@@ -251,6 +251,25 @@ describe("loadConfig", () => {
     });
   });
 
+  it("defaults to host only for a collector on this computer; any other address gets metadata, and says why", () => {
+    const key = { LMNR_PROJECT_API_KEY: "k" };
+    for (const local of ["http://localhost", "http://127.0.0.1", "http://127.1.2.3", "https://LOCALHOST", "http://lmnr-app"]) {
+      const found = tracesConfig({ ...key, LMNR_BASE_URL: local }, "/home/nobody");
+      expect(found, local).toMatchObject({ mode: "host" });
+      expect(found).not.toHaveProperty("note");
+    }
+    for (const remote of ["https://laminar.example.com", "http://10.0.0.5", "http://192.168.1.9", "http://lmnr-app.evil.example", "http://localhost.evil.example", "http://127.0.0.1.evil.example"]) {
+      const found = tracesConfig({ ...key, LMNR_BASE_URL: remote }, "/home/nobody");
+      expect(found, remote).toMatchObject({ mode: "metadata", note: expect.stringContaining(remote) });
+      expect((found as { note: string }).note).toContain("not on this computer");
+    }
+    // The owner's own word wins, a remote collector included, and no note is needed then.
+    const asked = tracesConfig({ ...key, LMNR_BASE_URL: "https://laminar.example.com", MACHINE_TRACES: "host" }, "/home/nobody");
+    expect(asked).toMatchObject({ mode: "host" });
+    expect(asked).not.toHaveProperty("note");
+    expect(tracesConfig({ ...key, LMNR_BASE_URL: "https://laminar.example.com", MACHINE_TRACES: "off" }, "/home/nobody")).toEqual({ mode: "off" });
+  });
+
   it("reads MACHINE_TRACES and the LMNR_* address, and refuses a mode without a key or a bad value", () => {
     expect(loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "full", LMNR_BASE_URL: "http://lmnr-app/", LMNR_STAGE_BASE_URL: "http://lmnr-app", LMNR_HTTP_PORT: "8100", LMNR_GRPC_PORT: "8101" }).traces).toEqual({
       mode: "full",

@@ -139,6 +139,7 @@ const decisionTruth = new DecisionTruth(decisionLog, {
   allowed: async (fact) => (fact.taskId ? (await learningOf(fact.taskId)).learning.truth : fact.repoPath ? repoKeepsTruth(fact.repoPath) : true), told: async (e) => void (e.taskId && (await pipeline.logDecisionTruth(e.taskId, e))) });
 if (config.traces.mode !== "off") {
   console.log(`traces ${telemetry.mode === "off" ? "off (backend unavailable)" : telemetry.mode} · Laminar at ${config.traces.laminar.baseUrl}:${config.traces.laminar.httpPort}`);
+  if (config.traces.note) console.log(config.traces.note);
 }
 
 /** The nightly housekeeping: old history pruned, closed tasks' checkouts and merged branches

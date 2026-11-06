@@ -134,6 +134,8 @@ export type TracesConfig =
         httpPort: number;
         grpcPort: number;
       };
+      /** Said at boot: why the mode is not the default `host` (the collector is not on this computer). Absent otherwise. */
+      note?: string;
     };
 
 const TRACES_MODES: readonly TracesMode[] = ["off", "metadata", "host", "full"];
@@ -230,24 +232,41 @@ export function tracesConfig(env: NodeJS.ProcessEnv, home: string): TracesConfig
   const key = env.LMNR_PROJECT_API_KEY?.trim() || secretFileSync(join(home, ".config", "hardness", LMNR_KEY_FILE));
   const raw = env.MACHINE_TRACES?.trim();
   if (raw !== undefined && raw !== "" && !TRACES_MODES.includes(raw as TracesMode)) throw new Error(`MACHINE_TRACES must be off, metadata, host or full, got "${raw}"`);
-  const mode = (raw || (key ? "host" : "off")) as TracesMode;
+  if (raw === "off") return { mode: "off" };
+  // `host` keeps contexts, answers and transcripts: it is the default only where the collector is on this computer. A hosted one
+  // gets `metadata` until the owner asks for more with MACHINE_TRACES.
+  const baseUrl = key ? hostUrlOf(env, "LMNR_BASE_URL", "http://localhost") : "http://localhost";
+  const local = isLocalCollector(baseUrl);
+  const mode = (raw || (key ? (local ? "host" : "metadata") : "off")) as TracesMode;
   if (mode === "off") return { mode };
   if (!key) throw new Error(`MACHINE_TRACES=${mode} needs a Laminar project key: set LMNR_PROJECT_API_KEY or put one in ~/.config/hardness/${LMNR_KEY_FILE}`);
-  const hostUrl = (name: string, fallback: string): string => {
-    const value = (env[name]?.trim() || fallback).replace(/\/+$/, "");
-    if (!/^https?:\/\/[^/:\s]+$/.test(value)) throw new Error(`${name} must be a scheme and host without a port, like ${fallback}, got "${env[name]}"`);
-    return value;
-  };
+  const note = !raw && !local ? `traces default to metadata, not host: the collector at ${baseUrl} is not on this computer (set MACHINE_TRACES=host to send contexts, answers and transcripts there)` : undefined;
   return {
     mode,
     laminar: {
       projectApiKey: key,
-      baseUrl: hostUrl("LMNR_BASE_URL", "http://localhost"),
-      stageBaseUrl: hostUrl("LMNR_STAGE_BASE_URL", "http://host.docker.internal"),
+      baseUrl,
+      stageBaseUrl: hostUrlOf(env, "LMNR_STAGE_BASE_URL", "http://host.docker.internal"),
       httpPort: portFrom(env, "LMNR_HTTP_PORT", 8000),
       grpcPort: portFrom(env, "LMNR_GRPC_PORT", 8001),
     },
+    ...(note ? { note } : {}),
   };
+}
+
+function hostUrlOf(env: NodeJS.ProcessEnv, name: string, fallback: string): string {
+  const value = (env[name]?.trim() || fallback).replace(/\/+$/, "");
+  if (!/^https?:\/\/[^/:\s]+$/.test(value)) throw new Error(`${name} must be a scheme and host without a port, like ${fallback}, got "${env[name]}"`);
+  return value;
+}
+
+/** The compose service that runs the collector next to the machine. */
+export const COMPOSE_COLLECTOR_HOST = "lmnr-app";
+
+/** Whether the collector's address is this computer: loopback, `localhost`, or the compose service name the configuration documents. */
+export function isLocalCollector(baseUrl: string): boolean {
+  const host = baseUrl.replace(/^https?:\/\//, "").toLowerCase();
+  return host === "localhost" || host === COMPOSE_COLLECTOR_HOST || /^127(\.\d{1,3}){3}$/.test(host);
 }
 
 /** `MACHINE_EGRESS` (on, off) and `MACHINE_EGRESS_ENGINE_HOSTS` (a comma list of host patterns, each checked). */
