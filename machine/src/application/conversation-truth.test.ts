@@ -49,4 +49,25 @@ describe("ConversationTruth", () => {
     expect(asked).toEqual(["C1:1.0"]);
     expect(learned).toHaveLength(1);
   });
+  it("a dismissed draft says why: no_reply_needed labels needs_reply false, bad_draft labels it true, no reason labels nothing; the reason is in the file; an expired draft labels nothing", async () => {
+    const { dir, learned, truth } = await setup();
+    const base = { thread: "C1:1.0", draft: "d1", machine: "a", records: { assess: "rec-1" } };
+    await truth.outcome({ ...base, outcome: "ignored", reason: "no_reply_needed" });
+    await truth.outcome({ ...base, draft: "d2", outcome: "ignored", reason: "bad_draft" });
+    await truth.outcome({ ...base, draft: "d3", outcome: "ignored" });
+    await truth.outcome({ ...base, draft: "d4", outcome: "expired" });
+    expect(learned).toEqual([
+      { pack: "conversation_assess", recordId: "rec-1", label: { needs_reply: { value: false } }, source: "draft_dismissed", kind: "person" },
+      { pack: "conversation_assess", recordId: "rec-1", label: { needs_reply: { value: true } }, source: "draft_dismissed", kind: "person" },
+    ]);
+    expect(JSON.parse(await readFile(join(dir, "ground-truth", "conversation", "C1_1.0-d2.json"), "utf8"))).toMatchObject({ outcome: "ignored", reason: "bad_draft" });
+  });
+  it("a hand-set priority also lands in ground-truth/priority with both levels and the scores, and no thread text", async () => {
+    const { dir, truth } = await setup();
+    await truth.override({ thread: "C1:1.0", classification, priority: "P2" });
+    const [name] = await (await import("node:fs/promises")).readdir(join(dir, "ground-truth", "priority"));
+    const doc = JSON.parse(await readFile(join(dir, "ground-truth", "priority", name!), "utf8"));
+    expect(doc).toMatchObject({ machine: "conversation", id: "C1:1.0", recordId: "rec-1", machineLevel: "P0", personLevel: "P2", knockOut: "production_down", total: 22 });
+    expect(Object.keys(doc)).not.toContain("text");
+  });
 });

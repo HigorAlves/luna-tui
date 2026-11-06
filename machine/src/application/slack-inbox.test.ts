@@ -541,6 +541,14 @@ describe("SlackInbox.pollOnce", () => {
         expect(post).not.toHaveBeenCalled();
         expect(await drafts.waiting(id)).not.toBeNull();
       });
+      it("passes the reason a person gave for dismissing a draft to the outcome, and none when none was given", async () => {
+        const a = await waiting();
+        await a.inbox.patch(a.id, { done: true, reason: "no_reply_needed" }, TAP);
+        expect(a.outcomes).toMatchObject([{ outcome: "ignored", reason: "no_reply_needed" }]);
+        const b = await waiting();
+        await b.inbox.patch(b.id, { done: true }, TAP);
+        expect((b.outcomes as Array<Record<string, unknown>>)[0]).not.toHaveProperty("reason");
+      });
       it("marks the waiting draft ignored on done, and expires it after the configured hours without posting", async () => {
         const a = await waiting();
         await a.inbox.patch(a.id, { done: true }, TAP);

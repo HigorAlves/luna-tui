@@ -1077,7 +1077,7 @@ export class SlackInbox implements SlackInboxPort {
       next = { ...next, doneAt: now, snoozedUntil: null };
       const ignored = this.options.drafts ? await this.options.drafts.ignore(row.id).catch(() => null) : null;
       if (ignored) {
-        await this.options.truth?.outcome({ thread: row.id, draft: ignored.id, outcome: "ignored", machine: ignored.text, records: ignored.records }).catch(() => {});
+        await this.options.truth?.outcome({ thread: row.id, draft: ignored.id, outcome: "ignored", machine: ignored.text, records: ignored.records, ...(patch.reason ? { reason: patch.reason } : {}) }).catch(() => {});
         if (next.triage?.draft) next = { ...next, triage: { ...next.triage, draft: null } };
       }
       if (!row.youReplied && !row.repliedAt) await this.learnFrom(row, "lowered");

@@ -48,7 +48,7 @@ import { basename, isAbsolute, join, normalize } from "node:path";
 import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
-import type { CommitFact } from "./ground-truth.ts";
+import type { CommitFact, PriorityTruthEntry } from "./ground-truth.ts";
 import { budgetRowsOf, buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
 import { DECIDED_REASONS, type DecidedEscalation, decideEscalation } from "./stages/escalation.ts";
 import { type Decide } from "./stages/check-decide.ts";
@@ -259,6 +259,8 @@ export interface PipelineOptions {
   groundTruth?: (task: TaskRow, approval: ApprovalRow) => Promise<string>;
   /** False when the card's repository keeps no ground truth (`learning.truth: false`): no file is written for it. Absent, every card keeps it. */
   truthKept?: (task: TaskRow) => Promise<boolean>;
+  /** Keeps a person's priority edit (levels and sub-scores) in `ground-truth/priority/`; absent, none is kept. */
+  priorityTruth?: (entry: PriorityTruthEntry) => Promise<unknown>;
   /** Writes a person's thumbs on an Evidence Pack (`ground-truth/evidence/`); absent, the answer is only logged. */
   evidenceFeedback?: (task: TaskRow, pack: EvidencePack, feedback: { useful: boolean; note?: string | undefined }, at: Date) => Promise<string>;
   /** Writes onto a decision's record what a person's decision at a gate says about it (RFC 0005 wave 7). */
@@ -439,6 +441,7 @@ export class Pipeline {
   private readonly releaseKept: ((taskId: string) => Promise<void>) | undefined;
   private readonly groundTruth: PipelineOptions["groundTruth"];
   private readonly truthKept: NonNullable<PipelineOptions["truthKept"]>;
+  private readonly options_priorityTruth: PipelineOptions["priorityTruth"];
   private readonly evidenceFeedbackWriter: PipelineOptions["evidenceFeedback"];
   private readonly owners: PipelineOptions["owners"];
   private readonly truth: DecisionTruth | undefined;
@@ -496,6 +499,7 @@ export class Pipeline {
     this.retroOutputs = options.retroOutputs;
     this.releaseKept = options.releaseKept;
     this.groundTruth = options.groundTruth;
+    this.options_priorityTruth = options.priorityTruth;
     this.truthKept = async (task) => (await options.truthKept?.(task).catch(() => true)) ?? true;
     this.evidenceFeedbackWriter = options.evidenceFeedback;
     this.owners = options.owners;
@@ -963,6 +967,7 @@ export class Pipeline {
   /** A person's correction of the Triage Record while the card waits at a gate. The record's version rises and the corrected fields are the
    *  person's (`decisionBy: person`, `editedFields`); each correction is ground truth for the `triage_signals` reading that said otherwise. */
   async editRecord(id: string, patch: { kind?: string; typeOfWork?: string; size?: string; riskPrelim?: string; priority?: string }): Promise<TaskRow> {
+    const priorityBefore: { seen?: boolean; level?: string | null; subScores?: Record<string, unknown> | null } = {};
     const { record, classification, fields } = await this.store.withTaskLock(id, async (task, tx) => {
       if (!task.record) throw new RecordNotEditableError(id, "triage has not written one");
       if (task.state !== "awaiting_answers" && task.state !== "awaiting_approval") throw new RecordNotEditableError(id, `the card is ${task.state}: a record is corrected at triage's questions or at the plan gate`);
@@ -987,6 +992,7 @@ export class Pipeline {
         next.risk = order.indexOf(patch.riskPrelim!) >= order.indexOf(floor) ? patch.riskPrelim : floor;
       });
       set("priority", before.urgencyDetail?.priority, patch.priority, () => {
+        Object.assign(priorityBefore, { seen: true, level: before.urgencyDetail?.priority ?? null, subScores: (before.urgencyDetail?.subScores as Record<string, unknown> | undefined) ?? null });
         next.urgency = patch.priority;
         next.urgencyDetail = { subScores: { who: 2, what: 2, impact: 2, time: 2, demand: 2 }, ...before.urgencyDetail, priority: patch.priority };
       });
@@ -1000,6 +1006,9 @@ export class Pipeline {
     if (fields.length > 0) {
       await this.log(id, "record.edited", { fields, version: record.version ?? null });
       const recordId = classification?.recordId;
+      if (priorityBefore.seen && patch.priority && this.options_priorityTruth && (await this.truthKept(await this.get(id)))) {
+        await this.options_priorityTruth({ machine: "triage", id, recordId: classification?.recordId ?? null, subScores: priorityBefore.subScores ?? null, machineLevel: priorityBefore.level ?? null, personLevel: patch.priority }).catch(() => {});
+      }
       const label = triageEditTruth({ ...record, editedFields: fields });
       if (this.truth && recordId && Object.keys(label).length > 0) await this.truth.learned({ pack: "triage_signals", recordId, label, kind: "person", source: "record_edit", taskId: id });
     }

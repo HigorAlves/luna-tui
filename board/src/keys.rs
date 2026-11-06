@@ -745,7 +745,7 @@ const BACKLOG: &[Binding] = &[
 const SLACK: &[Binding] = &[
     b("r", "reply: edit the draft, ctrl+s posts", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Reply), 90),
     b("t", "ticket: a Backlog task from the thread", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Task), 85),
-    b("d", "done: clear it; ignores a waiting draft", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Done), 80),
+    b("d", "done: clear it; a draft asks why", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Done), 80),
     b("s", "snooze: 1h, 3h, tomorrow or Monday", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Snooze), 75),
     b("o", "open the message in Slack", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Open), 60),
     b("N", "nudge: a one-line reminder", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Nudge), 70),

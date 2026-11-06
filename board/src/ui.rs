@@ -181,6 +181,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             app.mode,
             Mode::Normal
                 | Mode::SlackSnooze { .. }
+                | Mode::SlackDismiss { .. }
                 | Mode::SlackPick { .. }
                 | Mode::SlackReply { .. }
                 | Mode::SlackTask { .. }
@@ -196,6 +197,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         match &app.mode {
             Mode::SlackSnooze { cursor, .. } => render_slack_snooze(frame, *cursor),
+            Mode::SlackDismiss { .. } => render_slack_dismiss(frame),
             Mode::SlackPick { id, relation, cursor } => render_slack_pick(frame, app, id, *relation, *cursor),
             Mode::SlackReply { id, area, vim, nudge, .. } => render_slack_reply(frame, app, id, area, vim, *nudge),
             Mode::SlackTask { id, title, repo } => render_slack_task(frame, app, id, title, repo.as_deref()),
@@ -528,6 +530,7 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
         Mode::SlackPick { .. } => hint(&[("j/k", "pick"), ("enter", "save"), ("esc", "cancel")]),
         Mode::SlackSnooze { .. } => hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")]),
+        Mode::SlackDismiss { .. } => hint(&[("n", "no reply needed"), ("b", "bad draft"), ("s", "skip"), ("esc", "cancel")]),
         Mode::SlackTask { .. } => hint(&[("y", "create the ticket"), ("n", "cancel")]),
         Mode::SlackWatchAdd { .. } => hint(&[("type", "@handle, #channel or a word"), ("↑/↓", "pick"), ("enter", "watch"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
@@ -2089,6 +2092,18 @@ fn render_slack_pick(frame: &mut Frame, app: &App, id: &str, relation: bool, cur
             Line::from(vec![Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)), Span::from(row.clone()).style(style)])
         })
         .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+fn render_slack_dismiss(frame: &mut Frame) {
+    let area = centered(frame.area(), 40, 7);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).padding(Padding::horizontal(2)).title(Line::from(" why dismiss the draft? ").bold());
+    let lines = vec![
+        Line::from(vec![Span::from("n  ").fg(c(SUBTEXT0)), Span::from("no reply needed")]),
+        Line::from(vec![Span::from("b  ").fg(c(SUBTEXT0)), Span::from("a reply was needed, not this one")]),
+        Line::from(vec![Span::from("s  ").fg(c(SUBTEXT0)), Span::from("skip: no reason")]),
+    ];
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 

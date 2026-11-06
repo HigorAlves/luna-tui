@@ -5,7 +5,7 @@
 import type { ConversationClassification, ConversationKind, SlackPriority } from "@hardness/contracts";
 
 import type { TruthSink } from "./decision-truth.ts";
-import { truthName, writeTruthFile } from "./ground-truth.ts";
+import { priorityTruth, truthName, writeTruthFile } from "./ground-truth.ts";
 
 export class ConversationTruth {
   constructor(
@@ -21,17 +21,21 @@ export class ConversationTruth {
   }
 
   /** What a person did with a draft: a file per draft (`<thread>-<draft>.json`, mode 0600) with the record ids; sent or edited also labels `needs_reply` true on the assess record. Ignored and expired label nothing: either can mean "no reply was needed" or "the draft was bad". */
-  async outcome(input: { thread: string; draft: string; outcome: "sent_as_drafted" | "edited" | "ignored" | "expired"; machine: string; person?: string; records: Record<string, string> }): Promise<void> {
+  async outcome(input: { thread: string; draft: string; outcome: "sent_as_drafted" | "edited" | "ignored" | "expired"; machine: string; person?: string; records: Record<string, string>; /** Why a draft was dismissed, when the person said. */ reason?: "no_reply_needed" | "bad_draft" }): Promise<void> {
     if (!(await this.kept(input.thread))) return;
     try {
       const safeName = truthName;
       const lines = (t: string): number => t.split("\n").length;
-      const body = { thread: input.thread, draft: input.draft, outcome: input.outcome, records: input.records, machine: input.machine, ...(input.person !== undefined ? { person: input.person, lineDifference: lines(input.person) - lines(input.machine) } : {}), at: this.now().toISOString() };
+      const body = { thread: input.thread, draft: input.draft, outcome: input.outcome, records: input.records, machine: input.machine, ...(input.reason ? { reason: input.reason } : {}), ...(input.person !== undefined ? { person: input.person, lineDifference: lines(input.person) - lines(input.machine) } : {}), at: this.now().toISOString() };
       await writeTruthFile(this.stateDir, "conversation", `${safeName(input.thread)}-${safeName(input.draft)}.json`, `${JSON.stringify(body, null, 2)}\n`);
     } catch (error) {
       console.warn(`conversation truth: could not write the outcome: ${error instanceof Error ? error.message : String(error)}`);
     }
     const record = input.records.assess;
+    if (input.outcome === "ignored" && input.reason && record && this.truth) {
+      await this.truth.learned({ pack: "conversation_assess", recordId: record, label: { needs_reply: { value: input.reason === "bad_draft" } }, kind: "person", source: "draft_dismissed" });
+      return;
+    }
     if ((input.outcome === "sent_as_drafted" || input.outcome === "edited") && record && this.truth) await this.truth.learned({ pack: "conversation_assess", recordId: record, label: { needs_reply: { value: true } }, kind: "person", source: "person" });
   }
 
@@ -56,6 +60,7 @@ export class ConversationTruth {
     } catch (error) {
       console.warn(`conversation truth: could not write the file: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (input.priority) await priorityTruth(this.stateDir, { machine: "conversation", id: input.thread, recordId, subScores: (c.scores as Record<string, unknown> | null | undefined) ?? null, total: c.total ?? null, machineLevel: c.priority ?? null, personLevel: input.priority, knockOut: c.knockOut ?? null, at: this.now().toISOString() }).catch((error: unknown) => console.warn(`conversation truth: could not write the priority file: ${error instanceof Error ? error.message : String(error)}`));
     if (!recordId || !this.truth) return;
     if (input.kind) await this.truth.learned({ pack: "conversation_assess", recordId, label: { kind: { choice: input.kind } }, kind: "person", source: "person" });
     else if (input.priority && c.knockOut && c.priority === "P0" && input.priority !== "P0") await this.truth.learned({ pack: "conversation_assess", recordId, label: { [c.knockOut]: { value: false } }, kind: "person", source: "person" });

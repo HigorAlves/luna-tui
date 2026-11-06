@@ -44,6 +44,14 @@ const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
 /// How long a prefix key (`g`, `z`) waits before the footer lists its second keys.
 pub const WHICH_KEY_DELAY: Duration = Duration::from_millis(400);
 /// The platform's "open this URL" program and its arguments.
+/// The PATCH body of a done tap: `done: true`, and the reason a draft was dismissed when there is one.
+fn dismiss_patch(reason: Option<&str>) -> serde_json::Value {
+    match reason {
+        Some(reason) => serde_json::json!({ "done": true, "reason": reason }),
+        None => serde_json::json!({ "done": true }),
+    }
+}
+
 fn opener_command(url: &str) -> (&'static str, Vec<String>) {
     let program = if cfg!(target_os = "macos") {
         "open"
@@ -314,6 +322,8 @@ pub enum Mode {
     PrActions { cursor: usize },
     /// `s` on a Slack item: pick how long it sleeps.
     SlackSnooze { id: String, cursor: usize },
+    /// `d` on an item with a waiting draft: why it is dismissed (n: no reply needed, b: bad draft, s or enter: no reason).
+    SlackDismiss { id: String },
     /// `c` (the kind) or `L` (the relation) on a Slack thread: a picker over the machine's own list.
     SlackPick { id: String, relation: bool, cursor: usize },
     /// `r` (or `n`) on a Slack item: the reply, pre-filled with triage's draft (or a nudge);
@@ -1951,6 +1961,7 @@ impl App {
             Mode::ClonePrompt { .. } => self.handle_clone_prompt(key),
             Mode::PrActions { .. } => self.handle_pr_actions(key),
             Mode::SlackSnooze { .. } => self.handle_slack_snooze(key),
+            Mode::SlackDismiss { .. } => self.handle_slack_dismiss(key),
             Mode::SlackPick { .. } => self.handle_slack_pick(key),
             Mode::SlackReply { .. } => self.handle_slack_reply(key),
             Mode::SlackTask { .. } => self.handle_slack_task(key),
@@ -2823,13 +2834,9 @@ impl App {
                 let repo = self.guess_repo(&item.channel.name);
                 self.mode = Mode::SlackTask { id, title, repo };
             }
-            SlackKey::Done => {
-                let now = iso_of(now_secs());
-                self.patch_slack(&id, serde_json::json!({ "done": true }), "done", move |item| {
-                    item.split = SlackSplit::Done.wire().to_string();
-                    item.done_at = Some(now);
-                });
-            }
+            // A waiting draft is dismissed with a reason (one more key, or skip); an item with none is just done.
+            SlackKey::Done if item.draft.is_some() => self.mode = Mode::SlackDismiss { id },
+            SlackKey::Done => self.slack_done(&id, None),
             SlackKey::Bump | SlackKey::Lower => {
                 let Some(next) = item.priority().and_then(|p| priority_step(p, key == SlackKey::Bump)) else {
                     return;
@@ -2960,6 +2967,38 @@ impl App {
                 let kind = slack::KINDS[at];
                 self.patch_slack(&id, serde_json::json!({ "kind": kind }), &format!("kind: {kind}"), |_| {});
             }
+        }
+        Outcome::Continue
+    }
+
+    /// Marks an item done, with the reason a draft was dismissed when one was given.
+    fn slack_done(&mut self, id: &str, reason: Option<&str>) {
+        let now = iso_of(now_secs());
+        self.patch_slack(id, dismiss_patch(reason), "done", move |item| {
+            item.split = SlackSplit::Done.wire().to_string();
+            item.done_at = Some(now);
+        });
+    }
+
+    /// The dismiss prompt: n (no reply needed), b (bad draft), s or enter (no reason); esc leaves the item as it is.
+    fn handle_slack_dismiss(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::SlackDismiss { id } = &self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let reason = match key.code {
+            KeyCode::Char('n') => Some(Some("no_reply_needed")),
+            KeyCode::Char('b') => Some(Some("bad_draft")),
+            KeyCode::Char('s') | KeyCode::Enter => Some(None),
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = Mode::Normal;
+                None
+            }
+            _ => None,
+        };
+        if let Some(reason) = reason {
+            self.mode = Mode::Normal;
+            self.slack_done(&id, reason);
         }
         Outcome::Continue
     }
@@ -5765,6 +5804,21 @@ mod slack_tests {
         press(&mut app, KeyCode::Char('6'));
         press(&mut app, KeyCode::Char('d'));
         assert_eq!(toast(&app), "already done");
+    }
+
+    #[test]
+    fn a_done_tap_names_why_a_draft_was_dismissed_and_asks_only_when_a_draft_waits() {
+        assert_eq!(dismiss_patch(None), serde_json::json!({ "done": true }));
+        assert_eq!(dismiss_patch(Some("bad_draft")), serde_json::json!({ "done": true, "reason": "bad_draft" }));
+        assert_eq!(dismiss_patch(Some("no_reply_needed")), serde_json::json!({ "done": true, "reason": "no_reply_needed" }));
+        let mut app = app_with(snapshot());
+        app.slack_item_mut("C0123:1730112345.0001").unwrap().draft = Some(crate::model::SlackDraft { id: "d1".into(), hash: "h1".into(), kind: "reply".into(), expires_at: "2026-11-07T00:00:00Z".into() });
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('d'));
+        assert!(matches!(&app.mode, Mode::SlackDismiss { id } if id == "C0123:1730112345.0001"));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.slack_item("C0123:1730112345.0001").unwrap().split, "needs_reply", "esc leaves it as it is");
     }
 
     #[test]

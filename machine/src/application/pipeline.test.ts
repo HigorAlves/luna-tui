@@ -1022,6 +1022,23 @@ describe("the triage record: a correction and its ground truth", () => {
     return { p, id: task.id, learned };
   };
 
+  it("keeps a priority edit where a calibration can find it, with the machine's level, the person's and the sub-scores; and not for a repository that keeps no truth", async () => {
+    const written: Array<Record<string, unknown>> = [];
+    for (const keeps of [true, false]) {
+      const learned: unknown[] = [];
+      const truth = new DecisionTruth({ setTruth: async () => true, read: async () => null }, { told: async () => {} });
+      stubs.plan("triage", { outcome: "pass", detail: { outcome: "plan", summary: "A bug.", reply: "r", archiveReason: "stale", record: { goal: "Fix it", reason: "r" } } });
+      const saving = (stage: TaskState) => (stage === "triage" ? withTriageSignals(stubs.runnerFor(stage), { classify: null, save: (id, patch) => new PgTaskStore(db).updateTask(id, patch) }) : stubs.runnerFor(stage));
+      const p = new Pipeline(db, saving, { inline: true, policies: previewOn, hasConfig: () => true, truth, truthKept: async () => keeps, priorityTruth: async (e) => void written.push(e as never) });
+      void learned;
+      const task = await p.createTask({ title: "Login page", classification });
+      await p.start(task.id);
+      await p.editRecord(task.id, { priority: "P0" });
+    }
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({ machine: "triage", recordId: "rt", machineLevel: "P2", personLevel: "P0", subScores: { who: 2, what: 2, impact: 2, time: 1, demand: 1 } });
+  });
+
   it("takes a correction at a gate: the version rises, the fields are the person's, and each is ground truth on the reading that said otherwise", async () => {
     const { p, id, learned } = await setup();
     const edited = await p.editRecord(id, { kind: "feature", size: "M", priority: "P0" });

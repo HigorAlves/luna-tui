@@ -28,7 +28,7 @@ import type { EventRow } from "./domain/task.ts";
 import { DecisionLog } from "./application/decision-log.ts";
 import { ownCalls } from "./application/pack-runs.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
-import { escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
+import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
 import { commitsSince, headCommit } from "./adapters/git/worktree.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
@@ -506,6 +506,7 @@ pipeline = new Pipeline(db, runnerFor, {
       return (answer?.outOfMap ?? []).flatMap((o) => (typeof o?.path === "string" ? [o.path] : []));
     },
   },
+  priorityTruth: (entry) => priorityTruth(config.stateDir, entry),
   truthKept: async (task) => !task.repoPath || (await policies.for(task.repoPath)).factory.learning.truth,
   ...(config.groundTruth ? { evidenceFeedback: evidenceFeedbackWriter(config.stateDir), groundTruth: groundTruthWriter(config.stateDir), escalationTruth: escalationTruthWriter(config.stateDir), commitsSince, headOf: headCommit } : {}),
   truth: decisionTruth,

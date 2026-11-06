@@ -175,6 +175,8 @@ export const SlackItemPatch = z.object({
   priority: SlackPriority.optional(),
   /** A hand-set kind of the conversation: settles an `ask` and is ground truth for the decision. */
   kind: ConversationKind.optional(),
+  /** With `done: true` on an item that has a waiting draft: why it was dismissed (`no_reply_needed`: nobody should reply; `bad_draft`: a reply was needed, this one was not it). Absent: no reason. */
+  reason: z.enum(["no_reply_needed", "bad_draft"]).optional(),
 });
 export type SlackItemPatch = z.infer<typeof SlackItemPatch>;
 

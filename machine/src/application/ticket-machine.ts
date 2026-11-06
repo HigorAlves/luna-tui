@@ -89,7 +89,7 @@ export interface TicketMachineDeps {
   /** The shared backlog, for `schedule` and for keeping an item's rank in step with a re-assessment. */
   /** Ground truth: what a tap says about the decision `ticket_recommend` made (the decision log's `learned`), and what was done to a draft (a file beside a gate's). Absent: nothing is kept. */
   truth?: {
-    learned(fact: { pack: "ticket_recommend"; recordId: string; label: Record<string, Record<string, unknown>>; source: string; kind: "person" | "fact" | "outcome"; repoPath?: string | null }): Promise<boolean>;
+    learned(fact: { pack: "ticket_recommend" | "ticket_validity"; recordId: string; label: Record<string, Record<string, unknown>>; source: string; kind: "person" | "fact" | "outcome"; repoPath?: string | null }): Promise<boolean>;
     draft(entry: { key: string; draft: string; kind: string; did: "sent" | "edited" | "ignored"; original: string; final: string | null; at: string; repoPath?: string | null }): Promise<void>;
   };
   /** The label the GitHub intake watches for: a child ticket made on GitHub carries it, so the intake sees it. */
@@ -150,6 +150,8 @@ export class TicketMachine implements TicketIntake {
     }
     const validity = await checkValidity(this.deps.validity, ticket, enrichment, candidates);
     if (!validity) return done("validity_failed", { outcome: "validity_failed" }, []);
+    // The tool's own fact about the reporter settles that question; nothing else about validity has a fact.
+    if (validity.recordId && this.deps.truth) await this.deps.truth.learned({ pack: "ticket_validity", recordId: validity.recordId, label: { reporter: { value: ticket.reporter !== null } }, kind: "fact", source: "ticket_fact", repoPath: ctx.repoPath }).catch(() => false);
     if (validity.outcome === "duplicate") return done("duplicate", { outcome: "duplicate", duplicateOf: validity.duplicateOf }, []);
     if (validity.outcome === "not_ours") return done("not_ours", { outcome: "not_ours" }, [notOursDraft(ticket.key, null)]);
     if (validity.outcome === "needs_info") {

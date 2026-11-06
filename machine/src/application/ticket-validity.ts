@@ -1,6 +1,7 @@
 // Validity before assessment: one `ticket_validity` call over the ticket and its enrichment, then the outcome by script over the answers and
 // the pack's bar. Workable, needs info (with exactly what is missing, in fixed words), duplicate (of which card), or not ours. Only a workable
 // ticket is assessed. A failed call is no outcome (null): nothing is assessed and nothing is posted on a guess.
+import { recordIdOf } from "./decision-truth.ts";
 import type { CanonicalTicket, TicketContext } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
@@ -29,6 +30,8 @@ export interface TicketValidity {
   reporterReachable: boolean | null;
   /** Whether the pack was sure the ticket has repro steps or acceptance criteria (true), sure it has none (false), or unsure (null). */
   criteriaMet: boolean | null;
+  /** The decision record behind the answer, when the call left one. */
+  recordId?: string;
 }
 
 /** The pack's bar: an answer is taken only when its confidence is at least this (the pack's `proceed` policy). */
@@ -86,7 +89,9 @@ export interface ValidityDeps {
 /** One call. Null when it fails: the ticket is not assessed and nothing is said about it. */
 export async function checkValidity(deps: ValidityDeps, ticket: CanonicalTicket, enrichment: TicketEnrichment, candidates: Array<{ id: string; kind: "open" | "closed" | "backlog"; title: string; text: string }>): Promise<TicketValidity | null> {
   try {
-    return validityOf(await deps.decide(buildValidityContext(ticket, enrichment, candidates)), enrichment.shortlist);
+    const answer = await deps.decide(buildValidityContext(ticket, enrichment, candidates));
+    const recordId = recordIdOf(answer);
+    return { ...validityOf(answer, enrichment.shortlist), ...(recordId ? { recordId } : {}) };
   } catch (error) {
     console.warn(`ticket validity: the decision failed: ${error instanceof Error ? error.message : String(error)}`);
     return null;

@@ -464,7 +464,7 @@ A P0 or P1 entering Needs reply or Decide counts on the Board tab's badge and ra
 |---|---|
 | `r` | reply: edit the draft, ctrl+s posts |
 | `t` | ticket: a Backlog task from the thread |
-| `d` | done: clear it; ignores a waiting draft |
+| `d` | done: clear it; a draft asks why |
 | `s` | snooze: 1h, 3h, tomorrow or Monday |
 | `o` | open the message in Slack |
 | `N` | nudge: a one-line reminder |

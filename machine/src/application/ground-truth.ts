@@ -186,3 +186,25 @@ export function evidenceFeedbackWriter(stateDir: string): (task: TaskRow, pack: 
     return writeTruthFile(stateDir, "evidence", truthName(`${task.id}-${pack.commitSha.slice(0, 7).replace(/[^A-Za-z0-9]/g, "_")}.json`), `${JSON.stringify(evidenceFeedbackOf(task, pack, feedback, at), null, 2)}\n`);
   };
 }
+
+export interface PriorityTruthEntry {
+  machine: "triage" | "ticket" | "conversation";
+  id: string;
+  recordId: string | null;
+  subScores: Record<string, unknown> | null;
+  total?: number | null;
+  machineLevel: string | null;
+  /** Equal to `machineLevel` when a person approved the level as it was. */
+  personLevel: string;
+  knockOut?: string | null;
+  at?: string;
+}
+
+/** Writes `<stateDir>/ground-truth/priority/<machine>-<id>-<stamp>.json`: the model answered sub-scores, the person a level, so it labels no question by itself; a calibration of the weights reads these. Levels, scores and ids only, never a thread's text. Answers the path, or "" when the repository keeps no truth. */
+export async function priorityTruth(stateDir: string, entry: PriorityTruthEntry, keeps: () => Promise<boolean> = async () => true): Promise<string> {
+  if (!(await keeps().catch(() => true))) return "";
+  const at = entry.at ?? new Date().toISOString();
+  const name = truthName(`${entry.machine}-${entry.id}-${at.replace(/[:.]/g, "-")}.json`).slice(0, 180);
+  const body = { schema: 1, machine: entry.machine, id: entry.id, recordId: entry.recordId, subScores: entry.subScores, total: entry.total ?? null, machineLevel: entry.machineLevel, personLevel: entry.personLevel, knockOut: entry.knockOut ?? null, at };
+  return writeTruthFile(stateDir, "priority", name, `${JSON.stringify(body, null, 2)}\n`);
+}

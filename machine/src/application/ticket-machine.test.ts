@@ -1,3 +1,4 @@
+import { tagged } from "./decision-truth.ts";
 import { createHash } from "node:crypto";
 import { type CanonicalTicket, SCORING_DEFAULTS, FACTORY_DEFAULTS } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
@@ -38,7 +39,7 @@ const ticket = (over: Partial<CanonicalTicket> = {}): CanonicalTicket => ({
   comments: [], attachments: [], sprint: null, dueAt: null, createdAt: null, updatedAt: "2026-11-05T10:00:00Z", permalink: "https://x/browse/PAY-12", ...over,
 });
 
-function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: boolean; noRecord?: boolean; reply?: string; hold?: Promise<void>; split?: { children?: Array<Record<string, unknown>> | "none"; failAt?: number; failTimes?: number }; size?: { answer?: Record<string, unknown>; fail?: boolean; candidates?: Array<{ id: string; kind: "open" | "closed" | "backlog"; title: string; text: string; repo: string | null; closedAt: Date | null }>; counted?: Record<string, { added: number; removed: number }> } } = {}) {
+function setup(over: { validity?: ValidityAnswer; validityRecord?: string; recommend?: string; silent?: boolean; noRecord?: boolean; reply?: string; hold?: Promise<void>; split?: { children?: Array<Record<string, unknown>> | "none"; failAt?: number; failTimes?: number }; size?: { answer?: Record<string, unknown>; fail?: boolean; candidates?: Array<{ id: string; kind: "open" | "closed" | "backlog"; title: string; text: string; repo: string | null; closedAt: Date | null }>; counted?: Record<string, { added: number; removed: number }> } } = {}) {
   const learned: Array<Record<string, any>> = [];
   const kept: Array<Record<string, any>> = [];
   const half = { score: 0.5, confidence: 1 };
@@ -57,7 +58,7 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: b
   };
   const cards: unknown[] = [];
   const items: Array<Record<string, any>> = [];
-  const decide = { validity: vi.fn(async () => over.validity ?? goodValidity), assess: vi.fn(async () => (over.silent ? silentAnswer : assessAnswer)), recommend: vi.fn(async () => ({ action: { choice: over.recommend ?? "schedule", confidence: 0.9 }, ...(over.noRecord ? {} : { recordId: "rec-1" }) })), write: vi.fn(async () => ({ reply: over.reply ?? "Not planned now.", confidence: 0.9 })) };
+  const decide = { validity: vi.fn(async () => (over.validityRecord ? tagged({ answer: (over.validity ?? goodValidity) as never, recordId: over.validityRecord }) as unknown as ValidityAnswer : over.validity ?? goodValidity)), assess: vi.fn(async () => (over.silent ? silentAnswer : assessAnswer)), recommend: vi.fn(async () => ({ action: { choice: over.recommend ?? "schedule", confidence: 0.9 }, ...(over.noRecord ? {} : { recordId: "rec-1" }) })), write: vi.fn(async () => ({ reply: over.reply ?? "Not planned now.", confidence: 0.9 })) };
   const sizeDecide = vi.fn(async (_context: unknown, _repoPath: string | null) => {
     if (over.size?.fail) throw new Error("no model");
     return over.size?.answer ?? sizeAnswer(2);
@@ -295,6 +296,18 @@ describe("what a tap says about the decisions behind it", () => {
     await rule.machine.ingest(ticket({ id: "PAY-20", key: "PAY-20" }), ctx);
     await rule.machine.card("PAY-20");
     expect(rule.learned).toEqual([]);
+  });
+
+  it("teaches ticket_validity's reporter question from the tool's own fact (a reporter is on the ticket, or is not), on the validity record, naming the repository", async () => {
+    const present = setup({ validityRecord: "rec-v" });
+    await present.machine.ingest(ticket(), ctx);
+    expect(present.learned).toEqual([{ pack: "ticket_validity", recordId: "rec-v", label: { reporter: { value: true } }, kind: "fact", source: "ticket_fact", repoPath: "/r/a" }]);
+    const absent = setup({ validityRecord: "rec-v" });
+    await absent.machine.ingest(ticket({ id: "PAY-40", key: "PAY-40", reporter: null }), ctx);
+    expect(absent.learned).toEqual([expect.objectContaining({ label: { reporter: { value: false } } })]);
+    const none = setup();
+    await none.machine.ingest(ticket({ id: "PAY-41", key: "PAY-41" }), ctx);
+    expect(none.learned).toEqual([]);
   });
 
   it("names the ticket's repository on what it keeps and on what it teaches, so the repository's learning.truth can apply", async () => {

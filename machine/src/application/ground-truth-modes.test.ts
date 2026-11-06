@@ -1,12 +1,12 @@
 // Every ground-truth writer leaves owner-only files in owner-only folders, whatever the process's umask.
-import { existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 import { ConversationTruth } from "./conversation-truth.ts";
-import { escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter, writeTruthFile } from "./ground-truth.ts";
+import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter, writeTruthFile } from "./ground-truth.ts";
 import { appendAddedFinding, retroTruthOf, writeRetroTruth } from "./retro-outputs.ts";
 
 const mode = (path: string): number => statSync(path).mode & 0o777;
@@ -105,5 +105,17 @@ describe("learning.truth: false for the ticket file", () => {
     expect(await write({ ...entry, repoPath: "/r/on" })).toMatch(/ABC-9/);
     expect(await write(entry)).toMatch(/ABC-9/);
     expect(asked).toEqual(["/r/off", "/r/on"]);
+  });
+});
+
+describe("priorityTruth", () => {
+  it("writes the two levels and the sub-scores owner-only under ground-truth/priority, caps a person's text, and writes nothing when the repository keeps no truth", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "priority-"));
+    const entry = { machine: "triage" as const, id: "t-1", recordId: "rec-1", subScores: { who: 2, what: 3 }, total: 12, machineLevel: "P2", personLevel: "P0", knockOut: null, at: "2026-11-06T10:00:00.000Z" };
+    const path = await priorityTruth(stateDir, entry);
+    check(stateDir, "priority", path);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ schema: 1, machine: "triage", id: "t-1", recordId: "rec-1", machineLevel: "P2", personLevel: "P0", subScores: { who: 2, what: 3 } });
+    expect(await priorityTruth(stateDir, { ...entry, id: "t-2" }, async () => false)).toBe("");
+    expect(readdirSync(join(stateDir, "ground-truth", "priority"))).toHaveLength(1);
   });
 });
