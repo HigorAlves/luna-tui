@@ -197,6 +197,8 @@ describe("sandboxExecArgs", () => {
 
   it("points cargo's registry and its build output at the cache volume, so a retry does not rebuild a Rust crate from scratch", () => {
     expect(CACHE_ENV).toEqual(expect.arrayContaining(["CARGO_HOME=/cache/cargo", "CARGO_TARGET_DIR=/cache/cargo-target"]));
+    // pnpm 12 reads only the `pnpm_config_` spelling: without it the store lands in the work folder as `.pnpm-store` and a stage's `git add -A` stages it.
+    expect(CACHE_ENV).toEqual(expect.arrayContaining(["pnpm_config_store_dir=/cache/pnpm-store", "npm_config_store_dir=/cache/pnpm-store"]));
   });
 });
 

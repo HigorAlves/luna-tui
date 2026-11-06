@@ -37,6 +37,8 @@ export const CACHE_ENV = [
   `XDG_CACHE_HOME=${CACHE_DIR}`,
   `npm_config_cache=${CACHE_DIR}/npm`,
   `npm_config_store_dir=${CACHE_DIR}/pnpm-store`,
+  // pnpm 12 reads only this spelling; without it the store lands in the work folder as `.pnpm-store` and a stage commits it.
+  `pnpm_config_store_dir=${CACHE_DIR}/pnpm-store`,
   `YARN_CACHE_FOLDER=${CACHE_DIR}/yarn`,
   `GOCACHE=${CACHE_DIR}/go-build`,
   `GOMODCACHE=${CACHE_DIR}/go-mod`,
