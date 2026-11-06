@@ -12,6 +12,7 @@ import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 
 import { machineSecrets } from "./bootstrap/machine-secrets.ts";
+import { useTruthSecrets } from "./application/ground-truth.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
@@ -131,6 +132,8 @@ if (config.traces.mode === "off") console.log(process.env.MACHINE_TRACES?.trim()
 /** What each decision pack call leaves (context, answer, verdicts), for evals; off with MACHINE_DECISIONS=off. */
 const decisionLog = new DecisionLog({ stateDir: config.stateDir, enabled: config.decisions.enabled });
 /** What later facts say a decision should have been, written onto its record; each is a `decision.truth` event on the task. */
+// Every ground-truth file passes the machine's secret values and the token shapes before it is written.
+useTruthSecrets(() => machineSecrets(config, process.env));
 const decisionTruth = new DecisionTruth(decisionLog, {
   // `learning.truth: false` in a card's repository: nothing is learned from that card.
   allowed: async (fact) => (fact.taskId ? (await learningOf(fact.taskId)).learning.truth : fact.repoPath ? repoKeepsTruth(fact.repoPath) : true), told: async (e) => void (e.taskId && (await pipeline.logDecisionTruth(e.taskId, e))) });

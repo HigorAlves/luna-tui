@@ -21,13 +21,16 @@ export class ConversationTruth {
   }
 
   /** What a person did with a draft: a file per draft (`<thread>-<draft>.json`, mode 0600) with the record ids; sent or edited also labels `needs_reply` true on the assess record. Ignored and expired label nothing: either can mean "no reply was needed" or "the draft was bad". */
-  async outcome(input: { thread: string; draft: string; outcome: "sent_as_drafted" | "edited" | "ignored" | "expired"; machine: string; person?: string; records: Record<string, string>; /** Why a draft was dismissed, when the person said. */ reason?: "no_reply_needed" | "bad_draft" }): Promise<void> {
+  async outcome(input: { thread: string; draft: string; outcome: "sent_as_drafted" | "edited" | "ignored" | "expired"; machine: string; person?: string; records: Record<string, string>; /** Whether the thread is a private conversation: its file then holds the outcome, the size of the difference and the record ids, no text. */ private: boolean; /** Why a draft was dismissed, when the person said. */ reason?: "no_reply_needed" | "bad_draft" }): Promise<void> {
     if (!(await this.kept(input.thread))) return;
     try {
       const safeName = truthName;
       const lines = (t: string): number => t.split("\n").length;
-      const body = { thread: input.thread, draft: input.draft, outcome: input.outcome, records: input.records, machine: input.machine, ...(input.reason ? { reason: input.reason } : {}), ...(input.person !== undefined ? { person: input.person, lineDifference: lines(input.person) - lines(input.machine) } : {}), at: this.now().toISOString() };
-      await writeTruthFile(this.stateDir, "conversation", `${safeName(input.thread)}-${safeName(input.draft)}.json`, `${JSON.stringify(body, null, 2)}\n`);
+      const difference = input.person !== undefined ? { lineDifference: lines(input.person) - lines(input.machine) } : {};
+      // A private conversation's text is never kept: not the draft, not what the person sent.
+      const text = input.private ? {} : { machine: input.machine, ...(input.person !== undefined ? { person: input.person } : {}) };
+      const body = { thread: input.thread, draft: input.draft, outcome: input.outcome, records: input.records, ...text, ...(input.reason ? { reason: input.reason } : {}), ...difference, ...(input.private ? { private: true } : {}), at: this.now().toISOString() };
+      await writeTruthFile(this.stateDir, "conversation", `${safeName(input.thread)}-${safeName(input.draft)}.json`, body);
     } catch (error) {
       console.warn(`conversation truth: could not write the outcome: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -56,7 +59,7 @@ export class ConversationTruth {
       const stamp = this.now().toISOString().replace(/[:.]/g, "-");
       const name = `${truthName(input.thread)}-${stamp}.json`;
       const body = { thread: input.thread, record: recordId, scores: c.scores ?? null, total: c.total ?? null, machine: { kind: c.kind, priority: c.priority ?? null, knockOut: c.knockOut ?? null }, person: { kind: input.kind ?? null, priority: input.priority ?? null }, at: this.now().toISOString() };
-      await writeTruthFile(this.stateDir, "conversation", name, `${JSON.stringify(body, null, 2)}\n`);
+      await writeTruthFile(this.stateDir, "conversation", name, body);
     } catch (error) {
       console.warn(`conversation truth: could not write the file: ${error instanceof Error ? error.message : String(error)}`);
     }

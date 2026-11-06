@@ -230,6 +230,9 @@ interface Cursors {
   channels: Map<string, string>;
 }
 
+/** A private channel, a DM or a group DM, by the conversation's own mark, else by the channel's kind. */
+const privateRow = (row: { conversation?: { private?: boolean } | null; channel: { kind: string } }): boolean => row.conversation?.private ?? row.channel.kind !== "channel";
+
 export class SlackInbox implements SlackInboxPort {
   snapshot: SlackSnapshot = { items: [], watches: [], me: null, polledAt: null, error: null, socket: "off", sla: toWireSla(DEFAULT_SLA), quiet: false };
   /** How long until the next poll: the interval, or the backoff after a rate limit. */
@@ -327,6 +330,12 @@ export class SlackInbox implements SlackInboxPort {
     this.publishIfChanged({ ...this.snapshot, items, quiet: this.lastRules ? inQuietHours(this.lastRules, now) : false });
   }
 
+  /** Whether a thread is a private conversation; one that cannot be read counts as private. */
+  private async isPrivate(thread: string): Promise<boolean> {
+    const row = await this.get(thread).catch(() => null);
+    return row === null || privateRow(row);
+  }
+
   /** Marks the drafts past their expiry `expired` (kept, never posted) and clears their mirror in `triage.draft`. Run by the minute tick. */
   async expireDrafts(): Promise<void> {
     const { drafts, truth, store } = this.options;
@@ -334,7 +343,7 @@ export class SlackInbox implements SlackInboxPort {
     await drafts.abandonStuck(this.now());
     const done = await drafts.expire(this.now());
     for (const d of done) {
-      await truth?.outcome({ thread: d.thread, draft: d.id, outcome: "expired", machine: d.text, records: d.records }).catch(() => {});
+      await truth?.outcome({ thread: d.thread, draft: d.id, outcome: "expired", machine: d.text, records: d.records, private: await this.isPrivate(d.thread) }).catch(() => {});
       await this.clearMirror(d.thread);
     }
     if (done.length > 0) await this.refresh(this.snapshot.polledAt, this.snapshot.error);
@@ -1077,7 +1086,7 @@ export class SlackInbox implements SlackInboxPort {
       next = { ...next, doneAt: now, snoozedUntil: null };
       const ignored = this.options.drafts ? await this.options.drafts.ignore(row.id).catch(() => null) : null;
       if (ignored) {
-        await this.options.truth?.outcome({ thread: row.id, draft: ignored.id, outcome: "ignored", machine: ignored.text, records: ignored.records, ...(patch.reason ? { reason: patch.reason } : {}) }).catch(() => {});
+        await this.options.truth?.outcome({ thread: row.id, draft: ignored.id, outcome: "ignored", machine: ignored.text, records: ignored.records, private: privateRow(row), ...(patch.reason ? { reason: patch.reason } : {}) }).catch(() => {});
         if (next.triage?.draft) next = { ...next, triage: { ...next.triage, draft: null } };
       }
       if (!row.youReplied && !row.repliedAt) await this.learnFrom(row, "lowered");
@@ -1170,7 +1179,7 @@ export class SlackInbox implements SlackInboxPort {
     if (claimed && drafts) {
       const settled = await drafts.finish(claimed.id, text).catch(() => null);
       if (settled) {
-        await this.options.truth?.outcome({ thread: row.id, draft: settled.draft.id, outcome: settled.outcome, machine: settled.draft.original ?? settled.draft.text, person: text, records: settled.draft.records }).catch(() => {});
+        await this.options.truth?.outcome({ thread: row.id, draft: settled.draft.id, outcome: settled.outcome, machine: settled.draft.original ?? settled.draft.text, person: text, records: settled.draft.records, private: privateRow(row) }).catch(() => {});
         if (row.triage?.draft) row = { ...row, triage: { ...row.triage, draft: null } };
       }
     }

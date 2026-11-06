@@ -8,7 +8,8 @@ import { join } from "node:path";
 
 import type { EvidencePack } from "@hardness/contracts";
 
-import { safe } from "../domain/evidence-markdown.ts";
+import { redact, safe } from "../domain/evidence-markdown.ts";
+import { redactDeep, secretRedactor } from "../domain/redact-secrets.ts";
 import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 
 const TRUTH_KIND = /^[a-z0-9_]+$/;
@@ -17,10 +18,23 @@ const TRUTH_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** A string made fit to be a file name: letters, digits, dots, dashes and underscores, not starting with a dot or a dash. */
 export const truthName = (text: string): string => text.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[^A-Za-z0-9]/, "_");
 
+let truthSecrets: () => Readonly<Record<string, string>> = () => ({});
+/** The machine's secret values, read at each write: set once at start-up (`main.ts`), so every truth file passes the same redactor a stored record does. */
+export function useTruthSecrets(secrets: () => Readonly<Record<string, string>>): void {
+  truthSecrets = secrets;
+}
+
+/** `body` with every string (keys included) passed through the machine's secret values and the token shapes. Pure but for the secrets it reads. */
+export function redactedTruth(body: unknown): unknown {
+  const secret = secretRedactor(truthSecrets());
+  return redactDeep(body, (text) => redact(secret(text)));
+}
+
 /** The one way a ground-truth file is written: `<stateDir>/ground-truth/<kind>/<name>`, folders 0700, the file 0600, written to a
  *  temporary name and renamed over the target, so a reader never sees half a file and an older, looser file is replaced. The kind
- *  and the name are checked: nothing but `[A-Za-z0-9._-]` can name a file here. Answers the path. */
-export async function writeTruthFile(stateDir: string, kind: string, name: string, body: string): Promise<string> {
+ *  and the name are checked: nothing but `[A-Za-z0-9._-]` can name a file here. `body` is an object: every string in it (keys too) passes the
+ *  machine's secret values and the token shapes before it is written. Answers the path. */
+export async function writeTruthFile(stateDir: string, kind: string, name: string, body: object): Promise<string> {
   if (!TRUTH_KIND.test(kind)) throw new Error(`ground truth: "${kind}" is not a kind (lowercase letters, digits, underscores)`);
   if (!TRUTH_NAME.test(name)) throw new Error(`ground truth: "${name}" is not a file name (letters, digits, dots, dashes, underscores)`);
   const root = join(stateDir, "ground-truth");
@@ -31,7 +45,7 @@ export async function writeTruthFile(stateDir: string, kind: string, name: strin
   const path = join(dir, name);
   const temp = join(dir, `.${name}.${randomUUID()}.tmp`);
   try {
-    await writeFile(temp, body, { mode: 0o600 });
+    await writeFile(temp, `${JSON.stringify(redactedTruth(body), null, 2)}\n`, { mode: 0o600 });
     await rename(temp, path);
   } catch (error) {
     await rm(temp, { force: true });
@@ -95,7 +109,7 @@ export function groundTruthOf(task: TaskRow, approval: ApprovalRow): GroundTruth
 /** Writes `<stateDir>/ground-truth/plan/<taskId>-<approvalId>.json` and answers its path. */
 export function groundTruthWriter(stateDir: string): (task: TaskRow, approval: ApprovalRow) => Promise<string> {
   return async (task, approval) => {
-    return writeTruthFile(stateDir, "plan", truthName(`${task.id}-${approval.id}.json`), `${JSON.stringify(groundTruthOf(task, approval), null, 2)}\n`);
+    return writeTruthFile(stateDir, "plan", truthName(`${task.id}-${approval.id}.json`), groundTruthOf(task, approval));
   };
 }
 
@@ -133,7 +147,7 @@ export function escalationTruthOf(task: TaskRow, approval: ApprovalRow, commits:
 /** Writes `<stateDir>/ground-truth/escalation/<taskId>-<approvalId>.json` and answers its path. */
 export function escalationTruthWriter(stateDir: string): (task: TaskRow, approval: ApprovalRow, commits: readonly CommitFact[], corrected: string | null) => Promise<string> {
   return async (task, approval, commits, corrected) => {
-    return writeTruthFile(stateDir, "escalation", truthName(`${task.id}-${approval.id}.json`), `${JSON.stringify(escalationTruthOf(task, approval, commits, corrected), null, 2)}\n`);
+    return writeTruthFile(stateDir, "escalation", truthName(`${task.id}-${approval.id}.json`), escalationTruthOf(task, approval, commits, corrected));
   };
 }
 
@@ -146,7 +160,7 @@ export function ticketTruthWriter(
   return async ({ repoPath, ...entry }) => {
     if (repoPath && !(await keeps(repoPath).catch(() => true))) return "";
     const safeName = truthName(`${entry.key}-${entry.draft}-${entry.at}`).slice(0, 160);
-    return writeTruthFile(stateDir, "ticket", `${safeName}.json`, `${JSON.stringify({ schema: 1, ...entry }, null, 2)}\n`);
+    return writeTruthFile(stateDir, "ticket", `${safeName}.json`, { schema: 1, ...entry });
   };
 }
 
@@ -183,7 +197,7 @@ export function evidenceFeedbackOf(task: TaskRow, pack: EvidencePack, feedback: 
 /** Writes `<stateDir>/ground-truth/evidence/<taskId>-<sha 7>.json` (the last answer for a commit wins) and answers its path. */
 export function evidenceFeedbackWriter(stateDir: string): (task: TaskRow, pack: EvidencePack, feedback: { useful: boolean; note?: string | undefined }, at: Date) => Promise<string> {
   return async (task, pack, feedback, at) => {
-    return writeTruthFile(stateDir, "evidence", truthName(`${task.id}-${pack.commitSha.slice(0, 7).replace(/[^A-Za-z0-9]/g, "_")}.json`), `${JSON.stringify(evidenceFeedbackOf(task, pack, feedback, at), null, 2)}\n`);
+    return writeTruthFile(stateDir, "evidence", truthName(`${task.id}-${pack.commitSha.slice(0, 7).replace(/[^A-Za-z0-9]/g, "_")}.json`), evidenceFeedbackOf(task, pack, feedback, at));
   };
 }
 
@@ -206,5 +220,5 @@ export async function priorityTruth(stateDir: string, entry: PriorityTruthEntry,
   const at = entry.at ?? new Date().toISOString();
   const name = truthName(`${entry.machine}-${entry.id}-${at.replace(/[:.]/g, "-")}.json`).slice(0, 180);
   const body = { schema: 1, machine: entry.machine, id: entry.id, recordId: entry.recordId, subScores: entry.subScores, total: entry.total ?? null, machineLevel: entry.machineLevel, personLevel: entry.personLevel, knockOut: entry.knockOut ?? null, at };
-  return writeTruthFile(stateDir, "priority", name, `${JSON.stringify(body, null, 2)}\n`);
+  return writeTruthFile(stateDir, "priority", name, body);
 }

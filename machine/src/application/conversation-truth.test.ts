@@ -39,7 +39,7 @@ describe("ConversationTruth", () => {
     const sink = { learned: async (f: unknown) => (learned.push(f), true) };
     const off = new ConversationTruth(dir, sink as never, () => new Date("2026-10-28T12:00:00Z"), async () => false);
     await off.override({ thread: "C1:1.0", classification, kind: "question" });
-    await off.outcome({ thread: "C1:1.0", draft: "d1", outcome: "edited", machine: "a", person: "b", records: { assess: "rec-1" } });
+    await off.outcome({ private: false, thread: "C1:1.0", draft: "d1", outcome: "edited", machine: "a", person: "b", records: { assess: "rec-1" } });
     await off.relation({ thread: "C1:1.0", record: "rec-2", relation: "new_candidate", slot: null });
     expect(learned).toEqual([]);
     await expect(import("node:fs/promises").then((fs) => fs.readdir(join(dir, "ground-truth", "conversation")))).rejects.toThrow();
@@ -51,7 +51,7 @@ describe("ConversationTruth", () => {
   });
   it("a dismissed draft says why: no_reply_needed labels needs_reply false, bad_draft labels it true, no reason labels nothing; the reason is in the file; an expired draft labels nothing", async () => {
     const { dir, learned, truth } = await setup();
-    const base = { thread: "C1:1.0", draft: "d1", machine: "a", records: { assess: "rec-1" } };
+    const base = { thread: "C1:1.0", draft: "d1", machine: "a", records: { assess: "rec-1" }, private: false };
     await truth.outcome({ ...base, outcome: "ignored", reason: "no_reply_needed" });
     await truth.outcome({ ...base, draft: "d2", outcome: "ignored", reason: "bad_draft" });
     await truth.outcome({ ...base, draft: "d3", outcome: "ignored" });

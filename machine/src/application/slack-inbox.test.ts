@@ -534,6 +534,16 @@ describe("SlackInbox.pollOnce", () => {
         expect(second.outcomes).toMatchObject([{ outcome: "edited", machine: "It is queued.", person: "We are on it." }]);
         expect(second.store.rows.get(second.id)!.triage?.draft ?? null).toBeNull();
       });
+      it("tells the truth writer whether the thread is private: a public channel is not, a private one is", async () => {
+        const open = await waiting();
+        await open.inbox.reply(open.id, "We are on it.", TAP, false, await proof(open.drafts, open.id));
+        expect(open.outcomes).toMatchObject([{ outcome: "edited", private: false }]);
+        const dm = await waiting();
+        const row = dm.store.rows.get(dm.id)!;
+        dm.store.rows.set(dm.id, { ...row, conversation: { ...row.conversation!, private: true } });
+        await dm.inbox.reply(dm.id, "We are on it.", TAP, false, await proof(dm.drafts, dm.id));
+        expect(dm.outcomes).toMatchObject([{ outcome: "edited", private: true }]);
+      });
       it("refuses a reply that carries a token, with no post and the draft still waiting", async () => {
         const { inbox, drafts, id, post } = await waiting();
         const token = ["gh", "p_", "a".repeat(36)].join("");

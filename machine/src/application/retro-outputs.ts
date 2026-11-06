@@ -45,7 +45,7 @@ export function retroTruthOf(input: { taskId: string; facts: RetroFacts; retro: 
 }
 
 export async function writeRetroTruth(stateDir: string, doc: RetroTruth): Promise<string> {
-  return writeTruthFile(stateDir, "retro", `${truthName(doc.taskId.replace(/[^A-Za-z0-9-]/g, "_"))}.json`, JSON.stringify(doc, null, 2));
+  return writeTruthFile(stateDir, "retro", `${truthName(doc.taskId.replace(/[^A-Za-z0-9-]/g, "_"))}.json`, doc);
 }
 
 /** A path in the retro's `graphMisses[]` counts only when it is also one of the card's files outside the map; one only the model names is dropped. */
@@ -77,5 +77,5 @@ export async function appendAddedFinding(stateDir: string, taskId: string, findi
     // no file yet
   }
   doc.added = [...doc.added, { title: cap(finding.title, 200), severity: finding.severity, ...(finding.path ? { path: cap(finding.path, 300) } : {}), ...(finding.line ? { line: finding.line } : {}), at: new Date().toISOString() }].slice(-50);
-  await writeTruthFile(stateDir, "verify", name, JSON.stringify(doc, null, 2));
+  await writeTruthFile(stateDir, "verify", name, doc);
 }

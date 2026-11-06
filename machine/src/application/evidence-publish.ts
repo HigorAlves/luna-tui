@@ -223,7 +223,7 @@ export async function publishAndReady(deps: ReadyDeps, input: { task: { id: stri
     const current = sectionOf((await deps.github.prFacts(slug, number).catch(() => null))?.body ?? "");
     if (current !== null && sha256(current) !== before.publishedSection) {
       const sha = pack.commitSha.slice(0, 7);
-      await writeTruthFile(deps.stateDir, "evidence", truthName(`${task.id.replace(/[^A-Za-z0-9-]/g, "_")}-${sha.replace(/[^0-9a-f]/g, "_")}-edit.json`), JSON.stringify({ schema: 1, taskId: task.id, sha, at: new Date().toISOString(), section: current.slice(0, 60_000) }));
+      await writeTruthFile(deps.stateDir, "evidence", truthName(`${task.id.replace(/[^A-Za-z0-9-]/g, "_")}-${sha.replace(/[^0-9a-f]/g, "_")}-edit.json`), { schema: 1, taskId: task.id, sha, at: new Date().toISOString(), section: current.slice(0, 60_000) });
       edited = { sha, bytes: Math.min(current.length, 60_000) };
     }
   }

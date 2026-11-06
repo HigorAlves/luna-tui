@@ -33,7 +33,7 @@ const dir = () => mkdtempSync(join(tmpdir(), "gtm-"));
 describe("writeTruthFile", () => {
   it("makes folders 0700 and the file 0600, writes through a temporary name, and leaves none behind", async () => {
     const stateDir = dir();
-    const path = await writeTruthFile(stateDir, "plan", "t1-a1.json", "{}\n");
+    const path = await writeTruthFile(stateDir, "plan", "t1-a1.json", {});
     expect(path).toBe(join(stateDir, "ground-truth", "plan", "t1-a1.json"));
     check(stateDir, "plan", path);
     expect(readdirSync(join(stateDir, "ground-truth", "plan"))).toEqual(["t1-a1.json"]);
@@ -41,16 +41,16 @@ describe("writeTruthFile", () => {
 
   it("tightens a file that was left open by an earlier version when it rewrites it", async () => {
     const stateDir = dir();
-    await writeTruthFile(stateDir, "plan", "x.json", "1");
+    await writeTruthFile(stateDir, "plan", "x.json", { n: 1 });
     writeFileSync(join(stateDir, "ground-truth", "plan", "x.json"), "old", { mode: 0o644 });
-    const path = await writeTruthFile(stateDir, "plan", "x.json", "2");
+    const path = await writeTruthFile(stateDir, "plan", "x.json", { n: 2 });
     expect(mode(path)).toBe(0o600);
   });
 
   it("refuses a name or a kind that is not made of letters, digits, dots, dashes and underscores", async () => {
     const stateDir = dir();
-    for (const name of ["../x.json", "a/b.json", "a b.json", "", ".", ".."]) await expect(writeTruthFile(stateDir, "plan", name, "{}"), name).rejects.toThrow(/name/);
-    await expect(writeTruthFile(stateDir, "../plan", "a.json", "{}")).rejects.toThrow(/kind/);
+    for (const name of ["../x.json", "a/b.json", "a b.json", "", ".", ".."]) await expect(writeTruthFile(stateDir, "plan", name, {}), name).rejects.toThrow(/name/);
+    await expect(writeTruthFile(stateDir, "../plan", "a.json", {})).rejects.toThrow(/kind/);
     expect(readdirSync(stateDir)).toEqual([]);
   });
 });
@@ -85,7 +85,7 @@ describe("every writer leaves owner-only files", () => {
   it("the conversation outcome and override", async () => {
     const stateDir = dir();
     const truth = new ConversationTruth(stateDir, null);
-    await truth.outcome({ thread: "C1:1.0", draft: "d1", outcome: "ignored", machine: "m", records: {} });
+    await truth.outcome({ private: false, thread: "C1:1.0", draft: "d1", outcome: "ignored", machine: "m", records: {} });
     await truth.override({ thread: "C1:2.0", classification, kind: "question" });
     const folder = join(stateDir, "ground-truth", "conversation");
     const files = readdirSync(folder);
