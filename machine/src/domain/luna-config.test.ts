@@ -351,3 +351,32 @@ describe("a repository's base image in luna.yaml", () => {
     expect(parseLunaConfig("").factory.sandbox.image).toEqual({ base: null });
   });
 });
+
+describe("sandbox.egress, before and after it became a section", () => {
+  it("still parses the list form: the preset words are dropped, a valid host becomes an allow entry, and the warning is said once", () => {
+    const warnings: string[] = [];
+    const policy = parseLunaConfig("sandbox:\n  egress: [registries, github, Docs.Example.com, 1.2.3.4, '*']\n", (m) => warnings.push(m));
+    expect(policy.factory.sandbox.egress).toEqual({ allow: ["docs.example.com"], registries: "always" });
+    expect(warnings.filter((w) => w.includes("sandbox.egress"))).toHaveLength(1);
+    expect(warnings[0]).toMatch(/section/);
+  });
+
+  it("reads the section form with no warning", () => {
+    const warnings: string[] = [];
+    const policy = parseLunaConfig("sandbox:\n  egress:\n    allow: [Docs.Example.com]\n    registries: install\n  install:\n    scripts: on\n", (m) => warnings.push(m));
+    expect(policy.factory.sandbox).toMatchObject({ egress: { allow: ["docs.example.com"], registries: "install" }, install: { run: "on", scripts: "on" }, cpu: 2, memory_gb: 4 });
+    expect(warnings).toEqual([]);
+  });
+
+  it("refuses a bad host in the section naming the entry", () => {
+    expect(() => parseLunaConfig("sandbox:\n  egress:\n    allow: ['*.com']\n")).toThrow(/\*\.com/);
+  });
+
+  it("carries the e2e start, seed and deploy keys and a check's secrets into the policy", () => {
+    const policy = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 5173\n      secrets: [APP_KEY]\n    seed:\n      command: npm run seed\n    deploy:\n      url_pattern: https://{branch}.example.com\nchecks:\n  - name: t\n    run: x\n    secrets: [DB_URL]\n");
+    expect(policy.factory.verify.e2e.start).toMatchObject({ command: "npm start", port: 5173, ready: "/", secrets: ["APP_KEY"] });
+    expect(policy.factory.verify.e2e.seed).toEqual({ command: "npm run seed", secrets: [] });
+    expect(policy.factory.verify.e2e.deploy.url_pattern).toBe("https://{branch}.example.com");
+    expect(policy.checks?.[0]?.secrets).toEqual(["DB_URL"]);
+  });
+});
