@@ -34,7 +34,7 @@ const ticket = (over: Partial<CanonicalTicket> = {}): CanonicalTicket => ({
   comments: [], attachments: [], sprint: null, dueAt: null, createdAt: null, updatedAt: "2026-11-05T10:00:00Z", permalink: "https://x/browse/PAY-12", ...over,
 });
 
-function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: boolean; noRecord?: boolean; reply?: string; hold?: Promise<void> } = {}) {
+function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: boolean; noRecord?: boolean; reply?: string; hold?: Promise<void>; size?: { answer?: Record<string, unknown>; fail?: boolean; candidates?: Array<{ id: string; kind: "open" | "closed" | "backlog"; title: string; text: string; repo: string | null; closedAt: Date | null }>; counted?: Record<string, { added: number; removed: number }> } } = {}) {
   const learned: Array<Record<string, any>> = [];
   const kept: Array<Record<string, any>> = [];
   const half = { score: 0.5, confidence: 1 };
@@ -47,21 +47,27 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: b
   const cards: unknown[] = [];
   const items: Array<Record<string, any>> = [];
   const decide = { validity: vi.fn(async () => over.validity ?? goodValidity), assess: vi.fn(async () => (over.silent ? silentAnswer : assessAnswer)), recommend: vi.fn(async () => ({ action: { choice: over.recommend ?? "schedule", confidence: 0.9 }, ...(over.noRecord ? {} : { recordId: "rec-1" }) })), write: vi.fn(async () => ({ reply: over.reply ?? "Not planned now.", confidence: 0.9 })) };
+  const sizeDecide = vi.fn(async (_context: unknown, _repoPath: string | null) => {
+    if (over.size?.fail) throw new Error("no model");
+    return over.size?.answer ?? sizeAnswer(2);
+  });
   const store = new PgTicketStore(db);
   const machine = new TicketMachine({
     store,
     port: () => port,
-    candidates: async () => [],
+    candidates: async () => over.size?.candidates ?? [],
     config: async () => FACTORY_DEFAULTS,
+    ...(over.size ? { size: { decide: sizeDecide, counted: async (ids: string[]) => ids.flatMap((id) => (over.size!.counted?.[id] ? [{ id, ...over.size!.counted[id]! }] : [])) } } : {}),
     createCard: async (input) => (cards.push(input), { id: "card-1" }),
     validity: { decide: decide.validity }, assess: { decide: decide.assess }, recommend: { decide: decide.recommend }, reply: { write: decide.write },
     truth: { learned: async (f) => (learned.push(f), true), draft: async (e) => void kept.push(e) },
     backlog: { upsertFromSource: async (input, o) => { const i = items.findIndex((x) => JSON.stringify(x.sources) === JSON.stringify(input.sources)); if (i >= 0) { items[i] = { ...input, id: "b1" }; return { id: "b1", created: false }; } if (!o.createIfMissing) return null; items.push({ ...input, id: "b1" }); return { id: "b1", created: true }; } },
     now: () => new Date("2026-11-05T12:00:00Z"),
   });
-  return { machine, store, writes, cards, decide, items, learned, kept, port };
+  return { machine, store, writes, cards, decide, items, learned, kept, port, sizeDecide };
 }
 const ctx = { repoPath: "/r/a", question: false };
+const sizeAnswer = (loc: number, confidence = 0.95, reviewable = true) => ({ est_loc: { score: loc, confidence }, est_files: { score: 1, confidence }, reviewable: { value: reviewable, p: reviewable ? 0.95 : 0.05 } });
 
 describe("ingesting a ticket", () => {
   it("assesses a workable one and holds the drafts: nothing is written", async () => {
@@ -388,3 +394,64 @@ describe("ticket keys", () => {
   });
 });
 void SCORING_DEFAULTS;
+
+describe("the size estimate of a ticket (wave 15)", () => {
+  const last = async (x: ReturnType<typeof setup>) => (await x.store.get("PAY-12"))!.assessments.at(-1)!;
+  it("is asked after the assessment, kept on it, and its numbers end the assessment comment", async () => {
+    const x = setup({ size: { answer: sizeAnswer(2) } });
+    await x.machine.ingest(ticket(), ctx);
+    expect(await last(x)).toMatchObject({ outcome: "workable", sizeEstimate: { estLoc: expect.any(Number), estFiles: expect.any(Number), reviewable: true, confidence: 0.95 } });
+    const draft = (await x.store.get("PAY-12"))!.drafts.find((d) => d.kind === "assessment")!;
+    expect(draft.text).toMatch(/Estimated size: about \d+ lines in \d+ files\.$/);
+    expect(x.writes).toEqual([]);
+  });
+
+  it("makes the recommendation split, in fixed words and without asking ticket_recommend, when the estimate is sure and over the hard limit", async () => {
+    const x = setup({ size: { answer: sizeAnswer(6) } });
+    await x.machine.ingest(ticket(), ctx);
+    expect(await last(x)).toMatchObject({ recommendation: { action: "split", reason: expect.stringMatching(/about \d+ lines.*2500/) } });
+    expect(x.decide.recommend).not.toHaveBeenCalled();
+    expect(x.writes).toEqual([]);
+  });
+
+  it("makes it split when a sure answer says one reviewer cannot read it as one change", async () => {
+    const x = setup({ size: { answer: sizeAnswer(2, 0.95, false) } });
+    await x.machine.ingest(ticket(), ctx);
+    expect(await last(x)).toMatchObject({ recommendation: { action: "split", reason: expect.stringContaining("one change") } });
+  });
+
+  it("changes nothing when the estimate is unsure or fails: the recommendation is asked as before", async () => {
+    const unsure = setup({ size: { answer: sizeAnswer(6, 0.1) } });
+    await unsure.machine.ingest(ticket(), ctx);
+    expect((await last(unsure)).recommendation).not.toMatchObject({ action: "split" });
+    const failed = setup({ size: { fail: true } });
+    await failed.machine.ingest(ticket({ id: "PAY-13", key: "PAY-13" }), ctx);
+    const failedRow = (await failed.store.get("PAY-13"))!;
+    expect(failedRow.assessments.at(-1)).toMatchObject({ outcome: "workable" });
+    expect(failedRow.assessments.at(-1)).not.toHaveProperty("sizeEstimate");
+    expect(failedRow.drafts.find((d) => d.kind === "assessment")!.text).not.toContain("Estimated size");
+  });
+
+  it("gives the prompt only closed cards among the ticket's own candidates, with their counted lines", async () => {
+    const now = new Date("2026-11-04T00:00:00Z");
+    const x = setup({
+      size: {
+        candidates: [
+          { id: "c-closed", kind: "closed", title: "Refund fails for partial payments", text: "refund fails", repo: "/r/a", closedAt: now },
+          { id: "c-open", kind: "open", title: "Refund fails again", text: "refund fails", repo: "/r/a", closedAt: null },
+          { id: "c-uncounted", kind: "closed", title: "Refund fails with no diff", text: "refund fails", repo: "/r/a", closedAt: now },
+        ],
+        counted: { "c-closed": { added: 120, removed: 30 }, "c-open": { added: 5, removed: 5 } },
+      },
+    });
+    await x.machine.ingest(ticket({ title: "Refund fails", description: "refund fails" }), { repoPath: "/r/a", question: false });
+    const context = x.sizeDecide.mock.calls[0]![0] as { similar: Array<{ title: string; added: number; removed: number }> };
+    expect(context.similar).toEqual([{ title: "Refund fails for partial payments", added: 120, removed: 30 }]);
+  });
+
+  it("with no size decision wired, an assessment is exactly as before", async () => {
+    const x = setup();
+    await x.machine.ingest(ticket(), ctx);
+    expect(await last(x)).not.toHaveProperty("sizeEstimate");
+  });
+});

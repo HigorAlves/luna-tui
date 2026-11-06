@@ -3,7 +3,7 @@
 // a card; only `approve`, `edit` and `card`, each started by a person's request, do. A clock or an event handler has no path to them.
 import { createHash } from "node:crypto";
 
-import type { BacklogAddInput, CanonicalTicket, FactoryConfig, TaskSource, TicketContext } from "@hardness/contracts";
+import { type BacklogAddInput, type CanonicalTicket, type FactoryConfig, PACKS, type SizeContext, type TaskSource, type TicketContext, applyPolicy, sizeLimits, sizeVerdict } from "@hardness/contracts";
 
 import { carriesSecret } from "../domain/postable.ts";
 import type { Candidate } from "../domain/similarity.ts";
@@ -13,6 +13,7 @@ import { type AssessDeps, type AssessmentRecord, assessTicket } from "./ticket-a
 import { type Draft, type RecommendDeps, type ReplyDeps, assessmentDraft, declineDraft, parkDraft, reminderDraft, editDraft, ignoreDraft, needsInfoDraft, notOursDraft, recommendWithDecision } from "./ticket-drafts.ts";
 import { ticketClocks } from "../domain/ticket-sla.ts";
 import { enrichTicket } from "./ticket-enrich.ts";
+import { type SizeDecision, type SizedCard, similarCards, sizeContextOf, sizeDecisionOf } from "./size-estimate.ts";
 import { type ValidityDeps, checkValidity } from "./ticket-validity.ts";
 import type { NewTask } from "./pipeline.ts";
 import type { TicketRow, TicketStore, Tickets } from "./tickets.ts";
@@ -71,6 +72,11 @@ export interface TicketMachineDeps {
   createCard(input: NewTask): Promise<{ id: string }>;
   validity: ValidityDeps;
   assess: Pick<AssessDeps, "decide">;
+  /**
+   * The size estimate (wave 15): the typed decision `size_estimate` on the ticket's text, and the counted diff of closed cards by id. Only the closed cards among
+   * `candidates` (already filtered to what the ticket's audience may see) are looked up. Absent, an assessment carries no estimate.
+   */
+  size?: { decide(context: SizeContext, repoPath: string | null): Promise<Record<string, unknown>>; counted?(ids: string[]): Promise<Array<{ id: string; added: number; removed: number }>> };
   recommend: RecommendDeps;
   reply: ReplyDeps;
   /** The shared backlog, for `schedule` and for keeping an item's rank in step with a re-assessment. */
@@ -81,6 +87,13 @@ export interface TicketMachineDeps {
   };
   backlog?: { upsertFromSource(input: BacklogAddInput, options: { createIfMissing: boolean }): Promise<{ id: string; created: boolean } | null> };
   now?: () => Date;
+}
+
+/** Fixed words and two numbers: why a ticket is split before it is planned; null when the estimate rules nothing. */
+function splitReason(decision: SizeDecision, limits: ReturnType<typeof sizeLimits>): string | null {
+  if (decision.sure && sizeVerdict(decision.estLoc, limits) === "over") return `estimated at about ${decision.estLoc} lines, over the limit of ${limits.hard}`;
+  if (decision.reviewableNo) return "a reviewer could not read it as one change";
+  return null;
 }
 
 const sourceOf = (t: CanonicalTicket): TaskSource => {
@@ -138,17 +151,42 @@ export class TicketMachine implements TicketIntake {
     if (!record) return done("validity_failed", { outcome: "assess_failed" }, []);
     const { subScores: _kept, ...head } = record;
     const context: TicketContext = { ...base, assessment: { priority: record.priority, size: record.size, blastRadius: record.blastRadius, costOfDelay: record.costOfDelay, costOfDoing: record.costOfDoing, score: record.score } };
-    const recommendation = await recommendWithDecision(this.deps.recommend, record, context);
-    const drafts = [assessmentDraft(ticket.key, record, recommendation.action === "split" ? null : recommendation.action)];
+    const sized = await this.estimateSize(ticket, enrichment.files, candidates, config, ctx.repoPath, at);
+    // The diagram's `est_loc <= limit and reviewable?`: a sure estimate over the hard limit, or a sure "not reviewable", is a split; the scores are not asked.
+    const splitWhy = sized ? splitReason(sized.decision, sized.limits) : null;
+    const recommendation = splitWhy ? { action: "split" as const, reason: splitWhy } : await recommendWithDecision(this.deps.recommend, record, context);
+    const drafts = [assessmentDraft(ticket.key, record, recommendation.action === "split" ? null : recommendation.action, sized?.decision.sure ? { estLoc: sized.decision.estLoc, estFiles: sized.decision.estFiles } : null)];
     if (recommendation.action === "decline") {
       const decline = await declineDraft(this.deps.reply, ticket.key, context, (why) => (refused = why));
       if (decline) drafts.push(decline);
     }
-    await done("assessed", { outcome: "workable", ...head, subScores: record.subScores, recommendation }, drafts);
+    await done("assessed", { outcome: "workable", ...head, subScores: record.subScores, recommendation, ...(sized ? { sizeEstimate: { estLoc: sized.decision.estLoc, estFiles: sized.decision.estFiles, reviewable: !sized.decision.reviewableNo, confidence: sized.decision.confidence } } : {}) }, drafts);
     // A ticket already in the backlog keeps its rank in step with the new assessment (updated, never added).
     if (prev?.machineStatus === "scheduled" && this.deps.backlog) {
       const updated = await this.deps.backlog.upsertFromSource(backlogInput(ticket, ctx.repoPath, record), { createIfMissing: false }).catch(() => null);
       if (updated) await store.setMachine(ticket.key, { status: "scheduled" });
+    }
+  }
+
+  /** The `size_estimate` decision on the ticket, or null when none is wired or it failed (an unsure or failed estimate changes nothing). */
+  private async estimateSize(ticket: CanonicalTicket, files: string[], candidates: Candidate[], config: FactoryConfig, repoPath: string | null, at: Date): Promise<{ decision: SizeDecision; limits: ReturnType<typeof sizeLimits> } | null> {
+    const size = this.deps.size;
+    if (!size) return null;
+    try {
+      const limits = sizeLimits(config.size);
+      // Only the closed cards of the ticket's own candidates: what its audience may see. Their counted lines are looked up by id.
+      const closed = candidates.filter((c) => c.kind === "closed");
+      const counted = new Map((closed.length > 0 && size.counted ? await size.counted(closed.map((c) => c.id)).catch(() => []) : []).map((c) => [c.id, c]));
+      const sizedCards: SizedCard[] = closed.map((c) => ({ ...c, diffAdded: counted.get(c.id)?.added ?? null, diffRemoved: counted.get(c.id)?.removed ?? null }));
+      const similar = similarCards({ title: ticket.title, text: ticket.description, repo: repoPath }, sizedCards, { now: at, lookbackDays: config.dedup.lookback_days });
+      const context = sizeContextOf({ title: ticket.title, text: ticket.description, criteria: [], files: files.map((path) => ({ path })), symbols: [], similar, limits });
+      const answer = await size.decide(context, repoPath);
+      const asked = PACKS.size_estimate;
+      const { verdicts } = applyPolicy({ questions: asked.questions, policy: asked.policy }, answer, undefined);
+      return { decision: sizeDecisionOf(answer, { sure: verdicts.est_loc === "proceed", reviewableSure: verdicts.reviewable === "proceed" }), limits };
+    } catch (error) {
+      console.warn(`ticket size: the estimate failed: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
     }
   }
 

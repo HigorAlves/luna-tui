@@ -67,7 +67,7 @@ export interface PlanDeps {
   /** The size_estimate decision (full lane only, after risk_score and before the planner): null or absent skips it. `similar` lists the repository's nearest closed cards with a counted diff. */
   size?: {
     decide: ((size: SizeContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
-    similar?: (repoPath: string | null, card: { title: string; text: string }) => Promise<{ title: string; added: number; removed: number }[]>;
+    similar?: (task: StageContext["task"], card: { title: string; text: string }) => Promise<{ title: string; added: number; removed: number }[]>;
   };
   /** The split exit (wave 15): when the size verdict is `over`, the decomposer and split_check propose children for a person to approve. Absent, an over-limit plan only carries the flag. */
   split?: {
@@ -284,7 +284,7 @@ export function planStage(deps: PlanDeps): StageRunner {
     let sizeRecordId: string | undefined;
     if (deps.size?.decide && task.record?.decision !== "fast_lane") {
       try {
-        const similar = (await deps.size.similar?.(task.repoPath, { title: task.title, text: task.description }).catch(() => [])) ?? [];
+        const similar = (await deps.size.similar?.(task, { title: task.title, text: task.description }).catch(() => [])) ?? [];
         const sizeContext = sizeContextOf({ title: task.title, text: task.description, criteria: task.criteria, files: map?.files.map((f) => ({ path: f.path, ...(f.role ? { role: f.role } : {}) })) ?? [], symbols: map?.entry_points ?? [], similar, limits: sizeLimit });
         const sized = await deps.size.decide(sizeContext, task.repoPath);
         const asked = PACKS.size_estimate;

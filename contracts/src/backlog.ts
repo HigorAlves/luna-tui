@@ -43,4 +43,8 @@ export interface BacklogEntry {
   score: number;
   /** Not assessed for `backlog.stale_days`. */
   stale: boolean;
+  /** Every dependency is there: no item still in the list and no card that is not ready. A dependency that is neither is gone and does not block. */
+  schedulable?: boolean;
+  /** What the item waits for: ids, a kind and a state in fixed words. */
+  blockedBy?: Array<{ id: string; kind: "card" | "item"; state: string }>;
 }

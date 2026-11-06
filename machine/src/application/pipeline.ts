@@ -1310,6 +1310,50 @@ export class Pipeline {
     return this.candidatesFor({ repoPath: task.repoPath, sources, operator: sources.length === 0 && !task.jira, excludeId: task.id });
   }
 
+  /**
+   * The closed cards of the card's repository with a counted diff, for the size prompt's "similar cards": only those its own audience could already see
+   * (`canSeeKept`, as `candidatesFor`), the operator's own card seeing every one. A failed read is no cards.
+   */
+  async closedSized(task: TaskRow): Promise<Array<Candidate & { diffAdded: number | null; diffRemoved: number | null }>> {
+    if (!task.repoPath) return [];
+    try {
+      const sources = cardOf(task).sources;
+      const operator = sources.length === 0 && !task.jira;
+      const self = { repoPath: task.repoPath, sources };
+      return (await this.store.listTasks())
+        .filter((r) => r.id !== task.id && r.repoPath === task.repoPath && r.state === "closed" && !cardOf(r).mergedInto && r.diffAdded !== null && r.diffRemoved !== null)
+        .filter((r) => operator || canSeeKept(self, { repoPath: r.repoPath, sources: cardOf(r).sources }))
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, 500)
+        .map((r) => ({ id: r.id, kind: "closed" as const, title: r.title, text: r.description, repo: r.repoPath, closedAt: r.stateSince ?? r.updatedAt, diffAdded: r.diffAdded, diffRemoved: r.diffRemoved }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** For each id that is a card: its state and whether the dependency rule calls it satisfied (merged, or with an open PR). An id that is no card is absent. At most 50 ids. */
+  async dependencyStates(ids: readonly string[]): Promise<Map<string, { state: string; satisfied: boolean }>> {
+    const wanted = ids.filter((id) => UUID.test(id)).slice(0, 50);
+    const facts = await this.dependencyFacts(wanted);
+    const out = new Map<string, { state: string; satisfied: boolean }>();
+    for (const id of wanted) {
+      const fact = facts.get(id);
+      if (!fact) continue;
+      out.set(id, { state: fact.state, satisfied: schedulable({ id: "backlog-item", repoPath: null, dependsOn: [id] }, facts, { maxDepth: 1000 }).ok });
+    }
+    return out;
+  }
+
+  /** The counted diff of closed cards by id (ids the caller already filtered by audience). */
+  async countedDiffs(ids: string[]): Promise<Array<{ id: string; added: number; removed: number }>> {
+    const out: Array<{ id: string; added: number; removed: number }> = [];
+    for (const id of ids.slice(0, 50)) {
+      const row = UUID.test(id) ? await this.store.getTask(id).catch(() => null) : null;
+      if (row && row.state === "closed" && row.diffAdded !== null && row.diffRemoved !== null) out.push({ id, added: row.diffAdded, removed: row.diffRemoved });
+    }
+    return out;
+  }
+
   /** The cards and backlog items a ticket (not yet a card) could be a report of: only what its own source could already see (`canSeeKept`), failing closed. The Ticket Machine's enrichment reads this. */
   async ticketCandidates(repoPath: string | null, source: TaskSource): Promise<Candidate[]> {
     if (!repoPath) return [];

@@ -25,8 +25,8 @@ const fresh = (ticket: string, kind: Draft["kind"], text: string): Draft => ({ i
 
 const fixed = (n: number, digits = 2) => n.toFixed(digits);
 
-export function assessmentDraft(ticket: string, r: AssessmentRecord, recommended: Recommendation | null): Draft {
-  return fresh(ticket, "assessment", `Assessed: priority ${r.priority}, size ${r.size}, blast radius ${r.blastRadius}, score ${fixed(r.score)} (cost of delay ${fixed(r.costOfDelay, 1)} over cost of doing ${fixed(r.costOfDoing, 1)}).${recommended ? ` Recommended: ${recommended.replace(/_/g, " ")}.` : ""}`);
+export function assessmentDraft(ticket: string, r: AssessmentRecord, recommended: Recommendation | null, size: { estLoc: number; estFiles: number } | null = null): Draft {
+  return fresh(ticket, "assessment", `Assessed: priority ${r.priority}, size ${r.size}, blast radius ${r.blastRadius}, score ${fixed(r.score)} (cost of delay ${fixed(r.costOfDelay, 1)} over cost of doing ${fixed(r.costOfDoing, 1)}).${recommended ? ` Recommended: ${recommended.replace(/_/g, " ")}.` : ""}${size ? ` Estimated size: about ${Math.round(size.estLoc)} lines in ${Math.round(size.estFiles)} files.` : ""}`);
 }
 
 export function needsInfoDraft(ticket: string, missing: string[]): Draft {

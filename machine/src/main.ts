@@ -102,6 +102,7 @@ import { taskDiff } from "./adapters/git/diff.ts";
 import { noTokenGitHub } from "./application/github.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
 import { stackFactsOf } from "./application/stack.ts";
+import { similarCards } from "./application/size-estimate.ts";
 import { defaultBranch as hostDefaultBranch } from "./adapters/git/worktree.ts";
 import { shipRunner } from "./application/stages/ship.ts";
 import { StubStages } from "./application/stages/stubs.ts";
@@ -244,7 +245,7 @@ if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISAB
 /** Triage's signals: the classifier is built after the stages (it needs PackRuns), so it is bound below. */
 const triageSignals: TriageSignalDeps = { classify: null, graph, policy: (repoPath) => policies.for(repoPath), save: (id, patch) => engineSpend.updateTask(id, patch) };
 /** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
-const planDecisions: { decide: PlanDeps["decide"]; size: { decide: NonNullable<PlanDeps["size"]>["decide"] }; split: { decompose: NonNullable<PlanDeps["split"]>["decompose"]; check: NonNullable<PlanDeps["split"]>["check"]; depthOf?: NonNullable<PlanDeps["split"]>["depthOf"]; via?: NonNullable<PlanDeps["split"]>["via"] } } = { decide: null, size: { decide: null }, split: { decompose: null, check: null } };
+const planDecisions: { decide: PlanDeps["decide"]; size: { decide: NonNullable<PlanDeps["size"]>["decide"]; similar?: NonNullable<PlanDeps["size"]>["similar"] }; split: { decompose: NonNullable<PlanDeps["split"]>["decompose"]; check: NonNullable<PlanDeps["split"]>["check"]; depthOf?: NonNullable<PlanDeps["split"]>["depthOf"]; via?: NonNullable<PlanDeps["split"]>["via"] } } = { decide: null, size: { decide: null }, split: { decompose: null, check: null } };
 /** Build's red and scope checks run through PackRuns too: bound once it exists. */
 const buildDecisions: { decide: Decide | null; budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> } = { decide: null };
 /** Verify's finding_classify (and e2e's failure cause) run through PackRuns as the `verify` client: bound once it exists. */
@@ -654,6 +655,8 @@ if (packRuns) planDecisions.size.decide = async (size) => tagged(await packRuns.
 // The split exit: the decomposer (an agent pack with no tools) and split_check run through PackRuns as the plan stage's own client; the card's depth is read off its chain of splits.
 if (packRuns) planDecisions.split.decompose = async (split) => (await packRuns.run({ pack: "decompose", context: { split }, stage: "plan" }, "plan")).answer as Record<string, unknown>;
 if (packRuns) planDecisions.split.check = async (split) => tagged(await packRuns.run({ pack: "split_check", context: { split }, stage: "plan" }, "plan"));
+// The size prompt's similar cards: closed cards with a counted diff that the card's own audience may see, nearest first.
+planDecisions.size.similar = async (task, card) => similarCards({ ...card, repo: task.repoPath }, await pipeline.closedSized(task), { now: new Date(), lookbackDays: (await policies.for(task.repoPath)).factory.dedup.lookback_days });
 planDecisions.split.depthOf = (task) => splitDepth((id) => pipeline.get(id).catch(() => null), task);
 planDecisions.split.via = (task) => pipeline.splitVia(task);
 if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "verify" }, "verify"));
@@ -680,6 +683,13 @@ const ticketMachine = new TicketMachine({
   validity: { decide: async (c) => (await ticketPack("ticket_validity", c)) as never },
   assess: { decide: async (c) => (await ticketPack("ticket_assess", c)) as never },
   recommend: { decide: async (c) => (await ticketPack("ticket_recommend", c)) as never },
+  size: {
+    decide: async (size) => {
+      if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
+      return tagged(await packRuns.run({ pack: "size_estimate", context: { size } }, INTAKE_CLIENT)) as never;
+    },
+    counted: (ids) => pipeline.countedDiffs(ids),
+  },
   reply: { write: async (c) => (await ticketPack("ticket_reply", c)) as never },
   backlog: { upsertFromSource: (input, options) => backlog.upsertFromSource(input, options) },
   truth: { learned: (fact) => decisionTruth.learned(fact), draft: async (entry) => void (await ticketTruthWriter(config.stateDir)(entry)) },

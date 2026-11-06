@@ -53,7 +53,7 @@ import {
   type RepoHealth,
 } from "@hardness/contracts";
 import { type Context, Hono } from "hono";
-import { type Backlog, BacklogItemNotFoundError } from "../../application/backlog.ts";
+import { type Backlog, BacklogItemNotFoundError, NotSchedulableError } from "../../application/backlog.ts";
 import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -204,6 +204,7 @@ export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog,
     if (error instanceof TicketNotFound) return fail(c, 404, "not_found", error.message);
     if (error instanceof TicketRefusal) return fail(c, 409, "ticket_refused", error.message);
     if (error instanceof BacklogItemNotFoundError) return fail(c, 404, "not_found", error.message);
+    if (error instanceof NotSchedulableError) return fail(c, 409, "not_schedulable", error.message, { blockedBy: error.blockedBy });
     if (error instanceof UnknownRepositoryError) return fail(c, 400, "unknown_repository", error.message);
     if (error instanceof DedupAnswerError) return fail(c, 400, "invalid_candidate", error.message);
     if (error instanceof MergeError) return fail(c, 409, "cannot_merge", error.message);

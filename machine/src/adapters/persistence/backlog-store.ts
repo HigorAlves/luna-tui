@@ -58,6 +58,13 @@ export class PgBacklogStore implements BacklogStore {
     return rows[0] ? rowOf(rows[0]) : null;
   }
 
+  async replaceDependency(from: string, to: string): Promise<void> {
+    await this.db.query(
+      `update backlog_items set depends_on = (select coalesce(jsonb_agg(case when e = $1::text then to_jsonb($2::text) else to_jsonb(e) end), '[]'::jsonb) from jsonb_array_elements_text(depends_on) as e) where depends_on @> jsonb_build_array($1::text)`,
+      [from, to],
+    );
+  }
+
   async remove(id: string): Promise<boolean> {
     const [, count] = (await this.db.query("delete from backlog_items where id = $1", [id])) as [unknown, number];
     return count > 0;

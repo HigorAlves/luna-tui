@@ -129,3 +129,66 @@ describe("a candidate that comes from a ticket", () => {
     expect(await withHook.list()).toHaveLength(0);
   });
 });
+
+describe("the dependency rule in the backlog (wave 15)", () => {
+  const GONE = "00000000-0000-4000-8000-00000000dead";
+  const card = async (state: string, delivered = false) => {
+    const task = await pipeline.createTask({ title: `A ${state} card`, description: "t", repoPath: "/repos/a" });
+    await db.query("update tasks set state = $2, branch = 'task/x' where id = $1", [task.id, state]);
+    if (delivered) await db.query("insert into stage_runs (task_id, stage, attempt, outcome, detail, started_at, finished_at) values ($1, 'delivering', 1, 'pass', $2, now(), now())", [task.id, JSON.stringify({ prNumber: 4 })]).catch(() => undefined);
+    return task;
+  };
+
+  it("an item with no dependencies is listed schedulable and promoted exactly as before", async () => {
+    const a = await add("Free");
+    expect((await call("GET", "/backlog")).body[0]).toMatchObject({ id: a.body.id, schedulable: true, blockedBy: [] });
+    const promoted = await call("POST", `/backlog/${a.body.id}/promote`);
+    expect(promoted.status).toBe(201);
+    expect(cardOf(await pipeline.get(promoted.body.id)).dependsOn).toBeUndefined();
+  });
+
+  it("an item that names an item still in the list, or a card that is not ready, is blocked and says by what", async () => {
+    const first = await add("First");
+    const running = await card("building");
+    const second = await add("Second", { dependsOn: [first.body.id, running.id] });
+    const entry = (await call("GET", "/backlog")).body.find((e: any) => e.id === second.body.id);
+    expect(entry.schedulable).toBe(false);
+    expect(entry.blockedBy).toEqual(expect.arrayContaining([{ id: first.body.id, kind: "item", state: "in the backlog" }, { id: running.id, kind: "card", state: "building" }]));
+  });
+
+  it("an id that is neither a card nor an item is gone and does not block", async () => {
+    const a = await add("Orphan dependency", { dependsOn: [GONE] });
+    expect((await call("GET", "/backlog")).body[0]).toMatchObject({ id: a.body.id, schedulable: true, blockedBy: [] });
+  });
+
+  it("a closed dependency does not block", async () => {
+    const done = await card("closed");
+    const a = await add("After a merged card", { dependsOn: [done.id] });
+    expect((await call("GET", "/backlog")).body[0]).toMatchObject({ id: a.body.id, schedulable: true });
+  });
+
+  it("promote refuses an item that is not schedulable with 409 not_schedulable and the ids, and removes nothing", async () => {
+    const first = await add("First");
+    const second = await add("Second", { dependsOn: [first.body.id] });
+    const refused = await call("POST", `/backlog/${second.body.id}/promote`);
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ error: "not_schedulable", blockedBy: [{ id: first.body.id }] });
+    expect(JSON.stringify(refused.body)).toContain(first.body.id);
+    expect((await call("GET", "/backlog")).body).toHaveLength(2);
+    expect(await pipeline.list()).toHaveLength(0);
+  });
+
+  it("promoting the item another item named makes that item name the new card, and the card keeps its own card dependencies", async () => {
+    const done = await card("closed");
+    const first = await add("First", { dependsOn: [done.id] });
+    const second = await add("Second", { dependsOn: [first.body.id] });
+    const promoted = await call("POST", `/backlog/${first.body.id}/promote`);
+    expect(promoted.status).toBe(201);
+    expect(cardOf(await pipeline.get(promoted.body.id)).dependsOn).toEqual([done.id]);
+    const left = (await call("GET", "/backlog")).body;
+    expect(left).toHaveLength(1);
+    expect(left[0]).toMatchObject({ id: second.body.id, dependsOn: [promoted.body.id] });
+    // The new card is a draft nobody has started: the second item waits for it.
+    expect(left[0]).toMatchObject({ schedulable: false, blockedBy: [{ id: promoted.body.id, kind: "card", state: "draft" }] });
+  });
+});

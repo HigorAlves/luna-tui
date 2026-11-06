@@ -29,6 +29,8 @@ export interface BacklogStore {
   /** Demand minus one (never under 1): the undo of a bump. */
   unbump(id: string): Promise<BacklogRow | null>;
   remove(id: string): Promise<boolean>;
+  /** Every item that names `from` names `to` instead: one statement. */
+  replaceDependency(from: string, to: string): Promise<void>;
   /** New scores and size for an item (a ticket assessed again); it counts as assessed now and keeps its demand. */
   rescore(id: string, change: { text: string; scores: BacklogScores; size: BacklogSize }): Promise<BacklogRow | null>;
 }
@@ -42,12 +44,20 @@ export class BacklogItemNotFoundError extends Error {
 
 export interface BacklogOptions {
   store: BacklogStore;
-  pipeline: { createTask(input: NewTask): Promise<TaskRow> };
+  pipeline: { createTask(input: NewTask): Promise<TaskRow>; dependencyStates?(ids: readonly string[]): Promise<Map<string, { state: string; satisfied: boolean }>> };
   /** `backlog.stale_days`. */
   staleDays?: number;
   now?: () => Date;
   /** Called after a declined item has been removed (the ticket machine drafts the decline reply for a ticket's item). Never throws into the caller. */
   onDecline?: (row: BacklogRow) => Promise<void>;
+}
+
+/** The item waits for something: 409 `not_schedulable`, with what. Nothing was removed. */
+export class NotSchedulableError extends Error {
+  constructor(readonly blockedBy: NonNullable<BacklogEntry["blockedBy"]>) {
+    super(`this item waits for ${blockedBy.length} dependenc${blockedBy.length === 1 ? "y" : "ies"} that are not there yet`);
+    this.name = "NotSchedulableError";
+  }
 }
 
 export class Backlog {
@@ -59,21 +69,40 @@ export class Backlog {
     this.now = options.now ?? (() => new Date());
   }
 
-  private entries(rows: BacklogRow[]): BacklogEntry[] {
+  /** What each item waits for: an item still in `all` blocks; a card blocks unless the dependency rule calls it satisfied; an id that is neither is gone. */
+  private async blockers(rows: BacklogRow[], all: BacklogRow[]): Promise<Map<string, NonNullable<BacklogEntry["blockedBy"]>>> {
+    const items = new Set(all.map((r) => r.id));
+    const wanted = [...new Set(rows.flatMap((r) => r.dependsOn).filter((id) => !items.has(id)))];
+    const cards = wanted.length > 0 && this.options.pipeline.dependencyStates ? await this.options.pipeline.dependencyStates(wanted).catch(() => new Map<string, { state: string; satisfied: boolean }>()) : new Map<string, { state: string; satisfied: boolean }>();
+    return new Map(
+      rows.map((r) => [
+        r.id,
+        r.dependsOn.flatMap((id): NonNullable<BacklogEntry["blockedBy"]> => {
+          if (items.has(id)) return [{ id, kind: "item", state: "in the backlog" }];
+          const card = cards.get(id);
+          return card && !card.satisfied ? [{ id, kind: "card", state: card.state }] : [];
+        }),
+      ]),
+    );
+  }
+
+  private async entries(rows: BacklogRow[], all: BacklogRow[] = rows): Promise<BacklogEntry[]> {
+    const blocked = await this.blockers(rows, all);
     const ranked = rankBacklog(rows, { now: this.now(), staleDays: this.staleDays });
     const byId = new Map(rows.map((r) => [r.id, r]));
     return ranked.map((r) => {
       const row = byId.get(r.id)!;
-      return { id: row.id, title: row.title, text: row.text, sources: row.sources, repo: row.repo, scores: row.scores, size: row.size, demand: row.demand, dependsOn: row.dependsOn, addedAt: row.addedAt.toISOString(), assessedAt: row.assessedAt.toISOString(), score: r.score, stale: r.stale };
+      return { id: row.id, title: row.title, text: row.text, sources: row.sources, repo: row.repo, scores: row.scores, size: row.size, demand: row.demand, dependsOn: row.dependsOn, addedAt: row.addedAt.toISOString(), assessedAt: row.assessedAt.toISOString(), score: r.score, stale: r.stale, schedulable: (blocked.get(row.id) ?? []).length === 0, blockedBy: blocked.get(row.id) ?? [] };
     });
   }
 
   private async entry(row: BacklogRow): Promise<BacklogEntry> {
-    return this.entries([row])[0]!;
+    return (await this.entries([row], await this.options.store.list()))[0]!;
   }
 
   async list(): Promise<BacklogEntry[]> {
-    return this.entries(await this.options.store.list());
+    const rows = await this.options.store.list();
+    return this.entries(rows);
   }
 
   async add(input: BacklogAddInput): Promise<BacklogEntry> {
@@ -97,18 +126,27 @@ export class Backlog {
   async promote(id: string): Promise<TaskRow> {
     const item = await this.options.store.get(id);
     if (!item) throw new BacklogItemNotFoundError(id);
+    const all = await this.options.store.list();
+    const blockedBy = (await this.blockers([item], all)).get(id) ?? [];
+    if (blockedBy.length > 0) throw new NotSchedulableError(blockedBy);
+    // Its dependencies that are cards: what the new card waits for (an id that is gone is dropped).
+    const cardDeps = item.dependsOn.length > 0 && this.options.pipeline.dependencyStates ? [...(await this.options.pipeline.dependencyStates(item.dependsOn).catch(() => new Map())).keys()] : [];
     if (!(await this.options.store.remove(id))) throw new BacklogItemNotFoundError(id);
     const first = item.sources.find((s): s is TaskSource => "kind" in s);
     try {
-      return await this.options.pipeline.createTask({
-      title: item.title,
+      const made = await this.options.pipeline.createTask({
+        title: item.title,
         description: item.text,
         ...(first ? { source: first } : {}),
         sources: item.sources,
         ...(item.repo?.startsWith("/") ? { repoPath: item.repo } : {}),
         hints: { size: item.size, urgency: String(item.scores.time) },
         ...(item.repo ? { links: {} } : {}),
+        ...(cardDeps.length > 0 ? { stack: { dependsOn: cardDeps } } : {}),
       });
+      // Every other item that named this one now names the card.
+      await this.options.store.replaceDependency(id, made.id).catch((error: unknown) => console.warn(`backlog: dependencies were not moved to the new card: ${error instanceof Error ? error.message : String(error)}`));
+      return made;
     } catch (error) {
       await this.options.store.add({ title: item.title, text: item.text, sources: item.sources, repo: item.repo, scores: item.scores, size: item.size, dependsOn: item.dependsOn }).catch(() => undefined);
       throw error;
