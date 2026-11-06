@@ -752,6 +752,8 @@ export const EvidencePack = z.object({
   diffSummary: z.object({ what: z.string(), why: z.string(), files: z.array(z.string()), added: z.number().int().nullable(), removed: z.number().int().nullable() }).optional(),
   /** How many packs this card has had: 1 for the first, the stored one plus one after. (`version` is the schema's.) */
   revision: z.number().int().min(1).optional(),
+  /** The fixes pushed after review, oldest first (20 at most): the commit, its scope, a line and when. */
+  fixes: z.array(z.object({ sha: z.string(), scope: z.enum(["in_place", "re_verify_partial"]), summary: z.string(), at: z.string() })).max(20).optional(),
   /** What the pack was made from, so a new head re-makes only what it made stale: the browser run, a hash of the approved scenarios, the sha256 of the run's steps. */
   source: z.object({ e2eRunId: z.string().nullable(), scenariosKey: z.string(), stepsSha: z.string().nullable() }).optional(),
 });

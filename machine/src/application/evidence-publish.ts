@@ -187,14 +187,15 @@ export interface ReadyDeps {
   publish: PublishEvidence;
   /** Saves the pack, with its urls, on the task. */
   save: (taskId: string, pack: EvidencePack) => Promise<void>;
-  stateDir: string;
+  /** Where the ship cursor lives; absent, no cursor is written. */
+  stateDir?: string;
   /** The pack's own local dir for a commit. */
   localDir: (taskId: string, sha: string) => string;
   exists?: (path: string) => boolean;
 }
 
 export type Ready =
-  | { published: true; pack: EvidencePack; assets: number; readied: boolean; notes: string[] }
+  | { published: true; pack: EvidencePack; comment: "created" | "updated"; assets: number; readied: boolean; notes: string[] }
   | { published: false; reason: string; pack: EvidencePack };
 
 /** Publishes a complete pack onto the PR whose head on GitHub is `headSha`, saves it, records that it was published at this head, and marks a draft PR ready.
@@ -213,8 +214,10 @@ export async function publishAndReady(deps: ReadyDeps, input: { task: { id: stri
   // With no token behind the port nothing was published: no cursor, no ready.
   if (done.comment === "skipped") return { published: false, reason: "GitHub is not reachable with a token", pack };
   await deps.save(task.id, done.pack);
-  const cursor = (await loadCursor(deps.stateDir, task.id)) ?? emptyCursor({ slug, number });
-  await saveCursor(deps.stateDir, task.id, { ...cursor, pr: { slug, number }, published: { sha: pack.commitSha } });
+  if (deps.stateDir) {
+    const cursor = (await loadCursor(deps.stateDir, task.id)) ?? emptyCursor({ slug, number });
+    await saveCursor(deps.stateDir, task.id, { ...cursor, pr: { slug, number }, published: { sha: pack.commitSha } });
+  }
   if (draft) await deps.github.markPrReady(slug, number);
-  return { published: true, pack: done.pack, assets: done.assets, readied: draft, notes: done.notes ?? [] };
+  return { published: true, pack: done.pack, comment: done.comment, assets: done.assets, readied: draft, notes: done.notes ?? [] };
 }

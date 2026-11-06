@@ -61,6 +61,8 @@ export interface ShipMonitorDeps {
   maxWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => Date;
+  /** The Build Report's tests (scenario and file), so a changed test file points to its scenario in a fix's affected set. */
+  buildTests?: FixDeps["buildTests"];
   /** The CODEOWNERS text at the PR's base branch, or null; default: the first of the three places the port finds. Tests inject one. */
   readCodeowners?: (slug: string, baseRef: string) => Promise<string | null>;
   /** The freeze calendar; default: the repository's `luna.yaml` `freeze[]`. */
@@ -239,7 +241,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
     let me: string | null = null;
     const login = async () => (me ??= (await deps.github.viewer()).login.toLowerCase());
     const settle = () => settleDecisions(deps, task.id, cursor, slug, number);
-    const fixDeps = (): FixDeps => ({ github: deps.github, loop: deps.loop!, policies: deps.policies, evidence: deps.evidence });
+    const fixDeps = (): FixDeps => ({ github: deps.github, loop: deps.loop!, policies: deps.policies, evidence: deps.evidence, ...(deps.buildTests ? { buildTests: deps.buildTests } : {}) });
     const runOf = () => deps.loop?.exec ?? realExec;
     const plain = (text: string, cap: number) => postable(text, cap);
     const slugId = (id: string) => id.replace(/[^A-Za-z0-9]+/g, "-").slice(0, 40);
@@ -335,6 +337,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       if (out.resolvedTo.length > 0) cursor.resolvedByMachine = [...new Set([...(cursor.resolvedByMachine ?? []), ...out.resolvedTo])];
       if (out.replied > 0) await bump(round.id, { replies: out.replied });
       if (out.note) await note(`a reply could not be posted: ${out.note}`);
+      if (out.textNote) await note(out.textNote);
       if (round.topLevel && out.summary) await deps.github.commentOnIssue(slug, number, postable(out.summary)).catch(() => {});
       cursor.published = { sha: out.head };
       if (out.changed) cursor.fixes = [...(cursor.fixes ?? []), { sha: out.head, scope: round.scope, summary: round.summary.slice(0, 300), affected: out.affected ?? [] }].slice(-20);

@@ -7,7 +7,7 @@ import type { EvidencePack } from "@hardness/contracts";
 
 import { headCommit as worktreeHead, originSlugOf } from "../../adapters/git/worktree.ts";
 import { packComplete, repairPack } from "../../domain/evidence-pack.ts";
-import type { PublishEvidence } from "../evidence-publish.ts";
+import { type PublishEvidence, publishAndReady } from "../evidence-publish.ts";
 import { messageOf } from "../github.ts";
 import type { StageResult, StageRunner } from "../ports.ts";
 import { emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
@@ -34,7 +34,7 @@ export function shipWatchRunner(deps: ShipDeps): StageRunner {
   const slugOf = deps.slugOf ?? originSlugOf;
   const headOf = deps.headCommit ?? worktreeHead;
   /** The pack's turn at the gate: nothing to do (no pack), a stop (the head moved, the pack is incomplete), or what was published. */
-  const evidencePhase = async (slug: string, number: number, taskId: string, worktreePath: string, repoPath: string | null, approved: boolean): Promise<{ stop: StageResult } | { published: Record<string, unknown>; note?: string } | { none: true }> => {
+  const evidencePhase = async (slug: string, number: number, taskId: string, worktreePath: string, repoPath: string | null, approved: boolean, draft: boolean): Promise<{ stop: StageResult } | { published: Record<string, unknown>; readied?: boolean; note?: string } | { none: true }> => {
     const evidence = deps.evidence;
     if (!evidence) return { none: true };
     const pack = await evidence.load(taskId);
@@ -60,9 +60,10 @@ export function shipWatchRunner(deps: ShipDeps): StageRunner {
       if (fixed.unfixed.length > 0 || !after.ok) return { stop: { outcome: "fail", detail: { error: `the evidence pack is not complete: ${[...fixed.unfixed, ...after.problems].join("; ")}` } } };
       shown = fixed.pack;
     }
-    const done = await evidence.publish({ github: deps.github, slug, number, taskId, pack: shown, repoPath, approved, localDir: evidence.store.dirFor(taskId, pack.commitSha) });
-    await evidence.save(taskId, done.pack);
-    return { published: { comment: done.comment, assets: done.assets }, ...(note ? { note } : {}) };
+    // The one publisher: it checks the pack against the head, puts it on the PR, saves it, notes the head in the cursor and marks a draft ready.
+    const done = await publishAndReady({ github: deps.github, publish: evidence.publish, save: evidence.save, localDir: evidence.store.dirFor, ...(deps.stateDir ? { stateDir: deps.stateDir } : {}) }, { task: { id: taskId, repoPath }, slug, number, headSha: head, draft, pack: shown, approved });
+    if (!done.published) return { stop: { outcome: "fail", detail: { error: done.reason } } };
+    return { published: { comment: done.comment, assets: done.assets }, readied: done.readied, ...(note ? { note } : {}) };
   };
   return async (context) => {
     const { task } = context;
@@ -105,7 +106,7 @@ export function shipWatchRunner(deps: ShipDeps): StageRunner {
       });
       // Delivering was skipped (an older task): open the PR ready, as shipping used to. A resumed run never opens another.
       const pr = existing ?? (resumed ? { url: `https://github.com/${resumed.slug}/pull/${resumed.number}`, number: resumed.number, isDraft: false } : await openTaskPr(deps.github, slug, context, false));
-      const phase: Awaited<ReturnType<typeof evidencePhase>> = already ? { published: { resumed: true } } : await evidencePhase(slug, pr.number, task.id, cwd, task.repoPath ?? null, context.approvals.some((a) => a.kind === "awaiting_ship" && a.decision === "approved" && a.requested?.gate !== "ship_approval"));
+      const phase: Awaited<ReturnType<typeof evidencePhase>> = already ? { published: { resumed: true } } : await evidencePhase(slug, pr.number, task.id, cwd, task.repoPath ?? null, context.approvals.some((a) => a.kind === "awaiting_ship" && a.decision === "approved" && a.requested?.gate !== "ship_approval"), existing?.isDraft === true);
       if ("stop" in phase) return phase.stop;
       if (deps.stateDir && "published" in phase && !already) {
         const sha = (await headOf(cwd)).trim();
@@ -113,7 +114,7 @@ export function shipWatchRunner(deps: ShipDeps): StageRunner {
       }
       if ("published" in phase && !already) await context.emit?.("evidence.published", {}).catch(() => {});
       const shown = "published" in phase ? { published: phase.published, ...(phase.note ? { note: phase.note } : {}) } : deps.evidence ? { evidence: "none" } : {};
-      if (existing?.isDraft) await deps.github.markPrReady(slug, existing.number);
+      if (existing?.isDraft && !("published" in phase && phase.readied === true && !already)) await deps.github.markPrReady(slug, existing.number);
       const detail = { prUrl: pr.url, readied: existing?.isDraft === true, ...shown };
       if (!deps.monitor) return { outcome: "pass", detail };
       const watched = await deps.monitor(context, { slug, number: pr.number, url: pr.url });

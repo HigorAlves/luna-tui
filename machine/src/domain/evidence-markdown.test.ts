@@ -262,3 +262,16 @@ describe("renderEvidenceSection of a v2.2 pack", () => {
     expect(text).toContain("- should_fix: memoise the total (web/cart.tsx:4)");
   });
 });
+
+describe("Changes after review", () => {
+  const base = { summary: "s", format: "text", scenarios: [], findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "abc1234def", media: [], at: "t" } as never;
+  it("prints each fix through safe(), and prints nothing for a pack with no fixes", async () => {
+    const { renderEvidenceSection } = await import("./evidence-markdown.ts");
+    expect(renderEvidenceSection(base)).not.toContain("Changes after review");
+    const text = renderEvidenceSection({ ...(base as object), fixes: [{ sha: "e".repeat(40), scope: "in_place", summary: "renamed <b>x</b> @all", at: "t" }] } as never);
+    expect(text).toContain("### Changes after review");
+    expect(text).toContain("eeeeeee");
+    expect(text).not.toContain("<b>");
+    expect(text).not.toContain("@all");
+  });
+});

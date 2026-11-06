@@ -280,4 +280,43 @@ describe("shipping with an Evidence Pack", () => {
     expect(await run(context)).toMatchObject({ outcome: "pass", detail: { prUrl: "https://x/pull/9", published: { comment: "created" } } });
     expect(evidence.publish).toHaveBeenCalledWith(expect.objectContaining({ number: 9 }));
   });
+
+  it("is published through publishAndReady: a publish that put nothing on GitHub (no token) is a failure and the PR is not marked ready", async () => {
+    const github = fakeGitHub({ findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: true }), prHeadSha: async () => HEAD, markPrReady: async () => {} });
+    const { run, context } = withEvidence(pack(), github, { publish: vi.fn(async () => ({ pack: pack(), comment: "skipped" as const, assets: 0 })) });
+    const result = await run(context);
+    expect(result.outcome).toBe("fail");
+    expect(String(result.detail?.error)).toContain("not reachable");
+    expect(github.markPrReady).not.toHaveBeenCalled();
+  });
+
+  it("never uploads an unscanned medium without an approved preview gate (the real publisher behind the watch)", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { publishEvidence } = await import("../evidence-publish.ts");
+    const dir = mkdtempSync(join(tmpdir(), "watch-media-"));
+    const file = join(dir, "a.png");
+    writeFileSync(file, "png");
+    const uploads: string[] = [];
+    const github = fakeGitHub({
+      findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: false }),
+      prHeadSha: async () => HEAD,
+      viewer: async () => ({ login: "bot", teams: [] }),
+      prFacts: async () => ({ body: "## Why\n- cart" }) as never,
+      updatePrBody: async () => {},
+      listPrComments: async () => [],
+      commentOnIssue: async () => {},
+      ensureRelease: async () => ({ id: 5, url: "https://github.com/o/a/releases/tag/luna-evidence" }),
+      releaseAssets: async () => [],
+      uploadReleaseAsset: async (_s, _r, name) => (uploads.push(name), { url: `https://github.com/o/a/releases/download/luna-evidence/${name}` }),
+    });
+    const loaded = pack({ media: [{ kind: "screenshot", label: "a.png", url: file, scanned: false }] });
+    const w = withEvidence(loaded, github, { publish: publishEvidence, store: { dirFor: () => dir } });
+    await w.run(w.context);
+    expect(uploads).toEqual([]);
+    const approved = withEvidence(loaded, github, { publish: publishEvidence, store: { dirFor: () => dir } });
+    await approved.run({ ...approved.context, approvals: [{ kind: "awaiting_ship", decision: "approved" } as never] });
+    expect(uploads).toHaveLength(1);
+  });
 });

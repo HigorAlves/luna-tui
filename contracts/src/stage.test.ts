@@ -565,6 +565,16 @@ describe("ShipContext ci events", () => {
   });
 });
 
+describe("EvidencePack fixes", () => {
+  const base = { summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk: "low" as const, rollback: "r", howToVerify: "h", commitSha: "a", media: [], at: "t" };
+  it("takes at most 20 fixes, and a pack without any parses", () => {
+    const fix = { sha: "a", scope: "in_place" as const, summary: "s", at: "t" };
+    expect(EvidencePack.safeParse(base).success).toBe(true);
+    expect(EvidencePack.safeParse({ ...base, fixes: Array(20).fill(fix) }).success).toBe(true);
+    expect(EvidencePack.safeParse({ ...base, fixes: Array(21).fill(fix) }).success).toBe(false);
+  });
+});
+
 describe("the read step's shapes", () => {
   const thread = { id: "T1", path: "a.ts", line: 1, comments: [{ author: "ana", body: "rename x", at: "t" }] };
   const comment = { thread, pack: { summary: "s", scenarios: [{ id: "s1", text: "t", result: "pass" }], howToVerify: "h" }, myReplies: 0 };

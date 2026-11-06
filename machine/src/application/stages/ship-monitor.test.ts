@@ -61,7 +61,7 @@ function policyWith(over: (Partial<Policy> & { autoMerge?: "off" | "low" | "medi
 
 function setup(
   answers: Partial<GitHub> = {},
-  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"]; freezeSource?: ShipMonitorDeps["freeze"] } = {},
+  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"]; freezeSource?: ShipMonitorDeps["freeze"]; buildTests?: ShipMonitorDeps["buildTests"] } = {},
 ) {
   const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => ({ merged: true as const, sha: null }), ...answers });
   let clock = START.getTime();
@@ -86,6 +86,7 @@ function setup(
     ...(over.truth ? { truth: over.truth } : {}),
     ...(over.latestFinish ? { latestFinish: over.latestFinish } : {}),
     ...(over.freezeSource ? { freeze: over.freezeSource } : {}),
+    ...(over.buildTests ? { buildTests: over.buildTests } : {}),
   };
   const context = {
     task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" },
@@ -611,7 +612,7 @@ describe("the review loop: fixes", () => {
     expect(calls(github, "replyToThread")).toEqual([["replyToThread", "T1", "Renamed."]]);
     expect(calls(github, "resolveThread")).toEqual([["resolveThread", "T1"]]);
     expect(world.decide.mock.calls.map((c) => c[0])).toEqual(["event_class", "comment_intent", "fix_scope", "evidence_valid"]);
-    expect(world.saved[0]).toMatchObject({ commitSha: world.NEW, summary: expect.stringContaining("Fixed after review:") });
+    expect(world.saved[0]).toMatchObject({ commitSha: world.NEW, fixes: [expect.objectContaining({ sha: world.NEW })] });
     expect(world.publish).toHaveBeenCalledTimes(1);
     const cursor = (await loadCursor(stateDir, "t1"))!;
     expect(cursor.fixRounds).toBe(1);
@@ -1006,11 +1007,18 @@ describe("the read step, fix_scope for every change, and the fix guard", () => {
   });
 
   it("gives evidence_valid the affected scenarios (the ones the reader named) and keeps them with the fix on the cursor", async () => {
-    const world = loopWorld({ choices: { comment_intent: "change_request" }, read: { asks: "a", proposedFix: "b", scenarios: ["s2", "ghost"] } });
+    const world = loopWorld({ choices: { comment_intent: "change_request", evidence_valid: "refresh_text" }, read: { asks: "a", proposedFix: "b", scenarios: ["s2", "ghost"] } });
     const { run } = review(world, {}, [commentAct()], { pack: scenarioPack() });
     await run();
     expect(world.decide.mock.calls.find((c) => c[0] === "evidence_valid")![1]).toMatchObject({ fix: { affected: [{ id: "s2", text: "empty cart", result: "pass" }] } });
     expect((await loadCursor(stateDir, "t1"))!.fixes).toEqual([{ sha: world.NEW, scope: "in_place", summary: expect.any(String), affected: [{ id: "s2", text: "empty cart", result: "pass" }] }]);
+  });
+
+  it("points a changed test file to its scenario through the monitor's buildTests", async () => {
+    const world = loopWorld({ choices: { comment_intent: "change_request" }, changedFiles: "src/export.ts\ntest/cart.test.ts\n" });
+    const { run } = review(world, {}, [commentAct()], { pack: scenarioPack(), buildTests: async () => [{ scenario: "empty cart", file: "test/cart.test.ts" }] });
+    await run();
+    expect(world.decide.mock.calls.find((c) => c[0] === "evidence_valid")![1]).toMatchObject({ fix: { affected: [{ id: "s2", text: "empty cart", result: "pass" }] } });
   });
 
   it("asks a person at the twenty-first read", async () => {

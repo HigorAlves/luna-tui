@@ -21,12 +21,16 @@ import {
 import { at } from "../../adapters/git/machine-repo.ts";
 import { HOST_GIT, type GitExec, type RebaseResult } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
+import { refreshPackText } from "../../domain/evidence-refresh.ts";
 import { affectedScenarios } from "../../domain/affected-scenarios.ts";
 import { fixGuard } from "../../domain/fix-guard.ts";
 import { carriesSecret, postable } from "../../domain/postable.ts";
 import type { PublishEvidence } from "../evidence-publish.ts";
 import { type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
+import { publishAndReady } from "../evidence-publish.ts";
+import { touchesRenderedSurface } from "../../domain/evidence-stale.ts";
+import { branchDiffStat, changedPaths } from "../../adapters/git/worktree.ts";
 import { pushBranch } from "./deliver.ts";
 import { followUp } from "./pr-address.ts";
 import { gatherPr } from "./pr-review.ts";
@@ -78,8 +82,16 @@ export interface FixDeps {
   policies: { for: (repoPath: string | null) => Promise<{ decisions: Record<string, DecisionOverrides> }> };
   evidence: EvidenceHandle;
   /** The Build Report's tests (scenario and file), for the scenarios a fix's changed test files point to. Optional: without it only the reader's named scenarios count. */
+  /** The branch's size and files now, for the pack's text; default: host git through the machine repo's `at()`. */
+  branchDiff?: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number; files: string[] } | null>;
   buildTests?: (taskId: string) => Promise<Array<{ scenario: string; file?: string | null }>>;
 }
+
+const defaultBranchDiff = async (wt: string, repoPath: string | null) => {
+  if (!repoPath) return null;
+  const [stat, files] = await Promise.all([branchDiffStat(wt, repoPath), changedPaths(wt, repoPath)]);
+  return stat && files ? { ...stat, files } : null;
+};
 
 const KEY: Record<ShipDecisionPack, string> = { event_class: "event", comment_intent: "intent", fix_scope: "scope", evidence_valid: "validity", worth_learning: "worth" };
 
@@ -166,7 +178,7 @@ export interface FixInput {
 }
 
 export type FixOutcome =
-  | { ok: true; head: string; changed: boolean; affected?: Array<{ id: string; text: string; result: string }>; replied: number; resolved: number; repliedTo: string[]; resolvedTo: string[]; summary: string; note?: string }
+  | { ok: true; head: string; changed: boolean; textNote?: string; affected?: Array<{ id: string; text: string; result: string }>; replied: number; resolved: number; repliedTo: string[]; resolvedTo: string[]; summary: string; note?: string }
   | { ok: false; result: StageResult };
 
 const reasonOf = (result: StageResult): string => {
@@ -254,11 +266,13 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   if (checked.outcome !== "pass") {
     return stop(escalated(`the checks failed after the fix: ${reasonOf(checked)}`, "other", { findings: (checked.detail?.findings as Finding[] | undefined) ?? checked.findings ?? [] }));
   }
+  let reviewedFindings: unknown[] | undefined;
   if (input.scope === "re_verify_partial") {
     const reviewed = await deps.loop.runPack("verifying", subContext(ctxWork, `verify-${input.label}`), { baseCommit: before });
     if (reviewed.outcome !== "pass") {
       return stop(escalated(`the review of the fix found a problem: ${reasonOf(reviewed)}`, "other", { findings: (reviewed.detail?.findings as Finding[] | undefined) ?? reviewed.findings ?? [] }));
     }
+    reviewedFindings = (reviewed.detail?.findings as unknown[] | undefined) ?? reviewed.findings ?? [];
   }
 
   // The push is of what was checked: the head must still be the one the checks ran on, a descendant of the one we started from, with the PR's head where it was.
@@ -304,8 +318,25 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   const valid = await judgeShip(deps, "evidence_valid", ship, task.repoPath);
   // Unsure whether the pack is still true: Evidence runs again, the safe side.
   if (!valid.ok) return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}); ${valid.reason}, so Evidence runs again`, "head_moved") };
-  if (valid.choice === "refresh_media") return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}) and changes what the scenarios show: Evidence runs again`, "head_moved") };
-  const stamped = await restampPack(deps, task.id, input.slug, input.number, pack, after, `Fixed after review: ${postable(input.threadSummary, SUMMARY_ADD_CAP)}.`);
+  let choice = valid.choice;
+  let textNote: string | undefined;
+  if (choice === "refresh_media") {
+    // Honoured only when a scenario may have changed or a rendered surface did; otherwise it is read as refresh_text, and the note says so.
+    if (affected.length > 0 || touchesRenderedSurface(changedNames)) return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}) and changes what the scenarios show: the browser runs again at the new head and Evidence re-makes the media`, "head_moved", { refresh: "media" }) };
+    choice = "refresh_text";
+    textNote = "refresh_media was read as refresh_text: no scenario is affected and no rendered surface changed";
+  }
+  if (choice === "refresh_text") {
+    const delta = ((reviewedFindings ?? []) as Array<{ id?: unknown; title?: unknown; severity?: unknown }>).flatMap((f) => (typeof f.title === "string" ? [{ id: String(f.id ?? f.title), title: postable(f.title, 200), severity: String(f.severity ?? "info"), resolution: "found in the delta review of the fix" }] : []));
+    const diff = await (deps.branchDiff ?? defaultBranchDiff)(wt, task.repoPath).catch(() => null);
+    const next = refreshPackText(pack, { sha: after, fix: { scope: input.scope, summary: input.threadSummary, at: new Date().toISOString() }, delta, diff, now: new Date().toISOString() });
+    const { save, publish, store } = deps.evidence;
+    if (!save || !publish || !store) return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}); the Evidence Pack cannot be re-published from here, so Evidence runs again`, "head_moved") };
+    const done = await publishAndReady({ github: deps.github, publish, save, localDir: (id) => store.dirFor(id, pack.commitSha) }, { task: { id: task.id, repoPath: task.repoPath ?? null }, slug: input.slug, number: input.number, headSha: after, draft: false, pack: next, approved: false }).catch((error: unknown) => ({ published: false as const, reason: `re-publishing the Evidence Pack failed: ${messageOf(error)}` }));
+    if (!done.published) return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}); ${done.reason}, so Evidence runs again`, "head_moved") };
+    return { ...out, affected, ...(textNote ? { textNote } : {}) };
+  }
+  const stamped = await restampPack(deps, task.id, input.slug, input.number, pack, after, null);
   if (!stamped.ok) return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}); ${stamped.reason}, so Evidence runs again`, "head_moved") };
   return { ...out, affected };
 }

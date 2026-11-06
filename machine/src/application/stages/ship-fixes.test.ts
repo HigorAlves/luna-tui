@@ -16,7 +16,7 @@ const thread = { id: "T1", path: "src/export.ts", line: 12, comments: [{ author:
 const answer = (replies: Array<{ threadId: string; body: string; resolve: boolean }> = [{ threadId: "T1", body: "Renamed.", resolve: true }]) => ({ kind: "done", summary: "renamed", replies });
 
 /** A worktree whose head moves when the addressing pack "commits", and a git that records what it was asked. */
-function setup(over: { addressed?: StageResult; commit?: boolean; checks?: StageResult; verifying?: StageResult; valid?: string | Error; pushFails?: boolean; remote?: string; moveDuringChecks?: boolean; noSave?: boolean; branchRef?: string; symbolicRef?: string; fresh?: { back?: { ok: boolean; reason?: string } } } = {}) {
+function setup(over: { addressed?: StageResult; commit?: boolean; checks?: StageResult; verifying?: StageResult; valid?: string | Error; pushFails?: boolean; remote?: string; moveDuringChecks?: boolean; noSave?: boolean; branchRef?: string; symbolicRef?: string; names?: string; fresh?: { back?: { ok: boolean; reason?: string } } } = {}) {
   let head = B;
   const git: string[][] = [];
   const gitIn: Array<[string, string]> = [];
@@ -32,7 +32,7 @@ function setup(over: { addressed?: StageResult; commit?: boolean; checks?: Stage
       return ok();
     }
     if (a[0] === "merge-base") return ok();
-    if (a[0] === "diff" && a[1] === "--name-only") return ok("src/export.ts\nsrc/other.ts\n");
+    if (a[0] === "diff" && a[1] === "--name-only") return ok(over.names ?? "src/export.ts\nsrc/other.ts\n");
     if (a[0] === "diff") return ok(" 2 files changed, 3 insertions(+)");
     if (a[0] === "push") return over.pushFails ? { code: 1, stdout: "", stderr: "rejected" } : ok();
     return ok();
@@ -143,7 +143,7 @@ describe("a fix round on the shipped PR", () => {
     expect(s.github.resolveThread.mock.calls).toEqual([["T1"]]);
     expect(s.decide).toHaveBeenCalledWith("evidence_valid", { kind: "fix", fix: expect.objectContaining({ changed: ["src/export.ts", "src/other.ts"], threadSummary: "rename x in the export" }) }, "/repo");
     expect(s.saved).toHaveLength(1);
-    expect(s.saved[0]).toMatchObject({ commitSha: N, summary: "Adds the export. Fixed after review: rename x in the export." });
+    expect(s.saved[0]).toMatchObject({ commitSha: N, fixes: [{ sha: N, scope: "in_place", summary: "rename x in the export" }] });
     expect(s.publish).toHaveBeenCalledWith(expect.objectContaining({ slug: "o/a", number: 3, localDir: `/ev/t1/${B}` }));
     expect(s.resets()).toEqual([N]);
   });
@@ -198,8 +198,51 @@ describe("a fix round on the shipped PR", () => {
     expect(await fixRound(gaveUp.deps, gaveUp.context, gaveUp.input())).toMatchObject({ ok: false, result: { detail: { escalation: "plan_wrong", reason: "the plan is wrong" } } });
   });
 
-  it("sends the task back to Evidence when the fix changes what a scenario shows, or the decision cannot tell; the push stays", async () => {
-    const media = setup({ valid: "refresh_media" });
+  it("valid re-stamps the commit only: the text is not touched", async () => {
+    const s = setup({ valid: "valid" });
+    await fixRound(s.deps, s.context, s.input());
+    expect(s.saved[0]).toMatchObject({ commitSha: N, summary: "Adds the export." });
+    expect(s.saved[0]!.fixes).toBeUndefined();
+  });
+
+  it("refresh_text writes the pack's text again (the fix recorded, no appended sentence) and publishes it through publishAndReady", async () => {
+    const s = setup({ valid: "refresh_text" });
+    const out = await fixRound(s.deps, s.context, s.input());
+    expect(out).toMatchObject({ ok: true });
+    expect(s.saved[0]).toMatchObject({ commitSha: N, revision: 2, fixes: [{ sha: N, scope: "in_place" }] });
+    expect(s.saved[0]!.summary).not.toContain("Fixed after review");
+    expect(s.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads refresh_media as refresh_text when no scenario is affected and no rendered surface changed, and says so", async () => {
+    const s = setup({ valid: "refresh_media" });
+    const out = await fixRound(s.deps, s.context, s.input());
+    expect(out).toMatchObject({ ok: true, textNote: expect.stringContaining("refresh_text") });
+    expect(s.saved[0]).toMatchObject({ commitSha: N });
+  });
+
+  it("honours refresh_media when a rendered surface changed: head_moved with refresh: media", async () => {
+    const s = setup({ valid: "refresh_media", names: "src/export.ts\nsrc/App.tsx\n" });
+    s.github.prFiles.mockImplementation((async () => [{ path: "src/export.ts" }, { path: "src/App.tsx" }]) as never);
+    expect(await fixRound(s.deps, s.context, s.input())).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved", refresh: "media" } } });
+    expect(s.saved).toEqual([]);
+  });
+
+  it("honours refresh_media when the reader named an affected scenario", async () => {
+    const s = setup({ valid: "refresh_media" });
+    expect(await fixRound(s.deps, s.context, s.input({ named: ["s1"] }))).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved", refresh: "media" } } });
+  });
+
+  it("points a changed test file to its scenario through buildTests", async () => {
+    const s = setup({ valid: "refresh_media", names: "src/export.ts\ntest/export.test.ts\n" });
+    (s.deps as { buildTests?: unknown }).buildTests = async () => [{ scenario: "exports a cart", file: "test/export.test.ts" }];
+    expect(await fixRound(s.deps, s.context, s.input())).toMatchObject({ ok: false, result: { detail: { refresh: "media" } } });
+    expect((s.decide.mock.calls.at(-1) as unknown as unknown[])[1]).toMatchObject({ fix: { affected: [{ id: "s1", text: "exports a cart" }] } });
+  });
+
+  it("sends the task back to Evidence when the decision cannot tell, or the pack cannot be re-published; the push stays", async () => {
+    const media = setup({ valid: "refresh_media", names: "src/App.tsx\n" });
+    media.github.prFiles.mockImplementation((async () => [{ path: "src/App.tsx" }]) as never);
     expect(await fixRound(media.deps, media.context, media.input())).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved" } } });
     expect(media.pushed()).toHaveLength(1);
     expect(media.resets()).toEqual([N]);

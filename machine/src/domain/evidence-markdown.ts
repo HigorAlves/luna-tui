@@ -108,6 +108,7 @@ export function renderEvidenceSection(pack: EvidencePack, options: SectionOption
         ? ["", "| Scenario | Proof | Result |", "|---|---|---|", ...shown.map((s) => `| ${safe(s.text, true)} | ${s.test ? safe(s.test, true) : "none"} | ${s.result === "not_run" ? "not run" : s.result} |`), ...(hidden > 0 ? [`| … ${hidden} more | | |`] : [])]
         : []),
       ...(pack.findings.length || pack.findingsDetail?.length ? ["", "### Findings", ...findingLines(pack)] : []),
+      ...(pack.fixes?.length ? ["", "### Changes after review", ...pack.fixes.map((f) => `- \`${f.sha.slice(0, 7)}\` ${safe(f.summary)}`)] : []),
       ...(pack.outOfMap.length ? ["", "### Outside the plan's map", ...pack.outOfMap.map((o) => `- ${safe(o)}`)] : []),
       "",
       `**Rollback.** ${safe(pack.rollback)}`,

@@ -319,6 +319,8 @@ export async function buildRealStages(
           truth: truth ?? null,
           policies,
           latestFinish: evidenceDeps.latestFinish,
+          // A changed test file points to its scenario: the Build Report's tagged tests.
+          buildTests: async (taskId) => ((await evidenceDeps.reports?.(taskId).catch(() => null))?.build?.tests ?? []).map((t) => ({ scenario: t.scenario, file: t.file ?? null })),
           evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore },
           // The review loop: the decisions bind late; the sub-runs are the same packs the stages run, on the task's own worktree.
           loop: {
