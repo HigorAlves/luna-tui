@@ -348,8 +348,8 @@ describe("e2e_failure_cause", () => {
     await go(vi.fn().mockResolvedValueOnce(failing).mockResolvedValueOnce(passing));
     await go(vi.fn().mockResolvedValue(failing));
     expect(told).toEqual([
-      { pack: "e2e_failure_cause", recordId: "rec-1", label: { cause: { choice: "env_flake" } }, source: "e2e_rerun", taskId: "task-1" },
-      { pack: "e2e_failure_cause", recordId: "rec-1", label: { cause: { choice: ["product_bug", "test_bug"] } }, source: "e2e_rerun", taskId: "task-1" },
+      { pack: "e2e_failure_cause", recordId: "rec-1", label: { cause: { choice: "env_flake" } }, source: "e2e_rerun", kind: "fact", taskId: "task-1" },
+      { pack: "e2e_failure_cause", recordId: "rec-1", label: { cause: { choice: ["product_bug", "test_bug"] } }, source: "e2e_rerun", kind: "fact", taskId: "task-1" },
     ]);
   });
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { previewOn } from "../../test/policies.ts";
 
-import type { EngineId, StageOutput } from "@hardness/contracts";
+import type { DecisionRecord, EngineId, StageOutput } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -72,6 +72,14 @@ describe("POST /runs", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ pack: "chat_triage", engine: "codex:luna", model: "gpt-6-luna", client: "notch", ok: true, error: null, turns: 1, duration_ms: 4200, cost_usd: "0.00310000" });
     expect(JSON.stringify(rows)).not.toMatch(/rollout|Approved/);
+  });
+
+  it("keeps a decision record as a client's, whatever client name the request sends: the header never makes a call the machine's own", async () => {
+    const appended: DecisionRecord[] = [];
+    const retro = { kind: "retro", retro: { predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 640, removed: 90, retries: { verify: 2, e2e: 1, ci: 1, total: 5 }, escalations: 1, format: "captures", durationMin: 310 }, runs: 14 } };
+    const app = appWith(output({ answer: { worth: { value: true, p: 0.93 } } }), { deps: { decisions: { append: async (record) => void appended.push(record) } } });
+    for (const client of ["intake", "plan", "ship"]) expect((await post(app, { pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, client)).status).toBe(200);
+    expect(appended.map((r) => [r.client, r.origin])).toEqual([["intake", "client"], ["plan", "client"], ["ship", "client"]]);
   });
 
   it("is 400 for a pack that runs in a task, eval_judge, an engine the pack does not allow, a context that does not fit, or a bad client name", async () => {

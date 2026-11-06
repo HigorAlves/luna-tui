@@ -42,6 +42,14 @@ describe("the loop", () => {
     expect((await runHarvest(all, "worth_learning", { list: async () => [own, client] }, { all: true })).written).toEqual(["rec-11111111", "rec-22222222"]);
   });
 
+  it("harvests a record the machine made itself even when it names no stage (intake, tickets, conversations, triage), and still skips an old one a client made", async () => {
+    const machine = { ...record("11111111-aaaa"), stage: undefined, client: "intake", origin: "machine" as const };
+    const oldClient = { ...record("22222222-bbbb"), stage: undefined, client: "intake" };
+    const newClient = { ...record("33333333-cccc"), stage: "ship", origin: "client" as const };
+    const dir = mkdtempSync(join(tmpdir(), "loop-"));
+    expect((await runHarvest(dir, "worth_learning", { list: async () => [machine, oldClient, newClient] }, {})).written).toEqual(["rec-11111111"]);
+  });
+
   it("pushes every case to the dataset named for the pack, and nothing to a queue without --queue", async () => {
     const dir = mkdtempSync(join(tmpdir(), "loop-"));
     await runHarvest(dir, "worth_learning", { list: async () => [record("11111111-aaaa"), record("22222222-bbbb", { label: { worth: { value: false } }, source: "x", at: "t" })] }, {});

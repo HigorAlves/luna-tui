@@ -89,7 +89,7 @@ export interface TicketMachineDeps {
   /** The shared backlog, for `schedule` and for keeping an item's rank in step with a re-assessment. */
   /** Ground truth: what a tap says about the decision `ticket_recommend` made (the decision log's `learned`), and what was done to a draft (a file beside a gate's). Absent: nothing is kept. */
   truth?: {
-    learned(fact: { pack: "ticket_recommend"; recordId: string; label: Record<string, Record<string, unknown>>; source: string }): Promise<boolean>;
+    learned(fact: { pack: "ticket_recommend"; recordId: string; label: Record<string, Record<string, unknown>>; source: string; kind: "person" | "fact" | "outcome" }): Promise<boolean>;
     draft(entry: { key: string; draft: string; kind: string; did: "sent" | "edited" | "ignored"; original: string; final: string | null; at: string }): Promise<void>;
   };
   /** The label the GitHub intake watches for: a child ticket made on GitHub carries it, so the intake sees it. */
@@ -514,7 +514,7 @@ export class TicketMachine implements TicketIntake {
       const last = [...row.assessments].reverse().find((a) => a.outcome === "workable") as { recommendation?: { action?: string; recordId?: string } } | undefined;
       const recordId = last?.recommendation?.recordId;
       if (!recordId || !this.deps.truth) return;
-      await this.deps.truth.learned({ pack: "ticket_recommend", recordId, label: { action: { choice: chosen } }, source: last?.recommendation?.action === chosen ? "ticket_confirmed" : "ticket_override" });
+      await this.deps.truth.learned({ pack: "ticket_recommend", recordId, label: { action: { choice: chosen } }, kind: "person", source: last?.recommendation?.action === chosen ? "ticket_confirmed" : "ticket_override" });
     } catch (error) {
       console.warn(`ticket truth: ${error instanceof Error ? error.message : String(error)}`);
     }

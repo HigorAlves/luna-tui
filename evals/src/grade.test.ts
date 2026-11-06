@@ -157,6 +157,11 @@ describe("a decision pack's grades", () => {
     expect(caseResult("worth_learning", labelled, worth(true, 0.6), null).decision).toMatchObject({ correct: true, verdict: "flag" });
   });
 
+  it("leaves correct null for a labelled case still marked for review: an outcome's label counts once a person confirms it", () => {
+    const outcome = Expect.parse({ schema: 1, rubric: "r", label: { worth: { value: true } }, review: true, checks: [] });
+    expect(caseResult("worth_learning", outcome, worth(true, 0.9), null).decision).toMatchObject({ correct: null });
+  });
+
   it("leaves correct null for a case with no label, and grades nothing for an agent pack or a missing answer", () => {
     expect(caseResult("worth_learning", unlabelled, worth(true, 0.9), null).decision).toMatchObject({ correct: null });
     expect(caseResult("slack_triage", expectation, run("c1", output({ items: [verdict("m1", "P0")] })), null).decision).toBeUndefined();

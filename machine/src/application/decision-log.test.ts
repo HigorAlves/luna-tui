@@ -68,7 +68,7 @@ describe("DecisionLog", () => {
     await log.append(record());
     const truth = { label: { worth: { value: false } }, source: "retro", at: "2026-11-05T00:00:00.000Z" };
     expect(await log.setTruth("worth_learning", "r1", truth)).toBe(true);
-    expect((await log.read("worth_learning", "r1"))?.truth).toEqual(truth);
+    expect((await log.read("worth_learning", "r1"))?.truth).toMatchObject(truth);
     expect(statSync(join(stateDir, "decisions", "worth_learning", "2026-11-04", "r1.json")).mode & 0o777).toBe(0o600);
     expect(await log.setTruth("worth_learning", "gone", truth)).toBe(false);
   });
@@ -80,5 +80,51 @@ describe("DecisionLog", () => {
     expect(await log.sweep(90, new Date("2026-11-04T00:00:00Z"))).toBe(1);
     expect((await log.list("worth_learning")).map((r) => r.id)).toEqual(["new"]);
     expect(await log.sweep(0, new Date("2030-01-01T00:00:00Z"))).toBe(0);
+  });
+  describe("a truth adds up", () => {
+    const conversation = () => record({ pack: "conversation_assess", answer: { needs_reply: { value: false, p: 0.6 }, kind: { choice: "request", p: 0.7 } } });
+    const at = (n: number) => `2026-11-05T09:0${n}:00.000Z`;
+
+    it("keeps both labels when a kind override is followed by a sent draft (today the second erases the first)", async () => {
+      const log = new DecisionLog({ stateDir });
+      await log.append(conversation());
+      await log.setTruth("conversation_assess", "r1", { label: { kind: { choice: "question" } }, source: "person", kind: "person", at: at(1) });
+      await log.setTruth("conversation_assess", "r1", { label: { needs_reply: { value: true } }, source: "person", kind: "person", at: at(2) });
+      const truth = (await log.read("conversation_assess", "r1"))!.truth!;
+      expect(truth.label).toEqual({ kind: { choice: "question" }, needs_reply: { value: true } });
+      expect(truth).toMatchObject({ source: "person", kind: "person", at: at(2) });
+      expect(truth.history!.map((h) => h.label)).toEqual([{ kind: { choice: "question" } }, { needs_reply: { value: true } }]);
+    });
+
+    it("never lets an outcome overwrite a fact or a person's label, and lets a person overwrite either", async () => {
+      const log = new DecisionLog({ stateDir });
+      await log.append(conversation());
+      await log.setTruth("conversation_assess", "r1", { label: { kind: { choice: "question" } }, source: "person", kind: "person", at: at(1) });
+      await log.setTruth("conversation_assess", "r1", { label: { kind: { choice: "request" }, needs_reply: { value: true } }, source: "merged", kind: "outcome", at: at(2) });
+      let truth = (await log.read("conversation_assess", "r1"))!.truth!;
+      expect(truth.label).toEqual({ kind: { choice: "question" }, needs_reply: { value: true } });
+      expect(truth).toMatchObject({ source: "merged", kind: "outcome" });
+      await log.setTruth("conversation_assess", "r1", { label: { needs_reply: { value: false } }, source: "rerun", kind: "fact", at: at(3) });
+      await log.setTruth("conversation_assess", "r1", { label: { needs_reply: { value: true } }, source: "later_outcome", kind: "outcome", at: at(4) });
+      truth = (await log.read("conversation_assess", "r1"))!.truth!;
+      expect(truth.label.needs_reply).toEqual({ value: false });
+      expect(truth).toMatchObject({ source: "rerun", kind: "fact", at: at(3) });
+      await log.setTruth("conversation_assess", "r1", { label: { needs_reply: { value: true } }, source: "person", kind: "person", at: at(5) });
+      expect((await log.read("conversation_assess", "r1"))!.truth!.label.needs_reply).toEqual({ value: true });
+    });
+
+    it("lets the later of two equals win, reads a truth with no kind as a fact, and keeps at most 20 history entries", async () => {
+      const log = new DecisionLog({ stateDir });
+      await log.append(record({ truth: { label: { worth: { value: true } }, source: "old_fact", at: at(0) } }));
+      await log.setTruth("worth_learning", "r1", { label: { worth: { value: false } }, source: "retro_closed", kind: "fact", at: at(1) });
+      expect((await log.read("worth_learning", "r1"))!.truth).toMatchObject({ label: { worth: { value: false } }, source: "retro_closed" });
+      await log.setTruth("worth_learning", "r1", { label: { worth: { value: true } }, source: "x", kind: "outcome", at: at(2) });
+      expect((await log.read("worth_learning", "r1"))!.truth!.label.worth).toEqual({ value: false });
+      for (let n = 0; n < 25; n++) await log.setTruth("worth_learning", "r1", { label: { worth: { value: n % 2 === 0 } }, source: `s${n}`, kind: "fact", at: `2026-11-06T09:${String(n).padStart(2, "0")}:00.000Z` });
+      const truth = (await log.read("worth_learning", "r1"))!.truth!;
+      expect(truth.history).toHaveLength(20);
+      expect(truth.history!.at(-1)!.source).toBe("s24");
+      expect(truth.history![0]!.source).toBe("s5");
+    });
   });
 });

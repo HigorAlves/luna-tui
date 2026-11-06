@@ -9,7 +9,7 @@ import { ZodError } from "zod";
 import { type Credentials, NoCredentialError } from "../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
 import { type RunEnd, type RunStart, type Telemetry, noTelemetry } from "./telemetry.ts";
-import { EngineNotAllowedError, NotOnDemandError, PACK_RUNS_DIR, type PackRunRecord, PackRuns, QueueFullError, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "./pack-runs.ts";
+import { EngineNotAllowedError, NotOnDemandError, PACK_RUNS_DIR, type PackRunRecord, PackRuns, QueueFullError, ownCalls, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "./pack-runs.ts";
 
 const NOW = new Date("2026-11-02T12:00:00.000Z");
 const chat = {
@@ -418,6 +418,52 @@ describe("decision records", () => {
     expect(spans[0]!.end).toMatchObject({ input: { context: { ship: retro } }, output: { answer: { worth: { value: true, p: 0.93 } }, verdicts: { worth: "proceed" }, overall: "proceed" } });
     expect(spans[1]!.end).not.toHaveProperty("input");
     expect(spans[1]!.end).not.toHaveProperty("output");
+  });
+
+  describe("whose a record is, and what it keeps", () => {
+    const keep = async (call: (r: PackRuns) => Promise<unknown>, over: Partial<ConstructorParameters<typeof PackRuns>[0]> = {}) => {
+      const appended: DecisionRecord[] = [];
+      await call(runs(fakeSandbox(answered), { decisions: { append: async (record) => void appended.push(record) }, ...over }));
+      return appended[0]!;
+    };
+    const ask = { pack: "worth_learning" as const, engine: "claude:haiku" as const, context: { ship: retro } };
+
+    it("is the machine's when an in-process caller says so, and a client's otherwise, whatever the client header or the stage says", async () => {
+      expect((await keep((r) => r.run(ask, "intake", undefined, { own: true }))).origin).toBe("machine");
+      expect((await keep((r) => r.run(ask, "intake"))).origin).toBe("client");
+      expect((await keep((r) => r.run({ ...ask, stage: "ship" }, "ship"))).origin).toBe("client");
+    });
+
+    it("is the machine's through ownCalls, the wrapper every in-process caller of the machine uses", async () => {
+      expect((await keep((r) => ownCalls(r).run(ask, "intake"))).origin).toBe("machine");
+    });
+
+    it("stores the context with secrets redacted and counts them, while the model is given the real one", async () => {
+      const token = ["gh", "p_"].join("") + "b".repeat(36);
+      const answers = Object.fromEntries(Object.keys(PACKS.intake_dedup.questions).map((slot) => [slot, { choice: "different", confidence: 0.9 }]));
+      const appended: DecisionRecord[] = [];
+      const dedup = { title: "Login fails", text: `the log says ${token} and then ${token}`, candidates: [] };
+      await runs(fakeSandbox(output({ answer: answers })), { decisions: { append: async (record) => void appended.push(record) } }).run({ pack: "intake_dedup", context: { dedup } }, "intake", undefined, { own: true });
+      expect(JSON.stringify(appended[0]!.context)).not.toContain(token);
+      expect(appended[0]!.context).toEqual({ dedup: { title: "Login fails", text: "the log says [redacted] and then [redacted]", candidates: [] } });
+      expect(appended[0]!.redacted).toBe(1);
+      expect(JSON.stringify(seen[0]!.input)).toContain(token);
+    });
+
+    it("keeps no text of a private conversation, and says so on the record", async () => {
+      const conversation = { channel: "leadership", private: true, thread: ["marta: fire Bob on friday"], latest: "fire Bob on friday", author: { profile: "member", title: null }, candidates: [] };
+      const answers = { related: { choice: "none", confidence: 0.9 }, new_work: { value: true, p: 0.9 } };
+      const appended: DecisionRecord[] = [];
+      await runs(fakeSandbox(output({ answer: answers })), { decisions: { append: async (record) => void appended.push(record) } }).run({ pack: "conversation_relation", context: { conversation } }, "intake", undefined, { own: true });
+      expect(appended[0]).toMatchObject({ private: true, origin: "machine", context: { conversation: { channel: "leadership", private: true, thread: ["[private]"], latest: "[private]" } } });
+      expect(JSON.stringify(appended[0]!.context)).not.toContain("Bob");
+    });
+
+    it("records the verdict under the repository's own bars, what the call cost, and the engine it moved from", async () => {
+      const record = await keep((r) => r.run(ask, "ship", undefined, { own: true }));
+      expect(record.acted).toEqual({ overall: "proceed", below: [], overrides: false });
+      expect(record.usage).toEqual({ costUsd: 0.0031, durationMs: 4200 });
+    });
   });
 
   it("answers anyway when the log cannot write", async () => {

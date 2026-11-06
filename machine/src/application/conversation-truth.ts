@@ -28,7 +28,7 @@ export class ConversationTruth {
       console.warn(`conversation truth: could not write the outcome: ${error instanceof Error ? error.message : String(error)}`);
     }
     const record = input.records.assess;
-    if ((input.outcome === "sent_as_drafted" || input.outcome === "edited") && record && this.truth) await this.truth.learned({ pack: "conversation_assess", recordId: record, label: { needs_reply: { value: true } }, source: "person" });
+    if ((input.outcome === "sent_as_drafted" || input.outcome === "edited") && record && this.truth) await this.truth.learned({ pack: "conversation_assess", recordId: record, label: { needs_reply: { value: true } }, kind: "person", source: "person" });
   }
 
   /** A hand-set relation: labels `related` (the slot, or none) and, for a new candidate or none, `new_work`, on the `conversation_relation` record. */
@@ -36,7 +36,7 @@ export class ConversationTruth {
     if (!input.record || !this.truth) return;
     const label: Record<string, { choice: string } | { value: boolean }> = { related: { choice: input.slot ? `slot${input.slot}` : "none" } };
     if (input.slot === null) label.new_work = { value: input.relation === "new_candidate" };
-    await this.truth.learned({ pack: "conversation_relation", recordId: input.record, label, source: "person" });
+    await this.truth.learned({ pack: "conversation_relation", recordId: input.record, label, kind: "person", source: "person" });
   }
 
   /** A hand-set kind or priority on a thread the machine classified. Never throws: ground truth must not block a tap. */
@@ -55,7 +55,7 @@ export class ConversationTruth {
       console.warn(`conversation truth: could not write the file: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (!recordId || !this.truth) return;
-    if (input.kind) await this.truth.learned({ pack: "conversation_assess", recordId, label: { kind: { choice: input.kind } }, source: "person" });
-    else if (input.priority && c.knockOut && c.priority === "P0" && input.priority !== "P0") await this.truth.learned({ pack: "conversation_assess", recordId, label: { [c.knockOut]: { value: false } }, source: "person" });
+    if (input.kind) await this.truth.learned({ pack: "conversation_assess", recordId, label: { kind: { choice: input.kind } }, kind: "person", source: "person" });
+    else if (input.priority && c.knockOut && c.priority === "P0" && input.priority !== "P0") await this.truth.learned({ pack: "conversation_assess", recordId, label: { [c.knockOut]: { value: false } }, kind: "person", source: "person" });
   }
 }

@@ -14,8 +14,9 @@ export interface RecordSource {
   list(pack: PackId, options: { since?: Date; withTruth?: boolean }): Promise<DecisionRecord[]>;
 }
 
-/** Only the pipeline's own records (they name a `stage`) unless `all`: an HTTP client's context is not the machine's to turn into a case. */
-export const ownRecords = (records: DecisionRecord[], all = false): DecisionRecord[] => (all ? records : records.filter((r) => r.stage !== undefined));
+/** Only the machine's own records unless `all`: an HTTP client's context is not the machine's to turn into a case. A record says whose it is (`origin`);
+ *  one written before that field was there is the pipeline's own when it names a `stage`. */
+export const ownRecords = (records: DecisionRecord[], all = false): DecisionRecord[] => (all ? records : records.filter((r) => (r.origin !== undefined ? r.origin === "machine" : r.stage !== undefined)));
 
 export async function runHarvest(evalsDir: string, pack: PackId, source: RecordSource, options: { since?: Date; withTruth?: boolean; all?: boolean }): Promise<HarvestReport> {
   const { all, ...filters } = options;

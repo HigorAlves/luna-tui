@@ -39,13 +39,13 @@ export interface CaseResult {
   trial?: number;
 }
 
-/** A decision answer's grades: `correct` against the case's label (null without one), the mean confidence over its questions, the verdict under the pack's own bars. */
+/** A decision answer's grades: `correct` against the case's label (null without one, or while a person has yet to confirm it: `review`), the mean confidence over its questions, the verdict under the pack's own bars. */
 export function gradeDecision(pack: PackId, expect: Expect, answer: Record<string, unknown>): DecisionGrade | null {
   const decision = decisionPack(pack);
   if (!decision) return null;
   const confidences = Object.entries(decision.questions).map(([name, question]) => confidenceOf(question, answer[name]));
   return {
-    correct: expect.label ? matches(answer, expect.label as Label) : null,
+    correct: expect.label && expect.review !== true ? matches(answer, expect.label as Label) : null,
     confidence: confidences.length === 0 ? 0 : confidences.reduce((a, b) => a + b, 0) / confidences.length,
     verdict: applyPolicy(decision, answer).overall,
   };

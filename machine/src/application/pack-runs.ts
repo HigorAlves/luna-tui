@@ -36,6 +36,7 @@ import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
 import { type ContextPackId, type PackContext, contextSchema, isContextPack } from "../domain/context-packs.ts";
 import { engineProblem, fallbackCandidates } from "../domain/engine-choice.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
+import { recordContext } from "../domain/record-context.ts";
 import { buildContextPackInput } from "../domain/stage-input.ts";
 import { type RunFacts, runFacts } from "../domain/task.ts";
 import { applyPolicy } from "@hardness/contracts";
@@ -104,9 +105,21 @@ export class RunRateLimitedError extends Error {
  *  names a `stage` is the pipeline's own, the only kind whose context and answer a span may carry. */
 export type HostRunInput = RunInput & { taskId?: string; stage?: string };
 
+/** Who is calling, as the process knows it. `own` is passed by the machine's in-process callers only; the HTTP route never passes it,
+ *  so a decision record is the machine's own (`origin: "machine"`) whatever an `X-Luna-Client` header says. */
+export interface RunOptions {
+  own?: boolean;
+}
+
 export interface PackRunsPort {
   /** `signal` is the request's: when it aborts, a waiting call is dropped and a running one stopped. */
-  run(input: HostRunInput, client: string | null, signal?: AbortSignal): Promise<RunResult>;
+  run(input: HostRunInput, client: string | null, signal?: AbortSignal, options?: RunOptions): Promise<RunResult>;
+}
+
+/** The port the machine's own code calls: every call is marked `own`, so its decision records read `origin: "machine"`. The HTTP route gets the
+ *  runs themselves, never this wrapper. */
+export function ownCalls(runs: PackRunsPort): PackRunsPort {
+  return { run: (input, client, signal, options) => runs.run(input, client, signal, { ...options, own: true }) };
 }
 
 export interface PackRunsDeps {
@@ -136,6 +149,8 @@ export interface PackRunsDeps {
   telemetry?: Telemetry;
   /** Where a decision pack's validated answer is kept with its context (RFC 0005 wave 7); none keeps nothing. */
   decisions?: DecisionAppender;
+  /** Secret values to redact from the context a record stores (the shapes of tokens are always redacted); none by default. */
+  secrets?: () => Readonly<Record<string, string>>;
 }
 
 /** `resetsAt` as the run reported it (epoch seconds, or a string from an older runner), as ISO. */
@@ -178,7 +193,7 @@ export class PackRuns implements PackRunsPort {
     await rm(join(this.deps.stateDir, PACK_RUNS_DIR), { recursive: true, force: true });
   }
 
-  async run(request: HostRunInput, client: string | null, signal?: AbortSignal): Promise<RunResult> {
+  async run(request: HostRunInput, client: string | null, signal?: AbortSignal, options: RunOptions = {}): Promise<RunResult> {
     const { pack } = request;
     if (!isContextPack(pack)) throw new NotOnDemandError(`${pack} is not run on demand: only ${Object.keys(PACKS).filter((id) => isContextPack(id as PackId)).join(", ")} are`);
     let engine = request.engine ?? PACKS[pack].engines.default;
@@ -208,7 +223,7 @@ export class PackRuns implements PackRunsPort {
       let limit: RunRateLimitedError | null = null;
       for (;;) {
         try {
-          return await this.once(pack, context, engine, client, signal, movedFrom, { taskId: request.taskId, stage: request.stage });
+          return await this.once(pack, context, engine, client, signal, movedFrom, { taskId: request.taskId, stage: request.stage, own: options.own === true });
         } catch (thrown) {
           if (!(thrown instanceof RunRateLimitedError)) throw thrown;
           tried.push(engine);
@@ -254,7 +269,7 @@ export class PackRuns implements PackRunsPort {
   }
 
   /** One run of the pack on one engine, in a place already taken: its answer, or the error that ended it. */
-  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null, origin: { taskId?: string; stage?: string } = {}): Promise<RunResult> {
+  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null, origin: { taskId?: string; stage?: string; own?: boolean } = {}): Promise<RunResult> {
     const startedAt = this.now();
     const t0 = Date.now();
     const span = this.telemetry.run({ kind: "pack", pack, engine, client });
@@ -314,7 +329,7 @@ export class PackRuns implements PackRunsPort {
       });
       await rm(runDir, { recursive: true, force: true }).catch(() => {});
     }
-    const recordId = decided && answer ? await this.keep({ pack, engine, model: usage.model, client, ...origin, context, answer, decided, traceId: span.traceId() }) : undefined;
+    const recordId = decided && answer ? await this.keep({ pack, engine, model: usage.model, client, taskId: origin.taskId, stage: origin.stage, own: origin.own === true, context, answer, decided, usage, movedFrom, traceId: span.traceId() }) : undefined;
     if (!(failure instanceof RunNoCredentialError)) await this.record({ pack, engine, model: usage.model, client, ok: failure === null, error: failure?.message ?? null, turns: usage.turns, durationMs: usage.durationMs, costUsd: usage.costUsd, startedAt: startedAt.toISOString(), endedAt: this.now().toISOString(), ...facts });
     if (usage.costUsd) await this.deps.engineBudgets?.afterRun(engine, { taskId: null, repo: null }).catch((thrown: unknown) => console.warn(`run: could not check the engine's cap: ${thrown instanceof Error ? thrown.message : String(thrown)}`));
     const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd.toFixed(4)}`;
@@ -325,8 +340,10 @@ export class PackRuns implements PackRunsPort {
 
   /** Keeps a decision pack's validated answer with its context; the record's id, or undefined when none was kept.
    *  A log that cannot write never fails the call. */
-  private async keep(call: { pack: PackId; engine: EngineId; model: string; client: string | null; taskId?: string; stage?: string; context: PackContext; answer: Record<string, unknown>; decided: ReturnType<typeof applyPolicy>; traceId: string | null }): Promise<string | undefined> {
+  private async keep(call: { pack: PackId; engine: EngineId; model: string; client: string | null; taskId?: string; stage?: string; own: boolean; context: PackContext; answer: Record<string, unknown>; decided: ReturnType<typeof applyPolicy>; usage: RunResult["usage"]; movedFrom: EngineId | null; traceId: string | null }): Promise<string | undefined> {
     if (!this.deps.decisions) return undefined;
+    // The stored copy is redacted, and a private conversation's text is gone; the model was given the real context.
+    const stored = recordContext(call.context as Record<string, unknown>, { secrets: this.deps.secrets?.() ?? {} });
     const record: DecisionRecord = {
       schema: 1,
       id: randomUUID(),
@@ -337,11 +354,17 @@ export class PackRuns implements PackRunsPort {
       client: call.client,
       ...(call.taskId !== undefined ? { taskId: call.taskId } : {}),
       ...(call.stage !== undefined ? { stage: call.stage } : {}),
-      context: call.context as Record<string, unknown>,
+      context: stored.context,
       answer: call.answer,
       verdicts: call.decided.verdicts,
       overall: call.decided.overall,
       traceId: call.traceId,
+      origin: call.own ? "machine" : "client",
+      ...((call.context as { conversation?: { private?: unknown } }).conversation?.private === true ? { private: true } : {}),
+      // No repository is known to a pack call yet: what the machine did is the verdict under the pack's own bars.
+      acted: { overall: call.decided.overall, below: call.decided.below, overrides: false },
+      usage: { costUsd: call.usage.costUsd, durationMs: call.usage.durationMs, ...(call.movedFrom ? { movedFrom: call.movedFrom } : {}) },
+      redacted: stored.redacted,
     };
     try {
       await this.deps.decisions.append(record);

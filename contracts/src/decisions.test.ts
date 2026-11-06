@@ -33,4 +33,28 @@ describe("DecisionRecord", () => {
     const { answer: _a, ...without } = record;
     expect(() => DecisionRecord.parse(without)).toThrow();
   });
+  it("carries what wave 18 adds: whose it is, what the machine did, what it cost, and a truth's kind and history", () => {
+    const wave18 = {
+      origin: "machine",
+      private: true,
+      repo: "luna-tui",
+      acted: { overall: "flag", below: ["worth"], overrides: true },
+      usage: { costUsd: 0.002, durationMs: 1200, movedFrom: "claude:haiku" },
+      redacted: 2,
+      truth: { label: { worth: { value: true } }, source: "retro_approved", at: "2026-11-05T09:00:00.000Z", kind: "person", history: [{ label: { worth: { value: true } }, source: "retro_approved", kind: "person", at: "2026-11-05T09:00:00.000Z" }] },
+    };
+    expect(DecisionRecord.parse({ ...record, ...wave18 })).toMatchObject(wave18);
+  });
+
+  it("still parses a record and a truth written before wave 18, and adds nothing to them", () => {
+    const old = { ...record, stage: "ship", truth: { label: { worth: { value: false } }, source: "retro", at: "2026-11-05T09:00:00.000Z" } };
+    const parsed = DecisionRecord.parse(old);
+    expect(parsed).toEqual(old);
+    expect(parsed).not.toHaveProperty("origin");
+  });
+
+  it("refuses an origin that is neither the machine nor a client, and a truth kind that is not one of the three", () => {
+    expect(() => DecisionRecord.parse({ ...record, origin: "header" })).toThrow();
+    expect(() => DecisionRecord.parse({ ...record, truth: { label: {}, source: "x", at: "2026-11-05T09:00:00.000Z", kind: "guess" } })).toThrow();
+  });
 });

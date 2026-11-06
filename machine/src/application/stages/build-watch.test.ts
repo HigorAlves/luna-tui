@@ -123,8 +123,8 @@ describe("build checks", () => {
     await c.onGreen({ id: 1, title: "Export", status: "committed", commit: "abc" } as never);
     await c.onGreen({ id: 1, title: "Export", status: "committed", commit: "abc" } as never);
     expect(told).toEqual([
-      { pack: "red_check", recordId: "red-1", label: { right_reason: { value: false } }, source: "slice_green", taskId: "task-4" },
-      { pack: "red_check", recordId: "red-2", label: { right_reason: { value: true } }, source: "slice_green", taskId: "task-4" },
+      { pack: "red_check", recordId: "red-1", label: { right_reason: { value: false } }, source: "slice_green", kind: "fact", taskId: "task-4" },
+      { pack: "red_check", recordId: "red-2", label: { right_reason: { value: true } }, source: "slice_green", kind: "fact", taskId: "task-4" },
     ]);
   });
 

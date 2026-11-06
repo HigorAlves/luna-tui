@@ -23,6 +23,7 @@ import { evidenceRetentionDays, sweepEvidenceStore } from "./application/evidenc
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { DecisionLog } from "./application/decision-log.ts";
+import { ownCalls } from "./application/pack-runs.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
 import { escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
 import { commitsSince, headCommit } from "./adapters/git/worktree.ts";
@@ -452,7 +453,7 @@ pipeline = new Pipeline(db, runnerFor, {
   dedup: {
     decide: async (context) => {
       if (!packRuns) throw new Error("agents are off: no duplicate check");
-      const { answer, recordId } = await packRuns.run({ pack: "intake_dedup", context: { dedup: context } }, INTAKE_CLIENT);
+      const { answer, recordId } = await ownCalls(packRuns).run({ pack: "intake_dedup", context: { dedup: context } }, INTAKE_CLIENT);
       return { answer: answer as DedupAnswer, ...(recordId ? { recordId } : {}) };
     },
     backlog: {
@@ -589,7 +590,7 @@ const slackInbox = new SlackInbox({
     tone: (channel, isPrivate) => conversationDrafts.recentEdits(channel, isPrivate),
     run: async (context) => {
       if (!packRuns) throw new Error("agents are off: no model to draft the reply");
-      const out = await packRuns.run({ pack: "conversation_reply", context: { conversation: context } }, INTAKE_CLIENT);
+      const out = await ownCalls(packRuns).run({ pack: "conversation_reply", context: { conversation: context } }, INTAKE_CLIENT);
       return out.answer as { reply: string; confidence: number };
     },
   }),
@@ -635,8 +636,8 @@ const conversationMachine = (): ConversationMachine => {
         },
         new Date(),
       ),
-    decide: async (context) => packRuns!.run({ pack: "conversation_assess", context: { conversation: context } }, INTAKE_CLIENT),
-    decideRelation: async (context) => packRuns!.run({ pack: "conversation_relation", context: { conversation: context } }, INTAKE_CLIENT),
+    decide: async (context) => ownCalls(packRuns!).run({ pack: "conversation_assess", context: { conversation: context } }, INTAKE_CLIENT),
+    decideRelation: async (context) => ownCalls(packRuns!).run({ pack: "conversation_relation", context: { conversation: context } }, INTAKE_CLIENT),
     config: (channel) => channelClaims.configOf(channel),
   });
 };
@@ -657,29 +658,29 @@ const packRuns = buildPackRuns(config, {
 await packRuns?.clearLeftovers();
 /** Intake's first read of a new issue: triage_signals on Jev through the same PackRuns, recorded
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
-const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
+const classifier = packRuns ? createIssueClassifier({ runs: ownCalls(packRuns) }) : null;
 if (classifier) triageSignals.classify = (issue, _repoPath, options) => classifier.classify(issue, options);
-if (packRuns) planDecisions.decide = async (pack, plan) => tagged(await packRuns.run({ pack, context: { plan }, stage: "plan" }, "plan"));
-if (packRuns) planDecisions.size.decide = async (size) => tagged(await packRuns.run({ pack: "size_estimate", context: { size }, stage: "plan" }, "plan"));
+if (packRuns) planDecisions.decide = async (pack, plan) => tagged(await ownCalls(packRuns).run({ pack, context: { plan }, stage: "plan" }, "plan"));
+if (packRuns) planDecisions.size.decide = async (size) => tagged(await ownCalls(packRuns).run({ pack: "size_estimate", context: { size }, stage: "plan" }, "plan"));
 // The split exit: the decomposer (an agent pack with no tools) and split_check run through PackRuns as the plan stage's own client; the card's depth is read off its chain of splits.
-if (packRuns) planDecisions.split.decompose = async (split) => (await packRuns.run({ pack: "decompose", context: { split }, stage: "plan" }, "plan")).answer as Record<string, unknown>;
-if (packRuns) planDecisions.split.check = async (split) => tagged(await packRuns.run({ pack: "split_check", context: { split }, stage: "plan" }, "plan"));
+if (packRuns) planDecisions.split.decompose = async (split) => (await ownCalls(packRuns).run({ pack: "decompose", context: { split }, stage: "plan" }, "plan")).answer as Record<string, unknown>;
+if (packRuns) planDecisions.split.check = async (split) => tagged(await ownCalls(packRuns).run({ pack: "split_check", context: { split }, stage: "plan" }, "plan"));
 // The size prompt's similar cards: closed cards with a counted diff that the card's own audience may see, nearest first.
 planDecisions.size.similar = async (task, card) => similarCards({ ...card, repo: task.repoPath }, await pipeline.closedSized(task), { now: new Date(), lookbackDays: (await policies.for(task.repoPath)).factory.dedup.lookback_days });
 planDecisions.split.depthOf = (task) => splitDepth((id) => pipeline.get(id).catch(() => null), task);
 planDecisions.split.via = (task) => pipeline.splitVia(task);
-if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "verify" }, "verify"));
-if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await packRuns.run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
-if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await packRuns.run({ pack, context: { ship }, stage: "ship" }, "ship"));
+if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await ownCalls(packRuns).run({ pack, context: { check }, stage: "verify" }, "verify"));
+if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await ownCalls(packRuns).run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
+if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await ownCalls(packRuns).run({ pack, context: { ship }, stage: "ship" }, "ship"));
 buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
-if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "build" }, "build"));
+if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await ownCalls(packRuns).run({ pack, context: { check }, stage: "build" }, "build"));
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 /** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
 const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources) });
 /** The Ticket Machine: Jira and GitHub tickets in scope are read, checked, assessed and drafted, then held for a person's tap. Every model call is a pack through `packRuns`; the port's writes are reached only from the tap routes. */
 const ticketPack = async (pack: "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply", context: TicketContext): Promise<unknown> => {
   if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
-  const { answer, recordId } = await packRuns.run({ pack, context: { ticket: context } }, INTAKE_CLIENT);
+  const { answer, recordId } = await ownCalls(packRuns).run({ pack, context: { ticket: context } }, INTAKE_CLIENT);
   return pack === "ticket_recommend" && recordId ? { ...(answer as object), recordId } : answer;
 };
 const ticketMachine = new TicketMachine({
@@ -696,17 +697,17 @@ const ticketMachine = new TicketMachine({
   split: {
     decompose: async (split) => {
       if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
-      return (await packRuns.run({ pack: "decompose", context: { split }, stage: "plan" }, INTAKE_CLIENT)).answer as Record<string, unknown>;
+      return (await ownCalls(packRuns).run({ pack: "decompose", context: { split }, stage: "plan" }, INTAKE_CLIENT)).answer as Record<string, unknown>;
     },
     check: async (split) => {
       if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
-      return tagged(await packRuns.run({ pack: "split_check", context: { split } }, INTAKE_CLIENT)) as never;
+      return tagged(await ownCalls(packRuns).run({ pack: "split_check", context: { split } }, INTAKE_CLIENT)) as never;
     },
   },
   size: {
     decide: async (size) => {
       if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
-      return tagged(await packRuns.run({ pack: "size_estimate", context: { size } }, INTAKE_CLIENT)) as never;
+      return tagged(await ownCalls(packRuns).run({ pack: "size_estimate", context: { size } }, INTAKE_CLIENT)) as never;
     },
     counted: (ids) => pipeline.countedDiffs(ids),
   },

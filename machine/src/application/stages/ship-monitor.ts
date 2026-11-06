@@ -258,8 +258,8 @@ export async function settleDecisions(deps: Pick<ShipMonitorDeps, "github" | "tr
   if (!deps.truth || pending.length === 0) return;
   const open = await deps.github.prThreads(slug, number).catch(() => null);
   for (const d of pending) {
-    if (d.pack === "event_class") await deps.truth.learned({ pack: "event_class", recordId: d.recordId, label: eventClassTruth(d.further === true), source: "pr_merged", taskId });
-    else if (open && d.threadId && !(cursor.resolvedByMachine ?? []).includes(d.threadId) && !open.some((t) => t.id === d.threadId)) await deps.truth.learned({ pack: "comment_intent", recordId: d.recordId, label: commentIntentTruth(d.choice as "question" | "change_request"), source: "thread_resolved", taskId });
+    if (d.pack === "event_class") await deps.truth.learned({ pack: "event_class", recordId: d.recordId, label: eventClassTruth(d.further === true), kind: "outcome", source: "pr_merged", taskId });
+    else if (open && d.threadId && !(cursor.resolvedByMachine ?? []).includes(d.threadId) && !open.some((t) => t.id === d.threadId)) await deps.truth.learned({ pack: "comment_intent", recordId: d.recordId, label: commentIntentTruth(d.choice as "question" | "change_request"), kind: "outcome", source: "thread_resolved", taskId });
   }
   cursor.decisions = [];
   await saveCursor(deps.stateDir, taskId, cursor);

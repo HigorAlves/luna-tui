@@ -481,7 +481,7 @@ describe("decision truth at the merge", () => {
       );
       await run();
       const comment = told.filter((t) => t.pack === "comment_intent");
-      if (resolved) expect(comment).toEqual([{ pack: "comment_intent", recordId: "rec-comment_intent", label: { intent: { choice: "question" } }, source: "thread_resolved", taskId: "t1" }]);
+      if (resolved) expect(comment).toEqual([{ pack: "comment_intent", recordId: "rec-comment_intent", label: { intent: { choice: "question" } }, source: "thread_resolved", kind: "outcome", taskId: "t1" }]);
       else expect(comment).toEqual([]);
     }
   });
@@ -510,7 +510,7 @@ describe("decision truth at the merge", () => {
       { loop: { decide: noise, runPack } as never, truth: { learned: async (fact: Learned) => (told.push(fact), true) } },
     );
     await run();
-    expect(told.find((t) => t.pack === "event_class")).toMatchObject({ label: { event: { choice: later ? "review_comment" : "noise" } }, source: "pr_merged" });
+    expect(told.find((t) => t.pack === "event_class")).toMatchObject({ label: { event: { choice: later ? "review_comment" : "noise" } }, source: "pr_merged", kind: "outcome" });
   });
 });
 

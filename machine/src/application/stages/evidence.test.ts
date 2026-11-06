@@ -762,7 +762,7 @@ describe("evidenceStage", () => {
     const truth = { learned: async (fact: Learned) => (told.push(fact), true) };
     const { run } = stage({ decideFormat: async () => tagged({ answer: { format: { choice: "video", confidence: 0.95 } }, recordId: "rec-9" }), videoImage: async () => false, truth });
     await run(taskContext());
-    expect(told).toEqual([{ pack: "evidence_format", recordId: "rec-9", label: { format: { choice: "screenshots_or_terminal" } }, source: "evidence_shipped", taskId: expect.any(String) }]);
+    expect(told).toEqual([{ pack: "evidence_format", recordId: "rec-9", label: { format: { choice: "screenshots_or_terminal" } }, source: "evidence_shipped", kind: "fact", taskId: expect.any(String) }]);
   });
 
   it("degrades video to captures when the image exists but the browser run left neither a recording nor steps", async () => {

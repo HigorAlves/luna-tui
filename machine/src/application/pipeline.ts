@@ -595,7 +595,7 @@ export class Pipeline {
     const dedup = cardOf(task).dedup;
     const slot = dedup?.candidates.find((c) => c.id === keptId)?.slot;
     if (!dedup?.recordId || slot === undefined || !this.truth) return;
-    await this.truth.learned({ pack: "intake_dedup", recordId: dedup.recordId, label: { [`slot${slot}`]: { choice } }, source, taskId: task.id }).catch(() => false);
+    await this.truth.learned({ pack: "intake_dedup", recordId: dedup.recordId, label: { [`slot${slot}`]: { choice } }, kind: "person", source, taskId: task.id }).catch(() => false);
   }
 
   /** `dupId` is a report of `keptId`: its source joins the kept card, its reporter follows it, the demand goes up and the priority is scored again.
@@ -815,7 +815,7 @@ export class Pipeline {
     if (!reported.has(findingId)) throw new FindingNotFoundError(findingId);
     await this.log(id, "finding.dismissed", { id: findingId });
     const recordId = reported.get(findingId);
-    if (recordId) await this.truth?.learned({ pack: "finding_classify", recordId, label: { severity: { choice: "nit" } }, source: "ship_dismissed", taskId: id });
+    if (recordId) await this.truth?.learned({ pack: "finding_classify", recordId, label: { severity: { choice: "nit" } }, kind: "person", source: "ship_dismissed", taskId: id });
   }
 
   /** A person adds a finding Verify missed: the row holds the severity only; the text goes to the ground truth file. */
@@ -997,7 +997,7 @@ export class Pipeline {
       await this.log(id, "record.edited", { fields, version: record.version ?? null });
       const recordId = classification?.recordId;
       const label = triageEditTruth({ ...record, editedFields: fields });
-      if (this.truth && recordId && Object.keys(label).length > 0) await this.truth.learned({ pack: "triage_signals", recordId, label, source: "record_edit", taskId: id });
+      if (this.truth && recordId && Object.keys(label).length > 0) await this.truth.learned({ pack: "triage_signals", recordId, label, kind: "person", source: "record_edit", taskId: id });
     }
     return this.get(id);
   }
@@ -1483,7 +1483,7 @@ export class Pipeline {
     const record = cardOf(task).dedup;
     if (record?.recordId && this.truth) {
       const label = Object.fromEntries(listed.map((c) => [`slot${c.slot}`, { choice: !of.includes(c.id) ? "different" : answer.choice === "duplicate" ? "same" : "related" }]));
-      await this.truth.learned({ pack: "intake_dedup", recordId: record.recordId, label, source: "dedup_answer", taskId: id }).catch(() => false);
+      await this.truth.learned({ pack: "intake_dedup", recordId: record.recordId, label, kind: "person", source: "dedup_answer", taskId: id }).catch(() => false);
     }
     if (record) await this.store.updateTask(id, { card: { ...cardOf(task), dedup: { ...record, chosen: answer.choice } } });
     const decision: DecisionRecord = { decision: "answered", response: { choice: answer.choice, of } };
@@ -1810,12 +1810,12 @@ export class Pipeline {
       const edited = new Set((task.record?.editedFields ?? []).flatMap((f) => (f === "kind" ? ["kind"] : f === "typeOfWork" ? ["type_of_work"] : f === "size" ? ["size"] : f === "riskPrelim" ? ["risk_prelim"] : [])));
       const edits = task.record ? triageEditTruth(task.record) : {};
       if (gate.kind === "awaiting_approval" && recordId && (requested.outcome === "conversation" || requested.outcome === "archive")) {
-        await truth.learned({ pack: "triage_signals", recordId, label: { ...edits, ...triageOutcomeTruth(requested.outcome, decision) }, source: decision === "sent_back" ? "triage_sent_back" : "triage_outcome_approved", taskId });
+        await truth.learned({ pack: "triage_signals", recordId, label: { ...edits, ...triageOutcomeTruth(requested.outcome, decision) }, kind: "person", source: decision === "sent_back" ? "triage_sent_back" : "triage_outcome_approved", taskId });
       } else if (gate.kind === "awaiting_approval" && requested.outcome === undefined && recordId && decision === "approved" && task.classification) {
         // An approval that left the signals alone confirms the ones the machine acted on; a correction stands in for its own question.
         const policy = await this.policyFor(task.repoPath);
         const verdicts = triageVerdicts(task.classification, policy.factory.triage, { ...(policy.decisions.triage_signals ? { overrides: policy.decisions.triage_signals } : {}) });
-        await truth.learned({ pack: "triage_signals", recordId, label: { ...triageConfirmTruth(task.classification, verdicts, edited), ...edits }, source: "plan_approved", taskId });
+        await truth.learned({ pack: "triage_signals", recordId, label: { ...triageConfirmTruth(task.classification, verdicts, edited), ...edits }, kind: "person", source: "plan_approved", taskId });
       }
       if (gate.kind === "awaiting_approval" && isSplitOutcome(requested.outcome)) {
         // A split approved as proposed confirms split_check; sent back, rejected or kept whole contradicts it.
@@ -1825,7 +1825,7 @@ export class Pipeline {
           const confirmed = decision === "approved" && !kept;
           const answer = await truth.answerOf("split_check", recordId);
           const label = answer ? planTruth(PACKS.split_check, answer, confirmed ? "confirmed" : "contradicted") : null;
-          if (label) await truth.learned({ pack: "split_check", recordId, label, source: confirmed ? "split_approved" : kept ? "split_kept_whole" : "split_sent_back", taskId });
+          if (label) await truth.learned({ pack: "split_check", recordId, label, kind: "person", source: confirmed ? "split_approved" : kept ? "split_kept_whole" : "split_sent_back", taskId });
         }
       } else if (gate.kind === "awaiting_approval" && requested.outcome === undefined) {
         const touched = new Set((Array.isArray(requested.revisions) ? requested.revisions : []).flatMap((r) => Object.keys((r as { after?: object }).after ?? {})));
@@ -1836,13 +1836,13 @@ export class Pipeline {
           const answer = await truth.answerOf(pack as PackId, recordId);
           const contradicted = decision === "sent_back" || keys.some((key) => touched.has(key));
           const label = answer ? planTruth(PACKS[pack as "coverage_check" | "plan_check" | "risk_score"], answer, contradicted ? "contradicted" : "confirmed") : null;
-          if (label) await truth.learned({ pack: pack as PackId, recordId, label, source: decision === "sent_back" ? "plan_sent_back" : contradicted ? "plan_edited" : "plan_approved", taskId });
+          if (label) await truth.learned({ pack: pack as PackId, recordId, label, kind: "person", source: decision === "sent_back" ? "plan_sent_back" : contradicted ? "plan_edited" : "plan_approved", taskId });
         }
       } else if (gate.kind === "awaiting_ship" && decision === "approved" && Array.isArray(ids.finding_classify)) {
-        for (const recordId of ids.finding_classify) if (typeof recordId === "string") await truth.learned({ pack: "finding_classify", recordId, label: findingTruth(), source: "ship_approved", taskId });
+        for (const recordId of ids.finding_classify) if (typeof recordId === "string") await truth.learned({ pack: "finding_classify", recordId, label: findingTruth(), kind: "person", source: "ship_approved", taskId });
       } else if (gate.kind === "reviewing_memory" && typeof ids.worth_learning === "string" && requested.rules && typeof requested.rules === "object") {
         const kept = decision === "approved" && response?.applyRules !== false;
-        await truth.learned({ pack: "worth_learning", recordId: ids.worth_learning, label: worthLearningTruth(kept), source: kept ? "retro_approved" : "retro_closed", taskId });
+        await truth.learned({ pack: "worth_learning", recordId: ids.worth_learning, label: worthLearningTruth(kept), kind: "person", source: kept ? "retro_approved" : "retro_closed", taskId });
       }
     } catch (error) {
       console.warn(`decision truth: gate ${gate.kind} of task ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -1884,7 +1884,7 @@ export class Pipeline {
     if (!(DECIDED_REASONS as readonly string[]).includes(reason)) throw new InvalidEscalationReasonError();
     const decided = objectOf(gate.requested.escalationDecision);
     await this.log(id, "escalation.corrected", { from: typeof decided?.reason === "string" ? decided.reason : null, to: reason, approval: gate.id });
-    if (this.truth && typeof decided?.recordId === "string") await this.truth.learned({ pack: "escalation_reason", recordId: decided.recordId, label: { reason: { choice: reason } }, source: "escalation_correction", taskId: id });
+    if (this.truth && typeof decided?.recordId === "string") await this.truth.learned({ pack: "escalation_reason", recordId: decided.recordId, label: { reason: { choice: reason } }, kind: "person", source: "escalation_correction", taskId: id });
     return task;
   }
 

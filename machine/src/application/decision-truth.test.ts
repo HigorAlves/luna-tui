@@ -65,17 +65,17 @@ describe("DecisionTruth", () => {
     const written: unknown[] = [];
     const told: unknown[] = [];
     const truth = new DecisionTruth({ setTruth: async (pack, id, t) => (written.push([pack, id, t]), true) }, { now: () => new Date("2026-11-05T09:00:00Z"), told: async (e) => void told.push(e) });
-    expect(await truth.learned({ pack: "worth_learning", recordId: "r1", label: { worth: { value: true } }, source: "retro_approved", taskId: "t1" })).toBe(true);
-    expect(written).toEqual([["worth_learning", "r1", { label: { worth: { value: true } }, source: "retro_approved", at: "2026-11-05T09:00:00.000Z" }]]);
+    expect(await truth.learned({ pack: "worth_learning", recordId: "r1", label: { worth: { value: true } }, source: "retro_approved", kind: "person", taskId: "t1" })).toBe(true);
+    expect(written).toEqual([["worth_learning", "r1", { label: { worth: { value: true } }, source: "retro_approved", kind: "person", at: "2026-11-05T09:00:00.000Z" }]]);
     expect(told).toEqual([{ taskId: "t1", pack: "worth_learning", recordId: "r1", source: "retro_approved" }]);
   });
 
   it("says nothing when no record is there, and never throws", async () => {
     const told: unknown[] = [];
     const none = new DecisionTruth({ setTruth: async () => false }, { told: async (e) => void told.push(e) });
-    expect(await none.learned({ pack: "worth_learning", recordId: "gone", label: {}, source: "x" })).toBe(false);
+    expect(await none.learned({ pack: "worth_learning", recordId: "gone", label: {}, source: "x", kind: "fact" })).toBe(false);
     const broken = new DecisionTruth({ setTruth: async () => Promise.reject(new Error("disk")) }, { told: async (e) => void told.push(e) });
-    expect(await broken.learned({ pack: "worth_learning", recordId: "r", label: {}, source: "x" })).toBe(false);
+    expect(await broken.learned({ pack: "worth_learning", recordId: "r", label: {}, source: "x", kind: "fact" })).toBe(false);
     expect(told).toEqual([]);
   });
 });

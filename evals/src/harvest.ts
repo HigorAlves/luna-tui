@@ -66,7 +66,7 @@ export function harvest(evalsDir: string, pack: PackId, records: DecisionRecord[
   for (const record of records) {
     const id = caseIdOf(`rec-${record.id.slice(0, 8)}`)!;
     // A private conversation's text never becomes a case.
-    if ((record.context as { conversation?: { private?: unknown } }).conversation?.private === true) {
+    if (record.private === true || (record.context as { conversation?: { private?: unknown } }).conversation?.private === true) {
       report.refused.push({ id: record.id, reason: "a private conversation: its text never becomes a case" });
       continue;
     }
@@ -77,7 +77,7 @@ export function harvest(evalsDir: string, pack: PackId, records: DecisionRecord[
     }
     let files: CaseFiles;
     try {
-      files = caseOf(pack, id, scrubbed.value, currentLabel(pack, (record.truth?.label as Label | undefined) ?? null), { recordId: record.id, traceId: record.traceId, modelAnswer: record.answer });
+      files = caseOf(pack, id, scrubbed.value, currentLabel(pack, (record.truth?.label as Label | undefined) ?? null), { recordId: record.id, traceId: record.traceId, modelAnswer: record.answer, ...(record.truth?.kind === "outcome" ? { review: true } : {}) });
     } catch (error) {
       report.refused.push({ id: record.id, reason: `the context is off the pack's schema: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}` });
       continue;

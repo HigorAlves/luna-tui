@@ -309,7 +309,7 @@ export function buildChecks(deps: BuildChecksDeps) {
       const records = redRecords.get(slice.id) ?? [];
       redRecords.delete(slice.id);
       for (const [at, recordId] of records.entries()) {
-        await deps.truth?.learned({ pack: "red_check", recordId, label: redCheckTruth(at < records.length - 1), source: "slice_green", ...(deps.taskId ? { taskId: deps.taskId } : {}) });
+        await deps.truth?.learned({ pack: "red_check", recordId, label: redCheckTruth(at < records.length - 1), kind: "fact", source: "slice_green", ...(deps.taskId ? { taskId: deps.taskId } : {}) });
       }
     },
     async onScopeRequest(request: ScopeRequest): Promise<void> {

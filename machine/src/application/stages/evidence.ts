@@ -376,7 +376,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       addNote("there is no browser run to capture");
       format = "text";
     }
-    if (formatRecord) await deps.truth?.learned({ pack: "evidence_format", recordId: formatRecord, label: evidenceFormatTruth(format), source: "evidence_shipped", taskId: task.id });
+    if (formatRecord) await deps.truth?.learned({ pack: "evidence_format", recordId: formatRecord, label: evidenceFormatTruth(format), kind: "fact", source: "evidence_shipped", taskId: task.id });
 
     // 2. The commit the pack shows.
     let commitSha: string;

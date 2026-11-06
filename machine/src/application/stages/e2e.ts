@@ -304,7 +304,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
       result = await run();
     }
     // The re-run is the fact: a pass says it was the environment, a second failure says it was not.
-    if (causeRecord) await deps.truth?.learned({ pack: "e2e_failure_cause", recordId: causeRecord, label: e2eCauseTruth(result.outcome !== "fail"), source: "e2e_rerun", taskId: context.task.id });
+    if (causeRecord) await deps.truth?.learned({ pack: "e2e_failure_cause", recordId: causeRecord, label: e2eCauseTruth(result.outcome !== "fail"), kind: "fact", source: "e2e_rerun", taskId: context.task.id });
     if (result.outcome !== "fail") return { ...result, detail: { ...result.detail, rerun: true, cause } };
     const summary = String(result.detail?.summary ?? "");
     return withFindings({

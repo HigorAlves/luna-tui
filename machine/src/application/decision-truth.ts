@@ -4,7 +4,7 @@
 // been (`equals`), an array the labels it may have been (`oneOf`) for a fact that only rules one out.
 // A decision's record id travels on its answer as a symbol-keyed property: it survives the spreads
 // and hand-offs between a decide function and its stage, and never reaches JSON.
-import type { DecisionPack, DecisionTruth as Truth, PackId, TaskClassification, TriageRecord } from "@hardness/contracts";
+import type { DecisionPack, DecisionTruth as Truth, PackId, TaskClassification, TriageRecord, TruthKind } from "@hardness/contracts";
 
 import type { DecisionLog } from "./decision-log.ts";
 import type { FieldVerdict, TriageField } from "../domain/triage-policy.ts";
@@ -59,6 +59,8 @@ export interface Learned {
   recordId: string;
   label: Label;
   source: string;
+  /** Whose word it is: a person, a fact that settled it, or an outcome that is consistent with the answer but partly caused by it. */
+  kind: TruthKind;
   taskId?: string;
 }
 
@@ -81,7 +83,7 @@ export class DecisionTruth implements TruthSink {
   /** True when a record took the truth. A missing record, a log that cannot write: false, never a throw. */
   async learned(fact: Learned): Promise<boolean> {
     try {
-      const truth: Truth = { label: fact.label, source: fact.source, at: (this.options.now?.() ?? new Date()).toISOString() };
+      const truth: Truth = { label: fact.label, source: fact.source, kind: fact.kind, at: (this.options.now?.() ?? new Date()).toISOString() };
       if (!(await this.log.setTruth(fact.pack, fact.recordId, truth))) return false;
       await this.options.told?.({ ...(fact.taskId ? { taskId: fact.taskId } : {}), pack: fact.pack, recordId: fact.recordId, source: fact.source }).catch(() => {});
       return true;

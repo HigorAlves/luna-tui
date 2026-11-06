@@ -59,6 +59,25 @@ describe("harvest", () => {
     expect(Expect.parse(read(dir, "rec-6b0f2c52", "expect.json"))).toMatchObject({ review: true, checks: [], modelAnswer: { worth: { value: true, p: 0.93 } } });
   });
 
+  it("writes a case from an outcome truth with its label, marked for review so a person confirms it before it counts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvest-"));
+    harvest(dir, "worth_learning", [record({ truth: { label: { worth: { value: true } }, source: "pr_merged", kind: "outcome", at: "2026-11-05T00:00:00.000Z" } })]);
+    expect(Expect.parse(read(dir, "rec-6b0f2c52", "expect.json"))).toMatchObject({ label: { worth: { value: true } }, review: true });
+  });
+
+  it("does not mark a person's or a fact's label for review", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvest-"));
+    harvest(dir, "worth_learning", [record({ truth: { label: { worth: { value: true } }, source: "retro_approved", kind: "person", at: "2026-11-05T00:00:00.000Z" } })]);
+    expect(Expect.parse(read(dir, "rec-6b0f2c52", "expect.json"))).not.toHaveProperty("review");
+  });
+
+  it("refuses a record marked private, whatever its context holds", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvest-"));
+    const out = harvest(dir, "worth_learning", [record({ private: true })]);
+    expect(out.written).toEqual([]);
+    expect(out.refused).toEqual([{ id: "6b0f2c52-7a3e-4d0b-9c1e-0a1f2b3c4d5e", reason: "a private conversation: its text never becomes a case" }]);
+  });
+
   it("keeps a case that exists, whatever the record now says", () => {
     const dir = mkdtempSync(join(tmpdir(), "harvest-"));
     harvest(dir, "worth_learning", [record()]);

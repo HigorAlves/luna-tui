@@ -6,12 +6,36 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { DecisionRecord, type DecisionTruth, type PackId } from "@hardness/contracts";
+import { DecisionRecord, type DecisionTruth, type PackId, type TruthKind } from "@hardness/contracts";
 
 export const DECISIONS_DIR = "decisions";
 /** A record id is a file name: letters, digits, dots, dashes, underscores; never a path. */
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+const HISTORY_MAX = 20;
+/** For one question a person's word beats a fact, a fact beats an outcome; a truth with no kind is a fact. */
+const RANK: Record<TruthKind, number> = { person: 3, fact: 2, outcome: 1 };
+const kindOf = (truth: Pick<DecisionTruth, "kind">): TruthKind => truth.kind ?? "fact";
+
+/** `incoming` laid over `existing` by question: it takes a question when its kind ranks at least as high as the label there
+ *  (among equals the later wins). `source`, `kind` and `at` are those of the latest fact that changed a label; `history` keeps
+ *  each fact that did, the 20 latest. The same object comes back when nothing changed. */
+export function mergeTruth(existing: DecisionTruth | undefined, incoming: DecisionTruth): DecisionTruth {
+  const kind = kindOf(incoming);
+  const existingKinds = new Map<string, TruthKind>();
+  const history = existing ? (existing.history ?? [{ label: existing.label, source: existing.source, kind: kindOf(existing), at: existing.at }]) : [];
+  // The kind a question's label has: the latest history entry that names it, else the truth's own.
+  for (const entry of history) for (const question of Object.keys(entry.label)) existingKinds.set(question, entry.kind);
+  const applied: Record<string, unknown> = {};
+  for (const [question, value] of Object.entries(incoming.label)) {
+    const held = existing && question in existing.label ? (existingKinds.get(question) ?? kindOf(existing)) : null;
+    if (held === null || RANK[kind] >= RANK[held]) applied[question] = value;
+  }
+  if (existing && Object.keys(applied).length === 0) return existing;
+  const next = [...history, { label: applied, source: incoming.source, kind, at: incoming.at }].slice(-HISTORY_MAX);
+  return { label: { ...(existing?.label ?? {}), ...applied }, source: incoming.source, at: incoming.at, kind, history: next };
+}
 
 export interface DecisionAppender {
   append(record: DecisionRecord): Promise<void>;
@@ -61,12 +85,13 @@ export class DecisionLog implements DecisionAppender {
     return path ? this.load(path) : null;
   }
 
-  /** Rewrites the one file with the truth; false when there is no such record (or the log is off). */
+  /** Adds the truth to the record's, question by question (see `mergeTruth`); false when there is no such record (or the log is off). */
   async setTruth(pack: PackId, id: string, truth: DecisionTruth): Promise<boolean> {
     const path = await this.locate(pack, id);
     const record = path ? await this.load(path) : null;
     if (!path || !record) return false;
-    await this.write(path, { ...record, truth });
+    const merged = mergeTruth(record.truth, truth);
+    if (merged !== record.truth) await this.write(path, { ...record, truth: merged });
     return true;
   }
 
