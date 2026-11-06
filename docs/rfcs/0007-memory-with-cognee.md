@@ -1,7 +1,7 @@
 # RFC 0007 — Memory for the machine, on Cognee
 
 - **Author:** Higor Alves
-- **Status:** Draft
+- **Status:** Approved (2026-11-06, every decision taken with the user before the build; built in one PR)
 - **Created:** 2026-11-06
 - **Discussion:** the PR that adds this file
 - **Decision deadline:** 2026-11-13
@@ -259,6 +259,42 @@ The spike ran the official image (`cognee/cognee@sha256:84584ead…`, 3.79 GB, C
 - **Auth and paths.** Register refuses reserved e-mail domains. Without `FASTAPI_USERS_JWT_SECRET` tokens die on restart. The image runs as uid 1000 and only `/cognee-storage` is writable by it, so the model caches live there.
 - **Resources.** 1.65 GB of memory after the code graph, on a host with 7.7 GB for Docker.
 - **Pending a key:** the OpenAI cost of a `cognify` (Q2), what `/sessions/cost-by-model` reports, `GRAPH_COMPLETION`'s written answers (Q7), and PDFs outside a code project.
+
+## Implementation notes (M1 to M6 and G1, 2026-11-06)
+
+Built in one PR, each wave in its own lane against the port in `machine/src/application/memory.ts`, then merged.
+
+- **M1, the service.**
+  - Compose runs the pinned image as `cognee` on an internal `memory` network. Its only way out is `cognee-proxy`, the machine's own egress proxy, with `COGNEE_EGRESS_ALLOW` defaulting to OpenAI plus Hugging Face and PyPI for the first start. `cognee-gate` (socat) publishes the API to `127.0.0.1:8010`, because an internal-network container cannot publish a port. `cognee-ui` is on the `memory-ui` profile, which `pnpm start` brings up.
+  - `pnpm memory-prepare` renders `~/.config/hardness/cognee.env` from the catalog (`SERVICE_MODELS.cognee`; the embedder `local/bge-small-en-v1.5`, at zero price, under a new `local` runtime that no engine uses) and makes the password and JWT secret on first start.
+  - The client (`adapters/cognee/client.ts`) re-logs in on a 401, always reads response bodies (a cancelled body hung the next request on the same connection, found by the live test), and scrubs the token and password from errors. Cognee's `score` is a distance, reported as `1 - distance`.
+  - `memory_items` and a per-day counter table hold the rows and the cognify cap (machine-wide, `MACHINE_MEMORY_DAILY_COGNIFY`). `luna.yaml` `memory.daily_cognify_items` is parsed but not applied per repository yet.
+  - The boot (`bootstrap/memory.ts`) hands out one forwarding object: quiet until Cognee takes the login, retried every minute; then pending writes every minute and `reconcile()` hourly. Every hook in `main.ts` asks `memory.enabled` when it runs, not at boot.
+  - `GET /metrics` carries `memory: MemoryFloor`.
+  - The live contract test (`adapters/cognee/live.test.ts`, behind `COGNEE_LIVE_URL`) passed against the spike container.
+- **M2, cards.**
+  - `memory-facts.ts` is the close template; its `outcome` line is what triage shows for a similar card.
+  - The lesson flow: `memory_extract` on `codex:luna`, then `memory_worth`, then `memory_conflict` with one question per recalled slot, so the answer needs no item id. It lives in `stages/memory.ts`. The gate carries `requested.rules.lessons` and `retirements`, and `POST /tasks/:id/decision` takes `lessons: [{ id, action, text? }]`.
+  - The pushed block covers plan, build_tests, implementing, verifying, triage and pr_reply (`MEMORY_PACKS`; not `plan_fast`).
+  - The `memory_recall` tool numbers each call, so a repeated query is a second request.
+  - `memory_worth` and `memory_conflict` have cases but no measured defaults yet (listed as unmeasured).
+  - The replay eval named in M2's gate ("fewer repeated findings with memory on") is not built: it needs seeded-memory cards and an on/off runner, and is the next piece of work.
+- **M3 and M4.**
+  - The vector shortlist only fills slots the lexical one left; a full lexical shortlist gets no vector help, which keeps "never drops a lexical hit".
+  - Review asks are recorded per comment thread, so a review state of `CHANGES_REQUESTED` with no thread is not recorded. They are written at the merge and merged into implementing's block after M2's items.
+- **M5 and M5b.**
+  - Repo docs and the code graph ride the graph trigger (`GraphWatch.afterBuild`), so they run only for repositories whose graph is on.
+  - Company items get `co_` ids, and their marker `luna:co_…` is stripped by `postable()`; a draft carrying one is refused. `publicPostFor` decides `publicPost` at every viewer.
+  - The export for the code graph drops symlinks and opens the tree to uid 1000.
+- **M6.**
+  - The ask key is `Q`, because `?` is the key sheet; the memory view is `M`.
+  - The MCP server is a hand-written stdio server (no new dependency): `claude mcp add luna-memory -- pnpm --silent --dir <repo> memory:mcp`.
+  - `memory_answer` gets the recalled items in its input (`NO_ACCESS`). `POST /memory/ask?via=cognee` answers with Cognee's graph completion instead, for Q7.
+  - The stale sweep runs hourly. Revert retirement fires only for reverts the machine merges itself.
+- **G1.**
+  - There is no `--graph branch|main` word: Graphify's own `--graph` takes a path, so the prompt line and the code-discovery skill name `/graph-branch` and `/graph`.
+  - The build seeds Graphify's AST cache from the previous commit's folder (`build.py --keep-cache --seed-cache`), which is untested against a real Graphify build.
+  - The export goes through `at()` with a temporary index. Archived cards lose their branch graphs through `close()`.
 
 ## Alternatives considered
 
