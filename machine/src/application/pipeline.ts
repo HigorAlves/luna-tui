@@ -257,6 +257,8 @@ export interface PipelineOptions {
   owners?: (repoPath: string, paths: string[]) => Promise<Exclude<OwnersFound, "failed">>;
   /** Keeps the approved plan and what changed before it (ground truth); answers where. A failure is logged and never blocks the approval. */
   groundTruth?: (task: TaskRow, approval: ApprovalRow) => Promise<string>;
+  /** False when the card's repository keeps no ground truth (`learning.truth: false`): no file is written for it. Absent, every card keeps it. */
+  truthKept?: (task: TaskRow) => Promise<boolean>;
   /** Writes a person's thumbs on an Evidence Pack (`ground-truth/evidence/`); absent, the answer is only logged. */
   evidenceFeedback?: (task: TaskRow, pack: EvidencePack, feedback: { useful: boolean; note?: string | undefined }, at: Date) => Promise<string>;
   /** Writes onto a decision's record what a person's decision at a gate says about it (RFC 0005 wave 7). */
@@ -436,6 +438,7 @@ export class Pipeline {
   private readonly retroOutputs: RetroOutputs | undefined;
   private readonly releaseKept: ((taskId: string) => Promise<void>) | undefined;
   private readonly groundTruth: PipelineOptions["groundTruth"];
+  private readonly truthKept: NonNullable<PipelineOptions["truthKept"]>;
   private readonly evidenceFeedbackWriter: PipelineOptions["evidenceFeedback"];
   private readonly owners: PipelineOptions["owners"];
   private readonly truth: DecisionTruth | undefined;
@@ -493,6 +496,7 @@ export class Pipeline {
     this.retroOutputs = options.retroOutputs;
     this.releaseKept = options.releaseKept;
     this.groundTruth = options.groundTruth;
+    this.truthKept = async (task) => (await options.truthKept?.(task).catch(() => true)) ?? true;
     this.evidenceFeedbackWriter = options.evidenceFeedback;
     this.owners = options.owners;
     this.truth = options.truth;
@@ -829,7 +833,7 @@ export class Pipeline {
   async evidenceFeedback(id: string, feedback: { useful: boolean; note?: string | undefined }): Promise<void> {
     const task = await this.get(id);
     if (!task.evidence) throw new NoEvidenceError(id);
-    await this.evidenceFeedbackWriter?.(task, task.evidence, feedback, new Date());
+    if (await this.truthKept(task)) await this.evidenceFeedbackWriter?.(task, task.evidence, feedback, new Date());
     await this.log(id, "evidence.feedback", { useful: feedback.useful, format: task.evidence.format, sha: task.evidence.commitSha.slice(0, 7) });
   }
 
@@ -1851,7 +1855,7 @@ export class Pipeline {
 
   /** Writes the plan gate that was just approved as ground truth; whatever goes wrong is an event, never an error. */
   private async keepGroundTruth(task: TaskRow, approvalId: string): Promise<void> {
-    if (!this.groundTruth) return;
+    if (!this.groundTruth || !(await this.truthKept(task))) return;
     try {
       const approval = (await this.approvals(task.id)).find((a) => a.id === approvalId);
       if (!approval || approval.decision !== "approved") return;
@@ -1863,7 +1867,7 @@ export class Pipeline {
 
   /** Records what a person did on the branch after an escalation (commits since, names and line counts) beside the decision, with the reason they corrected it to. */
   private async keepEscalationTruth(task: TaskRow, approvalId: string): Promise<void> {
-    if (!this.escalationTruth) return;
+    if (!this.escalationTruth || !(await this.truthKept(task))) return;
     try {
       const approval = (await this.approvals(task.id)).find((a) => a.id === approvalId);
       if (!approval) return;

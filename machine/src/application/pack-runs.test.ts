@@ -57,6 +57,7 @@ function recordingTelemetry() {
   const spans: Array<{ start: RunStart; events: Array<{ name: string; payload?: Record<string, unknown> }>; end: RunEnd | null }> = [];
   const telemetry: Telemetry = {
     ...noTelemetry(),
+    mode: "full",
     run: (start) => {
       const span = { start, events: [] as Array<{ name: string; payload?: Record<string, unknown> }>, end: null as RunEnd | null };
       spans.push(span);
@@ -107,6 +108,7 @@ describe("PackRuns", () => {
     const seenAtEnd: boolean[] = [];
     const telemetry: Telemetry = {
       ...noTelemetry(),
+      mode: "host",
       run: () => ({ event: () => {}, traceId: () => null, childEnv: () => ({}), end: async (end) => void seenAtEnd.push(existsSync(end.transcriptPath!.replace(/transcript\.log$/, ""))) }),
     };
     await runs(fakeSandbox(output()), { telemetry }).run({ pack: "chat_triage", context: { chat } }, null);
@@ -476,6 +478,69 @@ describe("decision records", () => {
       await runs(fakeSandbox(output({ answer: answers })), { decisions: { append: async (record) => void appended.push(record) } }).run({ pack: "conversation_relation", context: { conversation } }, "intake", undefined, { own: true });
       expect(appended[0]).toMatchObject({ private: true, origin: "machine", context: { conversation: { channel: "[private]", private: true, thread: ["[private]"], latest: "[private]" } } });
       expect(JSON.stringify(appended[0]!.context)).not.toContain("Bob");
+    });
+
+    describe("a repository's learning section", () => {
+      const learning = (over: Record<string, unknown>) => async () => ({ repo: "shop", learning: { records: true, context: "full" as const, truth: true, traces: "host" as const, ...over } });
+      const dedup = { title: "Login fails", text: "the log", candidates: [] };
+      const slots = Object.fromEntries(Object.keys(PACKS.intake_dedup.questions).map((slot) => [slot, { choice: "different", confidence: 0.9 }]));
+      const ask2 = { pack: "intake_dedup" as const, context: { dedup }, taskId: "task-1" };
+      const keep2 = async (over: Record<string, unknown>, machine: Partial<ConstructorParameters<typeof PackRuns>[0]> = {}) => {
+        const appended: DecisionRecord[] = [];
+        const { telemetry, spans } = recordingTelemetry();
+        await runs(fakeSandbox(output({ answer: slots })), { telemetry, decisions: { append: async (record) => void appended.push(record) }, learning: learning(over), ...machine }).run(ask2, "intake", undefined, { own: true });
+        return { appended, spans };
+      };
+
+      it("writes the repository's folder name on the record, never its path", async () => {
+        const { appended } = await keep2({});
+        expect(appended[0]!.repo).toBe("shop");
+        expect(appended[0]!.context).toEqual({ dedup });
+      });
+
+      it("writes no record for a repository that asks for none", async () => {
+        expect((await keep2({ records: false })).appended).toEqual([]);
+      });
+
+      it("keeps the answer and no context when the repository asks for answers only", async () => {
+        const { appended } = await keep2({ context: "answers" });
+        expect(appended[0]).toMatchObject({ context: {}, answer: slots, repo: "shop" });
+      });
+
+      it("caps the span's mode at the repository's: metadata carries no input, off makes no span at all", async () => {
+        const meta = await keep2({ traces: "metadata" });
+        expect(meta.spans[0]!.end).not.toHaveProperty("input");
+        expect(meta.spans[0]!.end!.transcriptPath).toBeUndefined();
+        const off = await keep2({ traces: "off" });
+        expect(off.spans).toHaveLength(0);
+        const host = await keep2({ traces: "host" });
+        expect(host.spans[0]!.end).toHaveProperty("input");
+      });
+
+      it("never raises what the machine allows: a repository's host cannot turn on a machine that has traces off", async () => {
+        const { telemetry, spans } = recordingTelemetry();
+        const off: Telemetry = { ...telemetry, mode: "metadata" };
+        await runs(fakeSandbox(output({ answer: slots })), { telemetry: off, learning: learning({ traces: "host" }) }).run(ask2, "intake", undefined, { own: true });
+        expect(spans[0]!.end).not.toHaveProperty("input");
+      });
+
+      it("hands no container the key when the repository caps the mode below full", async () => {
+        const { telemetry } = recordingTelemetry();
+        const full: Telemetry = { ...telemetry, mode: "full" };
+        await keep2({ traces: "metadata" }, { telemetry: full });
+        expect(seen.at(-1)!.extraEnv).toEqual({});
+      });
+
+      it("does not let MACHINE_DECISIONS=off be raised: a machine with no log writes nothing whatever the repository says", async () => {
+        const { appended } = await keep2({ records: true }, { decisions: undefined });
+        expect(appended).toEqual([]);
+      });
+
+      it("uses the defaults for a call that names no card", async () => {
+        const appended: DecisionRecord[] = [];
+        await runs(fakeSandbox(output({ answer: slots })), { decisions: { append: async (record) => void appended.push(record) }, learning: async () => ({ repo: null, learning: { records: true, context: "full", truth: true, traces: "host" } }) }).run({ pack: "intake_dedup", context: { dedup } }, "intake", undefined, { own: true });
+        expect(appended[0]!.repo).toBeUndefined();
+      });
     });
 
     it("records the verdict under the repository's own bars, what the call cost, and the engine it moved from", async () => {

@@ -5,7 +5,7 @@
 // `evidence-markdown.ts`. With no GitHub token the pack keeps its local urls and nothing throws.
 import type { EvidencePack } from "@hardness/contracts";
 import { createHash } from "node:crypto";
-import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { extname, join, sep } from "node:path";
 
 import { findingKinds } from "../../runner-video/tools/lib/findings.ts";
@@ -13,6 +13,7 @@ import { hashRegularFile, readRegularBytes } from "../adapters/fs/bounded.ts";
 import { releaseAssetStorage, EVIDENCE_TAG as TAG } from "../adapters/evidence-storage/release-asset.ts";
 import { BODY_CAP, COMMENT_MARKER, mergeSection, redact, renderEvidenceComment, renderEvidenceSection, sectionOf, stripSection } from "../domain/evidence-markdown.ts";
 import { type EvidenceStorage, localStorage } from "./evidence-storage.ts";
+import { truthName, writeTruthFile } from "./ground-truth.ts";
 import { emptyCursor, loadCursor, saveCursor } from "./ship-cursor.ts";
 import { packComplete, repairPack } from "../domain/evidence-pack.ts";
 import { MAX_MEDIA_BYTES } from "./evidence-store.ts";
@@ -219,9 +220,7 @@ export async function publishAndReady(deps: ReadyDeps, input: { task: { id: stri
     const current = sectionOf((await deps.github.prFacts(slug, number).catch(() => null))?.body ?? "");
     if (current !== null && sha256(current) !== before.publishedSection) {
       const sha = pack.commitSha.slice(0, 7);
-      const dir = join(deps.stateDir, "ground-truth", "evidence");
-      await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, `${task.id.replace(/[^A-Za-z0-9-]/g, "_")}-${sha.replace(/[^0-9a-f]/g, "_")}-edit.json`), JSON.stringify({ schema: 1, taskId: task.id, sha, at: new Date().toISOString(), section: current.slice(0, 60_000) }));
+      await writeTruthFile(deps.stateDir, "evidence", truthName(`${task.id.replace(/[^A-Za-z0-9-]/g, "_")}-${sha.replace(/[^0-9a-f]/g, "_")}-edit.json`), JSON.stringify({ schema: 1, taskId: task.id, sha, at: new Date().toISOString(), section: current.slice(0, 60_000) }));
       edited = { sha, bytes: Math.min(current.length, 60_000) };
     }
   }

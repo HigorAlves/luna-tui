@@ -1091,6 +1091,15 @@ describe("ground truth", () => {
     expect((await p.events(id)).filter((e) => e.kind === "ground_truth.written").map((e) => e.payload)).toEqual([{ path: "/x.json" }]);
   });
 
+  it("writes no ground truth for a card whose repository keeps none (learning.truth: false)", async () => {
+    let calls = 0;
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, groundTruth: async () => { calls += 1; return "/x.json"; }, truthKept: async () => false });
+    const id = await atGate(p);
+    expect((await p.decide(id, "approved")).state).toBe("awaiting_ship");
+    expect(calls).toBe(0);
+    expect((await p.events(id)).filter((e) => e.kind.startsWith("ground_truth"))).toEqual([]);
+  });
+
   it("logs a writer that fails and approves anyway", async () => {
     const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, groundTruth: async () => { throw new Error("disk full"); } });
     const id = await atGate(p);

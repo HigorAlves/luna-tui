@@ -60,6 +60,23 @@ describe("tagging an answer with its record", () => {
   });
 });
 
+describe("DecisionTruth when a repository keeps no truth", () => {
+  const fact = { pack: "risk_score" as const, recordId: "r1", label: { blast_radius: { score: 1 } }, kind: "person" as const, source: "plan_approved", taskId: "task-1" };
+  it("is a no-op for a card whose repository says truth: false, and never throws when the question fails", async () => {
+    const written: unknown[] = [];
+    const told: unknown[] = [];
+    const sink = { setTruth: async (...args: unknown[]) => (written.push(args), true) };
+    const off = new DecisionTruth(sink, { allowed: async () => false, told: async (e) => void told.push(e) });
+    expect(await off.learned(fact)).toBe(false);
+    expect([written, told]).toEqual([[], []]);
+    const on = new DecisionTruth(sink, { allowed: async (f) => f.taskId === "task-1" });
+    expect(await on.learned(fact)).toBe(true);
+    const broken = new DecisionTruth(sink, { allowed: async () => Promise.reject(new Error("no policy")) });
+    expect(await broken.learned(fact)).toBe(true);
+    expect(written).toHaveLength(2);
+  });
+});
+
 describe("DecisionTruth", () => {
   it("writes the label with its source and the clock's time, then reports it", async () => {
     const written: unknown[] = [];

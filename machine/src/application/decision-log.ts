@@ -1,7 +1,7 @@
 // The decision log: one file per decision pack call, under the machine's state dir (never a repo):
 // `<stateDir>/decisions/<pack>/<yyyy-mm-dd>/<id>.json`, owner-only. Contexts carry repo paths and
 // code excerpts, so the files stay on this machine; `pnpm eval harvest` scrubs before anything
-// reaches `evals/`. Written atomically (temp file, then rename); swept past the retention.
+// reaches `evals/`. Written atomically (temp file, then rename); pruned by `pruneLearning` (`learning-prune.ts`).
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -93,22 +93,6 @@ export class DecisionLog implements DecisionAppender {
     const merged = mergeTruth(record.truth, truth);
     if (merged !== record.truth) await this.write(path, { ...record, truth: merged });
     return true;
-  }
-
-  /** Removes the days older than `retentionDays` (0 keeps everything); the number of records removed. */
-  async sweep(retentionDays: number, now: Date = new Date()): Promise<number> {
-    if (retentionDays <= 0) return 0;
-    const cutoff = new Date(now.getTime() - retentionDays * 86_400_000).toISOString().slice(0, 10);
-    let removed = 0;
-    for (const pack of await readdir(this.root).catch(() => [])) {
-      for (const day of await this.days(pack as PackId)) {
-        if (day >= cutoff) continue;
-        const dir = join(this.root, pack, day);
-        removed += (await readdir(dir).catch(() => [])).filter((name) => name.endsWith(".json")).length;
-        await rm(dir, { recursive: true, force: true });
-      }
-    }
-    return removed;
   }
 
   private async days(pack: PackId): Promise<string[]> {

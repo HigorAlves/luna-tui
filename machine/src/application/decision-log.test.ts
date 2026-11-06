@@ -73,14 +73,6 @@ describe("DecisionLog", () => {
     expect(await log.setTruth("worth_learning", "gone", truth)).toBe(false);
   });
 
-  it("sweeps the days past the retention and keeps the rest", async () => {
-    const log = new DecisionLog({ stateDir });
-    await log.append(record({ id: "old", at: "2026-07-01T00:00:00.000Z" }));
-    await log.append(record({ id: "new", at: "2026-11-01T00:00:00.000Z" }));
-    expect(await log.sweep(90, new Date("2026-11-04T00:00:00Z"))).toBe(1);
-    expect((await log.list("worth_learning")).map((r) => r.id)).toEqual(["new"]);
-    expect(await log.sweep(0, new Date("2030-01-01T00:00:00Z"))).toBe(0);
-  });
   describe("a truth adds up", () => {
     const conversation = () => record({ pack: "conversation_assess", answer: { needs_reply: { value: false, p: 0.6 }, kind: { choice: "request", p: 0.7 } } });
     const at = (n: number) => `2026-11-05T09:0${n}:00.000Z`;

@@ -72,7 +72,7 @@ export interface TruthSink {
 export class DecisionTruth implements TruthSink {
   constructor(
     private readonly log: Pick<DecisionLog, "setTruth"> & Partial<Pick<DecisionLog, "read">>,
-    private readonly options: { now?: () => Date; told?: (event: { taskId?: string; pack: PackId; recordId: string; source: string }) => Promise<void> } = {},
+    private readonly options: { now?: () => Date; /** False when the card's repository keeps no truth (`learning.truth: false`); a question that fails allows it. */ allowed?: (fact: Learned) => Promise<boolean>; told?: (event: { taskId?: string; pack: PackId; recordId: string; source: string }) => Promise<void> } = {},
   ) {}
 
   /** The answer a record kept, or null when there is none (or the log cannot read). */
@@ -83,6 +83,7 @@ export class DecisionTruth implements TruthSink {
   /** True when a record took the truth. A missing record, a log that cannot write: false, never a throw. */
   async learned(fact: Learned): Promise<boolean> {
     try {
+      if (this.options.allowed && !(await this.options.allowed(fact).catch(() => true))) return false;
       const truth: Truth = { label: fact.label, source: fact.source, kind: fact.kind, at: (this.options.now?.() ?? new Date()).toISOString() };
       if (!(await this.log.setTruth(fact.pack, fact.recordId, truth))) return false;
       await this.options.told?.({ ...(fact.taskId ? { taskId: fact.taskId } : {}), pack: fact.pack, recordId: fact.recordId, source: fact.source }).catch(() => {});

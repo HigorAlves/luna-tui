@@ -11,6 +11,7 @@ import { StreamWatcher } from "./adapters/http/watch.ts";
 import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 
+import { machineSecrets } from "./bootstrap/machine-secrets.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
@@ -19,6 +20,7 @@ import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
 import { AUTO_ARCHIVE_GATES, type SlaRow, applySlaActions } from "./application/sla-actions.ts";
 import { splitDepth } from "./application/split-depth.ts";
+import type { LearningPolicy } from "./application/pack-runs.ts";
 import { openTaskIdsOf, pruneLearning } from "./application/learning-prune.ts";
 import { evidenceRetentionDays, sweepEvidenceStore } from "./application/evidence-store.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
@@ -73,7 +75,7 @@ import { PgTaskStore } from "./adapters/persistence/task-store.ts";
 import { machineCredentials } from "./adapters/credentials/index.ts";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { uniqueRepoForProject } from "./application/context-setup.ts";
 import { Backlog } from "./application/backlog.ts";
 import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
@@ -129,7 +131,9 @@ if (config.traces.mode === "off") console.log(process.env.MACHINE_TRACES?.trim()
 /** What each decision pack call leaves (context, answer, verdicts), for evals; off with MACHINE_DECISIONS=off. */
 const decisionLog = new DecisionLog({ stateDir: config.stateDir, enabled: config.decisions.enabled });
 /** What later facts say a decision should have been, written onto its record; each is a `decision.truth` event on the task. */
-const decisionTruth = new DecisionTruth(decisionLog, { told: async (e) => void (e.taskId && (await pipeline.logDecisionTruth(e.taskId, e))) });
+const decisionTruth = new DecisionTruth(decisionLog, {
+  // `learning.truth: false` in a card's repository: nothing is learned from that card.
+  allowed: async (fact) => !fact.taskId || (await learningOf(fact.taskId)).learning.truth, told: async (e) => void (e.taskId && (await pipeline.logDecisionTruth(e.taskId, e))) });
 if (config.traces.mode !== "off") {
   console.log(`traces ${telemetry.mode === "off" ? "off (backend unavailable)" : telemetry.mode} · Laminar at ${config.traces.laminar.baseUrl}:${config.traces.laminar.httpPort}`);
 }
@@ -502,6 +506,7 @@ pipeline = new Pipeline(db, runnerFor, {
       return (answer?.outOfMap ?? []).flatMap((o) => (typeof o?.path === "string" ? [o.path] : []));
     },
   },
+  truthKept: async (task) => !task.repoPath || (await policies.for(task.repoPath)).factory.learning.truth,
   ...(config.groundTruth ? { evidenceFeedback: evidenceFeedbackWriter(config.stateDir), groundTruth: groundTruthWriter(config.stateDir), escalationTruth: escalationTruthWriter(config.stateDir), commitsSince, headOf: headCommit } : {}),
   truth: decisionTruth,
   ...(shipGateProbe ? { shipGateProbe, shipProbeMs: config.shipPoll.intervalMs } : {}),
@@ -643,6 +648,12 @@ const conversationMachine = (): ConversationMachine => {
     config: (channel) => channelClaims.configOf(channel),
   });
 };
+/** A card's repository: its folder name and the `learning` section of its `luna.yaml`; the defaults for a call that names no card or a card with no repository. */
+async function learningOf(taskId: string | undefined): Promise<{ repo: string | null; learning: LearningPolicy }> {
+  const repoPath = taskId ? (await pipeline.get(taskId).catch(() => null))?.repoPath ?? null : null;
+  if (!repoPath) return { repo: null, learning: FACTORY_DEFAULTS.learning };
+  return { repo: basename(repoPath), learning: (await policies.for(repoPath)).factory.learning };
+}
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
 const packRuns = buildPackRuns(config, {
@@ -653,6 +664,10 @@ const packRuns = buildPackRuns(config, {
   engineBudgets,
   telemetry,
   decisions: decisionLog,
+  // The machine's own credential values are redacted from a stored context, beside the token shapes.
+  secrets: () => machineSecrets(config, process.env),
+  // What the call's repository lets the machine keep: its `learning` section, by the card's repository (a call that names no card keeps the defaults).
+  learning: learningOf,
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });

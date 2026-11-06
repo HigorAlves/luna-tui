@@ -26,7 +26,7 @@
 // while the day is at its ceiling is refused before it runs. There is no monthly ceiling here:
 // that one is per repo (luna.yaml), and a call has no repo.
 import type { EgressPolicy } from "./egress-policy.ts";
-import { type CredentialOwner, type DecisionRecord, type EngineId, PACKS, type PackId, type RunInfo, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
+import { type CredentialOwner, type DecisionRecord, type EngineId, type FactoryConfig, PACKS, type PackId, type RunInfo, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -153,7 +153,15 @@ export interface PackRunsDeps {
   decisions?: DecisionAppender;
   /** Secret values to redact from the context a record stores (the shapes of tokens are always redacted); none by default. */
   secrets?: () => Readonly<Record<string, string>>;
+  /** What the call's repository lets the machine keep (its `learning` section) and the repository's folder name; absent, the defaults and no repository.
+   *  It can only lower what the machine's own switches allow: `MACHINE_DECISIONS=off` (no `decisions`) and `MACHINE_TRACES` (the telemetry's mode) stay ceilings. */
+  learning?: (taskId: string | undefined) => Promise<{ repo: string | null; learning: LearningPolicy }>;
 }
+
+/** The `learning` section of a repository's `luna.yaml`, as the machine reads it. */
+export type LearningPolicy = FactoryConfig["learning"];
+const KEEP_ALL: { repo: string | null; learning: LearningPolicy } = { repo: null, learning: { records: true, context: "full", truth: true, traces: "host" } };
+const MODE_RANK = { off: 0, metadata: 1, host: 2, full: 3 } as const;
 
 /** `resetsAt` as the run reported it (epoch seconds, or a string from an older runner), as ISO. */
 function resetsIso(resetsAt: number | string | null): string | null {
@@ -274,7 +282,12 @@ export class PackRuns implements PackRunsPort {
   private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null, origin: { taskId?: string; stage?: string; own?: boolean } = {}): Promise<RunResult> {
     const startedAt = this.now();
     const t0 = Date.now();
-    const span = this.telemetry.run({ kind: "pack", pack, engine, client });
+    const policy = await this.learningOf(origin.taskId);
+    // A repository can lower the trace mode of its own runs, never raise it above the machine's. Its default, `host`, is no cap:
+    // a repository that says nothing leaves the machine's own mode (`full` included) alone.
+    const mode = policy.learning.traces === "host" ? this.telemetry.mode : (["off", "metadata", "host", "full"] as const)[Math.min(MODE_RANK[this.telemetry.mode], MODE_RANK[policy.learning.traces])]!;
+    const span = mode === "off" ? noTelemetry().run({ kind: "pack", pack, engine, client }) : this.telemetry.run({ kind: "pack", pack, engine, client });
+    const keepsMore = mode === "host" || mode === "full";
     if (movedFrom) span.event("engine", { engine, reason: `fallback after ${movedFrom} rate limit` });
     const runDir = join(this.deps.stateDir, PACK_RUNS_DIR, `${pack}-${randomUUID()}`);
     const work = join(runDir, "work");
@@ -288,7 +301,7 @@ export class PackRuns implements PackRunsPort {
       await mkdir(work, { recursive: true });
       const input = buildContextPackInput(pack, context, engine);
       const run = await runPackOnce(
-        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: span.childEnv(), signal },
+        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, signal },
         { credentials: this.deps.credentials, sandbox: this.deps.sandbox, ...(this.deps.egress ? { egress: this.deps.egress } : {}) },
       );
       if (run.error !== null) failure = signal?.aborted ? new RunAbortedError("the client left: the run was stopped") : new RunFailedError(run.error);
@@ -326,12 +339,12 @@ export class PackRuns implements PackRunsPort {
         costUsd: usage.costUsd,
         durationMs: usage.durationMs,
         info,
-        transcriptPath: join(runDir, "transcript.log"),
-        ...(decided && origin.own === true ? { input: this.spanInput(context), output: { answer: answer!, verdicts: decided.verdicts, overall: decided.overall } } : {}),
+        ...(keepsMore ? { transcriptPath: join(runDir, "transcript.log") } : {}),
+        ...(keepsMore && decided && origin.own === true ? { input: this.spanInput(context), output: { answer: answer!, verdicts: decided.verdicts, overall: decided.overall } } : {}),
       });
       await rm(runDir, { recursive: true, force: true }).catch(() => {});
     }
-    const recordId = decided && answer ? await this.keep({ pack, engine, model: usage.model, client, taskId: origin.taskId, stage: origin.stage, own: origin.own === true, context, answer, decided, usage, movedFrom, traceId: span.traceId() }) : undefined;
+    const recordId = decided && answer ? await this.keep({ pack, engine, model: usage.model, client, taskId: origin.taskId, stage: origin.stage, own: origin.own === true, policy, context, answer, decided, usage, movedFrom, traceId: span.traceId() }) : undefined;
     if (!(failure instanceof RunNoCredentialError)) await this.record({ pack, engine, model: usage.model, client, ok: failure === null, error: failure?.message ?? null, turns: usage.turns, durationMs: usage.durationMs, costUsd: usage.costUsd, startedAt: startedAt.toISOString(), endedAt: this.now().toISOString(), ...facts });
     if (usage.costUsd) await this.deps.engineBudgets?.afterRun(engine, { taskId: null, repo: null }).catch((thrown: unknown) => console.warn(`run: could not check the engine's cap: ${thrown instanceof Error ? thrown.message : String(thrown)}`));
     const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd.toFixed(4)}`;
@@ -350,8 +363,17 @@ export class PackRuns implements PackRunsPort {
 
   /** Keeps a decision pack's validated answer with its context; the record's id, or undefined when none was kept.
    *  A log that cannot write never fails the call. */
-  private async keep(call: { pack: PackId; engine: EngineId; model: string; client: string | null; taskId?: string; stage?: string; own: boolean; context: PackContext; answer: Record<string, unknown>; decided: ReturnType<typeof applyPolicy>; usage: RunResult["usage"]; movedFrom: EngineId | null; traceId: string | null }): Promise<string | undefined> {
-    if (!this.deps.decisions) return undefined;
+  private async learningOf(taskId: string | undefined): Promise<{ repo: string | null; learning: LearningPolicy }> {
+    try {
+      return (await this.deps.learning?.(taskId)) ?? KEEP_ALL;
+    } catch (thrown) {
+      console.warn(`run: could not read the repository's learning section, using the defaults: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
+      return KEEP_ALL;
+    }
+  }
+
+  private async keep(call: { policy: { repo: string | null; learning: LearningPolicy }; pack: PackId; engine: EngineId; model: string; client: string | null; taskId?: string; stage?: string; own: boolean; context: PackContext; answer: Record<string, unknown>; decided: ReturnType<typeof applyPolicy>; usage: RunResult["usage"]; movedFrom: EngineId | null; traceId: string | null }): Promise<string | undefined> {
+    if (!this.deps.decisions || !call.policy.learning.records) return undefined;
     // The stored copy is redacted, and a private conversation's text is gone; the model was given the real context.
     const stored = recordContext(call.context as Record<string, unknown>, { secrets: this.deps.secrets?.() ?? {} });
     const record: DecisionRecord = {
@@ -364,7 +386,9 @@ export class PackRuns implements PackRunsPort {
       client: call.client,
       ...(call.taskId !== undefined ? { taskId: call.taskId } : {}),
       ...(call.stage !== undefined ? { stage: call.stage } : {}),
-      context: stored.context,
+      // `context: "answers"` keeps the answer and nothing the model read: the record can still take a truth, it cannot become a case.
+      context: call.policy.learning.context === "answers" ? {} : stored.context,
+      ...(call.policy.repo ? { repo: call.policy.repo } : {}),
       answer: call.answer,
       verdicts: call.decided.verdicts,
       overall: call.decided.overall,
@@ -374,7 +398,7 @@ export class PackRuns implements PackRunsPort {
       // No repository is known to a pack call yet: what the machine did is the verdict under the pack's own bars.
       acted: { overall: call.decided.overall, below: call.decided.below, overrides: false },
       usage: { costUsd: call.usage.costUsd, durationMs: call.usage.durationMs, ...(call.movedFrom ? { movedFrom: call.movedFrom } : {}) },
-      redacted: stored.redacted,
+      redacted: call.policy.learning.context === "answers" ? 0 : stored.redacted,
     };
     try {
       await this.deps.decisions.append(record);

@@ -2,13 +2,43 @@
 // what they approved (with every edit between) is kept as one file, so a later eval can learn from
 // what a person changed. It lives under the machine's state dir, never in the repo the task works
 // on: the machine runs for any repository and writes nothing of its own into one.
-import { mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { EvidencePack } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
 import type { ApprovalRow, TaskRow } from "../domain/task.ts";
+
+const TRUTH_KIND = /^[a-z0-9_]+$/;
+const TRUTH_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** A string made fit to be a file name: letters, digits, dots, dashes and underscores, not starting with a dot or a dash. */
+export const truthName = (text: string): string => text.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[^A-Za-z0-9]/, "_");
+
+/** The one way a ground-truth file is written: `<stateDir>/ground-truth/<kind>/<name>`, folders 0700, the file 0600, written to a
+ *  temporary name and renamed over the target, so a reader never sees half a file and an older, looser file is replaced. The kind
+ *  and the name are checked: nothing but `[A-Za-z0-9._-]` can name a file here. Answers the path. */
+export async function writeTruthFile(stateDir: string, kind: string, name: string, body: string): Promise<string> {
+  if (!TRUTH_KIND.test(kind)) throw new Error(`ground truth: "${kind}" is not a kind (lowercase letters, digits, underscores)`);
+  if (!TRUTH_NAME.test(name)) throw new Error(`ground truth: "${name}" is not a file name (letters, digits, dots, dashes, underscores)`);
+  const root = join(stateDir, "ground-truth");
+  const dir = join(root, kind);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(root, 0o700);
+  await chmod(dir, 0o700);
+  const path = join(dir, name);
+  const temp = join(dir, `.${name}.${randomUUID()}.tmp`);
+  try {
+    await writeFile(temp, body, { mode: 0o600 });
+    await rename(temp, path);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
+  return path;
+}
 
 const PLAN_KEYS = ["brief", "criteria", "assumptions", "slices", "rollback", "cases", "risk", "map"] as const;
 
@@ -65,11 +95,7 @@ export function groundTruthOf(task: TaskRow, approval: ApprovalRow): GroundTruth
 /** Writes `<stateDir>/ground-truth/plan/<taskId>-<approvalId>.json` and answers its path. */
 export function groundTruthWriter(stateDir: string): (task: TaskRow, approval: ApprovalRow) => Promise<string> {
   return async (task, approval) => {
-    const dir = join(stateDir, "ground-truth", "plan");
-    await mkdir(dir, { recursive: true });
-    const path = join(dir, `${task.id}-${approval.id}.json`);
-    await writeFile(path, `${JSON.stringify(groundTruthOf(task, approval), null, 2)}\n`);
-    return path;
+    return writeTruthFile(stateDir, "plan", truthName(`${task.id}-${approval.id}.json`), `${JSON.stringify(groundTruthOf(task, approval), null, 2)}\n`);
   };
 }
 
@@ -107,25 +133,15 @@ export function escalationTruthOf(task: TaskRow, approval: ApprovalRow, commits:
 /** Writes `<stateDir>/ground-truth/escalation/<taskId>-<approvalId>.json` and answers its path. */
 export function escalationTruthWriter(stateDir: string): (task: TaskRow, approval: ApprovalRow, commits: readonly CommitFact[], corrected: string | null) => Promise<string> {
   return async (task, approval, commits, corrected) => {
-    const dir = join(stateDir, "ground-truth", "escalation");
-    await mkdir(dir, { recursive: true });
-    const path = join(dir, `${task.id}-${approval.id}.json`);
-    await writeFile(path, `${JSON.stringify(escalationTruthOf(task, approval, commits, corrected), null, 2)}\n`);
-    return path;
+    return writeTruthFile(stateDir, "escalation", truthName(`${task.id}-${approval.id}.json`), `${JSON.stringify(escalationTruthOf(task, approval, commits, corrected), null, 2)}\n`);
   };
 }
 
 /** Writes `<stateDir>/ground-truth/ticket/<key>-<draft>-<at>.json`: what a person did to a ticket's draft (sent as drafted, edited with the text before and after, ignored). Answers its path. */
 export function ticketTruthWriter(stateDir: string): (entry: { key: string; draft: string; kind: string; did: string; original: string; final: string | null; at: string }) => Promise<string> {
   return async (entry) => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    const { join } = await import("node:path");
-    const dir = join(stateDir, "ground-truth", "ticket");
-    await mkdir(dir, { recursive: true });
-    const safeName = `${entry.key}-${entry.draft}-${entry.at}`.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 160);
-    const path = join(dir, `${safeName}.json`);
-    await writeFile(path, `${JSON.stringify({ schema: 1, ...entry }, null, 2)}\n`);
-    return path;
+    const safeName = truthName(`${entry.key}-${entry.draft}-${entry.at}`).slice(0, 160);
+    return writeTruthFile(stateDir, "ticket", `${safeName}.json`, `${JSON.stringify({ schema: 1, ...entry }, null, 2)}\n`);
   };
 }
 
@@ -162,10 +178,6 @@ export function evidenceFeedbackOf(task: TaskRow, pack: EvidencePack, feedback: 
 /** Writes `<stateDir>/ground-truth/evidence/<taskId>-<sha 7>.json` (the last answer for a commit wins) and answers its path. */
 export function evidenceFeedbackWriter(stateDir: string): (task: TaskRow, pack: EvidencePack, feedback: { useful: boolean; note?: string | undefined }, at: Date) => Promise<string> {
   return async (task, pack, feedback, at) => {
-    const dir = join(stateDir, "ground-truth", "evidence");
-    await mkdir(dir, { recursive: true });
-    const path = join(dir, `${task.id}-${pack.commitSha.slice(0, 7).replace(/[^A-Za-z0-9]/g, "_")}.json`);
-    await writeFile(path, `${JSON.stringify(evidenceFeedbackOf(task, pack, feedback, at), null, 2)}\n`);
-    return path;
+    return writeTruthFile(stateDir, "evidence", truthName(`${task.id}-${pack.commitSha.slice(0, 7).replace(/[^A-Za-z0-9]/g, "_")}.json`), `${JSON.stringify(evidenceFeedbackOf(task, pack, feedback, at), null, 2)}\n`);
   };
 }
