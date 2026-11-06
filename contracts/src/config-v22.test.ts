@@ -44,7 +44,7 @@ describe("the diagram's config defaults", () => {
     expect(keys.length).toBeGreaterThan(60);
     expect(keys.filter((k) => CONSUMED_FROM[k] === undefined)).toEqual([]);
     expect(Object.keys(CONSUMED_FROM).filter((k) => !keys.includes(k))).toEqual([]);
-    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16]));
+    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16, 17]));
   });
 
   it("mark exactly the keys whose default already equals today's constant as wave 8", () => {
@@ -129,5 +129,29 @@ describe("build.backoff_minutes", () => {
     expect(LunaConfig.safeParse({ build: { backoff_minutes: [0, 30] } }).success).toBe(false);
     expect(LunaConfig.safeParse({ build: { backoff_minutes: [0.5, 30] } }).success).toBe(false);
     expect(LunaConfig.safeParse({ build: { backoff_minutes: [1, 30] } }).success).toBe(true);
+  });
+});
+
+describe("the conversation section", () => {
+  it("defaults to no channel, no unattended post, a 90 second debounce and a 24 hour draft", () => {
+    expect(FACTORY_DEFAULTS.conversation).toEqual({ channels: [], auto: "off", debounce_seconds: 90, draft_expiry_hours: 24, confidence: 0.7, active_minutes: 10 });
+    expect(factoryConfigOf({ conversation: { channels: ["C0123ABC"] } }).conversation).toMatchObject({ channels: ["C0123ABC"], auto: "off", debounce_seconds: 90 });
+  });
+  it("accepts channel and DM ids only, and refuses an unknown key, a long list and a value out of range", () => {
+    const ok = (conversation: unknown) => LunaConfig.safeParse({ conversation }).success;
+    expect(ok({ channels: ["C0123ABC", "G0123ABC", "D0123ABC"], auto: "on", debounce_seconds: 0, draft_expiry_hours: 168, confidence: 0.5, active_minutes: 1440 })).toBe(true);
+    expect(ok({ channels: ["general"] })).toBe(false);
+    expect(ok({ channels: ["c0123abc"] })).toBe(false);
+    expect(ok({ channels: Array.from({ length: 51 }, (_, i) => `C${String(i).padStart(5, "0")}`) })).toBe(false);
+    expect(ok({ nope: 1 })).toBe(false);
+    expect(ok({ debounce_seconds: 3601 })).toBe(false);
+    expect(ok({ draft_expiry_hours: 0 })).toBe(false);
+    expect(ok({ draft_expiry_hours: 169 })).toBe(false);
+    expect(ok({ confidence: 1.5 })).toBe(false);
+    expect(ok({ active_minutes: 1441 })).toBe(false);
+    expect(ok({ auto: "maybe" })).toBe(false);
+  });
+  it("lists all six keys as consumed by wave 17", () => {
+    for (const key of ["channels", "auto", "debounce_seconds", "draft_expiry_hours", "confidence", "active_minutes"]) expect(CONSUMED_FROM[`conversation.${key}`]).toBe(17);
   });
 });

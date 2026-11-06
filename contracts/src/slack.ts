@@ -147,6 +147,10 @@ export interface SlackSnapshot {
   sla: Record<SlackPriority, number>;
   /** Now is inside the rules file's `## Quiet hours`: the board raises notices for P0 only. */
   quiet: boolean;
+  /** What the machine reads: `opted_in` or `all` (`MACHINE_SLACK_SCOPE`). Absent from a machine before wave 17. */
+  scope?: "opted_in" | "all";
+  /** How many conversations are opted in, so the board can say why the view is empty. */
+  optedIn?: number;
 }
 
 export const SlackItemPatch = z.object({

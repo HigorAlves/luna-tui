@@ -97,6 +97,8 @@ export interface SlackInboxConfig {
   markRead: boolean;
   /** The rules file (`<stateDir>/slack-triage.md` unless `MACHINE_SLACK_RULES` says otherwise); created from the template when missing. */
   rulesPath: string;
+  /** `MACHINE_SLACK_SCOPE`: `opted_in` (default) reads only the channels and DMs a person opted in; `all` reads what the poll read before wave 17. A machine variable on purpose: a repository's file cannot widen it. */
+  scope: "opted_in" | "all";
   /** `HH:MM` local time for the morning digest DM; null means none. */
   digestAt: { hour: number; minute: number } | null;
 }
@@ -320,6 +322,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (!match) throw new Error(`MACHINE_REPO_MAP must list owner/name=/absolute/path pairs, got "${pair}"`);
     repoMap[match[1]!] = match[2]!;
   }
+  const slackScope = env.MACHINE_SLACK_SCOPE === undefined || env.MACHINE_SLACK_SCOPE === "" ? "opted_in" : env.MACHINE_SLACK_SCOPE;
+  if (slackScope !== "opted_in" && slackScope !== "all") throw new Error(`MACHINE_SLACK_SCOPE must be opted_in or all, got "${slackScope}"`);
   const slackToken = env.MACHINE_SLACK_TOKEN ?? "";
   const slackChannel = env.MACHINE_SLACK_CHANNEL ?? "";
   if ((slackToken === "") !== (slackChannel === "")) {
@@ -397,6 +401,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       markRead: env.MACHINE_SLACK_MARK_READ === "on",
       rulesPath: rules ? resolve(REPO_ROOT, rules) : join(stateDir, "slack-triage.md"),
       digestAt,
+      scope: slackScope,
     },
     jira,
     sla,

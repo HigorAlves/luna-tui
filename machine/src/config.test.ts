@@ -49,7 +49,7 @@ describe("loadConfig", () => {
       groundTruth: true,
       decisions: { enabled: true, retentionDays: 90 },
       slack: null,
-      slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null },
+      slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
       jira: null,
       sla: { gateSecs: 172_800, cycleSecs: null },
     });
@@ -66,7 +66,10 @@ describe("loadConfig", () => {
       MACHINE_SLACK_RULES: "/state/slack-triage.md",
       MACHINE_SLACK_DIGEST_AT: "08:30",
     }).slackInbox;
-    expect(inbox).toEqual({ enabled: false, userToken: "xoxp-1", appToken: "xapp-1", intervalMs: 30_000, markRead: true, rulesPath: "/state/slack-triage.md", digestAt: { hour: 8, minute: 30 } });
+    expect(inbox).toEqual({ enabled: false, userToken: "xoxp-1", appToken: "xapp-1", intervalMs: 30_000, markRead: true, rulesPath: "/state/slack-triage.md", digestAt: { hour: 8, minute: 30 }, scope: "opted_in" });
+    expect(loadConfig({ HOME: "/h", MACHINE_SLACK_SCOPE: "all" }).slackInbox.scope).toBe("all");
+    expect(loadConfig({ HOME: "/h", MACHINE_SLACK_SCOPE: "opted_in" }).slackInbox.scope).toBe("opted_in");
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_SCOPE: "everything" })).toThrow(/MACHINE_SLACK_SCOPE/);
     expect(loadConfig({ HOME: "/h", MACHINE_SLACK_USER_TOKEN: "" }).slackInbox.userToken).toBeNull();
     // The default follows the state dir; a relative path is taken from the repo root.
     expect(loadConfig({ HOME: "/h", MACHINE_STATE_DIR: "/var/hardness" }).slackInbox.rulesPath).toBe("/var/hardness/slack-triage.md");

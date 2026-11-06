@@ -357,6 +357,13 @@ describe("the sections of the v2.2 config reach the policy", () => {
     expect(renderLunaConfig(validateLunaConfig({ tickets: { auto: "on" } }))).toContain("tickets:");
   });
 
+  it("takes the conversation section from a real luna.yaml, renders it, and refuses an unknown key", () => {
+    const policy = parseLunaConfig(["conversation:", "  channels: [C0123ABC]", "  auto: on", "  debounce_seconds: 5", ""].join("\n"));
+    expect(policy.factory.conversation).toMatchObject({ channels: ["C0123ABC"], auto: "on", debounce_seconds: 5, draft_expiry_hours: 24 });
+    expect(renderLunaConfig(validateLunaConfig({ conversation: { channels: ["C0123ABC"] } }))).toContain("conversation:");
+    expect(() => parseLunaConfig(["conversation:", "  sneaky: 1", ""].join("\n"))).toThrow(/sneaky|conversation/);
+  });
+
   it("reads every section the FactoryConfig schema has: a section a later wave adds cannot be forgotten", () => {
     const read = new Set<string>();
     const spy = new Proxy({}, { get: (_t, key) => (read.add(String(key)), undefined) });

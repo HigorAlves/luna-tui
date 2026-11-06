@@ -9,6 +9,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { FACTORY_DEFAULTS } from "@hardness/contracts";
 import type {
   SlackItem,
   SlackItemPatch,
@@ -26,6 +27,7 @@ import type {
 import type { SocketEvent, SocketState } from "../adapters/slack/socket-mode.ts";
 import { escapeMrkdwn, toPlainText } from "../adapters/slack/mrkdwn.ts";
 import { stats } from "../adapters/http/metrics.ts";
+import { inConversationScope, optedIn, type SlackScope } from "../domain/conversation-scope.ts";
 import { applyEdit, canonicalMessageOf, emptyConversation, foldMessage, latestText } from "../domain/conversation.ts";
 import { screen } from "../domain/secrets-check.ts";
 import {
@@ -47,6 +49,7 @@ import {
 } from "../domain/slack-item.ts";
 import { DEFAULT_SLA, LEARNED_TEMPLATE, RULES_TEMPLATE, type SlaTargets, type SlackRules, applyRules, firstLine, inQuietHours, learn, learnedPath, parseRules, withFloor } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
+import { ChannelClaims } from "./channel-claims.ts";
 import type { NewTask } from "./pipeline.ts";
 import { type ChannelInfo, type Conversation, type RawMessage, type Slack, type SlackMe, type Usergroup, messageOf } from "./slack.ts";
 import type { SlackStore } from "./slack-store.ts";
@@ -125,6 +128,10 @@ export interface SlackInboxOptions {
   files?: { read(path: string): Promise<string | null>; write(path: string, text: string): Promise<void> };
   /** Days to keep slack_triage_runs rows (`MACHINE_RETENTION_DAYS`); 0 or unset keeps them. */
   retentionDays?: number;
+  /** `MACHINE_SLACK_SCOPE`; unset is `opted_in`. */
+  scope?: SlackScope;
+  /** The channels repositories claim in `conversation.channels`; unset claims none. */
+  claims?: ChannelClaims;
 }
 
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
@@ -227,7 +234,14 @@ export class SlackInbox implements SlackInboxPort {
   /** The first poll of a run re-queues what the last run left untriaged. */
   private recovered = false;
 
+  private readonly scope: SlackScope;
+  private readonly claims: ChannelClaims;
+  /** The conversations a person opted in, as of the last poll. */
+  private opted = new Set<string>();
+
   constructor(private readonly options: SlackInboxOptions) {
+    this.scope = options.scope ?? "opted_in";
+    this.claims = options.claims ?? new ChannelClaims(async () => [], async () => ({ conversation: FACTORY_DEFAULTS.conversation, scoring: FACTORY_DEFAULTS.scoring }));
     this.now = options.now ?? (() => new Date());
     this.files = options.files ?? realFiles;
     this.nextDelayMs = options.intervalMs;
@@ -288,10 +302,11 @@ export class SlackInbox implements SlackInboxPort {
       // An edit or a deletion names the channel on the envelope, or on the message it carries.
       const channel = event.channel ?? event.message?.channel ?? event.previous_message?.channel;
       if (!channel) return;
+      if (!inConversationScope({ id: channel, kind: "channel" }, this.opted, this.scope)) return;
       this.dirty.add(channel);
       if (event.subtype === "message_changed" && event.message?.ts) this.edits.push({ id: `${channel}:${event.message.ts}`, text: event.message.text ?? "", deleted: false, at: slackTsToDate(event.ts).toISOString() });
       else if (event.subtype === "message_deleted" && (event.deleted_ts ?? event.previous_message?.ts)) this.edits.push({ id: `${channel}:${event.deleted_ts ?? event.previous_message!.ts}`, text: null, deleted: true, at: slackTsToDate(event.ts).toISOString() });
-    } else if (event.type === "reaction_added" && event.item.channel && event.item.ts && this.me && event.item_user === this.me.id) {
+    } else if (event.type === "reaction_added" && event.item.channel && event.item.ts && this.me && event.item_user === this.me.id && inConversationScope({ id: event.item.channel, kind: "channel" }, this.opted, this.scope)) {
       const { channel, ts } = event.item;
       const at = slackTsToDate(event.event_ts);
       // Its own id: a reaction on the root of a thread you are in must not replace that thread's item.
@@ -412,6 +427,8 @@ export class SlackInbox implements SlackInboxPort {
       socket: this.options.socketToken ? this.socketState : "off",
       sla: toWireSla(this.sla),
       quiet: inQuietHours(rules, now),
+      scope: this.scope,
+      optedIn: this.opted.size,
     });
     return this.snapshot;
   }
@@ -425,7 +442,8 @@ export class SlackInbox implements SlackInboxPort {
       JSON.stringify(next.sla) !== JSON.stringify(this.snapshot.sla) ||
       next.error !== this.snapshot.error ||
       next.socket !== this.snapshot.socket ||
-      next.quiet !== this.snapshot.quiet;
+      next.quiet !== this.snapshot.quiet ||
+      next.optedIn !== this.snapshot.optedIn;
     this.snapshot = next;
     if (changed) this.options.publish(next);
   }
@@ -453,6 +471,10 @@ export class SlackInbox implements SlackInboxPort {
     const { slack, store } = this.options;
     const me = await this.whoAmI();
     const watches = await this.ensureWatches();
+    await this.claims.refresh().catch(() => {});
+    const { scope } = this;
+    const opted = optedIn(watches, this.claims.claimed());
+    this.opted = opted;
     const rules = await this.rules();
     const now = this.now();
     const gathered: Gathered = { changed: new Map(), base: new Map(), pending: new Map() };
@@ -491,8 +513,10 @@ export class SlackInbox implements SlackInboxPort {
           { ts: incoming.slackTs, user: raw.author.id, botId: null, text: raw.text, subtype: null, threadTs: incoming.threadTs, replyCount: 0, latestReply: null, files: raw.files, editedTs: raw.editedTs },
           { channel: incoming.channel, author: raw.author, permalink: incoming.permalink, text: incoming.text },
         );
-        const conversation = foldMessage(item.conversation ?? emptyConversation(incoming.channel), message, screen(raw.text));
-        if (conversation !== item.conversation) item = { ...item, conversation };
+        const conversation = foldMessage(item.conversation ?? emptyConversation(incoming.channel, this.claims.repoOf(incoming.channel.id)), message, screen(raw.text));
+        const repo = this.claims.repoOf(incoming.channel.id);
+        const placed = conversation.repo === repo ? conversation : { ...conversation, repo };
+        if (placed !== item.conversation) item = { ...item, conversation: placed };
       }
       if (retriage) gathered.pending.set(incoming.id, { floor: verdict.floor, settled: verdict.triage });
       if (retriage || item !== existing) gathered.changed.set(incoming.id, item);
@@ -501,7 +525,7 @@ export class SlackInbox implements SlackInboxPort {
     // 1. Mentions, through search, since the last poll's newest hit.
     const since = moved.sinceTs;
     let cursor: string | undefined;
-    for (let page = 0; page < SEARCH_PAGES; page++) {
+    for (let page = 0; page < (scope === "all" ? SEARCH_PAGES : 0); page++) {
       const found = await slack.searchMentions(me.id, since, cursor);
       for (const hit of found.hits) {
         if (compareTs(hit.ts, moved.sinceTs) > 0) moved.sinceTs = hit.ts;
@@ -541,7 +565,10 @@ export class SlackInbox implements SlackInboxPort {
         if (m.threadTs && m.threadTs !== m.ts && m.subtype !== "thread_broadcast") continue;
         const isDm = conv.kind === "dm" || conv.kind === "mpim";
         const mention = mentionsUser(m.text, me.id);
-        const matched = isDm ? ["dm"] : [...(mention ? ["me"] : []), ...matchWatches(m.text, conv.id, watches)];
+        const keys = matchWatches(m.text, conv.id, watches);
+        // A channel a repository claims is opted in without a watch: its messages are the conversation machine's to read.
+        if (scope !== "all" && !isDm && opted.has(conv.id) && !keys.some((k) => k.startsWith("channel:"))) keys.push(`channel:${conv.id}`);
+        const matched = isDm ? ["dm"] : [...(mention ? ["me"] : []), ...keys];
         if (matched.length === 0) continue;
         const author = await this.authorOf(m.user, m.botId);
         if (author.id === me.id) continue;
@@ -567,10 +594,14 @@ export class SlackInbox implements SlackInboxPort {
         );
       }
     };
-    for (const dm of await slack.conversations(["im", "mpim"])) await sweep(dm);
-    const channels = await this.channels();
+    if (scope === "all") for (const dm of await slack.conversations(["im", "mpim"])) await sweep(dm);
+    const listed = (await this.channels()).filter((c) => inConversationScope(c, opted, scope));
+    // An opted-in DM or group DM is in no channel list: it is swept by its own id.
+    const extra: ChannelInfo[] = [];
+    if (scope !== "all") for (const id of opted) if (!listed.some((c) => c.id === id)) extra.push(await this.channelOf(id, id));
+    const channels = [...listed, ...extra];
     const due = channels.filter((c) => flagged.includes(c.id));
-    if (this.polls % SWEEP_EVERY === 1) {
+    if (scope !== "all" || this.polls % SWEEP_EVERY === 1) {
       const rest = channels.filter((c) => !due.includes(c)).sort((a, b) => (this.sweptAt.get(a.id) ?? 0) - (this.sweptAt.get(b.id) ?? 0));
       due.push(...rest.slice(0, Math.max(0, SWEEP_BUDGET - due.length)));
     }
@@ -597,7 +628,7 @@ export class SlackInbox implements SlackInboxPort {
       if (edited !== holder) gathered.changed.set(holder.id, edited);
     }
     const tracked = [...new Map([...stored, ...gathered.changed.values()].map((row) => [row.id, gathered.changed.get(row.id) ?? row])).values()]
-      .filter((row) => row.kind !== "reaction" && now.getTime() - new Date(row.ts).getTime() <= THREAD_WINDOW_MS)
+      .filter((row) => row.kind !== "reaction" && now.getTime() - new Date(row.ts).getTime() <= THREAD_WINDOW_MS && inConversationScope(row.channel, opted, scope))
       .sort((a, b) => compareTs(b.slackTs, a.slackTs))
       .slice(0, TRACKED_THREADS);
     for (const row of stored) if (!gathered.base.has(row.id)) gathered.base.set(row.id, row);

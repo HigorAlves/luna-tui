@@ -74,6 +74,7 @@ import { INTAKE_CLIENT } from "./application/classify.ts";
 import type { DedupAnswer } from "./application/intake-dedup.ts";
 import { PgBacklogStore } from "./adapters/persistence/backlog-store.ts";
 import { Pipeline } from "./application/pipeline.ts";
+import { ChannelClaims } from "./application/channel-claims.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
 import { createGitHub } from "./adapters/github/octokit.ts";
@@ -340,6 +341,15 @@ function publish(event: EventRow): void {
   if (event.kind === "transition") scheduleMetrics();
 }
 
+/** The channels each known repository claims in `conversation.channels`: what makes a channel opted in without a board watch. */
+const channelClaims = new ChannelClaims(
+  async () => [...Object.values(config.repoMap), ...(await repoMap.remembered())],
+  async (repoPath) => {
+    const { factory } = await policies.for(repoPath);
+    return { conversation: factory.conversation, scoring: factory.scoring };
+  },
+);
+
 pipeline = new Pipeline(db, runnerFor, {
   onEvent: publish,
   // The outside-approver rule reads CODEOWNERS through the code graph port and nothing a model wrote.
@@ -362,7 +372,7 @@ pipeline = new Pipeline(db, runnerFor, {
   },
   contextSetup: {
     resolveRepo: (slug) => repoMap.resolve(slug),
-    channelRepo: () => null,
+    channelRepo: (channel) => channelClaims.repoOf(channel),
     // The project's repository is the one known checkout whose own luna.yaml names it; a channel has no such source and stays unresolved.
     projectRepo: async (project) => uniqueRepoForProject(project, [...Object.values(config.repoMap), ...(await repoMap.remembered())], async (repoPath) => (await policies.for(repoPath)).jira?.project ?? null),
     configProject: async (repoPath) => (await policies.for(repoPath)).jira?.project ?? null,
@@ -445,6 +455,8 @@ const slackInbox = new SlackInbox({
   rulesPath: config.slackInbox.rulesPath,
   socketToken: config.slackInbox.appToken,
   retentionDays: config.retentionDays,
+  scope: config.slackInbox.scope,
+  claims: channelClaims,
 });
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */

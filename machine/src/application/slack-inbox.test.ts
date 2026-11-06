@@ -1,4 +1,4 @@
-import type { SlackSnapshot } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, type SlackSnapshot } from "@hardness/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SlackItemRow } from "../domain/slack-item.ts";
@@ -6,6 +6,7 @@ import { carriesSecret } from "../domain/postable.ts";
 import { RULES_TEMPLATE } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
+import { ChannelClaims } from "./channel-claims.ts";
 import { AlreadyTaskError, BuiltinWatchError, NoItemError, SlackInbox } from "./slack-inbox.ts";
 import { NoSlackTokenError, type RawMessage, type SearchHit, noTokenSlack } from "./slack.ts";
 import type { TriageAnswer, TriageItem, Triager } from "./slack-triage.ts";
@@ -37,10 +38,18 @@ interface World {
   now?: () => Date;
   intervalMs?: number;
   retentionDays?: number;
+  scope?: "opted_in" | "all";
+  claimed?: Record<string, string>;
 }
 
 const msg = (over: Partial<RawMessage> & { ts: string }): RawMessage => ({ user: "U2", botId: null, text: "", subtype: null, threadTs: null, replyCount: 0, latestReply: null, ...over });
 const hit = (over: Partial<SearchHit> & { ts: string }): SearchHit => ({ text: "<@U1> hi", user: "U2", channel: { id: "C1", name: "eng" }, permalink: `https://x.slack.com/archives/C1/p${over.ts.replace(".", "")}`, ...over });
+
+const stubClaims = (byChannel: Record<string, string>): ChannelClaims => {
+  const c = new ChannelClaims(async () => [], async () => ({ conversation: FACTORY_DEFAULTS.conversation, scoring: FACTORY_DEFAULTS.scoring }));
+  Object.assign(c, { refresh: async () => {}, repoOf: (ch: string) => byChannel[ch] ?? null, claimed: () => new Set(Object.keys(byChannel)) });
+  return c;
+};
 
 const answerAll = (item: TriageItem): TriageAnswer => ({
   priority: "P1",
@@ -107,6 +116,8 @@ function setup(world: World = {}) {
       return task;
     },
     markRead: world.markRead ?? false,
+    scope: world.scope ?? "all",
+    ...(world.claimed ? { claims: stubClaims(world.claimed) } : {}),
     rulesPath: "/rules.md",
     socketToken: null,
     now: world.now ?? (() => NOW),
@@ -228,6 +239,54 @@ describe("SlackInbox.pollOnce", () => {
     const history = store.rows.get(`C1:${root}`)!.conversation!.history;
     expect(history.find((m) => m.id === `C1:${ts(30)}`)).toMatchObject({ text: "first, fixed" });
     expect(history.find((m) => m.id === `C1:${ts(20)}`)).toMatchObject({ deleted: true, text: "" });
+  });
+
+  describe("scope", () => {
+    const called = (slack: ReturnType<typeof setup>["slack"], method: string) => slack.calls.filter((c) => c[0] === method);
+    const world = (over: World = {}): World => ({
+      scope: "opted_in",
+      hits: [hit({ ts: ts(10), text: "<@U1> in a channel nobody opted in" })],
+      history: { D1: [msg({ ts: ts(5), text: "ping from a DM" })], CR: [msg({ ts: ts(4), text: "<@U1> in random" })], C1: [msg({ ts: ts(3), text: "<@U1> in eng" })] },
+      ...over,
+    });
+
+    it("reads nothing nobody opted in: no search, no DM sweep, no history, no replies, no row, no pack run", async () => {
+      const { inbox, slack, store, triaged } = setup(world());
+      const snapshot = await poll(inbox);
+      expect(called(slack, "searchMentions")).toEqual([]);
+      expect(slack.calls.filter((c) => c[0] === "conversations" && (c[1] as string[]).includes("im"))).toEqual([]);
+      expect(called(slack, "history")).toEqual([]);
+      expect(called(slack, "replies")).toEqual([]);
+      expect(store.rows.size).toBe(0);
+      expect(triaged).toEqual([]);
+      expect(snapshot.scope).toBe("opted_in");
+      expect(snapshot.optedIn).toBe(0);
+    });
+
+    it("sweeps a channel with a channel watch, a channel a repository claims and a DM opted in by its id, and no other", async () => {
+      const { inbox, slack, store } = setup(world({ claimed: { CR: "/repos/a", D1: "/repos/a" } }));
+      await inbox.addWatch({ kind: "channel", value: "C1", channels: [], priority: null });
+      const snapshot = await poll(inbox);
+      expect(called(slack, "history").map((c) => c[1]).sort()).toEqual(["C1", "CR", "D1"]);
+      expect(called(slack, "searchMentions")).toEqual([]);
+      expect([...store.rows.keys()].sort()).toEqual([`C1:${ts(3)}`, `CR:${ts(4)}`, `D1:${ts(5)}`]);
+      expect(snapshot.optedIn).toBe(3);
+      expect(store.rows.get(`CR:${ts(4)}`)!.conversation?.repo).toBe("/repos/a");
+      expect(store.rows.get(`C1:${ts(3)}`)!.conversation?.repo).toBeNull();
+    });
+
+    it("drops a socket event from a conversation out of scope and re-reads only tracked threads in scope", async () => {
+      const { inbox, slack, store } = setup(world({ claimed: { C1: "/repos/a" } }));
+      const row = (channel: string, name: string) => ({ id: `${channel}:${ts(60)}`, kind: "mention", channel: { id: channel, name, kind: "channel" }, author: { id: "U2", name: "marta", isBot: false }, text: "old", threadTs: null, context: [], permalink: "", ts: iso(60), slackTs: ts(60), matched: ["me"], count: 1, replies: 0, youReplied: false, seenAt: null, doneAt: null, snoozedUntil: null, reopenedAt: null, repliedAt: null, arrivedAt: iso(60), triage: null, linked: { pr: null, taskId: null } }) as SlackItemRow;
+      await store.save([row("C1", "eng"), row("C9", "payments-oncall")]);
+      await inbox.pollOnce();
+      inbox.handleSocketEvent({ type: "message", channel: "C9", ts: ts(1), user: "U2", text: "x" });
+      await inbox.pollOnce(true);
+      expect(called(slack, "replies").length).toBeGreaterThan(0);
+      expect(called(slack, "replies").every((c) => c[1] === "C1")).toBe(true);
+      expect(called(slack, "history").map((c) => c[1])).not.toContain("C9");
+      expect(store.rows.has(`C9:${ts(60)}`)).toBe(true);
+    });
   });
 
   it("runs the rules first: own messages dropped, muted channels never stored, bots settled without the model, VIPs floored", async () => {
