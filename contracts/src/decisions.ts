@@ -21,6 +21,8 @@ export const DecisionTruth = z.object({
   at: z.string(),
   /** Absent reads as `fact`. */
   kind: TruthKind.optional(),
+  /** A person's note with a label given at the command line (`--note`), redacted before it is kept. */
+  note: z.string().max(500).optional(),
   /** Every label the truth took, oldest first, at most 20: a second fact adds to the first. */
   history: z.array(z.object({ label: z.record(z.string(), z.unknown()), source: z.string(), kind: TruthKind, at: z.string() })).max(20).optional(),
 });

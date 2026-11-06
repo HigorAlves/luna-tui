@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { DecisionRecord } from "@hardness/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { DecisionLog } from "./decision-log.ts";
+import { DecisionLog, mergeTruth } from "./decision-log.ts";
 
 let stateDir: string;
 beforeEach(() => {
@@ -118,5 +118,11 @@ describe("DecisionLog", () => {
       expect(truth.history!.at(-1)!.source).toBe("s24");
       expect(truth.history![0]!.source).toBe("s5");
     });
+  });
+
+  it("keeps a person's note with the label it came with, and an older note when a later truth brings none", () => {
+    const first = mergeTruth(undefined, { label: { worth: { value: true } }, source: "person_cli", kind: "person", at: "a", note: "one-off" });
+    expect(first.note).toBe("one-off");
+    expect(mergeTruth(first, { label: { worth: { value: false } }, source: "person_cli", kind: "person", at: "b" }).note).toBe("one-off");
   });
 });

@@ -1,13 +1,14 @@
 // The commands of the ground-truth loop, with their collaborators passed in so a test can fake
 // them: harvest (records to cases), dataset push (cases, and with --queue the unlabelled, to Laminar)
 // and dataset pull (labelled datapoints to cases). `cli.ts` wires the real log and telemetry.
-import type { DecisionRecord, PackId } from "@hardness/contracts";
-import type { Telemetry } from "@hardness/machine/telemetry";
+import type { DecisionRecord, DecisionTruth, PackId } from "@hardness/contracts";
+import type { QueueItem, Telemetry } from "@hardness/machine/telemetry";
 
 import { loadCases } from "./cases.ts";
 import { casesOfDatapoints, datapointsOf, queueItemsOf } from "./datasets.ts";
 import { type HarvestReport, harvest, writeCase } from "./harvest.ts";
 import { labelOfAnswer } from "./labels.ts";
+import { labelState } from "./records.ts";
 import { scrubContext } from "./scrub.ts";
 
 export interface RecordSource {
@@ -44,16 +45,55 @@ export async function runPush(evalsDir: string, pack: PackId, telemetry: Pick<Te
   return { dataset, queue: { name: options.queue, ...(await telemetry.queue.push(options.queue, items)) } };
 }
 
+const QUEUE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface LabelPushReport {
+  pushed: number;
+  /** Records a person can label here and nowhere else: private, or refused by the scrub. Named, never sent. */
+  localOnly: Array<{ pack: PackId; id: string }>;
+}
+
+/** Every `queue`-state record of the machine, of the packs given, to the labelling queue: scrubbed as a harvest is, the model's answer the prefilled target, the record id the key,
+ *  and for a record with a priority file the two levels as `metadata.hint`. A person types the command; nothing calls it. The queue is named by its id: the local tool cannot list queues. */
+export async function runLabelPush(
+  source: { list(pack: PackId, options: { since?: Date }): Promise<DecisionRecord[]> },
+  telemetry: Pick<Telemetry, "queue">,
+  options: { queue: string; packs: PackId[]; since?: Date; hintOf: (recordId: string) => unknown },
+): Promise<LabelPushReport> {
+  if (!QUEUE_ID.test(options.queue)) throw new Error(`name the queue by its id (the UUID in its page address): the local tool cannot list queues, so a name like ${JSON.stringify(options.queue)} cannot be found`);
+  const report: LabelPushReport = { pushed: 0, localOnly: [] };
+  const items: QueueItem[] = [];
+  for (const pack of options.packs) {
+    for (const r of ownRecords(await source.list(pack, options.since ? { since: options.since } : {}))) {
+      const state = labelState(r);
+      if (state === "local_only") report.localOnly.push({ pack, id: r.id });
+      if (state !== "queue") continue;
+      const scrubbed = scrubContext(r.context);
+      if (!scrubbed.ok) continue;
+      const hint = options.hintOf(r.id);
+      items.push({ idempotencyKey: r.id, data: scrubbed.value, target: labelOfAnswer(r.answer), metadata: { pack, source: "record", recordId: r.id, ...(r.traceId ? { traceId: r.traceId } : {}), ...(hint ? { hint } : {}) } });
+    }
+  }
+  if (items.length > 0) report.pushed = (await telemetry.queue.push(options.queue, items)).pushed;
+  return report;
+}
+
 export interface PullReport {
   written: string[];
   kept: string[];
   skipped: Array<{ taskId: string; reason: string }>;
+  /** Records a pulled label was written back to as a person's truth. */
+  labelled: string[];
 }
 
-/** The dataset's labelled datapoints as cases, never overwriting one that exists. */
-export async function runPull(evalsDir: string, pack: PackId, telemetry: Pick<Telemetry, "datasets">): Promise<PullReport> {
+/** The dataset's labelled datapoints as cases, never overwriting one that exists; with `labels`, a datapoint naming a `recordId` also sets a `person` truth (`person_queue`) on that record while it exists. */
+export async function runPull(evalsDir: string, pack: PackId, telemetry: Pick<Telemetry, "datasets">, labels?: { setTruth(pack: PackId, id: string, truth: DecisionTruth): Promise<boolean> }): Promise<PullReport> {
   const { cases, skipped } = casesOfDatapoints(pack, await telemetry.datasets.pull(pack));
-  const report: PullReport = { written: [], kept: [], skipped };
-  for (const files of cases) (writeCase(evalsDir, pack, files) ? report.written : report.kept).push(files.id);
+  const report: PullReport = { written: [], kept: [], skipped, labelled: [] };
+  for (const files of cases) {
+    (writeCase(evalsDir, pack, files) ? report.written : report.kept).push(files.id);
+    const { recordId, label } = files.expect;
+    if (labels && recordId && label && (await labels.setTruth(pack, recordId, { label, source: "person_queue", kind: "person", at: new Date().toISOString() }))) report.labelled.push(recordId);
+  }
   return report;
 }

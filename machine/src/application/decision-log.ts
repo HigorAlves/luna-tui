@@ -34,7 +34,7 @@ export function mergeTruth(existing: DecisionTruth | undefined, incoming: Decisi
   }
   if (existing && Object.keys(applied).length === 0) return existing;
   const next = [...history, { label: applied, source: incoming.source, kind, at: incoming.at }].slice(-HISTORY_MAX);
-  return { label: { ...(existing?.label ?? {}), ...applied }, source: incoming.source, at: incoming.at, kind, history: next };
+  return { label: { ...(existing?.label ?? {}), ...applied }, source: incoming.source, at: incoming.at, kind, ...(incoming.note ? { note: incoming.note } : existing?.note ? { note: existing.note } : {}), history: next };
 }
 
 export interface DecisionAppender {

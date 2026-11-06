@@ -7,7 +7,7 @@ import type { Datapoint, QueueItem } from "@hardness/machine/telemetry";
 import { describe, expect, it } from "vitest";
 
 import { loadCases } from "./cases.ts";
-import { runHarvest, runPull, runPush } from "./loop.ts";
+import { runHarvest, runLabelPush, runPull, runPush } from "./loop.ts";
 
 const retro = { kind: "retro", retro: { predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 640, removed: 90, retries: { verify: 2, e2e: 1, ci: 1, total: 5 }, escalations: 1, format: "captures", durationMin: 310 }, runs: 14 } };
 const record = (id: string, truth?: DecisionRecord["truth"]): DecisionRecord => ({
@@ -79,5 +79,54 @@ describe("the loop", () => {
     expect(await runPull(dir, "worth_learning", t)).toMatchObject({ written: ["reviewed-1"], kept: [], skipped: [{ taskId: "broken" }] });
     expect(await runPull(dir, "worth_learning", t)).toMatchObject({ written: [], kept: ["reviewed-1"] });
     expect(loadCases(dir, "worth_learning").map((c) => c.id)).toEqual(["reviewed-1"]);
+  });
+});
+
+const QUEUE = "b3ea1137-0000-4000-8000-000000000001";
+describe("label push", () => {
+  const asRecord = (id: string, over: Partial<DecisionRecord> = {}) => ({ ...record(id), origin: "machine" as const, ...over });
+  const source = (records: DecisionRecord[]) => ({ list: async () => records });
+
+  it("refuses a queue named by anything but its id, with the sentence that says why", async () => {
+    await expect(runLabelPush(source([]), fakeTelemetry(), { queue: "luna-decisions", packs: ["worth_learning"], hintOf: () => undefined })).rejects.toThrow(/id.*cannot list queues|cannot list queues.*id/s);
+  });
+
+  it("sends only queue-state records of the machine, scrubbed, the answer as the target, the record id as the key, and names the local-only ones without sending them", async () => {
+    const t = fakeTelemetry();
+    const secretShaped = { ship: { ...retro, note: `x ${"gh"}p_${"c".repeat(30)}` } };
+    const out = await runLabelPush(
+      source([asRecord("aaaa1111"), asRecord("bbbb2222", { private: true }), asRecord("cccc3333", { context: secretShaped }), asRecord("dddd4444", { truth: { label: { worth: { value: true } }, source: "x", at: "t", kind: "person" } }), asRecord("eeee5555", { origin: "client" })]),
+      t,
+      { queue: QUEUE, packs: ["worth_learning"], hintOf: (id) => (id === "aaaa1111" ? { machineLevel: "P2", personLevel: "P0" } : undefined) },
+    );
+    expect(out.pushed).toBe(1);
+    expect(out.localOnly.map((r) => r.id).sort()).toEqual(["bbbb2222", "cccc3333"]);
+    expect(t.sent.queue[0]![0]).toBe(QUEUE);
+    const [item] = t.sent.queue[0]![1];
+    expect(item).toMatchObject({ idempotencyKey: "aaaa1111", target: { worth: { value: true } }, metadata: { pack: "worth_learning", source: "record", recordId: "aaaa1111", hint: { machineLevel: "P2", personLevel: "P0" } } });
+    expect(JSON.stringify(t.sent.queue)).not.toContain("c".repeat(30));
+  });
+
+  it("sends nothing when nothing waits", async () => {
+    const t = fakeTelemetry();
+    const out = await runLabelPush(source([]), t, { queue: QUEUE, packs: ["worth_learning"], hintOf: () => undefined });
+    expect(out).toMatchObject({ pushed: 0, localOnly: [] });
+    expect(t.sent.queue).toEqual([]);
+  });
+});
+
+describe("pull writes the label back", () => {
+  it("sets a person truth (person_queue) on the record a datapoint names, when it still exists, as well as writing the case", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loop-"));
+    const t = fakeTelemetry([
+      { taskId: "reviewed-9", data: { ship: retro }, target: { worth: { value: false } }, metadata: { recordId: "11111111-aaaa" } },
+      { taskId: "reviewed-8", data: { ship: retro }, target: { worth: { value: true } }, metadata: { recordId: "gone" } },
+    ]);
+    const set: Array<[string, string, unknown]> = [];
+    const out = await runPull(dir, "worth_learning", t, { setTruth: async (pack, id, truth) => (set.push([pack, id, truth]), id !== "gone") });
+    expect(out.written.sort()).toEqual(["reviewed-8", "reviewed-9"]);
+    expect(set).toHaveLength(2);
+    expect(set[0]![2]).toMatchObject({ label: { worth: { value: false } }, source: "person_queue", kind: "person" });
+    expect(out.labelled).toEqual(["11111111-aaaa"]);
   });
 });

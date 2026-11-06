@@ -7,6 +7,7 @@ import { stateDirFrom } from "../config.ts";
 
 export { DecisionLog } from "../application/decision-log.ts";
 export { type ContextPackId, type PackContext, contextSchema, isContextPack } from "../domain/context-packs.ts";
+export { redact, safe } from "../domain/evidence-markdown.ts";
 export { buildContextPackInput } from "../domain/stage-input.ts";
 
 /** The machine's state dir as the machine resolves it (`MACHINE_STATE_DIR`, else the XDG-style default). */
