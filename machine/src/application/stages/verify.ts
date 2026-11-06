@@ -26,10 +26,10 @@ export interface VerifyDeps {
   exec: ((
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; image?: string },
   ) => Promise<ExecResult>) | null;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
-  runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) => Promise<StageResult>) | null;
+  runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) => Promise<StageResult>) | null;
   stateDir: string;
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** A fresh clone of the card's clone at its head commit, where the checks and the review run; absent, they run in the card's own folder. */
@@ -43,7 +43,9 @@ export interface VerifyDeps {
   /** The environment Build recorded for the task (its passing run's `env`); null when none. */
   buildEnv?: (taskId: string) => Promise<EnvRecord | null>;
   /** The environment as it is in `path` at `commit`: the image id and the lockfiles. */
-  envOf?: (path: string, commit: string, repoPath?: string) => Promise<EnvRecord>;
+  envOf?: (path: string, commit: string, repoPath?: string, image?: string) => Promise<EnvRecord>;
+  /** The repository's image as the stages run in it now. Read once per run: the comparison, the checks and the review all use that one answer, never a second resolution. */
+  imageOf?: (repoPath: string, signal?: AbortSignal) => Promise<string>;
   /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
@@ -148,7 +150,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       return [];
     }
   };
-  const verify = async (context: StageContext, state: { radius: string[] }): Promise<StageResult> => {
+  const verify = async (context: StageContext, state: { radius: string[]; image?: string }): Promise<StageResult> => {
     const { task, signal } = context;
     // No worktree means implementing was stubbed (agents off): behave like the stub, not an escalation.
     if (!task.worktreePath) return { outcome: "pass", detail: { note: "no worktree; implementer was stubbed" } };
@@ -219,6 +221,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
             env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
             services,
             ...(task.repoPath ? { repoPath: task.repoPath } : {}),
+            ...(state.image ? { image: state.image } : {}),
           });
         } catch (error) {
           // The repository's image could not be built: an environment problem with the reason, not a crashed stage.
@@ -354,7 +357,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     if (!deps.runPack) {
       return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports, ...coverageDetail }, run: { transcriptPath } };
     }
-    const pack = await deps.runPack(context, { ...(state.radius.length ? { blastRadius: state.radius } : {}), ...(coverage ? { coverage } : {}) });
+    const pack = await deps.runPack(context, { ...(state.radius.length ? { blastRadius: state.radius } : {}), ...(coverage ? { coverage } : {}), ...(state.image ? { image: state.image } : {}) });
     // A plain failure or a deliberate escalation are both the pack's own answer, verbatim —
     // neither should fall into the verdict computation below (an escalation has no real
     // findings to compute one from, and would otherwise be miscounted as a pass).
@@ -403,8 +406,18 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     };
   };
   return async (context) => {
-    const state = { radius: [] as string[] };
+    const state: { radius: string[]; image?: string } = { radius: [] };
     const { task } = context;
+    // The repository's image is chosen once here: the environment compared below, the checks and the review run in this one, so what is recorded
+    // is what ran even when a floating base moves meanwhile. One that cannot be built is an environment problem with the reason.
+    if (deps.imageOf && task.repoPath) {
+      try {
+        state.image = await deps.imageOf(task.repoPath, context.signal);
+      } catch (error) {
+        if (!(error instanceof RepoImageError)) throw error;
+        return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "image", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
+      }
+    }
     const fresh = deps.fresh && task.worktreePath && task.branch ? await deps.fresh.make(task.worktreePath, task.branch, context.runId) : null;
     // Whatever the stage reads and runs is the fresh clone's; the card's folder is only touched to take a fast-forward back.
     const inFresh: StageContext = fresh ? { ...context, task: { ...task, worktreePath: fresh.path } } : context;
@@ -414,7 +427,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     if (fresh && deps.buildEnv && deps.envOf) {
       const recorded = await deps.buildEnv(task.id);
       if (recorded) {
-        const compared = compareEnv(recorded, await deps.envOf(fresh.path, fresh.commit, task.repoPath ?? undefined));
+        const compared = compareEnv(recorded, await deps.envOf(fresh.path, fresh.commit, task.repoPath ?? undefined, state.image));
         envReproduction = compared.matched ? "matched" : compared.differences.join("; ");
         if (!compared.matched) {
           envFinding = { path: "", line: 0, start_line: null, severity: "blocker", category: "env", title: "the environment Verify has is not the one Build ran in", body: compared.differences.join("\n"), suggestion_code: null, confidence: 1 };

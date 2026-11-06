@@ -349,11 +349,12 @@ export function sandboxExecutor(images: { machine: string; imageOf: (repoPath: s
   return async (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string } = {},
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; image?: string } = {},
   ): Promise<ExecResult> => {
     if (!options.cwd) throw new Error("sandboxExecutor needs cwd: the worktree to mount");
     // The image is the repository's, named by the caller: never guessed from the folder. No repository, the machine's image.
-    const image = options.repoPath ? await images.imageOf(options.repoPath) : images.machine;
+    // A caller that already chose the image for its whole stage hands it in (`image`): it is not resolved a second time.
+    const image = options.image ?? (options.repoPath ? await images.imageOf(options.repoPath) : images.machine);
     const env: Record<string, string> = {};
     const identity: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env ?? {})) {

@@ -141,6 +141,8 @@ export interface AgentExtra {
   blastRadius?: string[];
   /** verifying: the coverage of the change's added lines. */
   coverage?: CoverageSummary;
+  /** verifying: the image the stage chose once (it compared the environment against it); the sandbox runs in it and the repository's image is not resolved again. */
+  image?: string;
   /** The video packs: the scenarios, target, narration and measurements. */
   video?: VideoContext | null;
   /** verifying after a shipped PR's fix: the commit to diff against, over the branch's fork point (only the delta is reviewed). */
@@ -213,8 +215,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   if (extra.checkout && limits.writable) throw new Error(`${pack} is writable; a checkout run must be read-only`);
   const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
   // The repository's own image, built from the base its luna.yaml names; a build that fails is an environment problem with the reason.
-  let stageImage = deps.image;
-  if (deps.repoImages && !extra.checkout) {
+  let stageImage = extra.image ?? deps.image;
+  if (deps.repoImages && !extra.checkout && !extra.image) {
     try {
       stageImage = (await deps.repoImages.ensure(task.repoPath, context.signal, task.id)).image;
     } catch (error) {
