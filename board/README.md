@@ -339,8 +339,7 @@ agent (`docker logs -f` on its container), whether the machine runs in Docker or
 on your host; `f` again focuses that tab. Nothing opens by itself: once the tab
 exists, later stages of the ticket re-point it, and the board closes it once the
 ticket is closed. Approving the Ship gate (`a` on `awaiting_ship`)
-pushes the task's branch and opens a real PR through the GitHub API — see the root
-`README.md`'s "Shipping" section for what that needs.
+pushes the task's branch and opens a real PR through the GitHub API — see the [architecture doc](../docs/architecture.md)'s "Shipping" section for what that needs.
 
 ## Tests
 
@@ -350,8 +349,8 @@ cargo test
 
 Most of the board's logic only shows up when it is actually talking to a
 running machine, so unit tests here are light (markdown parsing, timestamp
-math). The real check is running it against the machine — see the repo root
-`README.md`.
+math). The real check is running it against the machine — see
+the [root README](../.github/README.md).
 
 ## Pulls
 
