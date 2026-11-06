@@ -198,6 +198,7 @@ async function sweep(): Promise<void> {
   });
   await step("decision records", async () => {
     const pruned = await pruneLearning({ stateDir: config.stateDir, retentionDays: config.decisions.retentionDays, maxMb: config.decisions.maxMb, openTaskIds: await openTaskIdsOf(db), now: new Date() });
+    if (pruned.warning) console.warn(pruned.warning);
     return pruned.records > 0 || pruned.truthFiles > 0 || pruned.skippedLinks.length > 0 ? pruned.line : null;
   });
   await step("slack triage runs", async () => {

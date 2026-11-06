@@ -27,8 +27,12 @@ export function useTruthSecrets(secrets: () => Readonly<Record<string, string>>)
 /** `body` with every string (keys included) passed through the machine's secret values and the token shapes. Pure but for the secrets it reads. */
 export function redactedTruth(body: unknown): unknown {
   const secret = secretRedactor(truthSecrets());
-  return redactDeep(body, (text) => redact(secret(text)));
+  // One string of a truth file is cut at 20,000 characters: a flood of text cannot fill the disk through a single file.
+  return redactDeep(body, (text) => cut(redact(secret(text))));
 }
+
+const TRUTH_STRING_MAX = 20_000;
+const cut = (text: string): string => (text.length > TRUTH_STRING_MAX ? `${text.slice(0, TRUTH_STRING_MAX)}[… cut]` : text);
 
 /** The one way a ground-truth file is written: `<stateDir>/ground-truth/<kind>/<name>`, folders 0700, the file 0600, written to a
  *  temporary name and renamed over the target, so a reader never sees half a file and an older, looser file is replaced. The kind
@@ -218,7 +222,8 @@ export interface PriorityTruthEntry {
 export async function priorityTruth(stateDir: string, entry: PriorityTruthEntry, keeps: () => Promise<boolean> = async () => true): Promise<string> {
   if (!(await keeps().catch(() => true))) return "";
   const at = entry.at ?? new Date().toISOString();
-  const name = truthName(`${entry.machine}-${entry.id}-${at.replace(/[:.]/g, "-")}.json`).slice(0, 180);
+  // Cut before the extension, so a long name keeps its `.json`.
+  const name = `${truthName(`${entry.machine}-${entry.id}-${at.replace(/[:.]/g, "-")}`).slice(0, 170)}.json`;
   const body = { schema: 1, machine: entry.machine, id: entry.id, recordId: entry.recordId, subScores: entry.subScores, total: entry.total ?? null, machineLevel: entry.machineLevel, personLevel: entry.personLevel, knockOut: entry.knockOut ?? null, at };
   return writeTruthFile(stateDir, "priority", name, body);
 }

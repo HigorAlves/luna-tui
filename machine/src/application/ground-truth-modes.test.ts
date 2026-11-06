@@ -109,6 +109,22 @@ describe("learning.truth: false for the ticket file", () => {
 });
 
 describe("priorityTruth", () => {
+  it("keeps the .json extension when it cuts a long name", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "priority-long-"));
+    const path = await priorityTruth(stateDir, { machine: "conversation", id: "C0123ABCDE:" + "1".repeat(300), recordId: null, subScores: null, machineLevel: null, personLevel: "P1", at: "2026-11-06T10:00:00.000Z" });
+    expect(path.endsWith(".json")).toBe(true);
+    expect(readdirSync(join(stateDir, "ground-truth", "priority"))[0]!.length).toBeLessThanOrEqual(180);
+  });
+
+  it("cuts one very long string of a truth file with a marker, so a flood of text cannot fill the disk through one file", async () => {
+    const stateDir = dir();
+    const path = await writeTruthFile(stateDir, "plan", "big.json", { text: "x".repeat(500_000), short: "kept" });
+    const text = readFileSync(path, "utf8");
+    expect(text.length).toBeLessThan(80_000);
+    expect(JSON.parse(text)).toMatchObject({ short: "kept" });
+    expect(JSON.parse(text).text).toContain("[… cut]");
+  });
+
   it("writes the two levels and the sub-scores owner-only under ground-truth/priority, caps a person's text, and writes nothing when the repository keeps no truth", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "priority-"));
     const entry = { machine: "triage" as const, id: "t-1", recordId: "rec-1", subScores: { who: 2, what: 3 }, total: 12, machineLevel: "P2", personLevel: "P0", knockOut: null, at: "2026-11-06T10:00:00.000Z" };

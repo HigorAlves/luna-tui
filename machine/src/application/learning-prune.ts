@@ -23,6 +23,8 @@ const DAY_MS = 86_400_000;
 const MB = 1024 * 1024;
 /** The size cap never removes a record younger than this. */
 const MIN_AGE_DAYS = 7;
+/** A temporary file of a writer that died: `<id>.json.<8 hex>.tmp` (the decision log) or `.<name>.<uuid>.tmp` (a truth file), removed after a day. */
+const TEMP = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*\.json\.[0-9a-f]{8}|\.[A-Za-z0-9][A-Za-z0-9._-]*\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp$/;
 
 export interface PruneInput {
   stateDir: string;
@@ -33,6 +35,8 @@ export interface PruneInput {
   /** Cards that are not closed: their records stay. */
   openTaskIds: ReadonlySet<string>;
   now: Date;
+  /** Called once the records are listed and before any is removed: a test's window for a record that changes in between. */
+  afterListing?: () => Promise<void>;
 }
 
 export interface PruneResult {
@@ -42,6 +46,8 @@ export interface PruneResult {
   skippedLinks: string[];
   /** The one line the machine logs. */
   line: string;
+  /** One line when the size cap cannot be met because what is left cannot be pruned (open cards, young records, a person's truth, ground truth); null otherwise. */
+  warning: string | null;
 }
 
 interface Listed {
@@ -50,10 +56,21 @@ interface Listed {
   bytes: number;
   open: boolean;
   hasTruth: boolean;
+  /** A person's word is on the record: it is never removed for size. */
+  person: boolean;
 }
 
-async function plainDirs(parent: string, name: RegExp, links: string[]): Promise<string[]> {
+/** Whether a stored record carries a person's truth: its own kind or any entry of its history. */
+function personTruth(truth: unknown): boolean {
+  if (truth === null || typeof truth !== "object") return false;
+  const { kind, history } = truth as { kind?: unknown; history?: unknown };
+  return kind === "person" || (Array.isArray(history) && history.some((entry) => (entry as { kind?: unknown } | null)?.kind === "person"));
+}
+
+async function plainDirs(parent: string, name: RegExp, links: string[], checked = false): Promise<string[]> {
   const out: string[] = [];
+  // A root that is itself a link is not entered: it may lead anywhere.
+  if (!checked && !(await plainRoot(parent, links))) return out;
   for (const entry of await readdir(parent).catch(() => [] as string[])) {
     if (!name.test(entry)) continue;
     const path = join(parent, entry);
@@ -63,6 +80,17 @@ async function plainDirs(parent: string, name: RegExp, links: string[]): Promise
     else if (stat.isDirectory()) out.push(path);
   }
   return out;
+}
+
+/** Whether `path` is a real folder; a link is named in `links`, a missing one is just absent. */
+async function plainRoot(path: string, links: string[]): Promise<boolean> {
+  const stat = await lstat(path).catch(() => null);
+  if (!stat) return false;
+  if (stat.isSymbolicLink()) {
+    links.push(path);
+    return false;
+  }
+  return stat.isDirectory();
 }
 
 /** The record files this prune may touch, each read once for its card and its truth. */
@@ -82,18 +110,44 @@ async function listRecords(root: string, openTaskIds: ReadonlySet<string>, links
         if (!stat.isFile()) continue;
         let taskId: unknown;
         let hasTruth = false;
+        let person = false;
+        let readable = true;
         try {
           const parsed = JSON.parse(await readFile(path, "utf8")) as { taskId?: unknown; truth?: unknown };
           taskId = parsed.taskId;
           hasTruth = parsed.truth !== undefined && parsed.truth !== null;
+          person = personTruth(parsed.truth);
         } catch {
-          // An unreadable record is kept by the card rule only when we cannot tell: treat it as not open, with no truth.
+          // A record that cannot be read cannot be told from one with a person's word on it: it is kept by the size cap (fail closed).
+          readable = false;
         }
-        listed.push({ path, day: dayDir.slice(-10), bytes: stat.size, open: typeof taskId === "string" && openTaskIds.has(taskId), hasTruth });
+        listed.push({ path, day: dayDir.slice(-10), bytes: stat.size, open: typeof taskId === "string" && openTaskIds.has(taskId), hasTruth, person: person || !readable });
       }
     }
   }
   return listed;
+}
+
+/** Whether the record at `path` has a person's truth now (read again, just before a removal). A record that cannot be read counts as having one. */
+async function personNow(path: string): Promise<boolean> {
+  try {
+    return personTruth((JSON.parse(await readFile(path, "utf8")) as { truth?: unknown }).truth);
+  } catch {
+    return true;
+  }
+}
+
+/** The bytes of the regular files of a folder tree one level down: ground truth is removed by age only, so the size cap counts it as fixed. */
+async function truthBytes(root: string): Promise<number> {
+  let total = 0;
+  if (!(await plainRoot(root, []))) return 0;
+  for (const kind of await plainDirs(root, FOLDER, [], true)) {
+    for (const name of await readdir(kind).catch(() => [] as string[])) {
+      const stat = await lstat(join(kind, name)).catch(() => null);
+      if (stat?.isFile()) total += stat.size;
+    }
+  }
+  return total;
 }
 
 export async function pruneLearning(input: PruneInput): Promise<PruneResult> {
@@ -102,6 +156,7 @@ export async function pruneLearning(input: PruneInput): Promise<PruneResult> {
   let records = 0;
   let truthFiles = 0;
   let freed = 0;
+  let warning: string | null = null;
   const drop = async (item: Listed): Promise<void> => {
     await rm(item.path, { force: true });
     removedPaths.add(item.path);
@@ -110,7 +165,10 @@ export async function pruneLearning(input: PruneInput): Promise<PruneResult> {
   };
 
   const decisions = join(input.stateDir, DECISIONS_DIR);
-  let listed = await listRecords(decisions, input.openTaskIds, links);
+  // The root itself is checked: a link in its place is named and not entered.
+  const rootIsReal = await plainRoot(decisions, links);
+  let listed = rootIsReal ? await listRecords(decisions, input.openTaskIds, links) : [];
+  await input.afterListing?.();
 
   // By age: a day folder older than the retention loses its records, except those of an open card.
   if (input.retentionDays > 0) {
@@ -119,18 +177,33 @@ export async function pruneLearning(input: PruneInput): Promise<PruneResult> {
     listed = listed.filter((item) => !removedPaths.has(item.path));
   }
 
-  // By size: over the cap, records with no truth before records with one, oldest first, never a young one or an open card's.
+  // By size: the target for what may be pruned is the cap minus the bytes that cannot be (an open card's records, the young, a person's
+  // truth, the ground-truth files). Records with no truth go before records with a machine fact or an outcome; a person's never; each is
+  // read again just before it goes, since a label may have landed since the listing. When what cannot be pruned is over the cap, every
+  // record that may go does, and one warning says the cap cannot be met.
   if (input.maxMb > 0) {
-    let total = listed.reduce((sum, item) => sum + item.bytes, 0);
     const cap = input.maxMb * MB;
-    if (total > cap) {
-      const youngest = new Date(input.now.getTime() - MIN_AGE_DAYS * DAY_MS).toISOString().slice(0, 10);
-      const order = listed.filter((item) => !item.open && item.day < youngest).sort((a, b) => Number(a.hasTruth) - Number(b.hasTruth) || a.day.localeCompare(b.day) || a.path.localeCompare(b.path));
-      for (const item of order) {
-        if (total <= cap) break;
-        await drop(item);
-        total -= item.bytes;
+    const youngest = new Date(input.now.getTime() - MIN_AGE_DAYS * DAY_MS).toISOString().slice(0, 10);
+    const prunable = (item: Listed): boolean => !item.open && !item.person && item.day < youngest;
+    const fixed = listed.filter((item) => !prunable(item)).reduce((sum, item) => sum + item.bytes, 0) + (await truthBytes(join(input.stateDir, GROUND_TRUTH_DIR)));
+    let target = Math.max(0, cap - fixed);
+    let room = listed.filter(prunable).reduce((sum, item) => sum + item.bytes, 0);
+    const order = listed.filter(prunable).sort((a, b) => Number(a.hasTruth) - Number(b.hasTruth) || a.day.localeCompare(b.day) || a.path.localeCompare(b.path));
+    for (const item of order) {
+      if (room <= target) break;
+      if (await personNow(item.path)) {
+        // A person's word landed since the listing: the record now counts among the bytes that cannot be pruned.
+        room -= item.bytes;
+        target = Math.max(0, target - item.bytes);
+        continue;
       }
+      await drop(item);
+      room -= item.bytes;
+    }
+    if (fixed > cap) warning = `prune: the size cap of ${input.maxMb} MB cannot be met: ${(fixed / MB).toFixed(1)} MB cannot be pruned (open cards, records under 7 days or with a person's truth, ground truth); raise MACHINE_DECISIONS_MAX_MB or label less`;
+    else {
+      const after = fixed + listed.filter((item) => prunable(item) && !removedPaths.has(item.path)).reduce((sum, item) => sum + item.bytes, 0);
+      if (after > cap) warning = `prune: the size cap of ${input.maxMb} MB cannot be met: ${(after / MB).toFixed(1)} MB are left and none may be pruned (a person's truth landed on records meanwhile)`;
     }
   }
 
@@ -141,10 +214,25 @@ export async function pruneLearning(input: PruneInput): Promise<PruneResult> {
     await rmdir(dir.slice(0, dir.lastIndexOf("/"))).catch(() => {});
   }
 
+  // Temporary files a dying writer left: older than a day, by the name shapes the two writers use.
+  const staleBefore = input.now.getTime() - DAY_MS;
+  const sweepTemps = async (folder: string): Promise<void> => {
+    for (const name of await readdir(folder).catch(() => [] as string[])) {
+      if (!TEMP.test(name)) continue;
+      const path = join(folder, name);
+      const stat = await lstat(path).catch(() => null);
+      if (stat?.isFile() && stat.mtimeMs < staleBefore) await rm(path, { force: true });
+    }
+  };
+  if (rootIsReal) for (const pack of await plainDirs(decisions, FOLDER, links, true)) for (const day of await plainDirs(pack, DAY, links, true)) await sweepTemps(day);
+
   // Ground truth: a file whose mtime is older than the retention.
-  if (input.retentionDays > 0) {
+  const truthRoot = join(input.stateDir, GROUND_TRUTH_DIR);
+  if (await plainRoot(truthRoot, links)) {
     const cutoffMs = input.now.getTime() - input.retentionDays * DAY_MS;
-    for (const kind of await plainDirs(join(input.stateDir, GROUND_TRUTH_DIR), FOLDER, links)) {
+    for (const kind of await plainDirs(truthRoot, FOLDER, links, true)) {
+      await sweepTemps(kind);
+      if (input.retentionDays <= 0) continue;
       for (const name of await readdir(kind).catch(() => [] as string[])) {
         if (!FILE.test(name)) continue;
         const path = join(kind, name);
@@ -164,7 +252,7 @@ export async function pruneLearning(input: PruneInput): Promise<PruneResult> {
 
   const parts = [`${records} record(s)`, `${truthFiles} ground-truth file(s)`, `${(freed / MB).toFixed(1)} MB freed`];
   if (links.length > 0) parts.push(`skipped ${links.length} symbolic link(s): ${links.join(", ")}`);
-  return { records, truthFiles, freedBytes: freed, skippedLinks: links, line: `prune: ${parts.join(", ")}` };
+  return { records, truthFiles, freedBytes: freed, skippedLinks: links, line: `prune: ${parts.join(", ")}`, warning };
 }
 
 /** The cards a record may still be needed by: every task that is not closed or archived. */

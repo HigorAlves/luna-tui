@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -126,6 +126,102 @@ describe("pruneLearning by size", () => {
     const rec = f.record("risk_score", 200, "kept", {}, 1000);
     await pruneLearning({ stateDir: f.stateDir, ...base, maxMb: 10 });
     expect(existsSync(rec)).toBe(true);
+  });
+});
+
+describe("pruneLearning under a flood", () => {
+  const MB = 1024 * 1024;
+  const person = { truth: { label: { q: { value: true } }, source: "person_cli", kind: "person", at: "t", history: [{ label: { q: { value: true } }, source: "person_cli", kind: "person", at: "t" }] } };
+
+  it("never removes a record with a person's truth for size, says once that the cap cannot be met, and still removes what it may", async () => {
+    const f = fixture();
+    const kept = [f.record("risk_score", 30, "p1", person, MB), f.record("risk_score", 40, "p2", person, MB), f.record("risk_score", 50, "p3", person, MB)];
+    const bare = f.record("risk_score", 60, "bare", {}, MB);
+    const out = await pruneLearning({ stateDir: f.stateDir, ...base, maxMb: 1 });
+    expect(kept.map((path) => existsSync(path))).toEqual([true, true, true]);
+    expect(existsSync(bare)).toBe(false);
+    expect(out.warning).toMatch(/cannot be met/);
+    expect(out.warning).not.toContain("\n");
+  });
+
+  it("aims at the cap minus the bytes that cannot be pruned: with an open card over the cap it removes every record it may and warns", async () => {
+    const f = fixture();
+    const open = f.record("risk_score", 90, "open", { taskId: "t" }, 3 * MB);
+    const a = f.record("risk_score", 60, "a", {}, 1000);
+    const b = f.record("risk_score", 50, "b", {}, 1000);
+    const out = await pruneLearning({ stateDir: f.stateDir, ...base, maxMb: 2, openTaskIds: new Set(["t"]) });
+    expect([existsSync(open), existsSync(a), existsSync(b)]).toEqual([true, false, false]);
+    expect(out.warning).toMatch(/cannot be met/);
+  });
+
+  it("says nothing when the cap is met", async () => {
+    const f = fixture();
+    f.record("risk_score", 60, "a", {}, Math.floor(0.6 * MB));
+    f.record("risk_score", 50, "b", {}, Math.floor(0.6 * MB));
+    expect((await pruneLearning({ stateDir: f.stateDir, ...base, maxMb: 1 })).warning).toBeNull();
+  });
+
+  it("counts the ground-truth folder among the bytes it cannot prune for size", async () => {
+    const f = fixture();
+    const dir = join(f.stateDir, "ground-truth", "plan");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "big.json"), "x".repeat(2 * MB));
+    const bare = f.record("risk_score", 60, "a", {}, 1000);
+    const out = await pruneLearning({ stateDir: f.stateDir, ...base, maxMb: 1 });
+    expect(existsSync(bare)).toBe(false);
+    expect(existsSync(join(dir, "big.json"))).toBe(true);
+    expect(out.warning).toMatch(/cannot be met/);
+  });
+
+  it("looks again just before it removes: a record given a person's truth after the listing stays", async () => {
+    const f = fixture();
+    const target = f.record("risk_score", 60, "late", {}, MB);
+    const other = f.record("risk_score", 50, "other", {}, MB);
+    await pruneLearning({
+      stateDir: f.stateDir,
+      ...base,
+      maxMb: 1,
+      afterListing: async () => writeFileSync(target, JSON.stringify({ schema: 1, id: "late", pack: "risk_score", ...person })),
+    });
+    expect(existsSync(target)).toBe(true);
+    expect(JSON.parse(readFileSync(target, "utf8")).truth.kind).toBe("person");
+    expect(existsSync(other)).toBe(false);
+  });
+});
+
+describe("pruneLearning and links, and leftovers", () => {
+  it("does not follow a symbolic link standing for the decisions or the ground-truth folder", async () => {
+    const f = fixture();
+    const outside = mkdtempSync(join(tmpdir(), "outside-"));
+    const old = join(outside, "risk_score", dayAgo(500));
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "r.json"), "{}");
+    mkdirSync(join(outside, "plan"), { recursive: true });
+    writeFileSync(join(outside, "plan", "t.json"), "{}");
+    utimesSync(join(outside, "plan", "t.json"), new Date("2020-01-01"), new Date("2020-01-01"));
+    symlinkSync(outside, join(f.stateDir, "decisions"));
+    symlinkSync(outside, join(f.stateDir, "ground-truth"));
+    const out = await pruneLearning({ stateDir: f.stateDir, ...base });
+    expect(existsSync(join(old, "r.json"))).toBe(true);
+    expect(existsSync(join(outside, "plan", "t.json"))).toBe(true);
+    expect(out.skippedLinks.sort()).toEqual([join(f.stateDir, "decisions"), join(f.stateDir, "ground-truth")].sort());
+  });
+
+  it("removes a stale temporary file of either writer after a day, and keeps a fresh one", async () => {
+    const f = fixture();
+    const record = f.record("risk_score", 5, "keep", {});
+    const day = join(f.stateDir, "decisions", "risk_score", dayAgo(5));
+    const staleRecordTmp = join(day, "abc.json.1a2b3c4d.tmp");
+    const freshRecordTmp = join(day, "def.json.1a2b3c4d.tmp");
+    const truthDir = join(f.stateDir, "ground-truth", "plan");
+    mkdirSync(truthDir, { recursive: true });
+    const staleTruthTmp = join(truthDir, ".t1-a1.json.123e4567-e89b-12d3-a456-426614174000.tmp");
+    for (const path of [staleRecordTmp, freshRecordTmp, staleTruthTmp]) writeFileSync(path, "x");
+    const old = new Date(NOW.getTime() - 2 * 86_400_000);
+    for (const path of [staleRecordTmp, staleTruthTmp]) utimesSync(path, old, old);
+    utimesSync(freshRecordTmp, new Date(NOW.getTime() - 3600_000), new Date(NOW.getTime() - 3600_000));
+    await pruneLearning({ stateDir: f.stateDir, ...base });
+    expect([existsSync(staleRecordTmp), existsSync(freshRecordTmp), existsSync(staleTruthTmp), existsSync(record)]).toEqual([false, true, false, true]);
   });
 });
 

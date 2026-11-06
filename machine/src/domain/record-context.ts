@@ -35,6 +35,35 @@ function changed(before: unknown, after: unknown): number {
   return 0;
 }
 
+/** One call's stored context may not exceed this many bytes of JSON. */
+export const CONTEXT_MAX_BYTES = 200_000;
+const CUT_MARK = "[… cut]";
+
+/** `value` with every string over `limit` characters cut to it and marked; `count.cut` says how many. */
+function cutStrings(value: unknown, limit: number, count: { cut: number }): unknown {
+  if (typeof value === "string") {
+    if (value.length <= limit) return value;
+    count.cut++;
+    return `${value.slice(0, limit)}${CUT_MARK}`;
+  }
+  if (Array.isArray(value)) return value.map((item) => cutStrings(item, limit, count));
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cutStrings(item, limit, count)]));
+  return value;
+}
+
+/** The context bounded to `CONTEXT_MAX_BYTES`: first one string at most 20,000 characters, then (when the whole is still too big) 1,000; a context
+ *  that is still too big is replaced by a marker. Each string cut counts as one redaction. */
+function bounded(context: Record<string, unknown>): { context: Record<string, unknown>; cut: number } {
+  const size = (value: unknown): number => JSON.stringify(value).length;
+  const first = { cut: 0 };
+  let out = cutStrings(context, 20_000, first) as Record<string, unknown>;
+  if (size(out) <= CONTEXT_MAX_BYTES) return { context: out, cut: first.cut };
+  const second = { cut: 0 };
+  out = cutStrings(out, 1_000, second) as Record<string, unknown>;
+  const cut = first.cut + second.cut;
+  return size(out) <= CONTEXT_MAX_BYTES ? { context: out, cut } : { context: { cut: "the context was too large to keep" }, cut: cut + 1 };
+}
+
 export interface RecordedContext {
   context: Record<string, unknown>;
   /** Strings a redactor changed. */
@@ -45,9 +74,14 @@ export interface RecordedContext {
 export function recordContext(context: Record<string, unknown>, options: { secrets: Readonly<Record<string, string>>; private?: boolean }): RecordedContext {
   const secret = secretRedactor(options.secrets);
   const clean = redactDeep(context, (text) => redact(secret(text))) as Record<string, unknown>;
-  const redacted = changed(context, clean);
+  const limited = bounded(clean);
+  const redacted = changed(context, clean) + limited.cut;
+  return finish(limited.context, redacted, options.private);
+}
+
+function finish(clean: Record<string, unknown>, redacted: number, privateOption: boolean | undefined): RecordedContext {
   const conversation = clean.conversation;
-  const isPrivate = options.private ?? (conversation !== null && typeof conversation === "object" && (conversation as { private?: unknown }).private === true);
+  const isPrivate = privateOption ?? (conversation !== null && typeof conversation === "object" && (conversation as { private?: unknown }).private === true);
   if (!isPrivate || conversation === null || typeof conversation !== "object") return { context: clean, redacted };
   return { context: { ...clean, conversation: maskText(conversation) }, redacted };
 }

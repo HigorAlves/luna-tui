@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { recordContext } from "./record-context.ts";
+import { CONTEXT_MAX_BYTES, recordContext } from "./record-context.ts";
 
 // A token-shaped string built at runtime: GitHub's push protection reads source files.
 const token = ["gh", "p_"].join("") + "a".repeat(36);
@@ -43,5 +43,22 @@ describe("recordContext", () => {
     expect(named.context).toEqual({ conversation: { channel: "[private]", private: true, latest: "[private]", thread: ["[private]", "[private]"], author: { profile: "member", title: "[private]" }, candidates: [{ slot: 1, kind: "open", title: "[private]", summary: "[private]" }] } });
     const byId = recordContext({ conversation: { channel: "G01ABC2DEF", private: true, latest: "no" } }, { secrets: {} });
     expect(byId.context).toEqual({ conversation: { channel: "G01ABC2DEF", private: true, latest: "[private]" } });
+  });
+
+  it("bounds one call's stored context: a very long string is cut with a marker, each cut counts as a redaction, the rest stays", () => {
+    const context = { log: { tail: "x".repeat(300_000), other: "small" }, ids: ["a", "b"] };
+    const out = recordContext(context, { secrets: {}, private: false });
+    const flat = JSON.stringify(out.context);
+    expect(flat.length).toBeLessThan(120_000);
+    expect(out.context).toMatchObject({ log: { other: "small" }, ids: ["a", "b"] });
+    expect((out.context.log as { tail: string }).tail).toContain("[… cut]");
+    expect(out.redacted).toBe(1);
+  });
+
+  it("bounds a context made of many medium strings: the whole stays under the cap, and says it was cut", () => {
+    const context = { items: Array.from({ length: 400 }, (_, i) => `${i}:` + "y".repeat(5_000)) };
+    const out = recordContext(context, { secrets: {}, private: false });
+    expect(JSON.stringify(out.context).length).toBeLessThanOrEqual(CONTEXT_MAX_BYTES);
+    expect(out.redacted).toBeGreaterThan(0);
   });
 });
