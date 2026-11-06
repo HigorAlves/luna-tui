@@ -79,3 +79,23 @@ export const MemoryContext = z.object({
   note: z.string().max(300).nullable(),
 });
 export type MemoryContext = z.infer<typeof MemoryContext>;
+
+/** Every memory item carries a marker in the text a pack may see: `luna:<id>`. An item of the company folder has an id that starts with
+ *  `COMPANY_MEMORY_ID_PREFIX`, so its marker is recognisable wherever text is about to be posted (`postable()` drops it, a draft that
+ *  carries one is refused). The store (`adapters/cognee`) makes every company document's id with `companyMemoryId`. */
+export const MEMORY_MARKER_PREFIX = "luna:";
+export const COMPANY_MEMORY_ID_PREFIX = "co_";
+
+/** A company item's id from a random suffix (letters, digits, `_` and `-` only, so the marker pattern below finds the whole id). */
+export const companyMemoryId = (suffix: string): string => `${COMPANY_MEMORY_ID_PREFIX}${suffix.replace(/[^A-Za-z0-9_-]/g, "")}`;
+
+export const isCompanyMemoryId = (id: string): boolean => id.startsWith(COMPANY_MEMORY_ID_PREFIX);
+
+/** The marker of an item as it is written in a text. */
+export const memoryMarker = (id: string): string => `${MEMORY_MARKER_PREFIX}${id}`;
+
+/** Matches the marker of a company item anywhere in a text, whatever case it is typed in (global: for `replace`). */
+export const COMPANY_MARKER_PATTERN = new RegExp(`${MEMORY_MARKER_PREFIX}\\s*${COMPANY_MEMORY_ID_PREFIX}[A-Za-z0-9_-]*`, "gi");
+
+/** Whether the text carries the marker of a company item. */
+export const carriesCompanyMarker = (text: string): boolean => new RegExp(COMPANY_MARKER_PATTERN.source, "i").test(text);
