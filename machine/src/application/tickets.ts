@@ -64,6 +64,8 @@ export interface TicketStore {
   setMachine(key: string, change: { status?: string | null; links?: Array<{ kind: string; target: string }>; cardId?: string | null }): Promise<void>;
   appendAssessment(key: string, entry: Record<string, unknown>): Promise<void>;
   setDrafts(key: string, drafts: Record<string, unknown>[]): Promise<void>;
+  /** Changes the drafts under a row lock (see the Postgres store): a draft being posted is never lost to a read-modify-write. */
+  updateDrafts(key: string, change: (drafts: Record<string, unknown>[]) => Record<string, unknown>[]): Promise<void>;
   setClocks(key: string, clocks: Record<string, unknown>): Promise<void>;
 }
 

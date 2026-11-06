@@ -146,6 +146,8 @@ export interface NewTask extends Omit<CardFieldsInput, "source"> {
   worktreePath?: string | null;
   /** The Jira issue to link from the start; absent, a key in the title or description links by itself. */
   jira?: JiraLink | null;
+  /** A card made from a ticket is linked only to its own source: no Jira key is looked for in the text a stranger wrote. (`jira: null` means "not given", so it cannot say this.) */
+  noJiraDetection?: boolean;
   /** The task's own engine per pack (the work order's `stages`); checked against the packs by the caller. */
   stages?: StageEngines;
   /** What triage_signals said about the issue, when intake ran it. */
@@ -502,7 +504,7 @@ export class Pipeline {
       ...(input.route ? { route: input.route } : {}),
       ...(input.branch !== undefined ? { branch: input.branch } : {}),
       ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
-      jira: input.jira ?? this.detectJira(input.title, input.description ?? "", source),
+      jira: input.jira ?? this.detectJira(input.title, input.description ?? "", source, input.noJiraDetection !== true),
       ...(input.stages ? { stages: input.stages } : {}),
       ...(input.classification ? { classification: input.classification } : {}),
       ...(input.record ? { record: input.record } : {}),
@@ -512,8 +514,9 @@ export class Pipeline {
   }
 
   /** The link a new ticket starts with: its intake source's issue, else the first key in its text when Jira is set up. A notch ticket gets none. */
-  private detectJira(title: string, description: string, source: TaskSource | null): JiraLink | null {
+  private detectJira(title: string, description: string, source: TaskSource | null, detect = true): JiraLink | null {
     if (source?.kind === "jira") return bareLink(source.key, source.url, source.issueType);
+    if (!detect) return null;
     if (!this.jiraSite || source?.kind === "notch") return null;
     const key = findJiraKey(title) ?? findJiraKey(description);
     return key ? bareLink(key, issueUrl(this.jiraSite, key)) : null;

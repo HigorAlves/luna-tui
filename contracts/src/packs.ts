@@ -1056,16 +1056,16 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     answer: PrReplyAnswer,
     template: "pr_reply.md",
   },
-  // Drafts the decline to a ticket from the ticket and its assessment; runs on demand, never in a task state, and its text is only ever a draft.
+  // Drafts the decline to a ticket from the ticket and its assessment; runs on demand, never in a task state, and its text is only ever a draft. It reads hostile text, so it has no tools at all and one turn.
   ticket_reply: {
     id: "ticket_reply",
     kind: "agent",
     agent: "ticket-writer",
     helpers: [],
     skills: [],
-    access: access(READ_ONLY),
+    access: NO_ACCESS,
     writable: false,
-    maxTurns: 4,
+    maxTurns: 1,
     timeoutMs: 2 * MINUTE,
     engines: only("claude:haiku"),
     effort: "low",

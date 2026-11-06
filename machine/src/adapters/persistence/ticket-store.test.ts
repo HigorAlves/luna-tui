@@ -54,6 +54,25 @@ describe("the ticket store", () => {
     expect((await store.get("PAY-12"))?.key).toBe("PAY-12");
   });
 
+  it("keeps the last 20 assessments, newest last", async () => {
+    await store.read(ticket());
+    for (let i = 1; i <= 25; i++) await store.appendAssessment("PAY-12", { n: i });
+    const row = (await store.get("PAY-12"))!;
+    expect(row.assessments).toHaveLength(20);
+    expect(row.assessments[0]).toEqual({ n: 6 });
+    expect(row.assessments.at(-1)).toEqual({ n: 25 });
+  });
+
+  it("changes drafts under a row lock: a conditional change that refuses leaves them alone, and two in flight do not both win", async () => {
+    await store.read(ticket());
+    await store.setDrafts("PAY-12", [{ id: "d", status: "waiting" }]);
+    let won = 0;
+    const claim = () => store.updateDrafts("PAY-12", (ds) => (ds[0]!.status === "waiting" ? (won++, [{ ...ds[0]!, status: "posting" }]) : ds));
+    await Promise.all([claim(), claim()]);
+    expect(won).toBe(1);
+    expect((await store.get("PAY-12"))!.drafts).toEqual([{ id: "d", status: "posting" }]);
+  });
+
   it("keeps the clocks", async () => {
     await store.read(ticket());
     await store.setClocks("PAY-12", { acknowledgeBy: "2026-11-06T00:00:00Z" });

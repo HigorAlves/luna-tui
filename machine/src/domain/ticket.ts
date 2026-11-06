@@ -33,7 +33,7 @@ export function canonicalTicketOf(source: TicketSource): CanonicalTicket {
       labels: words(i.labels, TICKET_CAPS.labels),
       components: words(i.components ?? [], TICKET_CAPS.components),
       links: { blocks: [], duplicates: [], epic: null },
-      comments: i.comments.slice(0, TICKET_CAPS.comments).map((c) => ({ author: line(c.author, TICKET_CAPS.name), text: cap(c.text, TICKET_CAPS.commentText), at: c.created || null })),
+      comments: i.comments.slice(-TICKET_CAPS.comments).map((c) => ({ author: line(c.author, TICKET_CAPS.name), text: cap(c.text, TICKET_CAPS.commentText), at: c.created || null })),
       attachments: [],
       sprint: null,
       dueAt: i.dueAt,

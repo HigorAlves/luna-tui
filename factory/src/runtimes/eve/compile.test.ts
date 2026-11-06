@@ -12,6 +12,12 @@ const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".."
 const triage = { ...PACKS.triage, helpers: [] };
 const options = (over = {}) => ({ factoryRoot: FACTORY_ROOT, outDir: join(FACTORY_ROOT, ".eve-agents"), ...over });
 
+describe("eveTools for the ticket reply pack", () => {
+  it("gives the pack that reads hostile ticket text no tools at all", () => {
+    expect(eveTools(PACKS.ticket_reply.access)).toEqual([]);
+  });
+});
+
 describe("eveTools", () => {
   it("maps a pack's access to eve's tool names: no bash without commands, no write_file without write", () => {
     expect(eveTools(PACKS.slack_triage.access)).toEqual([]);

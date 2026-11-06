@@ -56,11 +56,25 @@ export class PgTicketStore implements TicketStore {
   }
 
   async appendAssessment(key: string, entry: Record<string, unknown>): Promise<void> {
-    await this.db.query("update tickets set assessments = assessments || $2::jsonb, updated_at = now() where key = $1", [key, JSON.stringify([entry])]);
+    // The history keeps the last 20 entries, oldest first.
+    await this.db.query(
+      `update tickets set assessments = (select coalesce(jsonb_agg(e order by n), '[]'::jsonb) from (select e, n from jsonb_array_elements(assessments || $2::jsonb) with ordinality as t(e, n) order by n desc limit 20) s), updated_at = now() where key = $1`,
+      [key, JSON.stringify([entry])],
+    );
   }
 
   async setDrafts(key: string, drafts: Record<string, unknown>[]): Promise<void> {
     await this.db.query("update tickets set drafts = $2::jsonb, updated_at = now() where key = $1", [key, JSON.stringify(drafts)]);
+  }
+
+  /** Changes the drafts under a row lock: `change` sees the drafts as they are now and answers the drafts to keep (the same list to change nothing). */
+  async updateDrafts(key: string, change: (drafts: Record<string, unknown>[]) => Record<string, unknown>[]): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const [row] = (await tx.query("select drafts from tickets where key = $1 for update", [key])) as Array<{ drafts: Record<string, unknown>[] }>;
+      if (!row) return;
+      const next = change(row.drafts);
+      if (next !== row.drafts) await tx.query("update tickets set drafts = $2::jsonb, updated_at = now() where key = $1", [key, JSON.stringify(next)]);
+    });
   }
 
   async setClocks(key: string, clocks: Record<string, unknown>): Promise<void> {

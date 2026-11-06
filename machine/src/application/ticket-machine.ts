@@ -102,10 +102,14 @@ export class TicketMachine implements TicketIntake {
     if (!ctx.force && prev?.machineStatus && prev.machineStatus !== "validity_failed" && prev.canonical.updatedAt === ticket.updatedAt) return;
     await store.read(ticket);
     const at = this.now();
+    let refused: string | null = null;
     const done = async (status: string, assessment: Record<string, unknown>, drafts: Draft[]) => {
-      const kept = (prev?.drafts ?? []).filter((d) => (d as unknown as Draft).status === "posted" && !drafts.some((f) => f.id === (d as unknown as Draft).id));
-      await store.appendAssessment(ticket.key, { at: at.toISOString(), ...assessment });
-      await store.setDrafts(ticket.key, [...kept, ...drafts] as unknown as Record<string, unknown>[]);
+      await store.appendAssessment(ticket.key, { at: at.toISOString(), ...assessment, ...(refused ? { draftRefused: refused } : {}) });
+      // Under the row lock: a draft being posted or already posted is never rewritten, and a new draft with the same id is dropped.
+      await store.updateDrafts(ticket.key, (current) => {
+        const keep = (current as unknown as Draft[]).filter((d) => d.status === "posting" || d.status === "posted");
+        return [...keep, ...drafts.filter((f) => !keep.some((k) => k.id === f.id))] as unknown as Record<string, unknown>[];
+      });
       await store.setMachine(ticket.key, { status, ...(ctx.repoPath ? { links: [{ kind: "repo", target: ctx.repoPath }] } : {}) });
     };
     const config = await this.deps.config(ctx.repoPath);
@@ -114,7 +118,7 @@ export class TicketMachine implements TicketIntake {
     const base = buildValidityContext(ticket, enrichment, candidates);
 
     if (ctx.question) {
-      const decline = await declineDraft(this.deps.reply, ticket.key, base);
+      const decline = await declineDraft(this.deps.reply, ticket.key, base, (why) => (refused = why));
       return done("question", { outcome: "question" }, decline ? [decline] : []);
     }
     const validity = await checkValidity(this.deps.validity, ticket, enrichment, candidates);
@@ -137,7 +141,7 @@ export class TicketMachine implements TicketIntake {
     const recommendation = await recommendWithDecision(this.deps.recommend, record, context);
     const drafts = [assessmentDraft(ticket.key, record, recommendation.action === "split" ? null : recommendation.action)];
     if (recommendation.action === "decline") {
-      const decline = await declineDraft(this.deps.reply, ticket.key, context);
+      const decline = await declineDraft(this.deps.reply, ticket.key, context, (why) => (refused = why));
       if (decline) drafts.push(decline);
     }
     await done("assessed", { outcome: "workable", ...head, subScores: record.subScores, recommendation }, drafts);
@@ -176,8 +180,11 @@ export class TicketMachine implements TicketIntake {
       const context: TicketContext = last ? { ...base, assessment: { priority: last.priority, size: last.size, blastRadius: last.blastRadius, costOfDelay: last.costOfDelay, costOfDoing: last.costOfDoing, score: last.score } } : base;
       const draft = await declineDraft(this.deps.reply, key, context);
       if (!draft) continue;
-      const others = (row.drafts as unknown as Draft[]).filter((d) => d.id !== draft.id);
-      await this.deps.store.setDrafts(key, [...others, draft] as unknown as Record<string, unknown>[]);
+      await this.deps.store.updateDrafts(key, (current) => {
+        const ds = current as unknown as Draft[];
+        const busy = ds.find((d) => d.id === draft.id && (d.status === "posting" || d.status === "posted"));
+        return (busy ? ds : [...ds.filter((d) => d.id !== draft.id), draft]) as unknown as Record<string, unknown>[];
+      });
     }
   }
 
@@ -193,7 +200,7 @@ export class TicketMachine implements TicketIntake {
   async approve(key: string, tap: { draft: string; hash: string; transition?: string }): Promise<void> {
     const row = await this.row(key);
     const draft = this.draftOf(row, tap.draft, tap.hash);
-    await this.post(row, draft, draft.text, tap.transition);
+    await this.post(row, draft, draft, tap.hash, tap.transition);
     await this.keep(row, draft, "sent", null);
   }
 
@@ -203,7 +210,7 @@ export class TicketMachine implements TicketIntake {
     const draft = this.draftOf(row, tap.draft, tap.hash);
     const edited = editDraft(draft, tap.text, this.now());
     if (!edited) throw new TicketRefusal("the text carries a token-shaped string and is not posted");
-    await this.post(row, edited, edited.text, tap.transition);
+    await this.post(row, draft, edited, tap.hash, tap.transition);
     await this.keep(row, draft, "edited", edited.text);
   }
 
@@ -212,7 +219,7 @@ export class TicketMachine implements TicketIntake {
     const drafts = row.drafts as unknown as Draft[];
     const draft = drafts.find((d) => d.id === tap.draft);
     if (!draft) throw new TicketRefusal("no such draft on this ticket");
-    await this.deps.store.setDrafts(key, drafts.map((d) => (d.id === draft.id ? ignoreDraft(d, this.now()) : d)) as unknown as Record<string, unknown>[]);
+    await this.deps.store.updateDrafts(key, (current) => (current as unknown as Draft[]).map((d) => (d.id === draft.id && (d.status === "waiting" || d.status === "edited") ? ignoreDraft(d, this.now()) : d)) as unknown as Record<string, unknown>[]);
     await this.acknowledge(key);
     await this.keep(row, draft, "ignored", null);
   }
@@ -229,6 +236,8 @@ export class TicketMachine implements TicketIntake {
       description: t.description,
       ...(repo ? { repoPath: repo } : {}),
       source: sourceOf(t),
+      // Linked only to its own source: no Jira key is looked for in the text a stranger wrote.
+      noJiraDetection: true,
       ...(t.reporter ? { reporter: { id: t.reporter.id, channel: t.tool } } : {}),
       ...(last ? { hints: { size: String(last.size), urgency: String(last.priority) } } : {}),
     } as NewTask);
@@ -247,20 +256,36 @@ export class TicketMachine implements TicketIntake {
   private draftOf(row: TicketRow, id: string, hash: string): Draft {
     const draft = (row.drafts as unknown as Draft[]).find((d) => d.id === id);
     if (!draft) throw new TicketRefusal("no such draft on this ticket");
+    if (draft.status === "posting") throw new TicketRefusal("the draft is being posted right now");
     if (draft.status === "posted" || draft.status === "ignored") throw new TicketRefusal(`the draft is already ${draft.status}`);
     if (hashOf(draft.text) !== hash) throw new TicketRefusal("the draft changed since you read it: read it again");
     return draft;
   }
 
-  private async post(row: TicketRow, draft: Draft, text: string, transition: string | undefined): Promise<void> {
+  /** Posts `to` in place of `before`. The draft is marked `posting` by a conditional change under the row lock BEFORE the port is called (only a waiting or edited draft with the hash the person saw can move), `posted` after; a failed post puts it back. Two taps in flight post once. */
+  private async post(row: TicketRow, before: Draft, to: Draft, hash: string, transition: string | undefined): Promise<void> {
     if (transition !== undefined && row.canonical.tool === "github") throw new TicketRefusal("a GitHub issue has no transition the machine makes: approve without one");
-    if (carriesSecret(text)) throw new TicketRefusal("the text carries a token-shaped string and is not posted");
+    if (carriesSecret(to.text)) throw new TicketRefusal("the text carries a token-shaped string and is not posted");
     const port = this.deps.port(row.canonical.tool);
-    await port.comment(row.key, text);
-    if (transition !== undefined) await port.transition(row.key, transition);
-    const drafts = (row.drafts as unknown as Draft[]).map((d) => (d.id === draft.id ? { ...draft, status: "posted" as const, text, history: [...draft.history, { at: this.now().toISOString(), did: "posted" as const, from: d.text }] } : d));
-    await this.deps.store.setDrafts(row.key, drafts as unknown as Record<string, unknown>[]);
-    if (draft.kind === "park") await this.deps.store.setMachine(row.key, { status: "parked" });
+    let claimed = false;
+    await this.deps.store.updateDrafts(row.key, (current) => {
+      const ds = current as unknown as Draft[];
+      const cur = ds.find((d) => d.id === before.id);
+      if (!cur || (cur.status !== "waiting" && cur.status !== "edited") || hashOf(cur.text) !== hash) return current;
+      claimed = true;
+      return ds.map((d) => (d.id === before.id ? { ...to, status: "posting" as const } : d)) as unknown as Record<string, unknown>[];
+    });
+    if (!claimed) throw new TicketRefusal("the draft is already being posted, or it changed since you read it");
+    try {
+      await port.comment(row.key, to.text);
+      if (transition !== undefined) await port.transition(row.key, transition);
+    } catch (error) {
+      await this.deps.store.updateDrafts(row.key, (current) => (current as unknown as Draft[]).map((d) => (d.id === before.id && d.status === "posting" ? before : d)) as unknown as Record<string, unknown>[]);
+      throw error;
+    }
+    const at = this.now().toISOString();
+    await this.deps.store.updateDrafts(row.key, (current) => (current as unknown as Draft[]).map((d) => (d.id === before.id ? { ...d, status: "posted" as const, history: [...to.history, { at, did: "posted" as const, from: before.text }] } : d)) as unknown as Record<string, unknown>[]);
+    if (before.kind === "park") await this.deps.store.setMachine(row.key, { status: "parked" });
     await this.acknowledge(row.key);
   }
 
@@ -314,7 +339,7 @@ export class TicketMachine implements TicketIntake {
       const add: Draft[] = [];
       if (overdue.includes("needs_info_reminder") && !drafts.some((d) => d.kind === "reminder")) add.push(reminderDraft(row.key, missing));
       if (overdue.includes("needs_info_park") && !drafts.some((d) => d.kind === "park")) add.push(parkDraft(row.key));
-      if (add.length) await this.deps.store.setDrafts(row.key, [...drafts, ...add] as unknown as Record<string, unknown>[]);
+      if (add.length) await this.deps.store.updateDrafts(row.key, (current) => [...current, ...add.filter((a) => !(current as unknown as Draft[]).some((d) => d.id === a.id))] as unknown as Record<string, unknown>[]);
       await this.mergeClocks(row.key, { computed: clocks.map((c) => ({ name: c.name, dueAt: c.dueAt.toISOString(), overdue: c.overdue })), overdue });
       if (overdue.length) out.push({ key: row.key, overdue });
     }

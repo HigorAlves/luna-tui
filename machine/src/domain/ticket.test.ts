@@ -62,6 +62,14 @@ describe("canonicalTicketOf", () => {
     expect(t.comments[0]!.text.length).toBeLessThanOrEqual(TICKET_CAPS.commentText);
   });
 
+  it("keeps the newest 30 comments, so a comment after the thirtieth is still seen", () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ author: "Bo", authorId: "acc-2", text: `c${i + 1}`, created: `2026-11-02T10:${String(i).padStart(2, "0")}:00.000+0000` }));
+    const t = canonicalTicketOf({ tool: "jira", issue: jiraIssue({ comments: many(40) }) });
+    expect(t.comments).toHaveLength(TICKET_CAPS.comments);
+    expect(t.comments[0]!.text).toBe("c11");
+    expect(t.comments.at(-1)!.text).toBe("c40");
+  });
+
   it("redacts a token-shaped string in any text", () => {
     const secret = ["gh", "p_"].join("") + "a".repeat(36);
     const t = canonicalTicketOf({ tool: "jira", issue: jiraIssue({ description: `use ${secret} here` }) });

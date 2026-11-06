@@ -4,7 +4,7 @@
 // hand-over note and stops assessing. Nothing is posted: this file calls no write of the Tickets port, and its event rows carry no text from the ticket.
 import type { CanonicalTicket, FactoryConfig } from "@hardness/contracts";
 
-import { inScope, scopeConfigured } from "../domain/ticket-scope.ts";
+import { inScope, scopeConfigured, settled } from "../domain/ticket-scope.ts";
 import type { TicketIntake } from "./ticket-machine.ts";
 import { type Draft, handoverDraft } from "./ticket-drafts.ts";
 import type { TicketStore } from "./tickets.ts";
@@ -20,7 +20,10 @@ export function ticketChanges(prev: CanonicalTicket, next: CanonicalTicket, post
   if (!same(prev.priority, next.priority)) out.push("priority_changed");
   if (!same(prev.assignee, next.assignee)) out.push("reassigned");
   const posted = new Set(postedTexts.map((t) => t.trim()));
-  if (next.comments.slice(prev.comments.length).some((c) => !posted.has(c.text.trim()))) out.push("new_comment");
+  // The tool keeps the newest comments only, so a new one is found by its time and author (by its text when the tool gives no time), never by the count.
+  const idOf = (c: CanonicalTicket["comments"][number]) => `${c.at ?? ""}|${c.author}|${c.at ? "" : c.text}`;
+  const seen = new Set(prev.comments.map(idOf));
+  if (next.comments.some((c) => !seen.has(idOf(c)) && !posted.has(c.text.trim()))) out.push("new_comment");
   return out;
 }
 
@@ -40,10 +43,30 @@ export interface TicketEventsDeps {
   machine: TicketIntake;
   pipeline: { record(id: string, kind: string, payload: Record<string, unknown>): Promise<void>; noteTicketChange(id: string, change: { fields: string[]; at: string }): Promise<void> };
   config(repoPath: string | null): Promise<FactoryConfig>;
+  now?: () => Date;
 }
 
+/** The least time between two forced re-assessments of one ticket. */
+export const REASSESS_GAP_MS = 10 * 60_000;
+
 export class TicketEvents {
-  constructor(private readonly deps: TicketEventsDeps) {}
+  private readonly now: () => Date;
+  constructor(private readonly deps: TicketEventsDeps) {
+    this.now = deps.now ?? (() => new Date());
+  }
+
+  /** Whether a ticket may be assessed again now: the edits have settled and the gap since the last forced one has passed. */
+  private async mayReassess(key: string, next: CanonicalTicket, debounceSeconds: number): Promise<boolean> {
+    const row = await this.deps.store.get(key);
+    const last = typeof row?.clocks.lastReassessedAt === "string" ? Date.parse(row.clocks.lastReassessedAt) : NaN;
+    const gap = Math.max(REASSESS_GAP_MS, debounceSeconds * 1000);
+    return settled(next.updatedAt, this.now(), debounceSeconds) && (Number.isNaN(last) || this.now().getTime() - last >= gap);
+  }
+
+  private async mark(key: string, patch: Record<string, unknown>): Promise<void> {
+    const row = await this.deps.store.get(key);
+    if (row) await this.deps.store.setClocks(key, { ...row.clocks, ...patch });
+  }
 
   /** The watch's read of a linked ticket. Returns what changed. Never posts. */
   async handle(next: CanonicalTicket, card: EventCard): Promise<TicketChangeKind[]> {
@@ -55,20 +78,33 @@ export class TicketEvents {
     }
     const posted = (prev.drafts as unknown as Draft[]).filter((d) => d.status === "posted").map((d) => d.text);
     const changes = ticketChanges(prev.canonical, next, posted);
-    if (changes.length === 0) return [];
+    if (changes.length === 0) {
+      // A re-assessment held back by the gap happens once it has passed, with the latest ticket.
+      if (prev.clocks.reassessPending === true && (await this.mayReassess(next.key, next, (await this.deps.config(null)).tickets.debounce_seconds))) {
+        await this.deps.machine.ingest(next, { repoPath: (prev.machineLinks.find((l) => l.kind === "repo")?.target ?? null), question: false, force: true } as never);
+        await this.mark(next.key, { reassessPending: false, lastReassessedAt: this.now().toISOString() });
+      }
+      return [];
+    }
     for (const kind of changes) await pipeline.record(card.id, `ticket.${kind}`, { key: next.key });
 
     const config = await this.deps.config(card.repoPath);
     const out = changes.includes("reassigned") && scopeConfigured(config.tickets) && !inScope(next, config.tickets);
     if (out) {
       await store.read(next);
-      const others = (prev.drafts as unknown as Draft[]).filter((d) => d.kind !== "handover");
-      await store.setDrafts(next.key, [...others, handoverDraft(next.key)] as unknown as Record<string, unknown>[]);
+      await store.updateDrafts(next.key, (current) => [...(current as unknown as Draft[]).filter((d) => d.kind !== "handover"), handoverDraft(next.key)] as unknown as Record<string, unknown>[]);
       await store.setMachine(next.key, { status: "handed_over" });
       await pipeline.record(card.id, "ticket.flag", { key: next.key, why: "reassigned_out_of_scope" });
       return changes;
     }
-    await this.deps.machine.ingest(next, { repoPath: card.repoPath, question: false, force: true } as never);
+    if (await this.mayReassess(next.key, next, config.tickets.debounce_seconds)) {
+      await this.deps.machine.ingest(next, { repoPath: card.repoPath, question: false, force: true } as never);
+      await this.mark(next.key, { reassessPending: false, lastReassessedAt: this.now().toISOString() });
+    } else {
+      // Held back: the ticket is stored as it is now, and one re-assessment follows the gap.
+      await store.read(next);
+      await this.mark(next.key, { reassessPending: true });
+    }
     const beforeBuild = BEFORE_BUILD.has(card.state);
     await pipeline.record(card.id, beforeBuild ? "ticket.gate_recheck" : "ticket.flag", { key: next.key, changes });
     const fields = [...(changes.includes("scope_edited") ? ["scope"] : []), ...(changes.includes("priority_changed") ? ["priority"] : [])];

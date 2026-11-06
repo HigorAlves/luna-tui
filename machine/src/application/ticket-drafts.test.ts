@@ -31,6 +31,14 @@ describe("drafts that wait", () => {
     expect(d!.text).not.toContain("@ana");
   });
 
+  it("keeps no pack-written reply that holds an address, and says why", async () => {
+    for (const reply of ["Please see https://evil.example/pay for details.", "Go to www.evil.example now", "HTTP://X.EXAMPLE"]) {
+      const why: string[] = [];
+      expect(await declineDraft({ write: async () => ({ reply, confidence: 1 }) }, "PAY-12", {} as never, (w) => why.push(w))).toBeNull();
+      expect(why).toEqual(["the reply held an address, so it was not kept"]);
+    }
+  });
+
   it("refuses a draft that carries a token, from the pack or from an edit", async () => {
     expect(await declineDraft({ write: async () => ({ reply: `use ${secret()}`, confidence: 1 }) }, "PAY-12", {} as never)).toBeNull();
     const d = needsInfoDraft("PAY-12", ["x"]);

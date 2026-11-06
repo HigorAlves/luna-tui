@@ -376,3 +376,10 @@ describe("the ticket_recommend decision pack and the ticket_reply agent pack", (
     expect(TicketReplyAnswer.safeParse({ reply: "Thanks, not now.", confidence: 0.8 }).success).toBe(true);
   });
 });
+
+describe("the ticket_reply pack reads hostile text and has no hands", () => {
+  it("has no tools at all and one turn", async () => {
+    const { PACKS, NO_ACCESS } = await import("./index.ts");
+    expect(PACKS.ticket_reply).toMatchObject({ maxTurns: 1, access: NO_ACCESS });
+  });
+});

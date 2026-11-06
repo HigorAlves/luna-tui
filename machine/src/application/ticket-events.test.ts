@@ -28,6 +28,15 @@ describe("what changed on a ticket", () => {
   });
 });
 
+describe("a new comment past the cap", () => {
+  it("is seen by its time and author, not by the count: the 41st comment of a ticket that keeps 30", () => {
+    const run = (n: number) => Array.from({ length: n }, (_, i) => ({ author: "Bo", text: `c${i + 1}`, at: `2026-11-02T10:${String(i).padStart(2, "0")}:00Z` }));
+    const prev = t({ comments: run(40).slice(-30) });
+    expect(ticketChanges(prev, t({ comments: run(41).slice(-30) }), [])).toEqual(["new_comment"]);
+    expect(ticketChanges(prev, t({ comments: run(40).slice(-30) }), [])).toEqual([]);
+  });
+});
+
 describe("TicketEvents", () => {
   let db: DataSource;
   beforeAll(async () => {
@@ -44,8 +53,9 @@ describe("TicketEvents", () => {
     const records: Array<[string, string, Record<string, unknown>]> = [];
     const ingest = vi.fn(async () => {});
     const noted: Array<[string, { fields: string[]; at: string }]> = [];
-    const events = new TicketEvents({ store, machine: { ingest }, pipeline: { record: async (id, kind, payload) => void records.push([id, kind, payload]), noteTicketChange: async (id, change) => void noted.push([id, change]) }, config: async () => ({ ...FACTORY_DEFAULTS, tickets: { ...FACTORY_DEFAULTS.tickets, ...scope } }) });
-    return { store, records, ingest, events, noted };
+    let clock = new Date("2026-11-05T12:00:00Z");
+    const events = new TicketEvents({ now: () => clock, store, machine: { ingest }, pipeline: { record: async (id, kind, payload) => void records.push([id, kind, payload]), noteTicketChange: async (id, change) => void noted.push([id, change]) }, config: async () => ({ ...FACTORY_DEFAULTS, tickets: { ...FACTORY_DEFAULTS.tickets, ...scope } }) });
+    return { store, records, ingest, events, noted, setNow: (d: Date) => (clock = d) };
   };
   const card = (state: string, over = {}) => ({ id: "card-1", state, repoPath: "/r/a", worktreePath: null, branch: null, ...over }) as never;
 
@@ -79,6 +89,31 @@ describe("TicketEvents", () => {
     await events.handle(t({ comments: [c("hi")] }), card("awaiting_approval"));
     await events.handle(t({ comments: [c("hi")], description: "x" }), card("implementing", { worktreePath: "/w" }));
     expect(noted).toEqual([]);
+  });
+
+  it("re-assesses once per ten minutes and once after the gap, with the latest ticket; every change is still a row", async () => {
+    const { events, records, ingest, store, setNow } = mk();
+    await store.read(t());
+    await events.handle(t({ description: "one" }), card("triage"));
+    expect(ingest).toHaveBeenCalledTimes(1);
+    setNow(new Date("2026-11-05T12:03:00Z"));
+    await events.handle(t({ description: "two" }), card("triage"));
+    await events.handle(t({ description: "three" }), card("triage"));
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(records.filter((r) => r[1] === "ticket.scope_edited")).toHaveLength(3);
+    setNow(new Date("2026-11-05T12:11:00Z"));
+    await events.handle(t({ description: "three" }), card("triage"));
+    expect(ingest).toHaveBeenCalledTimes(2);
+    expect(ingest).toHaveBeenLastCalledWith(expect.objectContaining({ description: "three" }), expect.anything());
+    await events.handle(t({ description: "three" }), card("triage"));
+    expect(ingest).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for a burst of edits to settle (tickets.debounce_seconds) before re-assessing", async () => {
+    const { events, ingest, store } = mk();
+    await store.read(t());
+    await events.handle(t({ description: "fresh", updatedAt: "2026-11-05T11:59:50Z" }), card("triage"));
+    expect(ingest).not.toHaveBeenCalled();
   });
 
   it("during or after Build: the card gets a flag and a person decides", async () => {

@@ -14,7 +14,7 @@ export interface Draft {
   ticket: string;
   kind: "assessment" | "needs_info" | "decline" | "not_ours" | "handover" | "reminder" | "park";
   /** `waiting` for a tap; `edited` is still waiting, with the person's text; `ignored` is kept and never posted. */
-  status: "waiting" | "edited" | "ignored" | "posted";
+  status: "waiting" | "edited" | "ignored" | "posting" | "posted";
   text: string;
   /** The machine's own text, kept beside an edit. */
   original?: string;
@@ -56,10 +56,18 @@ export interface ReplyDeps {
 }
 
 /** The decline reply, written by the pack. Null when the pack failed or its text carried a token. */
-export async function declineDraft(deps: ReplyDeps, ticket: string, context: TicketContext): Promise<Draft | null> {
+export const ADDRESS_REFUSED = "the reply held an address, so it was not kept";
+const ADDRESS = /(?:https?:\/\/|www\.)/i;
+
+export async function declineDraft(deps: ReplyDeps, ticket: string, context: TicketContext, onRefused?: (why: string) => void): Promise<Draft | null> {
   try {
     const { reply } = await deps.write(context);
     if (carriesSecret(reply)) return null;
+    // A pack-written text may carry an address the ticket asked for: a person would post it with one key. It is not kept.
+    if (ADDRESS.test(reply)) {
+      onRefused?.(ADDRESS_REFUSED);
+      return null;
+    }
     return fresh(ticket, "decline", reply);
   } catch (error) {
     console.warn(`ticket reply: the pack failed: ${error instanceof Error ? error.message : String(error)}`);

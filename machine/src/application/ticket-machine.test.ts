@@ -34,7 +34,7 @@ const ticket = (over: Partial<CanonicalTicket> = {}): CanonicalTicket => ({
   comments: [], attachments: [], sprint: null, dueAt: null, createdAt: null, updatedAt: "2026-11-05T10:00:00Z", permalink: "https://x/browse/PAY-12", ...over,
 });
 
-function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: boolean; noRecord?: boolean } = {}) {
+function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: boolean; noRecord?: boolean; reply?: string; hold?: Promise<void> } = {}) {
   const learned: Array<Record<string, any>> = [];
   const kept: Array<Record<string, any>> = [];
   const half = { score: 0.5, confidence: 1 };
@@ -42,11 +42,11 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: b
   const writes: unknown[][] = [];
   const port: Tickets = {
     listInScope: async () => [], read: async () => ticket(),
-    comment: async (k, t) => void writes.push(["comment", k, t]), transition: async (k, to) => void writes.push(["transition", k, to]), link: async (k, u) => void writes.push(["link", k, u]),
+    comment: async (k, t) => { await over.hold; writes.push(["comment", k, t]); }, transition: async (k, to) => void writes.push(["transition", k, to]), link: async (k, u) => void writes.push(["link", k, u]),
   };
   const cards: unknown[] = [];
   const items: Array<Record<string, any>> = [];
-  const decide = { validity: vi.fn(async () => over.validity ?? goodValidity), assess: vi.fn(async () => (over.silent ? silentAnswer : assessAnswer)), recommend: vi.fn(async () => ({ action: { choice: over.recommend ?? "schedule", confidence: 0.9 }, ...(over.noRecord ? {} : { recordId: "rec-1" }) })), write: vi.fn(async () => ({ reply: "Not planned now.", confidence: 0.9 })) };
+  const decide = { validity: vi.fn(async () => over.validity ?? goodValidity), assess: vi.fn(async () => (over.silent ? silentAnswer : assessAnswer)), recommend: vi.fn(async () => ({ action: { choice: over.recommend ?? "schedule", confidence: 0.9 }, ...(over.noRecord ? {} : { recordId: "rec-1" }) })), write: vi.fn(async () => ({ reply: over.reply ?? "Not planned now.", confidence: 0.9 })) };
   const store = new PgTicketStore(db);
   const machine = new TicketMachine({
     store,
@@ -59,7 +59,7 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: b
     backlog: { upsertFromSource: async (input, o) => { const i = items.findIndex((x) => JSON.stringify(x.sources) === JSON.stringify(input.sources)); if (i >= 0) { items[i] = { ...input, id: "b1" }; return { id: "b1", created: false }; } if (!o.createIfMissing) return null; items.push({ ...input, id: "b1" }); return { id: "b1", created: true }; } },
     now: () => new Date("2026-11-05T12:00:00Z"),
   });
-  return { machine, store, writes, cards, decide, items, learned, kept };
+  return { machine, store, writes, cards, decide, items, learned, kept, port };
 }
 const ctx = { repoPath: "/r/a", question: false };
 
@@ -305,6 +305,65 @@ describe("what a tap says about the decisions behind it", () => {
     await x.machine.ingest(ticket({ id: "PAY-22", key: "PAY-22" }), ctx);
     await x.machine.schedule("PAY-22");
     expect((await x.store.get("PAY-22"))!.clocks.acknowledgedAt).toBeTruthy();
+  });
+});
+
+describe("a reply that asks for a link", () => {
+  it("is not kept: the ticket gets no decline draft, and the row says why in fixed words", async () => {
+    const x = setup({ silent: true, recommend: "decline", reply: "Sure, see https://evil.example/login" });
+    await x.machine.ingest(ticket(), ctx);
+    const v = await x.machine.view("PAY-12");
+    expect(v.drafts.map((d) => d.kind)).not.toContain("decline");
+    expect(v.assessments.at(-1)).toMatchObject({ draftRefused: "the reply held an address, so it was not kept" });
+  });
+});
+
+describe("posting once", () => {
+  it("two taps in flight post once: the second is refused", async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const x = setup({ hold });
+    await x.machine.ingest(ticket(), ctx);
+    const [d] = (await x.machine.view("PAY-12")).drafts;
+    const first = x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash });
+    const second = x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash });
+    const refused = await second.then(() => null, (e) => e);
+    release();
+    await first;
+    expect(refused).toBeInstanceOf(TicketRefusal);
+    expect(x.writes).toHaveLength(1);
+    expect((await x.machine.view("PAY-12")).drafts[0]!.status).toBe("posted");
+  });
+
+  it("an ingest between the read and the write keeps the posting mark, and then the posted one", async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const x = setup({ hold });
+    await x.machine.ingest(ticket(), ctx);
+    const [d] = (await x.machine.view("PAY-12")).drafts;
+    const tap = x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash });
+    await new Promise((r) => setTimeout(r, 50));
+    expect((await x.machine.view("PAY-12")).drafts[0]!.status).toBe("posting");
+    await x.machine.ingest(ticket({ updatedAt: "2026-11-06T10:00:00Z" }), ctx);
+    expect((await x.machine.view("PAY-12")).drafts[0]!.status).toBe("posting");
+    release();
+    await tap;
+    const after = await x.machine.view("PAY-12");
+    expect(after.drafts.filter((k) => k.id === d!.id)).toHaveLength(1);
+    expect(after.drafts.find((k) => k.id === d!.id)!.status).toBe("posted");
+  });
+
+  it("a failed post goes back to waiting, and can be tapped again", async () => {
+    const x = setup();
+    await x.machine.ingest(ticket(), ctx);
+    const [d] = (await x.machine.view("PAY-12")).drafts;
+    const real = x.port.comment;
+    x.port.comment = async () => { throw new Error("jira down"); };
+    await expect(x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash })).rejects.toThrow("jira down");
+    expect((await x.machine.view("PAY-12")).drafts[0]!.status).toBe("waiting");
+    x.port.comment = real;
+    await x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash });
+    expect((await x.machine.view("PAY-12")).drafts[0]!.status).toBe("posted");
   });
 });
 

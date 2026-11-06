@@ -27,3 +27,10 @@ describe("access as Claude tools", () => {
     expect(claudeTools(NO_ACCESS)).toEqual({ tools: [], allowedTools: [] });
   });
 });
+
+describe("the ticket reply pack on Claude", () => {
+  it("has an empty tool list: it reads hostile ticket text", async () => {
+    const { PACKS } = await import("@hardness/contracts");
+    expect(claudeTools(PACKS.ticket_reply.access)).toEqual({ tools: [], allowedTools: [] });
+  });
+});
