@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -43,6 +43,7 @@ import { DECIDED_REASONS, type DecidedEscalation, decideEscalation } from "./sta
 import { type Decide } from "./stages/check-decide.ts";
 import { buildEntryOf } from "../domain/build-entry.ts";
 import { replanOf } from "../domain/replan.ts";
+import { controlPlaneFiles } from "../domain/control-plane.ts";
 import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, outsideSatisfied, ownersStateOf, ruleFiles, sameName } from "../domain/approvers.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
@@ -634,6 +635,18 @@ export class Pipeline {
         const moved = change("risk", applied.risk);
         if (moved || JSON.stringify(overrides.risk) !== JSON.stringify(applied.override)) overrides.risk = applied.override;
       }
+      // Steps that touch the control plane (CI, ownership, luna.yaml, a lockfile) make the plan high risk, as at the plan stage: the machine's floor rises
+      // with them, so the approvers rule and Ship read the high level and a person's lower override is shown, not applied.
+      let riskRaised: string | undefined;
+      const control = stepped ? controlPlaneFiles(stepped.steps.flatMap((step) => [...(step.files ?? []), ...(step.touchpoints ?? [])])) : [];
+      if (control.length > 0) {
+        const now = (after.risk as (PlanRisk & { machine?: Risk }) | undefined) ?? (objectOf(requested.risk) ?? { level: "low" }) as PlanRisk & { machine?: Risk };
+        if (now.level !== "high" || now.machine !== "high") {
+          change("risk", { ...now, level: "high", machine: "high" });
+          if (overrides.risk !== undefined) overrides.risk = { ...(objectOf(overrides.risk) ?? {}), applied: false };
+          riskRaised = `a step touches a control-plane file: ${control.slice(0, 5).join(", ")}`;
+        }
+      }
       if (patch.map) {
         const { reason, ...fixes } = patch.map;
         const current = (objectOf(requested.map) ?? { components: [], files: [], entry_points: [], owners: [], confidence: 0 }) as Record<string, unknown>;
@@ -658,6 +671,7 @@ export class Pipeline {
           ...(revised ? { plan: revised } : {}),
           ...(covered ? { coverageReport: covered.stored, flagged } : {}),
           ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+          ...(riskRaised ? { riskRaised } : {}),
           ...("risk" in after || "map" in after || requested.approvalRule !== undefined ? { approvalRule: approvalRule(level === "high" || level === "medium" ? level : "low", approvers, ownersNow) } : {}),
           ...(level === "high" && ("risk" in after || "map" in after || "slices" in after || requested.ruleOwners !== undefined) ? { ruleOwners: ownersNow } : {}),
           ...(Array.isArray(requested.approvers) ? { approvers: [] } : {}),
@@ -677,6 +691,8 @@ export class Pipeline {
   /** A person's correction of the Triage Record while the card waits at a gate. The record's version rises and the corrected fields are the
    *  person's (`decisionBy: person`, `editedFields`); each correction is ground truth for the `triage_signals` reading that said otherwise. */
   async editRecord(id: string, patch: { kind?: string; typeOfWork?: string; size?: string; riskPrelim?: string; priority?: string }): Promise<TaskRow> {
+    const taskRepo = (await this.get(id)).repoPath;
+    const approvers = (await this.policyFor(taskRepo)).factory.plan.approvers;
     const { record, classification, fields } = await this.store.withTaskLock(id, async (task, tx) => {
       if (!task.record) throw new RecordNotEditableError(id, "triage has not written one");
       if (task.state !== "awaiting_answers" && task.state !== "awaiting_approval") throw new RecordNotEditableError(id, `the card is ${task.state}: a record is corrected at triage's questions or at the plan gate`);
@@ -709,6 +725,24 @@ export class Pipeline {
       next.decisionBy = "person";
       next.editedFields = [...new Set([...(before.editedFields ?? []), ...changed])];
       await tx.updateTask(id, { record: next as TriageRecord });
+      // A risk raised here reaches the open plan gate in the same transaction: its grade rises, and approvals given for the lower one are void.
+      const gate = await tx.findOpenApproval(id);
+      const gateRisk = gate?.requested.risk as { level?: unknown } | undefined;
+      if (gate && gate.kind === "awaiting_approval" && gate.requested.outcome === undefined && gateRisk && typeof next.risk === "string") {
+        const level = maxRisk(next.risk as Risk, (typeof gateRisk.level === "string" ? gateRisk.level : "none") as Risk);
+        if (level !== gateRisk.level) {
+          // The approvers rule and the owners it reads follow the new level, as `editPlan` computes them: High needs the repo's names for high
+          // (two by default) and the owners CODEOWNERS names for the plan's files.
+          const gateNow = { ...gate.requested, risk: { ...gateRisk, level } };
+          const ownersNow: OwnersState = level === "high" ? await this.ruleOwnersOf(taskRepo, gateNow) : { state: "skipped" };
+          await tx.updateApprovalRequested(gate, {
+            ...gateNow,
+            approvalRule: approvalRule(level === "high" || level === "medium" ? level : "low", approvers, ownersNow),
+            ...(level === "high" ? { ruleOwners: ownersNow } : {}),
+            ...(Array.isArray(gate.requested.approvers) ? { approvers: [] } : {}),
+          });
+        }
+      }
       return { record: next as TriageRecord, classification: task.classification, fields: changed };
     });
     if (fields.length > 0) {
@@ -856,7 +890,9 @@ export class Pipeline {
       const configured = (await this.policyFor(task.repoPath)).factory.plan.approvers;
       const ruleOf = async (requested: Record<string, unknown>) => {
         const lv = (requested.risk as { level?: unknown } | undefined)?.level;
-        const level: Risk = lv === "high" || lv === "medium" ? lv : "low";
+        // The higher of the gate's grade and the card's own: a record corrected after the gate was written still counts.
+        const graded = maxRisk((typeof lv === "string" ? lv : "none") as Risk, (task.record?.risk ?? "none") as Risk);
+        const level: Risk = graded === "high" || graded === "medium" ? graded : "low";
         let owners: OwnersState = level === "high" ? await this.ruleOwnersOf(task.repoPath, requested) : { state: "skipped" };
         // CODEOWNERS could not be read just now: the owners the gate was opened with (the machine's own reading, kept on the gate) still hold,
         // so a lookup that fails at the moment of approval does not switch the condition off.
@@ -2026,8 +2062,9 @@ export class Pipeline {
 
   /** The commit the card's first implementing run started from, from the machine's own `stage_runs` rows (the host read it before the container ran); undefined before any run has one. */
   private async firstInputCommitOf(id: string): Promise<string | undefined> {
-    const runs = (await this.stageRuns(id)).filter((r) => r.stage === "implementing" && r.inputCommit && /^[0-9a-f]{7,64}$/.test(r.inputCommit)).sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
-    return runs[0]?.inputCommit ?? undefined;
+    const runs = (await this.stageRuns(id)).filter((r) => r.stage === "implementing" && (r.baseCommit ?? r.inputCommit) && /^[0-9a-f]{7,64}$/.test((r.baseCommit ?? r.inputCommit)!)).sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
+    // The run's base is the commit its first container started from; `inputCommit` alone would be the tests commit once the implementer began on it.
+    return runs[0] ? (runs[0].baseCommit ?? runs[0].inputCommit ?? undefined) : undefined;
   }
 
   /** The sha of the tests commit the machine itself made, from the newest implementing finish row that kept one (a sha, nothing else); undefined when there is none. */

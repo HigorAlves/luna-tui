@@ -153,7 +153,10 @@ export class PgTaskStore implements TaskStore {
   }
 
   async markStageRunStarted(id: string, facts: { containerId: string; inputCommit: string | null; engine?: EngineId | null }): Promise<void> {
-    await this.db.getRepository(StageRunEntity).update({ id }, facts);
+    const runs = this.db.getRepository(StageRunEntity);
+    await runs.update({ id }, facts);
+    // The first container's commit stays as the run's base, whatever a later container of the run started from.
+    if (facts.inputCommit) await runs.update({ id, baseCommit: IsNull() }, { baseCommit: facts.inputCommit });
   }
 
   async claimNextQueuedTask(options: ClaimOptions): Promise<TaskRow | null> {
