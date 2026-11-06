@@ -709,6 +709,8 @@ export const EvidencePack = z.object({
       url: z.string(),
       /** v2.2: where the file is on the machine, when `url` is not that path. */
       localPath: z.string().optional(),
+      /** v2.2, wave 12b: whether the text on this image was read for secrets and personal data; false when the reader could not run. */
+      scanned: z.boolean().optional(),
     }),
   ),
   /** The narrated walkthrough, when the format is video: where it is, the critic's verdict and scores, its defects, the rounds spent. */

@@ -357,6 +357,48 @@ describe("evidenceStage", () => {
     expect(pack.summary.split(/\s+/).length).toBeLessThanOrEqual(200);
   });
 
+  describe("the text on screenshots is read before they are kept", () => {
+    const token = "gh" + "p_" + "a".repeat(36);
+    const shot = async (frames: { file: string; text: string }[] | null) => {
+      const seen: string[] = [];
+      const { run, saved } = stage({ scanImages: async (dir) => (seen.push(dir), frames) });
+      const result = await run(taskContext());
+      return { result, saved, seen, pack: (saved[0]![1] as { evidence: { media: { kind: string; label: string; scanned?: boolean }[]; note?: string } }).evidence };
+    };
+
+    it("copies the screenshots into <runId>-shots and reads that folder, marking the clean ones scanned", async () => {
+      browserRun();
+      const { seen, pack } = await shot([{ file: "a.png", text: "Cart" }, { file: "b.png", text: "Total" }]);
+      expect(seen).toEqual([join(stateDir, "runs", "ev-shots")]);
+      expect(existsSync(join(stateDir, "runs", "ev-shots", "a.png"))).toBe(true);
+      expect(pack.media.filter((m) => m.kind === "screenshot").map((m) => [m.label, m.scanned])).toEqual([["a.png", true], ["b.png", true]]);
+    });
+
+    it("leaves a screenshot with a hit out, counts it in the note, and never prints the text", async () => {
+      browserRun();
+      const { pack, result } = await shot([{ file: "a.png", text: `key ${token}` }, { file: "b.png", text: "Total" }]);
+      expect(pack.media.map((m) => m.label)).not.toContain("a.png");
+      expect(pack.media.map((m) => m.label)).toContain("b.png");
+      expect(pack.note).toMatch(/1 screenshot.*left out.*token/);
+      expect(JSON.stringify(result)).not.toContain(token);
+    });
+
+    it("marks every screenshot scanned: false when the reader cannot run, and keeps them", async () => {
+      browserRun();
+      const { pack } = await shot(null);
+      expect(pack.media.filter((m) => m.kind === "screenshot").map((m) => m.scanned)).toEqual([false, false]);
+      expect(pack.note).toMatch(/not read/);
+    });
+
+    it("marks them scanned: false when there is no reader wired at all", async () => {
+      browserRun();
+      const { run, saved } = stage();
+      await run(taskContext());
+      const pack = (saved[0]![1] as { evidence: { media: { kind: string; scanned?: boolean }[] } }).evidence;
+      expect(pack.media.filter((m) => m.kind === "screenshot").every((m) => m.scanned === false)).toBe(true);
+    });
+  });
+
   describe("the format labels and the terminal capture", () => {
     const run2 = (choice: string, over: Partial<EvidenceStageDeps> = {}) => stage({ decideFormat: async () => ({ format: { choice, confidence: 0.9 } }), ...over });
     const verifying = (checks: unknown[]) => ({ runId: "v1", detail: { findings: [], checks } });

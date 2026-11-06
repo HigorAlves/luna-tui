@@ -501,6 +501,11 @@ describe("TriageRecord and EvidencePack", () => {
     expect(VideoContext.shape.budgetS.safeParse(90).success).toBe(true);
     expect(VideoContext.shape.budgetS.safeParse(-1).success).toBe(false);
   });
+  it("take a media entry's scanned flag, optional", () => {
+    const media = { kind: "screenshot", label: "a.png", url: "/x/a.png" };
+    expect(EvidencePack.parse({ ...evidence, media: [media] }).media[0]).not.toHaveProperty("scanned");
+    expect(EvidencePack.parse({ ...evidence, media: [{ ...media, scanned: false }] }).media[0]?.scanned).toBe(false);
+  });
   it("take a diff summary and a revision, and a pack stored without them still parses", () => {
     const plain = EvidencePack.parse(evidence);
     expect(plain).not.toHaveProperty("diffSummary");

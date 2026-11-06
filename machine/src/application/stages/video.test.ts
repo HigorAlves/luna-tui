@@ -38,7 +38,7 @@ beforeEach(() => {
   mkdirSync(stateDir);
 });
 
-function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink" | "inside-link"; heads?: string[]; answerOnly?: boolean; concurrent?: boolean; narrateFails?: boolean; narrateWaitsForAbort?: boolean; recorderWaitsForAbort?: boolean; config?: { voice?: string | null; language?: string | null; budgetS?: number; regenerate?: number }; metaDurationS?: number } = {}) {
+function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink" | "inside-link"; heads?: string[]; answerOnly?: boolean; concurrent?: boolean; narrateFails?: boolean; narrateWaitsForAbort?: boolean; recorderWaitsForAbort?: boolean; config?: { voice?: string | null; language?: string | null; budgetS?: number; regenerate?: number }; metaDurationS?: number; frames?: unknown[] | "none" | "bad-tool"; transcript?: string } = {}) {
   const calls: { pack: string; runId: string; extra: AgentExtra; at: number; signal?: AbortSignal }[] = [];
   const flags = { recordingBeforeNarrateReturned: false, recorderSawAbort: false, narrateSawAbort: false, recInTimelineAtStart: null as string | null };
   const heads = [...(opts.heads ?? [])];
@@ -106,12 +106,17 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
       for (const f of ["walkthrough.mp4", "cover.jpg", "captions.srt", "captions.vtt", "chapters.json"]) writeFileSync(join(job, f), f);
       writeFileSync(join(job, "meta.json"), JSON.stringify({ durationS: opts.metaDurationS ?? 58.5 }));
     }
+    if (tool === "frames") {
+      if (opts.frames === "none" || opts.frames === "bad-tool") return { exitCode: opts.frames === "bad-tool" ? 1 : 0, timedOut: false, aborted: false, transcriptPath: "" };
+      mkdirSync(join(job, "qa"), { recursive: true });
+      writeFileSync(join(job, "qa", "frames.json"), JSON.stringify({ frames: Array.isArray(opts.frames) ? opts.frames : [{ t: 0, text: "Cart" }] }));
+    }
     if (tool === "measure") {
       mkdirSync(join(job, "qa"), { recursive: true });
       const verdict = reports.length > 1 ? reports.shift() : reports[0];
       const checks = verdict === "fail" ? [{ level: "FAIL", check: "loudness", detail: "-9 LUFS, not -14 ± 1" }] : [];
       writeFileSync(join(job, "qa", "report.json"), JSON.stringify({ info: { durationS: 58.5, hasAudio: true }, picture: {}, audio: {}, checks, verdict: verdict === "fail" ? "fail" : "pass" }));
-      writeFileSync(join(job, "qa", "transcript.txt"), "apply the coupon twice");
+      writeFileSync(join(job, "qa", "transcript.txt"), opts.transcript ?? "apply the coupon twice");
       for (const f of ["beats_sheet.jpg", "hook_sheet.jpg", "phone_sheet.jpg"]) writeFileSync(join(job, "qa", f), f);
     }
     return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
@@ -165,7 +170,7 @@ describe("videoPipeline", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(h.calls.map((c) => c.pack)).toEqual(["video_script", "recording", "video_qa"]);
-    expect(h.tools.map((t) => t.tool)).toEqual(["narrate", "cards", "compose", "measure"]);
+    expect(h.tools.map((t) => t.tool)).toEqual(["narrate", "cards", "compose", "measure", "frames"]);
     expect(out.jobDir).toBe(join(stateDir, "runs", "run-1-video"));
     expect(out.video).toMatchObject({ file: "walkthrough.mp4", durationS: 58.5, verdict: "ship", rounds: 1, scores });
     expect(out.media.map((m) => [m.kind, m.label])).toEqual([
@@ -205,7 +210,7 @@ describe("videoPipeline", () => {
     const out = await h.pipeline(h.context(), h.input());
     expect(out.ok).toBe(true);
     expect(h.calls.map((c) => c.pack)).toEqual(["video_script", "recording", "video_qa", "video_fix", "video_qa"]);
-    expect(h.tools.map((t) => t.tool)).toEqual(["narrate", "cards", "compose", "measure", "narrate", "cards", "compose", "measure"]);
+    expect(h.tools.map((t) => t.tool)).toEqual(["narrate", "cards", "compose", "measure", "frames", "narrate", "cards", "compose", "measure", "frames"]);
     expect(h.calls[3]!.extra.video!.fixCards).toEqual([expect.objectContaining({ priority: "P0", text: expect.stringMatching(/loudness/) })]);
     if (out.ok) expect(out.video.rounds).toBe(2);
   });
@@ -267,7 +272,7 @@ describe("videoPipeline", () => {
     expect(again.calls[0]!.extra.video!.fixCards).toEqual([card]);
     expect((again.calls[0]!.extra.video!.timeline as { meta: { dur: number } }).meta.dur).toBe(60);
     if (out.ok) expect(out.jobDir).toBe(join(stateDir, "runs", "run-2-video"));
-    expect(again.tools.map((t) => t.tool)).toEqual(["narrate", "cards", "compose", "measure"]);
+    expect(again.tools.map((t) => t.tool)).toEqual(["narrate", "cards", "compose", "measure", "frames"]);
   });
 
   it("hands compose its own path to the recording, never the one the recorder wrote", async () => {
@@ -286,7 +291,7 @@ describe("videoPipeline", () => {
       const out = await h.pipeline(h.context(), h.input());
       expect(out.ok).toBe(true);
       expect(h.flags.recordingBeforeNarrateReturned).toBe(true);
-      expect(h.tools.map((t) => t.tool)).toEqual(["narrate", "cards", "compose", "measure"]);
+      expect(h.tools.map((t) => t.tool)).toEqual(["narrate", "cards", "compose", "measure", "frames"]);
     });
 
     it("gives the recorder a copy of the timeline in rec-in, read-only, since narrate rewrites the job's own", async () => {
@@ -407,6 +412,52 @@ describe("videoPipeline", () => {
       const done = await sure.pipeline(sure.context(), sure.input());
       expect(sure.calls.map((c) => c.pack)).not.toContain("video_fix");
       expect(done.ok && done.video.confidence).toBe(0.5);
+    });
+  });
+
+  describe("the frame check", () => {
+    const token = "gh" + "p_" + "a".repeat(36);
+
+    it("runs the frames tool after measure, bounded by the budget of 15 minutes", async () => {
+      const h = harness();
+      await h.pipeline(h.context(), h.input());
+      const frames = h.tools.find((t) => t.tool === "frames")!;
+      expect(frames.run.entrypoint!.slice(2)).toEqual(["--video", "/work/walkthrough.mp4", "--out", "/work/qa"]);
+      expect(frames.run.timeoutMs).toBe(15 * 60_000);
+      expect(h.tools.map((t) => t.tool).slice(-2)).toEqual(["measure", "frames"]);
+    });
+
+    it("turns a hit into a measured P0 card for the fix round, with the kind and the time and not the text", async () => {
+      const h = harness({ frames: [{ t: 12.5, text: `key ${token}` }] });
+      await h.pipeline(h.context(), h.input());
+      const fix = h.calls.find((c) => c.pack === "video_fix")!;
+      const card = fix.extra.video!.fixCards.find((c) => /on screen/.test(c.text))!;
+      expect(card).toMatchObject({ priority: "P0", text: "a token is on screen at 12.5 s: do not show it" });
+      expect(JSON.stringify(fix.extra.video)).not.toContain(token);
+    });
+
+    it("degrades when the hit is still there after the rounds, names the kind, and keeps the film out of the media", async () => {
+      const h = harness({ frames: [{ t: 1, text: `mail jane@acme-corp.io` }] });
+      const out = await h.pipeline(h.context(), h.input());
+      expect(out).toMatchObject({ ok: false, degrade: "captures", reason: expect.stringMatching(/email/) });
+      expect(JSON.stringify(out)).not.toContain("jane@");
+      expect("media" in out).toBe(false);
+    });
+
+    it("checks the transcript too", async () => {
+      const h = harness({ transcript: `my key is ${token}` });
+      await h.pipeline(h.context(), h.input());
+      const fix = h.calls.find((c) => c.pack === "video_fix")!;
+      expect(fix.extra.video!.fixCards.some((c) => /token is on screen|token is in the narration/.test(c.text))).toBe(true);
+    });
+
+    it("degrades with 'the frame check could not run' when the image has no frames tool or leaves no frames.json", async () => {
+      for (const frames of ["bad-tool", "none"] as const) {
+        const h = harness({ frames });
+        const out = await h.pipeline(h.context(), h.input());
+        expect(out, frames).toMatchObject({ ok: false, degrade: "captures", reason: "the frame check could not run" });
+        expect(h.calls.map((c) => c.pack)).not.toContain("video_qa");
+      }
     });
   });
 });

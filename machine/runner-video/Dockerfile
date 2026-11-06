@@ -8,6 +8,8 @@ ARG BASE=hardness-runner-qa:dev
 FROM ${BASE}
 
 USER root
+# tesseract reads the text on the film's frames and on screenshots (the `frames` tool).
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng && rm -rf /var/lib/apt/lists/*
 COPY machine/runner-video/package.json machine/runner-video/package-lock.json /video-tools/
 RUN cd /video-tools && npm ci --no-audit --no-fund && rm -rf /root/.npm
 COPY machine/runner-video/tools /video-tools/tools

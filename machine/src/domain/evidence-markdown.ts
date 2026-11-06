@@ -10,7 +10,8 @@ export const COMMENT_MARKER = "<!-- luna-evidence-comment -->";
 /** GitHub's limit is 65 536 characters; a body keeps some room. */
 export const BODY_CAP = 60_000;
 
-const SECRET_SHAPES = [
+/** The token shapes `redact` knows (global, so each replaces every match); `screenFindings` tests the same shapes. */
+export const SECRET_SHAPES = [
   /sk-ant-[A-Za-z0-9_-]{8,}/g,
   /gh[pousr]_[A-Za-z0-9]{20,}/g,
   /github_pat_[A-Za-z0-9_]{20,}/g,

@@ -17,7 +17,8 @@ import { Timeline, checkTimeline } from "../../../runner-video/tools/lib/timelin
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { headCommit as worktreeHead, resetWorktree } from "../../adapters/git/worktree.ts";
 import { copyRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
-import { type VideoTool, runVideoTool } from "../video-jobs.ts";
+import { type VideoTool, readFrames, runVideoTool } from "../video-jobs.ts";
+import { screenFindings } from "../../domain/screen-text.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import type { AgentExtra } from "./pack-runner.ts";
 
@@ -59,7 +60,7 @@ export type VideoPipeline = (context: StageContext, input: VideoInput) => Promis
 const MINUTE = 60_000;
 // The smoke's twenty-second film took eleven minutes cold on a laptop CPU (kokoro and whisper, 240 card frames):
 // a two-minute film with several cards needs room, and a job that hangs is still cut off well inside the stage's hour.
-const TOOL_TIMEOUT: Record<VideoTool, number> = { narrate: 30 * MINUTE, cards: 30 * MINUTE, compose: 10 * MINUTE, measure: 20 * MINUTE };
+const TOOL_TIMEOUT: Record<VideoTool, number> = { narrate: 30 * MINUTE, cards: 30 * MINUTE, compose: 10 * MINUTE, measure: 20 * MINUTE, frames: 15 * MINUTE };
 const SMALL = 2 * 1024 * 1024;
 const NARRATION_MAX = 20 * 1024 * 1024;
 const RECORDING_MAX = 4 * 1024 ** 3;
@@ -282,7 +283,10 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       let error = await tool("compose", ["--job", "/work", "--max-s", String(budgetS)]);
       if (error) return { error };
       error = await tool("measure", ["--video", "/work/walkthrough.mp4", "--timeline", "/work/timeline.json", "--out", "/work/qa", "--max-s", String(budgetS)]);
-      return error ? { error } : null;
+      if (error) return { error };
+      // The text on screen is read after measure. A tool that fails here (an image from before the frames tool) is "could not run", not a broken film.
+      await tool("frames", ["--video", "/work/walkthrough.mp4", "--out", "/work/qa"]);
+      return null;
     };
 
     interface Judged {
@@ -293,7 +297,9 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       error?: string;
       rateLimited?: boolean;
     }
+    let hitKinds: string[] = [];
     const judge = async (timeline: Timeline, tag: string): Promise<Judged> => {
+      hitKinds = [];
       const reportRaw = await readJson(jobDir, "qa/report.json", SMALL * 10);
       const report = Report.safeParse(reportRaw);
       if (!report.success) return { shipped: false, answer: null, measured: [], report: null, error: "the measure job left no usable report.json" };
@@ -305,6 +311,12 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       }
       const transcriptPath = await trusted(jobDir, "qa/transcript.txt", SMALL);
       const transcript = transcriptPath ? (await readRegularFile(transcriptPath, SMALL)).slice(0, TRANSCRIPT_CAP) : null;
+      // What is on screen and in the narration is checked for what must not be shown. A hit is a measured P0 card (its kind and time, never its text).
+      const read = await readFrames(jobDir);
+      if (!read) return { shipped: false, answer: null, measured, report: reportRaw, error: "the frame check could not run" };
+      const hits = screenFindings([...read.map((f) => ({ ...(f.t !== undefined ? { t: f.t } : {}), ...(f.file !== undefined ? { file: f.file } : {}), text: f.text })), ...(transcript !== null ? [{ file: "transcript", text: transcript }] : [])]);
+      for (const hit of hits) measured.push({ t: null, scene: null, element: null, text: hit.place === "transcript" ? `a ${hit.kind} is in the narration: do not say it` : `a ${hit.kind} is on screen at ${hit.place}: do not show it`, priority: "P0" });
+      hitKinds = [...new Set(hits.map((h) => h.kind))];
       const sheets: string[] = [];
       for (const name of ["beats_sheet.jpg", "hook_sheet.jpg", "phone_sheet.jpg"]) if (await trusted(jobDir, `qa/${name}`, 50 * 1024 * 1024)) sheets.push(`/evidence/qa/${name}`);
       // The critic reads the timeline beside the job's other files, at /evidence/timeline.json.
@@ -360,7 +372,7 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       if (judged.shipped) break;
       if (fixes >= regenerate) {
         const weakest = judged.answer?.weakestScene ?? "unknown";
-        return fail(`the critic did not pass the ${fixes === 1 ? "second" : `last (${rounds})`} round: ${weakest}`, { video: await packVideo(judged, rounds, "degraded") });
+        return fail(`the critic did not pass the ${fixes === 1 ? "second" : `last (${rounds})`} round: ${weakest}${hitKinds.length > 0 ? `; still on screen: ${hitKinds.join(", ")}` : ""}`, { video: await packVideo(judged, rounds, "degraded") });
       }
       const fixed = await scripted("video_fix", [...input.fixCards, ...cardsOf(judged)], timeline, fixes === 0 ? "fix" : `fix${fixes + 1}`);
       if ("error" in fixed) return fail(fixed.error, { rateLimited: fixed.rateLimited });

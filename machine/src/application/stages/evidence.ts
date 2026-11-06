@@ -5,7 +5,7 @@
 // on the task. The pack and its files show up in the ship approval's `requested`, the gate Ship publishes from.
 import { type TruthSink, evidenceFormatTruth, recordIdOf } from "../decision-truth.ts";
 import { type ArtifactKind, type EvidenceContext, EvidencePack, Finding, PACKS, Risk, type TaskReports, type TaskState, VerifyReport, applyPolicy } from "@hardness/contracts";
-import { readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
 import { assembleEvidencePack, packComplete, repairPack } from "../../domain/evidence-pack.ts";
@@ -13,8 +13,9 @@ import { type CheckOutput, checksExcerpt, terminalCapture } from "../../domain/t
 import { parseNote } from "../../domain/fix-card.ts";
 import type { Policy } from "../../domain/policy.ts";
 import { approvedCases, approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
-import { EvidenceStore, MAX_MEDIA_BYTES } from "../evidence-store.ts";
-import { hashRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
+import { EvidenceStore, MAX_MEDIA_BYTES, safeName } from "../evidence-store.ts";
+import { copyRegularFile, hashRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
+import { screenFindings } from "../../domain/screen-text.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import type { VideoPipeline } from "./video.ts";
 
@@ -232,6 +233,8 @@ export interface EvidenceStageDeps extends EvidenceDeps {
   videoImage: () => Promise<boolean>;
   /** The video pipeline (stages/video.ts); null or absent when the video image is not on this machine. */
   video?: VideoPipeline | null;
+  /** Reads the text on the image files directly in a folder (the video image's `frames --images`); null when it could not run. Absent when there is no video image. */
+  scanImages?: (dir: string, signal: AbortSignal) => Promise<{ file: string; text: string }[] | null>;
   now?: () => Date;
 }
 
@@ -431,11 +434,38 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         else if (a.kind === "qa-manifest" || a.kind === "har") picked.push({ path: a.path, label: a.label, kind: "report" });
       }
     }
+    // The text on the screenshots is read before anything is kept: a token, a key or personal data leaves the screenshot out. Nobody sees them before they are public.
+    const scanned = new Map<string, boolean>();
+    const shots = picked.filter((p) => p.kind === "screenshot");
+    if (shots.length > 0) {
+      const dir = join(deps.stateDir, "runs", `${context.runId}-shots`);
+      const names = new Map<string, string>();
+      let frames: { file: string; text: string }[] | null = null;
+      if (deps.scanImages) {
+        await mkdir(dir, { recursive: true });
+        for (const p of shots) {
+          const name = safeName(p.label);
+          if (await copyRegularFile(p.path, join(dir, name)).then(() => true, () => false)) names.set(p.label, name);
+        }
+        frames = await deps.scanImages(dir, context.signal).catch(() => null);
+      }
+      if (!frames) {
+        for (const p of shots) scanned.set(p.label, false);
+        if (deps.scanImages) addNote("the text on the screenshots was not read");
+      } else {
+        const hits = screenFindings(frames);
+        const bad = new Set(hits.map((h) => h.place));
+        const left = shots.filter((p) => bad.has(names.get(p.label) ?? "\u0000"));
+        for (const p of shots) scanned.set(p.label, true);
+        for (const p of left) picked.splice(picked.indexOf(p), 1);
+        if (left.length > 0) addNote(`${left.length} screenshot(s) left out: a ${[...new Set(hits.map((h) => h.kind))].join(", a ")} was on screen`);
+      }
+    }
     for (const m of filmMedia) picked.push({ path: m.url, label: m.label, kind: m.kind });
     const kept = await store.keep(task.id, commitSha, picked);
     const media = kept.flatMap((k) => {
       const kind = picked.find((p) => p.label === k.label)?.kind;
-      return kind ? [{ kind, label: k.label, url: k.path }] : [];
+      return kind ? [{ kind, label: k.label, url: k.path, ...(scanned.has(k.label) ? { scanned: scanned.get(k.label)! } : {}) }] : [];
     });
 
     // A terminal capture or the checks' excerpt: written from the card, listed as a media line and never inline.
