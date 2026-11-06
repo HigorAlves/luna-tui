@@ -180,7 +180,8 @@ describe("shipping with an Evidence Pack", () => {
     const result = await run(context);
     expect(result).toMatchObject({ outcome: "pass", detail: { prUrl: "https://x/pull/3", readied: true, published: { comment: "created", assets: 1 } } });
     expect(evidence.publish).toHaveBeenCalledWith({ github, slug: "a/b", number: 3, taskId: "t1", pack: pack(), repoPath: expect.anything(), approved: false, localDir: `/state/evidence/t1/${HEAD}` });
-    expect(saved).toEqual([["t1", published.pack]]);
+    // The saved pack is stamped as on the PR (the wave 12b fix): the board reads that, not the media links.
+    expect(saved).toEqual([["t1", { ...published.pack, published: true }]]);
     expect(github.markPrReady).toHaveBeenCalledWith("a/b", 3);
     // Published before the PR leaves draft.
     expect((evidence.publish as unknown as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]).toBeLessThan((github.markPrReady as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!);
