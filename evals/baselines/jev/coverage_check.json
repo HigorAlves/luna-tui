@@ -3,30 +3,74 @@
   "pack": "coverage_check",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-05T22:44:44.503Z",
+  "at": "2026-11-06T15:02:37.743Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 4,
-    "passed": 1,
-    "passRate": 0.25,
+    "cases": 8,
+    "passed": 4,
+    "passRate": 0.5,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 493.25,
-    "costUsd": 0.00007619000000000001,
+    "meanDurationMs": 521,
+    "costUsd": 0.00015662,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
-      "accuracy": 0.3333333333333333,
+      "n": 8,
+      "labelled": 7,
+      "acted": 3,
+      "accuracy": 0.5714285714285714,
       "actedOnAccuracy": 1,
       "coverage": 0.5,
-      "brier": 0.32870000000000005,
-      "ece": 0.51,
-      "meanConfidence": 0.7975,
+      "brier": 0.23099047619047616,
+      "ece": 0.31999999999999995,
+      "meanConfidence": 0.7841666666666667,
       "overconfident": 1
     }
   },
   "cases": [
+    {
+      "id": "one-criterion-cannot-be-proved",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "untestable.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 492,
+      "costUsd": 0.00001869,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": null,
+            "confidence": 0.61,
+            "verdict": "flag"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": true,
+            "confidence": 0.68,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.6966666666666668,
+        "verdict": "flag"
+      }
+    },
     {
       "id": "one-weak-scenario",
       "pass": false,
@@ -44,10 +88,27 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 499,
+      "durationMs": 408,
       "costUsd": 0.00001894,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.9299999999999999,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
         "confidence": 0.94,
         "verdict": "proceed"
@@ -70,13 +131,73 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 492,
+      "durationMs": 556,
       "costUsd": 0.00001819,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": false,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.46,
+            "verdict": "ask"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          }
+        },
         "correct": false,
-        "confidence": 0.68,
+        "confidence": 0.6933333333333334,
         "verdict": "ask"
+      }
+    },
+    {
+      "id": "scenario-opens-the-home-page",
+      "pass": false,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = false",
+          "pass": false,
+          "detail": "found true"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 851,
+      "costUsd": 0.0000173,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": false,
+            "confidence": 0.83,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.61,
+            "verdict": "flag"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.63,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.69,
+        "verdict": "flag"
       }
     },
     {
@@ -101,12 +222,29 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 488,
+      "durationMs": 506,
       "costUsd": 0.00002041,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.78,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": true,
+            "confidence": 0.87,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.86,
+        "confidence": 0.8533333333333334,
         "verdict": "proceed"
       }
     },
@@ -132,13 +270,126 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 494,
+      "durationMs": 403,
       "costUsd": 0.00001865,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": false,
+            "confidence": 0.54,
+            "verdict": "flag"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": false,
+            "confidence": 0.62,
+            "verdict": "flag"
+          }
+        },
         "correct": false,
-        "confidence": 0.71,
+        "confidence": 0.7066666666666667,
         "verdict": "flag"
+      }
+    },
+    {
+      "id": "three-distinct-scenarios",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "redundancy.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "untestable.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 482,
+      "costUsd": 0.00002205,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": true,
+            "confidence": 0.78,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": true,
+            "confidence": 0.89,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8566666666666668,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "three-scenarios-one-check",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "redundancy.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 470,
+      "costUsd": 0.00002239,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": null,
+            "confidence": 0.83,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8366666666666666,
+        "verdict": "proceed"
       }
     }
   ]

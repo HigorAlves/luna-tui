@@ -3,30 +3,371 @@
   "pack": "conversation_assess",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-06T04:01:51.323Z",
+  "at": "2026-11-06T15:37:35.520Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 4,
-    "passed": 4,
-    "passRate": 1,
+    "cases": 8,
+    "passed": 3,
+    "passRate": 0.375,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 493.5,
-    "costUsd": 0.00017938,
+    "meanDurationMs": 652.125,
+    "costUsd": 0.00035674,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
-      "accuracy": 1,
-      "actedOnAccuracy": null,
-      "coverage": 0,
-      "brier": 0.10932599999999998,
-      "ece": 0.2779999999999999,
-      "meanConfidence": 0.698,
-      "overconfident": 0
+      "n": 8,
+      "labelled": 7,
+      "acted": 1,
+      "accuracy": 0.2857142857142857,
+      "actedOnAccuracy": 1,
+      "coverage": 0.125,
+      "brier": 0.3808882857142857,
+      "ece": 0.4802857142857143,
+      "meanConfidence": 0.74875,
+      "overconfident": 3
+    },
+    "perQuestion": {
+      "kind": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 6,
+        "accuracy": 0.7142857142857143,
+        "actedOnAccuracy": 0.6666666666666666,
+        "coverage": 0.75,
+        "brier": 0.23727142857142858,
+        "ece": 0.31857142857142856,
+        "meanConfidence": 0.7837500000000001,
+        "overconfident": 2
+      },
+      "needs_reply": {
+        "n": 8,
+        "labelled": 2,
+        "acted": 2,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.015300000000000001,
+        "ece": 0.12,
+        "meanConfidence": 0.77625,
+        "overconfident": 0
+      },
+      "production_down": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.01557142857142858,
+        "ece": 0.07142857142857137,
+        "meanConfidence": 0.8975,
+        "overconfident": 0
+      },
+      "data_loss": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.005633333333333337,
+        "ece": 0.056666666666666754,
+        "meanConfidence": 0.9374999999999999,
+        "overconfident": 0
+      },
+      "security": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 7,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.003242857142857144,
+        "ece": 0.03857142857142848,
+        "meanConfidence": 0.9637500000000001,
+        "overconfident": 0
+      },
+      "who": {
+        "n": 8,
+        "labelled": 1,
+        "acted": 1,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.25,
+        "brier": 0,
+        "ece": 0,
+        "meanConfidence": 0.365,
+        "overconfident": 0
+      },
+      "what": {
+        "n": 8,
+        "labelled": 3,
+        "acted": 1,
+        "accuracy": 0.6666666666666666,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.1633333333333333,
+        "ece": 0.2333333333333333,
+        "meanConfidence": 0.68125,
+        "overconfident": 0
+      },
+      "impact": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 1,
+        "accuracy": 0.5,
+        "actedOnAccuracy": 1,
+        "coverage": 0.375,
+        "brier": 0.10645,
+        "ece": 0.25,
+        "meanConfidence": 0.64125,
+        "overconfident": 0
+      },
+      "time": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 3,
+        "accuracy": 0.6666666666666666,
+        "actedOnAccuracy": 1,
+        "coverage": 0.5,
+        "brier": 0.1249,
+        "ece": 0.2166666666666667,
+        "meanConfidence": 0.5625,
+        "overconfident": 0
+      },
+      "demand": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.875,
+        "brier": 0.004016666666666667,
+        "ece": 0.05500000000000005,
+        "meanConfidence": 0.87875,
+        "overconfident": 0
+      }
+    },
+    "answers": {
+      "n": 80,
+      "labelled": 49,
+      "acted": 39,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 0.9487179487179487,
+      "coverage": 0.7,
+      "brier": 0.07237346938775506,
+      "ece": 0.11448979591836746,
+      "meanConfidence": 0.7487499999999998,
+      "overconfident": 2
     }
   },
   "cases": [
+    {
+      "id": "add-a-plan-column-to-the-export",
+      "pass": false,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"request\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 0.69"
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 421,
+      "costUsd": 0.0000446,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.56,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.46,
+            "verdict": "ask"
+          },
+          "time": {
+            "correct": false,
+            "confidence": 0.52,
+            "verdict": "flag"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.8260000000000002,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "api-key-in-the-public-readme",
+      "pass": false,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice in [\"incident\",\"bug\"]",
+          "pass": false,
+          "detail": "found \"fyi\""
+        },
+        {
+          "check": "security.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 720,
+      "costUsd": 0.00004465,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": false,
+            "confidence": 0.78,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.24,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.834,
+        "verdict": "ask"
+      }
+    },
     {
       "id": "checkout-500s-for-everyone",
       "pass": true,
@@ -45,16 +386,93 @@
           "check": "production_down.value = true",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 587,
+      "durationMs": 805,
       "costUsd": 0.00004465,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.61,
+            "verdict": "flag"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": null,
+            "confidence": 0.87,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.38,
+            "verdict": "ask"
+          }
+        },
         "correct": true,
-        "confidence": 0.876,
+        "confidence": 0.8770000000000001,
         "verdict": "ask"
       }
     },
@@ -75,18 +493,70 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 425,
+      "durationMs": 543,
       "costUsd": 0.0000441,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "kind": {
+            "correct": null,
+            "confidence": 0.44,
+            "verdict": "ask"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.89,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": null,
+            "confidence": 0.6799999999999999,
+            "verdict": "flag"
+          },
+          "data_loss": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.44,
+            "verdict": "ask"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.02,
+            "verdict": "ask"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.626,
+        "confidence": 0.6279999999999999,
         "verdict": "ask"
       }
     },
     {
-      "id": "footer-typo-tells-the-scores",
-      "pass": true,
+      "id": "footer-typo-plain",
+      "pass": false,
       "schema": {
         "check": "answer on the conversation_assess schema",
         "pass": true,
@@ -107,22 +577,212 @@
           "check": "security.value = false",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "kind.choice in [\"bug\",\"request\"]",
+          "pass": false,
+          "detail": "found \"fyi\""
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 494,
+      "durationMs": 683,
+      "costUsd": 0.00004393,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": false,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.53,
+            "verdict": "flag"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.9299999999999999,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.3,
+            "verdict": "ask"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.67,
+            "verdict": "flag"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.31,
+            "verdict": "ask"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.6339999999999999,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "footer-typo-tells-the-scores",
+      "pass": false,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice in [\"bug\",\"request\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 0.98"
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 0.6"
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 0.65"
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 967,
       "costUsd": 0.00004628,
       "model": "typesafe-ai/jev",
       "decision": {
-        "correct": true,
-        "confidence": 0.471,
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.3,
+            "verdict": "ask"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.6799999999999999,
+            "verdict": "flag"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.84,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": false,
+            "confidence": 0,
+            "verdict": "ask"
+          },
+          "impact": {
+            "correct": false,
+            "confidence": 0.12,
+            "verdict": "ask"
+          },
+          "time": {
+            "correct": false,
+            "confidence": 0.02,
+            "verdict": "ask"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.44400000000000006,
         "verdict": "ask"
       }
     },
     {
       "id": "how-do-i-enable-csv-export",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the conversation_assess schema",
         "pass": true,
@@ -143,17 +803,197 @@
           "check": "production_down.value = false",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 0.7"
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 468,
+      "durationMs": 658,
       "costUsd": 0.00004435,
       "model": "typesafe-ai/jev",
       "decision": {
-        "correct": true,
-        "confidence": 0.8190000000000002,
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.36,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.74,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": false,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.818,
         "verdict": "ask"
+      }
+    },
+    {
+      "id": "thanks-for-the-quick-fix",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"chatter\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "needs_reply.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 420,
+      "costUsd": 0.00004418,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9289999999999999,
+        "verdict": "proceed"
       }
     }
   ]

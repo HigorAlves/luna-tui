@@ -3,26 +3,27 @@
   "pack": "escalation_reason",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-05T22:45:04.383Z",
+  "at": "2026-11-06T15:08:45.219Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 4,
-    "passed": 4,
+    "cases": 8,
+    "passed": 8,
     "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 414.25,
-    "costUsd": 0.00010714,
+    "meanDurationMs": 509.25,
+    "costUsd": 0.0002077,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
+      "n": 8,
+      "labelled": 7,
+      "acted": 6,
       "accuracy": 1,
       "actedOnAccuracy": 1,
       "coverage": 0.75,
-      "brier": 0.008600000000000003,
-      "ece": 0.06000000000000005,
-      "meanConfidence": 0.8499999999999999,
+      "brier": 0.021685714285714284,
+      "ece": 0.0885714285714285,
+      "meanConfidence": 0.8712500000000001,
       "overconfident": 0
     }
   },
@@ -44,12 +45,52 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 410,
+      "durationMs": 609,
       "costUsd": 0.00002747,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "needs-a-file-the-plan-does-not-name",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"undeclared_scope\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 618,
+      "costUsd": 0.00002579,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 1,
         "verdict": "proceed"
       }
     },
@@ -70,12 +111,19 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 416,
+      "durationMs": 453,
       "costUsd": 0.00002713,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "reason": {
+            "correct": null,
+            "confidence": 0.59,
+            "verdict": "flag"
+          }
+        },
         "correct": null,
-        "confidence": 0.58,
+        "confidence": 0.59,
         "verdict": "flag"
       }
     },
@@ -96,10 +144,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 399,
+      "durationMs": 451,
       "costUsd": 0.00002671,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -122,13 +177,119 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 432,
+      "durationMs": 476,
       "costUsd": 0.00002583,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.87,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.84,
+        "confidence": 0.87,
         "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ran-out-of-room-with-slices-left",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"too_complex\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 430,
+      "costUsd": 0.00002722,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.89,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.89,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "stopped-with-nothing-to-read",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"other\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 516,
+      "costUsd": 0.00002327,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "stopped-with-nothing-to-read-and-a-note",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"other\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 521,
+      "costUsd": 0.00002428,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.65,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.65,
+        "verdict": "flag"
       }
     }
   ]

@@ -3,30 +3,74 @@
   "pack": "coverage_check",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T22:45:30.839Z",
+  "at": "2026-11-06T15:02:24.296Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 4,
-    "passed": 2,
-    "passRate": 0.5,
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2728.25,
+    "meanDurationMs": 4934.5,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
-      "accuracy": 0.6666666666666666,
-      "actedOnAccuracy": 0.6666666666666666,
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 0.8571428571428571,
       "coverage": 1,
-      "brier": 0.31588518518518516,
-      "ece": 0.31666666666666665,
-      "meanConfidence": 0.9824999999999999,
+      "brier": 0.12757777777777776,
+      "ece": 0.11809523809523825,
+      "meanConfidence": 0.9758333333333333,
       "overconfident": 1
     }
   },
   "cases": [
+    {
+      "id": "one-criterion-cannot-be-proved",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "untestable.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3011,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9566666666666667,
+        "verdict": "proceed"
+      }
+    },
     {
       "id": "one-weak-scenario",
       "pass": false,
@@ -39,15 +83,32 @@
         {
           "check": "pins.p within 0.25..0.75",
           "pass": false,
-          "detail": "found 0.98"
+          "detail": "found 0.97"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3229,
+      "durationMs": 6594,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
         "confidence": 0.98,
         "verdict": "proceed"
@@ -70,10 +131,70 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2507,
+      "durationMs": 3332,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9899999999999999,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-opens-the-home-page",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3234,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.9899999999999999,
         "verdict": "proceed"
@@ -101,12 +222,29 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2537,
+      "durationMs": 14132,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.9866666666666667,
+        "confidence": 0.9833333333333334,
         "verdict": "proceed"
       }
     },
@@ -132,12 +270,125 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2640,
+      "durationMs": 3099,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": false,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
         "correct": false,
+        "confidence": 0.9433333333333334,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "three-distinct-scenarios",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "redundancy.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "untestable.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3950,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
         "confidence": 0.9733333333333333,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "three-scenarios-one-check",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "redundancy.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2124,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9899999999999999,
         "verdict": "proceed"
       }
     }

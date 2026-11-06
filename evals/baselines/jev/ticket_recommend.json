@@ -3,26 +3,27 @@
   "pack": "ticket_recommend",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-06T01:43:44.023Z",
+  "at": "2026-11-06T15:40:17.585Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 5,
-    "passed": 5,
+    "cases": 8,
+    "passed": 8,
     "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 623.8,
-    "costUsd": 0.00011693000000000001,
+    "meanDurationMs": 475.375,
+    "costUsd": 0.00018766,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 5,
-      "labelled": 4,
+      "n": 8,
+      "labelled": 7,
+      "acted": 1,
       "accuracy": 1,
-      "actedOnAccuracy": null,
-      "coverage": 0,
-      "brier": 0.3547,
-      "ece": 0.5900000000000001,
-      "meanConfidence": 0.402,
+      "actedOnAccuracy": 1,
+      "coverage": 0.125,
+      "brier": 0.24258571428571432,
+      "ece": 0.47857142857142854,
+      "meanConfidence": 0.5075,
       "overconfident": 0
     }
   },
@@ -44,13 +45,53 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 486,
+      "durationMs": 571,
       "costUsd": 0.00002302,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "action": {
+            "correct": null,
+            "confidence": 0.41,
+            "verdict": "ask"
+          }
+        },
         "correct": null,
-        "confidence": 0.37,
+        "confidence": 0.41,
         "verdict": "ask"
+      }
+    },
+    {
+      "id": "checkout-down-for-eu-cards",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"do_now\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 382,
+      "costUsd": 0.00002377,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.6,
+        "verdict": "flag"
       }
     },
     {
@@ -70,13 +111,20 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 709,
+      "durationMs": 605,
       "costUsd": 0.00002331,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.49,
+            "verdict": "ask"
+          }
+        },
         "correct": true,
-        "confidence": 0.53,
-        "verdict": "flag"
+        "confidence": 0.49,
+        "verdict": "ask"
       }
     },
     {
@@ -101,13 +149,53 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 424,
+      "durationMs": 457,
       "costUsd": 0.00002402,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.49,
+            "verdict": "ask"
+          }
+        },
         "correct": true,
-        "confidence": 0.43,
+        "confidence": 0.49,
         "verdict": "ask"
+      }
+    },
+    {
+      "id": "tooltip-rename-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"decline\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 368,
+      "costUsd": 0.00002344,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.6,
+        "verdict": "flag"
       }
     },
     {
@@ -127,13 +215,53 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 778,
+      "durationMs": 413,
       "costUsd": 0.00002335,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.33,
+            "verdict": "ask"
+          }
+        },
         "correct": true,
-        "confidence": 0.31,
+        "confidence": 0.33,
         "verdict": "ask"
+      }
+    },
+    {
+      "id": "two-teams-disagree-on-the-vendor",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"needs_decision\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 420,
+      "costUsd": 0.00002352,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.71,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.71,
+        "verdict": "proceed"
       }
     },
     {
@@ -153,12 +281,19 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 722,
+      "durationMs": 587,
       "costUsd": 0.00002323,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.43,
+            "verdict": "ask"
+          }
+        },
         "correct": true,
-        "confidence": 0.37,
+        "confidence": 0.43,
         "verdict": "ask"
       }
     }

@@ -3,26 +3,27 @@
   "pack": "worth_learning",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-06T06:51:19.505Z",
+  "at": "2026-11-06T15:30:44.906Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 6,
-    "passed": 5,
-    "passRate": 0.8333333333333334,
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 468,
-    "costUsd": 0.00010675999999999999,
+    "meanDurationMs": 430.875,
+    "costUsd": 0.00014183000000000002,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 6,
-      "labelled": 4,
+      "n": 8,
+      "labelled": 6,
+      "acted": 5,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 0.6666666666666666,
-      "brier": 0.046075,
-      "ece": 0.1825,
-      "meanConfidence": 0.785,
+      "coverage": 0.75,
+      "brier": 0.036833333333333336,
+      "ece": 0.16333333333333322,
+      "meanConfidence": 0.795,
       "overconfident": 0
     }
   },
@@ -44,10 +45,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 522,
+      "durationMs": 448,
       "costUsd": 0.00001743,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "worth": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.93,
         "verdict": "proceed"
@@ -70,12 +78,19 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 408,
+      "durationMs": 392,
       "costUsd": 0.00001798,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "worth": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.84,
+        "confidence": 0.85,
         "verdict": "proceed"
       }
     },
@@ -96,12 +111,19 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 423,
+      "durationMs": 542,
       "costUsd": 0.00001831,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "worth": {
+            "correct": true,
+            "confidence": 0.62,
+            "verdict": "flag"
+          }
+        },
         "correct": true,
-        "confidence": 0.63,
+        "confidence": 0.62,
         "verdict": "flag"
       }
     },
@@ -122,13 +144,86 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 559,
+      "durationMs": 454,
       "costUsd": 0.00001743,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "worth": {
+            "correct": null,
+            "confidence": 0.51,
+            "verdict": "flag"
+          }
+        },
         "correct": null,
-        "confidence": 0.6,
+        "confidence": 0.51,
         "verdict": "flag"
+      }
+    },
+    {
+      "id": "tiny-on-plan-plain-format",
+      "pass": true,
+      "schema": {
+        "check": "answer on the worth_learning schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "worth.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 495,
+      "costUsd": 0.00001739,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "worth": {
+            "correct": true,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.86,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "two-escalations-on-plan-size",
+      "pass": true,
+      "schema": {
+        "check": "answer on the worth_learning schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "worth.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 338,
+      "costUsd": 0.00001768,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "worth": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
       }
     },
     {
@@ -143,17 +238,24 @@
         {
           "check": "worth.p within 0.25..0.75",
           "pass": false,
-          "detail": "found 0.16"
+          "detail": "found 0.17"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 450,
+      "durationMs": 384,
       "costUsd": 0.00001835,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "worth": {
+            "correct": null,
+            "confidence": 0.83,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.84,
+        "confidence": 0.83,
         "verdict": "proceed"
       }
     },
@@ -174,12 +276,19 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 446,
+      "durationMs": 394,
       "costUsd": 0.00001726,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "worth": {
+            "correct": true,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.87,
+        "confidence": 0.86,
         "verdict": "proceed"
       }
     }

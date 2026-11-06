@@ -3,30 +3,74 @@
   "pack": "conversation_relation",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-06T04:02:38.691Z",
+  "at": "2026-11-06T15:38:56.996Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 5,
-    "passed": 4,
-    "passRate": 0.8,
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 473.6,
-    "costUsd": 0.00012751,
+    "meanDurationMs": 434,
+    "costUsd": 0.00020374,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 5,
-      "labelled": 4,
-      "accuracy": 1,
-      "actedOnAccuracy": 1,
-      "coverage": 0.6,
-      "brier": 0.03459375,
-      "ece": 0.15875000000000006,
-      "meanConfidence": 0.8559999999999999,
-      "overconfident": 0
+      "n": 8,
+      "labelled": 7,
+      "acted": 4,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 0.75,
+      "coverage": 0.625,
+      "brier": 0.15219285714285716,
+      "ece": 0.21000000000000002,
+      "meanConfidence": 0.8868750000000001,
+      "overconfident": 1
     }
   },
   "cases": [
+    {
+      "id": "asks-who-owns-billing",
+      "pass": false,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_work.value = false",
+          "pass": false,
+          "detail": "found true"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 472,
+      "costUsd": 0.0000247,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": false,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.9550000000000001,
+        "verdict": "proceed"
+      }
+    },
     {
       "id": "dark-mode-is-new-work",
       "pass": true,
@@ -49,10 +93,22 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 501,
+      "durationMs": 387,
       "costUsd": 0.00002558,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.985,
         "verdict": "proceed"
@@ -75,12 +131,24 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 457,
+      "durationMs": 378,
       "costUsd": 0.00002528,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "related": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": null,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.915,
+        "confidence": 0.925,
         "verdict": "proceed"
       }
     },
@@ -101,12 +169,62 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 505,
+      "durationMs": 507,
       "costUsd": 0.00002604,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": null,
+            "confidence": 0.6599999999999999,
+            "verdict": "flag"
+          }
+        },
         "correct": true,
-        "confidence": 0.755,
+        "confidence": 0.78,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "footer-typo-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 446,
+      "costUsd": 0.00002461,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": null,
+            "confidence": 0.59,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.79,
         "verdict": "flag"
       }
     },
@@ -127,12 +245,24 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 456,
+      "durationMs": 440,
       "costUsd": 0.000026,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.875,
+        "confidence": 0.89,
         "verdict": "proceed"
       }
     },
@@ -158,13 +288,68 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 449,
+      "durationMs": 423,
       "costUsd": 0.00002461,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": true,
+            "confidence": 0.5700000000000001,
+            "verdict": "flag"
+          }
+        },
         "correct": true,
-        "confidence": 0.75,
+        "confidence": 0.78,
         "verdict": "flag"
+      }
+    },
+    {
+      "id": "third-candidate-is-the-work",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"slot3\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_work.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 419,
+      "costUsd": 0.00002692,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
       }
     }
   ]

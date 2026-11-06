@@ -3,26 +3,27 @@
   "pack": "ci_failure_class",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-06T00:59:16.405Z",
+  "at": "2026-11-06T15:11:21.572Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 6,
-    "passed": 5,
-    "passRate": 0.8333333333333334,
+    "cases": 9,
+    "passed": 8,
+    "passRate": 0.8888888888888888,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2767.3333333333335,
+    "meanDurationMs": 2728.6666666666665,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 6,
-      "labelled": 5,
+      "n": 9,
+      "labelled": 8,
+      "acted": 8,
       "accuracy": 1,
       "actedOnAccuracy": 1,
       "coverage": 1,
-      "brier": 0.00016000000000000026,
-      "ece": 0.0119999999999999,
-      "meanConfidence": 0.9766666666666667,
+      "brier": 0.00013750000000000025,
+      "ece": 0.011249999999999982,
+      "meanConfidence": 0.9755555555555557,
       "overconfident": 0
     }
   },
@@ -39,17 +40,24 @@
         {
           "check": "class.confidence within 0..0.8",
           "pass": false,
-          "detail": "found 0.92"
+          "detail": "found 0.87"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3401,
+      "durationMs": 1892,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "class": {
+            "correct": null,
+            "confidence": 0.87,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.92,
+        "confidence": 0.87,
         "verdict": "proceed"
       }
     },
@@ -70,12 +78,19 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2463,
+      "durationMs": 2431,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.98,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     },
@@ -96,10 +111,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2587,
+      "durationMs": 4701,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -122,10 +144,50 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2812,
+      "durationMs": 3710,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "registry-times-out-on-install",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"infra\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1989,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -148,10 +210,50 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2685,
+      "durationMs": 2484,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "stale-lockfile-after-the-base-moved",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"drift\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2096,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -174,12 +276,52 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2656,
+      "durationMs": 3505,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "total-assertion-plain-log",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"real\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1750,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
         "verdict": "proceed"
       }
     }

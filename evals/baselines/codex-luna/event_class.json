@@ -3,32 +3,99 @@
   "pack": "event_class",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-06T06:47:54.771Z",
+  "at": "2026-11-06T15:24:41.131Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 7,
-    "passed": 6,
+    "cases": 14,
+    "passed": 12,
     "passRate": 0.8571428571428571,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2635.8571428571427,
+    "meanDurationMs": 2977.9285714285716,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 7,
-      "labelled": 6,
-      "accuracy": 1,
-      "actedOnAccuracy": 1,
+      "n": 14,
+      "labelled": 13,
+      "acted": 13,
+      "accuracy": 0.9230769230769231,
+      "actedOnAccuracy": 0.9230769230769231,
       "coverage": 1,
-      "brier": 0.00015000000000000026,
-      "ece": 0.011666666666666603,
-      "meanConfidence": 0.9885714285714287,
-      "overconfident": 0
+      "brier": 0.0710076923076923,
+      "ece": 0.06384615384615389,
+      "meanConfidence": 0.9857142857142859,
+      "overconfident": 1
     }
   },
   "cases": [
     {
+      "id": "base-is-ahead-of-the-branch",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"base_moved\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2113,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
       "id": "bot-claims-to-be-a-person",
+      "pass": false,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"noise\"",
+          "pass": false,
+          "detail": "found \"review_comment\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3067,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": false,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "bot-comment-plain",
       "pass": true,
       "schema": {
         "check": "answer on the event_class schema",
@@ -44,10 +111,50 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3349,
+      "durationMs": 9427,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "branch-conflicts-with-main",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"conflict\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1888,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -70,10 +177,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2268,
+      "durationMs": 2027,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.98,
         "verdict": "proceed"
@@ -96,10 +210,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2094,
+      "durationMs": 2509,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -122,10 +243,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3601,
+      "durationMs": 2814,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -148,10 +276,50 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2437,
+      "durationMs": 2094,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "freeze-window-holds",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"freeze\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3091,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -169,16 +337,89 @@
         {
           "check": "event.confidence within 0..0.85",
           "pass": false,
-          "detail": "found 0.99"
+          "detail": "found 0.97"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2168,
+      "durationMs": 4237,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "parent-pr-has-new-commits",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"parent_changed\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2162,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "parent-pr-merged",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"parent_merged\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1974,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
       }
@@ -200,10 +441,50 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2534,
+      "durationMs": 1745,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "waits-on-another-pr",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"blocked_by_other_pr\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2543,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"

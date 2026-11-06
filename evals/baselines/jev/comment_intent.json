@@ -3,26 +3,27 @@
   "pack": "comment_intent",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-06T06:48:50.461Z",
+  "at": "2026-11-06T15:26:27.113Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 5,
-    "passed": 5,
+    "cases": 8,
+    "passed": 8,
     "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 457.8,
-    "costUsd": 0.00011158000000000001,
+    "meanDurationMs": 521.875,
+    "costUsd": 0.00017790000000000004,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 5,
-      "labelled": 4,
+      "n": 8,
+      "labelled": 7,
+      "acted": 5,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 1,
-      "brier": 0.003649999999999997,
-      "ece": 0.04499999999999993,
-      "meanConfidence": 0.9339999999999999,
+      "coverage": 0.75,
+      "brier": 0.05161428571428571,
+      "ece": 0.14999999999999994,
+      "meanConfidence": 0.8500000000000001,
       "overconfident": 0
     }
   },
@@ -44,10 +45,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 567,
+      "durationMs": 835,
       "costUsd": 0.00002356,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 1,
         "verdict": "proceed"
@@ -70,12 +78,19 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 443,
+      "durationMs": 490,
       "costUsd": 0.00002234,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.92,
+        "confidence": 0.93,
         "verdict": "proceed"
       }
     },
@@ -96,13 +111,53 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 412,
+      "durationMs": 487,
       "costUsd": 0.0000215,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.91,
         "verdict": "proceed"
+      }
+    },
+    {
+      "id": "disputes-the-approach",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"disagreement\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 515,
+      "costUsd": 0.00002318,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.61,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.61,
+        "verdict": "flag"
       }
     },
     {
@@ -122,10 +177,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 459,
+      "durationMs": 429,
       "costUsd": 0.000021,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "intent": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
         "confidence": 0.85,
         "verdict": "proceed"
@@ -148,13 +210,86 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 408,
+      "durationMs": 450,
       "costUsd": 0.00002318,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
+      }
+    },
+    {
+      "id": "replace-format-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"change_request\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 485,
+      "costUsd": 0.00002092,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "trailing-whitespace-nit",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"nit\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 484,
+      "costUsd": 0.00002222,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.56,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.56,
+        "verdict": "flag"
       }
     }
   ]

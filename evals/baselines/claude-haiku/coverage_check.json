@@ -3,30 +3,74 @@
   "pack": "coverage_check",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T22:45:49.430Z",
+  "at": "2026-11-06T15:01:35.165Z",
   "model": "claude-haiku-5-5",
   "summary": {
-    "cases": 4,
-    "passed": 2,
-    "passRate": 0.5,
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 3000.75,
-    "costUsd": 0.0023604100000000003,
+    "meanDurationMs": 2657.125,
+    "costUsd": 0.00464209,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
-      "accuracy": 0.6666666666666666,
-      "actedOnAccuracy": 0.6666666666666666,
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 0.8571428571428571,
       "coverage": 1,
-      "brier": 0.24870370370370376,
-      "ece": 0.21111111111111114,
-      "meanConfidence": 0.875,
+      "brier": 0.11743174603174601,
+      "ece": 0.02285714285714291,
+      "meanConfidence": 0.8783333333333334,
       "overconfident": 1
     }
   },
   "cases": [
+    {
+      "id": "one-criterion-cannot-be-proved",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "untestable.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2568,
+      "costUsd": 0.0006894000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8933333333333334,
+        "verdict": "proceed"
+      }
+    },
     {
       "id": "one-weak-scenario",
       "pass": false,
@@ -39,17 +83,34 @@
         {
           "check": "pins.p within 0.25..0.75",
           "pass": false,
-          "detail": "found 0.8"
+          "detail": "found 0.85"
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2297,
-      "costUsd": 0.0006908000000000001,
+      "durationMs": 2477,
+      "costUsd": 0.0005449700000000001,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.8666666666666666,
+        "confidence": 0.8666666666666667,
         "verdict": "proceed"
       }
     },
@@ -70,10 +131,70 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2992,
-      "costUsd": 0.00054617,
+      "durationMs": 2905,
+      "costUsd": 0.00055617,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8733333333333334,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-opens-the-home-page",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2466,
+      "costUsd": 0.0005250700000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.8833333333333333,
         "verdict": "proceed"
@@ -101,10 +222,27 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3421,
-      "costUsd": 0.00056987,
+      "durationMs": 2477,
+      "costUsd": 0.00054537,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.9,
         "verdict": "proceed"
@@ -132,12 +270,125 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3293,
-      "costUsd": 0.00055357,
+      "durationMs": 2624,
+      "costUsd": 0.00056057,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.9299999999999999,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": false,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
         "correct": false,
-        "confidence": 0.8500000000000001,
+        "confidence": 0.86,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "three-distinct-scenarios",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "redundancy.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "untestable.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2572,
+      "costUsd": 0.00059977,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8666666666666666,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "three-scenarios-one-check",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "redundancy.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3168,
+      "costUsd": 0.0006207700000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "pins": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "redundancy": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "untestable": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8833333333333333,
         "verdict": "proceed"
       }
     }

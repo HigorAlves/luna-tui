@@ -3,30 +3,64 @@
   "pack": "event_class",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-06T06:48:03.741Z",
+  "at": "2026-11-06T15:25:03.553Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 7,
-    "passed": 6,
+    "cases": 14,
+    "passed": 12,
     "passRate": 0.8571428571428571,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 493.57142857142856,
-    "costUsd": 0.00018992,
+    "meanDurationMs": 476.64285714285717,
+    "costUsd": 0.00037317,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 7,
-      "labelled": 6,
-      "accuracy": 0.8333333333333334,
-      "actedOnAccuracy": 0.8333333333333334,
-      "coverage": 1,
-      "brier": 0.13091666666666665,
-      "ece": 0.1216666666666667,
-      "meanConfidence": 0.9228571428571429,
-      "overconfident": 1
+      "n": 14,
+      "labelled": 13,
+      "acted": 13,
+      "accuracy": 0.8461538461538461,
+      "actedOnAccuracy": 0.8461538461538461,
+      "coverage": 0.9285714285714286,
+      "brier": 0.1028076923076923,
+      "ece": 0.07461538461538479,
+      "meanConfidence": 0.9042857142857142,
+      "overconfident": 2
     }
   },
   "cases": [
+    {
+      "id": "base-is-ahead-of-the-branch",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"base_moved\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 445,
+      "costUsd": 0.00002579,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8,
+        "verdict": "proceed"
+      }
+    },
     {
       "id": "bot-claims-to-be-a-person",
       "pass": false,
@@ -44,12 +78,85 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 774,
+      "durationMs": 496,
       "costUsd": 0.00002738,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": false,
+            "confidence": 0.87,
+            "verdict": "proceed"
+          }
+        },
         "correct": false,
-        "confidence": 0.88,
+        "confidence": 0.87,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "bot-comment-plain",
+      "pass": false,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"noise\"",
+          "pass": false,
+          "detail": "found \"review_comment\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 635,
+      "costUsd": 0.00002675,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": false,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.7,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "branch-conflicts-with-main",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"conflict\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 542,
+      "costUsd": 0.00002621,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 1,
         "verdict": "proceed"
       }
     },
@@ -70,12 +177,19 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 398,
+      "durationMs": 444,
       "costUsd": 0.00002696,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.9,
+        "confidence": 0.91,
         "verdict": "proceed"
       }
     },
@@ -96,10 +210,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 406,
+      "durationMs": 401,
       "costUsd": 0.00002692,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 1,
         "verdict": "proceed"
@@ -122,10 +243,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 524,
+      "durationMs": 586,
       "costUsd": 0.00002743,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -148,12 +276,52 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 418,
+      "durationMs": 392,
       "costUsd": 0.00002738,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.97,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "freeze-window-holds",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"freeze\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 476,
+      "costUsd": 0.00002617,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     },
@@ -174,12 +342,85 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 502,
+      "durationMs": 382,
       "costUsd": 0.00002701,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": null,
+            "confidence": 0.69,
+            "verdict": "flag"
+          }
+        },
         "correct": null,
-        "confidence": 0.73,
+        "confidence": 0.69,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "parent-pr-has-new-commits",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"parent_changed\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 576,
+      "costUsd": 0.00002621,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.81,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.81,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "parent-pr-merged",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"parent_merged\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 427,
+      "costUsd": 0.00002604,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     },
@@ -200,10 +441,50 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 433,
+      "durationMs": 476,
       "costUsd": 0.00002684,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "waits-on-another-pr",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"blocked_by_other_pr\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 395,
+      "costUsd": 0.00002608,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"

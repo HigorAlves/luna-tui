@@ -3,26 +3,27 @@
   "pack": "frame_privacy",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-06T03:53:51.944Z",
+  "at": "2026-11-06T15:12:15.602Z",
   "model": "claude-haiku-5-5",
   "summary": {
-    "cases": 5,
-    "passed": 5,
+    "cases": 8,
+    "passed": 8,
     "passRate": 1,
     "meanJudgeScore": null,
-    "meanTurns": 2.2,
-    "meanDurationMs": 2607.4,
-    "costUsd": 0.00272749,
+    "meanTurns": 2,
+    "meanDurationMs": 2076.125,
+    "costUsd": 0.00337192,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 5,
-      "labelled": 4,
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 0.8,
-      "brier": 0.0023,
-      "ece": 0.04499999999999993,
-      "meanConfidence": 0.874,
+      "coverage": 0.875,
+      "brier": 0.002271428571428571,
+      "ece": 0.04428571428571437,
+      "meanConfidence": 0.91125,
       "overconfident": 0
     }
   },
@@ -44,12 +45,85 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2603,
-      "costUsd": 0.0006955,
+      "durationMs": 2655,
+      "costUsd": 0.000691,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "exposure": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.95,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "database-url-shown-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the frame_privacy schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "exposure.choice = \"credential\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1755,
+      "costUsd": 0.00048626,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "exposure": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "placeholder-contact-details",
+      "pass": true,
+      "schema": {
+        "check": "answer on the frame_privacy schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "exposure.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1973,
+      "costUsd": 0.00051816,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "exposure": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
         "verdict": "proceed"
       }
     },
@@ -69,14 +143,54 @@
         }
       ],
       "judge": null,
-      "turns": 3,
-      "durationMs": 3775,
-      "costUsd": 0.0007858100000000001,
+      "turns": 2,
+      "durationMs": 3790,
+      "costUsd": 0.00072566,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "exposure": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
         "correct": null,
-        "confidence": 0.55,
+        "confidence": 0.6,
         "verdict": "flag"
+      }
+    },
+    {
+      "id": "service-key-in-an-unmatched-shape",
+      "pass": true,
+      "schema": {
+        "check": "answer on the frame_privacy schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "exposure.choice = \"credential\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1635,
+      "costUsd": 0.00023316,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "exposure": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
       }
     },
     {
@@ -96,10 +210,17 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2158,
-      "costUsd": 0.00050436,
+      "durationMs": 1564,
+      "costUsd": 0.00023216,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "exposure": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.97,
         "verdict": "proceed"
@@ -122,12 +243,19 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2072,
-      "costUsd": 0.00025416,
+      "durationMs": 1631,
+      "costUsd": 0.00025116000000000006,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "exposure": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.93,
+        "confidence": 0.95,
         "verdict": "proceed"
       }
     },
@@ -148,10 +276,17 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2429,
-      "costUsd": 0.00048766,
+      "durationMs": 1606,
+      "costUsd": 0.00023436000000000003,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "exposure": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.97,
         "verdict": "proceed"

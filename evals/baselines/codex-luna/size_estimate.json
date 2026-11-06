@@ -3,30 +3,84 @@
   "pack": "size_estimate",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-06T12:24:53.656Z",
+  "at": "2026-11-06T15:15:34.381Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 4,
-    "passed": 1,
-    "passRate": 0.25,
+    "cases": 8,
+    "passed": 4,
+    "passRate": 0.5,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2840,
+    "meanDurationMs": 2935.875,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
-      "accuracy": 0.6666666666666666,
-      "actedOnAccuracy": 0.6666666666666666,
-      "coverage": 0.75,
-      "brier": 0.2902407407407407,
-      "ece": 0.24111111111111105,
-      "meanConfidence": 0.8716666666666666,
-      "overconfident": 1
+      "n": 8,
+      "labelled": 7,
+      "acted": 6,
+      "accuracy": 0.5714285714285714,
+      "actedOnAccuracy": 0.5,
+      "coverage": 0.875,
+      "brier": 0.3920396825396826,
+      "ece": 0.3823809523809524,
+      "meanConfidence": 0.8841666666666665,
+      "overconfident": 3
     }
   },
   "cases": [
+    {
+      "id": "billing-engine-rewrite",
+      "pass": false,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_loc.score within 5.5..6.5",
+          "pass": false,
+          "detail": "found 5.2"
+        },
+        {
+          "check": "est_files.score within 3.5..4.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reviewable.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3018,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": false,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "est_files": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.9666666666666668,
+        "verdict": "proceed"
+      }
+    },
     {
       "id": "one-endpoint-with-its-tests",
       "pass": false,
@@ -39,7 +93,60 @@
         {
           "check": "est_loc.score within 1.5..2.5",
           "pass": false,
-          "detail": "found 0.3"
+          "detail": "found 0.4"
+        },
+        {
+          "check": "reviewable.value = true",
+          "pass": false,
+          "detail": "found false"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2299,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": false,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "est_files": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": false,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "receipt-tax-line",
+      "pass": false,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_loc.score within 0.5..1.5",
+          "pass": false,
+          "detail": "found 0.15"
+        },
+        {
+          "check": "est_files.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
         },
         {
           "check": "reviewable.value = true",
@@ -49,18 +156,126 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3058,
+      "durationMs": 3271,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": false,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "est_files": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": false,
-        "confidence": 0.9166666666666666,
+        "confidence": 0.96,
         "verdict": "proceed"
       }
     },
     {
+      "id": "rename-brand-thirty-files-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reviewable.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3334,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": null,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          },
+          "est_files": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.84,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8333333333333334,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "rename-type-ten-files",
+      "pass": true,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_files.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reviewable.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2390,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": null,
+            "confidence": 0.66,
+            "verdict": "flag"
+          },
+          "est_files": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7666666666666666,
+        "verdict": "flag"
+      }
+    },
+    {
       "id": "ticket-says-it-is-one-line",
-      "pass": false,
+      "pass": true,
       "schema": {
         "check": "answer on the size_estimate schema",
         "pass": true,
@@ -69,8 +284,8 @@
       "checks": [
         {
           "check": "est_loc.score within 3.5..6",
-          "pass": false,
-          "detail": "found 3.2"
+          "pass": true,
+          "detail": null
         },
         {
           "check": "reviewable.value = false",
@@ -80,12 +295,29 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2580,
+      "durationMs": 3774,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": null,
+            "confidence": 0.74,
+            "verdict": "proceed"
+          },
+          "est_files": {
+            "correct": null,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.8266666666666667,
+        "confidence": 0.8233333333333334,
         "verdict": "proceed"
       }
     },
@@ -101,18 +333,35 @@
         {
           "check": "reviewable.p within 0.3..0.7",
           "pass": false,
-          "detail": "found 0.83"
+          "detail": "found 0.97"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2854,
+      "durationMs": 2525,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": null,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "est_files": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.7633333333333333,
-        "verdict": "flag"
+        "confidence": 0.8633333333333333,
+        "verdict": "proceed"
       }
     },
     {
@@ -142,10 +391,27 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2868,
+      "durationMs": 2876,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "est_files": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.98,
         "verdict": "proceed"

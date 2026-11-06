@@ -3,26 +3,27 @@
   "pack": "evidence_format",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-06T03:53:25.154Z",
+  "at": "2026-11-06T15:14:13.837Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 7,
-    "passed": 7,
+    "cases": 8,
+    "passed": 8,
     "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 563.2857142857143,
-    "costUsd": 0.00015959999999999998,
+    "meanDurationMs": 451.25,
+    "costUsd": 0.00018152,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 7,
-      "labelled": 6,
+      "n": 8,
+      "labelled": 7,
+      "acted": 6,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 0.7142857142857143,
-      "brier": 0.06033333333333333,
-      "ece": 0.21000000000000002,
-      "meanConfidence": 0.7471428571428571,
+      "coverage": 0.75,
+      "brier": 0.051257142857142855,
+      "ece": 0.19714285714285723,
+      "meanConfidence": 0.7687499999999999,
       "overconfident": 0
     }
   },
@@ -44,13 +45,20 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 1066,
+      "durationMs": 455,
       "costUsd": 0.0000226,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.66,
+            "verdict": "flag"
+          }
+        },
         "correct": true,
-        "confidence": 0.7,
-        "verdict": "proceed"
+        "confidence": 0.66,
+        "verdict": "flag"
       }
     },
     {
@@ -70,10 +78,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 497,
+      "durationMs": 554,
       "costUsd": 0.00002272,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.76,
         "verdict": "proceed"
@@ -96,12 +111,19 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 621,
+      "durationMs": 500,
       "costUsd": 0.00002318,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.92,
+        "confidence": 0.88,
         "verdict": "proceed"
       }
     },
@@ -122,10 +144,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 463,
+      "durationMs": 448,
       "costUsd": 0.00002285,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.72,
         "verdict": "proceed"
@@ -148,13 +177,53 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 451,
+      "durationMs": 401,
       "costUsd": 0.00002339,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.64,
-        "verdict": "flag"
+        "confidence": 0.72,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "rename-constant-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text_only\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 409,
+      "costUsd": 0.00002192,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
       }
     },
     {
@@ -174,13 +243,20 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 402,
+      "durationMs": 372,
       "costUsd": 0.00002243,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": null,
+            "confidence": 0.53,
+            "verdict": "flag"
+          }
+        },
         "correct": null,
-        "confidence": 0.49,
-        "verdict": "ask"
+        "confidence": 0.53,
+        "verdict": "flag"
       }
     },
     {
@@ -200,10 +276,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 443,
+      "durationMs": 471,
       "costUsd": 0.00002243,
       "model": "typesafe-ai/jev",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 1,
         "verdict": "proceed"

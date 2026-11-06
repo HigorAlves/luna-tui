@@ -3,30 +3,64 @@
   "pack": "fix_scope",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-06T06:49:12.953Z",
+  "at": "2026-11-06T15:27:08.522Z",
   "model": "claude-haiku-5-5",
   "summary": {
-    "cases": 5,
-    "passed": 4,
-    "passRate": 0.8,
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
     "meanJudgeScore": null,
-    "meanTurns": 2,
-    "meanDurationMs": 1806,
-    "costUsd": 0.0021250400000000003,
+    "meanTurns": 2.125,
+    "meanDurationMs": 2261.5,
+    "costUsd": 0.0034885300000000005,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 5,
-      "labelled": 4,
+      "n": 8,
+      "labelled": 7,
+      "acted": 5,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 1,
-      "brier": 0.029975000000000005,
-      "ece": 0.1425,
-      "meanConfidence": 0.866,
+      "coverage": 0.75,
+      "brier": 0.05962857142857142,
+      "ece": 0.20285714285714285,
+      "meanConfidence": 0.8099999999999999,
       "overconfident": 0
     }
   },
   "cases": [
+    {
+      "id": "adds-a-column-and-an-error",
+      "pass": true,
+      "schema": {
+        "check": "answer on the fix_scope schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.choice = \"re_verify_partial\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2128,
+      "costUsd": 0.0005954,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "scope": {
+            "correct": true,
+            "confidence": 0.65,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.65,
+        "verdict": "flag"
+      }
+    },
     {
       "id": "adds-a-validation",
       "pass": false,
@@ -44,12 +78,52 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1754,
-      "costUsd": 0.0005369000000000001,
+      "durationMs": 1861,
+      "costUsd": 0.00024551,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "scope": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
         "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "belongs-in-another-service",
+      "pass": true,
+      "schema": {
+        "check": "answer on the fix_scope schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.choice = \"re_plan\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1832,
+      "costUsd": 0.00043531000000000006,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "scope": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.85,
         "verdict": "proceed"
       }
     },
@@ -70,12 +144,19 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2438,
-      "costUsd": 0.0005171100000000001,
+      "durationMs": 2346,
+      "costUsd": 0.00031301,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "scope": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.7,
+        "confidence": 0.8,
         "verdict": "proceed"
       }
     },
@@ -96,10 +177,17 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1576,
-      "costUsd": 0.00040761000000000004,
+      "durationMs": 1587,
+      "costUsd": 0.00040811000000000005,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "scope": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.93,
         "verdict": "proceed"
@@ -122,13 +210,53 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1765,
-      "costUsd": 0.00043721,
+      "durationMs": 1714,
+      "costUsd": 0.00043921000000000005,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "scope": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.85,
         "verdict": "proceed"
+      }
+    },
+    {
+      "id": "switch-auth-model-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the fix_scope schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.choice in [\"re_verify_partial\",\"re_plan\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 3,
+      "durationMs": 4542,
+      "costUsd": 0.0006470700000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "scope": {
+            "correct": true,
+            "confidence": 0.55,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.55,
+        "verdict": "flag"
       }
     },
     {
@@ -148,10 +276,17 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1497,
-      "costUsd": 0.00022621000000000002,
+      "durationMs": 2082,
+      "costUsd": 0.00040491,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "scope": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.95,
         "verdict": "proceed"

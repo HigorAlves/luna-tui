@@ -3,27 +3,186 @@
   "pack": "triage_signals",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T22:45:02.255Z",
+  "at": "2026-11-06T14:59:00.020Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 6,
-    "passed": 3,
-    "passRate": 0.5,
+    "cases": 8,
+    "passed": 1,
+    "passRate": 0.125,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 5094.833333333333,
+    "meanDurationMs": 4684.25,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 6,
-      "labelled": 4,
-      "accuracy": 0.5,
+      "n": 8,
+      "labelled": 7,
+      "acted": 1,
+      "accuracy": 0.14285714285714285,
       "actedOnAccuracy": 0,
-      "coverage": 0.3333333333333333,
-      "brier": 0.4167189236111111,
-      "ece": 0.3660416666666667,
-      "meanConfidence": 0.83625,
-      "overconfident": 2
+      "coverage": 0.125,
+      "brier": 0.5807121031746033,
+      "ece": 0.6845238095238095,
+      "meanConfidence": 0.7941666666666666,
+      "overconfident": 6
+    },
+    "perQuestion": {
+      "kind": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.0021500000000000004,
+        "ece": 0.03500000000000003,
+        "meanConfidence": 0.88625,
+        "overconfident": 0
+      },
+      "type_of_work": {
+        "n": 8,
+        "labelled": 5,
+        "acted": 4,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.5,
+        "brier": 0.05132,
+        "ece": 0.19999999999999998,
+        "meanConfidence": 0.68625,
+        "overconfident": 0
+      },
+      "ready": {
+        "n": 8,
+        "labelled": 5,
+        "acted": 5,
+        "accuracy": 0.8,
+        "actedOnAccuracy": 0.8,
+        "coverage": 1,
+        "brier": 0.13609999999999994,
+        "ece": 0.1339999999999999,
+        "meanConfidence": 0.9325,
+        "overconfident": 1
+      },
+      "size": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 4,
+        "accuracy": 0.5,
+        "actedOnAccuracy": 0.5,
+        "coverage": 0.875,
+        "brier": 0.29444999999999993,
+        "ece": 0.445,
+        "meanConfidence": 0.71125,
+        "overconfident": 2
+      },
+      "who": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 4,
+        "accuracy": 0.5,
+        "actedOnAccuracy": 0.5,
+        "coverage": 0.5,
+        "brier": 0.22545,
+        "ece": 0.2783333333333334,
+        "meanConfidence": 0.6499999999999999,
+        "overconfident": 2
+      },
+      "what": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 4,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.625,
+        "brier": 0.03265,
+        "ece": 0.15499999999999997,
+        "meanConfidence": 0.7375,
+        "overconfident": 0
+      },
+      "impact": {
+        "n": 8,
+        "labelled": 2,
+        "acted": 1,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.625,
+        "brier": 0.06144999999999999,
+        "ece": 0.185,
+        "meanConfidence": 0.7025,
+        "overconfident": 0
+      },
+      "time": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 4,
+        "accuracy": 0.75,
+        "actedOnAccuracy": 0.75,
+        "coverage": 0.625,
+        "brier": 0.17012500000000003,
+        "ece": 0.14749999999999996,
+        "meanConfidence": 0.79375,
+        "overconfident": 1
+      },
+      "demand": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 4,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.875,
+        "brier": 0.012350000000000002,
+        "ece": 0.1050000000000001,
+        "meanConfidence": 0.8525,
+        "overconfident": 0
+      },
+      "risk_prelim": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 3,
+        "accuracy": 0.8571428571428571,
+        "actedOnAccuracy": 1,
+        "coverage": 0.375,
+        "brier": 0.0462857142857143,
+        "ece": 0.16000000000000003,
+        "meanConfidence": 0.7637500000000002,
+        "overconfident": 0
+      },
+      "archive": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 4,
+        "accuracy": 0.8571428571428571,
+        "actedOnAccuracy": 1,
+        "coverage": 0.5,
+        "brier": 0.08422857142857142,
+        "ece": 0.1600000000000001,
+        "meanConfidence": 0.8775000000000002,
+        "overconfident": 0
+      },
+      "archive_reason": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 6,
+        "accuracy": 0.8571428571428571,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.09687142857142857,
+        "ece": 0.09571428571428575,
+        "meanConfidence": 0.93625,
+        "overconfident": 0
+      }
+    },
+    "answers": {
+      "n": 96,
+      "labelled": 61,
+      "acted": 49,
+      "accuracy": 0.8360655737704918,
+      "actedOnAccuracy": 0.8775510204081632,
+      "coverage": 0.6666666666666666,
+      "brier": 0.09927213114754094,
+      "ece": 0.04131147540983631,
+      "meanConfidence": 0.7941666666666665,
+      "overconfident": 8
     }
   },
   "cases": [
@@ -75,22 +234,89 @@
           "check": "archive.value = false",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 5596,
+      "durationMs": 4548,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "type_of_work": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "ready": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": true,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.73,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": false,
+            "confidence": 0.81,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.84,
+            "verdict": "flag"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": false,
-        "confidence": 0.8866666666666667,
+        "confidence": 0.8675000000000002,
         "verdict": "flag"
       }
     },
     {
       "id": "checkout-down-incident",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the triage_signals schema",
         "pass": true,
@@ -131,22 +357,104 @@
           "check": "archive.value = false",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "ready.value = false",
+          "pass": false,
+          "detail": "found true"
+        },
+        {
+          "check": "who.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4851,
+      "durationMs": 4211,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
-        "correct": null,
-        "confidence": 0.9433333333333334,
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "type_of_work": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "ready": {
+            "correct": false,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": null,
+            "confidence": 0.68,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.9349999999999999,
         "verdict": "proceed"
       }
     },
     {
       "id": "issue-orders-the-labels",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the triage_signals schema",
         "pass": true,
@@ -162,22 +470,114 @@
           "check": "risk_prelim.choice = \"high\"",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "type_of_work.choice in [\"infra\",\"data\",\"mixed\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice in [\"task\",\"chore\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 2"
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.choice in [\"S\",\"M\"]",
+          "pass": false,
+          "detail": "found \"XL\""
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 5048,
+      "durationMs": 5059,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
-        "correct": true,
-        "confidence": 0.8558333333333333,
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "type_of_work": {
+            "correct": true,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "ready": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": false,
+            "confidence": 0.78,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": false,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.8141666666666666,
         "verdict": "flag"
       }
     },
     {
       "id": "judge-engine-question",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the triage_signals schema",
         "pass": true,
@@ -211,19 +611,352 @@
         },
         {
           "check": "archive.value = false",
+          "pass": false,
+          "detail": "found true"
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": false,
+          "detail": "found \"not_actionable\""
+        },
+        {
+          "check": "who.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
           "pass": true,
           "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 5384,
+      "durationMs": 4488,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
-        "correct": true,
-        "confidence": 0.8133333333333334,
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "type_of_work": {
+            "correct": null,
+            "confidence": 0.42,
+            "verdict": "ask"
+          },
+          "ready": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": null,
+            "confidence": 0.62,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": true,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.78,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.83,
+            "verdict": "flag"
+          },
+          "archive": {
+            "correct": false,
+            "confidence": 0.74,
+            "verdict": "ask"
+          },
+          "archive_reason": {
+            "correct": false,
+            "confidence": 0.82,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.7608333333333334,
         "verdict": "ask"
+      }
+    },
+    {
+      "id": "premium-feel-wish",
+      "pass": false,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "ready.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"not_actionable\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice = \"low\"",
+          "pass": false,
+          "detail": "found \"medium\""
+        },
+        {
+          "check": "who.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 1.4"
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 7548,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": null,
+            "confidence": 0.62,
+            "verdict": "ask"
+          },
+          "type_of_work": {
+            "correct": null,
+            "confidence": 0.52,
+            "verdict": "ask"
+          },
+          "ready": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": null,
+            "confidence": 0.77,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": false,
+            "confidence": 0.35,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": false,
+            "confidence": 0.44,
+            "verdict": "ask"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.86,
+            "verdict": "flag"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.7241666666666667,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "rotate-credentials-plain",
+      "pass": false,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice = \"high\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "type_of_work.choice in [\"infra\",\"data\",\"mixed\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice in [\"task\",\"chore\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 2"
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.choice in [\"S\",\"M\"]",
+          "pass": false,
+          "detail": "found \"XL\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3481,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          },
+          "type_of_work": {
+            "correct": true,
+            "confidence": 0.74,
+            "verdict": "proceed"
+          },
+          "ready": {
+            "correct": null,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": false,
+            "confidence": 0.73,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": false,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.63,
+            "verdict": "flag"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.57,
+            "verdict": "flag"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.87,
+            "verdict": "flag"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.8108333333333334,
+        "verdict": "flag"
       }
     },
     {
@@ -253,18 +986,80 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4979,
+      "durationMs": 4674,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "kind": {
+            "correct": null,
+            "confidence": 0.68,
+            "verdict": "flag"
+          },
+          "type_of_work": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "ready": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": null,
+            "confidence": 0.38,
+            "verdict": "ask"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.3,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.38,
+            "verdict": "ask"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.32,
+            "verdict": "ask"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.68,
+            "verdict": "flag"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.68,
+            "verdict": "flag"
+          },
+          "risk_prelim": {
+            "correct": null,
+            "confidence": 0.35,
+            "verdict": "ask"
+          },
+          "archive": {
+            "correct": null,
+            "confidence": 0.66,
+            "verdict": "ask"
+          },
+          "archive_reason": {
+            "correct": null,
+            "confidence": 0.82,
+            "verdict": "flag"
+          }
+        },
         "correct": null,
-        "confidence": 0.61,
+        "confidence": 0.5616666666666666,
         "verdict": "ask"
       }
     },
     {
       "id": "zod-upgrade-contracts",
-      "pass": false,
+      "pass": true,
       "schema": {
         "check": "answer on the triage_signals schema",
         "pass": true,
@@ -303,24 +1098,101 @@
         },
         {
           "check": "risk_prelim.choice = \"medium\"",
-          "pass": false,
-          "detail": "found \"low\""
+          "pass": true,
+          "detail": null
         },
         {
           "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within -0.5..0.5",
           "pass": true,
           "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4711,
+      "durationMs": 3465,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
-        "correct": false,
-        "confidence": 0.9083333333333333,
-        "verdict": "proceed"
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "type_of_work": {
+            "correct": true,
+            "confidence": 0.77,
+            "verdict": "proceed"
+          },
+          "ready": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": true,
+            "confidence": 0.87,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.83,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.73,
+            "verdict": "flag"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8791666666666668,
+        "verdict": "flag"
       }
     }
   ]

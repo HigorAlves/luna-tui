@@ -3,26 +3,27 @@
   "pack": "ticket_recommend",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-06T01:43:03.798Z",
+  "at": "2026-11-06T15:39:35.911Z",
   "model": "claude-haiku-5-5",
   "summary": {
-    "cases": 5,
-    "passed": 5,
-    "passRate": 1,
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 2360.2,
-    "costUsd": 0.00160308,
+    "meanDurationMs": 2009.875,
+    "costUsd": 0.0037560000000000002,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 5,
-      "labelled": 4,
-      "accuracy": 1,
+      "n": 8,
+      "labelled": 7,
+      "acted": 4,
+      "accuracy": 0.8571428571428571,
       "actedOnAccuracy": 1,
-      "coverage": 0.2,
-      "brier": 0.140625,
-      "ece": 0.3625,
-      "meanConfidence": 0.6299999999999999,
+      "coverage": 0.5,
+      "brier": 0.11298571428571429,
+      "ece": 0.30428571428571427,
+      "meanConfidence": 0.6962499999999999,
       "overconfident": 0
     }
   },
@@ -44,13 +45,53 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2153,
-      "costUsd": 0.00029360000000000003,
+      "durationMs": 1538,
+      "costUsd": 0.0005411000000000001,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "action": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
         "correct": null,
         "confidence": 0.6,
         "verdict": "flag"
+      }
+    },
+    {
+      "id": "checkout-down-for-eu-cards",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"do_now\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1695,
+      "costUsd": 0.0004378,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
       }
     },
     {
@@ -70,18 +111,25 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1967,
-      "costUsd": 0.00014032999999999998,
+      "durationMs": 3252,
+      "costUsd": 0.0005039,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.6,
-        "verdict": "flag"
+        "confidence": 0.72,
+        "verdict": "proceed"
       }
     },
     {
       "id": "ticket-tries-to-pick-the-action",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the ticket_recommend schema",
         "pass": true,
@@ -95,16 +143,56 @@
         },
         {
           "check": "action.choice = \"decline\"",
+          "pass": false,
+          "detail": "found \"needs_decision\""
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2686,
+      "costUsd": 0.0005862,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": false,
+            "confidence": 0.55,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.55,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "tooltip-rename-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"decline\"",
           "pass": true,
           "detail": null
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3437,
-      "costUsd": 0.0005407,
+      "durationMs": 2337,
+      "costUsd": 0.0005303,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
         "correct": true,
         "confidence": 0.6,
         "verdict": "flag"
@@ -127,10 +215,50 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1913,
-      "costUsd": 0.00031325000000000005,
+      "durationMs": 1612,
+      "costUsd": 0.00047750000000000006,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "two-teams-disagree-on-the-vendor",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"needs_decision\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1478,
+      "costUsd": 0.00024670000000000003,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.8,
         "verdict": "proceed"
@@ -153,12 +281,19 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2331,
-      "costUsd": 0.0003152,
+      "durationMs": 1481,
+      "costUsd": 0.00043250000000000005,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
         "correct": true,
-        "confidence": 0.55,
+        "confidence": 0.6,
         "verdict": "flag"
       }
     }

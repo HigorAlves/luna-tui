@@ -3,26 +3,27 @@
   "pack": "evidence_format",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-06T03:53:15.208Z",
+  "at": "2026-11-06T15:14:00.927Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 7,
+    "cases": 8,
     "passed": 7,
-    "passRate": 1,
+    "passRate": 0.875,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2723.285714285714,
+    "meanDurationMs": 2131.375,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 7,
-      "labelled": 6,
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 0.8571428571428571,
-      "brier": 0.0002000000000000004,
-      "ece": 0.013333333333333308,
-      "meanConfidence": 0.8742857142857143,
+      "coverage": 1,
+      "brier": 0.00018571428571428607,
+      "ece": 0.01285714285714279,
+      "meanConfidence": 0.9862500000000001,
       "overconfident": 0
     }
   },
@@ -44,10 +45,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2732,
+      "durationMs": 1972,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.98,
         "verdict": "proceed"
@@ -70,10 +78,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2342,
+      "durationMs": 2059,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -96,10 +111,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2948,
+      "durationMs": 2033,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -122,10 +144,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2299,
+      "durationMs": 2243,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -148,17 +177,24 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3046,
+      "durationMs": 2601,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.98,
         "verdict": "proceed"
       }
     },
     {
-      "id": "steps-but-no-video-image",
+      "id": "rename-constant-plain",
       "pass": true,
       "schema": {
         "check": "answer on the evidence_format schema",
@@ -167,20 +203,60 @@
       },
       "checks": [
         {
-          "check": "format.confidence within 0..0.85",
+          "check": "format.choice = \"text_only\"",
           "pass": true,
           "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3298,
+      "durationMs": 2200,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "steps-but-no-video-image",
+      "pass": false,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.confidence within 0..0.85",
+          "pass": false,
+          "detail": "found 0.98"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2213,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.2,
-        "verdict": "ask"
+        "confidence": 0.98,
+        "verdict": "proceed"
       }
     },
     {
@@ -200,10 +276,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2398,
+      "durationMs": 1730,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"

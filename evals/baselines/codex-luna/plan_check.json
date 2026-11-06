@@ -3,27 +3,28 @@
   "pack": "plan_check",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T22:45:43.307Z",
+  "at": "2026-11-06T15:03:58.511Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 4,
-    "passed": 2,
-    "passRate": 0.5,
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2509.75,
+    "meanDurationMs": 3035.375,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
-      "accuracy": 0.6666666666666666,
-      "actedOnAccuracy": 0.6666666666666666,
-      "coverage": 1,
-      "brier": 0.3277833333333333,
-      "ece": 0.30333333333333345,
-      "meanConfidence": 0.9750000000000001,
-      "overconfident": 1
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 0.7142857142857143,
+      "actedOnAccuracy": 0.7142857142857143,
+      "coverage": 0.875,
+      "brier": 0.28071071428571426,
+      "ece": 0.265,
+      "meanConfidence": 0.9525,
+      "overconfident": 2
     }
   },
   "cases": [
@@ -44,18 +45,68 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2165,
+      "durationMs": 2061,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.965,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "high-risk-with-flag-and-small-steps",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "risk_appropriate.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 4402,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.945,
         "verdict": "proceed"
       }
     },
     {
       "id": "medium-risk-one-bigger-step",
-      "pass": false,
+      "pass": true,
       "schema": {
         "check": "answer on the plan_check schema",
         "pass": true,
@@ -64,17 +115,67 @@
       "checks": [
         {
           "check": "risk_appropriate.p within 0.25..0.75",
-          "pass": false,
-          "detail": "found 0.99"
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2712,
+      "durationMs": 3455,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          }
+        },
         "correct": null,
+        "confidence": 0.765,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "plan-adds-unasked-work",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "fits_record.score within 0.5..1.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3767,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
       }
@@ -96,12 +197,62 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2890,
+      "durationMs": 2690,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.9550000000000001,
+        "confidence": 0.995,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-builds-something-else-with-a-note",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "fits_record.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2369,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.965,
         "verdict": "proceed"
       }
     },
@@ -127,10 +278,60 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2272,
+      "durationMs": 2194,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": false,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": false,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-skips-the-button",
+      "pass": false,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "fits_record.score within 0.5..1.5",
+          "pass": false,
+          "detail": "found 0"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3345,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": false,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": false,
         "confidence": 0.99,
         "verdict": "proceed"

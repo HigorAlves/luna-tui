@@ -3,30 +3,74 @@
   "pack": "conversation_relation",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-06T04:02:32.116Z",
+  "at": "2026-11-06T15:38:43.956Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 5,
-    "passed": 4,
-    "passRate": 0.8,
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2556.6,
+    "meanDurationMs": 2410.75,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 5,
-      "labelled": 4,
-      "accuracy": 1,
-      "actedOnAccuracy": 1,
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 0.8571428571428571,
       "coverage": 1,
-      "brier": 0.00010000000000000018,
-      "ece": 0.010000000000000009,
-      "meanConfidence": 0.9800000000000001,
-      "overconfident": 0
+      "brier": 0.13734642857142856,
+      "ece": 0.12928571428571423,
+      "meanConfidence": 0.9837500000000001,
+      "overconfident": 1
     }
   },
   "cases": [
+    {
+      "id": "asks-who-owns-billing",
+      "pass": false,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_work.value = false",
+          "pass": false,
+          "detail": "found true"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2777,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": false,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
     {
       "id": "dark-mode-is-new-work",
       "pass": true,
@@ -49,10 +93,22 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2358,
+      "durationMs": 3148,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -70,17 +126,29 @@
         {
           "check": "related.confidence within 0.2..0.8",
           "pass": false,
-          "detail": "found 0.94"
+          "detail": "found 0.96"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2457,
+      "durationMs": 2564,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "related": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.94,
+        "confidence": 0.965,
         "verdict": "proceed"
       }
     },
@@ -101,12 +169,62 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3287,
+      "durationMs": 2552,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "footer-typo-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2058,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.985,
         "verdict": "proceed"
       }
     },
@@ -127,10 +245,22 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2279,
+      "durationMs": 1926,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -158,10 +288,65 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2402,
+      "durationMs": 2240,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "third-candidate-is-the-work",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"slot3\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_work.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2021,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "related": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "new_work": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"

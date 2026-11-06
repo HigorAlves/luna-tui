@@ -3,30 +3,97 @@
   "pack": "finding_classify",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-06T00:56:31.215Z",
+  "at": "2026-11-06T15:09:50.943Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 4,
-    "passed": 4,
-    "passRate": 1,
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 3674.75,
+    "meanDurationMs": 2351.25,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
-      "accuracy": 1,
-      "actedOnAccuracy": 1,
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 0.8571428571428571,
       "coverage": 1,
-      "brier": 0.0001000000000000002,
-      "ece": 0.01000000000000012,
-      "meanConfidence": 0.9525000000000001,
-      "overconfident": 0
+      "brier": 0.14342857142857143,
+      "ece": 0.10571428571428576,
+      "meanConfidence": 0.9524999999999999,
+      "overconfident": 1
     }
   },
   "cases": [
+    {
+      "id": "comment-typo",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"nit\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2678,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "finding-early-return-plain",
+      "pass": false,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"blocker\"",
+          "pass": false,
+          "detail": "found \"nit\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3198,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": false,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
     {
       "id": "finding-says-nit-but-bypasses-auth",
       "pass": true,
@@ -44,10 +111,17 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 5410,
+      "durationMs": 1809,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
         "verdict": "proceed"
@@ -55,7 +129,7 @@
     },
     {
       "id": "missing-empty-cart-check",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the finding_classify schema",
         "pass": true,
@@ -64,18 +138,25 @@
       "checks": [
         {
           "check": "severity.confidence within 0..0.85",
-          "pass": true,
-          "detail": null
+          "pass": false,
+          "detail": "found 0.88"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2586,
+      "durationMs": 2123,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "severity": {
+            "correct": null,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.84,
+        "confidence": 0.88,
         "verdict": "proceed"
       }
     },
@@ -96,12 +177,52 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4018,
+      "durationMs": 2644,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
         "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "retry-loop-without-a-limit",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"should_fix\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2233,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.86,
         "verdict": "proceed"
       }
     },
@@ -122,12 +243,52 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2685,
+      "durationMs": 1904,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.99,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "unchecked-discount-field",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"should_fix\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2221,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.94,
         "verdict": "proceed"
       }
     }

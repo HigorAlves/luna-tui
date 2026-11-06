@@ -3,30 +3,84 @@
   "pack": "size_estimate",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-06T12:24:37.317Z",
+  "at": "2026-11-06T15:15:01.598Z",
   "model": "claude-haiku-5-5",
   "summary": {
-    "cases": 4,
-    "passed": 2,
-    "passRate": 0.5,
+    "cases": 8,
+    "passed": 5,
+    "passRate": 0.625,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 3045.25,
-    "costUsd": 0.0032267700000000003,
+    "meanDurationMs": 3120.625,
+    "costUsd": 0.005833629999999999,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
-      "accuracy": 0.6666666666666666,
+      "n": 8,
+      "labelled": 7,
+      "acted": 2,
+      "accuracy": 0.7142857142857143,
       "actedOnAccuracy": 1,
       "coverage": 0.25,
-      "brier": 0.2342333333333333,
-      "ece": 0.13888888888888884,
-      "meanConfidence": 0.7316666666666667,
-      "overconfident": 1
+      "brier": 0.2019746031746032,
+      "ece": 0.10761904761904766,
+      "meanConfidence": 0.7449999999999999,
+      "overconfident": 2
     }
   },
   "cases": [
+    {
+      "id": "billing-engine-rewrite",
+      "pass": true,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_loc.score within 5.5..6.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "est_files.score within 3.5..4.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reviewable.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2475,
+      "costUsd": 0.0007885,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "est_files": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8566666666666668,
+        "verdict": "proceed"
+      }
+    },
     {
       "id": "one-endpoint-with-its-tests",
       "pass": false,
@@ -39,7 +93,7 @@
         {
           "check": "est_loc.score within 1.5..2.5",
           "pass": false,
-          "detail": "found 1.2"
+          "detail": "found 1"
         },
         {
           "check": "reviewable.value = true",
@@ -49,12 +103,173 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2876,
-      "costUsd": 0.0009609000000000001,
+      "durationMs": 2589,
+      "costUsd": 0.00045249000000000005,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": false,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "est_files": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          }
+        },
         "correct": false,
-        "confidence": 0.7433333333333333,
+        "confidence": 0.7566666666666667,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "receipt-tax-line",
+      "pass": false,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_loc.score within 0.5..1.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "est_files.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 0.7"
+        },
+        {
+          "check": "reviewable.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3866,
+      "costUsd": 0.00074219,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "est_files": {
+            "correct": false,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.7166666666666667,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "rename-brand-thirty-files-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reviewable.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3627,
+      "costUsd": 0.00075429,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "est_files": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7333333333333334,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "rename-type-ten-files",
+      "pass": true,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_files.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reviewable.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2677,
+      "costUsd": 0.00076179,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "est_files": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7333333333333333,
         "verdict": "flag"
       }
     },
@@ -80,12 +295,29 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3803,
-      "costUsd": 0.00082029,
+      "durationMs": 3841,
+      "costUsd": 0.00085629,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "est_files": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.55,
+            "verdict": "flag"
+          }
+        },
         "correct": true,
-        "confidence": 0.6166666666666667,
+        "confidence": 0.6,
         "verdict": "flag"
       }
     },
@@ -101,17 +333,34 @@
         {
           "check": "reviewable.p within 0.3..0.7",
           "pass": false,
-          "detail": "found 0.72"
+          "detail": "found 0.75"
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3030,
-      "costUsd": 0.00083949,
+      "durationMs": 3099,
+      "costUsd": 0.0008794900000000001,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "est_files": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "reviewable": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.6233333333333333,
+        "confidence": 0.6333333333333333,
         "verdict": "flag"
       }
     },
@@ -142,12 +391,29 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2472,
-      "costUsd": 0.00060609,
+      "durationMs": 2791,
+      "costUsd": 0.00059859,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "est_loc": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "est_files": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "reviewable": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.9433333333333334,
+        "confidence": 0.93,
         "verdict": "proceed"
       }
     }

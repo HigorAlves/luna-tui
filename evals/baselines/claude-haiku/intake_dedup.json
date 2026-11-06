@@ -3,27 +3,28 @@
   "pack": "intake_dedup",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T23:15:21.208Z",
+  "at": "2026-11-06T15:31:27.997Z",
   "model": "claude-haiku-5-5",
   "summary": {
-    "cases": 4,
-    "passed": 4,
-    "passRate": 1,
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 2882.25,
-    "costUsd": 0.003307,
+    "meanDurationMs": 2566.625,
+    "costUsd": 0.0058717000000000005,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
-      "accuracy": 1,
+      "n": 8,
+      "labelled": 7,
+      "acted": 5,
+      "accuracy": 0.8571428571428571,
       "actedOnAccuracy": 1,
-      "coverage": 0.75,
-      "brier": 0.0030346666666666695,
-      "ece": 0.05466666666666675,
-      "meanConfidence": 0.9329999999999999,
-      "overconfident": 0
+      "coverage": 0.625,
+      "brier": 0.11458057142857145,
+      "ece": 0.06228571428571428,
+      "meanConfidence": 0.9145,
+      "overconfident": 1
     }
   },
   "cases": [
@@ -44,17 +45,150 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2499,
-      "costUsd": 0.0008752,
+      "durationMs": 3205,
+      "costUsd": 0.0009389,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "slot1": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "slot2": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot3": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot4": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot5": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.9520000000000002,
+        "confidence": 0.9200000000000002,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "closed-candidate-same-problem",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.choice = \"same\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2512,
+      "costUsd": 0.0008354,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "slot1": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "slot2": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot3": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot4": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot5": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9200000000000002,
         "verdict": "proceed"
       }
     },
     {
       "id": "different-problem-same-page",
+      "pass": false,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.choice = \"different\"",
+          "pass": false,
+          "detail": "found \"related\""
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2890,
+      "costUsd": 0.0008499,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "slot1": {
+            "correct": false,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "slot2": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot3": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot4": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot5": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.8700000000000001,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "neutral-candidate-text",
       "pass": true,
       "schema": {
         "check": "answer on the intake_dedup schema",
@@ -70,12 +204,39 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2640,
-      "costUsd": 0.0008122,
+      "durationMs": 2036,
+      "costUsd": 0.00043720000000000006,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "slot1": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "slot2": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "slot3": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "slot4": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "slot5": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.9359999999999999,
+        "confidence": 0.9860000000000001,
         "verdict": "proceed"
       }
     },
@@ -96,12 +257,92 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2889,
-      "costUsd": 0.0007693000000000001,
+      "durationMs": 2271,
+      "costUsd": 0.0008135000000000001,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "slot1": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "slot2": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot3": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot4": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot5": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.8959999999999999,
+        "confidence": 0.8800000000000001,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "related-not-same-export",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.choice = \"related\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2643,
+      "costUsd": 0.0007300000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "slot1": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "slot2": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "slot3": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "slot4": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "slot5": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8400000000000001,
         "verdict": "flag"
       }
     },
@@ -122,12 +363,97 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3501,
-      "costUsd": 0.0008503,
+      "durationMs": 1963,
+      "costUsd": 0.00044050000000000003,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "slot1": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "slot2": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "slot3": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "slot4": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "slot5": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.9479999999999998,
+        "confidence": 0.9780000000000001,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "second-slot-is-the-match",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.choice = \"different\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "slot2.choice = \"same\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3013,
+      "costUsd": 0.0008263000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "slot1": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "slot2": {
+            "correct": true,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "slot3": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "slot4": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "slot5": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9219999999999999,
         "verdict": "proceed"
       }
     }

@@ -3,30 +3,89 @@
   "pack": "scope_check",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T22:47:06.859Z",
+  "at": "2026-11-06T15:06:39.131Z",
   "model": "claude-haiku-5-5",
   "summary": {
-    "cases": 5,
-    "passed": 5,
-    "passRate": 1,
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
     "meanJudgeScore": null,
-    "meanTurns": 2,
-    "meanDurationMs": 2859.6,
-    "costUsd": 0.0036945600000000004,
+    "meanTurns": 2.125,
+    "meanDurationMs": 3176,
+    "costUsd": 0.0065549,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 5,
-      "labelled": 4,
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 0.8,
-      "brier": 0.012843750000000003,
-      "ece": 0.11208333333333342,
-      "meanConfidence": 0.8803333333333333,
+      "coverage": 1,
+      "brier": 0.012817857142857146,
+      "ece": 0.11119047619047628,
+      "meanConfidence": 0.8849999999999999,
       "overconfident": 0
     }
   },
   "cases": [
+    {
+      "id": "scope-adds-a-library",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_new_dependency.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3039,
+      "costUsd": 0.0010861,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.875,
+        "verdict": "proceed"
+      }
+    },
     {
       "id": "scope-clean",
       "pass": true,
@@ -69,12 +128,44 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2590,
-      "costUsd": 0.0008111,
+      "durationMs": 2858,
+      "costUsd": 0.00064879,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.9116666666666667,
+        "confidence": 0.935,
         "verdict": "proceed"
       }
     },
@@ -99,13 +190,166 @@
         }
       ],
       "judge": null,
-      "turns": 2,
-      "durationMs": 3130,
-      "costUsd": 0.00092899,
+      "turns": 3,
+      "durationMs": 4813,
+      "costUsd": 0.00126676,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.895,
+        "confidence": 0.8983333333333333,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scope-secret-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_secret_or_pii.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "unrelated_refactors.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2953,
+      "costUsd": 0.0008683899999999999,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scope-todo-for-the-empty-cart",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_todo.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1991,
+      "costUsd": 0.00040678999999999997,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8749999999999999,
         "verdict": "proceed"
       }
     },
@@ -131,12 +375,44 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2885,
-      "costUsd": 0.00054549,
+      "durationMs": 2753,
+      "costUsd": 0.0005194900000000001,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.8683333333333333,
+        "confidence": 0.8916666666666666,
         "verdict": "proceed"
       }
     },
@@ -157,18 +433,50 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3128,
-      "costUsd": 0.00091389,
+      "durationMs": 4132,
+      "costUsd": 0.00088239,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
         "correct": true,
-        "confidence": 0.8766666666666666,
-        "verdict": "flag"
+        "confidence": 0.8666666666666667,
+        "verdict": "proceed"
       }
     },
     {
       "id": "scope-weak-reason",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the scope_check schema",
         "pass": true,
@@ -177,8 +485,8 @@
       "checks": [
         {
           "check": "planned_or_declared.p within 0.25..0.75",
-          "pass": true,
-          "detail": null
+          "pass": false,
+          "detail": "found 0.8"
         },
         {
           "check": "unrelated_refactors.value = true",
@@ -188,12 +496,44 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2565,
-      "costUsd": 0.00049509,
+      "durationMs": 2869,
+      "costUsd": 0.0008761900000000001,
       "model": "claude-haiku-5-5",
       "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
         "correct": null,
-        "confidence": 0.8500000000000001,
+        "confidence": 0.8583333333333333,
         "verdict": "proceed"
       }
     }
