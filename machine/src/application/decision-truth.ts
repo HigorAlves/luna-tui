@@ -37,6 +37,65 @@ export const redCheckTruth = (testRewritten: boolean): Label => ({ right_reason:
 export const worthLearningTruth = (approved: boolean): Label => ({ worth: { value: approved } });
 export const eventClassTruth = (furtherActivity: boolean): Label => ({ event: { choice: furtherActivity ? "review_comment" : "noise" } });
 export const commentIntentTruth = (kind: "question" | "change_request"): Label => ({ intent: { choice: kind } });
+// ---- wave 18: truth from what happened next, for the pipeline decisions that had none. Each is one fact to one label; a scalar is what the
+// answer should have been, an array the labels it may have been. A null is "this fact settles nothing". ----
+
+export interface Derived {
+  label: Label;
+  source: string;
+  kind: TruthKind;
+}
+
+export type CiFact = "rerun_passed" | "rerun_red" | "fixed" | "rebased";
+/** A red CI job and what became of it: a re-run that passed with no new commit is a flake; a re-run still red rules the flake out; a Build fix after which the same job is green says real; a rebase alone says drift. */
+export function ciClassTruth(fact: CiFact): Derived {
+  if (fact === "rerun_passed") return { label: { class: { choice: "flake" } }, source: "ci_rerun", kind: "fact" };
+  if (fact === "rerun_red") return { label: { class: { choice: ["real", "infra", "drift"] } }, source: "ci_rerun", kind: "fact" };
+  if (fact === "fixed") return { label: { class: { choice: "real" } }, source: "ci_fixed", kind: "fact" };
+  return { label: { class: { choice: "drift" } }, source: "ci_rebased", kind: "fact" };
+}
+
+/** What the diff's script found for scope_check (each a no); null when it found nothing. */
+export function scopeFactsTruth(found: Partial<Record<string, false>>): Derived | null {
+  const label: Label = Object.fromEntries(Object.entries(found).map(([question, value]) => [question, { value }]));
+  return Object.keys(label).length > 0 ? { label, source: "scope_facts", kind: "fact" } : null;
+}
+
+/** The redactor matched the text read off the frames: a credential was shown. No match proves nothing. */
+export const frameCredentialTruth = (matched: boolean): Derived | null => (matched ? { label: { exposure: { choice: "credential" } }, source: "frame_redactor", kind: "fact" } : null);
+
+/** How a fix round ended, for fix_scope. An in-place fix whose checks failed or that a person sent to the verifier or the planner was wider; a round that ended as answered and whose PR merged with no reopened thread confirms the answer (an outcome: the fix itself caused part of it). */
+export function fixScopeTruth(answered: string, ended: { checksFailed?: boolean; sentTo?: "verify" | "plan" | null; merged?: boolean; reopened?: boolean }): Derived | null {
+  if (answered === "in_place" && (ended.checksFailed || ended.sentTo)) return { label: { scope: { choice: ["re_verify_partial", "re_plan"] } }, source: "fix_round", kind: "fact" };
+  if (ended.merged && ended.reopened === false) return { label: { scope: { choice: answered } }, source: "fix_round", kind: "outcome" };
+  return null;
+}
+
+/** The browser run repeated after a fix, scenario results by id before and after: a changed result means the media is stale; none changed leaves the media valid and the text open. Null when there is nothing to compare. */
+export function e2eCompareTruth(before: Readonly<Record<string, string>>, after: Readonly<Record<string, string>>): Derived | null {
+  const shared = Object.keys(before).filter((id) => id in after);
+  if (shared.length === 0) return null;
+  if (shared.some((id) => before[id] !== after[id])) return { label: { validity: { choice: "refresh_media" } }, source: "e2e_compare", kind: "fact" };
+  return { label: { validity: { choice: ["valid", "refresh_text"] } }, source: "e2e_compare", kind: "fact" };
+}
+
+/** A card resumed by a person with no correction confirms the reason the machine gave. A later correction wins. */
+export const escalationResumedTruth = (reason: string): Derived => ({ label: { reason: { choice: reason } }, source: "escalation_resumed", kind: "outcome" });
+
+/** Where a count falls on a rubric whose levels are anchored at these sizes: the nearest level on a log scale, the first level being 0. */
+const nearest = (count: number, anchors: readonly number[]): number => {
+  const at = Math.log(Math.max(count, 1));
+  let best = 0;
+  anchors.forEach((anchor, level) => {
+    if (Math.abs(at - Math.log(anchor)) < Math.abs(at - Math.log(anchors[best]!))) best = level;
+  });
+  return best;
+};
+const SIZE_LOC_ANCHORS = [50, 200, 500, 1000, 2000, 4000, 8000] as const;
+const SIZE_FILE_ANCHORS = [2, 5, 10, 25, 50] as const;
+/** What a merged card counted (added plus removed lines, files), as the levels of `est_loc` and `est_files`; `reviewable` gets none. */
+export const sizeTruth = (counted: { lines: number; files: number }): Derived => ({ label: { est_loc: { score: nearest(counted.lines, SIZE_LOC_ANCHORS) }, est_files: { score: nearest(counted.files, SIZE_FILE_ANCHORS) } }, source: "merged_size", kind: "fact" });
+
 /** A finding a person shipped with was not a blocker, whatever the model said. */
 export const findingTruth = (): Label => ({ severity: { choice: ["should_fix", "nit"] } });
 

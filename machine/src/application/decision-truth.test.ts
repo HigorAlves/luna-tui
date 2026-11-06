@@ -1,7 +1,7 @@
 import { PACKS } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { DecisionTruth, commentIntentTruth, e2eCauseTruth, eventClassTruth, evidenceFormatTruth, findingTruth, planTruth, recordIdOf, redCheckTruth, tagged, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
+import { DecisionTruth, commentIntentTruth, e2eCauseTruth, eventClassTruth, evidenceFormatTruth, findingTruth, planTruth, recordIdOf, redCheckTruth, tagged, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth, ciClassTruth, e2eCompareTruth, escalationResumedTruth, fixScopeTruth, frameCredentialTruth, scopeFactsTruth, sizeTruth } from "./decision-truth.ts";
 
 describe("what each fact says about the answer", () => {
   it("e2e_failure_cause: a re-run that passed makes env_flake right; one that failed the same way rules it out", () => {
@@ -57,6 +57,53 @@ describe("tagging an answer with its record", () => {
     expect(JSON.stringify(answer)).toBe('{"worth":{"value":true,"p":0.9}}');
     expect(recordIdOf({ worth: 1 })).toBeUndefined();
     expect(recordIdOf(tagged({ answer: { a: 1 } }))).toBeUndefined();
+  });
+});
+
+describe("what the wave 18 facts say about the answer", () => {
+  it("ci_failure_class: a re-run that passed is a flake, one still red rules the flake out, a fix says real, a rebase says drift", () => {
+    expect(ciClassTruth("rerun_passed")).toEqual({ label: { class: { choice: "flake" } }, source: "ci_rerun", kind: "fact" });
+    expect(ciClassTruth("rerun_red")).toEqual({ label: { class: { choice: ["real", "infra", "drift"] } }, source: "ci_rerun", kind: "fact" });
+    expect(ciClassTruth("fixed")).toEqual({ label: { class: { choice: "real" } }, source: "ci_fixed", kind: "fact" });
+    expect(ciClassTruth("rebased")).toEqual({ label: { class: { choice: "drift" } }, source: "ci_rebased", kind: "fact" });
+  });
+
+  it("scope_check: only the questions the diff answered with a no are labelled, from the script", () => {
+    expect(scopeFactsTruth({})).toBeNull();
+    expect(scopeFactsTruth({ no_todo: false, no_test_removed: false })).toEqual({ label: { no_todo: { value: false }, no_test_removed: { value: false } }, source: "scope_facts", kind: "fact" });
+  });
+
+  it("frame_privacy: a redactor match is a credential; no match labels nothing", () => {
+    expect(frameCredentialTruth(true)).toEqual({ label: { exposure: { choice: "credential" } }, source: "frame_redactor", kind: "fact" });
+    expect(frameCredentialTruth(false)).toBeNull();
+  });
+
+  it("fix_scope: an in-place fix that failed or was sent up is one of the wider scopes; a merged round with no reopened thread confirms the answer", () => {
+    expect(fixScopeTruth("in_place", { checksFailed: true })).toEqual({ label: { scope: { choice: ["re_verify_partial", "re_plan"] } }, source: "fix_round", kind: "fact" });
+    expect(fixScopeTruth("in_place", { sentTo: "verify" })).toMatchObject({ label: { scope: { choice: ["re_verify_partial", "re_plan"] } }, kind: "fact" });
+    expect(fixScopeTruth("in_place", { merged: true, reopened: false })).toEqual({ label: { scope: { choice: "in_place" } }, source: "fix_round", kind: "outcome" });
+    expect(fixScopeTruth("re_plan", { merged: true, reopened: false })).toEqual({ label: { scope: { choice: "re_plan" } }, source: "fix_round", kind: "outcome" });
+    expect(fixScopeTruth("re_plan", { checksFailed: true })).toBeNull();
+    expect(fixScopeTruth("in_place", { merged: true, reopened: true })).toBeNull();
+    expect(fixScopeTruth("in_place", {})).toBeNull();
+  });
+
+  it("evidence_valid: any scenario result that changed says refresh_media; none changed leaves valid or refresh_text; nothing to compare labels nothing", () => {
+    expect(e2eCompareTruth({ a: "pass", b: "pass" }, { a: "pass", b: "fail" })).toEqual({ label: { validity: { choice: "refresh_media" } }, source: "e2e_compare", kind: "fact" });
+    expect(e2eCompareTruth({ a: "pass" }, { a: "pass" })).toEqual({ label: { validity: { choice: ["valid", "refresh_text"] } }, source: "e2e_compare", kind: "fact" });
+    expect(e2eCompareTruth({}, { a: "pass" })).toBeNull();
+    expect(e2eCompareTruth({ a: "pass" }, {})).toBeNull();
+  });
+
+  it("escalation_reason: a card resumed with no correction confirms the reason as an outcome", () => {
+    expect(escalationResumedTruth("plan_wrong")).toEqual({ label: { reason: { choice: "plan_wrong" } }, source: "escalation_resumed", kind: "outcome" });
+  });
+
+  it("size_estimate: the counted lines and files fall on the nearest level of each rubric, reviewable gets none", () => {
+    expect(sizeTruth({ lines: 40, files: 1 })).toEqual({ label: { est_loc: { score: 0 }, est_files: { score: 0 } }, source: "merged_size", kind: "fact" });
+    expect(sizeTruth({ lines: 640, files: 6 })).toEqual({ label: { est_loc: { score: 2 }, est_files: { score: 1 } }, source: "merged_size", kind: "fact" });
+    expect(sizeTruth({ lines: 20_000, files: 400 })).toEqual({ label: { est_loc: { score: 6 }, est_files: { score: 4 } }, source: "merged_size", kind: "fact" });
+    expect(Object.keys(sizeTruth({ lines: 1, files: 1 }).label)).not.toContain("reviewable");
   });
 });
 
