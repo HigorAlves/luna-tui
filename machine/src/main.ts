@@ -76,7 +76,7 @@ import { Backlog } from "./application/backlog.ts";
 import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
 import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
 import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
-import { TicketMachine } from "./application/ticket-machine.ts";
+import { TicketMachine, cardOnce } from "./application/ticket-machine.ts";
 import { TicketEvents } from "./application/ticket-events.ts";
 import { INTAKE_CLIENT } from "./application/classify.ts";
 import type { DedupAnswer } from "./application/intake-dedup.ts";
@@ -541,7 +541,7 @@ const ticketMachine = new TicketMachine({
   candidates: (ticket, repoPath) => pipeline.ticketCandidates(repoPath, ticket.tool === "github" ? { kind: "github", repo: ticket.key.split("#")[0]!, number: Number(ticket.key.split("#")[1]), url: ticket.permalink } : { kind: "jira", key: ticket.key, url: ticket.permalink, issueType: ticket.type }),
   config: async (repoPath) => (await policies.for(repoPath)).factory,
   locate: async (repoPath, text) => (repoPath ? ((await graph.locate(repoPath, text))?.files ?? []).map((f: { path?: string } | string) => (typeof f === "string" ? f : (f.path ?? ""))).filter(Boolean) : []),
-  createCard: (input) => pipeline.createTask(input),
+  createCard: (input, key) => cardOnce(pipeline, input, key),
   validity: { decide: async (c) => (await ticketPack("ticket_validity", c)) as never },
   assess: { decide: async (c) => (await ticketPack("ticket_assess", c)) as never },
   recommend: { decide: async (c) => (await ticketPack("ticket_recommend", c)) as never },

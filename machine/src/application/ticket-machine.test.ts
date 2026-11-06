@@ -53,7 +53,7 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: b
     port: () => port,
     candidates: async () => [],
     config: async () => FACTORY_DEFAULTS,
-    createCard: async (input) => (cards.push(input), { id: "card-1" }),
+    createCard: async (input, key) => (cards.push({ ...input, key }), { id: "card-1" }),
     validity: { decide: decide.validity }, assess: { decide: decide.assess }, recommend: { decide: decide.recommend }, reply: { write: decide.write },
     truth: { learned: async (f) => (learned.push(f), true), draft: async (e) => void kept.push(e) },
     backlog: { upsertFromSource: async (input, o) => { const i = items.findIndex((x) => JSON.stringify(x.sources) === JSON.stringify(input.sources)); if (i >= 0) { items[i] = { ...input, id: "b1" }; return { id: "b1", created: false }; } if (!o.createIfMissing) return null; items.push({ ...input, id: "b1" }); return { id: "b1", created: true }; } },
@@ -168,6 +168,7 @@ describe("what a tap does", () => {
     await machine.card("PAY-12");
     expect(cards[0]).toMatchObject({ title: "Refund fails", source: { kind: "jira", key: "PAY-12" }, reporter: { id: "u1", channel: "jira" }, hints: { size: "M" } });
     expect((await store.get("PAY-12"))!.cardId).toBe("card-1");
+    expect(cards[0]).toMatchObject({ key: "ticket-card:PAY-12" });
     await expect(machine.card("PAY-12")).rejects.toBeInstanceOf(TicketRefusal);
     expect(writes).toEqual([]);
   });
@@ -175,7 +176,7 @@ describe("what a tap does", () => {
   it("two simultaneous card taps make one card; a failed creation releases the claim", async () => {
     const { machine, cards, store } = await held();
     const make = (machine as any).deps.createCard;
-    (machine as any).deps.createCard = async (input: unknown) => (await new Promise((r) => setTimeout(r, 50)), make(input));
+    (machine as any).deps.createCard = async (input: unknown, key: string) => (await new Promise((r) => setTimeout(r, 50)), make(input, key));
     const results = await Promise.allSettled([machine.card("PAY-12"), machine.card("PAY-12")]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
@@ -188,7 +189,7 @@ describe("what a tap does", () => {
     await x.machine.ingest(ticket(), ctx);
     const real = (x.machine as any).deps.createCard;
     let fail = true;
-    (x.machine as any).deps.createCard = async (input: unknown) => { if (fail) { fail = false; throw new Error("boom"); } return real(input); };
+    (x.machine as any).deps.createCard = async (input: unknown, key: string) => { if (fail) { fail = false; throw new Error("boom"); } return real(input, key); };
     await expect(x.machine.card("PAY-12")).rejects.toThrow("boom");
     await expect(x.machine.card("PAY-12")).resolves.toEqual({ id: "card-1" });
     expect(x.cards).toHaveLength(1);

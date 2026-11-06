@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 
 import type { BacklogAddInput, CanonicalTicket, FactoryConfig, TaskSource, TicketContext } from "@hardness/contracts";
 
+import { IdempotencyConflictError } from "../domain/task.ts";
 import { carriesSecret } from "../domain/postable.ts";
 import type { Candidate } from "../domain/similarity.ts";
 import { buildValidityContext } from "./ticket-validity.ts";
@@ -67,8 +68,8 @@ export interface TicketMachineDeps {
   candidates(ticket: CanonicalTicket, repoPath: string | null): Promise<Candidate[]>;
   config(repoPath: string | null): Promise<FactoryConfig>;
   locate?(repoPath: string | null, text: string): Promise<string[]>;
-  /** Makes a card through `create_card`. */
-  createCard(input: NewTask): Promise<{ id: string }>;
+  /** Makes a card through `create_card`, once per `key`: a second call with the key answers the card the first made (`cardOnce`). */
+  createCard(input: NewTask, key: string): Promise<{ id: string }>;
   validity: ValidityDeps;
   assess: Pick<AssessDeps, "decide">;
   recommend: RecommendDeps;
@@ -83,7 +84,17 @@ export interface TicketMachineDeps {
   now?: () => Date;
 }
 
-/** How long a claim on a ticket's card creation holds before a retry may take it (a machine that died between the card and the link). */
+/** The card for `key`, made once: a retry after a crash (or a retaken claim) answers the card already made, even when the order's body changed since (a reassessment moved a hint). */
+export async function cardOnce(pipeline: { createTaskOnce(order: NewTask & Record<string, unknown>, key: string): Promise<{ task: { id: string } }> }, input: NewTask, key: string): Promise<{ id: string }> {
+  try {
+    return { id: (await pipeline.createTaskOnce(input as NewTask & Record<string, unknown>, key)).task.id };
+  } catch (error) {
+    if (error instanceof IdempotencyConflictError) return { id: error.taskId };
+    throw error;
+  }
+}
+
+/** How long a claim on a ticket's card creation holds before a retry may take it (a machine that died between the card and the link; the card's own key then returns the card already made). */
 const CARD_CLAIM_MS = 10 * 60_000;
 
 const sourceOf = (t: CanonicalTicket): TaskSource => {
@@ -253,7 +264,7 @@ export class TicketMachine implements TicketIntake {
       noJiraDetection: true,
       ...(t.reporter ? { reporter: { id: t.reporter.id, channel: t.tool } } : {}),
       ...(last ? { hints: { size: String(last.size), urgency: String(last.priority) } } : {}),
-    } as NewTask);
+    } as NewTask, `ticket-card:${t.key}`);
     } catch (error) {
       await this.deps.store.releaseCard(key).catch(() => {});
       throw error;
