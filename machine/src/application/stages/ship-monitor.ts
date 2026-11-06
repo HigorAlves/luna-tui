@@ -15,7 +15,8 @@ import { lunaYamlFreeze } from "../../adapters/freeze/luna-yaml.ts";
 import { type Freeze, type Policy } from "../../domain/policy.ts";
 import { shipEvents } from "../../domain/ship-events.ts";
 import { ownerApprovals, parseCodeownersChecked, requiredOwners } from "../../domain/codeowners.ts";
-import { MAX_DEPENDENCIES, inFreeze, mergeReadiness, parseDependencies } from "../../domain/merge-readiness.ts";
+import { MAX_DEPENDENCIES, type MergeReadinessInput, inFreeze, mergeReadiness, parseDependencies } from "../../domain/merge-readiness.ts";
+import { type StackFacts, mergedIntoOther } from "../stack.ts";
 import { type ReviewRequirement, type ReviewRule, approvedOnHead, objectionOnPr, reviewRequirement } from "../../domain/review-rule.ts";
 import { fromGraphQl } from "../../domain/pull-request.ts";
 import { type GitHub, type PrActivity, type PrReview, messageOf } from "../github.ts";
@@ -48,6 +49,8 @@ const TEAM_TTL_MS = 10 * 60_000;
 
 export interface ShipMonitorDeps {
   github: GitHub;
+  /** A stacked card's parent, and the default branch: what the checklist's `stack` item reads. Absent, the item is always ok (a card read before the stack existed). */
+  stack?: { facts: (slug: string, task: StageContext["task"]) => Promise<StackFacts | null>; defaultBranch: (repoPath: string) => Promise<string | null> };
   policies: { for: (repoPath: string | null) => Promise<Policy> };
   /** The Evidence Pack: `load` to watch it; with `save`, `publish` and `store` the loop re-stamps and republishes it after a fix. */
   evidence: EvidenceHandle;
@@ -95,7 +98,7 @@ export interface ShipFacts {
   releaseOwners: string[];
 }
 
-export type ShipFactsDeps = Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "readCodeowners" | "freeze">;
+export type ShipFactsDeps = Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "readCodeowners" | "freeze" | "stack">;
 
 const defaultReadCodeowners = (github: GitHub) => async (slug: string, baseRef: string): Promise<string | null> => {
   for (const path of CODEOWNERS_PATHS) {
@@ -189,7 +192,15 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   else delete cursor.reviewRequiredSeen;
   const rule: ReviewRule = await deps.github.reviewRule(slug, pr.baseRef).catch((error: unknown): ReviewRule => ({ source: "unreadable", why: messageOf(error) }));
   const review = reviewRequirement({ rule, seenRequired: cursor.reviewRequiredSeen !== undefined, owners: codeownersText ? parseCodeownersChecked(codeownersText).rules : null, paths });
+  // The stack: waiting for a parent, or a PR aimed at some other branch than the default. A parent that cannot be read counts as not merged (it waits).
+  let stack: MergeReadinessInput["stack"];
+  if (deps.stack) {
+    const facts = await deps.stack.facts(slug, task).catch((): "unreadable" => "unreadable");
+    const defaultBranch = facts !== "unreadable" && facts ? facts.defaultBranch : task.repoPath ? await deps.stack.defaultBranch(task.repoPath).catch(() => null) : null;
+    stack = { stacked: facts === "unreadable" || (facts !== null && facts.parent.state === "open"), baseRef: pr.baseRef, defaultBranch };
+  }
   const readiness = mergeReadiness({
+    ...(stack ? { stack } : {}),
     pr,
     packSha: pack?.commitSha ?? null,
     policy: { autoMerge: policy.factory.ship.auto_merge, freeze: windows },
@@ -540,6 +551,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       try {
         const state = await deps.github.prMerged(slug, number);
         if (state.merged) {
+          const elsewhere = await mergedIntoOther(deps, slug, number, task.repoPath);
+          if (elsewhere) return { outcome: "fail", detail: { prClosed: true, mergedInto: elsewhere } };
           if (task.repoPath) deps.onMerged?.(task.repoPath);
           await settle().catch(() => {});
           return { outcome: "pass", detail: { merged: { sha: state.mergedSha, at: state.mergedAt, by: cursor.mergeRequested || cursor.queued ? "machine" : "person" }, prUrl: url, number } };

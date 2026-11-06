@@ -85,3 +85,22 @@ export function schedulable(card: { id: string; repoPath: string | null; depends
   if (chainOf(chosen.id, deps).ids.length + 1 > rule.maxDepth) return { ok: false, reason: "too_deep", waitingOn: [chosen.id] };
   return { ok: true, base: { card: chosen.id, branch: chosen.branch! } };
 }
+
+/** The words a person reads for why a card is held: fixed sentences, ids shortened, nothing a model wrote. A parent stopped with a person (escalated) is said so. */
+export function holdText(verdict: { reason: NotReady; waitingOn: readonly string[] }, deps: ReadonlyMap<string, DepFact>): string {
+  const short = (id: string) => id.slice(0, 8);
+  switch (verdict.reason) {
+    case "waiting":
+      return verdict.waitingOn.map((id) => (deps.get(id)?.state === "escalated" ? `waiting for ${short(id)}, which is stopped with a person` : `waiting for ${short(id)} to have an open PR`)).join("; ");
+    case "dependency_archived":
+      return verdict.waitingOn.map((id) => `${short(id)} was archived (${deps.get(id)?.archiveReason ?? "no reason"}); a person decides`).join("; ");
+    case "missing":
+      return verdict.waitingOn.map((id) => `${short(id)} is not a card`).join("; ");
+    case "diverging":
+      return "its dependencies are on branches that do not hold each other: it waits until all but one has merged";
+    case "too_deep":
+      return "the stack would be deeper than the repository allows";
+    case "cycle":
+      return "its dependencies lead back to itself";
+  }
+}

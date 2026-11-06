@@ -108,15 +108,22 @@ describe("shipping after a restart", () => {
     await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "a/b", number: 3 }), published: { sha: HEAD }, ...extra });
     return stateDir;
   };
-  const wire = async (state: { merged: boolean; mergedSha: string | null; state: "open" | "closed"; mergedAt: string | null }, extra: Record<string, unknown> = {}) => {
+  const wire = async (state: { merged: boolean; mergedSha: string | null; state: "open" | "closed"; mergedAt: string | null }, extra: Record<string, unknown> = {}, into: string | null = null) => {
     const stateDir = await cursorWith(extra);
-    const github = fakeGitHub({ prMerged: async () => state, findPr: async () => null, openPr: async () => { throw new Error("must not open a PR"); } });
+    const github = fakeGitHub({ prFacts: async () => ({ baseRefName: into ?? "main" }) as never, prMerged: async () => state, findPr: async () => null, openPr: async () => { throw new Error("must not open a PR"); } });
     const exec = vi.fn(async () => ok());
     const monitor = vi.fn(async () => ({ outcome: "pass" as const, detail: { merged: { sha: "m2", at: null, by: "person" }, prUrl: "u", number: 3 } }));
     const context = { task: { id: "t1", title: "feat", description: "d", criteria: [], branch: "hardness/t1", worktreePath: "/wt", repoPath: "/repo", source: null } as unknown as TaskRow, stage: "awaiting_ship", attempt: 2, runId: "r2", approvals: [], signal: new AbortController().signal } as StageContext;
-    const run = shipWatchRunner({ exec, github, slugOf: async () => "a/b", headCommit: async () => HEAD, monitor, stateDir });
+    const run = shipWatchRunner({ exec, github, slugOf: async () => "a/b", headCommit: async () => HEAD, monitor, stateDir, stack: { facts: async () => null, defaultBranch: async () => "main" } });
     return { run, context, exec, github, monitor };
   };
+
+  it("does not pass for a PR already merged into a branch that is not the default: the card's PR is closed", async () => {
+    const { run, context, exec, monitor } = await wire({ merged: true, mergedSha: "m1", state: "closed", mergedAt: "t" }, {}, "task/parent");
+    expect(await run(context)).toEqual({ outcome: "fail", detail: { prClosed: true, mergedInto: "task/parent" } });
+    expect(exec).not.toHaveBeenCalled();
+    expect(monitor).not.toHaveBeenCalled();
+  });
 
   it("passes at once for a PR already merged, without pushing the branch the merge deleted or opening another PR", async () => {
     const { run, context, exec, github, monitor } = await wire({ merged: true, mergedSha: "m1", state: "closed", mergedAt: "2026-11-04T12:00:00Z" }, { mergeRequested: true });

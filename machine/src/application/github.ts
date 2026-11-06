@@ -67,6 +67,8 @@ export interface NewPr {
   body: string;
   head: string;
   draft: boolean;
+  /** The branch the PR targets; absent, the repository's default branch. A stacked card's PR targets its parent's branch. */
+  base?: string;
 }
 
 /** One thing someone did on a PR: a conversation comment, a review comment or a review. */
@@ -145,6 +147,8 @@ export interface GitHub {
   /** The open PR whose head is `branch`, or null. */
   findPr(slug: string, branch: string): Promise<PrRef | null>;
   openPr(slug: string, pr: NewPr): Promise<PrRef>;
+  /** Changes the branch an open PR targets (a stacked card's PR, once its parent merged). */
+  retargetPr(slug: string, number: number, base: string): Promise<void>;
   markPrReady(slug: string, number: number): Promise<void>;
   /** Every check run and commit status on `ref`. */
   prChecks(slug: string, ref: string): Promise<Check[]>;
@@ -197,6 +201,7 @@ export function noTokenGitHub(): GitHub {
     commentOnIssue: refuse,
     findPr: refuse,
     openPr: refuse,
+    retargetPr: refuse,
     markPrReady: refuse,
     prChecks: refuse,
     failedRunLog: refuse,

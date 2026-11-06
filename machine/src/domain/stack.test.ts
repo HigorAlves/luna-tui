@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type DepFact, schedulable } from "./stack.ts";
+import { type DepFact, holdText, schedulable } from "./stack.ts";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const fact = (n: number, over: Partial<DepFact> = {}): DepFact => ({ id: id(n), repoPath: "/r/app", branch: `task/${n}`, state: "awaiting_approval", archiveReason: null, hasOpenPr: false, merged: false, base: null, mergedInto: null, ...over });
@@ -62,5 +62,22 @@ describe("schedulable", () => {
   it("ends on a chain that loops among other cards", () => {
     const set = facts(fact(1, { hasOpenPr: true, base: { card: id(2), branch: "x" } }), fact(2, { hasOpenPr: true, base: { card: id(1), branch: "y" } }));
     expect(schedulable(me(1), set, rule)).toMatchObject({ ok: false, reason: "cycle" });
+  });
+});
+
+describe("holdText", () => {
+  const short = (n: number) => id(n).slice(0, 8);
+  it("says in words a person can read what a held card waits for, and that a stopped parent is with a person", () => {
+    const set = facts(fact(1), fact(2, { state: "escalated" }));
+    expect(holdText({ reason: "waiting", waitingOn: [id(1), id(2)] }, set)).toBe(`waiting for ${short(1)} to have an open PR; waiting for ${short(2)}, which is stopped with a person`);
+  });
+
+  it("has a sentence for every other reason", () => {
+    const set = facts(fact(1, { state: "archived", archiveReason: "rejected" }));
+    expect(holdText({ reason: "dependency_archived", waitingOn: [id(1)] }, set)).toBe(`${short(1)} was archived (rejected); a person decides`);
+    expect(holdText({ reason: "missing", waitingOn: [id(7)] }, set)).toBe(`${short(7)} is not a card`);
+    expect(holdText({ reason: "diverging", waitingOn: [id(1), id(2)] }, set)).toMatch(/all but one has merged/);
+    expect(holdText({ reason: "too_deep", waitingOn: [id(1)] }, set)).toMatch(/deeper than/);
+    expect(holdText({ reason: "cycle", waitingOn: [id(1)] }, set)).toMatch(/lead back/);
   });
 });

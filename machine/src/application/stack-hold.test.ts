@@ -52,7 +52,7 @@ describe("a card that depends on others", () => {
     const kid = await child([parent]);
     expect(await pipeline.start(kid)).toMatchObject({ state: "draft" });
     expect(cardOf(await pipeline.get(kid)).startWhenReady).toBe(true);
-    expect(await held(kid)).toEqual([{ reason: "waiting", waitingOn: [parent] }]);
+    expect(await held(kid)).toEqual([{ reason: "waiting", waitingOn: [parent], text: `waiting for ${parent.slice(0, 8)} to have an open PR` }]);
     await pipeline.start(kid);
     expect(await held(kid)).toHaveLength(1);
   });
@@ -97,13 +97,25 @@ describe("a card that depends on others", () => {
     await pipeline.releaseHeld();
     await pipeline.releaseHeld();
     expect((await pipeline.get(kid)).state).toBe("draft");
-    expect(await held(kid)).toEqual([{ reason: "waiting", waitingOn: [parent] }, { reason: "dependency_archived", waitingOn: [parent] }]);
+    expect(await held(kid)).toEqual([
+      { reason: "waiting", waitingOn: [parent], text: `waiting for ${parent.slice(0, 8)} to have an open PR` },
+      { reason: "dependency_archived", waitingOn: [parent], text: `${parent.slice(0, 8)} was archived (rejected); a person decides` },
+    ]);
   });
 
   it("is held with `missing` for a dependency that is no card", async () => {
     const kid = await child(["00000000-0000-4000-8000-0000000000aa"]);
     await pipeline.start(kid);
-    expect(await held(kid)).toEqual([{ reason: "missing", waitingOn: ["00000000-0000-4000-8000-0000000000aa"] }]);
+    expect(await held(kid)).toEqual([{ reason: "missing", waitingOn: ["00000000-0000-4000-8000-0000000000aa"], text: "00000000 is not a card" }]);
+  });
+
+  it("says a parent that is stopped with a person is stopped with a person, and goes on waiting", async () => {
+    const parent = await parentCard();
+    const kid = await child([parent]);
+    await db.query("update tasks set state = 'escalated' where id = $1", [parent]);
+    await pipeline.start(kid);
+    expect(await held(kid)).toEqual([{ reason: "waiting", waitingOn: [parent], text: `waiting for ${parent.slice(0, 8)}, which is stopped with a person` }]);
+    expect((await pipeline.get(kid)).state).toBe("draft");
   });
 
   it("takes the old path untouched when it has no dependency: no hold, no release, no base", async () => {

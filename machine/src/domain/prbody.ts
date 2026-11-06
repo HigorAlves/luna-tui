@@ -36,6 +36,8 @@ export interface PrExtra {
   outOfMap?: Array<{ path: string; reason: string }>;
   base?: string | null;
   head?: string | null;
+  /** The PR of the card this one is stacked on. */
+  stack?: { number: number };
 }
 
 /** A foreign text made safe for the section: flattened, capped, and unable to hold either marker (a forged end marker would let the section grow on every update). */
@@ -65,6 +67,8 @@ export function buildPr({ task, plan, repoSlug, extra }: PrBodyInput): { title: 
   const why = [...(extra?.record?.goal ? [`- ${flat(extra.record.goal)}`] : []), ...bullets(plan?.brief || task.description || "")];
   const criteria = criteriaOf((plan?.criteria?.length ? plan.criteria : task.criteria) ?? []);
   const sections = [flat(task.title.trim())];
+  const parentNumber = extra?.stack?.number;
+  if (typeof parentNumber === "number" && Number.isInteger(parentNumber) && parentNumber > 0) sections.push(`Stacked on #${parentNumber}: this PR targets its branch and shows only this card's change. It is retargeted when #${parentNumber} merges.`);
   if (why.length > 0) sections.push(`## Why\n${why.join("\n")}`);
   if (extra?.planVersion != null) sections.push(`Plan version ${extra.planVersion}`);
   if (criteria.length > 0) sections.push(`## Criteria\n${criteria.map((c) => `- [ ] ${flat(c.text)} (${flat(c.id, 20)})`).join("\n")}`);

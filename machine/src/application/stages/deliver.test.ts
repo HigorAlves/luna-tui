@@ -215,3 +215,88 @@ describe("pushBranch with a lease", () => {
     expect(calls).toHaveLength(1);
   });
 });
+
+describe("delivering a stacked card", () => {
+  const PARENT = "11111111-2222-3333-4444-555555555555";
+  const SHA = "a".repeat(40);
+  const MOVED = "b".repeat(40);
+  const stacked = { card: { base: { card: PARENT, branch: "task/parent" } } };
+  const facts = (state: "open" | "merged" | "gone", head: string | null = SHA) => async () => ({ parent: { id: PARENT, branch: "task/parent", number: 7, state, head }, defaultBranch: "main" });
+
+  function wire(over: { facts?: () => Promise<unknown>; existing?: { url: string; number: number; isDraft: boolean } | null; current?: string; rebase?: unknown; unstack?: unknown; task?: Record<string, unknown> } = {}) {
+    const pushes: string[][] = [];
+    const exec = vi.fn(async (command: string, args: string[]) => {
+      if (args.includes("push")) pushes.push(args);
+      return ok();
+    });
+    const github = fakeGitHub({
+      findPr: async () => over.existing ?? null,
+      openPr: async () => ({ url: "https://github.com/acme/widgets/pull/9", number: 9, isDraft: true }),
+      prFacts: async () => ({ number: 9, baseRefName: over.current ?? "main", mergeable: "MERGEABLE", body: "" }) as never,
+      updatePrBody: async () => {},
+      retargetPr: async () => {},
+    });
+    const rebase = vi.fn((over.rebase as never) ?? (async () => ({ ok: true as const, onto: "origin/task/parent" })));
+    const unstack = vi.fn((over.unstack as never) ?? (async () => ({ ok: true as const, onto: "origin/main" })));
+    const clearBase = vi.fn(async () => {});
+    const stackFacts = vi.fn(over.facts ?? facts("open"));
+    const run = deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => "main", stacked: { facts: stackFacts as never, clearBase, rebase: rebase as never, unstack: unstack as never, baseSha: async () => SHA } });
+    const context = { task: { id: "t1", title: "part", description: "d", criteria: ["c"], branch: "task/child", worktreePath: "/wt", repoPath: "/repo", source: null, ...stacked, ...over.task } as unknown as TaskRow, stage: "delivering", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as StageContext;
+    return { run, context, github, pushes, rebase, unstack, clearBase, stackFacts };
+  }
+
+  it("opens its PR against the parent's branch, with the stacked line in the body", async () => {
+    const { run, context, github, rebase } = wire();
+    expect(await run(context)).toMatchObject({ outcome: "pass", detail: { prNumber: 9 } });
+    expect(github.openPr).toHaveBeenCalledWith("acme/widgets", expect.objectContaining({ base: "task/parent", body: expect.stringContaining("Stacked on #7") }));
+    expect(rebase).not.toHaveBeenCalled();
+  });
+
+  it("rebases onto the parent's new tip before it pushes, and pushes with a lease", async () => {
+    const { run, context, rebase, pushes } = wire({ facts: facts("open", MOVED) });
+    expect(await run(context)).toMatchObject({ outcome: "pass" });
+    expect(rebase).toHaveBeenCalledTimes(1);
+    expect(pushes[0]).toContain("--force-with-lease");
+  });
+
+  it("unstacks and drops the base when the parent merged, then opens against the default branch", async () => {
+    const { run, context, github, unstack, clearBase, pushes } = wire({ facts: facts("merged") });
+    expect(await run(context)).toMatchObject({ outcome: "pass" });
+    expect(unstack).toHaveBeenCalledTimes(1);
+    expect(clearBase).toHaveBeenCalledWith("t1");
+    expect(pushes[0]).toContain("--force-with-lease");
+    const sent = (github.openPr as unknown as { mock: { calls: Array<[string, { base?: string; body: string }]> } }).mock.calls[0]![1];
+    expect(sent.base).toBeUndefined();
+    expect(sent.body).not.toContain("Stacked on");
+  });
+
+  it("fails in fixed words, pushing nothing, when the parent is gone", async () => {
+    const { run, context, pushes, github } = wire({ facts: facts("gone") });
+    const result = await run(context);
+    expect(result).toMatchObject({ outcome: "fail", detail: { escalation: "other", error: expect.stringContaining(PARENT.slice(0, 8)) } });
+    expect(pushes).toEqual([]);
+    expect(github.openPr).not.toHaveBeenCalled();
+  });
+
+  it("fails with the files and pushes nothing when the rebase stops", async () => {
+    const { run, context, pushes } = wire({ facts: facts("open", MOVED), rebase: async () => ({ ok: false, error: "conflict", conflicts: ["a.ts"] }) });
+    expect(await run(context)).toMatchObject({ outcome: "fail", detail: { conflicts: ["a.ts"], escalation: "other" } });
+    expect(pushes).toEqual([]);
+  });
+
+  it("retargets an existing PR that does not target the parent's branch", async () => {
+    const { run, context, github } = wire({ existing: { url: "https://github.com/acme/widgets/pull/9", number: 9, isDraft: true }, current: "main" });
+    await run(context);
+    expect(github.retargetPr).toHaveBeenCalledWith("acme/widgets", 9, "task/parent");
+    const same = wire({ existing: { url: "https://github.com/acme/widgets/pull/9", number: 9, isDraft: true }, current: "task/parent" });
+    await same.run(same.context);
+    expect(same.github.retargetPr).not.toHaveBeenCalled();
+  });
+
+  it("does not touch the stack for a card with no base", async () => {
+    const { run, context, stackFacts, github } = wire({ task: { card: null } });
+    await run(context);
+    expect(stackFacts).not.toHaveBeenCalled();
+    expect((github.openPr as unknown as { mock: { calls: Array<[string, { base?: string }]> } }).mock.calls[0]![1].base).toBeUndefined();
+  });
+});

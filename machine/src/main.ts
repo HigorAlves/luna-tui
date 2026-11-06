@@ -101,6 +101,8 @@ import { createGitHub } from "./adapters/github/octokit.ts";
 import { taskDiff } from "./adapters/git/diff.ts";
 import { noTokenGitHub } from "./application/github.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
+import { stackFactsOf } from "./application/stack.ts";
+import { defaultBranch as hostDefaultBranch } from "./adapters/git/worktree.ts";
 import { shipRunner } from "./application/stages/ship.ts";
 import { StubStages } from "./application/stages/stubs.ts";
 import { verifyRunner } from "./application/stages/verify.ts";
@@ -249,6 +251,27 @@ const buildDecisions: { decide: Decide | null; budget?: (taskId: string) => Prom
 const verifyDecisions: { decide: Decide | null } = { decide: null };
 /** Evidence's format decision runs through PackRuns as the `evidence` client: bound once it exists. */
 const evidenceDecisions: { decide: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null } = { decide: null };
+/** A stacked card's parent, read from the pipeline's rows and GitHub's facts; what the workspace, Deliver, the checklist and the merge rule read. */
+const stackDeps = {
+  baseFor: (task: Parameters<typeof pipeline.baseOf>[0]) => pipeline.baseOf(task),
+  clearBase: (id: string) => pipeline.clearBase(id),
+  facts: (slug: string, task: Parameters<typeof pipeline.baseOf>[0]) =>
+    stackFactsOf(
+      {
+        github,
+        getTask: (id) => pipeline.get(id).catch(() => null),
+        deliveredNumber: async (id) => {
+          const number = (await pipeline.latestStageFinish(id, "delivering"))?.detail?.prNumber;
+          return typeof number === "number" ? number : null;
+        },
+        defaultBranch: hostDefaultBranch,
+        merged: (id) => pipeline.mergeRecorded(id),
+      },
+      slug,
+      task,
+    ),
+  defaultBranch: hostDefaultBranch,
+};
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
 const { real, verifyPack, checksExec, agentDeps, shipGateProbe } = await buildRealStages(
@@ -290,7 +313,7 @@ const { real, verifyPack, checksExec, agentDeps, shipGateProbe } = await buildRe
   // Triage's card_search: the task's own repository's cards, from the board the pipeline keeps.
   { search: async ({ repoPath, selfId, selfSource, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, selfSource, now: new Date() }) },
   // A stacked card's workspace: what it is cut from and the base it drops, read from the pipeline's rows when a run first makes it.
-  { baseFor: (task) => pipeline.baseOf(task), clearBase: (id) => pipeline.clearBase(id) },
+  stackDeps,
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -333,7 +356,7 @@ const realVerifyRunner = verifyRunner({
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
 const runnerFor = buildRunnerFor({
   real,
-  realDeliverRunner: realDeliverRunner(github),
+  realDeliverRunner: realDeliverRunner(github, { facts: stackDeps.facts, clearBase: stackDeps.clearBase }),
   realVerifyRunner,
   shipRunner: shipRunner(github),
   stubRunnerFor: (stage) => stubs.runnerFor(stage),

@@ -16,7 +16,7 @@ import { type CardFields, type ContextMissing, type DedupContext, contextComplet
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type DedupAnswer, checkDuplicates } from "./intake-dedup.ts";
 import type { Candidate } from "../domain/similarity.ts";
-import { type DepFact, schedulable } from "../domain/stack.ts";
+import { type DepFact, holdText, schedulable } from "../domain/stack.ts";
 import { type CardFieldsInput, MAX_FOLLOWERS, MAX_LINKS, appendSource, cardFieldsOf, cardOf, mergeFields, stackFieldsOf, unmergeFields, withDemand } from "../domain/card-fields.ts";
 import { splitFacts } from "../domain/split.ts";
 import { canSeeKept, contextAsk, mergedNotice, questionsComment } from "../domain/notices.ts";
@@ -1190,6 +1190,11 @@ export class Pipeline {
     return this.store.findStackedOn(id);
   }
 
+  /** Whether the card's last shipping run ended in a merge. */
+  async mergeRecorded(id: string): Promise<boolean> {
+    return (await this.mergedPr(id)) !== null;
+  }
+
   /** What a stacked card's workspace is cut from, from the rows as they are now: the parent's branch while its PR is open, `merged` once it merged (the card then starts from the default branch), `gone` when it was archived or is no card. Null for a card with no base. */
   async baseOf(task: TaskRow): Promise<{ state: "open"; branch: string } | { state: "merged" } | { state: "gone"; reason: string } | null> {
     const base = cardOf(task).base;
@@ -1258,15 +1263,17 @@ export class Pipeline {
   private async holdOrRelease(task: TaskRow): Promise<TaskRow | null> {
     const card = cardOf(task);
     const maxDepth = (await this.policyFor(task.repoPath)).factory.size.max_children;
-    const verdict = schedulable({ id: task.id, repoPath: task.repoPath, dependsOn: card.dependsOn ?? [] }, await this.dependencyFacts(card.dependsOn ?? []), { maxDepth });
+    const facts = await this.dependencyFacts(card.dependsOn ?? []);
+    const verdict = schedulable({ id: task.id, repoPath: task.repoPath, dependsOn: card.dependsOn ?? [] }, facts, { maxDepth });
     const last = (await this.events(task.id)).findLast((e) => e.kind === "card.held" || e.kind === "card.released");
     return this.store.withTaskLock(task.id, async (now, tx) => {
       if (now.state !== "draft") return this.get(task.id);
       const current = cardOf(now);
       if (!verdict.ok) {
         if (current.startWhenReady !== true) await tx.updateTask(task.id, { card: { ...current, startWhenReady: true } });
-        const same = last?.kind === "card.held" && last.payload.reason === verdict.reason && JSON.stringify(last.payload.waitingOn) === JSON.stringify(verdict.waitingOn);
-        if (!same) await tx.recordEvent({ taskId: task.id, kind: "card.held", payload: { reason: verdict.reason, waitingOn: verdict.waitingOn }, stageRunId: null });
+        const text = holdText(verdict, facts);
+        const same = last?.kind === "card.held" && last.payload.reason === verdict.reason && JSON.stringify(last.payload.waitingOn) === JSON.stringify(verdict.waitingOn) && last.payload.text === text;
+        if (!same) await tx.recordEvent({ taskId: task.id, kind: "card.held", payload: { reason: verdict.reason, waitingOn: verdict.waitingOn, text }, stageRunId: null });
         return this.get(task.id);
       }
       const { base: _gone, ...rest } = current;

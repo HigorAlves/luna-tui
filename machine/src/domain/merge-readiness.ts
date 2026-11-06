@@ -40,10 +40,12 @@ export interface MergeReadinessInput {
   objection?: string | null;
   /** An approved `awaiting_ship` ship approval (`requested.gate === "ship_approval"`) and the head it was asked about; null when there is none. */
   shipApproval?: { head: string } | null;
+  /** Whether the card is stacked on a parent that has not merged, the branch the PR targets and the repository's default branch (null when unknown). Absent for a card read before the stack existed. */
+  stack?: { stacked: boolean; baseRef: string | null; defaultBranch: string | null };
 }
 
 /** The items of the checklist, in the order the board shows them. Fixed in code: no model adds or renames one. */
-export const CHECKLIST_IDS = ["pack", "draft", "ci", "conflicts", "approvals", "owners", "codeowners_change", "fix_approval", "evidence_head", "freeze", "blocked", "stale"] as const;
+export const CHECKLIST_IDS = ["pack", "draft", "ci", "conflicts", "approvals", "owners", "codeowners_change", "fix_approval", "evidence_head", "freeze", "blocked", "stack", "stale"] as const;
 export type ChecklistId = (typeof CHECKLIST_IDS)[number];
 export interface ChecklistItem {
   id: ChecklistId;
@@ -115,6 +117,8 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   if (frozen) push("freeze", readableWindow(frozen) ? `freeze: ${frozen.reason} until ${frozen.to}` : "freeze window has an unreadable date");
   if ((input.dependenciesListed ?? 0) > MAX_DEPENDENCIES) push("blocked", `too many dependencies listed (${input.dependenciesListed})`);
   for (const d of dependencies) if (!d.merged && !d.closed) push("blocked", `blocked by #${d.number}`);
+  if (input.stack?.stacked) push("stack", "waits for its parent to merge");
+  else if (input.stack && input.stack.defaultBranch && input.stack.baseRef && input.stack.baseRef !== input.stack.defaultBranch) push("stack", `targets ${input.stack.baseRef}, not ${input.stack.defaultBranch}: the machine merges only into the default branch`);
   const staleDays = input.staleDays ?? STALE_DAYS;
   if (pr.headCommittedAt) {
     const committed = Math.max(Date.parse(pr.headCommittedAt), input.reverifiedAt ? Date.parse(input.reverifiedAt) || 0 : 0);

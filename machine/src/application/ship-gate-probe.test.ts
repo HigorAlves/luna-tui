@@ -21,11 +21,11 @@ const pack = { summary: "s", format: "text", scenarios: [], findings: [], outOfM
 const task = { id: "t1", repoPath: "/repo", branch: "hardness/t1" } as unknown as TaskRow;
 const gate = (head = HEAD) => ({ kind: "awaiting_ship", decision: null, requested: { gate: "ship_approval", head } }) as unknown as ApprovalRow;
 
-async function probeWith(github: Parameters<typeof fakeGitHub>[0], withCursor = true) {
+async function probeWith(github: Parameters<typeof fakeGitHub>[0], withCursor = true, stack?: { facts: () => Promise<null>; defaultBranch: () => Promise<string | null> }) {
   const stateDir = await mkdtemp(join(tmpdir(), "probe-"));
   if (withCursor) await saveCursor(stateDir, "t1", emptyCursor({ slug: "a/b", number: 3 }));
   const gh = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [], prFiles: async () => [], fileAtRef: async () => null, prHeadSha: async () => HEAD, prMerged: async () => open, prFacts: async () => node() as never, ...github });
-  return shipGateProbe({ github: gh, policies: { for: async () => DEFAULT_POLICY }, evidence: { load: async () => pack as never }, stateDir });
+  return shipGateProbe({ github: gh, policies: { for: async () => DEFAULT_POLICY }, evidence: { load: async () => pack as never }, stateDir, ...(stack ? { stack } : {}) });
 }
 
 describe("shipGateProbe", () => {
@@ -34,6 +34,12 @@ describe("shipGateProbe", () => {
   });
   it("says merged for a PR GitHub shows merged", async () => {
     expect(await (await probeWith({ prMerged: async () => ({ ...open, merged: true, state: "closed" as const, mergedSha: "m" }) }))(task, gate())).toBe("merged");
+  });
+  it("says closed, never merged, for a PR merged into a branch that is not the default", async () => {
+    const merged = { ...open, merged: true, state: "closed" as const, mergedSha: "m" };
+    const stack = { facts: async () => null, defaultBranch: async () => "main" };
+    expect(await (await probeWith({ prMerged: async () => merged, prFacts: async () => ({ ...node(), baseRefName: "task/parent" }) as never }, true, stack))(task, gate())).toBe("closed");
+    expect(await (await probeWith({ prMerged: async () => merged, prFacts: async () => node() as never }, true, stack))(task, gate())).toBe("merged");
   });
   it("says closed for a PR GitHub shows closed and not merged", async () => {
     expect(await (await probeWith({ prMerged: async () => ({ ...open, state: "closed" as const }) }))(task, gate())).toBe("closed");

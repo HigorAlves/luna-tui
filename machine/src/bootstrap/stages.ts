@@ -31,7 +31,7 @@ import { setupRunner } from "../application/stages/setup.ts";
 import { mergeRunner } from "../application/stages/ship.ts";
 import { shipWatchRunner } from "../application/stages/ship-watch.ts";
 import { type ShipDecide } from "../application/stages/ship-fixes.ts";
-import { shipMonitor } from "../application/stages/ship-monitor.ts";
+import { type ShipMonitorDeps, shipMonitor } from "../application/stages/ship-monitor.ts";
 import { verifyRunner } from "../application/stages/verify.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
 import { type ApprovedBases, approvedBases } from "../adapters/fs/approved-bases.ts";
@@ -129,7 +129,7 @@ export async function buildRealStages(
   /** The board search triage's agent may ask for; absent, `card_search` answers nothing. */
   cards?: AgentDeps["cards"],
   /** What a stacked card's workspace is cut from (`Pipeline.baseOf`) and the base it drops (`Pipeline.clearBase`). */
-  stack?: { baseFor: NonNullable<AgentDeps["baseFor"]>; clearBase: NonNullable<AgentDeps["clearBase"]> },
+  stack?: { baseFor: NonNullable<AgentDeps["baseFor"]>; clearBase: NonNullable<AgentDeps["clearBase"]>; /** The checklist's and the merge rule's view of the parent. */ facts: NonNullable<ShipMonitorDeps["stack"]>["facts"]; defaultBranch: NonNullable<ShipMonitorDeps["stack"]>["defaultBranch"] },
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -417,12 +417,14 @@ export async function buildRealStages(
     awaiting_ship: shipWatchRunner({
         exec,
         github,
+        ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}),
         // Ship publishes the task's Evidence Pack once it is complete and its commit is the PR head.
         evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore },
         // Then the PR is watched until it merges: by policy the machine merges it, else a person does.
         stateDir: config.stateDir,
         monitor: shipMonitor({
           github,
+          ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}),
           // A merged card's repository gets its graph rebuilt at once (D8).
           ...(graphs?.rebuild ? { onMerged: graphs.rebuild } : {}),
           truth: truth ?? null,
@@ -450,7 +452,7 @@ export async function buildRealStages(
         }),
     }),
     // The merge (decided again on GitHub's facts at that moment).
-    shipping: mergeRunner({ github, policies, evidence: { load: evidenceDeps.load }, truth: truth ?? null, stateDir: config.stateDir, ...(graphs?.rebuild ? { onMerged: graphs.rebuild } : {}), pollMs: config.shipPoll.intervalMs ?? FACTORY_DEFAULTS.ship.poll_minutes * 60_000 }),
+    shipping: mergeRunner({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, truth: truth ?? null, stateDir: config.stateDir, ...(graphs?.rebuild ? { onMerged: graphs.rebuild } : {}), pollMs: config.shipPoll.intervalMs ?? FACTORY_DEFAULTS.ship.poll_minutes * 60_000 }),
     // The retro, after the merge: its proposal waits at the same state for a person, and a card with nothing to learn closes by itself.
     reviewing_memory: memoryReviewRunner({
       runPack: async (context, ship) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}) }),
@@ -463,7 +465,7 @@ export async function buildRealStages(
       overrides: async (repoPath) => (await policies.for(repoPath)).decisions.worth_learning,
     }),
   };
-  return { real, verifyPack, checksExec, shipGateProbe: shipGateProbe({ github, policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { real, verifyPack, checksExec, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

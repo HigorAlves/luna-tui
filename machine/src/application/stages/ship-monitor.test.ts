@@ -116,7 +116,7 @@ describe("the release question (ship approval) after readiness", () => {
     const result = await run();
     expect(result).toMatchObject({ outcome: "needs_input", detail: { gate: "ship_approval", head: HEAD, prUrl: REF.url, number: 3, risk: "high", question: "safe to release now?", releaseOwners: ["bo", "cy"] } });
     const detail = result.detail as { checklist: Array<{ id: string; ok: boolean }>; evidence: { commitSha: string; risk: string } };
-    expect(detail.checklist).toHaveLength(12);
+    expect(detail.checklist).toHaveLength(13);
     expect(detail.checklist.every((i) => i.ok)).toBe(true);
     expect(detail.evidence).toMatchObject({ commitSha: HEAD, risk: "high" });
     expect(emitted.map(([kind]) => kind)).toEqual(["ship.ready", "ship.approval_needed"]);
@@ -1289,5 +1289,53 @@ describe("a stale head is re-verified once", () => {
     const { run } = go(world, { prFacts: async () => behind() }, { policy: { factory: { ...FACTORY_DEFAULTS, verify: { ...FACTORY_DEFAULTS.verify, auto_rebase: 0 } } } });
     expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("stale") } });
     expect(world.checks).not.toHaveBeenCalled();
+  });
+});
+
+describe("a stacked card's readiness (wave 15)", () => {
+  const stackItem = (r: Awaited<ReturnType<typeof readShipFacts>>) => r!.readiness.checklist.find((i) => i.id === "stack")!;
+  const world = (baseRef: string, stack: Record<string, unknown> | undefined) => {
+    const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node({ baseRefName: baseRef }), prHeadSha: async () => HEAD, prFiles: async () => [] });
+    const deps = { github, policies: { for: async () => policyWith({ autoMerge: "low" }) }, evidence: { load: async () => pack() }, stateDir, pollMs: 1, readCodeowners: async () => null, now: () => START, ...(stack ? { stack } : {}) };
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" }, approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    return readShipFacts(deps as never, context, REF, emptyCursor({ slug: "o/a", number: 3 }), deps.now);
+  };
+  const parent = (state: "open" | "merged" | "gone") => ({ parent: { id: "p", branch: "task/p", number: 2, state, head: HEAD }, defaultBranch: "main" });
+
+  it("is not ready while its parent has not merged, and the checklist says why", async () => {
+    const facts = await world("task/p", { facts: async () => parent("open"), defaultBranch: async () => "main" });
+    expect(stackItem(facts)).toMatchObject({ ok: false, detail: "waits for its parent to merge" });
+    expect(facts!.readiness.canAutoMerge).toBe(false);
+  });
+
+  it("is not ready for a card with no stack whose PR a person retargeted to another branch", async () => {
+    const facts = await world("release/2", { facts: async () => null, defaultBranch: async () => "main" });
+    expect(stackItem(facts)).toMatchObject({ ok: false, detail: expect.stringContaining("not main") });
+    expect(facts!.readiness.canAutoMerge).toBe(false);
+  });
+
+  it("is ready as before for a card that targets the default branch, stacked or not", async () => {
+    expect(stackItem(await world("main", { facts: async () => null, defaultBranch: async () => "main" })).ok).toBe(true);
+    expect((await world("main", undefined))!.readiness.canAutoMerge).toBe(true);
+    expect(stackItem(await world("main", { facts: async () => parent("merged"), defaultBranch: async () => "main" })).ok).toBe(true);
+  });
+
+  it("fails closed when the parent's facts cannot be read: it waits", async () => {
+    const facts = await world("main", { facts: async () => { throw new Error("github is down"); }, defaultBranch: async () => "main" });
+    expect(stackItem(facts).ok).toBe(false);
+    expect(facts!.readiness.canAutoMerge).toBe(false);
+  });
+});
+
+describe("a merge that is not a ship (wave 15)", () => {
+  const into = (baseRef: string) => {
+    const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), prMerged: async () => merged, prFacts: async () => node({ baseRefName: baseRef }) });
+    const deps = { github, policies: { for: async () => policyWith({ autoMerge: "low" }) }, evidence: { load: async () => pack() }, stateDir, pollMs: 1, readCodeowners: async () => null, now: () => START, stack: { facts: async () => null, defaultBranch: async () => "main" } };
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" }, approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    return shipMonitor(deps as never)(context, REF);
+  };
+  it("is closed, with the branch it went into, when the PR merged anywhere but the default branch; a merge into the default branch is a ship", async () => {
+    expect(await into("task/parent")).toEqual({ outcome: "fail", detail: { prClosed: true, mergedInto: "task/parent" } });
+    expect(await into("main")).toMatchObject({ outcome: "pass", detail: { merged: { sha: "m1" } } });
   });
 });

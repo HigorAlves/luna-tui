@@ -121,3 +121,18 @@ describe("a ticket cannot forge the machine's section", () => {
     expect(body).not.toContain("@someone");
   });
 });
+
+describe("a stacked card's PR body", () => {
+  const task = { id: "11111111-2222-3333-4444-555555555555", title: "Part two", description: "", criteria: ["works"], source: null, jira: null } as never;
+  it("says in fixed words what it is stacked on, and the body of any other card is unchanged", () => {
+    const plain = buildPr({ task, plan: null, repoSlug: "o/a" }).body;
+    const stacked = buildPr({ task, plan: null, repoSlug: "o/a", extra: { stack: { number: 12 } } }).body;
+    expect(stacked).toContain("Stacked on #12: this PR targets its branch and shows only this card's change. It is retargeted when #12 merges.");
+    expect(stacked.replace(/\n\nStacked on #12:[^\n]*/, "")).toBe(plain);
+    expect(buildPr({ task, plan: null, repoSlug: "o/a", extra: {} }).body).toBe(plain);
+  });
+
+  it("takes only a whole number for the parent's PR", () => {
+    expect(buildPr({ task, plan: null, repoSlug: "o/a", extra: { stack: { number: "12; rm" as never } } }).body).not.toContain("Stacked on");
+  });
+});

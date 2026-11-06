@@ -8,6 +8,7 @@ import { renderCommitTemplate } from "../../domain/commit-template.ts";
 import { type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type ShipCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
+import { mergedIntoOther } from "../stack.ts";
 import { type ShipFacts, type ShipMonitorDeps, readShipFacts, settleDecisions } from "./ship-monitor.ts";
 
 /** How long the machine waits for the merge queue to merge a PR it queued, before the watch looks at it again. */
@@ -17,7 +18,7 @@ const MERGE_READS = 3;
 const MERGE_READ_PAUSE_MS = 1000;
 const MERGE_ATTEMPTS = 2;
 
-export interface MergeDeps extends Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "truth" | "stateDir" | "sleep" | "now" | "readCodeowners" | "onMerged"> {
+export interface MergeDeps extends Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "truth" | "stateDir" | "sleep" | "now" | "readCodeowners" | "onMerged" | "stack"> {
   /** Milliseconds between the merge's own reads (a queue wait). */
   pollMs: number;
   /** The facts of one poll; default `readShipFacts`. Tests inject one. */
@@ -55,7 +56,11 @@ export function mergeRunner(deps: MergeDeps): StageRunner {
     /** The PR's own state, read first and last: a merge a person made, a PR closed. Null when it is still open. */
     const ended = async (): Promise<StageResult | null> => {
       const state = await deps.github.prMerged(slug, number);
-      if (state.merged) return recorded(state);
+      if (state.merged) {
+        const elsewhere = await mergedIntoOther(deps, slug, number, task.repoPath);
+        // Merged into a branch that is not the default: not a ship, whoever merged it. The card's PR is closed.
+        return elsewhere ? { outcome: "fail", detail: { prClosed: true, mergedInto: elsewhere } } : recorded(state);
+      }
       // GitHub's own `closed` state, never a comment's word: the pipeline archives the card (`pr_closed`).
       if (state.state === "closed") return { outcome: "fail", detail: { prClosed: true } };
       return null;

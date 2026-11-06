@@ -16,13 +16,13 @@ const open = { merged: false, mergedSha: null, state: "open" as const, mergedAt:
 const context = { task: { id: "t1", title: "feat", description: "d", criteria: [], branch: "hardness/t1", worktreePath: "/wt", repoPath: "/repo", source: null } as unknown as TaskRow, stage: "shipping", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as StageContext;
 const facts = (canAutoMerge: boolean, head = HEAD, reason = "not ready: CI is red"): ShipFacts => ({ pr: { title: "Export CSV", headRef: "hardness/t1", fromFork: false } as ShipFacts["pr"], head, pack: null, risk: "low", review: { required: false }, paths: [], events: [], releaseOwners: [], readiness: { ready: canAutoMerge, canAutoMerge, blockers: canAutoMerge ? [] : [reason], reason, checklist: [] } as unknown as ShipFacts["readiness"] });
 
-async function wire(over: { github?: Parameters<typeof fakeGitHub>[0]; facts?: () => Promise<ShipFacts | null>; cursor?: boolean; merge?: Record<string, unknown>; queuedCursor?: boolean; onMerged?: (repoPath: string) => void } = {}) {
+async function wire(over: { github?: Parameters<typeof fakeGitHub>[0]; facts?: () => Promise<ShipFacts | null>; cursor?: boolean; merge?: Record<string, unknown>; queuedCursor?: boolean; onMerged?: (repoPath: string) => void; stack?: { facts: () => Promise<null>; defaultBranch: () => Promise<string | null> } } = {}) {
   const stateDir = await mkdtemp(join(tmpdir(), "merge-"));
   if (over.cursor !== false) await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "a/b", number: 3 }), ...(over.queuedCursor ? { queued: true } : {}) });
   const github = fakeGitHub({ prMerged: async () => open, mergePr: async () => ({ merged: true as const, sha: null }), deleteBranch: async () => {}, ...over.github });
   const settle = vi.fn(async () => {});
   const sleep = vi.fn(async () => {});
-  const run = mergeRunner({ github, policies: { for: async () => ({ factory: { ship: { merge: { method: "squash", queue: true, delete_branch: true, commit_template: null, ...over.merge } } } }) as never }, evidence: { load: async () => null }, stateDir, pollMs: 1000, sleep, readFacts: over.facts ?? (async () => facts(true)), settle, ...(over.onMerged ? { onMerged: over.onMerged } : {}) });
+  const run = mergeRunner({ github, policies: { for: async () => ({ factory: { ship: { merge: { method: "squash", queue: true, delete_branch: true, commit_template: null, ...over.merge } } } }) as never }, evidence: { load: async () => null }, stateDir, pollMs: 1000, sleep, readFacts: over.facts ?? (async () => facts(true)), settle, ...(over.onMerged ? { onMerged: over.onMerged } : {}), ...(over.stack ? { stack: over.stack } : {}) });
   return { run, github, stateDir, settle, sleep };
 }
 
@@ -51,6 +51,16 @@ describe("mergeRunner (shipping)", () => {
     const { run, github } = await wire({ github: { prMerged: async () => ({ merged: true, mergedSha: MERGE_COMMIT, state: "closed", mergedAt: "t" }) } });
     expect(await run(context)).toMatchObject({ outcome: "pass", detail: { merged: { sha: MERGE_COMMIT, by: "person" } } });
     expect(github.mergePr).not.toHaveBeenCalled();
+  });
+
+  it("does not record a PR merged into any branch but the default as a ship: it is closed, with the branch it went into", async () => {
+    const stack = { facts: async () => null, defaultBranch: async () => "main" };
+    const { run, github, settle } = await wire({ stack, github: { prMerged: async () => ({ merged: true, mergedSha: MERGE_COMMIT, state: "closed", mergedAt: "t" }), prFacts: async () => ({ baseRefName: "task/parent" }) as never } });
+    expect(await run(context)).toEqual({ outcome: "fail", detail: { prClosed: true, mergedInto: "task/parent" } });
+    expect(github.mergePr).not.toHaveBeenCalled();
+    expect(settle).not.toHaveBeenCalled();
+    const onDefault = await wire({ stack, github: { prMerged: async () => ({ merged: true, mergedSha: MERGE_COMMIT, state: "closed", mergedAt: "t" }), prFacts: async () => ({ baseRefName: "main" }) as never } });
+    expect(await onDefault.run(context)).toMatchObject({ outcome: "pass", detail: { merged: { by: "person" } } });
   });
 
   it("is not ready when readiness is read again and no longer passes: it fails with notReady and merges nothing", async () => {

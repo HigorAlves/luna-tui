@@ -37,6 +37,7 @@ const METHODS: Array<keyof GitHub> = [
   "commentOnIssue",
   "findPr",
   "openPr",
+  "retargetPr",
   "markPrReady",
   "prChecks",
   "failedRunLog",

@@ -210,10 +210,10 @@ describe("auto-merge under the review rule (D4)", () => {
 });
 
 describe("the checklist and the ship approval (slice 4)", () => {
-  const IDS = ["pack", "draft", "ci", "conflicts", "approvals", "owners", "codeowners_change", "fix_approval", "evidence_head", "freeze", "blocked", "stale"];
+  const IDS = ["pack", "draft", "ci", "conflicts", "approvals", "owners", "codeowners_change", "fix_approval", "evidence_head", "freeze", "blocked", "stack", "stale"];
   const withMode = (autoMerge: "off" | "low" | "medium" | "medium_when_review_required", over: Partial<Parameters<typeof mergeReadiness>[0]> = {}) => input({ policy: { autoMerge, freeze: [] }, ...over });
 
-  it("lists the twelve items in a fixed order, all ok for a clean PR", () => {
+  it("lists the thirteen items in a fixed order, all ok for a clean PR", () => {
     const out = mergeReadiness(input());
     expect(out.checklist.map((i) => i.id)).toEqual(IDS);
     expect(out.checklist.every((i) => i.ok)).toBe(true);
@@ -285,5 +285,52 @@ describe("the checklist and the ship approval (slice 4)", () => {
     expect(mergeReadiness(withMode("low", { approvedOnHead: false, shipApproval: { head: HEAD } })).canAutoMerge).toBe(true);
     expect(mergeReadiness(withMode("low", { approvedOnHead: false, shipApproval: { head: "1111111aaaa" } })).canAutoMerge).toBe(false);
     expect(mergeReadiness(withMode("medium_when_review_required", { approvedOnHead: false, shipApproval: { head: HEAD } })).canAutoMerge).toBe(false);
+  });
+});
+
+describe("the stack item of the checklist", () => {
+  const item = (r: ReturnType<typeof mergeReadiness>) => r.checklist.find((c) => c.id === "stack");
+  it("sits after blocked, and is ok for a card with no stack whose PR targets the default branch", () => {
+    const r = mergeReadiness(input({ stack: { stacked: false, baseRef: "main", defaultBranch: "main" } }));
+    expect(r.checklist.map((c) => c.id).slice(-3)).toEqual(["blocked", "stack", "stale"]);
+    expect(item(r)).toMatchObject({ ok: true });
+    expect(r.ready).toBe(true);
+    expect(mergeReadiness(input()).ready).toBe(true);
+    expect(item(mergeReadiness(input()))).toMatchObject({ ok: true });
+  });
+
+  it("is red while the card is stacked: it waits for its parent to merge", () => {
+    const r = mergeReadiness(input({ stack: { stacked: true, baseRef: "task/p", defaultBranch: "main" } }));
+    expect(item(r)).toMatchObject({ ok: false, detail: "waits for its parent to merge" });
+    expect(r.ready).toBe(false);
+    expect(r.canAutoMerge).toBe(false);
+    expect(r.blockers).toContain("waits for its parent to merge");
+  });
+
+  it("is red when the PR targets another branch than the default, stacked or not: the machine merges only into the default branch", () => {
+    const r = mergeReadiness(input({ stack: { stacked: false, baseRef: "release/2", defaultBranch: "main" } }));
+    expect(item(r)).toMatchObject({ ok: false, detail: "targets release/2, not main: the machine merges only into the default branch" });
+    expect(r.canAutoMerge).toBe(false);
+  });
+
+  it("says nothing about the target when the default branch is not known", () => {
+    expect(item(mergeReadiness(input({ stack: { stacked: false, baseRef: "release/2", defaultBranch: null } })))).toMatchObject({ ok: true });
+  });
+});
+
+describe("an approval given while a card was stacked, after its PR was retargeted (wave 15)", () => {
+  it("does not count on the head the retarget's rebase made: the machine needs an approval on the new head again", async () => {
+    const { approvedOnHead } = await import("./review-rule.ts");
+    const OLD = "1".repeat(40);
+    const NEW = "2".repeat(40);
+    const reviews = [{ author: "ana", state: "APPROVED" as const, commitId: OLD, at: "t", association: "COLLABORATOR" }];
+    // While stacked, the approval is on the head it was given on.
+    expect(approvedOnHead(reviews, OLD, "me")).toBe(true);
+    // The parent merged, the card was rebased onto the default branch and its head moved: the same review is not a look at this head.
+    expect(approvedOnHead(reviews, NEW, "me")).toBe(false);
+    const ready = mergeReadiness(input({ policy: { autoMerge: "low", freeze: [] }, pr: pr({ headSha: NEW }), packSha: NEW, approvedOnHead: approvedOnHead(reviews, NEW, "me"), review: { required: true, why: "x" } as never }));
+    expect(ready.canAutoMerge).toBe(false);
+    const after = mergeReadiness(input({ policy: { autoMerge: "low", freeze: [] }, pr: pr({ headSha: NEW }), packSha: NEW, approvedOnHead: approvedOnHead([...reviews, { ...reviews[0]!, commitId: NEW }], NEW, "me"), review: { required: true, why: "x" } as never }));
+    expect(after.canAutoMerge).toBe(true);
   });
 });

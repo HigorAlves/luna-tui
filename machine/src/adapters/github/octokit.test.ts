@@ -129,6 +129,15 @@ describe("OctokitGitHub", () => {
     expect(calls).toEqual([["pulls.update", { owner: "o", repo: "a", pull_number: 7, state: "closed" }]]);
   });
 
+  it("opens a PR against the base it is given (a stacked card's parent branch), else the default branch, and retargets one by updating its base", async () => {
+    const { github, calls } = stub({ "repos.get": { default_branch: "main" }, "pulls.create": { html_url: "https://x/pull/9", number: 9, draft: true }, "pulls.update": {} });
+    await github.openPr("o/a", { title: "t", body: "b", head: "task/child", draft: true, base: "task/parent" });
+    expect(calls.find((c) => c[0] === "pulls.create")![1]).toMatchObject({ base: "task/parent", head: "task/child" });
+    expect(calls.some((c) => c[0] === "repos.get")).toBe(false);
+    await github.retargetPr("o/a", 9, "main");
+    expect(calls.at(-1)).toEqual(["pulls.update", { owner: "o", repo: "a", pull_number: 9, base: "main" }]);
+  });
+
   it("posts a review as one call, finds a PR by head, opens one against the default branch, and marks ready through GraphQL", async () => {
     const { github, calls } = stub({
       "pulls.createReview": {},

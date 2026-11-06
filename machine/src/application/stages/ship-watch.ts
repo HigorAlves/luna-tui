@@ -12,9 +12,10 @@ import { messageOf } from "../github.ts";
 import type { StageResult, StageRunner } from "../ports.ts";
 import { emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
 import { type DeliverDeps, openTaskPr, pushBranch } from "./deliver.ts";
-import type { ShipMonitor } from "./ship-monitor.ts";
+import type { ShipMonitor, ShipMonitorDeps } from "./ship-monitor.ts";
+import { mergedIntoOther } from "../stack.ts";
 
-export interface ShipDeps extends DeliverDeps {
+export interface ShipDeps extends DeliverDeps, Pick<ShipMonitorDeps, "stack"> {
   /** The Evidence Pack of the task: where it is read from and saved to, how it is published, where its local copy lives. Absent means ship without one. */
   evidence?: {
     load: (taskId: string) => Promise<EvidencePack | null>;
@@ -80,6 +81,8 @@ export function shipWatchRunner(deps: ShipDeps): StageRunner {
         const state = await deps.github.prMerged(resumed.slug, resumed.number);
         const url = `https://github.com/${resumed.slug}/pull/${resumed.number}`;
         if (state.merged) {
+          const elsewhere = await mergedIntoOther(deps, resumed.slug, resumed.number, task.repoPath);
+          if (elsewhere) return { outcome: "fail", detail: { prClosed: true, mergedInto: elsewhere } };
           return { outcome: "pass", detail: { merged: { sha: state.mergedSha, at: state.mergedAt, by: cursor!.mergeRequested || cursor!.queued ? "machine" : "person" }, prUrl: url, number: resumed.number } };
         }
         if (state.state === "closed") {

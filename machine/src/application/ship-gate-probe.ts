@@ -4,6 +4,7 @@ import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 import { loadCursor } from "./ship-cursor.ts";
 import { type ShipFactsDeps, readShipFacts } from "./stages/ship-monitor.ts";
 import type { StageContext } from "./ports.ts";
+import { mergedIntoOther } from "./stack.ts";
 
 export type ShipGateProbe = (task: TaskRow, gate: ApprovalRow) => Promise<"merged" | "closed" | "withdraw" | "keep">;
 
@@ -13,7 +14,7 @@ export function shipGateProbe(deps: ShipFactsDeps & { stateDir: string; now?: ()
     if (!cursor) return "keep";
     const { slug, number } = cursor.pr;
     const state = await deps.github.prMerged(slug, number);
-    if (state.merged) return "merged";
+    if (state.merged) return (await mergedIntoOther(deps, slug, number, task.repoPath)) ? "closed" : "merged";
     // GitHub's own `closed` state: the pipeline archives the card (`pr_closed`).
     if (state.state === "closed") return "closed";
     const facts = await readShipFacts(deps, { task, approvals: [] } as unknown as StageContext, { slug, number }, cursor, deps.now);

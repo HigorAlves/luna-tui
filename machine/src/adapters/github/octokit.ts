@@ -415,11 +415,16 @@ export class OctokitGitHub implements GitHub {
 
   async openPr(slug: string, pr: NewPr): Promise<PrRef> {
     const { owner, repo } = repoRef(slug);
-    const base = (await call(`reading ${slug}`, () => this.octokit.rest.repos.get({ owner, repo }))).data.default_branch;
+    const base = pr.base ?? (await call(`reading ${slug}`, () => this.octokit.rest.repos.get({ owner, repo }))).data.default_branch;
     const { data } = await call(`opening a PR for ${pr.head}`, () =>
       this.octokit.rest.pulls.create({ owner, repo, title: pr.title, body: pr.body, head: pr.head, base, draft: pr.draft }),
     );
     return { url: data.html_url, number: data.number, isDraft: data.draft === true };
+  }
+
+  async retargetPr(slug: string, number: number, base: string): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    await call(`retargeting ${slug}#${number} to ${base}`, () => this.octokit.rest.pulls.update({ owner, repo, pull_number: number, base }));
   }
 
   async markPrReady(slug: string, number: number): Promise<void> {
