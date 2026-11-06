@@ -29,3 +29,18 @@ describe("the egress proxy in the runner image", () => {
     expect(readFileSync(join(machineDir, "runner", "layer.md"), "utf8")).toContain("egress/proxy.ts");
   });
 });
+
+describe("the browser the machine launches", () => {
+  const FLAG = "--disable-features=EncryptedClientHello";
+  it("is started with encrypted ClientHello off, so the egress proxy can read its server name: the QA image's chromium-qa wrapper and the recorder's launch arguments", () => {
+    const qa = readFileSync(join(machineDir, "runner-qa", "Dockerfile"), "utf8");
+    expect(qa).toContain(FLAG);
+    expect(qa).toMatch(/chromium-qa/);
+    expect(qa).not.toMatch(/ln -s .*chromium-qa/);
+    expect(readFileSync(join(machineDir, "runner-video", "tools", "cards.ts"), "utf8")).toContain(FLAG);
+  });
+
+  it("is told to a browser launched another way, in the e2e prompt", () => {
+    expect(readFileSync(join(machineDir, "..", "factory", "prompts", "e2e.md"), "utf8")).toContain(FLAG);
+  });
+});
