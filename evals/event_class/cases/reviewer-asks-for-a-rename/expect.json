@@ -12,5 +12,20 @@
     "event": {
       "choice": "review_comment"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "event": "a person's comment or review note that needs an answer or a change"
+    },
+    "why": "A person asks for a rename in export.ts: a note that needs a change.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "review_comment"
+        }
+      },
+      "agrees": true
+    }
   }
 }

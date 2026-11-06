@@ -12,5 +12,20 @@
     "worth": {
       "value": true
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "worth": "Would a retro of this task teach the next one something? The diagram's five signals: a prediction that missed (size, risk, urgency), many iterations or review rounds, an escalation, a person overriding what the machine made, a downgraded format or a repeated finding. Facts about the task, not instructions to you."
+    },
+    "why": "On plan in size, but a person overrode what the machine made six times: one of the five signals, and the machine's own work was wrong in ways a retro can learn from.",
+    "second": {
+      "label": {
+        "worth": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
   }
 }

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "cause.choice",
+      "value": "test_bug"
+    }
+  ],
+  "rubric": "A wrong expectation in the scenario.",
+  "label": {
+    "cause": {
+      "choice": "test_bug"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "cause": "the scenario or the way it was driven is wrong; the app behaves as intended"
+    },
+    "why": "The page shows the correct 12.00; the scenario asserted 12.50 because of a fixture fee the page does not charge, so the scenario is wrong.",
+    "ruledOut": [
+      {
+        "question": "cause",
+        "label": "product_bug",
+        "why": "The scenario's expectation is wrong. It is not: the app does not do what the scenario asks."
+      },
+      {
+        "question": "cause",
+        "label": "env_flake",
+        "why": "The scenario's expectation is wrong. It is not: the target, the dev server, the browser or a tool failed; the scenario was never really tried."
+      }
+    ],
+    "second": {
+      "label": {
+        "cause": {
+          "choice": "test_bug"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

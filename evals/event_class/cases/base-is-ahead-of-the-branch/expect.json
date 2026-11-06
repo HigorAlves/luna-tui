@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "base_moved"
+    }
+  ],
+  "rubric": "The base moved and the branch is behind.",
+  "label": {
+    "event": {
+      "choice": "base_moved"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "event": "the base branch moved and the branch is behind it"
+    },
+    "why": "The branch is behind a base that moved, with no conflicts: the base moved.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "base_moved"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

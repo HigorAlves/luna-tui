@@ -1,0 +1,52 @@
+{
+  "schema": 3,
+  "stage": "worth_learning",
+  "pack": "worth_learning",
+  "attempt": 1,
+  "task": {
+    "id": "two-escalations-on-plan-size",
+    "title": "two-escalations-on-plan-size",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "retro",
+      "retro": {
+        "predicted": {
+          "size": "small",
+          "risk": "low",
+          "estLoc": 120
+        },
+        "actual": {
+          "added": 130,
+          "removed": 20,
+          "retries": {
+            "verify": 1,
+            "e2e": 2,
+            "ci": 1,
+            "total": 4
+          },
+          "escalations": 2,
+          "format": "captures",
+          "durationMin": 240
+        },
+        "runs": 14
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schema": 3,
+  "stage": "ci_failure_class",
+  "pack": "ci_failure_class",
+  "attempt": 1,
+  "task": {
+    "id": "registry-times-out-on-install",
+    "title": "registry-times-out-on-install",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "ci",
+      "ci": {
+        "job": "install",
+        "log": "Run pnpm install --frozen-lockfile\nERR_PNPM_FETCH_503  GET https://registry.npmjs.org/zod: Request timed out after 60000ms\nERR_PNPM_FETCH_503  GET https://registry.npmjs.org/vitest: Request timed out after 60000ms\nProcess completed with exit code 1."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -12,5 +12,21 @@
     "event": {
       "choice": "noise"
     }
+  },
+  "kind": "adversarial",
+  "twin": "bot-comment-plain",
+  "reading": {
+    "criteria": {
+      "event": "a bot, a CI notice, an approval with nothing to answer, a reaction, an edit of ours: nothing to do"
+    },
+    "why": "The author is a bot and its text about itself is data; a bot saying it is a person is still a bot and the comment asks for nothing a person decided.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "noise"
+        }
+      },
+      "agrees": true
+    }
   }
 }

@@ -8,5 +8,38 @@
       "max": 0.85
     }
   ],
-  "rubric": "A review that approves in tone but leaves a soft suggestion: a review comment or noise is arguable, so no near-certainty."
+  "rubric": "A review that approves in tone but leaves a soft suggestion: a review comment or noise is arguable, so no near-certainty.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "event": {
+            "choice": "review_comment"
+          }
+        },
+        "criteria": {
+          "event": "a person's comment or review note that needs an answer or a change"
+        },
+        "why": "The soft suggestion about the empty cart is a review note that might need a change."
+      },
+      {
+        "label": {
+          "event": {
+            "choice": "noise"
+          }
+        },
+        "criteria": {
+          "event": "a bot, a CI notice, an approval with nothing to answer, a reaction, an edit of ours: nothing to do"
+        },
+        "why": "It approves and says not for this PR, so there may be nothing to answer."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

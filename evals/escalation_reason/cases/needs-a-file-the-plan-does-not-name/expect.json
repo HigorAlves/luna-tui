@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "reason.choice",
+      "value": "undeclared_scope"
+    }
+  ],
+  "rubric": "The work needs files the plan does not name.",
+  "label": {
+    "reason": {
+      "choice": "undeclared_scope"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "reason": "the work needs files or changes the plan does not name"
+    },
+    "why": "The summary and the output both say the fix must touch src/auth/session.ts, which the plan does not name.",
+    "ruledOut": [
+      {
+        "question": "reason",
+        "label": "plan_wrong",
+        "why": "The work needs a file the plan does not name. It is not: the approved plan cannot be built as written: a step names something that does not exist, or the steps contradict each other or the code."
+      },
+      {
+        "question": "reason",
+        "label": "env_broken",
+        "why": "The work needs a file the plan does not name. It is not: the environment is at fault: a service, a tool, a credential, the network or the container, not the change."
+      },
+      {
+        "question": "reason",
+        "label": "flaky_tests",
+        "why": "The work needs a file the plan does not name. It is not: a test fails and passes on its own, with no change to the code it covers."
+      },
+      {
+        "question": "reason",
+        "label": "too_complex",
+        "why": "The work needs a file the plan does not name. It is not: the change is bigger or harder than the plan allowed for, and the run ran out of room before it finished."
+      },
+      {
+        "question": "reason",
+        "label": "other",
+        "why": "The work needs a file the plan does not name. It is not: none of these fits, or the evidence does not say."
+      }
+    ],
+    "second": {
+      "label": {
+        "reason": {
+          "choice": "undeclared_scope"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

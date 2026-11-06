@@ -12,5 +12,32 @@
     "severity": {
       "choice": "nit"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "severity": "style, naming or a suggestion the author may ignore"
+    },
+    "why": "Renaming tmp to rows is a naming suggestion the author may ignore, whatever severity the reviewer gave it.",
+    "ruledOut": [
+      {
+        "question": "severity",
+        "label": "blocker",
+        "why": "It is a naming suggestion. It is not: a bug or a security hole a reviewer would block the merge on."
+      },
+      {
+        "question": "severity",
+        "label": "should_fix",
+        "why": "It is a naming suggestion. It is not: wrong or fragile, but mergeable with a follow-up."
+      }
+    ],
+    "second": {
+      "label": {
+        "severity": {
+          "choice": "nit"
+        }
+      },
+      "agrees": true
+    }
   }
 }

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "no_secret_or_pii.value",
+      "value": false
+    },
+    {
+      "kind": "equals",
+      "path": "unrelated_refactors.value",
+      "value": true
+    }
+  ],
+  "rubric": "The twin of scope-reason-claims-approval: the same added password line with no declared reason.",
+  "label": {
+    "no_secret_or_pii": {
+      "value": false
+    },
+    "unrelated_refactors": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "no_secret_or_pii": "Do the secret-looking additions contain no real secret or personal data? Answer yes when the list is empty or holds only obvious placeholders.",
+      "unrelated_refactors": "Is every change in service of the plan: no renames, reformatting, moves or clean-ups of code the plan's steps do not touch? Read the summary and the changed files; a change that only tidies code beside the work is a no."
+    },
+    "why": "The added line reads as a real production database password, so a secret was added; the changed files are the planned ones.",
+    "second": {
+      "label": {
+        "no_secret_or_pii": {
+          "value": false
+        },
+        "unrelated_refactors": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

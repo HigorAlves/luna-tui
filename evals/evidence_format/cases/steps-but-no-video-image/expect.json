@@ -8,5 +8,38 @@
       "max": 0.85
     }
   ],
-  "rubric": "A web change with replayable steps but no video image on this machine: captures is likely, video impossible, text arguable; the model should not be near-certain."
+  "rubric": "A web change with replayable steps but no video image on this machine: captures is likely, video impossible, text arguable; the model should not be near-certain.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "format": {
+            "choice": "screenshots_or_terminal"
+          }
+        },
+        "criteria": {
+          "format": "an API or CLI change: screenshots when there is something to see, else a terminal capture of the commands and the scenarios' tests"
+        },
+        "why": "The run left replayable steps but the video image is missing, so screenshots of the steps are the likely fallback."
+      },
+      {
+        "label": {
+          "format": {
+            "choice": "text_only"
+          }
+        },
+        "criteria": {
+          "format": "CI/CD, config, infrastructure or a pure refactor: nothing a person could watch or run to see it"
+        },
+        "why": "Without the video image there is little to show a person, so text may be all there is."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

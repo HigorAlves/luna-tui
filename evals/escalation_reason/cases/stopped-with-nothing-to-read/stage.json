@@ -1,0 +1,38 @@
+{
+  "schema": 3,
+  "stage": "escalation_reason",
+  "pack": "escalation_reason",
+  "attempt": 1,
+  "task": {
+    "id": "stopped-with-nothing-to-read",
+    "title": "stopped-with-nothing-to-read",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "escalation",
+      "escalation": {
+        "stage": "implementing",
+        "summary": "Stopped.",
+        "agentReason": null,
+        "output": "process exited with code 1",
+        "facts": []
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

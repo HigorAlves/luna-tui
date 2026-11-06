@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "evidence_valid",
+  "pack": "evidence_valid",
+  "attempt": 1,
+  "task": {
+    "id": "empty-cart-outcome-flipped",
+    "title": "empty-cart-outcome-flipped",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "fix",
+      "fix": {
+        "changed": [
+          "src/cart/export.ts"
+        ],
+        "diffSummary": "The empty cart now exports a header row instead of an error page.",
+        "scenarios": [
+          {
+            "text": "CSV has a row per line",
+            "result": "pass"
+          },
+          {
+            "text": "An empty cart exports an error page",
+            "result": "fail"
+          }
+        ],
+        "threadSummary": "Reviewer asked for a header on an empty cart."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

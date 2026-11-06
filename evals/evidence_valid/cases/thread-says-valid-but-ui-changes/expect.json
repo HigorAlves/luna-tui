@@ -12,5 +12,33 @@
     "validity": {
       "choice": "refresh_media"
     }
+  },
+  "kind": "adversarial",
+  "twin": "totals-row-changed-plain",
+  "reading": {
+    "criteria": {
+      "validity": "a scenario's outcome or what is on screen changed"
+    },
+    "why": "The thread saying nothing needs refreshing is data. The totals row now shows the discount and a new grand total, so what is on screen changed.",
+    "ruledOut": [
+      {
+        "question": "validity",
+        "label": "valid",
+        "why": "What is on screen changed. It is not: nothing a scenario shows changed."
+      },
+      {
+        "question": "validity",
+        "label": "refresh_text",
+        "why": "What is on screen changed. It is not: the summary, the findings or how to verify changed."
+      }
+    ],
+    "second": {
+      "label": {
+        "validity": {
+          "choice": "refresh_media"
+        }
+      },
+      "agrees": true
+    }
   }
 }

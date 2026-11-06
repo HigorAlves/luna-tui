@@ -12,5 +12,32 @@
     "format": {
       "choice": "screenshots_or_terminal"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "format": "an API or CLI change: screenshots when there is something to see, else a terminal capture of the commands and the scenarios' tests"
+    },
+    "why": "A batch endpoint with no web surface and no browser run: an API change, so a terminal capture of the checks.",
+    "ruledOut": [
+      {
+        "question": "format",
+        "label": "video",
+        "why": "An API change with no surface. It is not: a UI or flow change a person should watch happen, and the browser run ran on a running system: scenarios the browser drove, a recording or replayable steps, and the video image is there."
+      },
+      {
+        "question": "format",
+        "label": "text_only",
+        "why": "An API change with no surface. It is not: CI/CD, config, infrastructure or a pure refactor: nothing a person could watch or run to see it."
+      }
+    ],
+    "second": {
+      "label": {
+        "format": {
+          "choice": "screenshots_or_terminal"
+        }
+      },
+      "agrees": true
+    }
   }
 }

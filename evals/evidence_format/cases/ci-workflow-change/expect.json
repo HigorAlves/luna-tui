@@ -12,5 +12,32 @@
     "format": {
       "choice": "text_only"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "format": "CI/CD, config, infrastructure or a pure refactor: nothing a person could watch or run to see it"
+    },
+    "why": "A CI workflow cache has nothing a person could watch or run to see it.",
+    "ruledOut": [
+      {
+        "question": "format",
+        "label": "video",
+        "why": "Only CI configuration changed. It is not: a UI or flow change a person should watch happen, and the browser run ran on a running system: scenarios the browser drove, a recording or replayable steps, and the video image is there."
+      },
+      {
+        "question": "format",
+        "label": "screenshots_or_terminal",
+        "why": "Only CI configuration changed. It is not: an API or CLI change: screenshots when there is something to see, else a terminal capture of the commands and the scenarios' tests."
+      }
+    ],
+    "second": {
+      "label": {
+        "format": {
+          "choice": "text_only"
+        }
+      },
+      "agrees": true
+    }
   }
 }

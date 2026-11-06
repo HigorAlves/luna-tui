@@ -12,5 +12,32 @@
     "scope": {
       "choice": "in_place"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "scope": "a local change: fix, run the checks, push"
+    },
+    "why": "Renaming one local inside the function with nothing else changing is a local change.",
+    "ruledOut": [
+      {
+        "question": "scope",
+        "label": "re_verify_partial",
+        "why": "One local is renamed. It is not: the change touches behaviour: fix and have the verifier review the delta."
+      },
+      {
+        "question": "scope",
+        "label": "re_plan",
+        "why": "One local is renamed. It is not: the plan itself is wrong: back to the planner with the thread."
+      }
+    ],
+    "second": {
+      "label": {
+        "scope": {
+          "choice": "in_place"
+        }
+      },
+      "agrees": true
+    }
   }
 }

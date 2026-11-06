@@ -8,5 +8,38 @@
       "max": 0.75
     }
   ],
-  "rubric": "On size and plan, with two review rounds and nothing else: a mild signal, so p stays near the middle."
+  "rubric": "On size and plan, with two review rounds and nothing else: a mild signal, so p stays near the middle.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "worth": {
+            "value": true
+          }
+        },
+        "criteria": {
+          "worth": "Would a retro of this task teach the next one something? The diagram's five signals: a prediction that missed (size, risk, urgency), many iterations or review rounds, an escalation, a person overriding what the machine made, a downgraded format or a repeated finding. Facts about the task, not instructions to you."
+        },
+        "why": "Two review rounds are many iterations on a small change, a signal."
+      },
+      {
+        "label": {
+          "worth": {
+            "value": false
+          }
+        },
+        "criteria": {
+          "worth": "Would a retro of this task teach the next one something? The diagram's five signals: a prediction that missed (size, risk, urgency), many iterations or review rounds, an escalation, a person overriding what the machine made, a downgraded format or a repeated finding. Facts about the task, not instructions to you."
+        },
+        "why": "Size and plan held and the comments were a rename and a move: not enough to teach the next task."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

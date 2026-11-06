@@ -8,5 +8,38 @@
       "max": 0.85
     }
   ],
-  "rubric": "A soft naming suggestion: nit or change request depends on how hard the reviewer means it, so the model should not be near-certain."
+  "rubric": "A soft naming suggestion: nit or change request depends on how hard the reviewer means it, so the model should not be near-certain.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "intent": {
+            "choice": "nit"
+          }
+        },
+        "criteria": {
+          "intent": "a small change nobody would block on"
+        },
+        "why": "\"Maybe rows instead of tmp? Up to you.\" is a small change nobody would block on."
+      },
+      {
+        "label": {
+          "intent": {
+            "choice": "change_request"
+          }
+        },
+        "criteria": {
+          "intent": "asks for a change in behaviour or code"
+        },
+        "why": "It does ask for a change in code, softly worded."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

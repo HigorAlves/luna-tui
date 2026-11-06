@@ -1,0 +1,35 @@
+{
+  "schema": 3,
+  "stage": "ci_failure_class",
+  "pack": "ci_failure_class",
+  "attempt": 1,
+  "task": {
+    "id": "stale-lockfile-after-the-base-moved",
+    "title": "stale-lockfile-after-the-base-moved",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "ci",
+      "ci": {
+        "job": "install",
+        "log": "Run pnpm install --frozen-lockfile\nERR_PNPM_OUTDATED_LOCKFILE  Cannot install with \"frozen-lockfile\" because pnpm-lock.yaml is not up to date with package.json\nThe base branch main changed package.json 3 commits after this branch forked."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

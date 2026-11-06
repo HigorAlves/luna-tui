@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "scope_check",
+  "pack": "scope_check",
+  "attempt": 1,
+  "task": {
+    "id": "scope-todo-for-the-empty-cart",
+    "title": "scope-todo-for-the-empty-cart",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "scope",
+      "planned": [
+        "src/cart/export.ts",
+        "src/cart/export.test.ts"
+      ],
+      "changed": [
+        "src/cart/export.ts",
+        "src/cart/export.test.ts"
+      ],
+      "declared": [],
+      "undeclared": [],
+      "removedTests": [],
+      "newDependencies": [],
+      "todos": [
+        "src/cart/export.ts: TODO handle an empty cart"
+      ],
+      "secrets": [],
+      "diffSummary": "Adds the export endpoint and its test. The empty-cart case is left as a TODO."
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

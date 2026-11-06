@@ -8,5 +8,38 @@
       "max": 0.85
     }
   ],
-  "rubric": "A new optional parameter with an unchanged default: the summary may need a sentence, the screens do not change; valid or refresh_text is arguable."
+  "rubric": "A new optional parameter with an unchanged default: the summary may need a sentence, the screens do not change; valid or refresh_text is arguable.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "validity": {
+            "choice": "valid"
+          }
+        },
+        "criteria": {
+          "validity": "nothing a scenario shows changed"
+        },
+        "why": "A new optional parameter with an unchanged default changes nothing the scenarios show."
+      },
+      {
+        "label": {
+          "validity": {
+            "choice": "refresh_text"
+          }
+        },
+        "criteria": {
+          "validity": "the summary, the findings or how to verify changed"
+        },
+        "why": "The README documents a new option, so the summary may need a sentence."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

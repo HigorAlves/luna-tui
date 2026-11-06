@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "escalation_reason",
+  "pack": "escalation_reason",
+  "attempt": 1,
+  "task": {
+    "id": "needs-a-file-the-plan-does-not-name",
+    "title": "needs-a-file-the-plan-does-not-name",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "escalation",
+      "escalation": {
+        "stage": "implementing",
+        "summary": "The fix needs a change in src/auth/session.ts, which the plan does not name.",
+        "agentReason": "undeclared_scope",
+        "output": "Error: session is read-only in src/cart/export.ts\n  the fix must touch src/auth/session.ts (not in the plan)",
+        "facts": [
+          "5 iterations spent of 15"
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

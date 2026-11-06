@@ -177,8 +177,8 @@ describe("the seed cases", () => {
   });
 });
 
-/** The packs whose hand-written cases are checked for their reading (`checkReading`). Slices 9 and 10 add their packs; at the end it is every decision pack. */
-const READ: string[] = ["intake_dedup", "risk_score", "size_estimate", "split_check", "coverage_check", "plan_check", "ticket_validity", "ticket_recommend", "conversation_relation", "triage_signals", "ticket_assess", "conversation_assess"];
+/** Every decision pack: a pack added later is checked from its first case. */
+const READ: string[] = Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
 
 describe("the readings of the hand-written cases", () => {
   const EVALS = resolve(import.meta.dirname, "..");

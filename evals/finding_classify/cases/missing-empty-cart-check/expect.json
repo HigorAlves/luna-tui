@@ -8,5 +8,38 @@
       "max": 0.85
     }
   ],
-  "rubric": "Fragile but mergeable, or just a nit? Reasonable reviewers split, so the answer should not be near-certain."
+  "rubric": "Fragile but mergeable, or just a nit? Reasonable reviewers split, so the answer should not be near-certain.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "severity": {
+            "choice": "should_fix"
+          }
+        },
+        "criteria": {
+          "severity": "wrong or fragile, but mergeable with a follow-up"
+        },
+        "why": "An unchecked empty cart is fragile but mergeable with a follow-up."
+      },
+      {
+        "label": {
+          "severity": {
+            "choice": "nit"
+          }
+        },
+        "criteria": {
+          "severity": "style, naming or a suggestion the author may ignore"
+        },
+        "why": "It yields a header row only, which may be what is wanted; the author may ignore the remark."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

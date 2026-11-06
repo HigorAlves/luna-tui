@@ -12,5 +12,37 @@
     "class": {
       "choice": "real"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "class": "the change broke a test, a build or a lint rule; a fix in the code is needed"
+    },
+    "why": "A test of the file the change touched fails with a plain assertion: the change broke a test and a code fix is needed.",
+    "ruledOut": [
+      {
+        "question": "class",
+        "label": "flake",
+        "why": "A plain assertion fails on code the change touched. It is not: a flaky or timing-dependent failure, likely to pass on a re-run."
+      },
+      {
+        "question": "class",
+        "label": "infra",
+        "why": "A plain assertion fails on code the change touched. It is not: the runner, a registry, the network, a quota or a service the job needs failed; nothing in the change can fix it."
+      },
+      {
+        "question": "class",
+        "label": "drift",
+        "why": "A plain assertion fails on code the change touched. It is not: the base branch moved: a conflict, a stale lockfile or a base commit the change no longer fits."
+      }
+    ],
+    "second": {
+      "label": {
+        "class": {
+          "choice": "real"
+        }
+      },
+      "agrees": true
+    }
   }
 }

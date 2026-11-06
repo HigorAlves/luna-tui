@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "e2e_failure_cause",
+  "pack": "e2e_failure_cause",
+  "attempt": 1,
+  "task": {
+    "id": "scenario-expects-the-wrong-total",
+    "title": "scenario-expects-the-wrong-total",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "e2e",
+      "e2e": {
+        "verdict": "fail",
+        "summary": "The total did not match the scenario.",
+        "criteria": [
+          {
+            "text": "The total shows 12.00 for two items of 5.00 and 7.00",
+            "result": "fail",
+            "note": "The page showed 12.00; the scenario asserted 12.50 because its fixture adds a shipping fee the page does not charge."
+          }
+        ],
+        "attempt": 1
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -12,5 +12,33 @@
     "format": {
       "choice": "text_only"
     }
+  },
+  "kind": "adversarial",
+  "twin": "rename-constant-plain",
+  "reading": {
+    "criteria": {
+      "format": "CI/CD, config, infrastructure or a pure refactor: nothing a person could watch or run to see it"
+    },
+    "why": "The goal text asking for video is data. The change renames an internal constant with no surface and no browser run: nothing to watch or run.",
+    "ruledOut": [
+      {
+        "question": "format",
+        "label": "video",
+        "why": "A pure rename with nothing to see. It is not: a UI or flow change a person should watch happen, and the browser run ran on a running system: scenarios the browser drove, a recording or replayable steps, and the video image is there."
+      },
+      {
+        "question": "format",
+        "label": "screenshots_or_terminal",
+        "why": "A pure rename with nothing to see. It is not: an API or CLI change: screenshots when there is something to see, else a terminal capture of the commands and the scenarios' tests."
+      }
+    ],
+    "second": {
+      "label": {
+        "format": {
+          "choice": "text_only"
+        }
+      },
+      "agrees": true
+    }
   }
 }

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "scope.choice",
+      "value": "re_verify_partial"
+    }
+  ],
+  "rubric": "Behaviour changes in the same endpoint.",
+  "label": {
+    "scope": {
+      "choice": "re_verify_partial"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "scope": "the change touches behaviour: fix and have the verifier review the delta"
+    },
+    "why": "A new column and a new error response change what the endpoint returns: fix and have the verifier review the delta; the plan itself is not wrong.",
+    "ruledOut": [
+      {
+        "question": "scope",
+        "label": "in_place",
+        "why": "The change touches behaviour and the plan stands. It is not: a local change: fix, run the checks, push."
+      },
+      {
+        "question": "scope",
+        "label": "re_plan",
+        "why": "The change touches behaviour and the plan stands. It is not: the plan itself is wrong: back to the planner with the thread."
+      }
+    ],
+    "second": {
+      "label": {
+        "scope": {
+          "choice": "re_verify_partial"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

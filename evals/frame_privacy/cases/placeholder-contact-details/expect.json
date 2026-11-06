@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "exposure.choice",
+      "value": "none"
+    }
+  ],
+  "rubric": "A name and phone number that are obvious placeholders.",
+  "label": {
+    "exposure": {
+      "choice": "none"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "exposure": "nothing sensitive: ordinary interface text, and synthetic or placeholder data (names like Jane Doe, addresses at example.com, obviously fake numbers)"
+    },
+    "why": "Jane Doe with an example.com address and the 555 0100 number are the synthetic placeholders the criterion names.",
+    "ruledOut": [
+      {
+        "question": "exposure",
+        "label": "credential",
+        "why": "Everything shown is a placeholder. It is not: a password, an API key, a token or a connection string shown in full."
+      },
+      {
+        "question": "exposure",
+        "label": "personal_data",
+        "why": "Everything shown is a placeholder. It is not: a real person's name together with contact, address, identity or payment details; synthetic or placeholder data is none."
+      }
+    ],
+    "second": {
+      "label": {
+        "exposure": {
+          "choice": "none"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

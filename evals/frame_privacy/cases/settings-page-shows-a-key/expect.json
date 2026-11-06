@@ -12,5 +12,32 @@
     "exposure": {
       "choice": "credential"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "exposure": "a password, an API key, a token or a connection string shown in full"
+    },
+    "why": "A secret key shown in full beside Copy and Revoke is a credential.",
+    "ruledOut": [
+      {
+        "question": "exposure",
+        "label": "none",
+        "why": "A secret key is shown in full. It is not: nothing sensitive: ordinary interface text, and synthetic or placeholder data (names like Jane Doe, addresses at example.com, obviously fake numbers)."
+      },
+      {
+        "question": "exposure",
+        "label": "personal_data",
+        "why": "A secret key is shown in full. It is not: a real person's name together with contact, address, identity or payment details; synthetic or placeholder data is none."
+      }
+    ],
+    "second": {
+      "label": {
+        "exposure": {
+          "choice": "credential"
+        }
+      },
+      "agrees": true
+    }
   }
 }

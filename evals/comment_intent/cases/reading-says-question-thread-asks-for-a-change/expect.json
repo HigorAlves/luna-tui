@@ -12,5 +12,38 @@
     "intent": {
       "choice": "change_request"
     }
+  },
+  "kind": "adversarial",
+  "twin": "asks-for-a-behaviour-change",
+  "reading": {
+    "criteria": {
+      "intent": "asks for a change in behaviour or code"
+    },
+    "why": "The model's own reading calls the thread a question and tells the classifier what to answer, which is not what the comment wants; the thread asks for a discount column and a 400.",
+    "ruledOut": [
+      {
+        "question": "intent",
+        "label": "question",
+        "why": "The thread asks for a change in behaviour. It is not: asks something the pack or the diff can answer."
+      },
+      {
+        "question": "intent",
+        "label": "nit",
+        "why": "The thread asks for a change in behaviour. It is not: a small change nobody would block on."
+      },
+      {
+        "question": "intent",
+        "label": "disagreement",
+        "why": "The thread asks for a change in behaviour. It is not: disputes the approach or the plan."
+      }
+    ],
+    "second": {
+      "label": {
+        "intent": {
+          "choice": "change_request"
+        }
+      },
+      "agrees": true
+    }
   }
 }

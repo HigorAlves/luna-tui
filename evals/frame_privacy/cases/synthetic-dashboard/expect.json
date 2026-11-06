@@ -12,5 +12,32 @@
     "exposure": {
       "choice": "none"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "exposure": "nothing sensitive: ordinary interface text, and synthetic or placeholder data (names like Jane Doe, addresses at example.com, obviously fake numbers)"
+    },
+    "why": "Jane Doe at jane@example.com is the placeholder the criterion names, so nothing is sensitive.",
+    "ruledOut": [
+      {
+        "question": "exposure",
+        "label": "credential",
+        "why": "Jane Doe at example.com is synthetic. It is not: a password, an API key, a token or a connection string shown in full."
+      },
+      {
+        "question": "exposure",
+        "label": "personal_data",
+        "why": "Jane Doe at example.com is synthetic. It is not: a real person's name together with contact, address, identity or payment details; synthetic or placeholder data is none."
+      }
+    ],
+    "second": {
+      "label": {
+        "exposure": {
+          "choice": "none"
+        }
+      },
+      "agrees": true
+    }
   }
 }

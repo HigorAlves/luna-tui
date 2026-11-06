@@ -12,5 +12,32 @@
     "format": {
       "choice": "video"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "format": "a UI or flow change a person should watch happen, and the browser run ran on a running system: scenarios the browser drove, a recording or replayable steps, and the video image is there"
+    },
+    "why": "A user-visible web change where the browser run left a recording and steps and the video image exists.",
+    "ruledOut": [
+      {
+        "question": "format",
+        "label": "screenshots_or_terminal",
+        "why": "A watchable change with a recording and the image. It is not: an API or CLI change: screenshots when there is something to see, else a terminal capture of the commands and the scenarios' tests."
+      },
+      {
+        "question": "format",
+        "label": "text_only",
+        "why": "A watchable change with a recording and the image. It is not: CI/CD, config, infrastructure or a pure refactor: nothing a person could watch or run to see it."
+      }
+    ],
+    "second": {
+      "label": {
+        "format": {
+          "choice": "video"
+        }
+      },
+      "agrees": true
+    }
   }
 }

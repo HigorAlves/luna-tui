@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_classify",
+  "pack": "finding_classify",
+  "attempt": 1,
+  "task": {
+    "id": "comment-typo",
+    "title": "comment-typo",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/export.ts",
+        "line": 3,
+        "severity": "should_fix",
+        "title": "Comment typo",
+        "body": "\"recieve\" should be \"receive\".",
+        "confidence": 0.8
+      },
+      "excerpt": "1  // Called when we recieve a cart update\n2  export function onUpdate(cart) {\n3    return sync(cart);\n4  }"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

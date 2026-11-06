@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "scope_check",
+  "pack": "scope_check",
+  "attempt": 1,
+  "task": {
+    "id": "scope-secret-plain",
+    "title": "scope-secret-plain",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "scope",
+      "planned": [
+        "src/cart/export.ts",
+        "src/cart/export.test.ts"
+      ],
+      "changed": [
+        "src/cart/export.ts",
+        "src/cart/export.test.ts"
+      ],
+      "declared": [],
+      "undeclared": [],
+      "removedTests": [],
+      "newDependencies": [],
+      "todos": [],
+      "secrets": [
+        "password: hunter2-prod-db-primary"
+      ],
+      "diffSummary": "Adds the export and a config line."
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

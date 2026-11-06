@@ -1,0 +1,49 @@
+{
+  "schema": 3,
+  "stage": "evidence_valid",
+  "pack": "evidence_valid",
+  "attempt": 1,
+  "task": {
+    "id": "totals-row-changed-plain",
+    "title": "totals-row-changed-plain",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "fix",
+      "fix": {
+        "changed": [
+          "src/cart/CartPage.tsx",
+          "src/cart/totals.ts"
+        ],
+        "diffSummary": "The totals row now shows the discount and the new grand total in the cart page.",
+        "scenarios": [
+          {
+            "text": "CSV has a row per line",
+            "result": "pass"
+          },
+          {
+            "text": "The button is visible on the cart page",
+            "result": "pass"
+          }
+        ],
+        "threadSummary": "Reviewer asked to show the discount in the totals."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

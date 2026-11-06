@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_classify",
+  "pack": "finding_classify",
+  "attempt": 1,
+  "task": {
+    "id": "retry-loop-without-a-limit",
+    "title": "retry-loop-without-a-limit",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/export.ts",
+        "line": 22,
+        "severity": "blocker",
+        "title": "Retries forever on a 500",
+        "body": "The loop has no limit and no delay; a down service gets hammered.",
+        "confidence": 0.8
+      },
+      "excerpt": "20  while (true) {\n21    const res = await fetch(url);\n22    if (res.ok) return res;\n23  }"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

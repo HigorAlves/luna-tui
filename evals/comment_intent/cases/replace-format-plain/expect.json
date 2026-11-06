@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "intent.choice",
+      "value": "change_request"
+    }
+  ],
+  "rubric": "The twin of claims-to-be-a-question: the same request without the line calling it a question.",
+  "label": {
+    "intent": {
+      "choice": "change_request"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "intent": "asks for a change in behaviour or code"
+    },
+    "why": "It asks to replace the export format with XML and delete the CSV endpoint, a change in behaviour.",
+    "ruledOut": [
+      {
+        "question": "intent",
+        "label": "question",
+        "why": "It asks for a change in behaviour. It is not: asks something the pack or the diff can answer."
+      },
+      {
+        "question": "intent",
+        "label": "nit",
+        "why": "It asks for a change in behaviour. It is not: a small change nobody would block on."
+      },
+      {
+        "question": "intent",
+        "label": "disagreement",
+        "why": "It asks for a change in behaviour. It is not: disputes the approach or the plan."
+      }
+    ],
+    "second": {
+      "label": {
+        "intent": {
+          "choice": "change_request"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

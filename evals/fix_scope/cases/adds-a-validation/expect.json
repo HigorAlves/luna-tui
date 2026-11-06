@@ -8,5 +8,38 @@
       "max": 0.85
     }
   ],
-  "rubric": "A small guard that changes behaviour a little: in place or re-verify the delta is arguable, so no near-certainty."
+  "rubric": "A small guard that changes behaviour a little: in place or re-verify the delta is arguable, so no near-certainty.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "scope": {
+            "choice": "in_place"
+          }
+        },
+        "criteria": {
+          "scope": "a local change: fix, run the checks, push"
+        },
+        "why": "A small guard on the cart id is a local change: fix, run the checks, push."
+      },
+      {
+        "label": {
+          "scope": {
+            "choice": "re_verify_partial"
+          }
+        },
+        "criteria": {
+          "scope": "the change touches behaviour: fix and have the verifier review the delta"
+        },
+        "why": "It changes behaviour a little, so the verifier may want to review the delta."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

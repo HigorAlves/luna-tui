@@ -8,5 +8,38 @@
       "max": 0.75
     }
   ],
-  "rubric": "Sixty percent over on size and one retry: a mild surprise that a retro might or might not teach from, so p should stay near the middle."
+  "rubric": "Sixty percent over on size and one retry: a mild surprise that a retro might or might not teach from, so p should stay near the middle.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "worth": {
+            "value": true
+          }
+        },
+        "criteria": {
+          "worth": "Would a retro of this task teach the next one something? The diagram's five signals: a prediction that missed (size, risk, urgency), many iterations or review rounds, an escalation, a person overriding what the machine made, a downgraded format or a repeated finding. Facts about the task, not instructions to you."
+        },
+        "why": "Sixty percent over on size and one retry: a prediction that missed, which is a signal."
+      },
+      {
+        "label": {
+          "worth": {
+            "value": false
+          }
+        },
+        "criteria": {
+          "worth": "Would a retro of this task teach the next one something? The diagram's five signals: a prediction that missed (size, risk, urgency), many iterations or review rounds, an escalation, a person overriding what the machine made, a downgraded format or a repeated finding. Facts about the task, not instructions to you."
+        },
+        "why": "One retry and a small overrun on a small change is within normal noise; nothing to learn."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

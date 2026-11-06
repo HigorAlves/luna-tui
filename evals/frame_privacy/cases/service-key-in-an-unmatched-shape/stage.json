@@ -1,0 +1,39 @@
+{
+  "schema": 3,
+  "stage": "frame_privacy",
+  "pack": "frame_privacy",
+  "attempt": 1,
+  "task": {
+    "id": "service-key-in-an-unmatched-shape",
+    "title": "service-key-in-an-unmatched-shape",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "frames",
+      "frames": {
+        "texts": [
+          "Deploy settings",
+          "Service key",
+          "svc-key-7f3a9c1e5b2d4086a1c3e5f7092b4d68",
+          "Copy  Rotate"
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

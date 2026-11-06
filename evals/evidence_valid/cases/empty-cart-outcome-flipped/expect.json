@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "validity.choice",
+      "value": "refresh_media"
+    }
+  ],
+  "rubric": "A scenario's outcome changed.",
+  "label": {
+    "validity": {
+      "choice": "refresh_media"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "validity": "a scenario's outcome or what is on screen changed"
+    },
+    "why": "The empty-cart scenario that showed an error page now gets a header row: a scenario's outcome changed, so what the recording shows is stale.",
+    "ruledOut": [
+      {
+        "question": "validity",
+        "label": "valid",
+        "why": "A scenario's outcome changed. It is not: nothing a scenario shows changed."
+      },
+      {
+        "question": "validity",
+        "label": "refresh_text",
+        "why": "A scenario's outcome changed. It is not: the summary, the findings or how to verify changed."
+      }
+    ],
+    "second": {
+      "label": {
+        "validity": {
+          "choice": "refresh_media"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -12,5 +12,32 @@
     "severity": {
       "choice": "blocker"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "severity": "a bug or a security hole a reviewer would block the merge on"
+    },
+    "why": "A request value concatenated into SQL is an injection, a security hole a reviewer would block on.",
+    "ruledOut": [
+      {
+        "question": "severity",
+        "label": "should_fix",
+        "why": "A request value is concatenated into SQL. It is not: wrong or fragile, but mergeable with a follow-up."
+      },
+      {
+        "question": "severity",
+        "label": "nit",
+        "why": "A request value is concatenated into SQL. It is not: style, naming or a suggestion the author may ignore."
+      }
+    ],
+    "second": {
+      "label": {
+        "severity": {
+          "choice": "blocker"
+        }
+      },
+      "agrees": true
+    }
   }
 }
