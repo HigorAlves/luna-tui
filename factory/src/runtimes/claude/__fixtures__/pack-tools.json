@@ -74,7 +74,8 @@
       "WebFetch",
       "Bash(gh issue view:*)",
       "mcp__luna__decision_get",
-      "mcp__luna__card_search"
+      "mcp__luna__card_search",
+      "mcp__luna__memory_recall"
     ],
     "tools": [
       "Read",
@@ -86,7 +87,8 @@
       "Bash",
       "WebFetch",
       "mcp__luna__decision_get",
-      "mcp__luna__card_search"
+      "mcp__luna__card_search",
+      "mcp__luna__memory_recall"
     ]
   },
   "test_design": {
@@ -184,7 +186,8 @@
       "Bash(graphify god-nodes:*)",
       "WebFetch",
       "Bash(gh issue view:*)",
-      "mcp__luna__decision_get"
+      "mcp__luna__decision_get",
+      "mcp__luna__memory_recall"
     ],
     "tools": [
       "Read",
@@ -194,7 +197,8 @@
       "mcp__luna__step",
       "Bash",
       "WebFetch",
-      "mcp__luna__decision_get"
+      "mcp__luna__decision_get",
+      "mcp__luna__memory_recall"
     ]
   },
   "plan_fast": {
@@ -278,7 +282,8 @@
       "Bash(cargo:*)",
       "Bash(pip:*)",
       "Bash(pytest:*)",
-      "Bash(make:*)"
+      "Bash(make:*)",
+      "mcp__luna__memory_recall"
     ],
     "tools": [
       "Read",
@@ -293,7 +298,8 @@
       "mcp__luna__slice_set",
       "mcp__luna__slice_list",
       "mcp__luna__decision_get",
-      "mcp__luna__scope_check"
+      "mcp__luna__scope_check",
+      "mcp__luna__memory_recall"
     ]
   },
   "verifying": {
@@ -335,7 +341,8 @@
       "Bash(cargo:*)",
       "Bash(pip:*)",
       "Bash(pytest:*)",
-      "Bash(make:*)"
+      "Bash(make:*)",
+      "mcp__luna__memory_recall"
     ],
     "tools": [
       "Read",
@@ -345,7 +352,8 @@
       "mcp__luna__step",
       "Bash",
       "Write",
-      "Edit"
+      "Edit",
+      "mcp__luna__memory_recall"
     ]
   },
   "e2e": {
@@ -776,7 +784,8 @@
       "Bash(graphify explain:*)",
       "Bash(graphify path:*)",
       "Bash(graphify affected:*)",
-      "Bash(graphify god-nodes:*)"
+      "Bash(graphify god-nodes:*)",
+      "mcp__luna__memory_recall"
     ],
     "tools": [
       "Read",
@@ -784,7 +793,8 @@
       "Grep",
       "Skill",
       "mcp__luna__step",
-      "Bash"
+      "Bash",
+      "mcp__luna__memory_recall"
     ]
   },
   "build_tests": {
@@ -828,7 +838,8 @@
       "Bash(pip:*)",
       "Bash(pytest:*)",
       "Bash(make:*)",
-      "mcp__luna__scenario_red"
+      "mcp__luna__scenario_red",
+      "mcp__luna__memory_recall"
     ],
     "tools": [
       "Read",
@@ -840,7 +851,8 @@
       "Write",
       "Edit",
       "mcp__luna__decision_get",
-      "mcp__luna__scenario_red"
+      "mcp__luna__scenario_red",
+      "mcp__luna__memory_recall"
     ]
   },
   "ticket_reply": {
@@ -852,6 +864,10 @@
     "tools": []
   },
   "decompose": {
+    "allowedTools": [],
+    "tools": []
+  },
+  "memory_extract": {
     "allowedTools": [],
     "tools": []
   }
