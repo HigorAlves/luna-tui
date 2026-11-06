@@ -76,7 +76,7 @@ describe("taskDiff", () => {
       "merge-base HEAD origin/main": ok(base),
       [`diff -M --numstat ${base} HEAD`]: ok("1\t1\tsrc/a.ts\n"),
       [`diff -M --name-status ${base} HEAD`]: ok("M\tsrc/a.ts\n"),
-      [`diff -M ${base} HEAD -- src/a.ts`]: ok(patch),
+      [`diff --no-ext-diff -M ${base} HEAD -- src/a.ts`]: ok(patch),
     });
     const diff = await taskDiff(git.exec, "/wt", "/repo", "src/a.ts");
     expect(diff).toMatchObject({ files: [{ path: "src/a.ts" }], patch });
@@ -107,7 +107,7 @@ describe("taskDiff", () => {
       "merge-base HEAD origin/main": ok(base),
       [`diff -M --numstat ${base} HEAD`]: ok("1\t1\tsrc/a.ts\n"),
       [`diff -M --name-status ${base} HEAD`]: ok("M\tsrc/a.ts\n"),
-      [`diff -M ${base} HEAD -- src/a.ts`]: ok(patch),
+      [`diff --no-ext-diff -M ${base} HEAD -- src/a.ts`]: ok(patch),
     });
     const diff = await taskDiff(git.exec, "/wt", "/repo", "src/a.ts");
     expect(diff.truncated).toBe(true);

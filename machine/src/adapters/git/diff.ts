@@ -106,7 +106,7 @@ export async function taskDiff(exec: GitExec, worktreePath: string, repoPath: st
   const diff: TaskDiff = { base, head: head.stdout.trim(), files };
   if (file !== undefined) {
     if (!files.some((f) => f.path === file)) throw new NoFileError(file);
-    const patch = await git("diff", "-M", base, "HEAD", "--", file);
+    const patch = await git("diff", "--no-ext-diff", "-M", base, "HEAD", "--", file);
     if (patch.length > PATCH_CAP) {
       const cut = patch.lastIndexOf("\n", PATCH_CAP - 1);
       diff.patch = patch.slice(0, cut > 0 ? cut + 1 : PATCH_CAP);
