@@ -344,3 +344,11 @@ describe("the v2.2 diagram's sections", () => {
     expect(planned).toEqual(["plan.approvers.high", "plan.approvers.low", "plan.approvers.medium", "plan.approvers.outside_owning_team", "plan.coverage_score_min", "plan.sla.escalate_days", "plan.sla.reminder_days"]);
   });
 });
+
+describe("the evidence keys the film reads reach the policy from a repository's luna.yaml", () => {
+  it("video_budget_s, regenerate, tts.voice and tts.language", () => {
+    const policy = parseLunaConfig("evidence:\n  video_budget_s: 90\n  regenerate: 0\n  tts:\n    voice: bf_emma\n    language: en-GB\n");
+    expect(policy.factory.evidence).toMatchObject({ video_budget_s: 90, regenerate: 0, tts: { voice: "bf_emma", language: "en-GB" } });
+    expect(parseLunaConfig("").factory.evidence).toMatchObject({ video_budget_s: 240, regenerate: 1, tts: { voice: null, language: null } });
+  });
+});

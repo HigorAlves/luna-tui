@@ -245,6 +245,8 @@ export const VideoQaAnswer = z.object({
   scores: z.object({ hook: VideoScore, clarity: VideoScore, readability: VideoScore, motion: VideoScore, rhythm: VideoScore, composition: VideoScore, continuity: VideoScore, truth: VideoScore, sync: VideoScore }),
   defects: z.array(z.object({ priority: z.enum(["P0", "P1", "P2"]), t: z.number(), scene: z.string().nullable(), element: z.string().nullable(), symptom: z.string(), mechanism: z.string(), fix: z.string() })),
   weakestScene: z.string(),
+  /** How sure the critic is of its verdict (0 to 1). A `ship` under 0.5 counts as one more pass. */
+  confidence: z.number().min(0).max(1).optional(),
 });
 export type VideoQaAnswer = z.infer<typeof VideoQaAnswer>;
 

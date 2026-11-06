@@ -721,6 +721,8 @@ export const EvidencePack = z.object({
       defects: z.array(z.object({ priority: z.enum(["P0", "P1", "P2"]), t: z.number(), scene: z.string().nullable(), element: z.string().nullable(), symptom: z.string(), fix: z.string() })),
       rounds: z.number().int(),
       transcript: z.string().optional(),
+      /** The critic's confidence in its verdict, 0 to 1, when it gave one. */
+      confidence: z.number().min(0).max(1).optional(),
     })
     .nullable()
     .optional(),
@@ -900,6 +902,8 @@ export const VideoContext = z.object({
   /** Contact sheets, as paths in the container (under /evidence). */
   sheets: z.array(z.string()),
   fixCards: z.array(VideoFixCard),
+  /** `evidence.video_budget_s`: the film's length limit in seconds; absent reads as 240. */
+  budgetS: z.number().int().positive().optional(),
 });
 export type VideoContext = z.infer<typeof VideoContext>;
 

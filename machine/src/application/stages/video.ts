@@ -66,6 +66,8 @@ const RECORDING_MAX = 4 * 1024 ** 3;
 const STEPS_CAP = 400;
 const TRANSCRIPT_CAP = 20_000;
 const SHIP_SCORE = 8;
+/** A `ship` the critic is less sure of than this counts as one more pass. */
+const CONFIDENCE_MIN = 0.5;
 
 const Marks = z.object({ marks: z.array(z.object({ scene: z.string(), t: z.number().finite().min(0) })) });
 const Narration = z.object({ scenes: z.array(z.object({ id: z.string(), durationS: z.number().finite().min(0) })) });
@@ -150,6 +152,9 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
     else if (wanted !== null) note("evidence.tts.voice is not a voice name (like af_heart): ignored, the default voice is used");
     if (voice === null && language === "en-gb") voice = "bf_emma";
 
+    const budgetS = evidenceConfig?.video_budget_s ?? 240;
+    const regenerate = evidenceConfig?.regenerate ?? 1;
+
     // What the browser run left: replayable steps and the chapters.
     const steps: string[] = [];
     let chapters: VideoContext["chapters"] = [];
@@ -173,6 +178,7 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       transcript: null,
       sheets: [],
       fixCards: [],
+      budgetS,
       ...over,
     });
     const titles = input.scenarios.map((s) => s.title);
@@ -195,7 +201,7 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       const answer = result.detail?.answer as { timeline?: unknown } | undefined;
       const parsed = Timeline.safeParse((await readJson(dir, "timeline.json", SMALL)) ?? answer?.timeline);
       if (!parsed.success) return { error: `${pack} left no valid timeline: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}` };
-      const checked = checkTimeline(parsed.data, { scenarios: titles });
+      const checked = checkTimeline(parsed.data, { scenarios: titles, maxS: budgetS });
       if (checked.errors.length > 0) return { error: `the timeline breaks its rules: ${checked.errors.join("; ")}`, problems: checked.errors };
       await writeFile(join(jobDir, "timeline.json"), JSON.stringify(parsed.data, null, 2));
       // The director has no file tool: the script rides in its answer (a file left by an older image is still read).
@@ -273,9 +279,9 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
         context.signal.removeEventListener("abort", relay);
       }
       if (first) return first;
-      let error = await tool("compose", ["--job", "/work"]);
+      let error = await tool("compose", ["--job", "/work", "--max-s", String(budgetS)]);
       if (error) return { error };
-      error = await tool("measure", ["--video", "/work/walkthrough.mp4", "--timeline", "/work/timeline.json", "--out", "/work/qa"]);
+      error = await tool("measure", ["--video", "/work/walkthrough.mp4", "--timeline", "/work/timeline.json", "--out", "/work/qa", "--max-s", String(budgetS)]);
       return error ? { error } : null;
     };
 
@@ -292,6 +298,11 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       const report = Report.safeParse(reportRaw);
       if (!report.success) return { shipped: false, answer: null, measured: [], report: null, error: "the measure job left no usable report.json" };
       const measured = report.data.checks.filter((c) => c.level === "FAIL").map((c): VideoFixCard => ({ t: null, scene: null, element: null, text: `measured ${c.check}: ${c.detail}`, priority: "P0" }));
+      // The budget is the host's to hold, whatever the image's own check said.
+      const film = (await readJson(jobDir, "meta.json", SMALL)) as { durationS?: unknown } | null;
+      if (typeof film?.durationS === "number" && film.durationS > budgetS && !measured.some((m) => m.text.startsWith("measured duration"))) {
+        measured.push({ t: null, scene: null, element: null, text: `measured duration: the film runs ${film.durationS}s, over the ${budgetS}s budget`, priority: "P0" });
+      }
       const transcriptPath = await trusted(jobDir, "qa/transcript.txt", SMALL);
       const transcript = transcriptPath ? (await readRegularFile(transcriptPath, SMALL)).slice(0, TRANSCRIPT_CAP) : null;
       const sheets: string[] = [];
@@ -309,17 +320,20 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       const answer = VideoQaAnswer.safeParse(result.detail?.answer);
       if (!answer.success) return { shipped: false, answer: null, measured, report: reportRaw, error: "video_qa gave no usable answer" };
       const a = answer.data;
-      const shipped = a.verdict === "ship" && Object.values(a.scores).every((s) => s >= SHIP_SCORE) && !a.defects.some((d) => d.priority === "P0") && measured.length === 0;
+      const shipped = a.verdict === "ship" && (a.confidence ?? 1) >= CONFIDENCE_MIN && Object.values(a.scores).every((s) => s >= SHIP_SCORE) && !a.defects.some((d) => d.priority === "P0") && measured.length === 0;
       return { shipped, answer: a, measured, report: reportRaw };
     };
     const cardsOf = (j: Judged): VideoFixCard[] => [
       ...(j.answer?.defects.filter((d) => d.priority !== "P2").map((d): VideoFixCard => ({ t: d.t, scene: d.scene, element: d.element, text: `${d.symptom}: ${d.fix}`, priority: d.priority })) ?? []),
+      ...(j.answer && j.answer.verdict === "ship" && (j.answer.confidence ?? 1) < CONFIDENCE_MIN
+        ? [{ t: null, scene: j.answer.weakestScene, element: null, text: `the critic was not sure (confidence ${j.answer.confidence}): check the weakest scene again`, priority: "P1" } as VideoFixCard]
+        : []),
       ...j.measured,
     ];
 
     // ---- the run
     let timeline: Timeline;
-    let fixUsed = false;
+    let fixes = 0;
     let recordNext = true;
     if (reuse) {
       const previous = Timeline.safeParse(await readJson(jobDir, "timeline.json", SMALL));
@@ -327,7 +341,7 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       const fixed = await scripted("video_fix", input.fixCards, previous.data, "fix");
       if ("error" in fixed) return fail(fixed.error, { rateLimited: fixed.rateLimited });
       timeline = fixed.timeline;
-      fixUsed = true;
+      fixes = 1;
       recordNext = demoChanged(previous.data, timeline);
     } else {
       const first = await scripted("video_script", input.fixCards, null, "script");
@@ -338,21 +352,21 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
     let rounds = 0;
     let judged: Judged;
     for (;;) {
-      const rendered = await render(timeline, recordNext, fixUsed ? "-2" : "");
+      const rendered = await render(timeline, recordNext, fixes > 0 ? `-${fixes + 1}` : "");
       if (rendered) return fail(rendered.error, { rateLimited: rendered.rateLimited });
-      judged = await judge(timeline, fixUsed ? "-2" : "");
+      judged = await judge(timeline, fixes > 0 ? `-${fixes + 1}` : "");
       rounds++;
       if (judged.error && !judged.answer) return fail(judged.error, { rateLimited: judged.rateLimited });
       if (judged.shipped) break;
-      if (fixUsed) {
+      if (fixes >= regenerate) {
         const weakest = judged.answer?.weakestScene ?? "unknown";
-        return fail(`the critic did not pass the second round: ${weakest}`, { video: await packVideo(judged, rounds, "degraded") });
+        return fail(`the critic did not pass the ${fixes === 1 ? "second" : `last (${rounds})`} round: ${weakest}`, { video: await packVideo(judged, rounds, "degraded") });
       }
-      const fixed = await scripted("video_fix", [...input.fixCards, ...cardsOf(judged)], timeline, "fix");
+      const fixed = await scripted("video_fix", [...input.fixCards, ...cardsOf(judged)], timeline, fixes === 0 ? "fix" : `fix${fixes + 1}`);
       if ("error" in fixed) return fail(fixed.error, { rateLimited: fixed.rateLimited });
       recordNext = demoChanged(timeline, fixed.timeline);
       timeline = fixed.timeline;
-      fixUsed = true;
+      fixes++;
     }
 
     const video = await packVideo(judged, rounds, "ship");
@@ -361,6 +375,8 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       ["walkthrough.mp4", "video", "walkthrough.mp4"],
       ["cover.jpg", "cover", "cover.jpg"],
       ["captions.srt", "captions", "captions.srt"],
+      ["captions.vtt", "captions", "captions.vtt"],
+      ["chapters.json", "report", "chapters.json"],
       ["qa/transcript.txt", "report", "transcript.txt"],
       ["meta.json", "report", "meta.json"],
       ["qa/beats_sheet.jpg", "screenshot", "beats_sheet.jpg"],
@@ -381,6 +397,7 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
         scores: j.answer?.scores ?? {},
         defects: (j.answer?.defects ?? []).map((d) => ({ priority: d.priority, t: d.t, scene: d.scene, element: d.element, symptom: d.symptom, fix: d.fix })),
         rounds: count,
+        ...(j.answer?.confidence !== undefined ? { confidence: j.answer.confidence } : {}),
         ...(transcriptPath ? { transcript: (await readRegularFile(transcriptPath, SMALL)).slice(0, 4000) } : {}),
       };
     }

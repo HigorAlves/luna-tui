@@ -54,7 +54,7 @@ export type VariableKind = "machine" | "line" | "block";
 // Only what the machine alone writes (a constant, a count, an enum, a hash, a path it chose). Traced one by one: the checks and QA targets
 // are the repository's own text, the scenario tests and the video's narration and sheets carry names a model or a tool wrote, the coverage
 // report lists paths from a report the container wrote, and a classification holds labels a model answered: all foreign.
-const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback"];
+const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS"];
 const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.eval.pack", "context.eval.case"];
 const block = [
   "task.description", "task.criteria", "task.record", "task.evidence", "plan.brief", "plan.criteria", "plan.criteria.ids", "plan.assumptions", "plan.slices",

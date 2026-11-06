@@ -54,7 +54,7 @@ const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 const round = (n: number) => Math.round(n * 1000) / 1000;
 
 /** The rules a timeline must meet. Errors block the film; warnings go to the critic. */
-export function checkTimeline(tl: Timeline, opts: { scenarios: string[] }): { errors: string[]; warnings: string[] } {
+export function checkTimeline(tl: Timeline, opts: { scenarios: string[]; maxS?: number }): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
   const frame = 1 / tl.meta.fps;
@@ -71,7 +71,8 @@ export function checkTimeline(tl: Timeline, opts: { scenarios: string[] }): { er
   if (Math.abs(last.end - tl.meta.dur) > frame) errors.push(`the last scene ends at ${last.end}s but meta.dur is ${tl.meta.dur}s`);
   for (const s of scenes) if (s.end <= s.start) errors.push(`scene "${s.id}" ends (${s.end}s) before it starts (${s.start}s)`);
 
-  if (tl.meta.dur > MAX_DURATION_S) errors.push(`the film runs ${tl.meta.dur}s, over the ${MAX_DURATION_S}s limit`);
+  const maxS = opts.maxS ?? MAX_DURATION_S;
+  if (tl.meta.dur > maxS) errors.push(`the film runs ${tl.meta.dur}s, over the ${maxS}s limit`);
   else if (tl.meta.dur < MIN_DURATION_S) warnings.push(`the film runs ${tl.meta.dur}s, under ${MIN_DURATION_S}s`);
 
   const demoTitles = new Set(scenes.filter((s) => s.kind === "demo").map((s) => norm(s.title)));

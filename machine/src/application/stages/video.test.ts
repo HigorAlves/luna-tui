@@ -38,7 +38,7 @@ beforeEach(() => {
   mkdirSync(stateDir);
 });
 
-function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink" | "inside-link"; heads?: string[]; answerOnly?: boolean; concurrent?: boolean; narrateFails?: boolean; narrateWaitsForAbort?: boolean; recorderWaitsForAbort?: boolean; config?: { voice?: string | null; language?: string | null } } = {}) {
+function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink" | "inside-link"; heads?: string[]; answerOnly?: boolean; concurrent?: boolean; narrateFails?: boolean; narrateWaitsForAbort?: boolean; recorderWaitsForAbort?: boolean; config?: { voice?: string | null; language?: string | null; budgetS?: number; regenerate?: number }; metaDurationS?: number } = {}) {
   const calls: { pack: string; runId: string; extra: AgentExtra; at: number; signal?: AbortSignal }[] = [];
   const flags = { recordingBeforeNarrateReturned: false, recorderSawAbort: false, narrateSawAbort: false, recInTimelineAtStart: null as string | null };
   const heads = [...(opts.heads ?? [])];
@@ -103,8 +103,8 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
       writeFileSync(join(job, "cards", "card-hook.mp4"), "mp4");
     }
     if (tool === "compose") {
-      for (const f of ["walkthrough.mp4", "cover.jpg", "captions.srt"]) writeFileSync(join(job, f), f);
-      writeFileSync(join(job, "meta.json"), JSON.stringify({ durationS: 58.5 }));
+      for (const f of ["walkthrough.mp4", "cover.jpg", "captions.srt", "captions.vtt", "chapters.json"]) writeFileSync(join(job, f), f);
+      writeFileSync(join(job, "meta.json"), JSON.stringify({ durationS: opts.metaDurationS ?? 58.5 }));
     }
     if (tool === "measure") {
       mkdirSync(join(job, "qa"), { recursive: true });
@@ -117,7 +117,7 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
     return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
   };
   const notes: string[] = [];
-  const config = async () => ({ video_budget_s: 240, regenerate: 1, tts: { voice: opts.config?.voice ?? null, language: opts.config?.language ?? null }, storage: "release_asset" as const, retention_days: 180 });
+  const config = async () => ({ video_budget_s: opts.config?.budgetS ?? 240, regenerate: opts.config?.regenerate ?? 1, tts: { voice: opts.config?.voice ?? null, language: opts.config?.language ?? null }, storage: "release_asset" as const, retention_days: 180 });
   const pipeline = videoPipeline({ sandbox, image: "video:1", stateDir, runPack, git, log: () => {}, ...(opts.config ? { config } : {}) });
   const worktree = join(root, "wt");
   const context = (runId = "run-1"): StageContext =>
@@ -172,6 +172,8 @@ describe("videoPipeline", () => {
       ["video", "walkthrough.mp4"],
       ["cover", "cover.jpg"],
       ["captions", "captions.srt"],
+      ["captions", "captions.vtt"],
+      ["report", "chapters.json"],
       ["report", "transcript.txt"],
       ["report", "meta.json"],
       ["screenshot", "beats_sheet.jpg"],
@@ -368,5 +370,43 @@ describe("videoPipeline", () => {
   it("does not follow a link inside the folder either: a recording that is a link to a sibling file is no recording", async () => {
     const h = harness({ recorder: "inside-link" });
     expect(await h.pipeline(h.context(), h.input())).toMatchObject({ ok: false, reason: expect.stringMatching(/no recording/) });
+  });
+
+  describe("the budget, the rounds and the critic's confidence", () => {
+    const toolArgs = (h: ReturnType<typeof harness>, name: string) => h.tools.find((t) => t.tool === name)!.run.entrypoint!.slice(2);
+
+    it("passes evidence.video_budget_s to compose and measure as --max-s, and the scripts as the context's budget", async () => {
+      const h = harness({ config: { budgetS: 90 } });
+      await h.pipeline(h.context(), h.input());
+      for (const name of ["compose", "measure"]) expect(toolArgs(h, name).slice(toolArgs(h, name).indexOf("--max-s"), toolArgs(h, name).indexOf("--max-s") + 2)).toEqual(["--max-s", "90"]);
+      expect(h.calls[0]!.extra.video!.budgetS).toBe(90);
+    });
+
+    it("turns a film longer than the budget into a measured P0 card, whatever the image said", async () => {
+      const h = harness({ config: { budgetS: 60 }, metaDurationS: 61.5 });
+      await h.pipeline(h.context(), h.input());
+      const fix = h.calls.find((c) => c.pack === "video_fix");
+      expect(fix!.extra.video!.fixCards).toContainEqual(expect.objectContaining({ priority: "P0", text: expect.stringMatching(/61\.5.*60/) }));
+    });
+
+    it("degrades at the first non-ship when evidence.regenerate is 0, and gives two fix rounds when it is 2", async () => {
+      const none = harness({ config: { regenerate: 0 }, critics: [rejectAnswer] });
+      expect(await none.pipeline(none.context(), none.input())).toMatchObject({ ok: false, reason: expect.stringMatching(/did not pass/) });
+      expect(none.calls.map((c) => c.pack)).toEqual(["video_script", "recording", "video_qa"]);
+      const two = harness({ config: { regenerate: 2 }, critics: [rejectAnswer] });
+      await two.pipeline(two.context(), two.input());
+      expect(two.calls.filter((c) => c.pack === "video_fix")).toHaveLength(2);
+    });
+
+    it("counts a ship under 0.5 confidence as one more pass, and keeps the confidence on the film", async () => {
+      const unsure = harness({ critics: [{ ...shipAnswer, confidence: 0.4 }, { ...shipAnswer, confidence: 0.9 }] });
+      const out = await unsure.pipeline(unsure.context(), unsure.input());
+      expect(unsure.calls.map((c) => c.pack)).toContain("video_fix");
+      expect(out.ok && out.video.confidence).toBe(0.9);
+      const sure = harness({ critics: [{ ...shipAnswer, confidence: 0.5 }] });
+      const done = await sure.pipeline(sure.context(), sure.input());
+      expect(sure.calls.map((c) => c.pack)).not.toContain("video_fix");
+      expect(done.ok && done.video.confidence).toBe(0.5);
+    });
   });
 });

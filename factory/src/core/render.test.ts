@@ -218,6 +218,10 @@ describe("renderPrompt", () => {
     expect(one).toContain("A coupon counts once: pass");
     const bare = renderPrompt({ pack: PACKS.video_script, input: { ...input, pack: "video_script" } as never, template: "{{context.video.narration}}|{{context.video.timeline}}|{{context.video.fixCards}}|{{task.evidence}}" });
     expect(bare).toContain("(none)|(none)|(none)|(none)");
+    const budget = (b?: number) => renderPrompt({ pack: PACKS.video_script, input: { ...input, pack: "video_script", context: { projectContext: null, video: { ...video, ...(b !== undefined ? { budgetS: b } : {}) } } } as never, template: "limit {{context.video.budgetS}} s" });
+    expect(budget(90)).toContain("limit 90 s");
+    expect(budget()).toContain("limit 240 s");
+    for (const id of ["video_script", "video_fix"] as const) expect(readFileSync(new URL(`../../prompts/${id}.md`, import.meta.url), "utf8")).not.toMatch(/\b240\b/);
     for (const id of ["video_script", "recording", "video_qa", "video_fix"] as const) {
       const template = readFileSync(new URL(`../../prompts/${id}.md`, import.meta.url), "utf8");
       const prompt = renderPrompt({ pack: PACKS[id], input: { ...base, pack: id } as never, template });

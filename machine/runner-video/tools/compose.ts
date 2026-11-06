@@ -28,7 +28,8 @@ const recording = regularFile(timing.videoPath, 4 * 1024 ** 3, job);
 const recInfo = await probe(recording);
 const clips = { scenes: narration.scenes.map((s) => ({ id: s.id, wav: regularFile(s.wav, 200_000_000, job), durationS: s.durationS })) };
 const plan = composePlan(timeline, clips, { marks: timing.marks, videoPath: recording, durationS: round3(recInfo.durationS) });
-if (plan.totalS > MAX_DURATION_S) throw new Error(`the film would run ${plan.totalS}s, over the ${MAX_DURATION_S}s limit`);
+const maxS = typeof args["max-s"] === "string" && Number.isFinite(Number(args["max-s"])) && Number(args["max-s"]) > 0 ? Number(args["max-s"]) : MAX_DURATION_S;
+if (plan.totalS > maxS) throw new Error(`the film would run ${plan.totalS}s, over the ${maxS}s limit`);
 
 // Captions follow the audio where the plan actually placed it.
 const placed = new Map(plan.audio.map((a) => [a.scene, a.atS]));
@@ -37,6 +38,7 @@ const cues = cuesFrom(words, { maxChars: 42, maxDurS: 3.5 });
 writeFileSync(at("captions.srt"), toSrt(cues));
 writeFileSync(at("captions.vtt"), toVtt(cues));
 writeFileSync(at("chapters.ffmeta"), chaptersMetadata(plan));
+writeFileSync(at("chapters.json"), JSON.stringify(plan.chapters.map((c) => ({ title: c.title, startS: c.startS })), null, 2));
 
 const cards: Record<string, string> = {};
 for (const seg of plan.segments) if (seg.source === "card") cards[seg.scene] = regularFile(at(`cards/card-${safe(seg.scene)}.mp4`), 2 * 1024 ** 3, job);

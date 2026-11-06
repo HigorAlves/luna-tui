@@ -50,3 +50,11 @@ describe("checkTimeline", () => {
     expect(checkTimeline(labelled, { scenarios }).errors).toEqual([]);
   });
 });
+
+describe("checkTimeline with a budget", () => {
+  it("holds the film to the budget it is given", () => {
+    expect(checkTimeline(valid, { scenarios, maxS: 45 }).errors.join("\n")).toMatch(/60s, over the 45s limit/);
+    expect(checkTimeline(valid, { scenarios, maxS: 90 }).errors).toEqual([]);
+    expect(checkTimeline({ ...valid, meta: { ...valid.meta, dur: 250 } }, { scenarios }).errors.join("\n")).toMatch(/over the 240s limit/);
+  });
+});

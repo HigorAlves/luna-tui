@@ -490,6 +490,17 @@ describe("TriageRecord and EvidencePack", () => {
     for (const result of ["pass", "fail", "partial", "skipped"]) expect(EvidencePack.safeParse({ ...evidence, scenarios: [{ text: "a", test: null, result }] }).success).toBe(true);
     expect(EvidencePack.safeParse({ ...evidence, scenarios: [{ text: "a", test: null, result: "maybe" }] }).success).toBe(false);
   });
+  it("keep the critic's confidence on the film, optional", () => {
+    const video = { file: "w.mp4", durationS: 10, verdict: "ship", scores: {}, defects: [], rounds: 1 };
+    expect(EvidencePack.parse({ ...evidence, video }).video).not.toHaveProperty("confidence");
+    expect(EvidencePack.parse({ ...evidence, video: { ...video, confidence: 0.8 } }).video?.confidence).toBe(0.8);
+    expect(EvidencePack.safeParse({ ...evidence, video: { ...video, confidence: 1.5 } }).success).toBe(false);
+  });
+  it("take a video context with a budget, absent for an older one", () => {
+    expect(VideoContext.shape.budgetS.safeParse(undefined).success).toBe(true);
+    expect(VideoContext.shape.budgetS.safeParse(90).success).toBe(true);
+    expect(VideoContext.shape.budgetS.safeParse(-1).success).toBe(false);
+  });
   it("take a diff summary and a revision, and a pack stored without them still parses", () => {
     const plain = EvidencePack.parse(evidence);
     expect(plain).not.toHaveProperty("diffSummary");
