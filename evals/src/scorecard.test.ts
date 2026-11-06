@@ -60,6 +60,23 @@ describe("proposeDefaults", () => {
     expect(proposeDefaults("risk_score", [card("risk_score", "jev", { actedOnAccuracy: 0.99, coverage: 0.5 }, { costUsd: 0.001 }), haiku], current).default).toBe("claude:haiku");
   });
 
+  it("gives the default to an engine that acted on every case and was right on every one, over an engine that only ties on what it acted on", () => {
+    const perfect = card("split_check", "codex:luna", { actedOnAccuracy: 1, accuracy: 1, coverage: 1 }, { costUsd: 0.2 });
+    const jevHalf = card("split_check", "jev", { actedOnAccuracy: 1, accuracy: 0.75, coverage: 0.6 }, { costUsd: 0.001 });
+    const haikuPart = card("split_check", "claude:haiku", { actedOnAccuracy: 1, accuracy: 1, coverage: 0.6 }, { costUsd: 0.01 });
+    const chosen = proposeDefaults("split_check", [perfect, jevHalf, haikuPart], current);
+    expect(chosen.default).toBe("codex:luna");
+    expect(chosen.reason).toMatch(/acted on every case and was right on every one/);
+    // Two perfect engines: Jev among them still wins, else the cheaper.
+    const jevPerfect = card("split_check", "jev", { actedOnAccuracy: 1, accuracy: 1, coverage: 1 }, { costUsd: 0.001 });
+    expect(proposeDefaults("split_check", [perfect, jevPerfect], current).default).toBe("jev");
+    const haikuPerfect = card("split_check", "claude:haiku", { actedOnAccuracy: 1, accuracy: 1, coverage: 1 }, { costUsd: 0.01 });
+    expect(proposeDefaults("split_check", [perfect, haikuPerfect, jevHalf], current).default).toBe("claude:haiku");
+    // Nobody perfect: the tie still goes to Jev.
+    const lunaNear = card("split_check", "codex:luna", { actedOnAccuracy: 1, accuracy: 1, coverage: 0.9 }, { costUsd: 0.2 });
+    expect(proposeDefaults("split_check", [lunaNear, jevHalf], current).default).toBe("jev");
+  });
+
   it("carries the numbers behind the choice and when they were measured", () => {
     const out = proposeDefaults("risk_score", [card("risk_score", "claude:haiku", {}, { at: "2026-11-09T08:00:00.000Z" }), card("risk_score", "codex:luna", {}, { at: "2026-11-11T08:00:00.000Z" })], current);
     expect(out.measuredAt).toBe("2026-11-11");

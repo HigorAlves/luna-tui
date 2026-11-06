@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "pack": "size_estimate",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T12:25:00.393Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 4,
+    "passed": 3,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 471.5,
+    "costUsd": 0.00012466000000000002,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 0.6666666666666666,
+      "actedOnAccuracy": 1,
+      "coverage": 0.25,
+      "brier": 0.1629555555555556,
+      "ece": 0.1288888888888889,
+      "meanConfidence": 0.78,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "one-endpoint-with-its-tests",
+      "pass": true,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_loc.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reviewable.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 643,
+      "costUsd": 0.000031,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.7266666666666667,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "ticket-says-it-is-one-line",
+      "pass": false,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_loc.score within 3.5..6",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reviewable.value = false",
+          "pass": false,
+          "detail": "found true"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 386,
+      "costUsd": 0.00003536,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": false,
+        "confidence": 0.6433333333333334,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "two-small-features-in-one-ticket",
+      "pass": true,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reviewable.p within 0.3..0.7",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 422,
+      "costUsd": 0.00003037,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.7666666666666667,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "typo-in-one-string",
+      "pass": true,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_loc.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "est_files.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reviewable.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 435,
+      "costUsd": 0.00002793,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9833333333333334,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

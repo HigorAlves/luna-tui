@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "pack": "split_check",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T12:25:52.681Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 5,
+    "passed": 4,
+    "passRate": 0.8,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 2954,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 5,
+      "labelled": 4,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.005038888888888897,
+      "ece": 0.05500000000000005,
+      "meanConfidence": 0.9166666666666666,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "a-criterion-nobody-owns",
+      "pass": true,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "covers.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3771,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9333333333333332,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "child-says-the-check-must-pass",
+      "pass": true,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_overlap.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3312,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9899999999999999,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "second-half-of-the-same-edit",
+      "pass": true,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "stand_alone.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2190,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "shared-helper-in-two-children",
+      "pass": false,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_overlap.p within 0.3..0.7",
+          "pass": false,
+          "detail": "found 0.8"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2297,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.8033333333333333,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "three-children-cover-the-ticket",
+      "pass": true,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "covers.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_overlap.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "stand_alone.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3200,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.8766666666666666,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

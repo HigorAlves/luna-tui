@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "pack": "size_estimate",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T12:24:37.317Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 4,
+    "passed": 2,
+    "passRate": 0.5,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 3045.25,
+    "costUsd": 0.0032267700000000003,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 0.6666666666666666,
+      "actedOnAccuracy": 1,
+      "coverage": 0.25,
+      "brier": 0.2342333333333333,
+      "ece": 0.13888888888888884,
+      "meanConfidence": 0.7316666666666667,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "one-endpoint-with-its-tests",
+      "pass": false,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_loc.score within 1.5..2.5",
+          "pass": false,
+          "detail": "found 1.2"
+        },
+        {
+          "check": "reviewable.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2876,
+      "costUsd": 0.0009609000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": false,
+        "confidence": 0.7433333333333333,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "ticket-says-it-is-one-line",
+      "pass": true,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_loc.score within 3.5..6",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reviewable.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3803,
+      "costUsd": 0.00082029,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.6166666666666667,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "two-small-features-in-one-ticket",
+      "pass": false,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reviewable.p within 0.3..0.7",
+          "pass": false,
+          "detail": "found 0.72"
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3030,
+      "costUsd": 0.00083949,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": null,
+        "confidence": 0.6233333333333333,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "typo-in-one-string",
+      "pass": true,
+      "schema": {
+        "check": "answer on the size_estimate schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "est_loc.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "est_files.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reviewable.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2472,
+      "costUsd": 0.00060609,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9433333333333334,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

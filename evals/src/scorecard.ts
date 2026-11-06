@@ -4,6 +4,8 @@
 //   - the best is the highest acted-on accuracy among those; engines within 2 points of it tie,
 //     and a tie goes to Jev when it is among them (by far the cheapest engine; the user's choice of 2026-11-05),
 //     else to the cheaper engine (cost per case);
+//   - an engine that acted on every case and was right on every one wins outright over engines that only tie on
+//     what they acted on (the user's choice of 2026-11-06); among several such, Jev, else the cheaper;
 //   - a pack with fewer than two engines measured keeps its current default and reads `unmeasured`.
 // Pure over scorecards; `cli.ts` reads and writes the files.
 import { DecisionDefaults, type DecisionDefault, type EngineId, PACKS, type PackId } from "@hardness/contracts";
@@ -17,7 +19,7 @@ export const MIN_CASES = 4;
 export const TIE_POINTS = 0.02;
 const ALLOWED: EngineId[] = ["jev", "claude:haiku", "codex:luna"];
 
-export const RULE = `An engine qualifies with coverage >= ${MIN_COVERAGE} and n >= ${MIN_CASES}. The default is the qualifying engine with the highest acted-on accuracy; engines within ${TIE_POINTS * 100} points of it tie, and a tie goes to Jev when it is among them (by far the cheapest engine), else to the cheaper one (cost per case). A pack with fewer than two engines measured keeps its current default.`;
+export const RULE = `An engine qualifies with coverage >= ${MIN_COVERAGE} and n >= ${MIN_CASES}. The default is the qualifying engine with the highest acted-on accuracy; engines within ${TIE_POINTS * 100} points of it tie, and a tie goes to Jev when it is among them (by far the cheapest engine), else to the cheaper one (cost per case). A pack with fewer than two engines measured keeps its current default. An engine that acted on every case and was right on every one wins outright; among several such, Jev, else the cheaper.`;
 
 /** Every decision pack's baselines under `evals/baselines/<engine>/<pack>.json`, those that parse. */
 export function loadBaselines(evalsDir: string): Scorecard[] {
@@ -40,6 +42,7 @@ export function loadBaselines(evalsDir: string): Scorecard[] {
 const costPerCase = (card: Scorecard): number => (card.summary.costUsd === null || card.summary.cases === 0 ? Number.POSITIVE_INFINITY : card.summary.costUsd / card.summary.cases);
 const acted = (card: Scorecard): number => card.summary.calibration?.actedOnAccuracy ?? Number.NEGATIVE_INFINITY;
 const qualifies = (card: Scorecard): boolean => (card.summary.calibration?.coverage ?? 0) >= MIN_COVERAGE && (card.summary.calibration?.n ?? 0) >= MIN_CASES && card.summary.calibration?.actedOnAccuracy != null;
+const isPerfect = (card: Scorecard): boolean => (card.summary.calibration?.coverage ?? 0) >= 1 - 1e-9 && acted(card) >= 1 - 1e-9;
 const num = (n: number | null | undefined, digits = 2) => (n === null || n === undefined ? "n/a" : n.toFixed(digits));
 
 export interface Proposal {
@@ -64,11 +67,15 @@ export function proposeDefaults(pack: PackId, cards: Scorecard[], current: { def
   const eligible = mine.filter(qualifies);
   if (eligible.length === 0) return { default: current.default, fallback: [...current.fallback], reason: `unmeasured: no engine reached coverage ${MIN_COVERAGE} on ${MIN_CASES} cases`, measuredAt, measured: false, scorecard: numbers };
   const best = Math.max(...eligible.map(acted));
-  const tied = eligible.filter((c) => best - acted(c) <= TIE_POINTS + 1e-9);
+  // An engine that acted on every case and was right on every one wins outright: one that ties on what it acted on,
+  // but acted on less, has not shown the same (the user's choice of 2026-11-06).
+  const perfect = eligible.filter(isPerfect);
+  const tied = perfect.length > 0 ? perfect : eligible.filter((c) => best - acted(c) <= TIE_POINTS + 1e-9);
   // Accuracy first; among the tied, Jev (by far the cheapest engine, whatever cost a baseline recorded for it), then the cheaper one.
   const jevFirst = (card: Scorecard): number => (card.engine === "jev" ? 0 : 1);
   const chosen = [...tied].sort((a, b) => jevFirst(a) - jevFirst(b) || costPerCase(a) - costPerCase(b) || acted(b) - acted(a))[0]!;
-  const note = tied.length > 1 ? (chosen.engine === "jev" ? `, a tie within ${TIE_POINTS * 100} points that goes to Jev, the cheapest` : `, a tie within ${TIE_POINTS * 100} points settled by cost`) : "";
+  const tieNote = tied.length > 1 ? (chosen.engine === "jev" ? `, a tie within ${TIE_POINTS * 100} points that goes to Jev, the cheapest` : `, a tie within ${TIE_POINTS * 100} points settled by cost`) : "";
+  const note = perfect.length > 0 ? `, it acted on every case and was right on every one${perfect.length > 1 ? (chosen.engine === "jev" ? "; so did others, and Jev is the cheapest" : "; so did others, and it is the cheaper") : ""}` : tieNote;
   const c = chosen.summary.calibration!;
   return {
     default: chosen.engine,
