@@ -72,25 +72,33 @@ afterEach(async () => {
   await new Promise<void>((r) => echo.close(() => r()));
 });
 
-/** Sends raw bytes to the proxy, collects what comes back until it closes or `wait` ms pass. */
-function talk(chunks: Array<Buffer | string>, wait = 300, gap = 0): Promise<string> {
+/** Sends raw bytes to the proxy and collects the reply: done when the proxy closes the socket, or once it has answered and then been quiet for 200 ms, with `deadline` ms as the hard stop. No fixed sleep stands in for a condition. */
+function talk(chunks: Array<Buffer | string>, deadline = 8000, gap = 0): Promise<string> {
   return new Promise((resolve) => {
     const s = netConnect(port, "127.0.0.1");
     sockets.add(s);
     let out = Buffer.alloc(0);
-    s.on("data", (d: Buffer) => (out = Buffer.concat([out, d])));
-    s.on("error", () => {});
-    s.on("close", () => resolve(out.toString("latin1")));
+    let quiet: NodeJS.Timeout | undefined;
+    const done = () => {
+      clearTimeout(quiet);
+      clearTimeout(hard);
+      s.destroy();
+      resolve(out.toString("latin1"));
+    };
+    const hard = setTimeout(done, deadline);
+    s.on("data", (d: Buffer) => {
+      out = Buffer.concat([out, d]);
+      clearTimeout(quiet);
+      quiet = setTimeout(done, 200);
+    });
+    s.on("error", done);
+    s.on("close", done);
     s.on("connect", async () => {
       for (const c of chunks) {
         s.write(c);
         if (gap) await new Promise((r) => setTimeout(r, gap));
       }
     });
-    setTimeout(() => {
-      s.destroy();
-      resolve(out.toString("latin1"));
-    }, wait);
   });
 }
 const connectLine = (target: string) => `CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`;
@@ -234,7 +242,7 @@ describe("the TLS server name on port 443", () => {
   it("accepts a ClientHello that arrives in pieces and a name with a trailing dot or capitals", async () => {
     await start(["good.example.com:443"]);
     const hello = clientHello("GOOD.example.com");
-    const reply = await talk([connectLine("good.example.com:443"), hello.subarray(0, 3), hello.subarray(3, 40), hello.subarray(40)], 600, 30);
+    const reply = await talk([connectLine("good.example.com:443"), hello.subarray(0, 3), hello.subarray(3, 40), hello.subarray(40)], 8000, 30);
     expect(reply.endsWith(hello.toString("latin1"))).toBe(true);
     expect(connects).toHaveLength(1);
   });
@@ -255,7 +263,7 @@ describe("plain HTTP", () => {
     echo = createServer((s) => s.once("data", (d) => { seen.push(d.toString()); s.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"); }));
     await new Promise<void>((r) => echo.listen(0, "127.0.0.1", () => r()));
     echoPort = (echo.address() as { port: number }).port;
-    const reply = await talk(["GET http://good.example.com/a/b?c=1 HTTP/1.1\r\nHost: good.example.com\r\nProxy-Authorization: x\r\nConnection: close\r\n\r\n"], 500);
+    const reply = await talk(["GET http://good.example.com/a/b?c=1 HTTP/1.1\r\nHost: good.example.com\r\nProxy-Authorization: x\r\nConnection: close\r\n\r\n"]);
     expect(status(reply)).toBe("HTTP/1.1 200 OK");
     expect(reply.endsWith("ok")).toBe(true);
     expect(seen[0]).toMatch(/^GET \/a\/b\?c=1 HTTP\/1\.1\r\n/);
@@ -284,7 +292,7 @@ describe("plain HTTP", () => {
     echo = createServer((s) => s.once("data", () => s.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")));
     await new Promise<void>((r) => echo.listen(0, "127.0.0.1", () => r()));
     echoPort = (echo.address() as { port: number }).port;
-    expect(status(await talk(["POST http://trace.example.com:8000/v1/traces HTTP/1.1\r\nHost: trace.example.com:8000\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"], 500))).toBe("HTTP/1.1 200 OK");
+    expect(status(await talk(["POST http://trace.example.com:8000/v1/traces HTTP/1.1\r\nHost: trace.example.com:8000\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"]))).toBe("HTTP/1.1 200 OK");
     expect(connects).toEqual([{ port: 8000, address: "172.17.0.9" }]);
     expect(status(await talk(["GET http://trace.example.com:9000/ HTTP/1.1\r\nHost: x\r\n\r\n"]))).toBe("HTTP/1.1 403 Forbidden");
   });
@@ -359,12 +367,12 @@ describe("DNS", () => {
 describe("the log", () => {
   it("writes each distinct (host, port, via) once, a count at each power of ten, and counts the rest past 200 distinct", async () => {
     await start([]);
-    for (let i = 0; i < 12; i++) await talk([connectLine("evil.example.com:443")], 50);
+    for (let i = 0; i < 12; i++) await talk([connectLine("evil.example.com:443")]);
     expect(blockedRows().filter((r) => r.host === "evil.example.com")).toEqual([
       { host: "evil.example.com", port: 443, via: "connect", reason: "not_listed" },
       { host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 10 },
     ]);
-    for (let i = 0; i < 205; i++) await talk([connectLine(`h${i}.example.com:443`)], 20);
+    for (let i = 0; i < 205; i++) await talk([connectLine(`h${i}.example.com:443`)]);
     const distinct = new Set(blockedRows().map((r) => `${r.host}${r.port}${r.via}`));
     expect(distinct.size).toBeLessThanOrEqual(200);
     expect(lines.some((l) => "more" in l)).toBe(true);
@@ -372,7 +380,7 @@ describe("the log", () => {
 
   it("never writes a line break or control character of a hostile name unescaped", async () => {
     await start([]);
-    await talk(["CONNECT evil\u0001host.example.com:443 HTTP/1.1\r\n\r\n"], 100);
+    await talk(["CONNECT evil\u0001host.example.com:443 HTTP/1.1\r\n\r\n"]);
     for (const row of blockedRows()) expect(String(row.host)).not.toMatch(/[\u0000-\u001f]/);
   });
 });
