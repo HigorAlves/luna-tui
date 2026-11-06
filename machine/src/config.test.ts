@@ -33,6 +33,7 @@ describe("loadConfig", () => {
       shipPoll: { intervalMs: null },
       githubToken: null,
       graphIntervalSecs: 600,
+      memoryDocs: { dirs: [], intervalSecs: 600 },
       retentionDays: DEFAULT_RETENTION_DAYS,
       taskBudgetUsd: null,
       dailyBudgetUsd: null,
@@ -54,6 +55,14 @@ describe("loadConfig", () => {
       jira: null,
       sla: { gateSecs: 172_800, cycleSecs: null },
     });
+  });
+
+  it("reads the company folders for memory: absolute paths only, polled every 10 minutes unless told otherwise", () => {
+    expect(loadConfig({ HOME: "/h", MACHINE_MEMORY_DOCS: "/srv/handbook:/srv/legal:/srv/handbook" }).memoryDocs).toEqual({ dirs: ["/srv/handbook", "/srv/legal"], intervalSecs: 600 });
+    expect(loadConfig({ HOME: "/h", MACHINE_MEMORY_DOCS: "/srv/a", MACHINE_MEMORY_DOCS_INTERVAL: "30" }).memoryDocs.intervalSecs).toBe(30);
+    expect(loadConfig({ HOME: "/h", MACHINE_MEMORY_DOCS_INTERVAL: "off" }).memoryDocs.intervalSecs).toBeNull();
+    expect(() => loadConfig({ HOME: "/h", MACHINE_MEMORY_DOCS: "docs" })).toThrow(/absolute/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_MEMORY_DOCS_INTERVAL: "0" })).toThrow(/positive integer/);
   });
 
   it("reads the Slack inbox's tokens and knobs", () => {
