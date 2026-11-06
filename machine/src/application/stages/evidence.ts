@@ -5,16 +5,15 @@
 // on the task. The pack and its files show up in the ship approval's `requested`, the gate Ship publishes from.
 import { type TruthSink, evidenceFormatTruth, recordIdOf } from "../decision-truth.ts";
 import { type ArtifactKind, type EvidenceContext, EvidencePack, Finding, PACKS, Risk, type TaskState, VerifyReport, applyPolicy } from "@hardness/contracts";
-import { createHash } from "node:crypto";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
 import { assembleEvidencePack } from "../../domain/evidence-pack.ts";
 import { parseNote } from "../../domain/fix-card.ts";
 import type { Policy } from "../../domain/policy.ts";
-import { approvedCases, approvedPlan } from "../../domain/stage-input.ts";
-import { EvidenceStore } from "../evidence-store.ts";
-import { evidenceFindings } from "../../domain/send-back.ts";
+import { approvedCases, approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
+import { EvidenceStore, MAX_MEDIA_BYTES } from "../evidence-store.ts";
+import { hashRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import type { VideoPipeline } from "./video.ts";
 
@@ -22,6 +21,8 @@ export interface EvidenceDeps {
   stateDir: string;
   /** The task's latest e2e run and the detail it finished with. */
   latestE2e: (taskId: string) => Promise<{ runId: string; detail?: Record<string, unknown> } | null>;
+  /** The task's latest finish of a stage (`pipeline.latestStageFinish`): where the Verify Report's rows come from. Absent, the prelude reads the e2e finish and the manifest. */
+  latestFinish?: (taskId: string, stage: TaskState) => Promise<{ runId: string; detail?: Record<string, unknown> } | null>;
 }
 
 const MANIFEST = "qa-manifest.json";
@@ -45,20 +46,44 @@ const kindOf = (name: string): ArtifactKind => {
   return "report";
 };
 
-async function walk(dir: string): Promise<string[]> {
+const WALK_MAX_FILES = 2000;
+const WALK_MAX_DEPTH = 4;
+const MANIFEST_MAX_BYTES = 20 * 1024 * 1024;
+
+/** The files under a container's folder, at most `WALK_MAX_FILES` and `WALK_MAX_DEPTH` levels deep. A link or a FIFO is not listed (`isFile` is false for both). */
+async function walk(dir: string, found: string[] = [], depth = 0): Promise<string[]> {
+  if (depth >= WALK_MAX_DEPTH || found.length >= WALK_MAX_FILES) return found;
   let entries;
   try {
-    entries = await readdir(dir, { withFileTypes: true });
+    entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   } catch {
-    return [];
+    return found;
   }
-  const found: string[] = [];
   for (const entry of entries) {
+    if (found.length >= WALK_MAX_FILES) break;
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) found.push(...(await walk(path)));
+    if (entry.isDirectory()) await walk(path, found, depth + 1);
     else if (entry.isFile()) found.push(path);
   }
-  return found.sort();
+  return found;
+}
+
+/** A scenario's row as the card holds it: the Verify Report's `e2e.rows`, or the e2e finish's `manifest`. */
+interface CardRow {
+  scenario: string;
+  title: string;
+  result: string;
+  artifacts: string[];
+}
+
+function cardRowsOf(value: unknown): CardRow[] | null {
+  if (!Array.isArray(value)) return null;
+  const rows = value.flatMap((r) => {
+    const row = objectOf(r);
+    if (!row || typeof row.title !== "string" || typeof row.result !== "string") return [];
+    return [{ scenario: typeof row.scenario === "string" ? row.scenario : "", title: row.title, result: row.result, artifacts: Array.isArray(row.artifacts) ? row.artifacts.filter((a): a is string => typeof a === "string") : [] }];
+  });
+  return rows.length > 0 || value.length === 0 ? rows : null;
 }
 
 /** What the prelude read, for the stage that builds the pack on it. */
@@ -71,124 +96,124 @@ interface PreludeFacts {
   scenarios: { text: string; criterion: string | null; result: string; test: string | null }[];
   artifacts: NonNullable<StageResult["artifacts"]>;
   approvedCount: number;
+  /** What is missing from the proof, each as a sentence; the pack's note carries them. */
+  gaps: string[];
 }
 
-async function prelude(deps: EvidenceDeps, context: StageContext): Promise<{ result: StageResult; facts: PreludeFacts | null }> {
-  {
-    const e2e = await deps.latestE2e(context.task.id);
-    const qaDir = e2e ? join(deps.stateDir, "runs", e2e.runId, "files", "qa") : undefined;
-    const manifestPath = qaDir ? join(qaDir, MANIFEST) : undefined;
+async function prelude(deps: EvidenceDeps, context: StageContext): Promise<{ result: StageResult; facts: PreludeFacts }> {
+  const e2e = await deps.latestE2e(context.task.id);
+  const qaDir = e2e ? join(deps.stateDir, "runs", e2e.runId, "files", "qa") : undefined;
+  const manifestPath = qaDir ? join(qaDir, MANIFEST) : undefined;
 
-    let verdict: string | undefined;
-    let manifest: Manifest = {};
-    if (manifestPath) {
-      try {
-        const parsed: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
-        // The container wrote it: anything but an object (null, a list, a number) is an unreadable manifest, not a crash.
-        manifest = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Manifest) : {};
-        verdict = typeof manifest.verdict === "string" ? manifest.verdict : "unreadable";
-      } catch (error) {
-        verdict = (error as NodeJS.ErrnoException)?.code === "ENOENT" ? undefined : "unreadable";
-      }
+  // The manifest is written by a container: read through the bounded reader, never followed, never blocked on.
+  let verdict: string | undefined;
+  let manifest: Manifest = {};
+  let manifestState: "ok" | "missing" | "unreadable" = "missing";
+  if (manifestPath) {
+    try {
+      const parsed: unknown = JSON.parse(await readRegularFile(manifestPath, MANIFEST_MAX_BYTES));
+      // Anything but an object (null, a list, a number) is an unreadable manifest, not a crash.
+      manifest = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Manifest) : {};
+      verdict = typeof manifest.verdict === "string" ? manifest.verdict : "unreadable";
+      manifestState = verdict === "unreadable" ? "unreadable" : "ok";
+    } catch (error) {
+      manifestState = (error as NodeJS.ErrnoException)?.code === "ENOENT" ? "missing" : "unreadable";
+      if (manifestState === "unreadable") verdict = "unreadable";
     }
+  }
 
-    if (verdict === undefined) {
-      if (e2e?.detail?.skipped === true) {
-        const why = e2e.detail.reason ?? e2e.detail.note;
-        return {
-          result: {
-            outcome: "pass",
-            detail: {
-              step: "evidence",
-              verdict: "skipped",
-              artifactCount: 0,
-              thumbnails: [],
-              note: `e2e skipped${why ? `: ${String(why)}` : ""}`,
-              evidence: { verdict: "skipped", artifactCount: 0, manifest: null, thumbnails: [] },
-            },
-          },
-          facts: { e2e, qaDir, manifest, manifestPath, verdict: "skipped", scenarios: [], artifacts: [], approvedCount: 0 },
-        };
-      }
-      return {
-        result: {
-          outcome: "fail",
-          detail: {
-            step: "evidence",
-            verdict: "missing",
-            artifactCount: 0,
-            error: `no ${MANIFEST} from the e2e run; the criteria are not shown working`,
-          },
-        },
-        facts: null,
-      };
-    }
-
-    const files = await walk(qaDir!);
-    const artifacts: NonNullable<StageResult["artifacts"]> = [];
-    for (const path of files) {
-      artifacts.push({
-        kind: kindOf(path.slice(path.lastIndexOf("/") + 1)),
-        path,
-        label: relative(qaDir!, path),
-        sha256: createHash("sha256").update(await readFile(path)).digest("hex"),
-      });
-    }
-    // Every approved scenario is shown by a row keyed by its title, and by a chapter when there is a recording.
-    const approved = verdict === "skipped" || verdict === "unreadable" ? [] : approvedCases(context.approvals);
-    const rows = Array.isArray(manifest.acceptance) ? manifest.acceptance : [];
-    const chapters = Array.isArray(manifest.video?.chapters) ? manifest.video!.chapters! : [];
-    const hasVideo = manifest.video !== undefined && manifest.video !== null;
-    const scenarios = approved.map((c) => {
-      const found = rows.find((r) => typeof r?.text === "string" && r.text.trim() === c.title.trim());
-      const chapter = chapters.find((ch) => typeof ch?.title === "string" && ch.title.trim() === c.title.trim());
-      const result = found?.result === "pass" || found?.result === "fail" || found?.result === "partial" ? found.result : "missing";
-      const evidence = Array.isArray(found?.evidence) ? found.evidence.find((e): e is string => typeof e === "string") : undefined;
-      return { text: c.title, criterion: c.criterion ?? null, result, chapter: typeof chapter?.start === "number" ? chapter.start : null, hasChapter: chapter !== undefined, test: evidence ?? null };
-    });
-    const noRow = scenarios.filter((s) => s.result === "missing").map((s) => s.text);
-    const noChapter = hasVideo ? scenarios.filter((s) => !s.hasChapter).map((s) => s.text) : [];
-    const gaps = [
-      ...(noRow.length > 0 ? [`${noRow.length} approved scenario(s) have no manifest row: ${noRow.join(", ")}`] : []),
-      ...(noChapter.length > 0 ? [`${noChapter.length} approved scenario(s) have no video chapter: ${noChapter.join(", ")}`] : []),
-    ];
-    if (gaps.length > 0 && verdict !== "fail") verdict = "partial";
-    const passed = gaps.length === 0 && (verdict === "pass" || verdict === "skipped");
-    const shown = approved.length > 0 ? { rows: rows.length, scenarios: scenarios.map(({ hasChapter: _, test: __, ...s }) => s) } : {};
-    const thumbnails = artifacts.filter((a) => a.kind === "screenshot").slice(0, THUMBNAILS).map((a) => a.path);
+  if (verdict === undefined && e2e?.detail?.skipped === true) {
+    const why = e2e.detail.reason ?? e2e.detail.note;
     return {
       result: {
-        outcome: passed ? "pass" : "fail",
+        outcome: "pass",
         detail: {
           step: "evidence",
-          verdict,
-          artifactCount: artifacts.length,
-          manifestPath,
-          thumbnails,
-          ...(gaps.length > 0 ? { error: gaps.join("; ") } : {}),
-          // The ship approval's `requested.evidence`, which the board shows.
-          evidence: { verdict, artifactCount: artifacts.length, manifest: manifestPath, thumbnails, ...shown },
+          verdict: "skipped",
+          artifactCount: 0,
+          thumbnails: [],
+          note: `e2e skipped${why ? `: ${String(why)}` : ""}`,
+          evidence: { verdict: "skipped", artifactCount: 0, manifest: null, thumbnails: [] },
         },
-        artifacts,
       },
-      facts: { e2e, qaDir, manifest, manifestPath, verdict, scenarios, artifacts, approvedCount: approved.length },
+      facts: { e2e, qaDir, manifest, manifestPath, verdict: "skipped", scenarios: [], artifacts: [], approvedCount: 0, gaps: [] },
     };
   }
+
+  // Each scenario's result comes from the card: the Verify Report's rows, else the e2e finish's manifest, else (a run from before wave 12a) the container's manifest by title.
+  const reported = deps.latestFinish ? VerifyReport.safeParse((await deps.latestFinish(context.task.id, "ci_watch").catch(() => null))?.detail?.report) : null;
+  const cardRows = (reported?.success ? cardRowsOf(reported.data.e2e.rows) : null) ?? cardRowsOf(e2e?.detail?.manifest);
+  const cardVerdict = reported?.success ? reported.data.e2e.verdict : typeof e2e?.detail?.verdict === "string" ? e2e.detail.verdict : null;
+  const gaps: string[] = [];
+  if (manifestState === "missing" && !cardRows) gaps.push(`no ${MANIFEST} from the e2e run`);
+  if (manifestState === "unreadable") gaps.push(`the ${MANIFEST} of the e2e run is unreadable`);
+  verdict = manifestState === "ok" ? verdict! : cardRows && cardVerdict ? cardVerdict : manifestState === "unreadable" ? "unreadable" : "missing";
+
+  const files = qaDir ? await walk(qaDir) : [];
+  const artifacts: NonNullable<StageResult["artifacts"]> = [];
+  for (const path of files) {
+    // A file over the cap, a link swapped in or anything unreadable is listed with no hash, and the store never keeps it.
+    const sha256 = await hashRegularFile(path, MAX_MEDIA_BYTES).catch(() => null);
+    artifacts.push({ kind: kindOf(path.slice(path.lastIndexOf("/") + 1)), path, label: relative(qaDir!, path), sha256: sha256 ?? "" });
+  }
+  const approved = verdict === "skipped" || verdict === "unreadable" ? [] : approvedCases(context.approvals);
+  const ids = approvedScenarios(context.approvals).map((s) => s.id);
+  const legacyRows = Array.isArray(manifest.acceptance) ? manifest.acceptance : [];
+  const chapters = Array.isArray(manifest.video?.chapters) ? manifest.video!.chapters! : [];
+  const hasVideo = manifest.video !== undefined && manifest.video !== null;
+  const scenarios = approved.map((c, i) => {
+    const chapter = chapters.find((ch) => typeof ch?.title === "string" && ch.title.trim() === c.title.trim());
+    let result = "not_run";
+    let test: string | null = null;
+    const card = cardRows?.find((r) => (r.scenario !== "" && r.scenario === ids[i]) || r.title.trim() === c.title.trim());
+    if (cardRows) {
+      if (card) {
+        result = card.result === "pass" || card.result === "fail" || card.result === "partial" || card.result === "skipped" ? card.result : "not_run";
+        test = card.artifacts[0] ?? null;
+      }
+    } else {
+      const found = legacyRows.find((r) => typeof r?.text === "string" && r.text.trim() === c.title.trim());
+      if (found) {
+        result = found.result === "pass" || found.result === "fail" || found.result === "partial" ? found.result : "not_run";
+        test = Array.isArray(found.evidence) ? (found.evidence.find((e): e is string => typeof e === "string") ?? null) : null;
+      }
+    }
+    return { text: c.title, criterion: c.criterion ?? null, result, chapter: typeof chapter?.start === "number" ? chapter.start : null, hasChapter: chapter !== undefined, test };
+  });
+  const noRow = scenarios.filter((x) => x.result === "not_run").map((x) => x.text);
+  const noChapter = hasVideo ? scenarios.filter((x) => !x.hasChapter).map((x) => x.text) : [];
+  if (noRow.length > 0 && manifestState === "ok") gaps.push(`${noRow.length} approved scenario(s) have no manifest row: ${noRow.join(", ")}`);
+  else if (noRow.length > 0 && cardRows) gaps.push(`${noRow.length} approved scenario(s) have no run row: ${noRow.join(", ")}`);
+  if (noChapter.length > 0) gaps.push(`${noChapter.length} approved scenario(s) have no video chapter: ${noChapter.join(", ")}`);
+  if (gaps.length > 0 && verdict === "pass") verdict = "partial";
+  const shown = approved.length > 0 ? { rows: cardRows?.length ?? legacyRows.length, scenarios: scenarios.map(({ hasChapter: _, test: __, ...x }) => x) } : {};
+  const thumbnails = artifacts.filter((a) => a.kind === "screenshot").slice(0, THUMBNAILS).map((a) => a.path);
+  return {
+    // Evidence shows less and says why: a gap is a note on the pack, never a failure.
+    result: {
+      outcome: "pass",
+      detail: {
+        step: "evidence",
+        verdict,
+        artifactCount: artifacts.length,
+        manifestPath: manifestState === "ok" ? manifestPath : undefined,
+        thumbnails,
+        ...(gaps.length > 0 ? { note: gaps.join("; ") } : {}),
+        // The ship approval's `requested.evidence`, which the board shows.
+        evidence: { verdict, artifactCount: artifacts.length, manifest: manifestState === "ok" ? manifestPath : null, thumbnails, ...shown },
+      },
+      artifacts,
+    },
+    facts: { e2e, qaDir, manifest, manifestPath: manifestState === "ok" ? manifestPath : undefined, verdict, scenarios, artifacts, approvedCount: approved.length, gaps },
+  };
 }
 
-/** The script prelude alone: the manifest and scenario checks, the files listed. */
-/** A failure that says what is missing also carries it as a finding, which is what Build is given when the card goes back. */
-function withMissing(result: StageResult): StageResult {
-  const error = result.detail?.error;
-  return result.outcome === "fail" && typeof error === "string" && !result.findings ? { ...result, findings: evidenceFindings(error) } : result;
-}
-
+/** The script prelude alone: the card's rows and the manifest checked, the files listed. It never fails: what is missing is a note. */
 export function evidenceRunner(deps: EvidenceDeps): StageRunner {
-  return async (context) => withMissing((await prelude(deps, context)).result);
+  return async (context) => (await prelude(deps, context)).result;
 }
 
 export interface EvidenceStageDeps extends EvidenceDeps {
-  /** The task's latest finish of a stage and its detail (`pipeline.latestStageFinish`). */
   latestFinish: (taskId: string, stage: TaskState) => Promise<{ runId: string; detail?: Record<string, unknown> } | null>;
   /** Writes the pack on the task row. */
   save: (taskId: string, patch: { evidence: EvidencePack }) => Promise<void>;
@@ -227,6 +252,9 @@ function plainUrl(raw: unknown): string | null {
   }
 }
 
+/** A scenario's result as the pack stores it: anything the run did not say plainly is a fail, a scenario with no row is `not_run`. */
+const packResult = (result: string): EvidencePack["scenarios"][number]["result"] => (result === "pass" || result === "partial" || result === "skipped" || result === "not_run" ? result : "fail");
+
 const dirExists = (path: string): Promise<boolean> => stat(path).then((s) => s.isDirectory(), () => false);
 const fileExists = (path: string): Promise<boolean> => stat(path).then((s) => s.isFile(), () => false);
 
@@ -237,8 +265,6 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
   return async (context) => {
     const { task } = context;
     const { result, facts } = await prelude(deps, context);
-    // A manifest gap, a failed run or no manifest at all: today's failure, no pack.
-    if (result.outcome !== "pass" || !facts) return withMissing(result);
 
     const plan = approvedPlan(context.approvals);
     const approval = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
@@ -288,13 +314,14 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         }
       }
     }
-    let note: string | undefined;
+    // What the prelude found missing is the pack's note: Evidence shows less and says why.
+    let note: string | undefined = facts.gaps.length > 0 ? facts.gaps.join("; ") : undefined;
+    const addNote = (text: string) => (note = note ? `${note}; ${text}` : text);
     // A re-run (the head moved, a send-back) still reads the latest browser run: when that run proved an older commit, say so on the pack.
     if (task.evidence && task.evidence.commitSha && facts.e2e && task.worktreePath) {
       const head = (await deps.headCommit(task.worktreePath).catch(() => "")).trim();
-      if (head && head !== task.evidence.commitSha) note = `the browser run proved ${task.evidence.commitSha.slice(0, 7)}; the pack now shows ${head.slice(0, 7)}, which no browser run has seen`;
+      if (head && head !== task.evidence.commitSha) addNote(`the browser run proved ${task.evidence.commitSha.slice(0, 7)}; the pack now shows ${head.slice(0, 7)}, which no browser run has seen`);
     }
-    const addNote = (text: string) => (note = note ? `${note}; ${text}` : text);
     // The QA target the film is recorded against: the manifest's by name, else luna.yaml's only or first one.
     const targets = (await deps.policies.for(task.repoPath)).qaTargets;
     const targetName = typeof facts.manifest.target?.name === "string" ? facts.manifest.target.name : null;
@@ -326,9 +353,9 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     try {
       commitSha = task.worktreePath ? (await deps.headCommit(task.worktreePath)).trim() : "";
     } catch (error) {
-      return { outcome: "fail", detail: { step: "evidence", verdict: "missing", artifactCount: 0, error: `cannot read the worktree's head: ${error instanceof Error ? error.message : String(error)}` } };
+      return { outcome: "fail", detail: { step: "evidence", verdict: "missing", artifactCount: 0, error: `cannot read the worktree's head: ${error instanceof Error ? error.message : String(error)}`, reason: "Evidence cannot read the worktree's head commit" } };
     }
-    if (commitSha === "") return { outcome: "fail", detail: { step: "evidence", verdict: "missing", artifactCount: 0, error: "the task has no worktree to take the evidence commit from" } };
+    if (commitSha === "") return { outcome: "fail", detail: { step: "evidence", verdict: "missing", artifactCount: 0, error: "the task has no worktree to take the evidence commit from", reason: "the task has no worktree to take the evidence commit from" } };
 
     // 2b. The film: the pipeline runs on the approved scenarios and the browser run's facts; a person's send-back note re-enters it at the fix.
     let video: EvidencePack["video"] | undefined;
@@ -344,7 +371,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         task: { title: task.title, description: task.description },
         record: task.record ?? null,
         plan: { rollback: plan?.rollback ?? null, risk: risk.success ? risk.data : null },
-        scenarios: facts.scenarios.map((s) => ({ text: s.text, criterion: s.criterion, result: s.result === "pass" || s.result === "partial" || s.result === "skipped" ? s.result : "fail", test: s.test })),
+        scenarios: facts.scenarios.map((s) => ({ text: s.text, criterion: s.criterion, result: packResult(s.result), test: s.test })),
         findings: [],
         outOfMap: [],
         media: [],
@@ -408,7 +435,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       task: { title: task.title, description: task.description },
       record: task.record ?? null,
       plan: { rollback: plan?.rollback ?? null, risk: risk.success ? risk.data : null },
-      scenarios: facts.scenarios.map((s) => ({ text: s.text, criterion: s.criterion, result: s.result === "pass" || s.result === "partial" || s.result === "skipped" ? s.result : "fail", test: s.test })),
+      scenarios: facts.scenarios.map((s) => ({ text: s.text, criterion: s.criterion, result: packResult(s.result), test: s.test })),
       findings,
       ...(reported.success ? { verifyReport: reported.data } : {}),
       outOfMap,

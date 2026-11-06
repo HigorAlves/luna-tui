@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { type EvidenceStageDeps, evidenceRunner, evidenceStage } from "./evidence.ts";
+import { type EvidenceDeps, type EvidenceStageDeps, evidenceRunner, evidenceStage } from "./evidence.ts";
 import { type Learned, tagged } from "../decision-truth.ts";
 import type { VideoInput, VideoOutcome } from "./video.ts";
 import type { StageContext } from "../ports.ts";
@@ -21,8 +22,8 @@ function qaDir(runId = "e2e-run"): string {
   mkdirSync(dir, { recursive: true });
   return dir;
 }
-const runner = (e2e: { runId: string; detail?: Record<string, unknown> } | null) =>
-  evidenceRunner({ stateDir, latestE2e: async () => e2e });
+const runner = (e2e: { runId: string; detail?: Record<string, unknown> } | null, latestFinish?: EvidenceDeps["latestFinish"]) =>
+  evidenceRunner({ stateDir, latestE2e: async () => e2e, ...(latestFinish ? { latestFinish } : {}) });
 
 describe("evidenceRunner: one manifest row per approved scenario", () => {
   const scenarios = [
@@ -39,8 +40,8 @@ describe("evidenceRunner: one manifest row per approved scenario", () => {
   it("reads a manifest that is JSON null as unreadable instead of crashing", async () => {
     writeFileSync(join(qaDir(), "qa-manifest.json"), "null");
     const result = await runner({ runId: "e2e-run" })(approved);
-    expect(result.outcome).toBe("fail");
-    expect(result.detail).toMatchObject({ verdict: "unreadable" });
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ verdict: "unreadable", note: expect.stringContaining("unreadable") });
   });
 
   it("passes when every scenario has its row and chapter, and lists them with the chapter start", async () => {
@@ -56,30 +57,27 @@ describe("evidenceRunner: one manifest row per approved scenario", () => {
     });
   });
 
-  it("fails naming the scenario that has no manifest row", async () => {
+  it("passes when a scenario has no manifest row: it is not_run, and the note names it", async () => {
     write({ acceptance: [row(scenarios[0]!.title)] });
     const result = await runner({ runId: "e2e-run" })(approved);
-    expect(result.outcome).toBe("fail");
-    expect(result.detail).toMatchObject({ verdict: "partial", error: `1 approved scenario(s) have no manifest row: ${scenarios[1]!.title}` });
-  });
-
-  it("sends the card back with the missing part as a finding", async () => {
-    write({ acceptance: [row(scenarios[0]!.title)] });
-    const result = await runner({ runId: "e2e-run" })(approved);
-    expect(result.findings).toEqual([expect.objectContaining({ severity: "blocker", title: "Evidence is missing", body: expect.stringContaining("have no manifest row") })]);
+    expect(result.outcome).toBe("pass");
+    expect(result.findings).toBeUndefined();
+    expect(result.detail).toMatchObject({ verdict: "partial", note: `1 approved scenario(s) have no manifest row: ${scenarios[1]!.title}` });
+    expect(result.detail).not.toHaveProperty("error");
+    expect(result.detail?.evidence).toMatchObject({ scenarios: [expect.objectContaining({ result: "pass" }), expect.objectContaining({ text: scenarios[1]!.title, result: "not_run" })] });
   });
 
   it("matches titles verbatim: a reworded row is a missing one", async () => {
     write({ acceptance: [row("rejects a bad password"), row(scenarios[1]!.title)] });
     const result = await runner({ runId: "e2e-run" })(approved);
-    expect(result.detail?.error).toContain(scenarios[0]!.title);
+    expect(result.detail?.note).toContain(scenarios[0]!.title);
   });
 
-  it("fails naming the scenario that has no chapter when the manifest has a video", async () => {
+  it("passes naming the scenario that has no chapter when the manifest has a video", async () => {
     write({ acceptance: [row(scenarios[0]!.title), row(scenarios[1]!.title)], video: { file: "qa.webm", chapters: [{ title: scenarios[0]!.title, start: 0 }] } });
     const result = await runner({ runId: "e2e-run" })(approved);
-    expect(result.outcome).toBe("fail");
-    expect(result.detail).toMatchObject({ error: `1 approved scenario(s) have no video chapter: ${scenarios[1]!.title}` });
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ note: `1 approved scenario(s) have no video chapter: ${scenarios[1]!.title}` });
   });
 
   it("needs no chapter without a video, and keeps a fail verdict a fail", async () => {
@@ -131,19 +129,19 @@ describe("evidenceRunner", () => {
     expect(result.artifacts?.every((a) => a.sha256.length === 64)).toBe(true);
   });
 
-  it("fails on a fail manifest", async () => {
+  it("passes on a fail manifest, which e2e would have looped on before Evidence", async () => {
     writeFileSync(join(qaDir(), "qa-manifest.json"), JSON.stringify({ verdict: "fail" }));
     const result = await runner({ runId: "e2e-run" })(context);
-    expect(result.outcome).toBe("fail");
+    expect(result.outcome).toBe("pass");
     expect(result.detail).toMatchObject({ step: "evidence", verdict: "fail" });
   });
 
-  it("fails on a partial manifest and on an unreadable one", async () => {
+  it("passes on a partial manifest and on an unreadable one", async () => {
     const dir = qaDir();
     writeFileSync(join(dir, "qa-manifest.json"), JSON.stringify({ verdict: "partial" }));
-    expect((await runner({ runId: "e2e-run" })(context)).outcome).toBe("fail");
+    expect((await runner({ runId: "e2e-run" })(context)).outcome).toBe("pass");
     writeFileSync(join(dir, "qa-manifest.json"), "{not json");
-    expect((await runner({ runId: "e2e-run" })(context)).outcome).toBe("fail");
+    expect((await runner({ runId: "e2e-run" })(context)).outcome).toBe("pass");
   });
 
   it("passes a skipped manifest", async () => {
@@ -164,15 +162,70 @@ describe("evidenceRunner", () => {
     });
   });
 
-  it("fails with no manifest when e2e did not skip", async () => {
+  it("passes with a note when e2e did not skip and left no manifest", async () => {
     const result = await runner({ runId: "e2e-run", detail: { verdict: "pass" } })(context);
-    expect(result.outcome).toBe("fail");
-    expect(result.detail).toMatchObject({ step: "evidence", error: expect.stringContaining("qa-manifest.json") });
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ step: "evidence", verdict: "missing", note: expect.stringContaining("qa-manifest.json") });
   });
 
-  it("fails when there is no e2e run at all", async () => {
-    expect((await runner(null)(context)).outcome).toBe("fail");
+  it("passes with a note when there is no e2e run at all", async () => {
+    const result = await runner(null)(context);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ verdict: "missing" });
   });
+});
+
+describe("evidenceRunner: the proof comes from the card first, and the container's files are not trusted", () => {
+  const scenarios = [
+    { id: "S1", title: "Rejects a bad password", criterion: "no crash", approach: "a" },
+    { id: "S2", title: "Shows the export button", criterion: null, approach: "b" },
+  ];
+  const approved = { ...context, approvals: [{ kind: "awaiting_approval", decision: "approved", requested: { cases: scenarios } }] } as unknown as StageContext;
+  const cardRow = (id: string, title: string, result: string, artifacts: string[] = []) => ({ scenario: id, title, criterion: null, result, seen: "ok", artifacts });
+  const report = (rows: unknown[]) => ({ prNumber: 3, headSha: "abc", findings: [], tests: { passed: 1, total: 1 }, coverageDelta: null, e2e: { verdict: "pass", scenarios: [], artifacts: [], rows }, envReproduction: null, overrides: [], version: 2 });
+
+  it("takes each scenario's result from the Verify Report's rows, whatever the manifest says", async () => {
+    writeFileSync(join(qaDir(), "qa-manifest.json"), JSON.stringify({ verdict: "pass", acceptance: [{ text: scenarios[0]!.title, result: "fail", evidence: [] }, { text: scenarios[1]!.title, result: "fail", evidence: [] }] }));
+    const finish = async (_id: string, stage: string) => (stage === "ci_watch" ? { runId: "ci", detail: { report: report([cardRow("S1", scenarios[0]!.title, "pass", ["a.png"]), cardRow("S2", scenarios[1]!.title, "partial")]) } } : null);
+    const result = await runner({ runId: "e2e-run" }, finish)(approved);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail?.evidence).toMatchObject({ scenarios: [expect.objectContaining({ result: "pass" }), expect.objectContaining({ result: "partial" })] });
+  });
+
+  it("falls back to the latest e2e finish's manifest rows, then to qa-manifest.json by title", async () => {
+    writeFileSync(join(qaDir(), "qa-manifest.json"), JSON.stringify({ verdict: "pass", acceptance: [{ text: scenarios[0]!.title, result: "fail", evidence: [] }, { text: scenarios[1]!.title, result: "pass", evidence: [] }] }));
+    const e2e = { runId: "e2e-run", detail: { manifest: [cardRow("S1", scenarios[0]!.title, "pass"), cardRow("S2", scenarios[1]!.title, "not_run")] } };
+    const fromFinish = await runner(e2e)(approved);
+    expect(fromFinish.detail?.evidence).toMatchObject({ scenarios: [expect.objectContaining({ result: "pass" }), expect.objectContaining({ result: "not_run" })] });
+    const fromFile = await runner({ runId: "e2e-run" })(approved);
+    expect(fromFile.detail?.evidence).toMatchObject({ scenarios: [expect.objectContaining({ result: "fail" }), expect.objectContaining({ result: "pass" })] });
+  });
+
+  it("reads no host file through a manifest or a screenshot that is a link, and does not block on a FIFO", async () => {
+    const secret = join(stateDir, "host-secret.txt");
+    writeFileSync(secret, "private key material");
+    const dir = qaDir();
+    symlinkSync(secret, join(dir, "qa-manifest.json"));
+    symlinkSync(secret, join(dir, "shot.png"));
+    execFileSync("mkfifo", [join(dir, "pipe.png")]);
+    const started = Date.now();
+    const result = await runner({ runId: "e2e-run" })(approved);
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ note: expect.stringContaining("manifest") });
+    expect(JSON.stringify(result)).not.toContain("private key");
+    // The link and the FIFO are listed with no hash and never kept.
+    expect((result.artifacts ?? []).every((a) => a.sha256 === "" || /^[0-9a-f]{64}$/.test(a.sha256))).toBe(true);
+    expect((result.artifacts ?? []).filter((a) => a.label === "shot.png" || a.label === "pipe.png" || a.label === "qa-manifest.json").every((a) => a.sha256 === "")).toBe(true);
+  }, 15_000);
+
+  it("stops the walk at 2000 files", async () => {
+    const dir = qaDir();
+    writeFileSync(join(dir, "qa-manifest.json"), JSON.stringify({ verdict: "pass" }));
+    for (let i = 0; i < 2100; i++) writeFileSync(join(dir, `f${String(i).padStart(4, "0")}.txt`), "x");
+    const result = await runner({ runId: "e2e-run" })(context);
+    expect(result.artifacts).toHaveLength(2000);
+  }, 30_000);
 });
 
 describe("evidenceStage", () => {
@@ -227,20 +280,23 @@ describe("evidenceStage", () => {
     return { run: evidenceStage(deps), saved, asked };
   }
 
-  it("still runs the prelude: a missing manifest fails as before and nothing is saved", async () => {
-    const { run, saved, asked } = stage();
+  it("a missing manifest passes with a text pack that says so, and the card is not sent back", async () => {
+    const { run, saved } = stage();
     const result = await run(taskContext());
-    expect(result.outcome).toBe("fail");
-    expect(result.detail).toMatchObject({ verdict: "missing" });
-    expect(saved).toEqual([]);
-    expect(asked).toEqual([]);
+    expect(result.outcome).toBe("pass");
+    expect(result.findings).toBeUndefined();
+    const pack = (saved[0]![1] as { evidence: { format: string; note?: string } }).evidence;
+    expect(pack.format).toBe("text");
+    expect(pack.note).toMatch(/qa-manifest\.json/);
   });
 
-  it("a manifest gap fails and saves no pack", async () => {
+  it("a manifest gap passes, saves a pack with the scenario not_run and a note", async () => {
     browserRun({ acceptance: [row(scenarios[0]!.title)] });
     const { run, saved } = stage();
-    expect((await run(taskContext())).outcome).toBe("fail");
-    expect(saved).toEqual([]);
+    expect((await run(taskContext())).outcome).toBe("pass");
+    const pack = (saved[0]![1] as { evidence: { scenarios: { result: string }[]; note?: string } }).evidence;
+    expect(pack.scenarios.map((x) => x.result)).toEqual(["pass", "not_run"]);
+    expect(pack.note).toMatch(/no manifest row/);
   });
 
   it("hands the decision the record, the risk from the approval, the surface, the browser run and the changed files", async () => {

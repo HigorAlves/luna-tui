@@ -694,7 +694,7 @@ export type CheckContext = z.infer<typeof CheckContext>;
 export const EvidencePack = z.object({
   summary: z.string(),
   format: z.enum(["video", "captures", "text"]),
-  scenarios: z.array(z.object({ text: z.string(), test: z.string().nullable(), result: z.enum(["pass", "fail", "partial", "skipped"]) })),
+  scenarios: z.array(z.object({ text: z.string(), test: z.string().nullable(), result: z.enum(["pass", "fail", "partial", "skipped", "not_run"]) })),
   findings: z.array(z.string()),
   /** Changes outside what the plan mapped. */
   outOfMap: z.array(z.string()),

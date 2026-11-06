@@ -231,11 +231,13 @@ describe("retry loops", () => {
     expect(last?.retries.total).toBe(2);
   });
 
-  it("counts evidence failures against the e2e loop", () => {
+  it("never sends a card back to Build from Evidence: a failure asks a person and resumes at Evidence", () => {
     const start = at("implementing", { retries: { ...NO_RETRIES, total: 1 } });
     const last = play(start, [...toEvidence, fail]).at(-1);
-    expect(last?.state).toBe("implementing");
-    expect(last?.retries.e2e).toBe(1);
+    expect(last?.state).toBe("escalated");
+    expect(last?.effect).toEqual({ kind: "wait", gate: "escalated" });
+    expect(last?.resumeTo).toBe("evidence");
+    expect(last?.retries.e2e).toBe(0);
   });
 
   it(`escalates after ${LOOP_CAP} failures in one loop`, () => {

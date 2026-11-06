@@ -1,5 +1,5 @@
-// What a card sent back to Build from the browser run or from Evidence carries: findings of the same shape as Verify's, one per failed
-// scenario with the judged cause, and one for what Evidence is missing. Everything is text a model or a container wrote: flattened and capped here.
+// What a card sent back to Build from the browser run carries: findings of the same shape as Verify's, one per failed
+// scenario with the judged cause. Everything is text a model or a container wrote: flattened and capped here.
 import { type Finding, findingId } from "@hardness/contracts";
 
 import { safe } from "./evidence-markdown.ts";
@@ -37,9 +37,4 @@ export function scenarioFindings(rows: readonly ScenarioRow[], seen: string, cau
       const body = [`expected: ${text}`, `seen: ${flat(row.seen || seen, TEXT_CAP)}`, ...(names.length > 0 ? [`artifacts: ${names.join(", ")}`] : []), ...(why && /^[a-z_]{1,40}$/.test(why) ? [`cause: ${why}`] : [])].join("\n");
       return finding(`${row.result === "fail" ? "scenario failed" : "scenario partly done"}: ${flat(row.text, TITLE_CAP)}`, body, row.criterion ? flat(row.criterion, 40) : null);
     });
-}
-
-/** What Evidence sends a card back for: the reason and the part that is missing, as one finding. */
-export function evidenceFindings(reason: string): Finding[] {
-  return [finding("Evidence is missing", flat(reason, TEXT_CAP), null)];
 }

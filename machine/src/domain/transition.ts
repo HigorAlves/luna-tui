@@ -381,8 +381,8 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       break;
     case "evidence":
       if (outcome === "pass") return wait("awaiting_ship", retries);
-      // The criteria could not be shown working: that counts against the e2e loop.
-      if (outcome === "fail") return loopFailed(task, "e2e", undefined, event.loopCap);
+      // Evidence shows less and says why; it never sends a card back to Build. A failure here is a card with no workspace, or a stage that broke: a person is asked, and the card resumes at Evidence.
+      if (outcome === "fail") return escalate(event.reason || "evidence failed", "evidence", retries);
       break;
     case "shipping":
       if (outcome === "pass") return wait("reviewing_memory", retries);

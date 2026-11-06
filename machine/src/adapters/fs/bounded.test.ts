@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { copyRegularFile, readRegularFile } from "./bounded.ts";
+import { copyRegularFile, hashRegularFile, readRegularFile } from "./bounded.ts";
 
 const dir = () => realpathSync(mkdtempSync(join(tmpdir(), "bounded-")));
 
@@ -44,4 +44,18 @@ describe("a file the host reads from a container's folder", () => {
     await copyRegularFile(join(d, "a.bin"), join(d, "b.bin"));
     expect([...readFileSync(join(d, "b.bin"))]).toEqual([0, 1, 2, 255]);
   });
+
+  it("hashes a regular file by streaming, and refuses a link, a FIFO or a file over the cap", async () => {
+    const d = dir();
+    writeFileSync(join(d, "real"), "abc");
+    // sha256("abc"), a known literal
+    expect(await hashRegularFile(join(d, "real"), 1000)).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    expect(await hashRegularFile(join(d, "real"), 2)).toBeNull();
+    symlinkSync(join(d, "real"), join(d, "link"));
+    await expect(hashRegularFile(join(d, "link"), 1000)).rejects.toThrow(/regular file|link/);
+    execFileSync("mkfifo", [join(d, "fifo")]);
+    const started = Date.now();
+    await expect(hashRegularFile(join(d, "fifo"), 1000)).rejects.toThrow(/regular file/);
+    expect(Date.now() - started).toBeLessThan(3000);
+  }, 10_000);
 });

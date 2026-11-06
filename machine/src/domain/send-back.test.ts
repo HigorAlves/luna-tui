@@ -1,7 +1,7 @@
 import { findingId } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { evidenceFindings, scenarioFindings } from "./send-back.ts";
+import { scenarioFindings } from "./send-back.ts";
 
 describe("what a card sent back from the browser run carries", () => {
   const rows = [
@@ -27,11 +27,5 @@ describe("what a card sent back from the browser run carries", () => {
     expect(one!.body).toContain("artifacts: ok.png");
     expect(one!.body).not.toContain("passwd");
     expect(one!.body).not.toMatch(/cause:/);
-  });
-
-  it("makes one finding of what Evidence is missing", () => {
-    const [one] = evidenceFindings("no manifest.json from the e2e run; the criteria are not shown working");
-    expect(one).toMatchObject({ severity: "blocker", title: "Evidence is missing", confidence: 1 });
-    expect(one!.body).toContain("no manifest.json");
   });
 });

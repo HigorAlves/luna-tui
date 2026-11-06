@@ -1952,7 +1952,7 @@ export class Pipeline {
 
   /** The failures the browser run's or CI's loop may have before a person is asked: the repository's `verify.e2e_rounds` or `verify.ci_rounds`. */
   private async loopCap(id: string, stage: TaskState, result: StageResult): Promise<{ loopCap?: number }> {
-    if (result.outcome !== "fail" || (stage !== "e2e" && stage !== "evidence" && stage !== "ci_watch")) return {};
+    if (result.outcome !== "fail" || (stage !== "e2e" && stage !== "ci_watch")) return {};
     const { verify } = (await this.policyFor((await this.get(id)).repoPath)).factory;
     return { loopCap: stage === "ci_watch" ? verify.ci_rounds : verify.e2e_rounds };
   }
@@ -1994,8 +1994,8 @@ export class Pipeline {
       (event) =>
         event.payload.stage === "verifying" ||
         event.payload.stage === "ci_watch" ||
-        // A card sent back from the browser run or from Evidence is handed that run's own findings, not the last Verify pass's.
-        ((event.payload.stage === "e2e" || event.payload.stage === "evidence") && event.payload.status === "failed") ||
+        // A card sent back from the browser run is handed that run's own findings, not the last Verify pass's.
+        (event.payload.stage === "e2e" && event.payload.status === "failed") ||
         (event.payload.stage === "implementing" && event.payload.status === "failed"),
     );
     // The pack runner reports findings at the result's top level; a stub or an older event

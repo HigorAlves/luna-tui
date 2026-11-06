@@ -2,8 +2,10 @@
 // the media store when the machine has no GitHub token, and what Ship publishes from when it has
 // one. The task id and sha come from the machine; file names come from a container, so they are
 // reduced to `[A-Za-z0-9._-]` and nothing but a regular file under the size cap is copied.
-import { copyFile, lstat, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+
+import { copyRegularFile } from "../adapters/fs/bounded.ts";
 
 const MEGABYTE = 1024 * 1024;
 export const MAX_MEDIA_BYTES = 512 * MEGABYTE;
@@ -49,7 +51,8 @@ export class EvidenceStore {
       for (let n = 2; taken.has(name); n++) name = `${n}-${safeName(file.label)}`;
       taken.add(name);
       const dest = join(dir, name);
-      await copyFile(file.path, dest);
+      // Through the open file, never following a link: a file swapped in after the check is refused here.
+      if (!(await copyRegularFile(file.path, dest).then(() => true, () => false))) continue;
       kept.push({ label: file.label, path: dest });
     }
     return kept;
