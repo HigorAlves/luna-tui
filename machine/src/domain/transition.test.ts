@@ -648,6 +648,7 @@ describe("awaiting_ship and reviewing_memory hold a running stage or an open gat
     for (const state of ["awaiting_ship", "shipping"] as const) {
       expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r" })).toMatchObject({ state: "evidence" });
       expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r", refresh: "media" })).toMatchObject({ state: "e2e", effect: { kind: "run", stage: "e2e" } });
+      expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r", refresh: "verify" })).toMatchObject({ state: "verifying", effect: { kind: "run", stage: "verifying" } });
     }
   });
   it("another escalation at awaiting_ship asks a person and resumes there", () => {

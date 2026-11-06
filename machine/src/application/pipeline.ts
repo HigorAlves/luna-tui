@@ -2591,7 +2591,7 @@ export class Pipeline {
                 ...(stage === "shipping" && result.detail?.notReady === true ? { notReady: true as const } : {}),
                 // The retro has something for a person (rules, prompt updates, graph misses): it waits for an answer; otherwise the card closes.
                 ...(stage === "reviewing_memory" && result.outcome === "pass" && result.detail?.rules != null ? { proposals: true as const } : {}),
-                ...(result.detail?.refresh === "media" ? { refresh: "media" as const } : {}),
+                ...(result.detail?.refresh === "media" || result.detail?.refresh === "verify" ? { refresh: result.detail.refresh } : {}),
                 ...(stage === "evidence" ? { preview: (await this.policyFor((await this.get(id)).repoPath)).factory.ship.preview === "on" } : {}),
               };
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.

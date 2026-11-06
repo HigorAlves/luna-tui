@@ -161,7 +161,9 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   const changesCodeowners = paths.some((p) => CODEOWNERS_PATHS.includes(p));
   // The reviews are read once a poll, for the owners and for the approval a fix needs.
   let reviewsRead: Promise<PrReview[]> | null = null;
-  const reviewsOf = () => (reviewsRead ??= deps.github.prReviews(slug, number));
+  // A card that left its stack: only a review given after that moment counts (an unreadable time counts for nothing).
+  const leftAt = cursor.unstacked ? Date.parse(cursor.unstacked.at) : null;
+  const reviewsOf = () => (reviewsRead ??= deps.github.prReviews(slug, number).then((all) => all.filter((r) => leftAt === null || (Number.isFinite(Date.parse(r.at)) && Date.parse(r.at) > leftAt))));
 
   /** What the repo's CODEOWNERS still wants: null when it has none. A team the token cannot read stays unresolved. */
   const ownersOf = async (text: string | null) => {
@@ -199,6 +201,7 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   // The token's own login: an approval or an objection by it is never a look. Unreadable: no approval counts (fail closed).
   const me = (await deps.github.viewer().catch(() => null))?.login ?? null;
   const reviewList = await reviewsOf().catch(() => []);
+  const packStale = cursor.unstacked !== undefined && pack !== null && !(Date.parse(pack.at) > Date.parse(cursor.unstacked.at));
   const onHead = approvedOnHead(reviewList, head, me);
   const objection = objectionOnPr(reviewList, me);
   // After a fix the loop made, the approval that counts is the merge rule's own: an owner, member or collaborator (not the machine) on the head.
@@ -226,7 +229,7 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   const readiness = mergeReadiness({
     ...(stack ? { stack } : {}),
     pr,
-    packSha: pack?.commitSha ?? null,
+    packSha: packStale ? null : pack?.commitSha ?? null,
     policy: { autoMerge: policy.factory.ship.auto_merge, freeze: windows },
     risk,
     now: now(),
@@ -503,9 +506,11 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
           if (!done.ok) return stuck(`the card left its stack but its base could not be moved: ${plain(done.error, 200)}`);
           await stack.clearBase?.(task.id);
           delete cursor.stackGone;
+          // The branch still carries the parent's commits, which nobody reviewed against the default branch: every approval and the pack from before this moment stop counting.
+          cursor.unstacked = { head, at: now().toISOString() };
           await saveCursor(deps.stateDir, task.id, cursor);
           await note("the PR now targets the default branch: the card is no longer stacked");
-          return {};
+          return { result: escalated("the card left its stack: a new review is needed because the change now includes its parent's commits", "head_moved", { refresh: "verify" }) };
         }
         if (cursor.stackGone === "gone") return {};
         cursor.stackGone = "gone";

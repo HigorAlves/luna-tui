@@ -74,6 +74,8 @@ const ShipCursorSchema = z.object({
   lastEvent: z.object({ class: z.string(), at: z.string() }).optional(),
   /** How many times the branch was rebased onto a parent that changed (at most `STACK_REBASES_MAX`, then a person). */
   stackRebases: z.number().int().optional(),
+  /** The head at which the card left its stack, and when: approvals given at or before `at`, and an Evidence Pack made then, do not count for this card. */
+  unstacked: z.object({ head: z.string(), at: z.string() }).optional(),
   /** The parent state a person was last asked about (`gone`): the same state is not asked twice. */
   stackGone: z.string().optional(),
   /** `ship.ready` was logged: readiness is announced the first time it is true. */

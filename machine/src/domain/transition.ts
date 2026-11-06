@@ -50,7 +50,7 @@ export type PipelineEvent =
   /** The card is a report of another card (or of a backlog item): it closes, with nothing left to run. */
   | { type: "merged" }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
@@ -353,7 +353,7 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
     // The PR head moved after the evidence pack was made: Evidence runs again, retries kept; its format is kept too.
     // From the watch or the merge; a fix that changed what a scenario shows asks for a new browser run first, and Evidence re-makes the media from it.
     if (event.escalation === "head_moved" && task.route === "feature" && (state === "shipping" || state === "awaiting_ship")) {
-      return { ...run(event.refresh === "media" ? "e2e" : "evidence", retries), reason: event.reason };
+      return { ...run(event.refresh === "verify" ? "verifying" : event.refresh === "media" ? "e2e" : "evidence", retries), reason: event.reason };
     }
     // Too complex for the default engine: one more run on the pack's stronger one before a person is asked.
     if (event.escalation === "too_complex" && state === "implementing" && (retries.stronger ?? 0) < 1 && retries.total < IMPLEMENTER_CAP && stronger(PACKS.implementing)) {

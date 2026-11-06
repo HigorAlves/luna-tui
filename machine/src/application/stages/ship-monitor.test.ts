@@ -1346,6 +1346,31 @@ describe("an approval given while stacked (wave 15)", () => {
   });
 });
 
+describe("a card that left its stack needs a new review (wave 15 security pass)", () => {
+  const LEFT = "2026-11-04T06:00:00Z";
+  const readyWith = async (reviewAt: string, packAt: string) => {
+    const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: reviewAt, association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node({ baseRefName: "main" }), prHeadSha: async () => HEAD, prFiles: async () => [] });
+    const deps = { github, policies: { for: async () => policyWith({ autoMerge: "low" }) }, evidence: { load: async () => ({ ...pack(), at: packAt }) }, stateDir, pollMs: 1, readCodeowners: async () => null, now: () => START };
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" }, approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    return (await readShipFacts(deps as never, context, REF, { ...emptyCursor({ slug: "o/a", number: 3 }), unstacked: { head: HEAD, at: LEFT } }, deps.now))!;
+  };
+  it("an approval given on the same head before the unstack does not make the card ready", async () => {
+    const out = await readyWith("2026-11-04T05:00:00Z", "2026-11-04T07:00:00Z");
+    expect(out.readiness.canAutoMerge).toBe(false);
+  });
+  it("the Evidence Pack made before the unstack is stale even on the same head", async () => {
+    const out = await readyWith("2026-11-04T07:00:00Z", "2026-11-04T05:00:00Z");
+    expect(out.readiness.canAutoMerge).toBe(false);
+  });
+  it("a new approval after the unstack, with a pack made after it, counts", async () => {
+    const out = await readyWith("2026-11-04T07:00:00Z", "2026-11-04T06:30:00Z");
+    expect(out.readiness.canAutoMerge).toBe(true);
+  });
+  it("a review whose time cannot be read does not count once the card left its stack", async () => {
+    expect((await readyWith("t", "2026-11-04T06:30:00Z")).readiness.canAutoMerge).toBe(false);
+  });
+});
+
 describe("a merge that is not a ship (wave 15)", () => {
   const into = (baseRef: string) => {
     const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), prMerged: async () => merged, prFacts: async () => node({ baseRefName: baseRef }) });
@@ -1504,6 +1529,16 @@ describe("a parent that changed or merged (wave 15)", () => {
     expect(t.forgotten).toEqual(["forgot"]);
     expect(t.cleared).toEqual(["t1"]);
     expect(t.world.pushes()).toEqual([]);
+  });
+
+  it("leaving the stack records the head and the time, and sends the card back through Verify and Evidence with fixed words", async () => {
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), stackGone: "gone" });
+    const t = stacked({ parent: "gone", prBase: "main" });
+    const out = await t.run();
+    expect(out).toMatchObject({ outcome: "escalated", detail: { escalation: "head_moved", refresh: "verify", reason: "the card left its stack: a new review is needed because the change now includes its parent's commits" } });
+    const saved = await loadCursor(stateDir, "t1");
+    expect(saved!.unstacked).toMatchObject({ head: HEAD });
+    expect(typeof saved!.unstacked!.at).toBe("string");
   });
 
   it("a card with no stack facts is watched exactly as before: no stack call, no event", async () => {
