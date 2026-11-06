@@ -385,3 +385,22 @@ describe("buildStageInput", () => {
     expect(at("verifying").context.testCases).toEqual(cases);
   });
 });
+
+describe("buildContextPackInput: every context a pack is given reaches its input", () => {
+  it("puts the context under its key for every on-demand pack, so no pack runs blind", async () => {
+    const { CONTEXT_OF } = await import("./context-packs.ts");
+    const { buildContextPackInput } = await import("./stage-input.ts");
+    for (const [pack, { key }] of Object.entries(CONTEXT_OF)) {
+      if (key === "slack" || key === "jira") continue; // these two have their own builders, tested above
+      const marker = { marker: `ctx-${pack}`, title: "t", key: "K-1", description: "d", brief: "b", origin: { title: "o" }, thread: [], channel: { id: "C1", kind: "channel" } };
+      const input = buildContextPackInput(pack as never, { [key]: marker } as never);
+      expect((input.context as Record<string, unknown>)[key], `${pack}: context.${key}`).toEqual(marker);
+    }
+  });
+
+  it("names the ticket or the thread in the synthetic task's title", async () => {
+    const { buildContextPackInput } = await import("./stage-input.ts");
+    expect(buildContextPackInput("ticket_validity" as never, { ticket: { key: "PAY-12", title: "Refund twice" } } as never).task.title).toBe("PAY-12: Refund twice");
+    expect(buildContextPackInput("conversation_assess" as never, { conversation: { channel: { id: "C1" } } } as never).task.title).toBe("Conversation");
+  });
+});

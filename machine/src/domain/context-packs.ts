@@ -58,6 +58,7 @@ export type PackContext =
   | { dedup: DedupContext }
   | { size: SizeContext }
   | { split: SplitContext }
+  | { ticket: TicketContext }
   | { conversation: ConversationContext };
 
 /** Whether a client may run the pack on data it sends: it runs in no task state, has a context a
