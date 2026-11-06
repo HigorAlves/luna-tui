@@ -42,7 +42,11 @@ export const CACHE_ENV = [
   `CARGO_TARGET_DIR=${CACHE_DIR}/cargo-target`,
   `PIP_CACHE_DIR=${CACHE_DIR}/pip`,
   `UV_CACHE_DIR=${CACHE_DIR}/uv`,
+  // The package manager an install fetched is here for an agent whose registries are closed.
+  `COREPACK_HOME=${CACHE_DIR}/corepack`,
 ];
+/** Corepack never prompts and never takes the latest version of a package manager, in any container. */
+const COREPACK_ENV = ["COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_DEFAULT_TO_LATEST=0"];
 
 /** Variables a repository's image must not set for the process the machine starts in it (`ENV NODE_OPTIONS=--require=...` would run its code in the factory before the guards load): every container the machine starts passes them empty. */
 export const BLANKED_ENV = ["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"];
@@ -161,6 +165,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     // otherwise hit the now-read-only root filesystem — point HOME at the one writable,
     // throwaway place left: the tmpfs above.
     "-e", "HOME=/tmp",
+    ...COREPACK_ENV.flatMap((env) => ["-e", env]),
     ...blankedEnv(),
     // Temp files live on the tmpfs; the SDK's sessions too, unless a host dir is mounted below.
     "-e", "TMPDIR=/tmp",
@@ -352,7 +357,7 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
   args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
-  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...blankedEnv(), ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
+  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...COREPACK_ENV.flatMap((env) => ["-e", env]), ...blankedEnv(), ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.env ?? {})) args.push("-e", `${key}=${value}`);
   args.push(...cacheArgs(run.cacheVolume));
   args.push(...networkArgs(run.network, run.serviceEnv, false, run.cardNetwork, run.alsoJoin, Object.keys(run.services ?? {})));

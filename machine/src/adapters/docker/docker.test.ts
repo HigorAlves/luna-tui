@@ -168,6 +168,8 @@ describe("sandboxExecArgs", () => {
     expect(envs).toEqual([
       "HOME=/tmp",
       "TMPDIR=/tmp",
+      "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
+      "COREPACK_DEFAULT_TO_LATEST=0",
       ...["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"].map((n) => `${n}=`),
       "GIT_CONFIG_COUNT=2",
       "GIT_CONFIG_KEY_0=safe.directory",
@@ -408,5 +410,18 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
     expect(events).toEqual(["open chk1", "services on net-own", "docker run --rm", "blocked own", "teardown services", "teardown own"]);
     expect(result.blocked).toEqual(rows);
     expect(calls.find((c) => c[0] === "run")).toEqual(expect.arrayContaining(["--network", "net-own"]));
+  });
+});
+
+describe("corepack in every container", () => {
+  it("keeps its downloads in the repository's cache volume and never prompts or takes the latest, for a stage and a check", () => {
+    expect(CACHE_ENV).toContain("COREPACK_HOME=/cache/corepack");
+    const stage = sandboxArgs(run({ cacheVolume: "vol" }), "/in", "/out");
+    const check = sandboxExecArgs({ name: "c", image: "img", worktree: "/wt", argv: ["true"], cacheVolume: "vol" } as never);
+    for (const args of [stage, check]) for (const env of ["COREPACK_HOME=/cache/corepack", "COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_DEFAULT_TO_LATEST=0"]) expect(args).toContain(env);
+    // with no cache volume the two flags are still set
+    const bare = sandboxArgs(run(), "/in", "/out");
+    expect(bare).toContain("COREPACK_ENABLE_DOWNLOAD_PROMPT=0");
+    expect(bare).not.toContain("COREPACK_HOME=/cache/corepack");
   });
 });

@@ -35,7 +35,10 @@ import { dockerImages } from "../adapters/docker/image-build.ts";
 import { repoSlug } from "../adapters/graph/slug.ts";
 import { ensureGraphReady } from "../application/graph-ready.ts";
 import { type RepoImageEvent, repoImages as makeRepoImages } from "../application/repo-images.ts";
-import { DEFAULT_SANDBOX_SIZE, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
+import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
+import { isClone } from "../adapters/git/clone.ts";
+import { DEFAULT_SANDBOX_SIZE, execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { removeLeftoverNetworks } from "../adapters/docker/egress.ts";
 import { type EgressPolicy, blockedPayloads, egressPolicy } from "../application/egress-policy.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
@@ -43,7 +46,7 @@ import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
 import { hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
-import { HOST_GIT, changedPaths, gitIdentity, commitAll, currentBranch, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
+import { HOST_GIT, changedPaths, dirtyFiles, gitIdentity, commitAll, currentBranch, headCommit, lockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
@@ -175,7 +178,7 @@ export async function buildRealStages(
     onEvent: (event) => imageEvents.sink(event),
   });
   const egress = buildEgress(config, policies);
-  const checksExec = sandboxExecutor({
+  const sandboxChecks = sandboxExecutor({
     machine: config.runnerImage,
     imageOf: async (repoPath) => (await repoImages.ensure(repoPath)).image,
     ...(egress ? { egress: (repoPath: string | undefined) => egress.for({ repoPath: repoPath ?? null, kind: "check" }) } : {}),
@@ -185,6 +188,16 @@ export async function buildRealStages(
       return { cpu: sandbox.cpu, memoryGb: sandbox.memory_gb };
     },
   });
+  // The machine installs from the lockfile before a stage that writes, and before a check on a card's workspace (Verify's fresh one included).
+  const install = (input: InstallInput): Promise<InstallOutcome> =>
+    ensureInstalled({ stateDir: config.stateDir, policies, repoImages, imageId, lockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles }, input);
+  const checksExec: typeof sandboxChecks = async (command, args, options = {}) => {
+    if (options.repoPath && options.cwd && isClone(options.cwd)) {
+      const installed = await install({ taskId: "_checks", repoPath: options.repoPath, workspace: options.cwd, commit: await headCommit(options.cwd), ...(options.signal ? { signal: options.signal } : {}) });
+      if (!installed.ok) throw new InstallFailedError(installed.detail);
+    }
+    return sandboxChecks(command, args, options);
+  };
   // Each stage gets only its own engine's credential, read when the stage starts.
   const credentials = engineCredentials;
   // A card waits for its repository's graph before triage or the plan reads it (graph-ready.ts).
@@ -192,6 +205,7 @@ export async function buildRealStages(
   const deps = {
     image: config.runnerImage,
     ...(egress ? { egress } : {}),
+    install,
     repoImages,
     imageId,
     qaImage: config.runnerQaImage,

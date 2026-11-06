@@ -1,5 +1,6 @@
 import { RepoImageError } from "../repo-images.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { InstallFailedError } from "../install.ts";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -671,5 +672,15 @@ describe("the network a check runs on", () => {
     const runner = verifyRunner({ ...base, exec: (async () => ({ code: 0, stdout: "ok", stderr: "", blocked: rows })) as never });
     await runner(ctx(async (kind, payload) => void emitted.push([kind, payload]))).catch(() => {}); // the stubbed review pack answers nothing; the rows were emitted before
     expect(emitted).toContainEqual(["sandbox.egress_blocked", { step: "check", host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }]);
+  });
+});
+
+describe("when the install before a check fails", () => {
+  it("escalates as env_broken at step install with the step's own detail", async () => {
+    const detail = { escalation: "env_broken", envBroken: true, step: "install", tool: "npm", lockfile: "package-lock.json", reason: "x", logTail: "boom", options: [] };
+    const exec = async () => { throw new InstallFailedError(detail); };
+    const runner = verifyRunner({ exec: exec as never, runPack: vi.fn(), stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    expect(await runner(context)).toMatchObject({ outcome: "escalated", detail });
   });
 });

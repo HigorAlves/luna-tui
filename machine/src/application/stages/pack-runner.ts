@@ -30,6 +30,7 @@ import { CredentialWaitError, type CredentialMount, type Credentials, NoCredenti
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { type EgressPolicy, blockedPayloads } from "../egress-policy.ts";
+import type { InstallInput, InstallOutcome } from "../install.ts";
 import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
@@ -76,6 +77,8 @@ export interface AgentDeps {
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
   /** The list of hosts each run may reach; absent (`MACHINE_EGRESS=off`, tests) a run joins an ordinary bridge as before the allow-list. */
   egress?: EgressPolicy;
+  /** Installs the card's dependencies from its lockfile before a writable stage (application/install.ts); absent, nothing is installed by the machine. */
+  install?: (input: InstallInput) => Promise<InstallOutcome>;
   /** Finds the project's own check commands; the locked-test replay runs the test one. */
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** Each repo's luna.yaml; one store is shared so a bad edit warns once. */
@@ -454,6 +457,22 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   };
   // The agent starts with a git repository of its own in the folder, made by the machine from the card's: the one the host never reads.
   if (!extra.checkout && !resume) await refreshScratch(workspace.path, workspace.branch);
+  // The machine installs the card's dependencies from its lockfile, no credential in that container: the agent then works with them.
+  if (deps.install && limits.writable && !extra.checkout && !resume) {
+    let installed: InstallOutcome;
+    try {
+      installed = await deps.install({ taskId: task.id, repoPath: task.repoPath, workspace: workspace.path, commit: inputCommit, signal: context.signal });
+    } catch (error) {
+      credential.release();
+      throw error;
+    }
+    for (const payload of blockedPayloads(installed.blocked, "install")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
+    if (!installed.ok) {
+      credential.release();
+      return { outcome: "escalated", detail: installed.detail };
+    }
+    for (const note of installed.notes) await context.note?.(note).catch(() => {});
+  }
   // The run's own list: its engine's owner and each helper's, and for a browser run the hosts of the QA target(s) it may drive.
   const found = PACKS[pack];
   const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : found.helpers.map((h) => credentialOwner(h.engine)))];

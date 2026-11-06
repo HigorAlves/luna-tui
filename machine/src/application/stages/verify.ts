@@ -9,6 +9,7 @@ import { branchBase, changedPaths as hostChangedPaths, diffText, gitIdentity as 
 import { RepoImageError } from "../repo-images.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { blockedPayloads } from "../egress-policy.ts";
+import { InstallFailedError } from "../install.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
@@ -224,6 +225,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           });
         } catch (error) {
           // The repository's image could not be built: an environment problem with the reason, not a crashed stage.
+          if (error instanceof InstallFailedError) return { outcome: "escalated", detail: error.detail };
           if (error instanceof EgressUnsupportedError) return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
           if (!(error instanceof RepoImageError)) throw error;
           return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "checks", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };

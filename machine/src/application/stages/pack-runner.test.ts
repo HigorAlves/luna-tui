@@ -1331,3 +1331,35 @@ describe("a stage's own list of hosts", () => {
     expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28"), options: expect.any(Array) });
   });
 });
+
+describe("the machine's install before a writable stage", () => {
+  const outcome = { ok: true as const, ran: ["pnpm install --frozen-lockfile --ignore-scripts"], notes: ["restored tracked files the install changed (package.json)"], blocked: [{ host: "x.example.com", port: 443, via: "connect" as const, reason: "not_listed", count: 1 }] };
+
+  it("installs after the workspace is made and before the container, for implementing, with the card's commit, and not for a read-only pack", async () => {
+    const order: string[] = [];
+    const inner = fakeSandbox(output());
+    const calls: Array<Record<string, unknown>> = [];
+    const d: AgentDeps = { ...deps(async (run) => (order.push("sandbox"), inner(run))), install: async (input) => (order.push("install"), calls.push(input as never), outcome) };
+    const notes: string[] = [];
+    const emitted: string[] = [];
+    await runAgent(d, { ...context("implementing"), note: async (t) => void notes.push(t), emit: async (k, p) => void emitted.push(`${k}:${p.step}`) }, "implementing");
+    expect(order).toEqual(["install", "sandbox"]);
+    expect(calls[0]).toMatchObject({ taskId: "11111111-2222-3333-4444-555555555555", repoPath: repo });
+    expect(String(calls[0]!.commit)).toMatch(/^[0-9a-f]{40}$/);
+    expect(String(calls[0]!.workspace)).toContain(join(root, "worktrees"));
+    expect(notes.join(" ")).toContain("restored tracked files");
+    expect(emitted).toContain("sandbox.egress_blocked:install");
+    order.length = 0;
+    await runAgent(d, context("triage"), "triage");
+    expect(order).toEqual(["sandbox"]);
+  });
+
+  it("ends the stage as env_broken at step install, with the step's detail, and starts no container, when the install fails", async () => {
+    let started = false;
+    const d: AgentDeps = { ...deps(async (run) => ((started = true), fakeSandbox(output())(run))), install: async () => ({ ok: false, blocked: [], detail: { escalation: "env_broken", envBroken: true, step: "install", tool: "pnpm", lockfile: "pnpm-lock.yaml", reason: "x", logTail: "boom", options: [] } }) };
+    const result = await runAgent(d, context("implementing"), "implementing");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", step: "install", tool: "pnpm", logTail: "boom" });
+    expect(started).toBe(false);
+  });
+});
