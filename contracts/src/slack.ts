@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import type { Stats } from "./api.ts";
+import type { Conversation } from "./conversation.ts";
 import type { EngineId } from "./engines.ts";
 
 /** Where an item sits for you. One split per item, picked by the machine's `splitOf`. */
@@ -129,6 +130,8 @@ export interface SlackItem {
   triage: SlackTriage | null;
   split: SlackSplit;
   linked: { pr: { repo: string; number: number; split: string } | null; taskId: string | null };
+  /** The thread as the conversation machine holds it; absent or null on an item stored before wave 17. */
+  conversation?: Conversation | null;
 }
 
 /** `GET /slack/items` and the `slack.items` stream event. */

@@ -32,3 +32,50 @@ export const CanonicalMessage = z.object({
   deleted: z.boolean(),
 });
 export type CanonicalMessage = z.infer<typeof CanonicalMessage>;
+
+/** What a thread is about, relative to existing work (slice 6 fills it). */
+export const ConversationRelationType = z.enum(["related_to_in_progress", "related_to_backlog", "new_candidate", "none", "ask"]);
+export type ConversationRelationType = z.infer<typeof ConversationRelationType>;
+
+export interface ConversationClassification {
+  /** incident, bug, request, question, fyi or chatter; set by the typed decision or by hand. */
+  kind: string;
+  confidence: number;
+  by: "model" | "person";
+  /** ISO time of the answer: the board hears a change through it. */
+  at: string;
+  /** Decision record ids by step. */
+  records: Record<string, string>;
+}
+
+export interface ConversationRelation {
+  type: ConversationRelationType;
+  target: string | null;
+  confidence: number;
+  by: "model" | "person";
+  at: string;
+  record?: string;
+}
+
+export interface ConversationParticipant {
+  id: string;
+  name: string;
+  isBot: boolean;
+}
+
+/** One thread as the machine holds it: its recent messages, its people and what it decided about them. Optional on a `SlackItem`: null on rows from before wave 17. */
+export interface Conversation {
+  /** The last `MESSAGE_CAPS.history` messages, oldest first. */
+  history: CanonicalMessage[];
+  participants: ConversationParticipant[];
+  /** A private channel, a DM or a group DM: its text never leaves for another thread, a card or a backlog item. */
+  private: boolean;
+  /** The one repository whose `luna.yaml` claims the channel; null otherwise. */
+  repo: string | null;
+  classification: ConversationClassification | null;
+  relation: ConversationRelation | null;
+  /** How many secrets were cut from this thread's messages. */
+  redactions: number;
+  /** Which personal data the stored text still holds. */
+  pii: Array<"email" | "phone">;
+}

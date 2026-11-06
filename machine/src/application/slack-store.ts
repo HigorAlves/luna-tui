@@ -26,6 +26,10 @@ export interface SlackStore {
   item(id: string): Promise<SlackItemRow | null>;
   /** Inserts or replaces by id. */
   save(rows: SlackItemRow[]): Promise<void>;
+  /** The item whose `linked.taskId` is this card: the conversation a card came from. */
+  itemByTask(taskId: string): Promise<SlackItemRow | null>;
+  /** The items whose conversation relates to this backlog item. */
+  itemsLinkedTo(backlogId: string): Promise<SlackItemRow[]>;
   /** The latest Slack ts the store holds, for the first poll after a restart. */
   latestTs(): Promise<string | null>;
   /** Deletes items done before `doneBefore` and, when given, triage runs started before `runsBefore`. */

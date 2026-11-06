@@ -26,6 +26,7 @@ import type {
 import type { SocketEvent, SocketState } from "../adapters/slack/socket-mode.ts";
 import { escapeMrkdwn, toPlainText } from "../adapters/slack/mrkdwn.ts";
 import { stats } from "../adapters/http/metrics.ts";
+import { applyEdit, canonicalMessageOf, emptyConversation, foldMessage, latestText } from "../domain/conversation.ts";
 import { screen } from "../domain/secrets-check.ts";
 import {
   type IncomingMessage,
@@ -208,6 +209,8 @@ export class SlackInbox implements SlackInboxPort {
   private readonly dirty = new Set<string>();
   /** Reactions the socket reported, folded in by the next poll. */
   private readonly queued: IncomingMessage[] = [];
+  /** Edits and deletions the socket announced, applied at the next poll. */
+  private readonly edits: { id: string; text: string | null; deleted: boolean; at: string }[] = [];
   /** The latest ts read per channel. */
   private readonly cursors = new Map<string, string>();
   private readonly sweptAt = new Map<string, number>();
@@ -286,6 +289,8 @@ export class SlackInbox implements SlackInboxPort {
       const channel = event.channel ?? event.message?.channel ?? event.previous_message?.channel;
       if (!channel) return;
       this.dirty.add(channel);
+      if (event.subtype === "message_changed" && event.message?.ts) this.edits.push({ id: `${channel}:${event.message.ts}`, text: event.message.text ?? "", deleted: false, at: slackTsToDate(event.ts).toISOString() });
+      else if (event.subtype === "message_deleted" && (event.deleted_ts ?? event.previous_message?.ts)) this.edits.push({ id: `${channel}:${event.deleted_ts ?? event.previous_message!.ts}`, text: null, deleted: true, at: slackTsToDate(event.ts).toISOString() });
     } else if (event.type === "reaction_added" && event.item.channel && event.item.ts && this.me && event.item_user === this.me.id) {
       const { channel, ts } = event.item;
       const at = slackTsToDate(event.event_ts);
@@ -458,7 +463,7 @@ export class SlackInbox implements SlackInboxPort {
     const flagged = [...this.dirty];
     const reactions = this.queued.slice();
 
-    const ingest = async (incoming: IncomingMessage, raw: { text: string; author: SlackItem["author"] }) => {
+    const ingest = async (incoming: IncomingMessage, raw: { text: string; author: SlackItem["author"]; files?: RawMessage["files"]; editedTs?: string | null }) => {
       const verdict = applyRules(
         {
           author: raw.author,
@@ -478,7 +483,17 @@ export class SlackInbox implements SlackInboxPort {
         existing = (await store.item(incoming.id)) ?? undefined;
         if (!gathered.base.has(incoming.id)) gathered.base.set(incoming.id, existing ?? null);
       }
-      const { item, retriage } = fold(existing ?? null, incoming, now);
+      const folded = fold(existing ?? null, incoming, now);
+      const { retriage } = folded;
+      let item = folded.item;
+      if (incoming.kind !== "reaction") {
+        const message = canonicalMessageOf(
+          { ts: incoming.slackTs, user: raw.author.id, botId: null, text: raw.text, subtype: null, threadTs: incoming.threadTs, replyCount: 0, latestReply: null, files: raw.files, editedTs: raw.editedTs },
+          { channel: incoming.channel, author: raw.author, permalink: incoming.permalink, text: incoming.text },
+        );
+        const conversation = foldMessage(item.conversation ?? emptyConversation(incoming.channel), message, screen(raw.text));
+        if (conversation !== item.conversation) item = { ...item, conversation };
+      }
       if (retriage) gathered.pending.set(incoming.id, { floor: verdict.floor, settled: verdict.triage });
       if (retriage || item !== existing) gathered.changed.set(incoming.id, item);
     };
@@ -548,7 +563,7 @@ export class SlackInbox implements SlackInboxPort {
             slackTs: m.ts,
             matched,
           },
-          { text: m.text, author },
+          { text: m.text, author, files: m.files, editedTs: m.editedTs },
         );
       }
     };
@@ -571,6 +586,16 @@ export class SlackInbox implements SlackInboxPort {
 
     // 5. Threads you are in that moved: replies counted, your own reply noticed, context refreshed.
     const stored = await store.items(new Date(now.getTime() - KEEP_DONE_MS));
+    // Edits and deletions the socket announced: applied to the message they name, wherever its thread is held.
+    const edits = this.edits.slice();
+    for (const edit of edits) {
+      const holder = [...gathered.changed.values(), ...stored].find((r) => r.conversation?.history.some((m) => m.id === edit.id));
+      if (!holder) continue;
+      if (!gathered.base.has(holder.id)) gathered.base.set(holder.id, stored.find((r) => r.id === holder.id) ?? null);
+      const text = edit.deleted ? undefined : await this.plain(edit.text ?? "");
+      const edited = await this.followEdit(holder, edit.id, { text, editedAt: edit.at, deleted: edit.deleted }, gathered);
+      if (edited !== holder) gathered.changed.set(holder.id, edited);
+    }
     const tracked = [...new Map([...stored, ...gathered.changed.values()].map((row) => [row.id, gathered.changed.get(row.id) ?? row])).values()]
       .filter((row) => row.kind !== "reaction" && now.getTime() - new Date(row.ts).getTime() <= THREAD_WINDOW_MS)
       .sort((a, b) => compareTs(b.slackTs, a.slackTs))
@@ -585,14 +610,41 @@ export class SlackInbox implements SlackInboxPort {
         console.warn(`slack inbox: replies of ${row.id}: ${messageOf(error)}`);
         continue;
       }
-      if (replies.length === 0) continue;
+      let conv = row.conversation ?? emptyConversation(row.channel);
+      const rootId = `${row.channel.id}:${threadTs}`;
+      for (const r of replies) {
+        const id = `${row.channel.id}:${r.ts}`;
+        const author = await this.authorOf(r.user, r.botId);
+        const held = conv.history.find((m) => m.id === id);
+        if (!held) {
+          const text = await this.plain(r.text);
+          conv = foldMessage(conv, canonicalMessageOf(r, { channel: row.channel, author, permalink: "", text }), screen(r.text));
+        } else if (r.editedTs && held.editedAt !== slackTsToDate(r.editedTs).toISOString()) {
+          const edited = await this.followEdit({ ...row, conversation: conv }, id, { text: await this.plain(r.text), editedAt: slackTsToDate(r.editedTs).toISOString() }, gathered);
+          conv = edited.conversation!;
+          if (edited.text !== row.text) row.text = edited.text;
+        }
+      }
+      // A stored reply Slack no longer returns was deleted.
+      const present = new Set(replies.map((r) => `${row.channel.id}:${r.ts}`));
+      for (const m of conv.history) {
+        if (m.id === rootId || m.deleted || present.has(m.id) || compareTs(m.ts, threadTs) <= 0) continue;
+        const edited = await this.followEdit({ ...row, conversation: conv }, m.id, { editedAt: now.toISOString(), deleted: true }, gathered);
+        conv = edited.conversation!;
+        if (edited.text !== row.text) row.text = edited.text;
+      }
+      const base = conv !== row.conversation ? { ...row, conversation: conv } : row;
+      if (replies.length === 0) {
+        if (base !== row) gathered.changed.set(row.id, base);
+        continue;
+      }
       const latest = replies.at(-1)!;
       const before = replies.filter((r) => compareTs(r.ts, row.slackTs) < 0).slice(-3);
       const context: SlackItem["context"] = [];
       for (const r of before) context.push({ ts: r.ts, user: await this.authorOf(r.user, r.botId), text: await this.plain(r.text) });
       // A reply addressed to you after the latest folded message is a new ask: fold it.
       const asks = replies.filter((r) => compareTs(r.ts, row.slackTs) > 0 && r.user !== me.id && (mentionsUser(r.text, me.id) || matchWatches(r.text, row.channel.id, watches).length > 0 || row.kind === "dm"));
-      let current = row;
+      let current = base;
       for (const ask of asks) {
         const author = await this.authorOf(ask.user, ask.botId);
         const folded = fold(current, { ...current, author, text: await this.plain(ask.text), ts: slackTsToDate(ask.ts).toISOString(), slackTs: ask.ts, matched: [...(mentionsUser(ask.text, me.id) ? ["me"] : []), ...matchWatches(ask.text, row.channel.id, watches), ...(row.kind === "dm" ? ["dm"] : [])], context }, now);
@@ -601,7 +653,7 @@ export class SlackInbox implements SlackInboxPort {
       }
       const moved = touch(current, { replies: replies.length, latestIsYours: latest.user === me.id, context }, now);
       if (moved.retriage && !gathered.pending.has(row.id)) gathered.pending.set(row.id, { floor: null, settled: null });
-      if (moved.item !== row) gathered.changed.set(row.id, moved.item);
+      if (moved.item !== row || base !== row) gathered.changed.set(row.id, moved.item);
     }
 
     // 6. Settle what the rules decided and queue the rest for the pack; 7. persist. The pack's
@@ -618,6 +670,7 @@ export class SlackInbox implements SlackInboxPort {
     for (const [id, ts] of moved.channels) this.cursors.set(id, ts);
     for (const id of flagged) this.dirty.delete(id);
     this.queued.splice(0, reactions.length);
+    this.edits.splice(0, edits.length);
   }
 
   /**
@@ -765,6 +818,21 @@ export class SlackInbox implements SlackInboxPort {
   /** A hand-set priority outlives a re-triage. */
   private keepOverride(previous: SlackTriage | null, next: SlackTriage): SlackTriage {
     return previous?.overridden ? { ...next, priority: previous.priority, overridden: true } : next;
+  }
+
+  /**
+   * An edit or a deletion applied to the message it names. When it was the thread's latest message the item's text follows it and
+   * the item is triaged again (unless nothing readable is left).
+   */
+  private async followEdit(row: SlackItemRow, id: string, edit: { text?: string; editedAt: string; deleted?: boolean }, gathered: Gathered): Promise<SlackItemRow> {
+    if (!row.conversation) return row;
+    const conversation = applyEdit(row.conversation, { id, ...edit });
+    if (conversation === row.conversation) return row;
+    const isLatest = id === `${row.channel.id}:${row.slackTs}`;
+    if (!isLatest) return { ...row, conversation };
+    const text = latestText(conversation);
+    if (text !== row.text && text !== "" && !gathered.pending.has(row.id)) gathered.pending.set(row.id, { floor: null, settled: null });
+    return { ...row, conversation, text };
   }
 
   /** mrkdwn to plain text, with every mentioned user named. */

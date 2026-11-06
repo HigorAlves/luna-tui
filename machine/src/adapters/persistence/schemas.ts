@@ -168,6 +168,7 @@ export const SlackItemEntity = new EntitySchema<SlackItemEntityRow>({
     arrivedAt: { name: "arrived_at", type: "timestamptz" },
     triage: { type: "jsonb", nullable: true },
     linked: { type: "jsonb" },
+    conversation: { type: "jsonb", nullable: true },
     createdAt: { name: "created_at", type: "timestamptz", createDate: true },
     updatedAt: { name: "updated_at", type: "timestamptz", updateDate: true },
   },

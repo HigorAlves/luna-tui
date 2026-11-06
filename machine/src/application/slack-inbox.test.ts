@@ -172,6 +172,64 @@ describe("SlackInbox.pollOnce", () => {
     expect(rows[0]!.text).toContain("[redacted]");
   });
 
+  it("folds every message it reads of a thread into the item's conversation: the ingest and the replies", async () => {
+    const root = ts(40);
+    const { inbox, store } = setup({
+      hits: [hit({ ts: root, text: "<@U1> the export fails" })],
+      replies: { [`C1:${root}`]: [msg({ ts: ts(30), user: "U3", text: "same here, mail ana@example.com", threadTs: root, files: [{ id: "F1", name: "trace.log", kind: "text" }] })] },
+    });
+    await poll(inbox);
+    await poll(inbox);
+    const row = store.rows.get(`C1:${root}`)!;
+    expect(row.conversation?.private).toBe(false);
+    expect(row.conversation?.history.map((m) => m.id)).toEqual([`C1:${root}`, `C1:${ts(30)}`]);
+    expect(row.conversation?.history[1]!.attachments).toEqual([{ id: "F1", name: "trace.log", kind: "text" }]);
+    expect(row.conversation?.participants.map((p) => p.id).sort()).toEqual(["U2", "U3"]);
+    expect(row.conversation?.pii).toEqual(["email"]);
+    await poll(inbox);
+    expect(store.rows.get(`C1:${root}`)!.conversation?.history).toHaveLength(2);
+  });
+
+  it("marks a DM's conversation private", async () => {
+    const { inbox, store } = setup({ history: { D1: [msg({ ts: ts(5), text: "ping" })] } });
+    await poll(inbox);
+    expect(store.rows.get(`D1:${ts(5)}`)!.conversation?.private).toBe(true);
+  });
+
+  it("applies an edit and a deletion that arrive over the socket at the next poll, and triages the item again when it was the latest message", async () => {
+    const root = ts(40);
+    const { inbox, store, triaged } = setup({
+      hits: [hit({ ts: root, text: "<@U1> the export fails?" })],
+      replies: { [`C1:${root}`]: [] },
+    });
+    await poll(inbox);
+    const before = triaged.length;
+    inbox.handleSocketEvent({ type: "message", channel: "C1", ts: ts(1), subtype: "message_changed", message: { ts: root, text: "<@U1> the import fails?" } });
+    await poll(inbox);
+    const edited = store.rows.get(`C1:${root}`)!;
+    expect(edited.conversation?.history[0]).toMatchObject({ text: "@higor the import fails?" });
+    expect(edited.conversation?.history[0]!.editedAt).not.toBeNull();
+    expect(edited.text).toBe("@higor the import fails?");
+    expect(triaged.length).toBeGreaterThan(before);
+    inbox.handleSocketEvent({ type: "message", channel: "C1", ts: ts(0.5), subtype: "message_deleted", deleted_ts: root });
+    await poll(inbox);
+    const gone = store.rows.get(`C1:${root}`)!;
+    expect(gone.conversation?.history[0]).toMatchObject({ deleted: true, text: "" });
+    expect(gone.text).toBe("");
+  });
+
+  it("without the socket, the replies re-read finds an edit and a deletion", async () => {
+    const root = ts(40);
+    const state = { replies: [msg({ ts: ts(30), user: "U3", text: "first", threadTs: root }), msg({ ts: ts(20), user: "U3", text: "second", threadTs: root })] };
+    const { inbox, store } = setup({ hits: [hit({ ts: root, text: "<@U1> help" })], replies: { [`C1:${root}`]: state.replies } });
+    await poll(inbox);
+    state.replies.splice(0, 2, msg({ ts: ts(30), user: "U3", text: "first, fixed", threadTs: root, editedTs: ts(25) }));
+    await poll(inbox);
+    const history = store.rows.get(`C1:${root}`)!.conversation!.history;
+    expect(history.find((m) => m.id === `C1:${ts(30)}`)).toMatchObject({ text: "first, fixed" });
+    expect(history.find((m) => m.id === `C1:${ts(20)}`)).toMatchObject({ deleted: true, text: "" });
+  });
+
   it("runs the rules first: own messages dropped, muted channels never stored, bots settled without the model, VIPs floored", async () => {
     const rules = `## VIPs\n- @ana\n\n## Muted channels\n- #random\n\n## Always P0 keywords\n- rollback\n`;
     const { inbox, triaged, store } = setup({

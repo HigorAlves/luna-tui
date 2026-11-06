@@ -231,6 +231,7 @@ export function toSlackItem(row: SlackItemRow, now: Date, sla: SlaTargets): Slac
  */
 export function fingerprint(item: SlackItem): string {
   const t = item.triage;
+  const c = item.conversation;
   return [
     item.id,
     item.split,
@@ -247,6 +248,7 @@ export function fingerprint(item: SlackItem): string {
     item.youReplied ? 1 : 0,
     item.ts,
     item.linked.taskId,
+    c ? `${c.classification?.kind ?? ""}@${c.classification?.at ?? ""}/${c.relation?.type ?? ""}@${c.relation?.at ?? ""}/${c.history.length}` : "",
     item.linked.pr ? `${item.linked.pr.repo}#${item.linked.pr.number}/${item.linked.pr.split}` : "",
   ].join("|");
 }

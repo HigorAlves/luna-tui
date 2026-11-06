@@ -59,6 +59,16 @@ export class MemorySlackStore implements SlackStore {
   async save(rows: SlackItemRow[]): Promise<void> {
     for (const row of rows) this.rows.set(row.id, structuredClone(row));
   }
+  async itemByTask(taskId: string): Promise<SlackItemRow | null> {
+    const found = [...this.rows.values()].filter((r) => r.linked.taskId === taskId).sort((a, b) => b.ts.localeCompare(a.ts))[0];
+    return found ? structuredClone(found) : null;
+  }
+  async itemsLinkedTo(backlogId: string): Promise<SlackItemRow[]> {
+    return [...this.rows.values()]
+      .filter((r) => r.conversation?.relation?.type === "related_to_backlog" && r.conversation.relation.target === backlogId)
+      .sort((a, b) => a.ts.localeCompare(b.ts))
+      .map((r) => structuredClone(r));
+  }
   async latestTs(): Promise<string | null> {
     const all = [...this.rows.values()].map((r) => r.slackTs);
     return all.length === 0 ? null : all.sort((a, b) => Number(a) - Number(b)).at(-1)!;

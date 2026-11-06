@@ -54,7 +54,7 @@ describe("PgSlackStore items", () => {
     await store.save([row("C1:1", { text: "edited", count: 2, triage: { priority: "P1", category: "question", expectsReply: true, summary: "s", why: "w", draft: null, refs: [], deadline: null, by: "model", triagedAt: now.toISOString(), overridden: false } })]);
     const all = await store.items(new Date(0));
     expect(all.map((r) => r.id)).toEqual(["C1:1", "C1:2"]);
-    expect(all[0]).toEqual(row("C1:1", { text: "edited", count: 2, triage: expect.objectContaining({ priority: "P1" }) as never }));
+    expect(all[0]).toEqual(row("C1:1", { conversation: null, text: "edited", count: 2, triage: expect.objectContaining({ priority: "P1" }) as never }));
     expect(await store.item("C1:2")).toMatchObject({ doneAt: daysAgo(2) });
     expect(await store.item("nope")).toBeNull();
     expect(await store.latestTs()).toBe("1730000001.000100");
@@ -131,5 +131,45 @@ describe("PgSlackStore triage runs", () => {
     const plain = await store.recordTriageRun({ ...base, startedAt: daysAgo(1) });
     expect(plain).not.toHaveProperty("fingerprint");
     expect((await store.triageRuns(new Date(0)))[0]).toMatchObject(facts);
+  });
+});
+
+describe("conversations on items", () => {
+  const conversation = {
+    history: [],
+    participants: [],
+    private: false,
+    repo: "o/a",
+    classification: null,
+    relation: { type: "related_to_backlog" as const, target: "b-1", confidence: 0.9, by: "model" as const, at: "2026-10-28T00:00:00.000Z" },
+    redactions: 0,
+    pii: [],
+  };
+
+  it("reads a row written before the migration with conversation null", async () => {
+    await db.query(
+      `insert into slack_items (id, kind, channel, author, text, ts, slack_ts, arrived_at, linked) values ('C1:9.1', 'mention', '{"id":"C1","name":"eng","kind":"channel"}', '{"id":"U2","name":"marta","isBot":false}', 'old', now(), '9.1', now(), '{"pr":null,"taskId":null}')`,
+    );
+    const found = await store.item("C1:9.1");
+    expect(found?.conversation).toBeNull();
+    expect(found?.triage).toBeNull();
+  });
+
+  it("round trips a conversation and finds items by card and by backlog item", async () => {
+    await store.save([row("C1:1.0", { conversation, linked: { pr: null, taskId: "task-7" } }), row("C1:2.0")]);
+    expect((await store.item("C1:1.0"))?.conversation?.repo).toBe("o/a");
+    expect((await store.itemByTask("task-7"))?.id).toBe("C1:1.0");
+    expect(await store.itemByTask("nope")).toBeNull();
+    expect((await store.itemsLinkedTo("b-1")).map((r) => r.id)).toEqual(["C1:1.0"]);
+    expect(await store.itemsLinkedTo("b-2")).toEqual([]);
+  });
+
+  it("allows one waiting draft per thread", async () => {
+    const insert = (status: string) =>
+      db.query(`insert into slack_drafts (thread, channel, thread_ts, kind, status, text, expires_at) values ('C1:1.0', 'C1', '1.0', 'reply', $1, 'hi', now())`, [status]);
+    await insert("waiting");
+    await expect(insert("waiting")).rejects.toThrow();
+    await insert("superseded");
+    await db.query("truncate slack_drafts");
   });
 });

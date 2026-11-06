@@ -34,6 +34,7 @@ export interface SlackItemEntityRow {
   arrivedAt: Date;
   triage: SlackTriage | null;
   linked: SlackItem["linked"];
+  conversation: SlackItem["conversation"];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -95,12 +96,14 @@ function toRow(e: SlackItemEntityRow): SlackItemRow {
     arrivedAt: e.arrivedAt.toISOString(),
     triage: e.triage,
     linked: e.linked,
+    conversation: e.conversation ?? null,
   };
 }
 
 function toEntity(r: SlackItemRow): Omit<SlackItemEntityRow, "createdAt" | "updatedAt"> {
   return {
     ...r,
+    conversation: r.conversation ?? null,
     ts: new Date(r.ts),
     seenAt: date(r.seenAt),
     doneAt: date(r.doneAt),
@@ -149,6 +152,20 @@ export class PgSlackStore implements SlackStore {
   async save(rows: SlackItemRow[]): Promise<void> {
     if (rows.length === 0) return;
     await this.db.getRepository(SlackItemEntity).save(rows.map(toEntity));
+  }
+
+  async itemByTask(taskId: string): Promise<SlackItemRow | null> {
+    const [found]: { id: string }[] = await this.db.query(`select id from slack_items where linked->>'taskId' = $1 order by ts desc limit 1`, [taskId]);
+    return found ? this.item(found.id) : null;
+  }
+
+  async itemsLinkedTo(backlogId: string): Promise<SlackItemRow[]> {
+    const found: { id: string }[] = await this.db.query(
+      `select id from slack_items where conversation->'relation'->>'type' = 'related_to_backlog' and conversation->'relation'->>'target' = $1 order by ts`,
+      [backlogId],
+    );
+    const rows = await Promise.all(found.map((f) => this.item(f.id)));
+    return rows.filter((r): r is SlackItemRow => r !== null);
   }
 
   async latestTs(): Promise<string | null> {
