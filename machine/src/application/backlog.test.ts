@@ -105,6 +105,16 @@ describe("a candidate that comes from a ticket", () => {
     expect(list[0]).toMatchObject({ size: "L", scores: { who: 1 }, demand: 1 });
   });
 
+  it("knows a Slack thread by its channel and root ts: the same thread updates its item, another thread adds one", async () => {
+    const slack = (ts: string) => ({ kind: "slack" as const, channel: "C1", ts, permalink: `https://x.slack.com/p${ts}` });
+    const first = await backlog.upsertFromSource(input({ sources: [slack("1.1")] }), { createIfMissing: true });
+    const again = await backlog.upsertFromSource(input({ sources: [slack("1.1")], size: "L" }), { createIfMissing: true });
+    expect(again).toMatchObject({ created: false, id: first!.id });
+    const other = await backlog.upsertFromSource(input({ sources: [slack("2.2")] }), { createIfMissing: true });
+    expect(other).toMatchObject({ created: true });
+    expect(await backlog.list()).toHaveLength(2);
+  });
+
   it("is not created by a re-assessment that finds no item", async () => {
     expect(await backlog.upsertFromSource(input(), { createIfMissing: false })).toBeNull();
     expect(await backlog.list()).toHaveLength(0);

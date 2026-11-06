@@ -134,10 +134,11 @@ export class Backlog {
   }
 }
 
-/** The same ticket: a Jira key, or a GitHub repository and number. */
+/** The same ticket: a Jira key, a GitHub repository and number, or a Slack thread (channel and root ts). */
 export function sameSource(a: unknown, b: TaskSource): boolean {
   const x = a as Record<string, unknown>;
   if (b.kind === "jira") return x.kind === "jira" && x.key === b.key;
   if (b.kind === "github") return x.kind === "github" && x.repo === b.repo && x.number === b.number;
+  if (b.kind === "slack") return x.kind === "slack" && x.channel === b.channel && x.ts === b.ts;
   return false;
 }

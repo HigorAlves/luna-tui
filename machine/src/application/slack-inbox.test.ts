@@ -1,4 +1,4 @@
-import { FACTORY_DEFAULTS, type SlackSnapshot } from "@hardness/contracts";
+import { type ConversationRelation, FACTORY_DEFAULTS, type SlackPriority, type SlackSnapshot } from "@hardness/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SlackItemRow } from "../domain/slack-item.ts";
@@ -24,7 +24,7 @@ const poll = async (inbox: SlackInbox): Promise<SlackSnapshot> => {
 };
 
 const USERS: Record<string, { name: string; isBot: boolean }> = { U1: { name: "higor", isBot: false }, U2: { name: "marta", isBot: false }, U3: { name: "ana", isBot: false }, UB: { name: "deploybot", isBot: true } };
-const CHANNELS: Record<string, { name: string; kind: "channel" | "group" | "dm" | "mpim" }> = { C1: { name: "eng", kind: "channel" }, C9: { name: "payments-oncall", kind: "channel" }, CR: { name: "random", kind: "channel" }, D1: { name: "U2", kind: "dm" } };
+const CHANNELS: Record<string, { name: string; kind: "channel" | "group" | "dm" | "mpim" }> = { C1: { name: "eng", kind: "channel" }, C9: { name: "payments-oncall", kind: "channel" }, CR: { name: "random", kind: "channel" }, D1: { name: "U2", kind: "dm" }, G1: { name: "secret", kind: "group" } };
 
 interface World {
   hits?: SearchHit[];
@@ -43,6 +43,7 @@ interface World {
   claimed?: Record<string, string>;
   conv?: Partial<typeof FACTORY_DEFAULTS.conversation>;
   assessor?: { assess: (row: SlackItemRow) => Promise<Assessed> };
+  actions?: { apply: (row: SlackItemRow, relation: ConversationRelation) => Promise<{ relation: ConversationRelation; taskId?: string; priority?: SlackPriority }>; undo: (previous: ConversationRelation | null | undefined, next: ConversationRelation) => Promise<void> };
   truth?: { override: (input: unknown) => Promise<void>; relation?: (input: unknown) => Promise<void> };
 }
 
@@ -123,6 +124,7 @@ function setup(world: World = {}) {
     scope: world.scope ?? "all",
     ...(world.claimed || world.conv ? { claims: stubClaims(world.claimed ?? {}, world.conv) } : {}),
     ...(world.assessor ? { assessor: world.assessor } : {}),
+    ...(world.actions ? { actions: world.actions } : {}),
     ...(world.truth ? { truth: world.truth as never } : {}),
     rulesPath: "/rules.md",
     socketToken: null,
@@ -396,6 +398,67 @@ describe("SlackInbox.pollOnce", () => {
         await expect(inbox.relate(id, { relation: "related_to_in_progress", target: "card-9" })).rejects.toBeInstanceOf(BadRelationError);
         await expect(inbox.relate(id, { relation: "related_to_in_progress" })).rejects.toBeInstanceOf(BadRelationError);
         await expect(inbox.relate(id, { relation: "none", target: "card-2" })).rejects.toBeInstanceOf(BadRelationError);
+      });
+    });
+
+    describe("the relation's action", () => {
+      const card = { type: "related_to_in_progress" as const, target: "card-1", confidence: 0.9, by: "model" as const, at: iso(0) };
+      const actions = () => {
+        const log: string[] = [];
+        return { log, apply: async (row: SlackItemRow, relation: ConversationRelation) => (log.push(`apply ${row.id} ${relation.type}`), { relation: { ...relation, applied: { at: iso(0), bumped: false } }, taskId: "card-1", priority: "P0" as const }), undo: async (_p: unknown, next: ConversationRelation) => void log.push(`undo ${next.type}`) };
+      };
+      it("runs once at a verdict that is not ask: the item links to the card and takes its priority; no card is made", async () => {
+        const a = actions();
+        const assessor = { assess: async () => assessed({ relation: card }) };
+        const { inbox, store, created } = setup({ assessor, actions: a, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
+        await poll(inbox);
+        await poll(inbox);
+        const row = store.rows.get(`C1:${ts(10)}`)!;
+        expect(a.log).toEqual([`apply C1:${ts(10)} related_to_in_progress`]);
+        expect(row.linked.taskId).toBe("card-1");
+        expect(row.triage?.priority).toBe("P0");
+        expect(row.conversation?.relation?.applied).toBeDefined();
+        expect(created).toEqual([]);
+      });
+      it("does not run for ask, nor for a verdict ask", async () => {
+        const a = actions();
+        const assessor = { assess: async () => assessed({ relation: { ...card, type: "ask", target: null } }) };
+        const { inbox, created } = setup({ assessor, actions: a, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
+        await poll(inbox);
+        expect(a.log).toEqual([]);
+        expect(created).toEqual([]);
+      });
+      it("runs when a person sets the relation, and takes back what the model's relation raised", async () => {
+        const a = actions();
+        const assessor = { assess: async () => assessed({ relation: card, shortlist: [{ slot: 1, id: "card-1", kind: "open", otherSource: null }, { slot: 2, id: "b-2", kind: "backlog", otherSource: null }] }) };
+        const { inbox, created } = setup({ assessor, actions: a, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
+        await poll(inbox);
+        await inbox.relate(`C1:${ts(10)}`, { relation: "related_to_backlog", target: "b-2" });
+        expect(a.log).toEqual([`apply C1:${ts(10)} related_to_in_progress`, "undo related_to_backlog", `apply C1:${ts(10)} related_to_backlog`]);
+        expect(created).toEqual([]);
+      });
+    });
+
+    describe("a card from a conversation, made only by a tap", () => {
+      it("is built from candidateOf with the hints and the machine of origin: kind, the priority as urgency, the confidence", async () => {
+        const assessor = { assess: async () => assessed({ classification: { kind: "bug", confidence: 0.85, by: "model", at: iso(0), records: {}, verdict: "ok", priority: "P1" } }) };
+        const { inbox, created } = setup({ assessor, hits: [hit({ ts: ts(10), text: "<@U1> login fails\nsecond line" })], claimed: { C1: "/r" } });
+        await poll(inbox);
+        await inbox.toTask(`C1:${ts(10)}`, {});
+        expect(created).toHaveLength(1);
+        expect(created[0]).toMatchObject({ title: "@higor login fails", originMachine: "conversation", hints: { kind: "bug", urgency: "P1", confidence: 0.85 }, reporter: { id: "U2", channel: "slack" }, source: { kind: "slack", channel: "C1" } });
+        expect((created[0] as { description: string }).description).toContain("> marta: ");
+      });
+      it("carries no thread text when the conversation is private", async () => {
+        const assessor = { assess: async () => assessed() };
+        const { inbox, store, created } = setup({ assessor, hits: [hit({ ts: ts(10), text: "<@U1> the plan is banana", channel: { id: "G1", name: "secret" } })] });
+        await poll(inbox);
+        const id = `G1:${ts(10)}`;
+        expect(store.rows.get(id)?.conversation?.private).toBe(true);
+        await inbox.toTask(id, {});
+        expect(created).toHaveLength(1);
+        expect(JSON.stringify(created[0])).not.toContain("banana");
+        expect(created[0]).toMatchObject({ title: "A private Slack conversation" });
       });
     });
 

@@ -68,6 +68,8 @@ export interface ConversationRelation {
   record?: string;
   /** Where a ticket-sourced card came from (a channel a repository claims sees such cards): the board says so on its own line before the tap. */
   otherSource?: { kind: "jira" | "github"; key: string } | null;
+  /** Set once the relation's action ran (attach, bump, add): it runs once per thread. `bumped` is whether this thread raised a backlog item's demand (undone if a person moves it); `backlog` is the item a new candidate became. */
+  applied?: { at: string; bumped: boolean; backlog?: string };
 }
 
 /** The ids behind the slots the relation decision saw: a target a person sets must be one of them, never anything a message names. */

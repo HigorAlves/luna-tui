@@ -14,7 +14,7 @@ import { type CardFields, type ContextMissing, type DedupContext, contextComplet
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type DedupAnswer, checkDuplicates } from "./intake-dedup.ts";
 import type { Candidate } from "../domain/similarity.ts";
-import { type CardFieldsInput, appendSource, cardFieldsOf, cardOf, mergeFields, unmergeFields, withDemand } from "../domain/card-fields.ts";
+import { type CardFieldsInput, MAX_FOLLOWERS, MAX_LINKS, appendSource, cardFieldsOf, cardOf, mergeFields, unmergeFields, withDemand } from "../domain/card-fields.ts";
 import { canSeeKept, contextAsk, mergedNotice, questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -600,6 +600,23 @@ export class Pipeline {
     const card = cardOf(task);
     await this.store.updateTask(id, { card: { ...card, sources: appendSource(card.sources, source) } });
     return this.get(id);
+  }
+
+  /**
+   * A Slack thread about this card: its permalink goes into `links` (key `slack:<channel>:<root ts>`) and its author into `followers`. It is never added to
+   * `sources`: that would change who can see the card and where it posts. Answers the card's priority when its record has one. Logs ids only.
+   */
+  async attachThread(id: string, thread: { channel: string; ts: string; permalink: string; authorId: string }): Promise<{ priority: "P0" | "P1" | "P2" | "P3" | null }> {
+    const task = await this.get(id);
+    const card = cardOf(task);
+    const key = `slack:${thread.channel}:${thread.ts}`;
+    const links = key in card.links || Object.keys(card.links).length >= MAX_LINKS ? card.links : { ...card.links, [key]: thread.permalink.slice(0, 2000) };
+    const author = thread.authorId.replace(/[^\p{L}\p{N}@/._-]/gu, "").slice(0, 120);
+    const followers = !author || card.followers.includes(author) || card.followers.length >= MAX_FOLLOWERS ? card.followers : [...card.followers, author];
+    await this.store.updateTask(id, { card: { ...card, links, followers } });
+    await this.log(id, "conversation.attached", { channel: thread.channel, ts: thread.ts });
+    const priority = (task.record as { urgencyDetail?: { priority?: string } } | null)?.urgencyDetail?.priority;
+    return { priority: priority === "P0" || priority === "P1" || priority === "P2" || priority === "P3" ? priority : null };
   }
 
   /** The latest task linked to a Jira issue, by its link or its intake source, if any. */

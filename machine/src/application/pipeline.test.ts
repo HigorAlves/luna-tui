@@ -3247,3 +3247,26 @@ describe("what a running stage may emit", () => {
     warn.mockRestore();
   });
 });
+
+describe("a Slack thread attached to a card", () => {
+  const thread = { channel: "C1", ts: "1700000000.000100", permalink: "https://x.slack.com/archives/C1/p1700000000000100", authorId: "U2" };
+  it("goes into the card's links and its author into the followers, never into the sources, and is logged with ids only", async () => {
+    const task = await pipeline.createTask({ title: "Login page", source: { kind: "jira", key: "PAY-1", url: "https://x/PAY-1", issueType: "Task" } });
+    const out = await pipeline.attachThread(task.id, thread);
+    const card = (await pipeline.get(task.id)).card!;
+    expect(card.links).toMatchObject({ "slack:C1:1700000000.000100": thread.permalink });
+    expect(card.followers).toContain("U2");
+    expect(card.sources).toHaveLength(1);
+    expect(out).toEqual({ priority: null });
+    const event = (await pipeline.events(task.id)).find((e) => e.kind === "conversation.attached");
+    expect(event?.payload).toEqual({ channel: "C1", ts: "1700000000.000100" });
+    await pipeline.attachThread(task.id, thread);
+    expect((await pipeline.get(task.id)).card!.followers.filter((f) => f === "U2")).toHaveLength(1);
+  });
+  it("answers the card's priority when it has one", async () => {
+    const task = await pipeline.createTask({ title: "Login page" });
+    await db.query("update tasks set record = $1 where id = $2", [JSON.stringify({ urgencyDetail: { priority: "P1", subScores: {} } }), task.id]);
+    expect(await pipeline.attachThread(task.id, thread)).toEqual({ priority: "P1" });
+  });
+});
+

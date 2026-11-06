@@ -77,6 +77,7 @@ import { Pipeline } from "./application/pipeline.ts";
 import { ChannelClaims } from "./application/channel-claims.ts";
 import { ConversationMachine } from "./application/conversation-machine.ts";
 import { enrichConversation } from "./application/conversation-enrich.ts";
+import { ConversationActions } from "./application/conversation-actions.ts";
 import { ConversationTruth } from "./application/conversation-truth.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
@@ -384,7 +385,12 @@ pipeline = new Pipeline(db, runnerFor, {
       return [...new Set((located?.owners ?? []).flatMap((entry) => entry.owners))];
     },
     history: async (source) => {
-      if (source.kind === "slack") return (await slackApi.replies(source.channel, source.ts, "0")).map((m) => ({ author: m.user, text: m.text, at: m.ts }));
+      // A private conversation's text goes to no card: nothing is fetched for it.
+      if (source.kind === "slack") {
+        const conversation = await slackStore.item(`${source.channel}:${source.ts}`).catch(() => null);
+        if (conversation?.conversation?.private || (conversation && conversation.channel.kind !== "channel") || (!conversation && /^[DG]/.test(source.channel))) return [];
+        return (await slackApi.replies(source.channel, source.ts, "0")).map((m) => ({ author: m.user, text: m.text, at: m.ts }));
+      }
       if (source.kind === "jira") return (await jiraApi.issue(source.key)).comments.map((c) => ({ author: c.author, text: c.text, at: c.created }));
       if (source.kind === "github") return (await github.listPrComments(source.repo, source.number)).map((c) => ({ author: c.author, text: c.body, at: null }));
       return [];
@@ -463,6 +469,18 @@ const slackInbox = new SlackInbox({
   // The Conversation Machine's chain: only where agents are on (the triager exists); the pack runs through `packRuns`, built below.
   ...(triager ? { assessor: { assess: (row) => conversationMachine().assess(row) } } : {}),
   truth: new ConversationTruth(config.stateDir, decisionTruth),
+  // The relation's action: attach, bump, add. `backlog` is built below; it is read when a conversation is assessed, never before.
+  actions: new ConversationActions({
+    attachThread: (cardId, thread) => pipeline.attachThread(cardId, thread),
+    bump: async (id) => void (await backlog.bump(id)),
+    unbump: (id) => backlog.unbump(id),
+    addCandidate: async (input) => {
+      const added = await backlog.upsertFromSource(input, { createIfMissing: true });
+      if (!added) throw new Error("the backlog did not take the candidate");
+      return { id: added.id };
+    },
+    linkedTo: (id) => slackStore.itemsLinkedTo(id),
+  }),
 });
 const conversationMachine = (): ConversationMachine => {
   if (!packRuns) throw new Error("agents are off: the conversation machine has no model to ask");

@@ -11,6 +11,7 @@ import { dirname } from "node:path";
 
 import { FACTORY_DEFAULTS } from "@hardness/contracts";
 import type {
+  ConversationRelation,
   SlackItem,
   SlackItemPatch,
   SlackRelationInput,
@@ -29,6 +30,7 @@ import type { SocketEvent, SocketState } from "../adapters/slack/socket-mode.ts"
 import { escapeMrkdwn, toPlainText } from "../adapters/slack/mrkdwn.ts";
 import { stats } from "../adapters/http/metrics.ts";
 import { inConversationScope, optedIn, type SlackScope } from "../domain/conversation-scope.ts";
+import { candidateOf } from "../domain/conversation-candidate.ts";
 import { applyEdit, canonicalMessageOf, emptyConversation, foldMessage, latestText } from "../domain/conversation.ts";
 import { screen } from "../domain/secrets-check.ts";
 import {
@@ -52,6 +54,7 @@ import { DEFAULT_SLA, LEARNED_TEMPLATE, vipOf, RULES_TEMPLATE, type SlaTargets, 
 import type { TaskRow } from "../domain/task.ts";
 import { ChannelClaims } from "./channel-claims.ts";
 import { type Assessed, CATEGORY } from "./conversation-machine.ts";
+import type { ConversationActions } from "./conversation-actions.ts";
 import type { ConversationTruth } from "./conversation-truth.ts";
 import { settled as threadQuiet } from "../domain/ticket-scope.ts";
 import type { NewTask } from "./pipeline.ts";
@@ -148,6 +151,8 @@ export interface SlackInboxOptions {
   claims?: ChannelClaims;
   /** The Conversation Machine's chain. Without it (agents off) every item takes the `slack_triage` path as before. */
   assessor?: { assess(row: SlackItemRow): Promise<Assessed> };
+  /** What a relation does once it is not `ask` (attach, bump, add): never a post, never a card. Absent: the relation is stored and nothing else happens. */
+  actions?: Pick<ConversationActions, "apply" | "undo">;
   /** Ground truth of a hand-set kind or priority. */
   truth?: Pick<ConversationTruth, "override" | "relation">;
 }
@@ -838,7 +843,25 @@ export class SlackInbox implements SlackInboxPort {
       if (!fresh) continue;
       const conversation = fresh.conversation ?? emptyConversation(fresh.channel);
       const kept = conversation.classification?.by === "person" ? conversation.classification : out.classification;
-      await store.save([{ ...fresh, triage: withFloor(this.keepOverride(fresh.triage, out.triage), entry.floor), conversation: { ...conversation, classification: kept, relation: conversation.classification?.by === "person" && conversation.relation?.by === "person" ? conversation.relation : out.relation, shortlist: out.shortlist } }]);
+      let relation = conversation.relation?.by === "person" ? conversation.relation : out.relation;
+      let linked = fresh.linked;
+      let triage = withFloor(this.keepOverride(fresh.triage, out.triage), entry.floor);
+      const previous = conversation.relation;
+      if (relation && relation.type !== "ask" && this.options.actions) {
+        if (previous?.applied && previous.type === relation.type && previous.target === relation.target) relation = { ...relation, applied: previous.applied };
+        else if (!relation.applied) {
+          try {
+            if (previous) await this.options.actions.undo(previous, relation);
+            const done = await this.options.actions.apply(fresh, relation);
+            relation = done.relation;
+            if (done.taskId) linked = { ...linked, taskId: done.taskId };
+            if (done.priority && triage && !triage.overridden) triage = { ...triage, priority: done.priority };
+          } catch (error) {
+            console.warn(`slack inbox: relation action failed for ${id}: ${messageOf(error)}`);
+          }
+        }
+      }
+      await store.save([{ ...fresh, linked, triage, conversation: { ...conversation, classification: kept, relation, shortlist: out.shortlist } }]);
       await this.refresh(this.snapshot.polledAt, this.snapshot.error);
     }
     if (!triager || rows.size === 0) return;
@@ -1033,7 +1056,18 @@ export class SlackInbox implements SlackInboxPort {
     const record = conversation.relation?.record ?? conversation.classification?.records.relation;
     const relation = { type: input.relation, target: entry?.id ?? null, confidence: 1, by: "person" as const, at: now, ...(record ? { record } : {}), ...(entry?.otherSource ? { otherSource: entry.otherSource } : {}) };
     await this.options.truth?.relation?.({ thread: row.id, record: record ?? null, relation: input.relation, slot: entry?.slot ?? null }).catch(() => {});
-    return this.saveAndPublish({ ...row, conversation: { ...conversation, relation } });
+    // A person's say runs the action too (a tap authorises it): what the machine's relation raised is taken back first.
+    let stored: ConversationRelation = relation;
+    let linked = row.linked;
+    let triage = row.triage;
+    if (this.options.actions) {
+      if (conversation.relation) await this.options.actions.undo(conversation.relation, relation);
+      const done = await this.options.actions.apply(row, relation);
+      stored = done.relation;
+      if (done.taskId) linked = { ...linked, taskId: done.taskId };
+      if (done.priority && triage && !triage.overridden) triage = { ...triage, priority: done.priority };
+    }
+    return this.saveAndPublish({ ...row, linked, triage, conversation: { ...conversation, relation: stored } });
   }
 
   async reply(id: string, text: string, nudge = false): Promise<SlackItem> {
@@ -1053,6 +1087,25 @@ export class SlackInbox implements SlackInboxPort {
     const row = await this.get(id);
     if (row.linked.taskId && (await this.options.findTask(row.linked.taskId))) throw new AlreadyTaskError(id, row.linked.taskId);
     const where = row.channel.kind === "dm" ? `DM with @${row.channel.name}` : `#${row.channel.name}`;
+    // A conversation the machine classified, or a private one, becomes a card from `candidateOf`: the thread masked and capped, and for a private one no text at all.
+    // The card is made here and nowhere else: a relation's action never calls `createTask`.
+    if (row.conversation && (row.conversation.classification || row.conversation.private)) {
+      const candidate = candidateOf(row);
+      const c = row.conversation;
+      const priority = c.classification?.priority ?? row.triage?.priority;
+      const confidence = c.classification?.confidence;
+      const task = await this.options.createTask({
+        title: input.title ?? candidate.title,
+        description: c.private ? candidate.text : `From Slack: @${row.author.name} in ${where}${row.permalink ? ` · ${row.permalink}` : ""}\n\n${candidate.text}`,
+        repoPath: input.repoPath ?? c.repo ?? null,
+        source: { kind: "slack", channel: row.channel.id, ts: row.slackTs, permalink: row.permalink },
+        reporter: { id: row.author.id, name: row.author.name, channel: "slack" },
+        originMachine: "conversation",
+        hints: { ...(c.classification ? { kind: c.classification.kind } : {}), ...(priority ? { urgency: priority } : {}), ...(confidence !== undefined ? { confidence } : {}) },
+      });
+      await this.saveAndPublish({ ...row, linked: { ...row.linked, taskId: task.id } });
+      return task;
+    }
     const context = row.context.map((m) => `> @${m.user.name}: ${m.text.replace(/\n/g, "\n> ")}`);
     const description = [
       `From Slack: @${row.author.name} in ${where}${row.permalink ? ` · ${row.permalink}` : ""}`,
