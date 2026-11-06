@@ -250,6 +250,20 @@ describe("each tap makes exactly one write, recorded with its route", () => {
     expect(w.sender.writes).toEqual([]);
     expect((await w.drafts.waiting(w.id))?.kind).toBe("questions");
   });
+  it("the tap that posts the questions settles the waiting questions draft: it is not left to expire or to be sent a second time", async () => {
+    const w = await ready();
+    const card = await slackCard(w.pipeline);
+    await w.store.save([{ ...w.row, linked: { ...w.row.linked, taskId: card.id } }]);
+    await w.replies.handle(event(card.id, "task.questions", { body: "Which export?", secret: false, hash: "h", by: "machine" }));
+    await w.replies.idle();
+    const draft = (await w.drafts.waiting(w.id))!;
+    expect(draft.kind).toBe("questions");
+    await w.replies.handle(event(card.id, "task.questions", { body: "Which export?", secret: false, hash: "h", by: "person" }));
+    await w.replies.idle();
+    expect(w.sender.writes).toHaveLength(1);
+    expect(await w.drafts.waiting(w.id)).toBeNull();
+    expect((await w.drafts.get(draft.id))?.status).toBe("sent");
+  });
   it("a text that carries a secret-shaped string is refused at the door", async () => {
     const w = await ready();
     const token = ["gh", "p_", "a".repeat(36)].join("");

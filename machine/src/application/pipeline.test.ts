@@ -3270,3 +3270,14 @@ describe("a Slack thread attached to a card", () => {
   });
 });
 
+describe("the address of a card's PR", () => {
+  it("is known as soon as the PR exists (the stage that opened it finished), not only after a merge", async () => {
+    const task = await pipeline.createTask({ title: "Login page" });
+    expect(await pipeline.prLinkOf(task.id)).toBeNull();
+    await pipeline.record(task.id, "stage.finished", { detail: { prUrl: "https://github.com/acme/app/pull/4", prNumber: 4 } });
+    expect(await pipeline.prLinkOf(task.id)).toBe("https://github.com/acme/app/pull/4");
+    await pipeline.record(task.id, "stage.finished", { detail: { prUrl: "javascript:alert(1)" } });
+    expect(await pipeline.prLinkOf(task.id)).toBe("https://github.com/acme/app/pull/4");
+  });
+});
+

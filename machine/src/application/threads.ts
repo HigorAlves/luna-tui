@@ -176,11 +176,18 @@ export class ThreadReplies {
     const sender = this.sender();
     if (!sender) return;
     const item = this.options.store ? await this.options.store.itemByTask(taskId) : null;
+    // The tap that posts the questions settles the waiting questions draft: claimed before Slack is called, so it is neither left to expire nor sent twice.
+    const drafts = this.options.drafts;
+    const waiting = event.kind === "task.questions" && drafts && item ? await drafts.waiting(item.id) : null;
+    const claimed = drafts && waiting?.kind === "questions" ? await drafts.claim(item!.id, waiting.text) : null;
     try {
       await sender.postMessage(auth, source.channel, body, item ? (item.id.split(":")[1] ?? source.ts) : source.ts);
     } catch (error) {
+      if (claimed) await drafts!.release(claimed.id).catch(() => {});
       console.warn(`slack post to the source thread failed for task ${taskId}: ${messageOf(error)}`);
+      return;
     }
+    if (claimed) await drafts!.finish(claimed.id, claimed.text).catch(() => {});
   }
 
   /** The PR merged: the summary on the issue; with `conversation.auto: on` also in the machine's thread and the source thread; otherwise a shipped draft on the thread the card came from and on each thread attached to it. */

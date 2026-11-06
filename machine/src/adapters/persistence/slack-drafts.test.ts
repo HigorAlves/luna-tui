@@ -43,3 +43,29 @@ describe("PgDraftStore", () => {
     expect(await d.expire(new Date(Date.now() + 25 * 3_600_000))).toHaveLength(1);
   });
 });
+
+describe("PgDraftStore claims", () => {
+  it("lets one of two claims in flight win, and a finished draft cannot be claimed again", async () => {
+    const d = drafts();
+    const a = await d.open(input());
+    const claims = await Promise.all([d.claim("C1:1.1", "It is queued."), d.claim("C1:1.1", "It is queued.")]);
+    expect(claims.filter((c) => c !== null)).toHaveLength(1);
+    expect(await d.inFlight("C1:1.1")).toBe(true);
+    expect((await d.finish(a.id, "It is queued."))?.outcome).toBe("sent_as_drafted");
+    expect(await d.inFlight("C1:1.1")).toBe(false);
+    expect(await d.claim("C1:1.1", "It is queued.")).toBeNull();
+    expect(await d.finish(a.id, "again")).toBeNull();
+  });
+  it("gives a released claim back: it waits and can be claimed again; a finish with another text is edited", async () => {
+    const d = drafts();
+    const a = await d.open(input());
+    await d.claim("C1:1.1", "x");
+    await d.release(a.id);
+    expect((await d.waiting("C1:1.1"))?.id).toBe(a.id);
+    expect(await d.claim("C1:1.1", "We are on it.")).not.toBeNull();
+    expect(await d.finish(a.id, "We are on it.")).toMatchObject({ outcome: "edited", draft: { original: "It is queued." } });
+    const [row] = await db.query("select history from slack_drafts where id = $1", [a.id]);
+    expect(JSON.stringify(row.history)).toContain("posting");
+  });
+});
+
