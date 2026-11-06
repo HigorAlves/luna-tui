@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "covers.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "no_overlap.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "stand_alone.value",
+      "value": true
+    }
+  ],
+  "rubric": "Three children, one per criterion: the endpoint, the button that uses it, the audit entry written by the endpoint. Each is merged and tested alone once the child it names is in.",
+  "label": {
+    "covers": {
+      "value": true
+    },
+    "no_overlap": {
+      "value": true
+    },
+    "stand_alone": {
+      "value": true
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "covers.value",
+      "value": false
+    }
+  ],
+  "rubric": "The original asks for an audit entry on every export (C3); neither child does it, and neither goal mentions it. The pieces left are sound, so only covers is labelled.",
+  "label": {
+    "covers": {
+      "value": false
+    }
+  }
+}

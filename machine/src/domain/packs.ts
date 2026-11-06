@@ -32,6 +32,9 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   frame_privacy: [],
   // A decision on the evidence context, run on demand by the evidence stage.
   evidence_format: [],
+  // Decisions on change size, run on demand by the plan stage, the Ticket Machine and the split loop.
+  size_estimate: [],
+  split_check: [],
   // The video pipeline runs inside evidence, sub-run by sub-run; `evidence` stays first in PACKS so the state still picks it.
   video_script: ["evidence"],
   recording: ["evidence"],

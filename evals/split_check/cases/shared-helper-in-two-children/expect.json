@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "no_overlap.p",
+      "min": 0.3,
+      "max": 0.7
+    }
+  ],
+  "rubric": "The first child writes a quoting helper and the second may extend it: a reader can call that one piece of work in two children, or call the second's use a dependency. Confidence stays moderate."
+}

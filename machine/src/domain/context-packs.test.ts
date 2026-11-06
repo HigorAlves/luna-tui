@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "finding_classify", "fix_scope", "frame_privacy", "intake_dedup", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "slack_triage", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "worth_learning"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "finding_classify", "fix_scope", "frame_privacy", "intake_dedup", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "worth_learning"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -123,5 +123,23 @@ describe("buildContextPackInput", () => {
   it("gives slack_triage and jira_intake exactly the input their own runners build", () => {
     expect(buildContextPackInput("slack_triage", { slack }, "claude:haiku")).toEqual(buildSlackTriageInput(slack, "claude:haiku"));
     expect(buildContextPackInput("jira_intake", { jira }, "claude:sonnet")).toEqual(buildJiraIntakeInput(jira, "claude:sonnet"));
+  });
+});
+
+describe("the change-size decisions", () => {
+  const limit = { target: [1000, 2000] as [number, number], hard: 2500 };
+  it("size_estimate reads context.size and split_check context.split, both on demand with no task state", () => {
+    const size = { title: "Export", text: "x", criteria: [], files: [], symbols: [], similar: [], limit };
+    const split = { origin: { title: "Big", text: "x", criteria: [] }, files: [], limit: { ...limit, maxChildren: 8 }, children: [], round: 1 };
+    for (const [pack, context] of [["size_estimate", { size }], ["split_check", { split }]] as const) {
+      expect(packStates(pack)).toEqual([]);
+      expect(isContextPack(pack)).toBe(true);
+      expect(contextSchema(pack).safeParse(context).success).toBe(true);
+      expect(contextSchema(pack).safeParse({ plan }).success).toBe(false);
+      const input = buildContextPackInput(pack, context);
+      expect(StageInput.parse(input)).toEqual(input);
+      expect(input).toMatchObject({ pack, stage: pack, plan: null, context: { projectContext: null, ...context }, limits: { maxTurns: 1 } });
+    }
+    expect(buildContextPackInput("size_estimate", { size }).task.title).toBe("Export");
   });
 });

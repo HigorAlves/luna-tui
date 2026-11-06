@@ -1,0 +1,120 @@
+{
+  "schema": 3,
+  "stage": "split_check",
+  "pack": "split_check",
+  "attempt": 1,
+  "task": {
+    "id": "split-check",
+    "title": "CSV export of reports",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "split": {
+      "origin": {
+        "title": "CSV export of reports",
+        "text": "Reports can be exported as CSV from the API and from the web page, and the export is logged for audit.",
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "GET /reports/:id/export.csv returns the report as CSV"
+          },
+          {
+            "id": "C2",
+            "text": "The reports page has an Export button that downloads it"
+          },
+          {
+            "id": "C3",
+            "text": "Every export writes an audit log entry"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "src/reports/api.ts"
+        },
+        {
+          "path": "src/reports/page.tsx"
+        },
+        {
+          "path": "src/audit/log.ts"
+        }
+      ],
+      "limit": {
+        "target": [
+          1000,
+          2000
+        ],
+        "hard": 2500,
+        "maxChildren": 8
+      },
+      "children": [
+        {
+          "title": "Rewrite the export mapping, first half",
+          "goal": "Start rewriting buildCsvRows in src/reports/csv.ts: change the header and the first six columns, leaving the function half-edited",
+          "acceptance_criteria": [
+            "The header and the first six columns are rewritten"
+          ],
+          "covers": [
+            "C1"
+          ],
+          "files_hint": [
+            "src/reports/csv.ts"
+          ],
+          "est_loc": 150,
+          "depends_on": [],
+          "order": 1
+        },
+        {
+          "title": "Rewrite the export mapping, second half",
+          "goal": "Finish the edit begun in the other child: the remaining columns of buildCsvRows, which only compiles and passes once the first half is there",
+          "acceptance_criteria": [
+            "The remaining columns are rewritten"
+          ],
+          "covers": [
+            "C1"
+          ],
+          "files_hint": [
+            "src/reports/csv.ts"
+          ],
+          "est_loc": 150,
+          "depends_on": [],
+          "order": 2
+        },
+        {
+          "title": "Export button",
+          "goal": "Add an Export button on the reports page that downloads the CSV from the endpoint",
+          "acceptance_criteria": [
+            "The button downloads the file"
+          ],
+          "covers": [
+            "C2"
+          ],
+          "files_hint": [
+            "src/reports/page.tsx"
+          ],
+          "est_loc": 250,
+          "depends_on": [
+            1
+          ],
+          "order": 2
+        }
+      ],
+      "round": 1
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
 import { Scenario } from "./plan.ts";
+import { SizeContext, SplitContext } from "./split.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
 
 /** What a stage run decided. Lives here, not in api.ts, so the two files do not import each other in a loop. */
@@ -154,6 +155,9 @@ export const PackId = z.enum([
   "code_map",
   // A decision on Evidence (an evidence context, run on demand): which format shows the change best.
   "evidence_format",
+  // Decisions on change size (wave 15): how big a change is, and whether a proposed split is sound.
+  "size_estimate",
+  "split_check",
   // Evidence's video pipeline (they run in the evidence state): the script and timeline, the recording of the approved steps, the cold critic, one fix round.
   "video_script",
   "recording",
@@ -1122,6 +1126,10 @@ export const StageInput = z.object({
     evidence: EvidenceContext.nullable().optional(),
     /** For Ship's decisions and pr_reply: the review event, comment, fix or retro facts. */
     ship: ShipContext.nullable().optional(),
+    /** For size_estimate: the change as a record or ticket, the code map's files and the limits. */
+    size: SizeContext.nullable().optional(),
+    /** For split_check: the origin, the proposed children and the script's findings. */
+    split: SplitContext.nullable().optional(),
     /** For intake_dedup: the new report and the shortlist to judge. */
     dedup: DedupContext.nullable().optional(),
     /** For the Ticket Machine's decisions (ticket_validity): the ticket and its enrichment. */

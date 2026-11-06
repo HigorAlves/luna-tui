@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "est_loc.score",
+      "min": 1.5,
+      "max": 2.5
+    },
+    {
+      "kind": "equals",
+      "path": "reviewable.value",
+      "value": true
+    }
+  ],
+  "rubric": "One endpoint, its mapping and three tests; the nearest closed change of the same shape counted about 425 lines: about 500 lines on the scale, and one purpose a reviewer follows in one sitting.",
+  "label": {
+    "est_loc": {
+      "score": 2
+    },
+    "reviewable": {
+      "value": true
+    }
+  }
+}

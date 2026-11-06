@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "stand_alone.value",
+      "value": false
+    }
+  ],
+  "rubric": "The second child finishes an edit the first one leaves half-made and names no dependency: merged alone, it cannot compile or be tested. Only stand_alone is labelled; the other questions have two readings here.",
+  "label": {
+    "stand_alone": {
+      "value": false
+    }
+  }
+}
