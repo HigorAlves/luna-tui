@@ -69,6 +69,8 @@ export interface StageRunRow {
   turns: number | null;
   containerId: string | null;
   inputCommit: string | null;
+  /** The commit the run first started from, written once; `inputCommit` follows the run's latest container. Null on rows from before. */
+  baseCommit?: string | null;
   outputCommit: string | null;
   transcriptPath: string | null;
   /** Verifying only: one verdict per approved case, when the run reported them. */

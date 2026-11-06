@@ -2015,8 +2015,9 @@ export class Pipeline {
 
   /** The commit the card's first implementing run started from, from the machine's own `stage_runs` rows (the host read it before the container ran); undefined before any run has one. */
   private async firstInputCommitOf(id: string): Promise<string | undefined> {
-    const runs = (await this.stageRuns(id)).filter((r) => r.stage === "implementing" && r.inputCommit && /^[0-9a-f]{7,64}$/.test(r.inputCommit)).sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
-    return runs[0]?.inputCommit ?? undefined;
+    const runs = (await this.stageRuns(id)).filter((r) => r.stage === "implementing" && (r.baseCommit ?? r.inputCommit) && /^[0-9a-f]{7,64}$/.test((r.baseCommit ?? r.inputCommit)!)).sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
+    // The run's base is the commit its first container started from; `inputCommit` alone would be the tests commit once the implementer began on it.
+    return runs[0] ? (runs[0].baseCommit ?? runs[0].inputCommit ?? undefined) : undefined;
   }
 
   /** The sha of the tests commit the machine itself made, from the newest implementing finish row that kept one (a sha, nothing else); undefined when there is none. */

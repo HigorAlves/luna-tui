@@ -444,6 +444,21 @@ describe("the commit the card's first implementing run started from", () => {
   });
 });
 
+describe("the base commit of a run that starts several containers", () => {
+  it("stays the first container's commit when the implementer then starts on the tests commit, for every later run", async () => {
+    const seen: Array<string | undefined> = [];
+    const base = "a".repeat(40);
+    const testsCommit = "b".repeat(40);
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async (context) => (seen.push(context.firstInputCommit), await context.started?.({ container: "w", inputCommit: base }), await context.started?.({ container: "i", inputCommit: testsCommit }), { outcome: "fail" as const, detail: { error: `different ${seen.length}` } }) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(seen[0]).toBeUndefined();
+    expect(seen[1]).toBe(base);
+    expect(seen[2]).toBe(base);
+  });
+});
+
 describe("a scope problem gets one fix pass, then a person", () => {
   const red = { outcome: "fail" as const, detail: { scopeRed: true, error: "scope check failed" }, findings: [{ path: "x.ts", line: 0, start_line: null, severity: "scope", title: "file outside the plan, not declared", body: "revert it", suggestion_code: null, confidence: 1 }] };
 
