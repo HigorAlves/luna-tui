@@ -560,8 +560,14 @@ export class Pipeline {
     if (TERMINAL.has(kept.state)) throw new MergeError(`card ${keptId} has ended: nothing to merge into`);
     if (!BEFORE_BUILD.has(dup.state) || dup.worktreePath || dup.branch) throw new MergeError(`card ${dupId} has reached Build (a workspace or a PR may exist): it cannot be merged`);
     const scoring = (await this.policyFor(kept.repoPath)).factory.scoring;
-    const mergedCard = mergeFields(cardOf(kept), cardOf(dup), dupId);
-    await this.store.updateTask(keptId, { card: mergedCard, record: withDemand(kept.record ?? null, mergedCard.demand ?? 1, scoring) });
+    // The kept card is read again under its row lock and written in the same transaction: two duplicates merging into it at once each add their own
+    // source, follower and demand to what the other left, never to the row both read before either wrote.
+    await this.store.withTaskLock(keptId, async (locked, tx) => {
+      if (TERMINAL.has(locked.state)) throw new MergeError(`card ${keptId} has ended: nothing to merge into`);
+      if ((cardOf(locked).merged ?? []).some((m) => m.id === dupId)) return;
+      const mergedCard = mergeFields(cardOf(locked), cardOf(dup), dupId);
+      await tx.updateTask(keptId, { card: mergedCard, record: withDemand(locked.record ?? null, mergedCard.demand ?? 1, scoring) });
+    });
     await this.log(keptId, "card.merged", { from: dupId });
     await this.log(dupId, "card.merged", { into: keptId });
     const dupView = { repoPath: dup.repoPath, sources: cardOf(dup).sources };
@@ -582,8 +588,11 @@ export class Pipeline {
     const kept = await this.store.getTask(keptId);
     const card = cardOf(dup);
     if (kept) {
-      const back = unmergeFields(cardOf(kept), dupId);
-      await this.store.updateTask(keptId, { card: back, record: withDemand(kept.record ?? null, back.demand ?? 1, (await this.policyFor(kept.repoPath)).factory.scoring) });
+      const scoring = (await this.policyFor(kept.repoPath)).factory.scoring;
+      await this.store.withTaskLock(keptId, async (locked, tx) => {
+        const back = unmergeFields(cardOf(locked), dupId);
+        await tx.updateTask(keptId, { card: back, record: withDemand(locked.record ?? null, back.demand ?? 1, scoring) });
+      });
     }
     if (merged.payload.backlog === true) await this.dedupDeps?.backlog?.unbump(keptId).catch(() => undefined);
     const restored = await this.createTask({
