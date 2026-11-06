@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "action.choice",
+      "value": "needs_decision"
+    }
+  ],
+  "rubric": "The answer turns on a contract and a date the scores cannot see: a person decides.",
+  "label": {
+    "action": {
+      "choice": "needs_decision"
+    }
+  }
+}

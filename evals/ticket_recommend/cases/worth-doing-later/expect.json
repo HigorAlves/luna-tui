@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "action.choice",
+      "value": "schedule"
+    }
+  ],
+  "rubric": "Worth doing but with a workaround and no date: schedule.",
+  "label": {
+    "action": {
+      "choice": "schedule"
+    }
+  }
+}

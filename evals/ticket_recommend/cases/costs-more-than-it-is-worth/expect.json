@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "action.choice",
+      "value": "decline"
+    }
+  ],
+  "rubric": "Taste, no demand, large and costly: decline.",
+  "label": {
+    "action": {
+      "choice": "decline"
+    }
+  }
+}

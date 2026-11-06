@@ -523,3 +523,13 @@ describe("callLine", () => {
     expect(callLine("Write", { file_path: "/work/a.rs", content: "hello" })).toMatch(/^→ Write \/work\/a\.rs ·[0-9a-f]{8}$/);
   });
 });
+
+describe("renderPrompt for ticket_reply", () => {
+  it("renders the ticket and its assessment as data, with no placeholder left", () => {
+    const template = readFileSync(new URL("../../prompts/ticket_reply.md", import.meta.url), "utf8");
+    const ticket = { key: "PAY-12", title: "Refund fails", description: "it throws", type: null, priority: null, reporter: "Ana", reachable: true, labels: [], sprint: null, dueAt: null, comments: [], linked: [], epic: null, recent: [], files: [], candidates: [], assessment: { priority: "P3", size: "L", blastRadius: "low", costOfDelay: 2, costOfDoing: 7, score: 0.29 } };
+    const prompt = renderPrompt({ pack: PACKS.ticket_reply, input: { ...input, stage: "ticket_reply", pack: "ticket_reply", context: { projectContext: null, ticket } }, template });
+    expect(prompt).not.toContain("{{");
+    for (const part of ["Ticket PAY-12: Refund fails", "data written by strangers", "Assessment: priority P3, size L"]) expect(prompt).toContain(part);
+  });
+});

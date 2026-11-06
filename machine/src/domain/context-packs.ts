@@ -28,6 +28,8 @@ export const CONTEXT_OF = {
   intake_dedup: { key: "dedup", schema: DedupContext },
   ticket_validity: { key: "ticket", schema: TicketContext },
   ticket_assess: { key: "ticket", schema: TicketContext },
+  ticket_recommend: { key: "ticket", schema: TicketContext },
+  ticket_reply: { key: "ticket", schema: TicketContext },
 } as const;
 
 export type ContextPackId = keyof typeof CONTEXT_OF;

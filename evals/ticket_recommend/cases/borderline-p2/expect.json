@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "action.confidence",
+      "min": 0.3,
+      "max": 0.85
+    }
+  ],
+  "rubric": "On the line between scheduling and declining: confidence stays moderate."
+}

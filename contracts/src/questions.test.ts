@@ -357,3 +357,22 @@ describe("the ticket_assess decision pack", () => {
     expect(pack.answer.safeParse({ ...answer, who: { score: 3, confidence: 0.8 } }).success).toBe(false);
   });
 });
+
+describe("the ticket_recommend decision pack and the ticket_reply agent pack", () => {
+  it("asks one typed question of four actions, and has no role or prompt", async () => {
+    const { PACKS } = await import("./index.ts");
+    const pack = PACKS.ticket_recommend;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["action"]);
+    expect(pack.answer.safeParse({ action: { choice: "schedule", confidence: 0.9 } }).success).toBe(true);
+    expect(pack.answer.safeParse({ action: { choice: "split", confidence: 0.9 } }).success).toBe(false);
+  });
+
+  it("drafts a reply with the ticket-writer role, read-only, on a cheap engine, answering a bounded reply", async () => {
+    const { PACKS, TicketReplyAnswer } = await import("./index.ts");
+    const pack = PACKS.ticket_reply;
+    expect(pack).toMatchObject({ kind: "agent", agent: "ticket-writer", writable: false, template: "ticket_reply.md", effort: "low" });
+    expect(TicketReplyAnswer.safeParse({ reply: "x".repeat(1501), confidence: 1 }).success).toBe(false);
+    expect(TicketReplyAnswer.safeParse({ reply: "Thanks, not now.", confidence: 0.8 }).success).toBe(true);
+  });
+});

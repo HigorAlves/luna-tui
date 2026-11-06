@@ -167,6 +167,10 @@ export const PackId = z.enum([
   "ticket_validity",
   // A decision at the Ticket Machine: the four typed answers of an assessment (urgency, complexity, blast radius, risk of doing against not doing).
   "ticket_assess",
+  // A decision at the Ticket Machine: what to do with a scored ticket where the scores alone cannot tell (do now, schedule, decline, needs decision).
+  "ticket_recommend",
+  // Drafts the reply that declines a ticket, from the ticket and its assessment as data; the draft waits for a person.
+  "ticket_reply",
   // Drafts the answer to a reviewer's question on a shipped PR from the Evidence Pack (runs in the shipping state, after the retro in PACKS order).
   "pr_reply",
 ]);
@@ -891,6 +895,8 @@ export const TicketContext = z.object({
   recent: z.array(z.object({ key: z.string().max(200), title: z.string().max(300) })).max(10),
   files: z.array(z.string().max(300)).max(10),
   candidates: z.array(z.object({ slot: z.number().int().min(1).max(5), kind: z.enum(["open", "closed", "backlog"]), title: z.string().max(500), summary: z.string().max(1000) })).max(5),
+  /** The assessment, for the packs that read it (ticket_recommend, ticket_reply). */
+  assessment: z.object({ priority: z.string().max(10), size: z.string().max(10), blastRadius: z.string().max(10), costOfDelay: z.number(), costOfDoing: z.number(), score: z.number() }).nullable().optional(),
 });
 export type TicketContext = z.infer<typeof TicketContext>;
 

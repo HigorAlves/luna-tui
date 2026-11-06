@@ -5,7 +5,7 @@ import { DECISION_ALLOWED, DECISION_DEFAULTS, DecisionDefault, DecisionDefaults,
 const allDecisionPacks = Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
 /** Decision packs the host has not measured yet: they run on the built-in engines (`decisionEngines`) and have no entry until a scorecard writes one. */
 // Packs the host has not measured yet: they have no entry and run on the built-in engines until it does (the scorecard run adds the entry and empties this).
-const UNMEASURED: string[] = ["ticket_validity", "ticket_assess"];
+const UNMEASURED: string[] = ["ticket_validity", "ticket_assess", "ticket_recommend"];
 const decisionPacks = allDecisionPacks.filter((id) => !UNMEASURED.includes(id));
 
 describe("decision-defaults.json", () => {

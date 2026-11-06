@@ -39,6 +39,7 @@ export function renderTicket(ticket: TicketContext): string {
     "Recent tickets from the same reporter or component:",
     ...ticket.recent.map((r) => `${r.key}: ${r.title}`),
     `Code the text points at: ${ticket.files.join(", ") || "none found"}`,
+    ...(ticket.assessment ? [`Assessment: priority ${ticket.assessment.priority}, size ${ticket.assessment.size}, blast radius ${ticket.assessment.blastRadius}, score ${ticket.assessment.score.toFixed(2)} (cost of delay ${ticket.assessment.costOfDelay.toFixed(1)} over cost of doing ${ticket.assessment.costOfDoing.toFixed(1)})`] : []),
     "Candidates:",
     ...ticket.candidates.map((c) => `slot${c.slot} (${KIND_WORDS[c.kind]}): ${c.title}${c.summary ? ` | ${c.summary}` : ""}`),
   ].join("\n");

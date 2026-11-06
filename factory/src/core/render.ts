@@ -8,6 +8,7 @@ import { PACKS, type TaskClassification, answerJsonSchema, classificationLine, c
 import type { TriageRecord } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
+import { renderTicket } from "./decide.ts";
 import { callText } from "./transcript.ts";
 
 const NONE = "(none)";
@@ -382,6 +383,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{task.branch}}": txt(input.task.branch),
     "{{task.classification}}": classificationLines(input.task.classification),
     "{{task.record}}": recordText(input.task.record),
+    "{{context.ticket}}": input.context.ticket ? renderTicket(input.context.ticket) : NONE,
     "{{context.plan.map}}": mapText(input.context.plan?.map),
     "{{context.plan.shortlist}}": shortlistText(input.context.plan?.shortlist),
     "{{context.plan.replan}}": replanText(input.context.plan?.replan),
