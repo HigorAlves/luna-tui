@@ -26,6 +26,16 @@ Every ticket moves through these stages, from Intake (not ready yet) to Done ([d
 
    **What leaves the machine in Ship.** The pack's section and comment (fixed words and facts; model text only through `postable()`), replies to questions, a fix's push and summary, a merge request, a reminder and an escalation line, the close-the-loop summary, and a draft PR after a retro approval. The machine never gives an approval (`postReview` is called only on the review route) and never closes a PR.
 
+   **What Ship does not promise.** The machine merges nothing nobody looked at: readiness green on GitHub's facts read at that moment, the head's sha guarded, an approval on the head from an owner, member or collaborator who is not the machine's own account, and a review required by the repository's own rules (or, under the explicit `ship.auto_merge: low` or `medium`, a person's approval at the board after readiness). A High-risk card in the default mode needs the required review and the approval on the head as well as the release owner's answer. A collaborator's standing "changes requested" blocks the merge whatever GitHub's review decision says. These are the limits, in plain words:
+
+   - An approval from a collaborator's second account, or from a bot with write access, counts as a look.
+   - The release owner's name is an attestation from the one API token; it is not checked when no owners are named.
+   - A ruleset with bypass actors still reads as a required review.
+   - Anyone with write access can retarget, close or rename the PR.
+   - Every model sees hostile PR text. The containment is the typed answers (a model only picks among capped branches and never touches the risk), the fix guard (the PR's own files and test files, both names of a renamed file, no control-plane path, a size cap in which a binary file counts as over), the caps on replies and the approval on the head after every fix. A comment from anyone who is not an owner, member or collaborator is never given to the fix agent or the re-plan, and reaches the reader and the decisions only marked as an untrusted author's data.
+   - Inside the PR's own files and any test file, the fix agent can write any code, and CI runs it with the repository's CI secrets.
+   - `ship.auto_merge: low` or `medium` lets one board click stand in for a review, by the owner's choice.
+
    **Not built (recorded limits).** `ship.override { merged_not_ready }` is not emitted; gate send-backs are not counted in the retro's overrides; the four older `worth_learning` eval cases have no new fields; a retro's proposals ride only with a rules proposal; webhooks (polling only), stacked PRs (wave 15), a checklist a repository edits, and the diagram's "tone from past approved replies".
 
 Triage, Plan and Build run stage packs (see [Factory mode](#factory-mode)) when a credential and the runner image are available. Deliver and Ship run for real too — they are plain host commands (`git push` + `gh pr create --draft` / `gh pr ready`), not Claude agents — as soon as a task has a branch. CI watch polls on the host and runs its pack only for a red check. Evidence runs on the host (its video pipeline starts containers). Intake, Done and any stage without a runner are stubs that pass, unless you queue a result with `POST /dev/stubs`. Full route list: [api.md](./api.md).
