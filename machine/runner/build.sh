@@ -32,7 +32,7 @@ tree_files() { (cd "$root" && find "$@" -type f -not -path '*/node_modules/*' -n
 
 ref="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 inputs=()
-while IFS= read -r f; do inputs+=("$f"); done < <(tree_files factory contracts/src contracts/package.json machine/runner/graph; echo "$root/package.json"; echo "$root/pnpm-lock.yaml"; echo "$root/pnpm-workspace.yaml"; echo "$root/.pnpmfile.cjs"; echo "$here/Dockerfile"; echo "$here/luna-stage"; echo "$here/layer-wrapper")
+while IFS= read -r f; do inputs+=("$f"); done < <(tree_files factory contracts/src contracts/package.json machine/runner/graph machine/runner/egress; echo "$root/package.json"; echo "$root/pnpm-lock.yaml"; echo "$root/pnpm-workspace.yaml"; echo "$root/.pnpmfile.cjs"; echo "$here/Dockerfile"; echo "$here/luna-stage"; echo "$here/layer-wrapper")
 key="$(key_of "${inputs[@]}")"
 if [ "${REBUILD:-}" != 1 ] && [ "$(current_key "$runner:dev")" = "$key" ]; then
   echo "$runner:dev is up to date (factory $key)"

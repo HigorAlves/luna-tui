@@ -106,8 +106,12 @@ ENV LUNA_FACTORY_ROOT=/opt/luna/factory-src/factory
 # the stage's entry: the factory on the layer's own Node, with the layer's tools first on PATH.
 COPY machine/runner/luna-stage /opt/luna/bin/luna-stage
 COPY machine/runner/layer-wrapper /opt/luna/bin/.wrapper
+# The egress proxy (machine/runner/egress/proxy.ts): the machine starts it as a second container of this image, the only door
+# out of a run's network. One file of erasable TypeScript on the layer's own Node; it is never run inside a stage container.
+COPY machine/runner/egress/proxy.ts /opt/luna/egress/proxy.ts
 ARG LAYER_REV=unknown
 LABEL dev.hardness.graphify="${GRAPHIFY_VERSION}"
+LABEL dev.hardness.egress="1"
 RUN for bin in /usr/local/bin/node /usr/bin/rg; do ldd "$bin" | awk '/=> \//{print $3}'; done | sort -u \
       | grep -Ev '/(libc|libm|libdl|libpthread|librt|libutil|libresolv|ld-linux[^/]*)\.so' | xargs -r -I{} cp -L {} /opt/luna/lib/ \
  && cp /usr/local/bin/node /opt/luna/libexec/node && cp /usr/bin/rg /opt/luna/libexec/rg && cp /usr/local/bin/gh /opt/luna/bin/gh \

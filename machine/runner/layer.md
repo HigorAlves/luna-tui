@@ -13,6 +13,7 @@ another image (a repository's own base) and run there: `COPY --from=<runner imag
 | `python/` | a relocatable standalone Python (python-build-standalone, pinned) with the pinned Graphify installed in it; the base image's Python is never used or touched |
 | `graph-tools/build.py` | the graph build, run with `python/bin/python3` |
 | `factory-src/` | the factory and contracts with their production dependencies and built eve agents; `/factory-src` is a symlink to it in the runner image |
+| `egress/proxy.ts` | the egress proxy: one file of erasable TypeScript that imports only `node:` modules; the machine starts it as a second container of the image (`/opt/luna/bin/node /opt/luna/egress/proxy.ts --listen 3128 --allow ... --allow-private ...`), never inside a stage; `--check` exits 0 when it runs on the layer's Node |
 | `KEY` | the layer's key (see below) |
 
 ## Supported bases
@@ -29,7 +30,7 @@ the image is not rebuilt. A repository's image tag is derived from this key (`re
 
 ## Checks
 
-`machine/runner/check-layer.sh <image>` checks the entry, the tools and the copy onto a stock `python:3.13-slim`.
+`machine/runner/check-layer.sh <image>` checks the entry, the tools (the proxy's `--check` among them) and the copy onto a stock `python:3.13-slim`.
 `RUNNER_REPO=hardness-runner-test-x machine/runner/build.sh` builds under another name, leaving `hardness-runner:dev` alone.
 
 ## Trust
