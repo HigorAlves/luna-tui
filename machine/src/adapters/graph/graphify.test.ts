@@ -131,6 +131,22 @@ describe("graphifyGraph.build", () => {
     expect(existsSync(dir) ? readdirSync(dir).filter((n) => n.startsWith("building-")) : []).toEqual([]);
   });
 
+  it("runs one build for a repository however it is asked: the watch, a waiting card and a rebuild on merge share it, and the next request builds again", async () => {
+    const { graph, repo, seen, setHead } = setup();
+    const [first, second] = await Promise.all([graph.build(repo), graph.build(repo)]);
+    expect(seen).toHaveLength(1);
+    expect(second).toEqual(first);
+    setHead("b".repeat(40));
+    await graph.build(repo);
+    expect(seen).toHaveLength(2);
+  });
+
+  it("does not make one repository wait for another's build", async () => {
+    const { graph, repo, seen } = setup();
+    await Promise.all([graph.build(repo), graph.build(`${repo}-other`)]);
+    expect(seen).toHaveLength(2);
+  });
+
   it("knows nothing of a repo it never built", async () => {
     const { graph, repo } = setup();
     expect(graph.currentDir(repo)).toBeNull();

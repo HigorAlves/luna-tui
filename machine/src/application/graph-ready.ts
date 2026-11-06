@@ -17,7 +17,8 @@ export type GraphReadiness = { state: "ready" } | { state: "off" } | { state: "s
 
 const REASON_CAP = 400;
 
-/** One build in flight per repository: two cards, a card and the watch, a rebuild on merge all wait for the same build. The entry goes when it settles. */
+/** Cards waiting for one repository's graph wait for the same build and share its retry. The graph adapter itself runs one build per repository
+ *  whoever asks (the watch and a rebuild on merge included); this map only keeps two cards from each starting their own wait. The entry goes when it settles. */
 const inflight = new Map<string, Promise<unknown>>();
 function buildOnce(deps: GraphReadyDeps, repoPath: string, signal: AbortSignal): Promise<unknown> {
   const running = inflight.get(repoPath);
