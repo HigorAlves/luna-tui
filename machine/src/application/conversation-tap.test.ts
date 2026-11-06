@@ -241,6 +241,23 @@ describe("the standing for unattended posts needs the claiming repository and a 
   });
 });
 
+describe("a shipped GitHub card with a Slack thread attached", () => {
+  const shipped = { title: "t", prUrl: "https://github.com/o/a/pull/4", number: 4, mergedSha: null, by: "machine", format: null, howToVerify: null, media: [] };
+  it("drafts the shipped summary on the attached thread and posts nothing without a tap", async () => {
+    const w = await world();
+    await w.inbox.pollOnce();
+    const id = [...w.store.rows.keys()][0]!;
+    const [channel, thread] = id.split(":") as [string, string];
+    const card = await w.pipeline.createTask({ title: "Checkout fails", repoPath: "/r/a", source: { kind: "github", repo: "o/a", number: 9, url: "https://github.com/o/a/issues/9" } });
+    await w.pipeline.attachThread(card.id, { channel, ts: thread, permalink: "https://x.slack.com/archives/C1/p1", authorId: "U2" });
+    await w.drafts.supersede(id);
+    await w.replies.handle(event(card.id, "task.shipped", shipped));
+    await w.replies.idle();
+    expect(await w.drafts.waiting(id)).toMatchObject({ kind: "shipped", cardId: card.id });
+    expect(w.writes()).toEqual([]);
+  });
+});
+
 describe("each tap makes exactly one write, recorded with its route", () => {
   const ready = async () => {
     const w = await world();
