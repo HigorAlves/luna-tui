@@ -248,6 +248,15 @@ describe("closeTask: the rules file is only ever a real file inside the worktree
     });
   }
 
+  it("keeps the merged PR's own address clickable and breaks an address inside the rules", async () => {
+    const opened: Array<{ body: string }> = [];
+    const exec: CloseDeps["exec"] = async () => ({ code: 0, stdout: "", stderr: "" });
+    const deps: CloseDeps = { exec, worktreeRemove: false, github: { openPr: async (_s, pr) => (opened.push(pr), { url: "u", number: 9, isDraft: true }) }, slugOf: async () => "o/a", defaultBranchOf: async () => "main" };
+    await closeTask({ id: "0a1b2c3d-1111", title: "t", repoPath: "/repo", worktreePath: worktree(), rules: { markdown: "- see https://evil.example/a and www.evil.example/b and [x](https://evil.example/c)\n", apply: true }, merged: { prUrl: "https://github.com/o/a/pull/7", number: 7 } }, deps);
+    expect(opened[0]!.body).toContain(": https://github.com/o/a/pull/7\n");
+    expect(opened[0]!.body.replace("https://github.com/o/a/pull/7", "")).not.toMatch(/https?:\/\/|\bwww\.|\]\(/i);
+  });
+
   it("escapes HTML and redacts a token in the draft PR's body", async () => {
     // Built at run time: a literal of this shape blocks the push.
     const token = "gh" + "p_" + "d".repeat(24);

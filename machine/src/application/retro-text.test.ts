@@ -18,6 +18,23 @@ describe("proposalsSection", () => {
   });
 });
 
+const ADDRESSES = "see https://evil.example/a and www.evil.example/b and [the docs](https://evil.example/c) and ![px](http://evil.example/p.png) and <https://evil.example/d>\n[ref]: https://evil.example/e\nCloses https://github.com/o/r/issues/12 GH-7";
+const clickable = (text: string) => /https?:\/\/|\bwww\.|\]\(|\]:|GH-\d/i.test(text);
+
+describe("a retro proposal holding an address", () => {
+  it("comes out of inert with nothing GitHub would turn into a link, an image or a closing reference, and the words stay readable", () => {
+    const out = inert(ADDRESSES);
+    expect(clickable(out)).toBe(false);
+    expect(out).toContain("evil.example/a");
+    expect(out).toContain("the docs");
+    expect(out).toContain("\n[ref]");
+  });
+  it("comes out of proposalsSection (title and body) the same way", () => {
+    const out = proposalsSection([{ kind: "runbook", title: "Fix at https://evil.example/t", body: ADDRESSES }]);
+    expect(clickable(out)).toBe(false);
+  });
+});
+
 describe("inert", () => {
   it("escapes markup and neutralizes mentions and issue references", () => {
     const out = inert("<!-- x --> @bo closes #12");

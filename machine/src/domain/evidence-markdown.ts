@@ -20,24 +20,29 @@ export function redact(text: string): string {
   return SECRET_SHAPES.reduce((out, shape) => out.replace(shape, "[redacted]"), text);
 }
 
+/** Text with nothing GitHub would turn into a link, an image or a closing reference. A bare address is a link on GitHub, and `Closes https://github.com/o/r/issues/12`
+ *  closes on merge: the scheme and `www.` are broken, the text stays readable. A link or an image needs its `(` right after the `]`, a reference definition its `:`: a space
+ *  there leaves the address readable and nothing to click under another name, and no image for the page to fetch, however the label was written. Keeps line breaks. */
+export function breakLinks(text: string): string {
+  return text
+    .replace(/\bGH-(?=\d)/gi, "GH\u200b-")
+    .replace(/\b(https?)(:\/\/)/gi, "$1\u200b$2")
+    .replace(/\bwww\./gi, "www\u200b.")
+    .replace(/\]([(:])/g, "] $1");
+}
+
 /** A line of someone else's text made safe to print: one line, no HTML at all (a tag can fold the rest of the page away), no mention, no issue reference, no bare address that would autolink,
  *  no link or image of its own, no table break. */
 export function safe(text: string, table = false): string {
-  const flat = redact(text)
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\s+/g, " ")
-    .replace(/@(?=[A-Za-z0-9])/g, "@\u200b")
-    // `Closes #12` in a PR body closes issue 12 on merge: a model's text never gets that power.
-    .replace(/#(?=\d)/g, "#\u200b")
-    .replace(/\bGH-(?=\d)/gi, "GH\u200b-")
-    // A bare address is a link on GitHub, and `Closes https://github.com/o/r/issues/12` closes on merge: the scheme and `www.` are broken, the text stays readable.
-    .replace(/\b(https?)(:\/\/)/gi, "$1\u200b$2")
-    .replace(/\bwww\./gi, "www\u200b.")
-    // A link or an image needs its `(` right after the `]`, a reference definition its `:`. A space there leaves the address readable and
-    // nothing to click under another name, and no image for the page to fetch. However the label was written: this is the guarantee.
-    .replace(/\]([(:])/g, "] $1")
-    .trim();
+  const flat = breakLinks(
+    redact(text)
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\s+/g, " ")
+      .replace(/@(?=[A-Za-z0-9])/g, "@\u200b")
+      // `Closes #12` in a PR body closes issue 12 on merge: a model's text never gets that power.
+      .replace(/#(?=\d)/g, "#\u200b"),
+  ).trim();
   return table ? flat.replace(/\|/g, "\\|") : flat;
 }
 

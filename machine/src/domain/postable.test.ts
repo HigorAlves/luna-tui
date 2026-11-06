@@ -15,6 +15,12 @@ describe("postable", () => {
     expect(postable(`key ${["ghp", "a".repeat(36)].join("_")}`)).toBe("key [redacted]");
   });
 
+  it("leaves nothing GitHub would turn into a link in a bare address, a www. address or a labelled link", () => {
+    const out = postable("see https://evil.example/a and www.evil.example/b and [the docs](https://evil.example/c) and ![px](http://evil.example/p.png) and <https://evil.example/d> and GH-7");
+    expect(out).not.toMatch(/https?:\/\/|\bwww\.|\]\(|GH-\d/i);
+    expect(out).toContain("evil.example/a");
+  });
+
   it("leaves no live link or image, however the label is written", () => {
     // A label over two lines: the lines are joined after the links were read, so the link must be broken afterwards too.
     expect(postable("[click\nhere](https://evil.example/a)")).not.toContain("](");
