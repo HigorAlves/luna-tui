@@ -90,18 +90,18 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 
 | pack | default | why |
 | --- | --- | --- |
-| ci_failure_class | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 6), it acted on every case and was right on every one; so did others, and it is the cheaper |
+| ci_failure_class | jev | jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.83, n 6) |
 | comment_intent | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 5), it acted on every case and was right on every one; so did others, and Jev is the cheapest |
 | conversation_assess | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 0.75 (n 4) |
-| conversation_relation | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 5), it acted on every case and was right on every one |
+| conversation_relation | jev | jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.60, n 5) |
 | coverage_check | claude:haiku | claude:haiku: acted-on accuracy 0.67 at coverage 1.00 (n 4), a tie within 2 points settled by cost |
 | e2e_failure_cause | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
-| escalation_reason | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 4), it acted on every case and was right on every one; so did others, and it is the cheaper |
+| escalation_reason | jev | jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.75, n 4) |
 | event_class | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 7), it acted on every case and was right on every one |
 | evidence_format | jev | jev: acted-on accuracy 1.00 at coverage 0.71 (n 7), a tie within 2 points that goes to Jev, the cheapest |
 | evidence_valid | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 4), it acted on every case and was right on every one |
 | finding_classify | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 4), it acted on every case and was right on every one |
-| fix_scope | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 5), it acted on every case and was right on every one; so did others, and it is the cheaper |
+| fix_scope | jev | jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.60, n 5) |
 | frame_privacy | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 5), it acted on every case and was right on every one; so did others, and Jev is the cheapest |
 | intake_dedup | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 4), it acted on every case and was right on every one |
 | plan_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4) |
@@ -114,4 +114,4 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | ticket_recommend | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 5), it acted on every case and was right on every one |
 | ticket_validity | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 5), it acted on every case and was right on every one |
 | triage_signals | jev | unmeasured: no engine reached coverage 0.6 on 4 cases |
-| worth_learning | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 6), it acted on every case and was right on every one |
+| worth_learning | jev | jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.67, n 6) |

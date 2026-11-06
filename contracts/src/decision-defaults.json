@@ -378,11 +378,11 @@
     }
   },
   "fix_scope": {
-    "default": "claude:haiku",
+    "default": "jev",
     "fallback": [
-      "codex:luna"
+      "claude:haiku"
     ],
-    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 5), it acted on every case and was right on every one; so did others, and it is the cheaper",
+    "reason": "jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.60, n 5)",
     "measuredAt": "2026-11-06",
     "scorecard": {
       "claude:haiku": {
@@ -452,11 +452,11 @@
     }
   },
   "worth_learning": {
-    "default": "codex:luna",
+    "default": "jev",
     "fallback": [
       "claude:haiku"
     ],
-    "reason": "codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 6), it acted on every case and was right on every one",
+    "reason": "jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.67, n 6)",
     "measuredAt": "2026-11-06",
     "scorecard": {
       "claude:haiku": {
@@ -489,11 +489,11 @@
     }
   },
   "escalation_reason": {
-    "default": "claude:haiku",
+    "default": "jev",
     "fallback": [
-      "codex:luna"
+      "claude:haiku"
     ],
-    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 4), it acted on every case and was right on every one; so did others, and it is the cheaper",
+    "reason": "jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.75, n 4)",
     "measuredAt": "2026-11-05",
     "scorecard": {
       "claude:haiku": {
@@ -526,11 +526,11 @@
     }
   },
   "ci_failure_class": {
-    "default": "claude:haiku",
+    "default": "jev",
     "fallback": [
-      "codex:luna"
+      "claude:haiku"
     ],
-    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 6), it acted on every case and was right on every one; so did others, and it is the cheaper",
+    "reason": "jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.83, n 6)",
     "measuredAt": "2026-11-06",
     "scorecard": {
       "claude:haiku": {
@@ -748,11 +748,11 @@
     }
   },
   "conversation_relation": {
-    "default": "codex:luna",
+    "default": "jev",
     "fallback": [
       "claude:haiku"
     ],
-    "reason": "codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 5), it acted on every case and was right on every one",
+    "reason": "jev: pinned by the owner on 2026-11-06, to try Jev on real cards first (measured: acted-on accuracy 1.00 at coverage 0.60, n 5)",
     "measuredAt": "2026-11-06",
     "scorecard": {
       "claude:haiku": {

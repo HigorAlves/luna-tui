@@ -19,6 +19,16 @@ export const MIN_CASES = 4;
 export const TIE_POINTS = 0.02;
 const ALLOWED: EngineId[] = ["jev", "claude:haiku", "codex:luna"];
 
+/** Packs the owner keeps on one engine whatever the numbers say, each with the day and the reason. The numbers are still measured and
+ *  shown beside the choice; to let the rule decide again, remove the entry and run `pnpm eval defaults --write`. */
+export const PINNED: Partial<Record<PackId, { engine: EngineId; since: string; why: string }>> = {
+  worth_learning: { engine: "jev", since: "2026-11-06", why: "to try Jev on real cards first" },
+  conversation_relation: { engine: "jev", since: "2026-11-06", why: "to try Jev on real cards first" },
+  fix_scope: { engine: "jev", since: "2026-11-06", why: "to try Jev on real cards first" },
+  escalation_reason: { engine: "jev", since: "2026-11-06", why: "to try Jev on real cards first" },
+  ci_failure_class: { engine: "jev", since: "2026-11-06", why: "to try Jev on real cards first" },
+};
+
 export const RULE = `An engine qualifies with coverage >= ${MIN_COVERAGE} and n >= ${MIN_CASES}. The default is the qualifying engine with the highest acted-on accuracy; engines within ${TIE_POINTS * 100} points of it tie, and a tie goes to Jev when it is among them (by far the cheapest engine), else to the cheaper one (cost per case). A pack with fewer than two engines measured keeps its current default. An engine that acted on every case and was right on every one wins outright; among several such, Jev, else the cheaper.`;
 
 /** Every decision pack's baselines under `evals/baselines/<engine>/<pack>.json`, those that parse. */
@@ -64,6 +74,12 @@ export function proposeDefaults(pack: PackId, cards: Scorecard[], current: { def
   const others = (chosen: EngineId): EngineId[] => [(["claude:haiku", "codex:luna", "jev"] as EngineId[]).find((e) => e !== chosen)!];
   if (mine.length < 2) return { default: current.default, fallback: [...current.fallback], reason: `unmeasured: ${mine.length} engine${mine.length === 1 ? "" : "s"} measured, two are needed`, measuredAt, measured: false, scorecard: numbers };
 
+  const pin = PINNED[pack as PackId];
+  if (pin) {
+    const mineOf = mine.find((c) => c.engine === pin.engine)?.summary.calibration;
+    const seen = mineOf ? ` (measured: acted-on accuracy ${num(mineOf.actedOnAccuracy)} at coverage ${num(mineOf.coverage)}, n ${mineOf.n})` : "";
+    return { default: pin.engine, fallback: others(pin.engine), reason: `${pin.engine}: pinned by the owner on ${pin.since}, ${pin.why}${seen}`, measuredAt, measured: true, scorecard: numbers };
+  }
   const eligible = mine.filter(qualifies);
   if (eligible.length === 0) return { default: current.default, fallback: [...current.fallback], reason: `unmeasured: no engine reached coverage ${MIN_COVERAGE} on ${MIN_CASES} cases`, measuredAt, measured: false, scorecard: numbers };
   const best = Math.max(...eligible.map(acted));

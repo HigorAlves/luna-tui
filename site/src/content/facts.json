@@ -4,18 +4,18 @@
   "packs": 53,
   "images": 3,
   "decisionDefaults": {
-    "ci_failure_class": "claude:haiku",
+    "ci_failure_class": "jev",
     "comment_intent": "jev",
     "conversation_assess": "codex:luna",
-    "conversation_relation": "codex:luna",
+    "conversation_relation": "jev",
     "coverage_check": "claude:haiku",
     "e2e_failure_cause": "claude:haiku",
-    "escalation_reason": "claude:haiku",
+    "escalation_reason": "jev",
     "event_class": "codex:luna",
     "evidence_format": "jev",
     "evidence_valid": "codex:luna",
     "finding_classify": "codex:luna",
-    "fix_scope": "claude:haiku",
+    "fix_scope": "jev",
     "frame_privacy": "jev",
     "intake_dedup": "codex:luna",
     "plan_check": "claude:haiku",
@@ -27,6 +27,6 @@
     "ticket_recommend": "codex:luna",
     "ticket_validity": "codex:luna",
     "triage_signals": "jev",
-    "worth_learning": "codex:luna"
+    "worth_learning": "jev"
   }
 }

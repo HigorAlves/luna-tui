@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Calibration } from "./calibration.ts";
 import type { Scorecard } from "./grade.ts";
-import { buildDefaultsFile, loadBaselines, proposeDefaults, renderScorecard } from "./scorecard.ts";
+import { buildDefaultsFile, loadBaselines, proposeDefaults, renderScorecard, PINNED } from "./scorecard.ts";
 
 /** A baseline: `cases` graded cases costing `costUsd` in all, calibration as given over the defaults below. */
 const card = (pack: string, engine: string, calibration: Partial<Calibration>, over: { costUsd?: number | null; at?: string } = {}): Scorecard =>
@@ -75,6 +75,18 @@ describe("proposeDefaults", () => {
     // Nobody perfect: the tie still goes to Jev.
     const lunaNear = card("split_check", "codex:luna", { actedOnAccuracy: 1, accuracy: 1, coverage: 0.9 }, { costUsd: 0.2 });
     expect(proposeDefaults("split_check", [lunaNear, jevHalf], current).default).toBe("jev");
+  });
+
+  it("keeps a pack the owner pinned on its engine whatever the numbers say, and says so with the numbers beside it", () => {
+    const perfect = card("worth_learning", "codex:luna", { actedOnAccuracy: 1, accuracy: 1, coverage: 1 }, { costUsd: 0.2 });
+    const jevPart = card("worth_learning", "jev", { actedOnAccuracy: 1, accuracy: 0.8, coverage: 0.67 }, { costUsd: 0.001 });
+    const chosen = proposeDefaults("worth_learning", [perfect, jevPart], current);
+    expect(chosen.default).toBe("jev");
+    expect(chosen.reason).toMatch(/pinned by the owner/);
+    expect(chosen.scorecard["codex:luna"]!.coverage).toBe(1);
+    expect(Object.keys(PINNED).sort()).toEqual(["ci_failure_class", "conversation_relation", "escalation_reason", "fix_scope", "worth_learning"]);
+    // A pack that is not pinned follows the rule.
+    expect(proposeDefaults("split_check", [card("split_check", "codex:luna", { actedOnAccuracy: 1, coverage: 1 }), card("split_check", "jev", { actedOnAccuracy: 1, coverage: 0.6 })], current).default).toBe("codex:luna");
   });
 
   it("carries the numbers behind the choice and when they were measured", () => {
