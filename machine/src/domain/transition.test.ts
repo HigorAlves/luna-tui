@@ -361,7 +361,7 @@ describe("a task over its budget", () => {
   });
 
   it("is rejected outside a running state", () => {
-    expect(() => transition(at("awaiting_ship"), { type: "over_budget", reason: "x" })).toThrow(TransitionError);
+    expect(() => transition(at("awaiting_approval"), { type: "over_budget", reason: "x" })).toThrow(TransitionError);
   });
 });
 
@@ -579,5 +579,51 @@ describe("PR task routes", () => {
     expect(() => transition(at("reviewing"), pass)).toThrow(TransitionError);
     expect(transition(at("draft", { route: "review" }), { type: "start" }).state).toBe("reviewing");
     expect(() => transition(at("awaiting_approval", { route: "ci_fix" }), approved)).toThrow(TransitionError);
+  });
+});
+
+describe("awaiting_ship and reviewing_memory hold a running stage or an open gate (feature route)", () => {
+  it.each(["crash", "over_budget", "abort"] as const)("%s at awaiting_ship escalates with resumeTo awaiting_ship", (type) => {
+    const event: PipelineEvent = type === "crash" ? { type, error: "x" } : type === "over_budget" ? { type, reason: "r" } : { type };
+    expect(transition(at("awaiting_ship"), event)).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship" });
+    expect(transition(at("reviewing_memory"), event)).toMatchObject({ state: "escalated", resumeTo: "reviewing_memory" });
+  });
+  it("rate_limited at awaiting_ship pauses and the window reset resumes there", () => {
+    const paused = transition(at("awaiting_ship"), { type: "rate_limited" });
+    expect(paused).toMatchObject({ state: "paused_rate_limit", resumeTo: "awaiting_ship", effect: { kind: "pause" } });
+    expect(transition(at("paused_rate_limit", { resumeTo: "awaiting_ship" }), { type: "window_reset" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+  });
+  it("the review route's verdict gate is untouched", () => {
+    expect(() => transition(at("awaiting_ship", { route: "review" }), { type: "crash", error: "x" })).toThrow(TransitionError);
+  });
+  it("stage_done at awaiting_ship: pass runs shipping, needs_input waits, fail escalates", () => {
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "shipping", effect: { kind: "run", stage: "shipping" } });
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "needs_input" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "wait", gate: "awaiting_ship" } });
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "fail" })).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship", reason: "the ship watch failed" });
+  });
+  it("plan_wrong from awaiting_ship runs the plan stage once per card", () => {
+    const step = transition(at("awaiting_ship"), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" });
+    expect(step).toMatchObject({ state: "test_design", retries: { planWrong: 1 }, escalation: "plan_wrong" });
+    const again = transition(at("awaiting_ship", { retries: { ...NO_RETRIES, planWrong: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" });
+    expect(again).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship" });
+  });
+  it("head_moved from awaiting_ship or shipping runs evidence, or e2e when media are to be refreshed", () => {
+    for (const state of ["awaiting_ship", "shipping"] as const) {
+      expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r" })).toMatchObject({ state: "evidence" });
+      expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r", refresh: "media" })).toMatchObject({ state: "e2e", effect: { kind: "run", stage: "e2e" } });
+    }
+  });
+  it("another escalation at awaiting_ship asks a person and resumes there", () => {
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "escalated", reason: "stuck" })).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship", reason: "stuck" });
+  });
+  it("shipping that is not ready hands the card back to the watch", () => {
+    expect(transition(at("shipping"), { type: "stage_done", outcome: "fail", notReady: true })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("shipping"), { type: "stage_done", outcome: "fail" })).toMatchObject({ state: "escalated", resumeTo: "shipping" });
+  });
+  it("the ship approval's answers: approved runs shipping, sent_back runs the watch again; without the gate both are as before", () => {
+    expect(transition(at("awaiting_ship"), { type: "approved", gate: "ship_approval" })).toMatchObject({ state: "shipping" });
+    expect(transition(at("awaiting_ship"), { type: "sent_back", gate: "ship_approval" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("awaiting_ship"), { type: "approved" })).toMatchObject({ state: "shipping" });
+    expect(transition(at("awaiting_ship"), { type: "sent_back" })).toMatchObject({ state: "evidence" });
   });
 });

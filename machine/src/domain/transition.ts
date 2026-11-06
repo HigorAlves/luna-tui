@@ -2,7 +2,7 @@
 // state and what the machine should do next. No database, no I/O, so every path is
 // unit tested. The graph is documented in docs/architecture.md.
 import { nextRound, type FindingSetRounds } from "./finding-sets.ts";
-import { type ArchiveReason, type EscalationReason, FACTORY_DEFAULTS, PACKS, RUNNING, TERMINAL, type TaskRoute, type TaskState, type TriageOutcome, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type EscalationReason, FACTORY_DEFAULTS, PACKS, RUNNING, RUN_OR_GATE, TERMINAL, type TaskRoute, type TaskState, type TriageOutcome, stronger } from "@hardness/contracts";
 
 /** Failures allowed in one retry loop (verify, e2e, ci) before asking you. */
 export const LOOP_CAP = 3;
@@ -44,15 +44,16 @@ export type PipelineEvent =
   /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
   | { type: "start"; setup?: boolean }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
   /** A conversation outcome's reply was approved at its gate: the reply goes where the card came from and the card ends closed. */
   | { type: "replied" }
-  | { type: "approved" }
+  /** `gate: "ship_approval"` says the answer is to the release question the watch asked, not to the preview gate. */
+  | { type: "approved"; gate?: "ship_approval" }
   /** `from` says which stage opened the gate: `triage` (a reply or an archive to confirm) or `plan` (the plan stage's scenarios). */
-  | { type: "sent_back"; from?: "triage" | "plan" }
+  | { type: "sent_back"; from?: "triage" | "plan"; gate?: "ship_approval" }
   | { type: "rate_limited" }
   | { type: "window_reset" }
   | { type: "abort" }
@@ -62,6 +63,9 @@ export type PipelineEvent =
   | { type: "crash"; error: string }
   /** The task spent past its ceiling; `reason` is the budget line shown on the board. */
   | { type: "over_budget"; reason: string };
+
+/** A state a stage runs in, on the feature route: the running states, and the two that can hold a stage as well as a gate. */
+const runsStage = (task: Snapshot): boolean => RUNNING.has(task.state) || (task.route === "feature" && RUN_OR_GATE.has(task.state));
 
 /** What the machine does after a transition. */
 export type Effect =
@@ -168,13 +172,13 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       if (TERMINAL.has(state)) break;
       return { state: "archived", retries, resumeTo: null, effect: { kind: "done" }, reason: event.reason, archiveReason: event.reason };
     case "crash":
-      if (RUNNING.has(state)) return escalate(`stage loop crashed: ${event.error}`, state, retries);
+      if (runsStage(task)) return escalate(`stage loop crashed: ${event.error}`, state, retries);
       break;
     case "over_budget":
-      if (RUNNING.has(state)) return escalate(event.reason, state, retries);
+      if (runsStage(task)) return escalate(event.reason, state, retries);
       break;
     case "abort":
-      if (RUNNING.has(state)) return escalate("aborted", state, retries);
+      if (runsStage(task)) return escalate("aborted", state, retries);
       if (state === "paused_rate_limit" && task.resumeTo) {
         return escalate("aborted", task.resumeTo, retries);
       }
@@ -185,7 +189,7 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       break;
     }
     case "rate_limited":
-      if (RUNNING.has(state)) {
+      if (runsStage(task)) {
         return { state: "paused_rate_limit", retries, resumeTo: state, effect: { kind: "pause" } };
       }
       break;
@@ -210,7 +214,7 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       if (task.route === "review" && state === "awaiting_ship") return done(retries);
       if (task.route !== "feature") break;
       // The ship gate is a preview: a note sends it back to Evidence, which makes the pack again.
-      if (state === "awaiting_ship") return run("evidence", retries);
+      if (state === "awaiting_ship") return event.gate === "ship_approval" ? run("awaiting_ship", retries) : run("evidence", retries);
       if (state === "awaiting_approval") return run(event.from === "triage" ? "triage" : "test_design", retries);
       if (state === "awaiting_test_check") return run("test_design", retries);
       break;
@@ -324,15 +328,16 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
   const { outcome } = event;
 
   // The agent stopped on purpose and says why: a human decides, so no retry is spent.
-  if (outcome === "escalated" && RUNNING.has(state)) {
+  if (outcome === "escalated" && (RUNNING.has(state) || (task.route === "feature" && state === "awaiting_ship"))) {
     // A plan that cannot be built as written goes back to the planner (the plan stage) with the evidence, retries kept and the record as triage
     // left it; the second time on the same card a person decides. On a PR route there is no plan to redo, and triage and setup have none.
     if (event.escalation === "plan_wrong" && task.route === "feature" && state !== "triage" && state !== "setup" && state !== "test_design" && (retries.planWrong ?? 0) < 1) {
       return { ...run("test_design", { ...retries, planWrong: (retries.planWrong ?? 0) + 1 }), reason: event.reason, escalation: "plan_wrong" };
     }
     // The PR head moved after the evidence pack was made: Evidence runs again, retries kept; its format is kept too.
-    if (event.escalation === "head_moved" && task.route === "feature" && state === "shipping") {
-      return { ...run("evidence", retries), reason: event.reason };
+    // From the watch or the merge; a fix that changed what a scenario shows asks for a new browser run first, and Evidence re-makes the media from it.
+    if (event.escalation === "head_moved" && task.route === "feature" && (state === "shipping" || state === "awaiting_ship")) {
+      return { ...run(event.refresh === "media" ? "e2e" : "evidence", retries), reason: event.reason };
     }
     // Too complex for the default engine: one more run on the pack's stronger one before a person is asked.
     if (event.escalation === "too_complex" && state === "implementing" && (retries.stronger ?? 0) < 1 && retries.total < IMPLEMENTER_CAP && stronger(PACKS.implementing)) {
@@ -385,8 +390,15 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       // Evidence shows less and says why; it never sends a card back to Build. A failure here is a card with no workspace, or a stage that broke: a person is asked, and the card resumes at Evidence.
       if (outcome === "fail") return escalate(event.reason || "evidence failed", "evidence", retries);
       break;
+    case "awaiting_ship":
+      // The watch: it ends with a merge to make, a question for a person, or a failure.
+      if (outcome === "pass") return run("shipping", retries);
+      if (outcome === "needs_input") return wait("awaiting_ship", retries);
+      if (outcome === "fail") return escalate("the ship watch failed", "awaiting_ship", retries);
+      break;
     case "shipping":
       if (outcome === "pass") return wait("reviewing_memory", retries);
+      if (outcome === "fail" && event.notReady === true) return run("awaiting_ship", retries);
       if (outcome === "fail") return escalate("ship failed", "shipping", retries);
       break;
   }

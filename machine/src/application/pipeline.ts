@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, RUN_OR_GATE, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -13,7 +13,7 @@ import { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, Inval
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
-import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
+import { type PipelineEvent, type Step, TransitionError, transition } from "../domain/transition.ts";
 import { isClone, unpushedCommits } from "../adapters/git/clone.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
@@ -239,7 +239,7 @@ function casesOf(detail: Record<string, unknown> | undefined): StageRunCase[] | 
 
 
 /** Stages that only poll GitHub from the host: a restart runs them again. */
-const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "shipping"]);
+const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "awaiting_ship", "shipping"]);
 
 const objectOf = (value: unknown): Record<string, unknown> | undefined => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
 
@@ -770,10 +770,23 @@ export class Pipeline {
   }
 
   /** Deletes a task with its runs, approvals and events. Its worktree is kept. */
+  /** Whether a stage is running (or should be) for the task: a running state, or a `RUN_OR_GATE` state of the feature route with no open approval. */
+  private async runsAStage(task: TaskRow): Promise<boolean> {
+    if (RUNNING.has(task.state)) return true;
+    return task.route === "feature" && RUN_OR_GATE.has(task.state) && !(await this.approvals(task.id)).some((a) => a.decision === null);
+  }
+
+  /** The tasks `RUNNING` finds, and the feature cards at a `RUN_OR_GATE` state with no open approval: what a restart or the supervisor must account for. */
+  private async stuckRunning(): Promise<TaskRow[]> {
+    const stuck = await this.store.findStuckTasks(RUNNING);
+    for (const task of await this.store.findStuckTasks(RUN_OR_GATE)) if (task.route === "feature" && !(await this.approvals(task.id)).some((a) => a.decision === null)) stuck.push(task);
+    return stuck;
+  }
+
   /** Deletes the task and the checkout it worked in; the branch and its commits stay. Answers its tombstone's sequence number. */
   async delete(id: string): Promise<number> {
     const task = await this.get(id);
-    if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
+    if (await this.runsAStage(task)) throw new TaskBusyError(id, task.state);
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
     this.pausedOn.delete(id);
@@ -799,7 +812,7 @@ export class Pipeline {
    * and commits stay; only the checkout the agent worked in is gone. */
   async removeWorktree(id: string, options: { discard?: boolean } = {}): Promise<TaskRow> {
     const task = await this.get(id);
-    if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
+    if (await this.runsAStage(task)) throw new TaskBusyError(id, task.state);
     if (!task.repoPath || !task.worktreePath) return task;
     // A clone is the only copy of what no remote has: say so instead of dropping it silently.
     if (!options.discard && isClone(task.worktreePath)) {
@@ -854,6 +867,8 @@ export class Pipeline {
     const { approver } = options;
     const decision: "approved" | "sent_back" | "rejected" = wanted === "changes_requested" ? "sent_back" : wanted;
     const task = await this.get(id);
+    // A state that holds a stage or a gate answers a decision only while a gate is open: a watched card has nobody to answer.
+    if (RUN_OR_GATE.has(task.state) && task.route === "feature" && (await this.runsAStage(task))) throw new TransitionError(task, { type: decision === "approved" ? "approved" : "sent_back" });
     if (decision === "rejected") return this.reject(task, reason, options.auto === true);
     // The gate this decision closes, read before it moves: what a decision pack said about it is judged by what the person does here.
     const gate = this.truth && !options.auto ? (await this.approvals(id)).find((a) => a.decision === null) : undefined;
@@ -1057,6 +1072,8 @@ export class Pipeline {
     if (before.source?.kind === "notch" && before.state.startsWith("awaiting_")) {
       return this.dispatch(id, { type: "stop" }, { decision: { decision: "sent_back", reason: "stopped" } });
     }
+    // A state that holds a stage or a gate is aborted only while it runs a stage: with an open approval it is a gate, a 409 like any other.
+    if (RUN_OR_GATE.has(before.state) && !(await this.runsAStage(before))) throw new TransitionError(before, { type: "abort" });
     const task = await this.dispatch(id, { type: "abort" });
     this.loops.get(id)?.abort();
     await this.store.updateTask(id, { queued: false });
@@ -1270,7 +1287,7 @@ export class Pipeline {
    */
   async tick(): Promise<void> {
     const cutoff = Date.now() - ORPHAN_GRACE_MS;
-    for (const task of await this.store.findStuckTasks(RUNNING)) {
+    for (const task of await this.stuckRunning()) {
       if (task.queued || this.loops.has(task.id) || task.updatedAt.getTime() > cutoff) continue;
       await this.apply(task.id, { type: "crash", error: "no stage loop was driving it" }, {}).catch((error: unknown) =>
         console.error(`could not escalate orphaned task ${task.id}`, error),
@@ -1324,7 +1341,7 @@ export class Pipeline {
    * that was merely queued for a free slot lost nothing and is simply rescheduled.
    */
   async recover(): Promise<number> {
-    const stuck = await this.store.findStuckTasks(RUNNING);
+    const stuck = await this.stuckRunning();
     // A stage container the last machine started may still be running: re-attach to it and
     // ingest its result when it ends, rather than kill it and ask you whether to start over.
     const resumable = new Map<string, StageRunRow>();
@@ -1851,6 +1868,8 @@ export class Pipeline {
           from: task.state,
           to: step.state,
           ...(step.reason ? { reason: step.reason } : {}),
+          // A state that holds a stage or a gate says which it is now: this step opened a gate.
+          ...(step.effect.kind === "wait" ? { gate: true } : {}),
         },
       });
       // The row says when it entered this state, stamped like the event, so the clocks need no event scan.

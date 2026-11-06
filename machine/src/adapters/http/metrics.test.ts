@@ -68,6 +68,18 @@ describe("percentile", () => {
   });
 });
 
+describe("GET /metrics for a card at a state that holds a stage or a gate", () => {
+  it("counts a watched card (awaiting_ship, no open approval) as running, and one with an open approval as waiting on you", async () => {
+    const watched = await pipeline.createTask({ title: "watched", repoPath: "/r/a" });
+    await db.query("update tasks set state = 'awaiting_ship' where id = $1", [watched.id]);
+    const m = await getMetrics();
+    expect(m.tasks).toMatchObject({ open: 1, waitingOnYou: 0, running: 1 });
+    await db.query("insert into approvals (task_id, kind, requested) values ($1, 'awaiting_ship', '{}'::jsonb)", [watched.id]);
+    const gated = await getMetrics();
+    expect(gated.tasks).toMatchObject({ open: 1, waitingOnYou: 1, running: 0 });
+  });
+});
+
 describe("GET /metrics", () => {
   it("is all zeros and nulls on an empty database", async () => {
     const m = await getMetrics();

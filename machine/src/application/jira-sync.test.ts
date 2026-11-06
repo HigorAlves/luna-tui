@@ -165,6 +165,20 @@ describe("JiraSync", () => {
     expect(quiet.jira.comments["PLAT-123"]?.length ?? 0).toBe(before);
   });
 
+  it("comments Needs you at awaiting_ship only when the transition opened a gate", async () => {
+    const gates = wire(jiraPolicy({ comments: "gates", on: {} }));
+    const t1 = await gates.pipeline.createTask({ title: "PLAT-123 a", repoPath: "/r/a" });
+    await gates.pipeline.start(t1.id);
+    await gates.sync.idle();
+    const before = gates.jira.comments["PLAT-123"]!.length;
+    await gates.pipeline.record(t1.id, "transition", { event: "stage_done", from: "evidence", to: "awaiting_ship" });
+    await gates.sync.idle();
+    expect(gates.jira.comments["PLAT-123"]!.length).toBe(before);
+    await gates.pipeline.record(t1.id, "transition", { event: "stage_done", from: "evidence", to: "awaiting_ship", gate: true });
+    await gates.sync.idle();
+    expect(gates.jira.comments["PLAT-123"]!.at(-1)).toBe("Needs you: choose how to ship.");
+  });
+
   it("comments every gate with `gates`, nothing with `none`, and ignores tasks with no link or repos with no jira block", async () => {
     const gates = wire(jiraPolicy({ comments: "gates", on: {} }));
     const t1 = await gates.pipeline.createTask({ title: "PLAT-123 a", repoPath: "/r/a" });

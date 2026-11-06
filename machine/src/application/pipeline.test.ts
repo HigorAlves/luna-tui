@@ -2146,6 +2146,54 @@ describe("one usage window per credential", () => {
   });
 });
 
+describe("awaiting_ship holds a stage or a gate", () => {
+  const park = (id: string, state: TaskState) => db.query("update tasks set state = $2, queued = false, updated_at = now() - interval '5 minutes' where id = $1", [id, state]);
+
+  it("writes gate: true on the transition row that opens a gate, and only then", async () => {
+    const task = await newTask();
+    await startAndApprove(task.id);
+    const rows = (await pipeline.events(task.id)).filter((e) => e.kind === "transition");
+    const opened = rows.find((e) => e.payload.to === "awaiting_ship");
+    expect(opened?.payload.gate).toBe(true);
+    expect(rows.filter((e) => e.payload.gate === true).map((e) => e.payload.to)).toEqual(expect.arrayContaining(["awaiting_approval", "awaiting_ship"]));
+    expect(rows.find((e) => e.payload.to === "implementing")?.payload.gate).toBeUndefined();
+  });
+
+  it("tick escalates a card at awaiting_ship with no open approval and no loop, as a stuck running card", async () => {
+    const task = await pipeline.createTask({ title: "watched" });
+    await park(task.id, "awaiting_ship");
+    await pipeline.tick();
+    expect(await pipeline.get(task.id)).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship" });
+  });
+
+  it("tick leaves a card at awaiting_ship with an open approval alone", async () => {
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
+    await db.query("update tasks set updated_at = now() - interval '5 minutes' where id = $1", [task.id]);
+    await pipeline.tick();
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
+  });
+
+  it("recover runs the watch again for a card at awaiting_ship with no approval, as a host poller", async () => {
+    const task = await pipeline.createTask({ title: "watched" });
+    await park(task.id, "awaiting_ship");
+    const seen: TaskState[] = [];
+    pipeline = new Pipeline(db, (stage) => (stage === "awaiting_ship" ? async () => (seen.push(stage), { outcome: "pass" as const }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    expect(await pipeline.recover()).toBe(0);
+    expect(seen).toEqual(["awaiting_ship"]);
+    expect((await pipeline.events(task.id)).some((e) => e.kind === "stage.restarted" && e.payload.stage === "awaiting_ship")).toBe(true);
+    expect((await pipeline.get(task.id)).state).toBe("reviewing_memory");
+  });
+
+  it("abort at awaiting_ship with an open approval is still refused", async () => {
+    const task = await newTask();
+    await startAndApprove(task.id);
+    await expect(pipeline.abort(task.id)).rejects.toThrow();
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
+  });
+});
+
 describe("fallback across engines", () => {
   const everyCredential = { check: async () => ({ available: true as const }) };
   const inOneHour = () => Math.floor(Date.now() / 1000) + 3600;

@@ -248,4 +248,14 @@ describe("ThreadReplies: a question flagged secret is refused", () => {
     await replies.handle(event({ body: "Luna needs your answers to go on: 1) Which one?", secret: false, hash: "b" }));
     expect(comments).toHaveLength(1);
   });
+
+  it("says Needs you for awaiting_ship only when the transition opened a gate", async () => {
+    const { pipeline, replies, comments } = wire();
+    const task = await pipeline.createTask({ title: "Export CSV", repoPath: "/r/a", source });
+    await pipeline.record(task.id, "transition", { event: "stage_done", from: "evidence", to: "awaiting_ship" });
+    await pipeline.record(task.id, "transition", { event: "stage_done", from: "evidence", to: "awaiting_ship", gate: true });
+    await pipeline.record(task.id, "transition", { event: "sent_back", from: "awaiting_ship", to: "awaiting_ship", gate: true });
+    await replies.idle();
+    expect(comments.map((c) => c[2])).toEqual(["Needs you: choose how to ship.", "Needs you: choose how to ship."]);
+  });
 });

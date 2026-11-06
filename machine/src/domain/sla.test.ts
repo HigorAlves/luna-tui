@@ -25,6 +25,18 @@ describe("parseDuration", () => {
   });
 });
 
+describe("computeSla at a state that holds a stage or a gate", () => {
+  const since = new Date("2026-10-28T11:30:00Z");
+  it("has a gate clock for awaiting_ship only with an open gate", () => {
+    const watched = computeSla({ task: task({ state: "awaiting_ship" }), stateSince: since, stageStartedAt: null, targets: null, defaults, gateOpen: false }, NOW);
+    expect(watched).toBeNull();
+    expect(computeSla({ task: task({ state: "awaiting_ship" }), stateSince: since, stageStartedAt: null, targets: null, defaults }, NOW)).toBeNull();
+    const gated = computeSla({ task: task({ state: "awaiting_ship" }), stateSince: since, stageStartedAt: null, targets: null, defaults, gateOpen: true }, NOW);
+    expect(gated?.gate).toMatchObject({ state: "awaiting_ship", targetSecs: 3600 });
+    expect(computeSla({ task: task({ state: "awaiting_approval" }), stateSince: since, stageStartedAt: null, targets: null, defaults, gateOpen: false }, NOW)?.gate).not.toBeNull();
+  });
+});
+
 describe("computeSla", () => {
   it("runs the gate clock from the moment the task started waiting, with the repo's target over the machine's", () => {
     const since = new Date("2026-10-28T11:30:00Z");

@@ -2,7 +2,7 @@
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
 import { hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
-import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -592,7 +592,9 @@ const slaTicker = new Ticker(() => {
     .then(() => pipeline.list())
     .then(async (tasks) => {
       // A gate past its clock reminds once; a ticket left at an intake gate past `sla.archive` is archived.
-      const gated = tasks.filter((task) => WAITING_ON_USER.has(task.state));
+      // A card at a state that holds a stage or a gate has a gate clock only while an approval is open.
+      const gated: typeof tasks = [];
+      for (const task of tasks) if (RUN_OR_GATE.has(task.state) ? (await pipeline.approvals(task.id)).some((a) => a.decision === null) : WAITING_ON_USER.has(task.state)) gated.push(task);
       const clocks = await slaClocks.forAll(gated);
       const rows: SlaRow[] = [];
       for (const task of gated) {

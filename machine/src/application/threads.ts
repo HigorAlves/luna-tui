@@ -3,7 +3,7 @@
 // set; never for a notch task, whose ticket the notch talks about. Only the moments that
 // matter get a line: picked up, needs you, escalated, paused, the PR, closed. Stage-to-stage
 // progress stays on the board.
-import { WAITING_ON_USER, type TaskState } from "@hardness/contracts";
+import { RUN_OR_GATE, WAITING_ON_USER, type TaskState } from "@hardness/contracts";
 import { basename } from "node:path";
 
 import { safe } from "../domain/evidence-markdown.ts";
@@ -45,6 +45,9 @@ const ASKS: Partial<Record<TaskState, string>> = {
 
 const SLACK_API = "https://slack.com/api/chat.postMessage";
 
+/** A transition into a state that waits on a person; a state that holds a stage or a gate waits only when the step opened a gate (also when it stays in the state). */
+export const needsYou = (to: TaskState, from: TaskState, gate: boolean): boolean => (RUN_OR_GATE.has(to) ? gate : WAITING_ON_USER.has(to) && to !== from);
+
 export class ThreadReplies {
   private readonly pending = new Set<Promise<void>>();
   /** Slack thread per task, once known; filled from `thread.opened` events after a restart. */
@@ -77,7 +80,7 @@ export class ThreadReplies {
       if (to === "paused_rate_limit") return this.reply(event.taskId, "Paused on a usage limit; it resumes by itself.");
       if (to === "closed") return this.reply(event.taskId, "Closed.");
       if (to === "archived") return this.reply(event.taskId, archivedNotice(event.payload.archiveReason));
-      if (WAITING_ON_USER.has(to) && to !== from) return this.reply(event.taskId, `Needs you: ${ASKS[to] ?? to}.`);
+      if (needsYou(to, from, event.payload.gate === true)) return this.reply(event.taskId, `Needs you: ${ASKS[to] ?? to}.`);
       return;
     }
     // A conversation outcome's answer (approved in one tap) and triage's questions: posted where the card came from, and nowhere else.

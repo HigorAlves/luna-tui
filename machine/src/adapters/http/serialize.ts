@@ -4,11 +4,12 @@ import {
   type Artifact,
   COLUMN_OF,
   RUNNING,
+  RUN_OR_GATE,
   type StageRun,
   type Task,
   type TaskEvent,
   type TaskSla,
-  WAITING_ON_USER,
+  waitsOnPerson,
 } from "@hardness/contracts";
 
 import { namesOf } from "../../domain/card-events.ts";
@@ -35,8 +36,9 @@ export const toTask = (
   worktreePath: row.worktreePath,
   state: row.state,
   column: COLUMN_OF[row.state],
-  waitingOnYou: WAITING_ON_USER.has(row.state),
-  running: RUNNING.has(row.state) && !row.queued,
+  // A state that holds a stage or a gate waits on a person only while an approval is open.
+  waitingOnYou: waitsOnPerson(row.state, (glance?.gate ?? null) !== null),
+  running: (RUNNING.has(row.state) || (RUN_OR_GATE.has(row.state) && (glance?.gate ?? null) === null)) && !row.queued,
   queued: row.queued,
   retries: row.retries,
   resumeTo: row.resumeTo,
