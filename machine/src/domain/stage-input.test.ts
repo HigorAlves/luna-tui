@@ -66,6 +66,14 @@ describe("buildStageInput's pack and plan", () => {
     expect(StageInput.safeParse(input).success).toBe(true);
   });
 
+  it("keeps the coverage notes in the designer's filtered context, the reason its second run must revise", () => {
+    const notes = ["C1 has no scenario: it does not pin the criterion"];
+    for (const pack of ["test_design", "test_design_fast"] as const) {
+      const input = buildStageInput({ task, stage: "test_design", pack, attempt: 1, approvals: [], priorFindings: [], plan: { ...planContext, coverage_notes: notes } });
+      expect(input.context.plan).toMatchObject({ brief: "", slices: [], coverage_notes: notes });
+    }
+  });
+
   it("hands the test designer the criteria and the goal and no step, brief or assumption, in context.plan and in the plan it reads", () => {
     const withPlan = { ...planContext, risk: { level: "high" as const }, map: { components: [], files: [], entry_points: [], owners: [], confidence: 0.5 } };
     for (const pack of ["test_design", "test_design_fast"] as const) {
