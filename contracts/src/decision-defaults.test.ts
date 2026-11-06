@@ -67,3 +67,13 @@ describe("decision-defaults.json", () => {
     }
   });
 });
+
+describe("DecisionDefault.measure", () => {
+  it("is optional: an entry from before parses, and one that names the measure keeps it", async () => {
+    const { DecisionDefault } = await import("./decision-defaults.ts");
+    const old = { default: "jev", fallback: ["claude:haiku"], reason: "r", measuredAt: "2026-11-05" };
+    expect(DecisionDefault.parse(old)).toEqual(old);
+    expect(DecisionDefault.parse({ ...old, measure: "answer" })).toMatchObject({ measure: "answer" });
+    expect(() => DecisionDefault.parse({ ...old, measure: "other" })).toThrow();
+  });
+});

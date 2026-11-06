@@ -3,7 +3,15 @@
 // accuracy metrics: nothing says whether it was right.
 import type { Verdict } from "@hardness/contracts";
 
+export interface QuestionGrade {
+  correct: boolean | null;
+  confidence: number;
+  verdict: Verdict;
+}
+
 export interface DecisionGrade {
+  /** Each question against the case's label for it. Absent in a result from before the per-answer measure. */
+  questions?: Record<string, QuestionGrade>;
   /** Every labelled question matched; null when the case has no label. */
   correct: boolean | null;
   /** The answer's confidence, the mean over its questions. */
@@ -18,6 +26,8 @@ export interface Calibration {
   labelled: number;
   /** Right over labelled. */
   accuracy: number | null;
+  /** The labelled answers the policy would have acted on (`proceed`): what `actedOnAccuracy` is over. Absent in a baseline from before. */
+  acted?: number;
   /** Right among the labelled ones the policy would have acted on (`proceed`). */
   actedOnAccuracy: number | null;
   /** Share of answers that were `proceed`. */
@@ -43,6 +53,7 @@ export function calibrate(grades: DecisionGrade[], options: { bar: number }): Ca
   return {
     n: grades.length,
     labelled: labelled.length,
+    acted: acted.length,
     accuracy: mean(labelled.map((g) => (g.correct ? 1 : 0))),
     actedOnAccuracy: mean(acted.map((g) => (g.correct ? 1 : 0))),
     coverage: mean(grades.map((g) => (g.verdict === "proceed" ? 1 : 0))),

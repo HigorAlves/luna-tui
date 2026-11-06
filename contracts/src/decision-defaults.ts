@@ -22,6 +22,8 @@ export const DecisionDefault = z
     reason: z.string().min(1),
     measuredAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     scorecard: z.record(z.string(), z.unknown()).optional(),
+    /** How the numbers behind the default were read: per answer for a pack the machine reads answer by answer. Absent in an entry from before. */
+    measure: z.enum(["answer", "verdict"]).optional(),
   })
   .refine((entry) => !entry.fallback.includes(entry.default), { message: "the fallback names the default" });
 export type DecisionDefault = z.infer<typeof DecisionDefault>;

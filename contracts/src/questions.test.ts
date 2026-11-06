@@ -457,3 +457,11 @@ describe("the conversation_reply agent pack reads hostile text and has no hands"
     expect(pack.answer.safeParse({ reply: "x".repeat(1501), confidence: 0.8 }).success).toBe(false);
   });
 });
+
+describe("which packs are measured answer by answer", () => {
+  it("declares measure: answer for exactly the three packs the machine reads one answer at a time, and verdict (absent) for every other decision pack", async () => {
+    const { PACKS } = await import("./packs.ts");
+    const answer = Object.values(PACKS).filter((p) => p.kind === "decision" && (p as { measure?: string }).measure === "answer").map((p) => p.id).sort();
+    expect(answer).toEqual(["conversation_assess", "ticket_assess", "triage_signals"]);
+  });
+});

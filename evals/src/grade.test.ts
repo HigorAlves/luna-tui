@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { Expect } from "./expect.ts";
 import { formatDiff, formatScorecard } from "./format.ts";
-import { type CaseResult, type CaseRun, caseResult, diffScorecards, gradeAnswer, scorecard, summarize } from "./grade.ts";
+import { type CaseResult, type CaseRun, caseResult, diffScorecards, gradeAnswer, gradeDecision, scorecard, summarize } from "./grade.ts";
 
 const verdict = (id: string, priority: string) => ({ id, priority, category: "question", expectsReply: true, summary: "s", why: "w", draft: "d", refs: [], deadline: null });
 
@@ -151,9 +151,9 @@ describe("a decision pack's grades", () => {
   const unlabelled = Expect.parse({ schema: 1, rubric: "r", review: true });
 
   it("grades correct, confidence and the verdict under the pack's own bars (a yes/no's confidence is its distance from a coin toss)", () => {
-    expect(caseResult("worth_learning", labelled, worth(true, 0.9), null).decision).toEqual({ correct: true, confidence: 0.9, verdict: "proceed" });
+    expect(caseResult("worth_learning", labelled, worth(true, 0.9), null).decision).toMatchObject({ correct: true, confidence: 0.9, verdict: "proceed" });
     // p 0.1 says no with 0.9 confidence: wrong against a yes label, still proceed.
-    expect(caseResult("worth_learning", labelled, worth(false, 0.1), null).decision).toEqual({ correct: false, confidence: 0.9, verdict: "proceed" });
+    expect(caseResult("worth_learning", labelled, worth(false, 0.1), null).decision).toMatchObject({ correct: false, confidence: 0.9, verdict: "proceed" });
     expect(caseResult("worth_learning", labelled, worth(true, 0.6), null).decision).toMatchObject({ correct: true, verdict: "flag" });
   });
 
@@ -188,5 +188,19 @@ describe("a decision pack's grades", () => {
     expect(text).toContain("label right · conf 0.90 proceed");
     expect(text).toMatch(/b#2 .*label wrong · conf 0\.40 ask/);
     expect(text).toContain("accuracy 50% (2 labelled of 2) · acted-on 100% · coverage 50% · Brier 0.085 · ECE 0.250 · mean confidence 0.65 · overconfident 0 · 3 trials");
+  });
+});
+
+describe("per-question grades", () => {
+  it("grades each question against the case's label for it: right or wrong, its own confidence, its own bar; null where the label is silent", () => {
+    const answer = { blast_radius: { score: 1, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.4 }, data_sensitivity: { score: 0, confidence: 0.9 }, complexity: { choice: "M", confidence: 0.9 } };
+    const expectation = { schema: 1, checks: [], label: { blast_radius: { score: 1 }, reversibility: { score: 2 } } } as never;
+    const grade = gradeDecision("risk_score", expectation, answer)!;
+    expect(grade.questions).toEqual({
+      blast_radius: { correct: true, confidence: 0.9, verdict: "proceed" },
+      reversibility: { correct: false, confidence: 0.4, verdict: "ask" },
+      data_sensitivity: { correct: null, confidence: 0.9, verdict: "proceed" },
+      complexity: { correct: null, confidence: 0.9, verdict: "proceed" },
+    });
   });
 });

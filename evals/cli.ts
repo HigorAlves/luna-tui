@@ -5,7 +5,7 @@
 //   pnpm eval dataset push --pack <decision> [--queue <id or name>] [--records]
 //   pnpm eval dataset pull --pack <decision>
 //   pnpm eval scorecard                       evals/scorecard.md over every decision baseline
-//   pnpm eval defaults [--write]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
+//   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
 import { DECISION_DEFAULTS, PACKS, PackId, decisionEngines } from "@hardness/contracts";
 import { DecisionLog, machineStateDir } from "@hardness/machine/decisions";
 import { buildTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
@@ -69,7 +69,7 @@ if (command === "harvest") {
   }
   await t.flush();
 } else if (command === "scorecard" || command === "defaults") {
-  const { values } = parseArgs({ args: process.argv.slice(3), options: { write: { type: "boolean", default: false } } });
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { write: { type: "boolean", default: false }, except: { type: "string", multiple: true, default: [] } } });
   const cards = loadBaselines(EVALS);
   if (cards.length === 0) fail("no decision baselines under evals/baselines: run `pnpm eval --pack <p> --engine <e> --save-baseline` first");
   const current = (pack: PackId) => decisionEngines(pack);
@@ -81,8 +81,8 @@ if (command === "harvest") {
     writeFileSync(join(EVALS, "scorecard.md"), text);
     console.log(`evals/scorecard.md written: ${cards.length} baseline(s)`);
   } else {
-    const next = buildDefaultsFile(DECISION_DEFAULTS, proposals);
-    for (const [pack, p] of Object.entries(proposals)) console.log(`${pack}: ${p!.default}${p!.measured ? "" : " (unmeasured, kept)"} · ${p!.reason}`);
+    const next = buildDefaultsFile(DECISION_DEFAULTS, proposals, { except: values.except });
+    for (const [pack, p] of Object.entries(proposals)) console.log(values.except.includes(pack) ? `${pack}: left exactly as it is (--except)` : `${pack}: ${p!.default}${p!.measured ? "" : " (unmeasured, kept)"} · ${p!.reason}`);
     if (values.write) {
       writeFileSync(DEFAULTS_FILE, `${JSON.stringify(next, null, 2)}\n`);
       console.log(`contracts/src/decision-defaults.json written`);

@@ -433,6 +433,8 @@ export interface DecisionPack extends PackBase {
   questions: QuestionSet;
   /** Per question, the confidence at which an answer is acted on (`proceed`) and the one below which a person decides (`flag`). */
   policy: DecisionPolicy;
+  /** How the machine reads the answer: `verdict` (absent) acts on the whole answer; `answer` weighs each answer by its own confidence, so the evals measure each answer too. */
+  measure?: "answer" | "verdict";
 }
 
 export type Pack = AgentPack | DecisionPack;
@@ -1346,6 +1348,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     // calls it yet; a caller acts on answers at or above `policy` and takes the agent path below.
     kind: "decision",
     questions: TRIAGE_SIGNALS,
+    measure: "answer",
     // Archiving a ticket by machine wants a higher bar than labelling it; a repo's luna.yaml `triage.confidence` and `policy.decisions` move these.
     policy: triagePolicy(FACTORY_DEFAULTS.triage),
     writable: false,
@@ -1382,8 +1385,8 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
   worth_learning: { ...planDecision("worth_learning", WORTH_LEARNING_QUESTIONS) },
   intake_dedup: { ...planDecision("intake_dedup", INTAKE_DEDUP_QUESTIONS) },
   ticket_validity: { ...planDecision("ticket_validity", TICKET_VALIDITY_QUESTIONS) },
-  ticket_assess: { ...planDecision("ticket_assess", TICKET_ASSESS_QUESTIONS) },
-  conversation_assess: { ...planDecision("conversation_assess", CONVERSATION_ASSESS_QUESTIONS) },
+  ticket_assess: { ...planDecision("ticket_assess", TICKET_ASSESS_QUESTIONS), measure: "answer" },
+  conversation_assess: { ...planDecision("conversation_assess", CONVERSATION_ASSESS_QUESTIONS), measure: "answer" },
   conversation_relation: { ...planDecision("conversation_relation", CONVERSATION_RELATION_QUESTIONS) },
   ticket_recommend: { ...planDecision("ticket_recommend", TICKET_RECOMMEND_QUESTIONS) },
 };

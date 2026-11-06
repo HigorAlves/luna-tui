@@ -1,7 +1,7 @@
 // Grading one case, then a scorecard per pack and engine, then the diff between two scorecards.
 // The order is RFC 0003's: the StageOutput and the pack's answer schema first, the case's
 // deterministic checks second, the judge last. Pure: runs and verdicts come in as data.
-import { type EngineId, PACKS, type PackId, type StageOutput, applyPolicy, confidenceOf, lowestBar } from "@hardness/contracts";
+import { type ConfidencePolicy, type EngineId, PACKS, type PackId, type StageOutput, applyPolicy, confidenceOf, lowestBar, verdictOf } from "@hardness/contracts";
 
 import { type Calibration, type DecisionGrade, calibrate } from "./calibration.ts";
 import { decisionPack, matches, type Label } from "./labels.ts";
@@ -44,7 +44,15 @@ export function gradeDecision(pack: PackId, expect: Expect, answer: Record<strin
   const decision = decisionPack(pack);
   if (!decision) return null;
   const confidences = Object.entries(decision.questions).map(([name, question]) => confidenceOf(question, answer[name]));
+  const labelled = expect.label && expect.review !== true ? (expect.label as Label) : null;
+  const questions = Object.fromEntries(
+    Object.entries(decision.questions).map(([name, question], i) => [
+      name,
+      { correct: labelled && name in labelled ? matches(answer, { [name]: labelled[name]! }) : null, confidence: confidences[i]!, verdict: verdictOf(confidences[i]!, decision.policy[name] as ConfidencePolicy) },
+    ]),
+  );
   return {
+    questions,
     correct: expect.label && expect.review !== true ? matches(answer, expect.label as Label) : null,
     confidence: confidences.length === 0 ? 0 : confidences.reduce((a, b) => a + b, 0) / confidences.length,
     verdict: applyPolicy(decision, answer).overall,
@@ -102,6 +110,9 @@ export interface Summary {
   judgeCostUsd: number | null;
   /** A decision pack's calibration over its graded cases; absent for an agent pack. */
   calibration?: Calibration;
+  /** A pack read answer by answer: the calibration of each question over the cases, and of the pool of every (case, question) pair. Absent for a baseline from before, and for a pack read as a whole. */
+  perQuestion?: Record<string, Calibration>;
+  answers?: Calibration;
 }
 
 export interface Scorecard {
@@ -126,6 +137,15 @@ const sumOrNull = (values: (number | null)[]): number | null => {
 };
 const scored = (judge: JudgeVerdict | null): judge is Extract<JudgeVerdict, { score: number }> => judge !== null && "score" in judge;
 
+/** Every (case, question) pair graded on its own: each question's calibration, and the pool of them all. */
+function perAnswer(decision: NonNullable<ReturnType<typeof decisionPack>>, grades: DecisionGrade[]): Pick<Summary, "perQuestion" | "answers"> {
+  const pairs = Object.keys(decision.questions).map((name) => [name, grades.flatMap((g) => (g.questions?.[name] ? [g.questions[name]!] : []))] as const);
+  return {
+    perQuestion: Object.fromEntries(pairs.map(([name, list]) => [name, calibrate(list, { bar: (decision.policy[name] as ConfidencePolicy).proceed })])),
+    answers: calibrate(pairs.flatMap(([, list]) => list), { bar: lowestBar(decision.policy) }),
+  };
+}
+
 export function summarize(cases: CaseResult[], pack?: PackId): Summary {
   const grades = cases.flatMap((c) => (c.decision ? [c.decision] : []));
   const decision = pack ? decisionPack(pack) : null;
@@ -141,6 +161,7 @@ export function summarize(cases: CaseResult[], pack?: PackId): Summary {
     costUsd: sumOrNull(cases.map((c) => c.costUsd)),
     judgeCostUsd: sumOrNull(scores.map((j) => j.costUsd)),
     ...(decision ? { calibration: calibrate(grades, { bar: lowestBar(decision.policy) }) } : {}),
+    ...(decision?.measure === "answer" ? perAnswer(decision, grades) : {}),
   };
 }
 
