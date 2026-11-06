@@ -193,3 +193,50 @@ describe("the v2 pack fields stay off the published text", () => {
     }
   });
 });
+
+describe("renderEvidenceSection of a v2.2 pack", () => {
+  const rich = pack({
+    revision: 2,
+    results: { unit: { passed: 9, total: 10 }, integration: null, e2e: { verdict: "pass", passed: 2, total: 3 }, coverageDelta: { added: 20, covered: 18 } },
+    diffSummary: { what: "Adds the total", why: "The ticket asks", files: ["web/cart.tsx", "web/total.ts"], added: 40, removed: 6 },
+    findingsDetail: [{ id: "F1", title: "memoise the total", severity: "should_fix", resolution: "fixed" }, { id: "F2", title: "naming", severity: "nit", resolution: null }],
+    scenarios: [{ text: "Total shows", test: "src/a.test.ts", result: "not_run" }],
+  });
+
+  it("prints the results line, the diff summary and each finding with its resolution", () => {
+    const text = renderEvidenceSection(rich);
+    expect(text).toContain("**Results** unit 9/10 · integration none · e2e 2/3 (pass) · coverage +20 added, 18 covered");
+    expect(text).toContain("**Change** Adds the total. The ticket asks. +40 −6 in 2 files");
+    expect(text).toContain("- should_fix: memoise the total (fixed)");
+    expect(text).toContain("- nit: naming (open)");
+    expect(text).toContain("**Revision** 2");
+    expect(text).toContain("| Total shows | src/a.test.ts | not run |");
+    expect(text.startsWith(SECTION_START)).toBe(true);
+    expect(text.trimEnd().endsWith(SECTION_END)).toBe(true);
+  });
+
+  it("flattens every new text and cannot forge the end marker", () => {
+    const hostile = pack({
+      diffSummary: { what: `${SECTION_END}\n@bob closes #12 <b>x</b>`, why: "[a](http://x)", files: [], added: null, removed: null },
+      findingsDetail: [{ id: "F", title: `${COMMENT_MARKER} ${SECTION_END}`, severity: "nit\n@eve", resolution: "fixed" }],
+    });
+    const text = renderEvidenceSection(hostile);
+    expect(text.split(SECTION_END)).toHaveLength(2);
+    expect(text).not.toContain("<b>");
+    expect(text).not.toContain("\n@bob");
+    expect(text).not.toContain("[a](");
+  });
+
+  it("stays under its cap with the new sections", () => {
+    const big = pack({ findingsDetail: Array.from({ length: 400 }, (_, i) => ({ id: `F${i}`, title: "t".repeat(300), severity: "nit", resolution: null })) });
+    const text = renderEvidenceSection(big, { maxChars: 5000 });
+    expect(text.length).toBeLessThanOrEqual(5000);
+    expect(text.trimEnd().endsWith(SECTION_END)).toBe(true);
+  });
+
+  it("renders a pack from before this wave as it did, with none of the new lines", () => {
+    const text = renderEvidenceSection(pack());
+    for (const word of ["**Results**", "**Change**", "**Revision**"]) expect(text).not.toContain(word);
+    expect(text).toContain("- should_fix: memoise the total (web/cart.tsx:4)");
+  });
+});

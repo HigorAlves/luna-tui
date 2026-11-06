@@ -4,11 +4,11 @@
 // a mechanical veto), assembles the Evidence Pack, keeps a local copy of its media and saves the pack
 // on the task. The pack and its files show up in the ship approval's `requested`, the gate Ship publishes from.
 import { type TruthSink, evidenceFormatTruth, recordIdOf } from "../decision-truth.ts";
-import { type ArtifactKind, type EvidenceContext, EvidencePack, Finding, PACKS, Risk, type TaskState, VerifyReport, applyPolicy } from "@hardness/contracts";
+import { type ArtifactKind, type EvidenceContext, EvidencePack, Finding, PACKS, Risk, type TaskReports, type TaskState, VerifyReport, applyPolicy } from "@hardness/contracts";
 import { readdir, stat } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
-import { assembleEvidencePack } from "../../domain/evidence-pack.ts";
+import { assembleEvidencePack, packComplete, repairPack } from "../../domain/evidence-pack.ts";
 import { parseNote } from "../../domain/fix-card.ts";
 import type { Policy } from "../../domain/policy.ts";
 import { approvedCases, approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
@@ -215,6 +215,8 @@ export function evidenceRunner(deps: EvidenceDeps): StageRunner {
 
 export interface EvidenceStageDeps extends EvidenceDeps {
   latestFinish: (taskId: string, stage: TaskState) => Promise<{ runId: string; detail?: Record<string, unknown> } | null>;
+  /** The Build and Verify Reports (`pipeline.reports`): the pack's diff summary, the scenarios' tagged tests and results by layer come from the Build Report. */
+  reports?: (taskId: string) => Promise<TaskReports>;
   /** Writes the pack on the task row. */
   save: (taskId: string, patch: { evidence: EvidencePack }) => Promise<void>;
   /** Runs evidence_format on an evidence context and returns its answer; bound late, once PackRuns exists. Read at call time. */
@@ -357,6 +359,10 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     }
     if (commitSha === "") return { outcome: "fail", detail: { step: "evidence", verdict: "missing", artifactCount: 0, error: "the task has no worktree to take the evidence commit from", reason: "the task has no worktree to take the evidence commit from" } };
 
+    const approvedScenarioList = approvedScenarios(context.approvals);
+    const scenarioInputs = facts.scenarios.map((x, i) => ({ text: x.text, criterion: x.criterion, result: packResult(x.result), test: x.test, ...(approvedScenarioList[i]?.id !== undefined ? { id: approvedScenarioList[i]!.id } : {}), layer: approvedScenarioList[i]?.layer ?? null }));
+    const buildReport = (await deps.reports?.(task.id).catch(() => null))?.build ?? null;
+
     // 2b. The film: the pipeline runs on the approved scenarios and the browser run's facts; a person's send-back note re-enters it at the fix.
     let video: EvidencePack["video"] | undefined;
     let filmMedia: EvidencePack["media"] = [];
@@ -371,7 +377,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         task: { title: task.title, description: task.description },
         record: task.record ?? null,
         plan: { rollback: plan?.rollback ?? null, risk: risk.success ? risk.data : null },
-        scenarios: facts.scenarios.map((s) => ({ text: s.text, criterion: s.criterion, result: packResult(s.result), test: s.test })),
+        scenarios: scenarioInputs,
         findings: [],
         outOfMap: [],
         media: [],
@@ -431,13 +437,15 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     });
     // ci_watch's passing finish carries the Verify Report; the pack takes its v2 fields from it when there is one.
     const reported = VerifyReport.safeParse((await deps.latestFinish(task.id, "ci_watch").catch(() => null))?.detail?.report);
-    const pack = assembleEvidencePack({
+    const assembled = assembleEvidencePack({
       task: { title: task.title, description: task.description },
       record: task.record ?? null,
       plan: { rollback: plan?.rollback ?? null, risk: risk.success ? risk.data : null },
-      scenarios: facts.scenarios.map((s) => ({ text: s.text, criterion: s.criterion, result: packResult(s.result), test: s.test })),
+      scenarios: scenarioInputs,
       findings,
       ...(reported.success ? { verifyReport: reported.data } : {}),
+      buildReport,
+      previous: task.evidence ? { ...(task.evidence.revision !== undefined ? { revision: task.evidence.revision } : {}) } : null,
       outOfMap,
       media,
       commitSha,
@@ -447,6 +455,9 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       ...(video !== undefined ? { video } : {}),
       now: now(),
     });
+    // What a script can fix is fixed before the pack is kept (a commit that is not the head is never repaired: this pack's is).
+    const checked = packComplete(assembled, commitSha);
+    const pack = checked.ok ? assembled : repairPack(assembled, checked.problems).pack;
     const classified = (await deps.latestFinish(task.id, "verifying").catch(() => null))?.detail?.classified;
     const findingRecords = (Array.isArray(classified) ? classified : []).flatMap((row) => (typeof row?.recordId === "string" ? [row.recordId as string] : []));
     await store.writePack(task.id, commitSha, pack);

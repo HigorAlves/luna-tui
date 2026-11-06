@@ -739,6 +739,11 @@ export const EvidencePack = z.object({
   findingsDetail: z.array(z.object({ id: z.string(), title: z.string(), severity: z.string(), resolution: z.string().nullable(), inferred: z.boolean().optional() })).optional(),
   previewUrl: z.string().optional(),
   version: z.number().int().optional(),
+  // v2.2, wave 12b, all optional.
+  /** What the change was and why, in the implementer's words, and its size: from the Build Report. */
+  diffSummary: z.object({ what: z.string(), why: z.string(), files: z.array(z.string()), added: z.number().int().nullable(), removed: z.number().int().nullable() }).optional(),
+  /** How many packs this card has had: 1 for the first, the stored one plus one after. (`version` is the schema's.) */
+  revision: z.number().int().min(1).optional(),
 });
 export type EvidencePack = z.infer<typeof EvidencePack>;
 

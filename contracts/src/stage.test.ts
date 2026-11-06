@@ -490,6 +490,15 @@ describe("TriageRecord and EvidencePack", () => {
     for (const result of ["pass", "fail", "partial", "skipped"]) expect(EvidencePack.safeParse({ ...evidence, scenarios: [{ text: "a", test: null, result }] }).success).toBe(true);
     expect(EvidencePack.safeParse({ ...evidence, scenarios: [{ text: "a", test: null, result: "maybe" }] }).success).toBe(false);
   });
+  it("take a diff summary and a revision, and a pack stored without them still parses", () => {
+    const plain = EvidencePack.parse(evidence);
+    expect(plain).not.toHaveProperty("diffSummary");
+    expect(plain).not.toHaveProperty("revision");
+    const rich = { ...evidence, revision: 2, diffSummary: { what: "Adds the total", why: "The ticket asks for it", files: ["web/cart.tsx"], added: 12, removed: 3 } };
+    expect(EvidencePack.parse(rich)).toEqual(rich);
+    expect(EvidencePack.parse({ ...rich, diffSummary: { what: "", why: "", files: [], added: null, removed: null } }).diffSummary?.added).toBeNull();
+    expect(EvidencePack.safeParse({ ...rich, revision: 1.5 }).success).toBe(false);
+  });
   it("carry a video's verdict, scores and defects, and a note when a format was degraded", () => {
     const video = { file: "walkthrough.mp4", durationS: 92.4, verdict: "ship", scores: { hook: 8, clarity: 9 }, rounds: 1, defects: [{ priority: "P1", t: 12.5, scene: "cart", element: "cta", symptom: "the headline is cut off", fix: "shorten the heading to two lines" }], transcript: "Here is the cart." };
     const rich = { ...evidence, format: "video", note: "the critic passed round 2", video, media: [{ kind: "video", label: "walkthrough", url: "w.mp4" }, { kind: "cover", label: "cover", url: "c.jpg" }, { kind: "captions", label: "captions", url: "c.srt" }, { kind: "audio", label: "voice", url: "v.wav" }] };

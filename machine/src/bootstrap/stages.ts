@@ -80,7 +80,7 @@ export async function buildRealStages(
   /** Verify's decisions (finding_classify, e2e_failure_cause), bound late like the others; null runs e2e without the failure cause. */
   verifyDecisions?: { decide: Decide | null },
   /** Evidence: the task's latest stage finishes, the pack's save and the format decision (`decide` bound late, once PackRuns exists; null picks captures or text). */
-  evidenceDeps: { latestFinish: EvidenceStageDeps["latestFinish"]; save: EvidenceStageDeps["save"]; load: (taskId: string) => Promise<EvidencePack | null>; decisions: { decide: EvidenceStageDeps["decideFormat"] } } = {
+  evidenceDeps: { latestFinish: EvidenceStageDeps["latestFinish"]; reports?: EvidenceStageDeps["reports"]; save: EvidenceStageDeps["save"]; load: (taskId: string) => Promise<EvidencePack | null>; decisions: { decide: EvidenceStageDeps["decideFormat"] } } = {
     latestFinish: async () => null,
     load: async () => null,
     save: async () => {},
@@ -264,6 +264,7 @@ export async function buildRealStages(
       stateDir: config.stateDir,
       latestE2e,
       latestFinish: evidenceDeps.latestFinish,
+      ...(evidenceDeps.reports ? { reports: evidenceDeps.reports } : {}),
       save: evidenceDeps.save,
       truth: truth ?? null,
       get decideFormat() {

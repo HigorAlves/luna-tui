@@ -321,6 +321,42 @@ describe("evidenceStage", () => {
     expect((without.saved[0]![1] as { evidence: Record<string, unknown> }).evidence).not.toHaveProperty("results");
   });
 
+  it("takes the Build Report from deps.reports: the diff summary, the scenario's tagged test, results by layer and revision 1", async () => {
+    browserRun();
+    const layered = scenarios.map((x, i) => ({ ...x, id: `S${i + 1}`, layer: "unit" }));
+    const buildReport = { branch: "b", base: null, headSha: "abc1234def", envHash: null, diffSummary: { added: 9, removed: 2, files: ["web/cart.tsx"] }, declaredFiles: [], tests: [{ scenario: "S1", before: "fail", after: "pass", file: "src/cart.test.ts" }], runs: [], tokens: null, minutes: 1, scopeCheck: { clean: true, issues: [] }, version: 2 };
+    const report = { prNumber: 3, headSha: "abc1234def", findings: [], tests: { passed: 2, total: 2 }, coverageDelta: null, e2e: { verdict: "pass", scenarios: [], artifacts: [] }, envReproduction: null, overrides: [], version: 2 };
+    const { run, saved } = stage({
+      reports: async () => ({ build: buildReport as never, verify: report as never }),
+      latestFinish: async (_id, name) => (name === "ci_watch" ? { runId: "ci", detail: { report } } : (finishes[name] ?? null)),
+    });
+    const ctx = taskContext();
+    ctx.approvals[0]!.requested.cases = layered;
+    await run(ctx);
+    const pack = (saved[0]![1] as { evidence: Record<string, any> }).evidence;
+    expect(pack.revision).toBe(1);
+    expect(pack.diffSummary).toMatchObject({ added: 9, removed: 2, files: ["web/cart.tsx"] });
+    expect(pack.scenarios[0].test).toBe("src/cart.test.ts");
+    expect(pack.results.unit).toEqual({ passed: 1, total: 2 });
+  });
+
+  it("counts the revision on from the stored pack", async () => {
+    browserRun();
+    const { run, saved } = stage();
+    const stored = { summary: "s", format: "captures", scenarios: [], findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "abc1234def", media: [], at: "2026-11-03T00:00:00.000Z", revision: 2 };
+    await run(taskContext({ evidence: stored }));
+    expect((saved[0]![1] as { evidence: { revision: number } }).evidence.revision).toBe(3);
+  });
+
+  it("repairs what a script can before saving: an over-long goal does not leave an over-long summary", async () => {
+    browserRun();
+    const goal = Array.from({ length: 300 }, (_, i) => `w${i}`).join(" ");
+    const { run, saved } = stage();
+    await run(taskContext({ record: { ...record, goal } }));
+    const pack = (saved[0]![1] as { evidence: { summary: string } }).evidence;
+    expect(pack.summary.split(/\s+/).length).toBeLessThanOrEqual(200);
+  });
+
   it("assembles a captures pack, keeps its media locally and saves it on the task", async () => {
     const dir = browserRun();
     const { run, saved } = stage();
