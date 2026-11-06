@@ -3377,6 +3377,25 @@ describe("deleting a task", () => {
   });
 });
 
+describe("deleting a task with branch graphs", () => {
+  it("deletes the card's branch graphs, and a failure there does not stop the delete", async () => {
+    const dropped: string[][] = [];
+    let fail = false;
+    const p = new Pipeline(db, stubs.runnerFor, {
+      policies: previewOn,
+      inline: true, hasConfig: () => true,
+      closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false, dropBranchGraphs: async (repoPath, taskId) => (dropped.push([repoPath, taskId]), fail ? Promise.reject(new Error("disk")) : undefined) },
+    });
+    const first = await p.createTask({ title: "Login page", repoPath: "/some/repo" });
+    await p.delete(first.id);
+    expect(dropped).toEqual([["/some/repo", first.id]]);
+    fail = true;
+    const second = await p.createTask({ title: "Logout page", repoPath: "/some/repo" });
+    await p.delete(second.id);
+    await expect(p.get(second.id)).rejects.toBeInstanceOf(TaskNotFoundError);
+  });
+});
+
 describe("removing a card's clone", () => {
   it("removes a clone from disk, but says so instead of silently dropping commits no remote has", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "rmclone-")));
