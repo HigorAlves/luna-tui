@@ -147,6 +147,12 @@ export interface TaskDiffFile {
 }
 
 /** A person's answer on whether an Evidence Pack was useful: a boolean from the fixed set, and a short note that is flattened before anything keeps it. */
+/** A person dismisses a finding Verify reported (the card waits at awaiting_ship): the reason stays out of the stream. */
+export const DismissFindingInput = z.object({ reason: z.string().max(500).optional() });
+export type DismissFindingInput = z.infer<typeof DismissFindingInput>;
+/** A person adds a finding Verify missed. */
+export const AddFindingInput = z.object({ title: z.string().min(1).max(200), severity: z.enum(["blocker", "should_fix", "nit"]), path: z.string().max(300).optional(), line: z.number().int().min(1).max(1_000_000).optional() });
+export type AddFindingInput = z.infer<typeof AddFindingInput>;
 export const EvidenceFeedbackInput = z.object({ useful: z.boolean(), note: z.string().max(500).optional() });
 export type EvidenceFeedbackInput = z.infer<typeof EvidenceFeedbackInput>;
 

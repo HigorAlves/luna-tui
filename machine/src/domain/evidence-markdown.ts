@@ -143,6 +143,13 @@ export function stripSection(body: string): string {
   return before && after ? `${before}\n\n${after}` : `${before}${after}`;
 }
 
+/** The body's marked section (both markers included), or null when it has none. */
+export function sectionOf(body: string): string | null {
+  const start = body.indexOf(SECTION_START);
+  const end = start === -1 ? -1 : body.indexOf(SECTION_END, start);
+  return start !== -1 && end !== -1 ? body.slice(start, end + SECTION_END.length) : null;
+}
+
 /** Replaces the body's marked section with `section`, or appends it. */
 export function mergeSection(body: string, section: string): string {
   const start = body.indexOf(SECTION_START);

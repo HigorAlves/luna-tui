@@ -55,6 +55,8 @@ const ShipCursorSchema = z.object({
   escalatedAt: z.string().nullable().optional(),
   /** The head that was re-verified for staleness, and when: the stale clock counts from `at` for that head. */
   reverified: z.object({ sha: z.string(), at: z.string() }).optional(),
+  /** sha256 of the Evidence section as the machine last published it: a different section in the PR body is a person's edit. */
+  publishedSection: z.string().optional(),
   /** `ship.ready` was logged: readiness is announced the first time it is true. */
   readyNoted: z.boolean().optional(),
 });

@@ -257,17 +257,19 @@ const { real, verifyPack, checksExec, agentDeps, shipGateProbe } = await buildRe
     decisions: evidenceDecisions,
   },
   shipDecisions,
-  async (taskId) => {
-    const [task, events, runs, finish] = await Promise.all([pipeline.get(taskId), pipeline.events(taskId), pipeline.stageRuns(taskId), pipeline.latestStageFinish(taskId, "implementing")]);
-    const ledger = Ledger.safeParse(finish?.detail?.ledger);
-    const cursor = await loadCursor(config.stateDir, taskId);
-    const usage = await pipeline.taskUsage(taskId);
-    return retroFactsOf({ task, ledger: ledger.success ? ledger.data : null, events, runs: runs.length, cursor, costUsd: usage.spentUsd });
-  },
+  retroFactsFor,
   decisionTruth,
   // Triage's card_search: the task's own repository's cards, from the board the pipeline keeps.
   { search: async ({ repoPath, selfId, selfSource, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, selfSource, now: new Date() }) },
 );
+/** The retro's facts for a task, from the machine's own records. */
+async function retroFactsFor(taskId: string) {
+  const [task, events, runs, finish] = await Promise.all([pipeline.get(taskId), pipeline.events(taskId), pipeline.stageRuns(taskId), pipeline.latestStageFinish(taskId, "implementing")]);
+  const ledger = Ledger.safeParse(finish?.detail?.ledger);
+  const cursor = await loadCursor(config.stateDir, taskId);
+  const usage = await pipeline.taskUsage(taskId);
+  return retroFactsOf({ task, ledger: ledger.success ? ledger.data : null, events, runs: runs.length, cursor, costUsd: usage.spentUsd });
+}
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
  *  pack joins when agents are on. */
@@ -372,6 +374,16 @@ pipeline = new Pipeline(db, runnerFor, {
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, watcher, github },
+  // A merged card's retro: the truth file, and the graph misses its Build Report also declared (never written into prompts or rules).
+  retroOutputs: {
+    stateDir: config.stateDir,
+    facts: retroFactsFor,
+    graph,
+    declaredFiles: async (taskId) => {
+      const answer = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.answer as { outOfMap?: Array<{ path?: unknown }> } | undefined;
+      return (answer?.outOfMap ?? []).flatMap((o) => (typeof o?.path === "string" ? [o.path] : []));
+    },
+  },
   ...(config.groundTruth ? { evidenceFeedback: evidenceFeedbackWriter(config.stateDir), groundTruth: groundTruthWriter(config.stateDir), escalationTruth: escalationTruthWriter(config.stateDir), commitsSince, headOf: headCommit } : {}),
   truth: decisionTruth,
   ...(shipGateProbe ? { shipGateProbe, shipProbeMs: config.shipPoll.intervalMs } : {}),

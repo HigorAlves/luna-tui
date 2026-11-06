@@ -5,6 +5,8 @@ import {
   type ApiError,
   CloneInput,
   ArchiveInput,
+  AddFindingInput,
+  DismissFindingInput,
   EvidenceFeedbackInput,
   DecisionInput,
   EscalationReasonInput,
@@ -58,7 +60,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, WorktreeUnpushedError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, FindingNotFoundError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, WorktreeUnpushedError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -177,6 +179,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof WorktreeUnpushedError) return fail(c, 409, "unpushed_commits", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
+    if (error instanceof FindingNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof NoEvidenceError) return fail(c, 409, "no_evidence", error.message);
     if (error instanceof NoQuestionsToPostError) return fail(c, 409, "no_questions", error.message);
     if (error instanceof QuestionsCarrySecretError) return fail(c, 409, "secret", error.message);
@@ -439,6 +442,21 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const id = taskId(c);
     const { useful, note } = await body(c, EvidenceFeedbackInput);
     await pipeline.evidenceFeedback(id, { useful, note });
+    return c.json(await serialize(await pipeline.get(id)));
+  });
+
+  /** A person dismisses one of the findings the last Verify reported, while the card waits at awaiting_ship. */
+  app.post("/tasks/:id/findings/:findingId/dismiss", async (c) => {
+    const id = taskId(c);
+    await body(c, DismissFindingInput);
+    await pipeline.dismissFinding(id, c.req.param("findingId").slice(0, 200));
+    return c.json(await serialize(await pipeline.get(id)));
+  });
+
+  /** A person adds a finding Verify missed. */
+  app.post("/tasks/:id/findings", async (c) => {
+    const id = taskId(c);
+    await pipeline.addFinding(id, await body(c, AddFindingInput));
     return c.json(await serialize(await pipeline.get(id)));
   });
 

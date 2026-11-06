@@ -260,6 +260,13 @@ export class RejectNotAllowedError extends Error {
 }
 
 /** A High-risk release approved by someone the gate's release owners do not name. */
+export class FindingNotFoundError extends Error {
+  constructor(readonly findingId: string) {
+    super("the last Verify did not report that finding");
+    this.name = "FindingNotFoundError";
+  }
+}
+
 export class NotReleaseOwnerError extends Error {
   constructor(id: string, approver: string) {
     super(`task ${id}: ${approver} is not one of the release owners this question names`);

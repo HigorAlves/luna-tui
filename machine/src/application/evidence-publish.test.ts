@@ -1,5 +1,5 @@
 import type { EvidencePack } from "@hardness/contracts";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -356,6 +356,45 @@ describe("publishAndReady", () => {
     expect(await loadCursor(stateDir, base.taskId)).toMatchObject({ pr: { slug: "o/a", number: 3 }, published: { sha: "abc1234def5678" } });
     expect(gh.markPrReady).toHaveBeenCalledWith("o/a", 3);
     expect((gh.markPrReady as unknown as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0]!).toBeGreaterThan((gh.updatePrBody as unknown as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0]!);
+  });
+
+  describe("a person's edit of the section", () => {
+    const again = async (edit: ((body: string) => string) | null, saveFirst = true) => {
+      const state = { body: "## Why\n- cart", comments: [] as Comment[], assets: [] as Array<{ id: number; name: string; url: string }> };
+      const gh = github({ markPrReady: async () => {} }, state);
+      const stateDir = mkdtempSync(join(tmpdir(), "ready-edit-"));
+      const deps = { github: gh, publish: publishEvidence, save: async () => {}, stateDir, localDir: () => localDir };
+      const input = { task: { id: base.taskId, repoPath: "/repo" }, slug: "o/a", number: 3, headSha: HEAD, draft: false, pack: pack([{ kind: "screenshot", label: "a.png", url: put("a.png"), scanned: true }]), approved: false };
+      await publishAndReady(deps, input);
+      if (!saveFirst) {
+        const cursor = (await loadCursor(stateDir, base.taskId))!;
+        const { publishedSection: _gone, ...rest } = cursor as typeof cursor & { publishedSection?: string };
+        const { saveCursor } = await import("./ship-cursor.ts");
+        await saveCursor(stateDir, base.taskId, rest);
+      }
+      if (edit) state.body = edit(state.body);
+      const out = await publishAndReady(deps, input);
+      return { out, state, stateDir };
+    };
+
+    it("records nothing when the section is as the machine left it, and saves its hash at each publish", async () => {
+      const { out, stateDir } = await again(null);
+      expect(out).toMatchObject({ published: true });
+      expect((out as { edited?: unknown }).edited).toBeUndefined();
+      expect((await loadCursor(stateDir, base.taskId))!.publishedSection).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it("writes the edited section to the ground truth before replacing it, and says so", async () => {
+      const { out, stateDir } = await again((body) => body.replace("<!-- luna-evidence:end -->", "my own line\n<!-- luna-evidence:end -->"));
+      expect(out).toMatchObject({ published: true, edited: { sha: HEAD.slice(0, 7) } });
+      const file = JSON.parse(readFileSync(join(stateDir, "ground-truth", "evidence", `${base.taskId}-${HEAD.slice(0, 7)}-edit.json`), "utf8"));
+      expect(file.section).toContain("my own line");
+    });
+
+    it("records nothing for a cursor with no publishedSection (a pack published before this wave)", async () => {
+      const { out } = await again((body) => body.replace("<!-- luna-evidence:end -->", "edit\n<!-- luna-evidence:end -->"), false);
+      expect((out as { edited?: unknown }).edited).toBeUndefined();
+    });
   });
 
   it("does not mark a PR that is already ready", async () => {

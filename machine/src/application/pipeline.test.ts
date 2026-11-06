@@ -817,6 +817,8 @@ describe("the ship approval (the release question after readiness)", () => {
     expect(out).toMatchObject({ state: "archived", archiveReason: "rejected" });
     const gate = (await pipeline.approvals(id)).filter((a) => a.requested.gate === "ship_approval").at(-1)!;
     expect(gate).toMatchObject({ decision: "rejected", reason: "not today" });
+    // The question is asked only when the checklist passes, so a rejection is a person refusing a ready PR: a row with checklist ids only (none failed).
+    expect((await pipeline.events(id)).find((e) => e.kind === "ship.override")?.payload).toEqual({ kind: "rejected_ready", items: [] });
   });
 
   it("a person's send-back at the release question is refused: there is nothing to run again", async () => {
@@ -1373,6 +1375,32 @@ describe("memory review decision", () => {
     for (let i = 0; i < 2; i++) await p.decide(broken.id, "approved");
     expect((await p.get(broken.id)).state).toBe("closed");
     expect((await p.events(broken.id)).some((e) => e.kind === "transition" && e.payload.to === "closed" && e.payload.reason === "the retro broke")).toBe(true);
+  });
+
+  it("a merged card's close writes the retro's truth, records only the misses the Build Report declared, and logs card.learned with counts", async () => {
+    const { mkdtemp, readFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const stateDir = await mkdtemp(join(tmpdir(), "retro-truth-"));
+    const misses: string[][] = [];
+    const facts = { predicted: { size: "small", risk: "low", estLoc: 10 }, actual: { added: 3, removed: 1, retries: { verify: 0, e2e: 0, ci: 0, total: 0 }, escalations: 0, format: "text", durationMin: 5, overrides: 0 }, runs: 3 };
+    const p = new Pipeline(db, stubs.runnerFor, {
+      policies: previewOn,
+      inline: true, hasConfig: () => true,
+      closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false },
+      retroOutputs: { stateDir, facts: async () => facts, graph: { recordMisses: async (_repo: string, miss: { files: string[] }) => void misses.push(miss.files) }, declaredFiles: async () => ["src/a.ts"] },
+    });
+    stubs.plan("shipping", { outcome: "pass", detail: { merged: { sha: "m1" }, prUrl: "https://github.com/o/a/pull/7", number: 7 } });
+    stubs.plan("reviewing_memory", { outcome: "pass", detail: { rules: { markdown: "- r\n", graphMisses: ["src/a.ts", "src/model-only.ts"], recalibration: [{ dimension: "size", predicted: "small", actual: "small", note: "fine" }] } } });
+    const created = await p.createTask({ title: "Login page", criteria: ["x"], repoPath: "/r/a" });
+    await p.start(created.id);
+    for (let i = 0; i < 2; i++) await p.decide(created.id, "approved");
+    await p.decide(created.id, "approved", undefined, { applyRules: false });
+    expect(misses).toEqual([["src/a.ts"]]);
+    const doc = JSON.parse(await readFile(join(stateDir, "ground-truth", "retro", `${created.id}.json`), "utf8"));
+    expect(doc).toMatchObject({ schema: 1, retroRan: true, adopted: false, recalibration: [{ dimension: "size", note: "fine" }] });
+    const events = await p.events(created.id);
+    expect(events.find((e) => e.kind === "ground_truth.written")?.payload).toMatchObject({ kind: "retro" });
+    expect(events.find((e) => e.kind === "card.learned")?.payload).toMatchObject({ misses: 1 });
   });
 
   it("offers the rules step by default when the gate carries rules", async () => {
@@ -3518,7 +3546,8 @@ describe("a PR closed without a merge archives its card", () => {
   it("the watch answering prClosed archives the card with pr_closed and runs the close step", async () => {
     stubs.plan("awaiting_ship", closed);
     const closes: string[] = [];
-    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, releaseKept: async (id) => void closes.push(id) });
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, releaseKept: async (id) => void closes.push(id), closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false, watcher: { close: async (id) => void watched.push(id) } } });
+    const watched: string[] = [];
     const task = await newTask();
     await p.start(task.id);
     await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
@@ -3526,6 +3555,9 @@ describe("a PR closed without a merge archives its card", () => {
     const out = await reasons(p, task.id);
     expect(out.task).toMatchObject({ state: "archived", archiveReason: "pr_closed" });
     expect(closes).toContain(task.id);
+    // The real close step ran (its report is logged and the watch tab closed), not just the kept-sandbox release.
+    expect(out.kinds).toContain("task.closed");
+    expect(watched).toContain(task.id);
     expect(out.kinds).not.toContain("ship.merged");
   });
 

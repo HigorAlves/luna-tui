@@ -1,6 +1,7 @@
 // The host-side close step, run after a task reaches `closed`. It adds no task state: the
 // pipeline stores the transition first, then calls this and logs the report. A failed step
 // is reported, never thrown, because the task is already closed.
+import { proposalsSection } from "./retro-outputs.ts";
 import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -42,7 +43,7 @@ export interface CloseTarget {
   repoPath: string | null;
   worktreePath: string | null;
   /** The memory review's proposal; `apply` is false when the approval said to skip it. */
-  rules?: { markdown: string; apply: boolean };
+  rules?: { markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }> };
   title?: string;
   /** The task's PR, when it merged: the rules then go to their own branch, never the merged one. */
   merged?: { prUrl: string; number: number } | null;
@@ -104,10 +105,10 @@ async function applyRules(
 }
 
 /** A model's text for a draft PR's body: tokens redacted, HTML escaped (a `<!--` or `<details>` would hide the rest from the reviewer), mentions and issue references neutralized: a draft PR must not ping anyone or close anything. */
-const inert = (text: string): string => redact(text).replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@(?=[A-Za-z0-9])/g, "@\u200b").replace(/#(?=\d)/g, "#\u200b");
+export const inert = (text: string): string => redact(text).replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@(?=[A-Za-z0-9])/g, "@\u200b").replace(/#(?=\d)/g, "#\u200b");
 
 /** After a merge the task's branch is gone: the rules go on `luna/memory-<task8>`, cut from origin's default branch, pushed with -u and opened as a draft PR. The branch name is the machine's, never from a model. */
-async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rules: { markdown: string }, deps: CloseDeps): Promise<string> {
+async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rules: { markdown: string; proposals?: Array<{ kind: string; title: string; body: string }> }, deps: CloseDeps): Promise<string> {
   const base = await (deps.defaultBranchOf ?? hostDefaultBranch)(target.repoPath ?? worktreePath);
   if (!base || !isBranchName(base)) throw new Error(`no usable default branch: ${JSON.stringify(base ?? null)}`);
   const short = target.id.replace(/[^0-9a-f]/gi, "").slice(0, 8) || "task";
@@ -140,7 +141,7 @@ async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rul
   await must("commit", ["-c", "commit.gpgsign=false", "commit", "-m", "docs(context): rules from the memory review"]);
   await must("push", ["push", "-u", "origin", branch]);
   const title = `docs(agents): rules from ${(target.title ?? "the task").replace(/\s+/g, " ").trim().slice(0, 100)}`;
-  const body = `Rules proposed by the retro of the task whose PR merged: ${target.merged!.prUrl}\n\n${inert(rules.markdown).slice(0, 20_000)}`;
+  const body = `Rules proposed by the retro of the task whose PR merged: ${target.merged!.prUrl}\n\n${inert(rules.markdown).slice(0, 20_000)}${rules.proposals?.length ? `\n\n${proposalsSection(rules.proposals)}` : ""}`;
   const pr = await deps.github.openPr(slug, { title, body, head: branch, draft: true });
   return `committed ${CONTEXT_FILE} (${lines} lines) on ${branch}, pushed, and opened the draft PR ${pr.url}`;
 }

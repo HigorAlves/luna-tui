@@ -9,7 +9,7 @@ import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, FindingNotFoundError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -26,6 +26,7 @@ import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import { blockerSetKey } from "../domain/finding-sets.ts";
+import { type RetroOutputs, acceptedMisses, appendAddedFinding, retroTruthOf, writeRetroTruth } from "./retro-outputs.ts";
 import { EMITTABLE, type StageContext, type StageResult, type StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
 import { buildProgressOf, buildReportOf, prFactsOf, verifyReportOf } from "./reports.ts";
@@ -48,7 +49,7 @@ import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, ou
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
+export { ApproverRequiredError, FindingNotFoundError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -148,6 +149,8 @@ export interface PipelineOptions {
   diffStat?: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
   closeDeps?: CloseDeps;
+  /** Where a merged card's retro leaves its outputs (decision 25): the truth file's directory, the machine's own facts, the graph's misses file and the Build Report's out-of-map files. */
+  retroOutputs?: RetroOutputs;
   /** Who owns paths at the default branch, from CODEOWNERS (the code graph port's `owners`). The outside-approver rule reads only this, never a model's owners; absent, the rule is not enforced and says so. */
   owners?: (repoPath: string, paths: string[]) => Promise<Exclude<OwnersFound, "failed">>;
   /** Keeps the approved plan and what changed before it (ground truth); answers where. A failure is logged and never blocks the approval. */
@@ -322,6 +325,7 @@ export class Pipeline {
   private readonly revertCommit: (worktreePath: string, sha: string) => Promise<void>;
   private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   private readonly closeDeps: CloseDeps | undefined;
+  private readonly retroOutputs: RetroOutputs | undefined;
   private readonly releaseKept: ((taskId: string) => Promise<void>) | undefined;
   private readonly groundTruth: PipelineOptions["groundTruth"];
   private readonly evidenceFeedbackWriter: PipelineOptions["evidenceFeedback"];
@@ -373,6 +377,7 @@ export class Pipeline {
     this.revertCommit = options.revertCommit ?? revertCommit;
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
+    this.retroOutputs = options.retroOutputs;
     this.releaseKept = options.releaseKept;
     this.groundTruth = options.groundTruth;
     this.evidenceFeedbackWriter = options.evidenceFeedback;
@@ -571,6 +576,34 @@ export class Pipeline {
   }
 
   /** A person says whether the card's Evidence Pack was useful. A card with no pack is refused. The answer is a file for the retro and a row with ids and enums only (no `stage.` prefix: no container can write that kind). */
+  /** The finding ids the last Verify reported (its classified rows and findings). */
+  private async reportedFindings(id: string): Promise<Map<string, string | null>> {
+    const detail = (await this.latestStageFinish(id, "verifying"))?.detail;
+    const found = new Map<string, string | null>();
+    for (const row of Array.isArray(detail?.findings) ? (detail!.findings as Array<{ id?: unknown }>) : []) if (typeof row?.id === "string" && row.id) found.set(row.id, null);
+    for (const row of Array.isArray(detail?.classified) ? (detail!.classified as Array<{ id?: unknown; recordId?: unknown }>) : []) if (typeof row?.id === "string" && row.id) found.set(row.id, typeof row.recordId === "string" ? row.recordId : null);
+    return found;
+  }
+
+  /** A person dismisses a finding while the card waits at awaiting_ship: `finding.dismissed` carries the id only; when Verify kept a classification record for it, the truth is "nit" (`ship_dismissed`). */
+  async dismissFinding(id: string, findingId: string): Promise<void> {
+    const task = await this.get(id);
+    if (task.state !== "awaiting_ship") throw new TransitionError(task, { type: "approved" });
+    const reported = await this.reportedFindings(id);
+    if (!reported.has(findingId)) throw new FindingNotFoundError(findingId);
+    await this.log(id, "finding.dismissed", { id: findingId });
+    const recordId = reported.get(findingId);
+    if (recordId) await this.truth?.learned({ pack: "finding_classify", recordId, label: { severity: { choice: "nit" } }, source: "ship_dismissed", taskId: id });
+  }
+
+  /** A person adds a finding Verify missed: the row holds the severity only; the text goes to the ground truth file. */
+  async addFinding(id: string, finding: { title: string; severity: "blocker" | "should_fix" | "nit"; path?: string | undefined; line?: number | undefined }): Promise<void> {
+    const task = await this.get(id);
+    if (task.state !== "awaiting_ship") throw new TransitionError(task, { type: "approved" });
+    if (this.retroOutputs) await appendAddedFinding(this.retroOutputs.stateDir, id, finding);
+    await this.log(id, "finding.added", { severity: finding.severity });
+  }
+
   async evidenceFeedback(id: string, feedback: { useful: boolean; note?: string | undefined }): Promise<void> {
     const task = await this.get(id);
     if (!task.evidence) throw new NoEvidenceError(id);
@@ -991,6 +1024,8 @@ export class Pipeline {
     const record = { decision: "rejected" as const, ...(reason ? { reason } : {}) };
     const archived = await this.archive(task.id, "rejected", { onlyFrom: new Set<TaskState>([gateKind!]), decision: record });
     if (this.truth) await this.learnFromGate(task.id, open, "sent_back");
+    // The release question opens only when the checklist passes: rejecting it overrides a ready PR. Ids only; the retro counts it.
+    if (gateKind === "awaiting_ship") await this.log(task.id, "ship.override", { kind: "rejected_ready", items: [] });
     return archived;
   }
 
@@ -1539,11 +1574,34 @@ export class Pipeline {
   }
 
   /** The memory review's proposal and whether the approval kept it, if the gate carried one. */
-  private async approvedRules(id: string): Promise<{ markdown: string; apply: boolean } | undefined> {
+  private async approvedRules(id: string): Promise<{ markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }> } | undefined> {
     const gate = (await this.approvals(id)).filter((a) => a.kind === "reviewing_memory" && a.decision === "approved").at(-1);
-    const rules = (gate?.requested as { rules?: { markdown?: unknown } } | undefined)?.rules;
+    const rules = (gate?.requested as { rules?: { markdown?: unknown; proposals?: unknown } } | undefined)?.rules;
     if (!gate || typeof rules?.markdown !== "string" || rules.markdown.trim() === "") return undefined;
-    return { markdown: rules.markdown, apply: gate.response?.applyRules !== false };
+    const proposals = Array.isArray(rules.proposals) ? (rules.proposals as Array<{ kind: string; title: string; body: string }>).filter((p) => typeof p?.kind === "string" && typeof p.title === "string" && typeof p.body === "string") : [];
+    return { markdown: rules.markdown, apply: gate.response?.applyRules !== false, ...(proposals.length > 0 ? { proposals } : {}) };
+  }
+
+  /** A merged card's retro: the truth file for the eval loop (written whether or not a retro ran) and the graph misses the Build Report also declared. Returns how many misses were recorded. Never throws. */
+  private async recordRetroOutputs(id: string, repoPath: string | null, adopted: boolean): Promise<number> {
+    const out = this.retroOutputs;
+    if (!out || !(await this.mergedPr(id))) return 0;
+    try {
+      const facts = await out.facts(id);
+      if (!facts) return 0;
+      const detail = (await this.latestStageFinish(id, "reviewing_memory"))?.detail;
+      const rules = detail?.rules && typeof detail.rules === "object" ? (detail.rules as { recalibration?: unknown; graphMisses?: unknown }) : null;
+      await writeRetroTruth(out.stateDir, retroTruthOf({ taskId: id, facts, retro: rules, adopted }));
+      await this.log(id, "ground_truth.written", { kind: "retro" });
+      const accepted = acceptedMisses(rules?.graphMisses, (await out.declaredFiles?.(id)) ?? []);
+      if (accepted.length > 0 && repoPath && out.graph) {
+        await out.graph.recordMisses(repoPath, { task: id, at: new Date().toISOString(), files: accepted });
+        return accepted.length;
+      }
+    } catch (error) {
+      console.error(`could not record the retro outputs of ${id}`, error);
+    }
+    return 0;
   }
 
   /** The task's PR when the last shipping run ended in a merge (the monitor's `detail.merged`), else null. */
@@ -1563,8 +1621,10 @@ export class Pipeline {
         await this.store.updateTask(id, { worktreePath: null });
       }
       await this.log(id, "task.closed", { ...report });
-      // The memory review's rules were written: the card learned something.
-      if (report.steps.some((step) => step.step === "rules" && step.ok && !step.note.startsWith("skipped"))) await this.log(id, "card.learned", {});
+      // What the retro leaves behind, recorded where it is used (never written into prompts or rules here).
+      const rulesWritten = report.steps.some((step) => step.step === "rules" && step.ok && !step.note.startsWith("skipped"));
+      const misses = await this.recordRetroOutputs(id, task.repoPath, rulesWritten);
+      if (rulesWritten || misses > 0) await this.log(id, "card.learned", { ...(rulesWritten ? { rules: 1 } : {}), ...(misses > 0 ? { misses } : {}) });
     } catch (error) {
       console.error(`could not close task ${id}`, error);
     }

@@ -5,13 +5,13 @@
 // `evidence-markdown.ts`. With no GitHub token the pack keeps its local urls and nothing throws.
 import type { EvidencePack } from "@hardness/contracts";
 import { createHash } from "node:crypto";
-import { realpath, stat } from "node:fs/promises";
-import { extname, sep } from "node:path";
+import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
+import { extname, join, sep } from "node:path";
 
 import { findingKinds } from "../../runner-video/tools/lib/findings.ts";
 import { hashRegularFile, readRegularBytes } from "../adapters/fs/bounded.ts";
 import { releaseAssetStorage, EVIDENCE_TAG as TAG } from "../adapters/evidence-storage/release-asset.ts";
-import { BODY_CAP, COMMENT_MARKER, mergeSection, redact, renderEvidenceComment, renderEvidenceSection, stripSection } from "../domain/evidence-markdown.ts";
+import { BODY_CAP, COMMENT_MARKER, mergeSection, redact, renderEvidenceComment, renderEvidenceSection, sectionOf, stripSection } from "../domain/evidence-markdown.ts";
 import { type EvidenceStorage, localStorage } from "./evidence-storage.ts";
 import { emptyCursor, loadCursor, saveCursor } from "./ship-cursor.ts";
 import { packComplete, repairPack } from "../domain/evidence-pack.ts";
@@ -182,6 +182,8 @@ export const publishEvidence: PublishEvidence = async ({ github, slug, number, t
 export const publishChosen = (kindOf: (repoPath: string | null) => Promise<"release_asset" | "local">): PublishEvidence => async (input) =>
   publishEvidence({ ...input, storage: (await kindOf(input.repoPath ?? null).catch(() => "release_asset" as const)) === "local" ? localStorage() : releaseAssetStorage(input.github) });
 
+const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
+
 export interface ReadyDeps {
   github: GitHub;
   publish: PublishEvidence;
@@ -195,7 +197,7 @@ export interface ReadyDeps {
 }
 
 export type Ready =
-  | { published: true; pack: EvidencePack; comment: "created" | "updated"; assets: number; readied: boolean; notes: string[] }
+  | { published: true; pack: EvidencePack; comment: "created" | "updated"; assets: number; readied: boolean; notes: string[]; /** A person had edited the section the machine last published: it was kept in the ground truth before being replaced. The caller emits `evidence.edited`. */ edited?: { sha: string; bytes: number } }
   | { published: false; reason: string; pack: EvidencePack };
 
 /** Publishes a complete pack onto the PR whose head on GitHub is `headSha`, saves it, records that it was published at this head, and marks a draft PR ready.
@@ -210,14 +212,28 @@ export async function publishAndReady(deps: ReadyDeps, input: { task: { id: stri
     if (fixed.unfixed.length > 0 || !after.ok) return { published: false, reason: `the pack is not complete: ${[...fixed.unfixed, ...after.problems].join("; ")}`, pack: input.pack };
     pack = fixed.pack;
   }
+  // A person's edit of the section is data worth keeping: compared with the hash saved at the last publish (a cursor with none records nothing), stored, then replaced.
+  let edited: { sha: string; bytes: number } | undefined;
+  const before = deps.stateDir ? await loadCursor(deps.stateDir, task.id) : null;
+  if (deps.stateDir && before?.publishedSection) {
+    const current = sectionOf((await deps.github.prFacts(slug, number).catch(() => null))?.body ?? "");
+    if (current !== null && sha256(current) !== before.publishedSection) {
+      const sha = pack.commitSha.slice(0, 7);
+      const dir = join(deps.stateDir, "ground-truth", "evidence");
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, `${task.id.replace(/[^A-Za-z0-9-]/g, "_")}-${sha.replace(/[^0-9a-f]/g, "_")}-edit.json`), JSON.stringify({ schema: 1, taskId: task.id, sha, at: new Date().toISOString(), section: current.slice(0, 60_000) }));
+      edited = { sha, bytes: Math.min(current.length, 60_000) };
+    }
+  }
   const done = await deps.publish({ github: deps.github, slug, number, taskId: task.id, pack, localDir: deps.localDir(task.id, pack.commitSha), repoPath: task.repoPath, approved });
   // With no token behind the port nothing was published: no cursor, no ready.
   if (done.comment === "skipped") return { published: false, reason: "GitHub is not reachable with a token", pack };
   await deps.save(task.id, done.pack);
   if (deps.stateDir) {
     const cursor = (await loadCursor(deps.stateDir, task.id)) ?? emptyCursor({ slug, number });
-    await saveCursor(deps.stateDir, task.id, { ...cursor, pr: { slug, number }, published: { sha: pack.commitSha } });
+    const section = sectionOf((await deps.github.prFacts(slug, number).catch(() => null))?.body ?? "");
+    await saveCursor(deps.stateDir, task.id, { ...cursor, pr: { slug, number }, published: { sha: pack.commitSha }, ...(section !== null ? { publishedSection: sha256(section) } : {}) });
   }
   if (draft) await deps.github.markPrReady(slug, number);
-  return { published: true, pack: done.pack, comment: done.comment, assets: done.assets, readied: draft, notes: done.notes ?? [] };
+  return { published: true, pack: done.pack, comment: done.comment, assets: done.assets, readied: draft, notes: done.notes ?? [], ...(edited ? { edited } : {}) };
 }

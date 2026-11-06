@@ -63,7 +63,7 @@ export function shipWatchRunner(deps: ShipDeps): StageRunner {
     // The one publisher: it checks the pack against the head, puts it on the PR, saves it, notes the head in the cursor and marks a draft ready.
     const done = await publishAndReady({ github: deps.github, publish: evidence.publish, save: evidence.save, localDir: evidence.store.dirFor, ...(deps.stateDir ? { stateDir: deps.stateDir } : {}) }, { task: { id: taskId, repoPath }, slug, number, headSha: head, draft, pack: shown, approved });
     if (!done.published) return { stop: { outcome: "fail", detail: { error: done.reason } } };
-    return { published: { comment: done.comment, assets: done.assets }, readied: done.readied, ...(note ? { note } : {}) };
+    return { published: { comment: done.comment, assets: done.assets }, readied: done.readied, ...(done.edited ? { edited: done.edited } : {}), ...(note ? { note } : {}) };
   };
   return async (context) => {
     const { task } = context;
@@ -113,6 +113,7 @@ export function shipWatchRunner(deps: ShipDeps): StageRunner {
         await saveCursor(deps.stateDir, task.id, { ...(cursor ?? emptyCursor({ slug, number: pr.number })), pr: { slug, number: pr.number }, published: { sha } });
       }
       if ("published" in phase && !already) await context.emit?.("evidence.published", {}).catch(() => {});
+      if ("edited" in phase && phase.edited) await context.emit?.("evidence.edited", { ...(phase.edited as { sha: string; bytes: number }) }).catch(() => {});
       const shown = "published" in phase ? { published: phase.published, ...(phase.note ? { note: phase.note } : {}) } : deps.evidence ? { evidence: "none" } : {};
       if (existing?.isDraft && !("published" in phase && phase.readied === true && !already)) await deps.github.markPrReady(slug, existing.number);
       const detail = { prUrl: pr.url, readied: existing?.isDraft === true, ...shown };

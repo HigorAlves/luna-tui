@@ -82,6 +82,7 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
       ...(Array.isArray(answer.recalibration) ? { recalibration: answer.recalibration } : {}),
       ...(Array.isArray(answer.graphMisses) ? { graphMisses: answer.graphMisses } : {}),
       ...(Array.isArray(answer.promptUpdates) ? { promptUpdates: answer.promptUpdates } : {}),
+      ...(Array.isArray(answer.proposals) ? { proposals: answer.proposals } : {}),
     };
     const hasLearned = Object.values(learned).some((v) => (v as unknown[]).length > 0);
     if (markdown.trim() === "" && !hasLearned) {

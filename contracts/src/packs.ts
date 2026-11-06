@@ -273,12 +273,14 @@ export const ReviewingMemoryAnswer = z.object({
   rulesMarkdown: z.string().optional(),
   /** Where the task's size, risk, iterations, escalations or format differed from the prediction. */
   recalibration: z
-    .array(z.object({ dimension: z.enum(["size", "risk", "iterations", "escalations", "format"]), predicted: z.string(), actual: z.string(), note: z.string() }))
+    .array(z.object({ dimension: z.enum(["size", "risk", "urgency", "iterations", "escalations", "format"]), predicted: z.string(), actual: z.string(), note: z.string() }))
     .optional(),
   /** Files the change touched that the plan's map did not name. */
   graphMisses: z.array(z.string()).optional(),
   /** A prompt a pack should change, and how, in one sentence. */
   promptUpdates: z.array(z.object({ pack: z.string(), change: z.string() })).optional(),
+  /** A runbook or an ADR the retro proposes: it reaches the repository only as a section of the draft PR a person approved. */
+  proposals: z.array(z.object({ kind: z.enum(["runbook", "adr"]), title: z.string().max(200), body: z.string().max(2000) })).max(5).optional(),
 });
 
 /** reviewing (PR task): a comment review the host posts at once; approve / request_changes wait for you. */
