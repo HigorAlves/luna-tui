@@ -181,6 +181,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             app.mode,
             Mode::Normal
                 | Mode::SlackSnooze { .. }
+                | Mode::SlackPick { .. }
                 | Mode::SlackReply { .. }
                 | Mode::SlackTask { .. }
                 | Mode::SlackWatchAdd { .. }
@@ -195,6 +196,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         match &app.mode {
             Mode::SlackSnooze { cursor, .. } => render_slack_snooze(frame, *cursor),
+            Mode::SlackPick { id, relation, cursor } => render_slack_pick(frame, app, id, *relation, *cursor),
             Mode::SlackReply { id, area, vim, nudge } => render_slack_reply(frame, app, id, area, vim, *nudge),
             Mode::SlackTask { id, title, repo } => render_slack_task(frame, app, id, title, repo.as_deref()),
             Mode::SlackWatchAdd { query, cursor } => render_slack_watch_add(frame, app, query, *cursor),
@@ -519,6 +521,7 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::EnginePicker { .. } => hint(&[("j/k", "move"), ("enter", "set"), ("esc", "back")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
+        Mode::SlackPick { .. } => hint(&[("j/k", "pick"), ("enter", "save"), ("esc", "cancel")]),
         Mode::SlackSnooze { .. } => hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")]),
         Mode::SlackTask { .. } => hint(&[("y", "create the ticket"), ("n", "cancel")]),
         Mode::SlackWatchAdd { .. } => hint(&[("type", "@handle, #channel or a word"), ("↑/↓", "pick"), ("enter", "watch"), ("esc", "cancel")]),
@@ -1311,7 +1314,11 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     let inner = list_block.inner(list_area);
     let mut lines = Vec::new();
     if items.is_empty() {
-        lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
+        if app.slack_snapshot.scope.as_deref() == Some("opted_in") && app.slack_snapshot.opted_in == Some(0) {
+            lines.push(Line::from(Span::from("  nothing is opted in: watch a channel with W, or list it in conversation.channels of a repository's luna.yaml").fg(c(SUBTEXT0))));
+        } else {
+            lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
+        }
     }
     // A window of rows around the cursor, so a long split never hides the selected PR.
     let visible = (inner.height as usize).max(1);
@@ -1695,6 +1702,10 @@ fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
         lines.push(Line::from(Span::from("new since you cleared it").fg(c(YELLOW)).bold()));
     }
     lines.push(Line::default());
+    for (name, text) in slack::conversation_lines(item, now).into_iter().filter(|(n, _)| *n != "waiting") {
+        let style = if name == "asks you" || name == "knock-out" { Style::new().fg(c(YELLOW)) } else { Style::new() };
+        lines.push(Line::from(vec![Span::from(format!("{name:<9}")).fg(c(SUBTEXT0)), Span::from(text).style(style)]));
+    }
     for message in &item.context {
         lines.push(muted(format!("@{}  {}", message.user.name, message.text)));
     }
@@ -1727,6 +1738,9 @@ fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
             }
             if let Some(deadline) = &triage.deadline {
                 lines.push(field("deadline", deadline.clone()));
+            }
+            if let Some((_, waiting)) = slack::conversation_lines(item, now).into_iter().find(|(n, _)| *n == "waiting") {
+                lines.push(field("waiting", waiting));
             }
             if let Some(draft) = triage.draft.as_deref().filter(|d| !d.is_empty()) {
                 lines.push(Line::default());
@@ -1984,6 +1998,29 @@ fn render_record_edit(frame: &mut Frame, task: &Task, field: usize, picks: &[usi
                 Span::from(format!("◂ {value} ▸")).style(style),
                 Span::from(if changed { "  (you)" } else { "" }).fg(c(YELLOW)),
             ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `c` and `L`: the machine's own list, one line each; nothing here posts.
+fn render_slack_pick(frame: &mut Frame, app: &App, id: &str, relation: bool, cursor: usize) {
+    let Some(item) = app.slack_item(id) else { return };
+    let (title, rows): (&str, Vec<String>) = if relation {
+        (" about which work? ", slack::relation_choices(item).into_iter().map(|c| c.label).collect())
+    } else {
+        (" what kind of thread? ", slack::KINDS.iter().map(|k| k.to_string()).collect())
+    };
+    let area = centered(frame.area(), 64, rows.len() as u16 + 4);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).padding(Padding::horizontal(2)).title(Line::from(title).bold());
+    let lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let selected = i == cursor;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            Line::from(vec![Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)), Span::from(row.clone()).style(style)])
         })
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);

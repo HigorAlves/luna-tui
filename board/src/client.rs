@@ -417,6 +417,12 @@ impl Machine {
         Self::json(self.agent.post(self.url(&slack_item_path(id, "/reply"))).send_json(json!({ "text": text, "nudge": nudge }))).map(|_| ())
     }
 
+    /// What you say a thread is about: a stored answer (and a truth record), never a post. `target` is an id of the item's stored shortlist.
+    pub fn slack_relation(&self, id: &str, relation: &str, target: Option<&str>) -> Result<crate::model::SlackItem, String> {
+        let value = Self::json(self.agent.post(self.url(&slack_item_path(id, "/relation"))).send_json(json!({ "relation": relation, "target": target })))?;
+        serde_json::from_value(value).map_err(|e| e.to_string())
+    }
+
     /// A Backlog ticket from the item; `repo_path` None leaves the repo to set later.
     pub fn slack_task(&self, id: &str, title: &str, repo_path: Option<&str>) -> Result<Task, String> {
         self.post(&slack_item_path(id, "/task"), json!({ "title": title, "repoPath": repo_path }))

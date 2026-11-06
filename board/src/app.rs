@@ -310,6 +310,8 @@ pub enum Mode {
     PrActions { cursor: usize },
     /// `s` on a Slack item: pick how long it sleeps.
     SlackSnooze { id: String, cursor: usize },
+    /// `c` (the kind) or `L` (the relation) on a Slack thread: a picker over the machine's own list.
+    SlackPick { id: String, relation: bool, cursor: usize },
     /// `r` (or `n`) on a Slack item: the reply, pre-filled with triage's draft (or a nudge);
     /// ctrl+s posts it as you. `nudge`: the machine prefixes a mention of the author.
     SlackReply {
@@ -1933,6 +1935,7 @@ impl App {
             Mode::ClonePrompt { .. } => self.handle_clone_prompt(key),
             Mode::PrActions { .. } => self.handle_pr_actions(key),
             Mode::SlackSnooze { .. } => self.handle_slack_snooze(key),
+            Mode::SlackPick { .. } => self.handle_slack_pick(key),
             Mode::SlackReply { .. } => self.handle_slack_reply(key),
             Mode::SlackTask { .. } => self.handle_slack_task(key),
             Mode::SlackWatchAdd { .. } => self.handle_slack_watch_add(key),
@@ -2679,7 +2682,7 @@ impl App {
 
     /// The keys `handle_slack` matches, `SlackKey::ALL` included.
     #[cfg(test)]
-    pub(crate) const HANDLED_SLACK: &[&str] = &["esc", "S", "q", "?", "j", "k", "l", "h", "1-6", "R", "W", "enter", "x", "r", "t", "d", "s", "o", "N", "!", "-"];
+    pub(crate) const HANDLED_SLACK: &[&str] = &["esc", "S", "q", "?", "j", "k", "l", "h", "1-6", "R", "W", "enter", "x", "r", "t", "d", "s", "o", "N", "!", "-", "c", "L"];
 
     /// The Slack view's keys: move, switch split, open, act on the item, Watches, refresh.
     fn handle_slack(&mut self, key: KeyEvent) -> Outcome {
@@ -2771,6 +2774,8 @@ impl App {
             // The mention itself is built on the machine, by id; the editor shows the words only.
             SlackKey::Nudge => self.open_slack_reply(item, "gentle nudge on this one: any news?".to_string(), true),
             SlackKey::Snooze => self.mode = Mode::SlackSnooze { id, cursor: 0 },
+            SlackKey::Kind => self.mode = Mode::SlackPick { id, relation: false, cursor: 0 },
+            SlackKey::Relation => self.mode = Mode::SlackPick { id, relation: true, cursor: 0 },
             SlackKey::Task => {
                 let title = item.summary().to_string();
                 let repo = self.guess_repo(&item.channel.name);
@@ -2867,6 +2872,50 @@ impl App {
                     }
                     Err(error) => self.notify(error, true),
                 }
+            }
+        }
+        Outcome::Continue
+    }
+
+    /// The `c` and `L` pickers: j/k move, enter stores the answer on the machine (a stored answer and a truth record, never a post), esc leaves it.
+    fn handle_slack_pick(&mut self, key: KeyEvent) -> Outcome {
+        let (id, relation, mut cursor) = match &self.mode {
+            Mode::SlackPick { id, relation, cursor } => (id.clone(), *relation, *cursor),
+            _ => return Outcome::Continue,
+        };
+        let Some(item) = self.slack_item(&id).cloned() else {
+            self.mode = Mode::Normal;
+            return Outcome::Continue;
+        };
+        let choices = if relation { slack::relation_choices(&item) } else { Vec::new() };
+        let len = if relation { choices.len() } else { slack::KINDS.len() };
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => cursor = (cursor + 1).min(len - 1),
+            KeyCode::Up | KeyCode::Char('k') => cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(cursor),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        if let Mode::SlackPick { cursor: shown, .. } = &mut self.mode {
+            *shown = cursor;
+        }
+        if let Some(at) = chosen {
+            self.mode = Mode::Normal;
+            if relation {
+                let choice = &choices[at];
+                match self.machine.slack_relation(&id, choice.relation, choice.target.as_deref()) {
+                    Ok(updated) => {
+                        if let Some(slot) = self.slack_item_mut(&id) {
+                            *slot = updated;
+                        }
+                        self.notify("relation saved", false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            } else {
+                let kind = slack::KINDS[at];
+                self.patch_slack(&id, serde_json::json!({ "kind": kind }), &format!("kind: {kind}"), |_| {});
             }
         }
         Outcome::Continue

@@ -134,10 +134,12 @@ pub enum SlackKey {
     Nudge,
     Bump,
     Lower,
+    Kind,
+    Relation,
 }
 
 impl SlackKey {
-    pub const ALL: [SlackKey; 8] = [
+    pub const ALL: [SlackKey; 10] = [
         SlackKey::Reply,
         SlackKey::Task,
         SlackKey::Done,
@@ -146,6 +148,8 @@ impl SlackKey {
         SlackKey::Nudge,
         SlackKey::Bump,
         SlackKey::Lower,
+        SlackKey::Kind,
+        SlackKey::Relation,
     ];
 
     pub fn key(self) -> char {
@@ -158,6 +162,8 @@ impl SlackKey {
             SlackKey::Nudge => 'N',
             SlackKey::Bump => '!',
             SlackKey::Lower => '-',
+            SlackKey::Kind => 'c',
+            SlackKey::Relation => 'L',
         }
     }
 
@@ -175,6 +181,8 @@ impl SlackKey {
             SlackKey::Nudge => "nudge: a one-line reminder in the thread you are waiting on",
             SlackKey::Bump => "priority up one step",
             SlackKey::Lower => "priority down one step",
+            SlackKey::Kind => "kind: what the thread is (a stored answer, never a post)",
+            SlackKey::Relation => "link: the card or backlog item it is about, a new candidate, or none",
         }
     }
 
@@ -190,6 +198,7 @@ pub fn blocker(item: &SlackItem, key: SlackKey) -> Option<&'static str> {
     let split = item.split_enum();
     match key {
         SlackKey::Reply | SlackKey::Open | SlackKey::Snooze => None,
+        SlackKey::Kind | SlackKey::Relation => item.conversation.is_none().then_some("not assessed yet"),
         SlackKey::Task => item.task_id().is_some().then_some("already a ticket"),
         SlackKey::Done => (split == Some(SlackSplit::Done)).then_some("already done"),
         SlackKey::Nudge => (split != Some(SlackSplit::WaitingOnThem)).then_some("only while waiting on them"),
@@ -200,6 +209,78 @@ pub fn blocker(item: &SlackItem, key: SlackKey) -> Option<&'static str> {
             _ => None,
         },
     }
+}
+
+/// The kinds the machine knows, in the order `c` lists them.
+pub const KINDS: [&str; 6] = ["incident", "bug", "request", "question", "fyi", "chatter"];
+
+/// One line of the `L` picker: what it says, the relation it sets and its target (an id of the stored shortlist).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelationChoice {
+    pub label: String,
+    pub relation: &'static str,
+    pub target: Option<String>,
+}
+
+/// The candidates the machine listed (cards in progress, backlog items), then a new candidate, then none. Every title goes through `plain`.
+pub fn relation_choices(item: &SlackItem) -> Vec<RelationChoice> {
+    let mut out = Vec::new();
+    if let Some(c) = &item.conversation {
+        for e in &c.shortlist {
+            let backlog = e.kind == "backlog";
+            let title = crate::detail::plain(e.title.as_deref().unwrap_or(&e.id));
+            let from = e.other_source.as_ref().map(|s| format!(" (from {} {})", crate::detail::plain(&s.kind), crate::detail::plain(&s.key))).unwrap_or_default();
+            out.push(RelationChoice { label: format!("{}: {title}{from}", if backlog { "backlog" } else { "card" }), relation: if backlog { "related_to_backlog" } else { "related_to_in_progress" }, target: Some(e.id.clone()) });
+        }
+    }
+    out.push(RelationChoice { label: "a new candidate".to_string(), relation: "new_candidate", target: None });
+    out.push(RelationChoice { label: "none: not about any work".to_string(), relation: "none", target: None });
+    out
+}
+
+/// What the pane says of the conversation, as (name, text) pairs, every string through `plain`. `now` is unix seconds.
+pub fn conversation_lines(item: &SlackItem, now: u64) -> Vec<(&'static str, String)> {
+    let p = crate::detail::plain;
+    let mut out = Vec::new();
+    if let Some(c) = &item.conversation {
+        if let Some(k) = &c.classification {
+            let who = if k.by == "person" { "you" } else { "the machine" };
+            out.push(("kind", format!("{} ({:.0}% sure, set by {who})", p(&k.kind), k.confidence * 100.0)));
+            if !k.scores.is_empty() {
+                let parts: Vec<String> = ["who", "what", "impact", "time", "demand"].iter().filter_map(|n| k.scores.get(*n).map(|s| format!("{n} {} ({:.0}%)", s.score, s.confidence * 100.0))).collect();
+                let total = k.total.map(|t| format!(" · total {t}")).unwrap_or_default();
+                out.push(("scores", format!("{}{total}", parts.join(", "))));
+            }
+            if let Some(flag) = &k.knock_out {
+                out.push(("knock-out", format!("{} (P0 before any scoring)", p(flag))));
+            }
+            if k.verdict.as_deref() == Some("ask") {
+                out.push(("asks you", "the machine is not sure of the kind or of the need for a reply: set the kind with c".to_string()));
+            }
+        }
+        if let Some(r) = &c.relation {
+            let words = match r.kind.as_str() {
+                "related_to_in_progress" => "a card in progress",
+                "related_to_backlog" => "a backlog item",
+                "new_candidate" => "new work",
+                "none" => "no existing work",
+                _ => "not sure: pick one with L",
+            };
+            let title = r.target.as_ref().and_then(|t| c.shortlist.iter().find(|e| &e.id == t)).and_then(|e| e.title.as_deref()).map(|t| format!(": {}", p(t))).unwrap_or_default();
+            out.push(("relation", format!("{words}{title}")));
+            if let Some(s) = &r.other_source {
+                out.push(("source", format!("about a card from {} {}", p(&s.kind), p(&s.key))));
+            }
+        }
+        if c.redactions > 0 {
+            out.push(("cut", format!("{} secret(s) were cut from this thread", c.redactions)));
+        }
+    }
+    if let Some(d) = &item.draft {
+        let left = unix_secs(&d.expires_at).map(|at| at.saturating_sub(now) / 3600).map(|h| format!(", expires in {h}h")).unwrap_or_default();
+        out.push(("waiting", format!("a {} draft{left}", p(&d.kind))));
+    }
+    out
 }
 
 /// The snooze picker's choices, in the order it lists them.
@@ -463,5 +544,65 @@ mod tests {
         word.channels = vec!["#eng".into(), "#luna-tui".into()];
         word.priority = Some("P2".into());
         assert_eq!(watch_scope(&word), "P2 · in #eng, #luna-tui");
+    }
+
+    fn conversation_item() -> SlackItem {
+        let mut value: serde_json::Value = serde_json::from_str(&super::fixtures::item_json("C0123:1730112345.0001", "needs_reply", Some("P1"), "2026-10-28T09:00:00.000Z")).unwrap();
+        value["conversation"] = serde_json::json!({
+            "history": [{"id": "ignored by the board"}], "participants": [], "private": false, "repo": "/r/app", "redactions": 2, "pii": [],
+            "classification": { "kind": "bug", "confidence": 0.84, "by": "model", "at": "t", "records": {}, "verdict": "ask", "total": 22, "knockOut": "production_down",
+                "scores": { "who": {"score": 2, "confidence": 0.9}, "what": {"score": 3, "confidence": 0.8}, "impact": {"score": 2, "confidence": 0.7}, "time": {"score": 1, "confidence": 0.6}, "demand": {"score": 1, "confidence": 0.5} } },
+            "relation": { "type": "related_to_in_progress", "target": "card-1", "confidence": 0.9, "by": "model", "at": "t", "otherSource": { "kind": "jira", "key": "PAY-12" } },
+            "shortlist": [ { "slot": 1, "id": "card-1", "kind": "open", "otherSource": { "kind": "jira", "key": "PAY-12" }, "title": "Checkout\u{1b}[31m fails" }, { "slot": 2, "id": "b-2", "kind": "backlog", "otherSource": null, "title": "CSV export" } ]
+        });
+        value["draft"] = serde_json::json!({ "id": "d1", "kind": "reply", "text": "x", "expiresAt": "2026-10-29T09:00:00.000Z" });
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn a_snapshot_and_an_item_from_before_wave_17_still_parse() {
+        let old: SlackItem = serde_json::from_str(&super::fixtures::item_json("C0123:1.0001", "fyi", None, "2026-10-28T09:00:00.000Z")).unwrap();
+        assert!(old.conversation.is_none() && old.draft.is_none());
+        assert!(conversation_lines(&old, 0).is_empty());
+        let snapshot: crate::model::SlackSnapshot = serde_json::from_str(r#"{"items":[],"watches":[],"polledAt":null,"error":null,"socket":"off","sla":{},"quiet":false}"#).unwrap();
+        assert!(snapshot.scope.is_none() && snapshot.opted_in.is_none());
+        let new: crate::model::SlackSnapshot = serde_json::from_str(r#"{"items":[],"scope":"opted_in","optedIn":0}"#).unwrap();
+        assert_eq!((new.scope.as_deref(), new.opted_in), (Some("opted_in"), Some(0)));
+    }
+
+    #[test]
+    fn the_pane_says_what_the_machine_decided_with_every_string_cleaned() {
+        let now = unix_secs("2026-10-28T10:00:00.000Z").unwrap();
+        let lines: std::collections::BTreeMap<_, _> = conversation_lines(&conversation_item(), now).into_iter().collect();
+        assert_eq!(lines["kind"], "bug (84% sure, set by the machine)");
+        assert_eq!(lines["scores"], "who 2 (90%), what 3 (80%), impact 2 (70%), time 1 (60%), demand 1 (50%) · total 22");
+        assert_eq!(lines["knock-out"], "production_down (P0 before any scoring)");
+        assert!(lines["asks you"].contains("not sure"));
+        assert!(lines["relation"].starts_with("a card in progress: Checkout") && lines["relation"].ends_with("fails"));
+        assert_eq!(lines["source"], "about a card from jira PAY-12");
+        assert_eq!(lines["cut"], "2 secret(s) were cut from this thread");
+        assert_eq!(lines["waiting"], "a reply draft, expires in 23h");
+        assert!(lines.values().all(|v| !v.contains('\u{1b}')));
+    }
+
+    #[test]
+    fn the_link_picker_lists_the_machines_candidates_then_new_and_none() {
+        let choices = relation_choices(&conversation_item());
+        assert_eq!(choices.len(), 4);
+        assert_eq!((choices[0].relation, choices[0].target.as_deref()), ("related_to_in_progress", Some("card-1")));
+        assert!(choices[0].label.starts_with("card: Checkout") && choices[0].label.ends_with("(from jira PAY-12)"));
+        assert_eq!((choices[1].relation, choices[1].target.as_deref()), ("related_to_backlog", Some("b-2")));
+        assert_eq!((choices[2].relation, choices[3].relation), ("new_candidate", "none"));
+        assert!(choices[2].target.is_none() && choices[3].target.is_none());
+    }
+
+    #[test]
+    fn c_and_l_are_off_until_the_machine_assessed_the_thread() {
+        let old = item("C0123:1.0001", "fyi", None, "2026-10-28T09:00:00.000Z");
+        assert_eq!(blocker(&old, SlackKey::Kind), Some("not assessed yet"));
+        assert_eq!(blocker(&old, SlackKey::Relation), Some("not assessed yet"));
+        assert_eq!(blocker(&conversation_item(), SlackKey::Kind), None);
+        assert_eq!(SlackKey::from_char('c'), Some(SlackKey::Kind));
+        assert_eq!(SlackKey::from_char('L'), Some(SlackKey::Relation));
     }
 }

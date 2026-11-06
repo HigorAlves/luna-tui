@@ -1301,6 +1301,109 @@ pub struct SlackItem {
     pub split: String,
     #[serde(default)]
     pub linked: SlackLinked,
+    /// The thread as the conversation machine holds it; absent from a machine older than wave 17.
+    #[serde(default)]
+    pub conversation: Option<SlackConversation>,
+    /// The draft that waits for your tap on this thread; absent when none waits.
+    #[serde(default)]
+    pub draft: Option<SlackDraft>,
+}
+
+/// A draft waiting for a tap: what it is and when it expires.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackDraft {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub expires_at: String,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackSubScore {
+    #[serde(default)]
+    pub score: f64,
+    #[serde(default)]
+    pub confidence: f64,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackClassification {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub confidence: f64,
+    /// `model` or `person`.
+    #[serde(default)]
+    pub by: String,
+    /// `ask`: the machine is not sure and waits for you.
+    #[serde(default)]
+    pub verdict: Option<String>,
+    #[serde(default)]
+    pub total: Option<f64>,
+    #[serde(default)]
+    pub knock_out: Option<String>,
+    #[serde(default)]
+    pub scores: BTreeMap<String, SlackSubScore>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackSource {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub key: String,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackRelation {
+    /// `related_to_in_progress`, `related_to_backlog`, `new_candidate`, `none` or `ask`.
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub confidence: f64,
+    #[serde(default)]
+    pub by: String,
+    #[serde(default)]
+    pub other_source: Option<SlackSource>,
+}
+
+/// One candidate the relation decision saw; a target you set must be one of these.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackShortlistEntry {
+    #[serde(default)]
+    pub slot: u64,
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub other_source: Option<SlackSource>,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// What the board reads of the machine's conversation object: no history, only what it shows.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackConversation {
+    #[serde(default)]
+    pub private: bool,
+    #[serde(default)]
+    pub classification: Option<SlackClassification>,
+    #[serde(default)]
+    pub relation: Option<SlackRelation>,
+    #[serde(default)]
+    pub shortlist: Vec<SlackShortlistEntry>,
+    /// How many secrets were cut from this thread's messages.
+    #[serde(default)]
+    pub redactions: u64,
 }
 
 /// The priorities in order; `priority_step` walks them.
@@ -1432,6 +1535,12 @@ pub struct SlackSnapshot {
     /// Now is inside the rules file's quiet hours: only a P0 raises a notice.
     #[serde(default)]
     pub quiet: bool,
+    /// `opted_in` or `all` (the machine's `MACHINE_SLACK_SCOPE`); absent from a machine older than wave 17.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// How many conversations are opted in, so an empty view can say why.
+    #[serde(default)]
+    pub opted_in: Option<u64>,
 }
 
 impl SlackSnapshot {

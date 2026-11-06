@@ -437,6 +437,8 @@ From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌re
 
 ## Slack
 
+Since wave 17 the machine reads only the conversations you opted in (a channel you watch with `W`, or one listed in `conversation.channels` of a repository's `luna.yaml`); until you opt something in the view says so. Each thread shows what the machine made of it: its kind and how sure it is, the five scores and the total, the knock-out when one hit, "asks you" when it is not sure, the card or backlog item it relates to (and, for a ticket-sourced card, `about a card from <kind> <key>` on its own line), how many secrets were cut, and the draft that waits with how long until it expires. `c` sets the kind and `L` the card or backlog item it is about (the picker lists only the candidates the machine listed); both store an answer and teach the machine, and neither posts. Nothing is posted until you tap: `r` sends or edits the draft, `d` ignores a waiting draft, `t` makes the card.
+
 `S` opens the Slack inbox (`:slack` too): everything your Activity tab shows plus the handles you watch, as the machine polls it every minute and a triage pass sorts it. Six splits, `h`/`l` or `1`–`6` between them, `j`/`k` down the rows. Needs reply and Decide go P0 first, then oldest; the other splits newest first.
 
 | Split | An item lands here when |
@@ -457,12 +459,14 @@ A P0 or P1 entering Needs reply or Decide counts on the Board tab's badge and ra
 |---|---|
 | `r` | reply: edit the draft, ctrl+s posts |
 | `t` | ticket: a Backlog task from the thread |
-| `d` | done: clear it here |
+| `d` | done: clear it; ignores a waiting draft |
 | `s` | snooze: 1h, 3h, tomorrow or Monday |
 | `o` | open the message in Slack |
 | `N` | nudge: a one-line reminder |
 | `!` | priority up one step |
 | `-` | priority down one step |
+| `c` | kind: what the thread is |
+| `L` | link: the work it is about |
 
 **Move**
 
