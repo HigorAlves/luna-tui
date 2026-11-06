@@ -4,17 +4,20 @@
 // the policy's risk. A PR a person merges ends the wait the same way. The cursor file lets a
 // machine restart resume instead of escalate. Review activity and a red CI are recorded and noted
 // here; acting on them is the maintenance loop's.
-import { PrReplyAnswer, type EvidencePack, type Risk, type ShipContext, type TaskState } from "@hardness/contracts";
+import { PrReplyAnswer, type EvidencePack, type Risk, type ShipContext, type ShipEventClass, type TaskState, eventClassOf } from "@hardness/contracts";
 
 import { HOST_GIT, rebaseOntoDefault } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
 
-import { type Policy } from "../../domain/policy.ts";
+import { lunaYamlFreeze } from "../../adapters/freeze/luna-yaml.ts";
+import { type Freeze, type Policy } from "../../domain/policy.ts";
+import { shipEvents } from "../../domain/ship-events.ts";
 import { ownerApprovals, parseCodeownersChecked, requiredOwners } from "../../domain/codeowners.ts";
-import { MAX_DEPENDENCIES, mergeReadiness, parseDependencies } from "../../domain/merge-readiness.ts";
+import { MAX_DEPENDENCIES, inFreeze, mergeReadiness, parseDependencies } from "../../domain/merge-readiness.ts";
 import { type ReviewRule, approvedOnHead, reviewRequirement } from "../../domain/review-rule.ts";
 import { fromGraphQl } from "../../domain/pull-request.ts";
 import { type GitHub, type PrActivity, type PrReview, messageOf } from "../github.ts";
+import type { FreezeSource } from "../freeze.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { type ShipCursor, SEEN_CAP, emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
 import { ciContextOf, ciRunIdOf, failedChecks } from "./ci.ts";
@@ -58,6 +61,8 @@ export interface ShipMonitorDeps {
   now?: () => Date;
   /** The CODEOWNERS text at the PR's base branch, or null; default: the first of the three places the port finds. Tests inject one. */
   readCodeowners?: (slug: string, baseRef: string) => Promise<string | null>;
+  /** The freeze calendar; default: the repository's `luna.yaml` `freeze[]`. */
+  freeze?: FreezeSource;
   log?: (message: string) => void;
 }
 
@@ -73,11 +78,13 @@ export interface ShipFacts {
   risk: Risk;
   readiness: ReturnType<typeof mergeReadiness>;
   paths: string[];
+  /** The classes GitHub's facts decided at this poll (`shipEvents`). */
+  events: ShipEventClass[];
   /** Who answers the release question: `ship.release_owners`, else the CODEOWNERS owners of the PR's paths at the base ref. Facts, never a model's word. */
   releaseOwners: string[];
 }
 
-export type ShipFactsDeps = Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "readCodeowners">;
+export type ShipFactsDeps = Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "readCodeowners" | "freeze">;
 
 const defaultReadCodeowners = (github: GitHub) => async (slug: string, baseRef: string): Promise<string | null> => {
   for (const path of CODEOWNERS_PATHS) {
@@ -114,6 +121,8 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
       return { number: n, merged: dep?.merged ?? false, closed: dep ? dep.state === "closed" : false };
     }),
   );
+  // The calendar is read only through the port; a window the port cannot give counts as frozen (an unreadable date fails closed in `inFreeze`).
+  const windows = await (deps.freeze ?? lunaYamlFreeze(deps.policies)).windows(task.repoPath).catch((): Freeze[] => [{ from: "", to: "", reason: "the freeze calendar could not be read" }]);
   const paths = (await deps.github.prFiles(slug, number)).map((f) => f.path);
   const changesCodeowners = paths.some((p) => CODEOWNERS_PATHS.includes(p));
   // The reviews are read once a poll, for the owners and for the approval a fix needs.
@@ -171,7 +180,7 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   const readiness = mergeReadiness({
     pr,
     packSha: pack?.commitSha ?? null,
-    policy: { autoMerge: policy.factory.ship.auto_merge, freeze: policy.freeze },
+    policy: { autoMerge: policy.factory.ship.auto_merge, freeze: windows },
     risk,
     now: now(),
     dependencies,
@@ -187,7 +196,8 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   const named = policy.factory.ship.release_owners;
   const fromCodeowners = codeownersText ? [...new Set(requiredOwners(paths, parseCodeownersChecked(codeownersText).rules).flatMap((r) => r.owners))] : [];
   const releaseOwners = (named.length > 0 ? named : fromCodeowners).slice(0, 20);
-  return { pr, head, pack, risk, readiness, paths, releaseOwners };
+  const events = shipEvents({ mergeable: pr.mergeable, mergeState: pr.mergeState, frozen: inFreeze(windows, now()) !== null, openDependencies: dependencies.filter((d) => !d.merged && !d.closed).length });
+  return { pr, head, pack, risk, readiness, paths, events, releaseOwners };
 }
 
 /** The PR merged: the decisions it was waiting on are settled by what happened to their threads. Called wherever a merge is recorded. */
@@ -328,30 +338,25 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         await note(`skipped a ${a.kind} from ${a.actor ?? "ghost"}: not a collaborator`);
         return {};
       }
+      // An approving review with nothing to answer is noted, never asked about.
+      if (a.kind === "review" && a.state === "APPROVED" && a.body.trim() === "") {
+        await note(`${a.actor ?? "ghost"} approved`);
+        return {};
+      }
       const body = a.body.slice(0, 2000);
       const event: ShipContext = { kind: "event", event: { actor: a.actor ?? "ghost", isBot: a.isBot, isMe: false, kind: a.kind === "review" ? "review" : "comment", state: a.state, body, url: a.url } };
       const label = `${a.actor ?? "ghost"} ${a.kind}: ${plain(body, 80)}`;
       // A person's word on the PR after an earlier event means that event drew activity.
       if (!a.isBot && TRUSTED.has(a.association ?? "")) for (const d of cursor.decisions ?? []) if (d.pack === "event_class") d.further = true;
       const cls = await judgeShip(fixDeps(), "event_class", event, task.repoPath);
-      if (cls.ok && cls.recordId && (cls.choice === "noise" || cls.choice === "comment")) cursor.decisions = [...(cursor.decisions ?? []), { pack: "event_class", recordId: cls.recordId, choice: cls.choice }];
       if (!cls.ok) return { result: escalated(`a review event needs a person (${cls.reason}): ${label}`) };
+      // Only two answers are accepted for an activity item; a label read through `eventClassOf` (an old stored one included).
+      const klass = eventClassOf(cls.choice);
+      if (klass !== "review_comment" && klass !== "noise") return { result: escalated(`a review event needs a person: ${label}`) };
+      if (cls.recordId) cursor.decisions = [...(cursor.decisions ?? []), { pack: "event_class", recordId: cls.recordId, choice: klass }];
       // One row per classified item, by its kind and class (enum values, never the reviewer's words).
-      await context.emit?.("ship.event", { kind: a.kind, class: ["noise", "approval", "changes_requested", "push", "comment"].includes(cls.choice) ? cls.choice : "other" }).catch(() => {});
-      switch (cls.choice) {
-        case "noise":
-          return {};
-        case "approval":
-        case "changes_requested":
-          await note(`${a.actor ?? "ghost"} ${cls.choice === "approval" ? "approved" : "asked for changes"}`);
-          return {};
-        case "push":
-          return { result: escalated(`someone else pushed to the branch: ${label}`, "head_moved") };
-        case "comment":
-          return handleComment(a, pack);
-        default:
-          return { result: escalated(`a review event needs a person: ${label}`) };
-      }
+      await context.emit?.("ship.event", { kind: a.kind, class: klass }).catch(() => {});
+      return klass === "noise" ? {} : handleComment(a, pack);
     };
 
     /** A red CI on the head: the ci_watch pack says what kind of red, then a fix round, one re-run or a person. */
@@ -365,15 +370,18 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       cursor.ciKey = key;
       cursor.ciCycled = false;
       await saveCursor(deps.stateDir, task.id, cursor);
-      const ran = await deps.loop!.runPack("ci_watch", subContext(context, `ci-${slugId(key.slice(0, 12))}-${runIds[0]}`), { ci: await ciContextOf(deps.github, slug, task.branch ?? "", checks, failed) });
-      const answer = ran.detail?.answer && typeof ran.detail.answer === "object" ? (ran.detail.answer as Record<string, unknown>) : {};
-      if (ran.outcome !== "pass") return { result: escalated(`CI is red and its cause could not be read: ${plain(String(ran.detail?.error ?? ran.outcome), 300)}`) };
-      const verdict = String(answer.verdict ?? "");
-      const summary = plain(String(answer.summary ?? ""), 400);
-      if (verdict === "green") return {};
-      if (verdict === "flake") {
+      // What kind of red this is: a typed decision on data (the job and the log's tail, flattened by the machine); only three answers are accepted.
+      const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+      const detail = await ciContextOf(deps.github, slug, task.branch ?? "", checks, failed);
+      const event: ShipContext = { kind: "event", event: { actor: "ci", isBot: true, isMe: false, kind: "ci", state: "failure", body: plain(failed.map((c) => c.name).join(", "), 500), url: null, job: plain(failed[0]!.name, 200), log: flat(detail.logs ?? "").slice(-4000) } };
+      const cls = await judgeShip(fixDeps(), "event_class", event, task.repoPath);
+      if (!cls.ok) return { result: escalated(`a red CI needs a person (${cls.reason}): ${plain(failed[0]!.name, 120)}`) };
+      const klass = eventClassOf(cls.choice);
+      if (cls.recordId) cursor.decisions = [...(cursor.decisions ?? []), { pack: "event_class", recordId: cls.recordId, choice: klass ?? cls.choice }];
+      await context.emit?.("ship.event", { kind: "ci", class: klass ?? "noise" }).catch(() => {});
+      if (klass === "ci_flaky") {
         const reruns = (await deps.policies.for(task.repoPath)).factory.verify.ci_flaky_reruns;
-        if (cursor.ciReruns >= reruns) return { result: escalated(`CI is red again after ${reruns === 1 ? "one re-run" : `${reruns} re-runs`}: ${summary}`) };
+        if (cursor.ciReruns >= reruns) return { result: escalated(`CI is red again after ${reruns === 1 ? "one re-run" : `${reruns} re-runs`}: ${plain(failed[0]!.name, 120)}`) };
         cursor.ciReruns++;
         await saveCursor(deps.stateDir, task.id, cursor);
         try {
@@ -384,10 +392,13 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         await note("CI is red and looks like a flake: the failed jobs run again");
         return {};
       }
-      if (verdict !== "fixable") {
-        const reason = plain(String(answer.reason ?? summary ?? verdict), 400);
-        return { result: escalated(`CI is red (${verdict || "unknown"}): ${reason}`, "other", { verdict }) };
-      }
+      if (klass === "base_moved") return baseMoved(head, pack);
+      if (klass !== "ci_real") return { result: escalated(`a red CI needs a person: ${plain(failed[0]!.name, 120)}`) };
+      // A real failure: ci_watch only describes the fix (its findings); its own verdict is not read.
+      const ran = await deps.loop!.runPack("ci_watch", subContext(context, `ci-${slugId(key.slice(0, 12))}-${runIds[0]}`), { ci: detail });
+      const answer = ran.detail?.answer && typeof ran.detail.answer === "object" ? (ran.detail.answer as Record<string, unknown>) : {};
+      if (ran.outcome !== "pass") return { result: escalated(`CI is red and its cause could not be read: ${plain(String(ran.detail?.error ?? ran.outcome), 300)}`) };
+      const summary = plain(String(answer.summary ?? ""), 400);
       const findings = Array.isArray(answer.findings) ? (answer.findings as Array<{ title?: unknown; body?: unknown }>).slice(0, 10).map((f) => `${plain(String(f.title ?? ""), 120)}: ${plain(String(f.body ?? ""), 300)}`) : [];
       const text = [summary, ...findings].filter(Boolean).join("\n");
       const synthetic = { id: "ci", path: null, line: null, comments: [{ author: "ci", body: text.slice(0, 3000), at: now().toISOString() }] };
@@ -425,6 +436,16 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       return { moved: true };
     };
 
+    /** The base moved: rebase while the rebases allowed last; after that the card keeps waiting and the checklist says so. */
+    const baseMoved = async (head: string, pack: EvidencePack | null): Promise<Outcome> => {
+      const allowed = (await deps.policies.for(task.repoPath)).factory.verify.auto_rebase;
+      if (cursor.rebases >= allowed) {
+        await note("waiting: the base branch moved and the rebases allowed are spent");
+        return {};
+      }
+      return watchConflict(head, pack);
+    };
+
     for (;;) {
       if (signal.aborted) return { outcome: "fail", detail: { error: "aborted" } };
       if (now().getTime() - Date.parse(cursor.startedAt!) > maxWaitMs) {
@@ -452,6 +473,11 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
               detail: { escalation: "head_moved", reason: `the PR head moved after the evidence pack (${pack.commitSha.slice(0, 7)} → ${head.slice(0, 7)}): Evidence runs again`, options: [] },
             };
           }
+          // The classes facts decide: one `ship.event` per change; freeze and blocked_by_other_pr are items on the checklist and the watch waits.
+          const classes = facts.events;
+          const before = cursor.lastEvents ?? [];
+          for (const c of classes) if (!before.includes(c)) await context.emit?.("ship.event", { kind: "poll", class: c }).catch(() => {});
+          cursor.lastEvents = classes;
           // A checks run that left failure and came back is a new red even under the same run id.
           if (deps.loop && pr.checks.state !== "failure") cursor.ciCycled = true;
 
@@ -475,8 +501,12 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
                 break;
               }
             }
-            if (!moved && pr.mergeable === "CONFLICTING" && head) {
+            if (!moved && classes.includes("conflict") && head) {
               const out = await watchConflict(head, pack);
+              if (out.result) return out.result;
+              moved = out.moved ?? false;
+            } else if (!moved && classes.includes("base_moved") && head) {
+              const out = await baseMoved(head, pack);
               if (out.result) return out.result;
               moved = out.moved ?? false;
             }

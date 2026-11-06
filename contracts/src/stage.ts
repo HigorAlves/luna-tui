@@ -786,10 +786,13 @@ export const ShipContext = z.object({
       actor: z.string(),
       isBot: z.boolean(),
       isMe: z.boolean(),
-      kind: z.enum(["comment", "review", "push"]),
+      kind: z.enum(["comment", "review", "push", "ci"]),
       state: z.string().nullable().optional(),
       body: z.string().max(2000),
       url: z.string().nullable(),
+      /** A red CI run: the failed job's name, and the last 4,000 characters of its log (both flattened by the machine; data). */
+      job: z.string().max(200).optional(),
+      log: z.string().max(4000).optional(),
     })
     .optional(),
   comment: z

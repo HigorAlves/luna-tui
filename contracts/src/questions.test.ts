@@ -3,7 +3,7 @@
 import { decisionEngines } from "./decision-defaults.ts";
 import { describe, expect, it } from "vitest";
 
-import { ENGINES, PACKS, PACK_LIMITS, PlanContext, StageInput, answerSchema, applyPolicy, classificationLine, classificationOf, coverageGaps, riskLevelOf } from "./index.ts";
+import { ENGINES, PACKS, SHIP_EVENT_CLASSES, eventClassOf, PACK_LIMITS, PlanContext, StageInput, answerSchema, applyPolicy, classificationLine, classificationOf, coverageGaps, riskLevelOf } from "./index.ts";
 
 describe("the answer schema of a question set", () => {
   const schema = answerSchema({
@@ -182,7 +182,7 @@ describe("the plan stage's decision packs", () => {
   it("the ship decisions exist: event_class, comment_intent, fix_scope and evidence_valid each ask one choice, worth_learning one yes/no, all decisions like the others", () => {
     const packs = PACKS as Record<string, unknown>;
     const choices: Record<string, [string, string[]]> = {
-      event_class: ["event", ["comment", "approval", "changes_requested", "push", "noise"]],
+      event_class: ["event", ["ci_flaky", "ci_real", "conflict", "base_moved", "review_comment", "freeze", "blocked_by_other_pr", "parent_merged", "parent_changed", "noise"]],
       comment_intent: ["intent", ["question", "nit", "change_request", "disagreement"]],
       fix_scope: ["scope", ["in_place", "re_verify_partial", "re_plan"]],
       evidence_valid: ["validity", ["valid", "refresh_text", "refresh_media"]],
@@ -328,5 +328,16 @@ describe("confidence policy", () => {
     expect(applyPolicy(pack, answer).verdicts.kind).toBe("flag");
     const v = applyPolicy(pack, answer, { kind: { proceed: 0.6 } });
     expect(v.verdicts.kind).toBe("proceed");
+  });
+});
+
+describe("eventClassOf", () => {
+  it("reads an old label as its new one and a new one as itself", () => {
+    expect(SHIP_EVENT_CLASSES).toEqual(["ci_flaky", "ci_real", "conflict", "base_moved", "review_comment", "freeze", "blocked_by_other_pr", "parent_merged", "parent_changed"]);
+    expect(eventClassOf("comment")).toBe("review_comment");
+    expect(eventClassOf("changes_requested")).toBe("review_comment");
+    for (const old of ["approval", "push", "noise"]) expect(eventClassOf(old)).toBe("noise");
+    for (const c of [...SHIP_EVENT_CLASSES, "noise"]) expect(eventClassOf(c)).toBe(c);
+    expect(eventClassOf("something else")).toBeNull();
   });
 });

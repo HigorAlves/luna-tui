@@ -40,6 +40,8 @@ const ShipCursorSchema = z.object({
   lastBlockers: z.string().optional(),
   /** GitHub itself answered `reviewDecision: REVIEW_REQUIRED` for this PR at some poll: a review is required here (kept as evidence the rule reader may not see). */
   reviewRequiredSeen: z.boolean().optional(),
+  /** The classes facts decided at the last poll (`conflict`, `base_moved`, `freeze`, `blocked_by_other_pr`): one `ship.event` per change. */
+  lastEvents: z.array(z.string()).optional(),
   /** `ship.ready` was logged: readiness is announced the first time it is true. */
   readyNoted: z.boolean().optional(),
 });

@@ -28,7 +28,7 @@ describe("what each fact says about the answer", () => {
 
   it("event_class: no further activity confirms noise, further activity makes it a comment", () => {
     expect(eventClassTruth(false)).toEqual({ event: { choice: "noise" } });
-    expect(eventClassTruth(true)).toEqual({ event: { choice: "comment" } });
+    expect(eventClassTruth(true)).toEqual({ event: { choice: "review_comment" } });
   });
 
   it("comment_intent: a question the reviewer resolved, a change request fixed and resolved", () => {

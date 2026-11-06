@@ -554,6 +554,16 @@ describe("ShipContext", () => {
   });
 });
 
+describe("ShipContext ci events", () => {
+  const ci = { actor: "ci", isBot: true, isMe: false, kind: "ci" as const, state: "failure", body: "build", url: null, job: "build", log: "boom" };
+  it("carries a job (200) and the tail of a log (4000)", () => {
+    expect(ShipContext.parse({ kind: "event", event: ci }).event).toEqual(ci);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...ci, job: "x".repeat(201) } }).success).toBe(false);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...ci, log: "x".repeat(4001) } }).success).toBe(false);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...ci, log: "x".repeat(4000) } }).success).toBe(true);
+  });
+});
+
 describe("ShipContext caps", () => {
   const thread = (comments: unknown[]) => ({ kind: "comment", comment: { thread: { id: "T", path: null, line: null, comments }, pack: { summary: "s", scenarios: [], howToVerify: "h" }, myReplies: 0 } });
   const one = { author: "a", body: "b", at: "t" };

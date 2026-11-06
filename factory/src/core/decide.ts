@@ -127,7 +127,9 @@ export function renderShip(ship: ShipContext): string {
       `Actor: ${e.actor}${e.isBot ? " (a bot)" : ""}${e.isMe ? " (this machine)" : ""}`,
       `Kind: ${e.kind}${e.state ? ` (${e.state})` : ""}`,
       ...(e.url ? [`URL: ${e.url}`] : []),
+      ...(e.job ? [`Job: ${e.job}`] : []),
       `Body:\n${e.body}`,
+      ...(e.log ? [`Log (tail):\n${e.log}`] : []),
     ].join("\n");
   }
   if (ship.kind === "comment" && ship.comment) {

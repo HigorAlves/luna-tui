@@ -35,7 +35,7 @@ export const evidenceFormatTruth = (format: string): Label => ({ format: { choic
 /** `testRewritten`: the slice went red again after the judged red, because the test was changed. */
 export const redCheckTruth = (testRewritten: boolean): Label => ({ right_reason: { value: !testRewritten } });
 export const worthLearningTruth = (approved: boolean): Label => ({ worth: { value: approved } });
-export const eventClassTruth = (furtherActivity: boolean): Label => ({ event: { choice: furtherActivity ? "comment" : "noise" } });
+export const eventClassTruth = (furtherActivity: boolean): Label => ({ event: { choice: furtherActivity ? "review_comment" : "noise" } });
 export const commentIntentTruth = (kind: "question" | "change_request"): Label => ({ intent: { choice: kind } });
 /** A finding a person shipped with was not a blocker, whatever the model said. */
 export const findingTruth = (): Label => ({ severity: { choice: ["should_fix", "nit"] } });

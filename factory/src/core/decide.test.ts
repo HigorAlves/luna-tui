@@ -249,6 +249,11 @@ describe("a ship context", () => {
     expect(renderDecision(PACKS.event_class.questions, state(ship))).toContain("## event (choice)");
   });
 
+  it("renders a red CI event with its job and log as data", () => {
+    const ship = { kind: "event", event: { actor: "ci", isBot: true, isMe: false, kind: "ci", state: "failure", body: "build", url: null, job: "build", log: "AssertionError: expected 1" } };
+    for (const part of ["Kind: ci (failure)", "Job: build", "Log (tail):", "AssertionError: expected 1"]) expect(state(ship).description).toContain(part);
+  });
+
   it("titles a comment by its path, with the thread and the pack", () => {
     const ship = { kind: "comment", comment: { thread: { id: "T1", path: "a.ts", line: 4, comments: [{ author: "ana", body: "why?", at: "t" }] }, pack: { summary: "Adds x", scenarios: [{ text: "x works", result: "pass" }], howToVerify: "run it" }, myReplies: 1 } };
     expect(state(ship).title).toBe("Comment on a.ts");
