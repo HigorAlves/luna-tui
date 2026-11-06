@@ -39,6 +39,7 @@ pub enum Scope {
     Pulls,
     Backlog,
     Tickets,
+    Memory,
     Slack,
     Watches,
     Inbox,
@@ -49,12 +50,13 @@ pub enum Scope {
 }
 
 impl Scope {
-    pub const ALL: [Scope; 12] = [
+    pub const ALL: [Scope; 13] = [
         Scope::Board,
         Scope::Detail,
         Scope::Pulls,
         Scope::Backlog,
         Scope::Tickets,
+        Scope::Memory,
         Scope::Slack,
         Scope::Watches,
         Scope::Inbox,
@@ -72,6 +74,7 @@ impl Scope {
             Scope::Pulls => "Pulls",
             Scope::Backlog => "Backlog",
             Scope::Tickets => "Tickets",
+            Scope::Memory => "Memory",
             Scope::Slack => "Slack",
             Scope::Watches => "Watches",
             Scope::Inbox => "Inbox",
@@ -90,6 +93,7 @@ impl Scope {
             Scope::Pulls => "pulls",
             Scope::Backlog => "backlog",
             Scope::Tickets => "tickets",
+            Scope::Memory => "memory",
             Scope::Slack => "slack",
             Scope::Watches => "watches",
             Scope::Inbox => "inbox",
@@ -133,6 +137,7 @@ impl Group {
             Group::Ticket => match scope {
                 Scope::Pulls => "Pull request",
                 Scope::Backlog => "Item",
+                Scope::Memory => "Memory item",
                 Scope::Slack => "Message",
                 Scope::Watches => "Watch",
                 _ => "Ticket",
@@ -595,12 +600,14 @@ const BOARD: &[Binding] = &[
     cmd(b("P", "Pulls: every open PR involving you", Group::Views, Scope::Board, on, 20), "prs"),
     cmd(b("B", "Backlog: candidates, not tickets yet", Group::Views, Scope::Board, on, 20), "backlog"),
     cmd(b("K", "Tickets: held, assessed, waiting on you", Group::Views, Scope::Board, on, 20), "tickets"),
+    cmd(b("M", "Memory: what the machine remembers", Group::Views, Scope::Board, on, 20), "memory"),
     cmd(b("S", "Slack: mentions, DMs and watches", Group::Views, Scope::Board, on, 20), "slack"),
     // Marks & bulk.
     b("v", "mark the ticket; a X d w act on marks", Group::Marks, Scope::Board, |app| with_task(app, |_| Avail::On), 25),
     b("V", "mark the whole column", Group::Marks, Scope::Board, on, 24),
     // App.
     cmd(b("n", "new ticket, then edit it in place", Group::App, Scope::Board, on, 55), "new"),
+    cmd(b("Q", "ask memory, answers cite sources", Group::App, Scope::Board, on, 45), "ask"),
     b("x", "actions menu for the ticket", Group::App, Scope::Board, |app| with_task(app, |_| Avail::On), 70),
     b(":", "command palette", Group::App, Scope::Board, on, 30),
     b("esc", "clear the filter and the marks", Group::App, Scope::Board, on, 20),
@@ -629,6 +636,8 @@ const BOARD: &[Binding] = &[
     cmd(b(":prs", "open Pulls", Group::Commands, Scope::Board, on, 0), "prs"),
     cmd(b(":backlog", "open the Backlog", Group::Commands, Scope::Board, on, 0), "backlog"),
     cmd(b(":tickets", "open the Tickets view", Group::Commands, Scope::Board, on, 0), "tickets"),
+    cmd(b(":memory", "open the Memory view", Group::Commands, Scope::Board, on, 0), "memory"),
+    cmd(b(":ask <question>", "ask memory, in the selected repo", Group::Commands, Scope::Board, on, 0), "ask"),
     cmd(b(":ticket-edit <text>", "post your text, not the draft's", Group::Commands, Scope::Tickets, on, 0), "ticket-edit"),
     cmd(b(":dedup duplicate <n> | related <ns> | neither", "answer the duplicate question", Group::Commands, Scope::Board, on, 0), "dedup"),
     cmd(b(":dup <id>", "close as a duplicate of that ticket", Group::Commands, Scope::Board, on, 0), "dup"),
@@ -722,6 +731,28 @@ const TICKETS: &[Binding] = &[
     b("R", "fetch the tickets again", Group::App, Scope::Tickets, on, 60),
     cmd(b("?", "keys", Group::App, Scope::Tickets, on, 100), "help"),
 ];
+
+/// The Memory view: what the machine remembers of a repository, and the taps that let a person correct it.
+const MEMORY: &[Binding] = &[
+    b("f", "forget: delete it (asks first)", Group::Ticket, Scope::Memory, |app| memory_item(app, false), 90),
+    b("a", "adopt: an outside item, a lesson", Group::Ticket, Scope::Memory, |app| memory_item(app, true), 85),
+    b("o", "only the outside items", Group::Filter, Scope::Memory, on, 60),
+    b("Q", "ask memory a question", Group::App, Scope::Memory, on, 70),
+    b("j / k", "previous / next item", Group::Move, Scope::Memory, on, 30),
+    b("esc / M / q", "close", Group::Move, Scope::Memory, on, 20),
+    b("R", "fetch the items again", Group::App, Scope::Memory, on, 50),
+    cmd(b("?", "keys", Group::App, Scope::Memory, on, 100), "help"),
+];
+
+/// `f` needs an item that is not retired; `a` one with trust `outside`.
+fn memory_item(app: &App, adopt: bool) -> Avail {
+    match app.memory_under_cursor() {
+        Some(item) if adopt && !item.is_outside() => Avail::Off("only an outside item can be adopted"),
+        Some(item) if !adopt && item.is_retired() => Avail::Off("already retired"),
+        Some(_) => Avail::On,
+        None => Avail::Off("no item selected"),
+    }
+}
 
 fn ticket_waiting(app: &App) -> Avail {
     match app.ticket_under_cursor() {
@@ -819,7 +850,7 @@ const HELP: &[Binding] = &[
     b("esc / q", "close", Group::App, Scope::Help, on, 60),
 ];
 
-const TOTAL: usize = BOARD.len() + SHARED.len() + count_except(SHARED, "J") + count_except(SHARED, "A") + DETAIL.len() + INBOX.len() + PULLS.len() + BACKLOG.len() + TICKETS.len() + SLACK.len() + WATCHES.len() + DIGEST.len() + FLOOR.len() + EDITOR.len() + HELP.len();
+const TOTAL: usize = BOARD.len() + SHARED.len() + count_except(SHARED, "J") + count_except(SHARED, "A") + DETAIL.len() + INBOX.len() + PULLS.len() + BACKLOG.len() + TICKETS.len() + MEMORY.len() + SLACK.len() + WATCHES.len() + DIGEST.len() + FLOOR.len() + EDITOR.len() + HELP.len();
 
 /// Copies `rows` into `out` under `scope`, skipping the key `except` (the view handles it
 /// itself: `A` approves the Inbox split, `J` scrolls the popup).
@@ -877,6 +908,7 @@ const fn build() -> [Binding; TOTAL] {
     copy_into(PULLS, Scope::Pulls, "", &mut out, &mut at);
     copy_into(BACKLOG, Scope::Backlog, "", &mut out, &mut at);
     copy_into(TICKETS, Scope::Tickets, "", &mut out, &mut at);
+    copy_into(MEMORY, Scope::Memory, "", &mut out, &mut at);
     copy_into(SLACK, Scope::Slack, "", &mut out, &mut at);
     copy_into(WATCHES, Scope::Watches, "", &mut out, &mut at);
     copy_into(DIGEST, Scope::Digest, "", &mut out, &mut at);
@@ -915,6 +947,8 @@ pub fn active_scope(app: &App) -> Scope {
         Scope::Backlog
     } else if app.tickets.is_some() {
         Scope::Tickets
+    } else if app.memory.is_some() {
+        Scope::Memory
     } else if app.slack.is_some() {
         Scope::Slack
     } else {
@@ -1492,6 +1526,7 @@ mod tests {
         parity(Scope::Pulls, handled::PULLS);
         parity(Scope::Backlog, handled::BACKLOG);
         parity(Scope::Tickets, handled::TICKETS);
+        parity(Scope::Memory, handled::MEMORY);
         parity(Scope::Slack, handled::SLACK);
         parity(Scope::Watches, handled::WATCHES);
         parity(Scope::Digest, handled::DIGEST);
