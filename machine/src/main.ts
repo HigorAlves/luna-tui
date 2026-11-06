@@ -684,6 +684,7 @@ const ticketPack = async (pack: "ticket_validity" | "ticket_assess" | "ticket_re
 const ticketMachine = new TicketMachine({
   store: new PgTicketStore(db),
   port: (tool) => (tool === "jira" ? new JiraTickets(jiraApi) : new GitHubTickets(github)),
+  intakeLabel: config.githubPoll.label,
   candidates: (ticket, repoPath) => pipeline.ticketCandidates(repoPath, ticket.tool === "github" ? { kind: "github", repo: ticket.key.split("#")[0]!, number: Number(ticket.key.split("#")[1]), url: ticket.permalink } : { kind: "jira", key: ticket.key, url: ticket.permalink, issueType: ticket.type }),
   config: async (repoPath) => (await policies.for(repoPath)).factory,
   locate: async (repoPath, text) => (repoPath ? ((await graph.locate(repoPath, text))?.files ?? []).map((f: { path?: string } | string) => (typeof f === "string" ? f : (f.path ?? ""))).filter(Boolean) : []),

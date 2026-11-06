@@ -32,9 +32,9 @@ export class GitHubTickets implements Tickets {
     await this.github.commentOnIssue(slug, number, text);
   }
 
-  async create(origin: CanonicalTicket, child: { title: string; body: string }): Promise<{ key: string; permalink: string }> {
+  async create(origin: CanonicalTicket, child: { title: string; body: string }, options: { labels?: string[] } = {}): Promise<{ key: string; permalink: string }> {
     const { slug } = parse(origin.key);
-    const made = await this.github.createIssue(slug, { title: child.title, body: child.body });
+    const made = await this.github.createIssue(slug, { title: child.title, body: child.body, ...(options.labels && options.labels.length > 0 ? { labels: options.labels } : {}) });
     return { key: `${slug}#${made.number}`, permalink: made.url };
   }
 

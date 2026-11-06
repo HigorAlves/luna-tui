@@ -90,6 +90,8 @@ export interface TicketMachineDeps {
     learned(fact: { pack: "ticket_recommend"; recordId: string; label: Record<string, Record<string, unknown>>; source: string }): Promise<boolean>;
     draft(entry: { key: string; draft: string; kind: string; did: "sent" | "edited" | "ignored"; original: string; final: string | null; at: string }): Promise<void>;
   };
+  /** The label the GitHub intake watches for: a child ticket made on GitHub carries it, so the intake sees it. */
+  intakeLabel?: string;
   backlog?: { upsertFromSource(input: BacklogAddInput, options: { createIfMissing: boolean }): Promise<{ id: string; created: boolean } | null> };
   now?: () => Date;
 }
@@ -370,6 +372,9 @@ export class TicketMachine implements TicketIntake {
     const origin = row.canonical;
     const port = this.deps.port(origin.tool);
     const prefix = `${split.id}:`;
+    // A card-less split: the floor is the origin's assessed blast radius, never below medium (a card's split passes its own).
+    const lastBlast = (row.assessments.at(-1) as { blastRadius?: unknown } | undefined)?.blastRadius;
+    const floor: "low" | "medium" | "high" = split.floor ?? (lastBlast === "high" ? "high" : "medium");
     let links = [...row.machineLinks];
     const made = new Map<number, string>();
     for (const l of links) if (l.kind === "split_part" && l.target.startsWith(prefix)) {
@@ -381,10 +386,12 @@ export class TicketMachine implements TicketIntake {
     for (const { c, n } of order) {
       if (made.has(n)) continue;
       const text = this.childTexts(origin, children, made)[n - 1]!;
-      const created = await port.create(origin, text);
+      const created = await port.create(origin, text, origin.tool === "github" && this.deps.intakeLabel ? { labels: [this.deps.intakeLabel] } : {});
       made.set(n, created.key);
       links = [...links, { kind: "split_part", target: `${prefix}${n}:${created.key}` }, { kind: "child", target: created.key }];
       await this.deps.store.setMachine(originKey, { links });
+      // Linked now, from what `create` returned: a tracker that cannot read a child back by key must not leave it unlinked.
+      await this.linkChild(origin, originKey, created, text, n, children, made, floor, links.find((l) => l.kind === "repo")?.target ?? null);
       if (split.draft) {
         const list = [...made].map(([m, key]) => ({ n: m, key })).sort((a, b) => a.n - b.n);
         await this.deps.store.updateDrafts(originKey, (current) => (current as unknown as Draft[]).map((d) => (d.id === split.draft ? { ...d, created: list } : d)) as unknown as Record<string, unknown>[]);
@@ -393,23 +400,36 @@ export class TicketMachine implements TicketIntake {
     const keys = children.map((_, i) => made.get(i + 1)!);
     if (!links.some((l) => l.kind === "split_done" && l.target === split.id)) {
       const repo = links.find((l) => l.kind === "repo")?.target ?? null;
-      for (const [i, c] of children.entries()) {
-        const key = keys[i]!;
-        let canonical: CanonicalTicket | null = null;
-        try {
-          canonical = await port.read(key);
-        } catch {
-          // Read back later by the intake; the link below still stands.
-        }
-        if (!canonical) continue;
-        await this.deps.store.read(canonical);
-        await this.deps.store.setMachine(key, { links: [{ kind: "origin", target: originKey }, ...c.depends_on.flatMap((p) => (keys[p - 1] ? [{ kind: "depends_on", target: keys[p - 1]! }] : [])), ...(split.floor ? [{ kind: "risk_floor", target: split.floor }] : []), ...(repo ? [{ kind: "repo", target: repo }] : [])] });
-        await this.ingest(canonical, { repoPath: repo, question: false, force: true }).catch((error: unknown) => console.warn(`ticket split: child ${key} was not assessed: ${error instanceof Error ? error.message : String(error)}`));
+      const texts = this.childTexts(origin, children, made);
+      // Every child is linked (all its dependencies now known) before the split counts as done; a failure here leaves it undone and a retry links the rest.
+      for (const [i, c] of children.entries()) await this.linkChild(origin, originKey, { key: keys[i]!, permalink: "" }, texts[i]!, i + 1, children, made, floor, repo);
+      for (const [i] of children.entries()) {
+        const row = await this.deps.store.get(keys[i]!);
+        if (!row || !row.machineLinks.some((l) => l.kind === "origin" && l.target === originKey)) throw new Error(`child ${keys[i]} is not linked to its origin`);
+      }
+      for (const [i] of children.entries()) {
+        const row = (await this.deps.store.get(keys[i]!))!;
+        await this.ingest(row.canonical, { repoPath: repo, question: false, force: true }).catch((error: unknown) => console.warn(`ticket split: child ${keys[i]} was not assessed: ${error instanceof Error ? error.message : String(error)}`));
       }
       await this.deps.store.setMachine(originKey, { status: "epic", links: [...links, { kind: "split_done", target: split.id }] });
       await port.comment(originKey, `Split into: ${keys.join(", ")}.`).catch(() => {});
     }
     return { keys };
+  }
+
+  /** Stores a created child (a row built from what `create` returned, never read back) and writes its links: origin, the siblings it waits for, the floor and the repository. */
+  private async linkChild(origin: CanonicalTicket, originKey: string, created: { key: string; permalink: string }, text: { title: string; body: string }, n: number, children: SplitChild[], made: Map<number, string>, floor: "low" | "medium" | "high", repo: string | null): Promise<void> {
+    const at = this.now().toISOString();
+    const existing = await this.deps.store.get(created.key);
+    if (!existing) {
+      await this.deps.store.read({
+        tool: origin.tool, id: created.key, key: created.key, title: text.title.slice(0, 200), description: text.body, type: null, status: null, priority: null, reporter: origin.reporter, assignee: null,
+        labels: origin.tool === "github" && this.deps.intakeLabel ? [this.deps.intakeLabel] : [], components: [], links: { blocks: [], duplicates: [], epic: null }, comments: [], attachments: [], sprint: null,
+        dueAt: null, createdAt: at, updatedAt: at, permalink: created.permalink || origin.permalink,
+      } as CanonicalTicket);
+    }
+    const c = children[n - 1]!;
+    await this.deps.store.setMachine(created.key, { links: [{ kind: "origin", target: originKey }, ...c.depends_on.flatMap((p) => (made.get(p) ? [{ kind: "depends_on", target: made.get(p)! }] : [])), { kind: "risk_floor", target: floor }, ...(repo ? [{ kind: "repo", target: repo }] : [])] });
   }
 
   /** The ticket a card came from, when the store holds that ticket with this card as its own: what lets a card's split create tickets. Null for every other card. */

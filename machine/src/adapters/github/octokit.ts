@@ -405,9 +405,9 @@ export class OctokitGitHub implements GitHub {
     await call(`commenting on ${slug}#${number}`, () => this.octokit.rest.issues.createComment({ owner, repo, issue_number: number, body }));
   }
 
-  async createIssue(slug: string, issue: { title: string; body: string }): Promise<{ number: number; url: string }> {
+  async createIssue(slug: string, issue: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }> {
     const { owner, repo } = repoRef(slug);
-    const { data } = await call(`creating an issue in ${slug}`, () => this.octokit.rest.issues.create({ owner, repo, title: issue.title, body: issue.body }));
+    const { data } = await call(`creating an issue in ${slug}`, () => this.octokit.rest.issues.create({ owner, repo, title: issue.title, body: issue.body, ...(issue.labels && issue.labels.length > 0 ? { labels: issue.labels } : {}) }));
     return { number: data.number, url: data.html_url };
   }
 

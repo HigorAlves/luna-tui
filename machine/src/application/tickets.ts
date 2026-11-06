@@ -27,7 +27,7 @@ export interface Tickets {
    * Creates a child ticket of `origin` (a split's part): in the origin's own project (Jira) or repository (GitHub), never anywhere the child names. A write:
    * only on a tap, with a title and body the machine made postable.
    */
-  create(origin: CanonicalTicket, child: { title: string; body: string }): Promise<{ key: string; permalink: string }>;
+  create(origin: CanonicalTicket, child: { title: string; body: string }, options?: { labels?: string[] }): Promise<{ key: string; permalink: string }>;
 }
 
 export class NoTicketTokenError extends Error {

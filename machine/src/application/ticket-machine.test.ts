@@ -17,7 +17,9 @@ beforeAll(async () => {
 afterAll(async () => {
   await db.destroy();
 });
+let intakeLabel: string | undefined;
 beforeEach(async () => {
+  intakeLabel = undefined;
   await db.query("truncate tickets");
 });
 
@@ -72,6 +74,7 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: b
     truth: { learned: async (f) => (learned.push(f), true), draft: async (e) => void kept.push(e) },
     backlog: { upsertFromSource: async (input, o) => { const i = items.findIndex((x) => JSON.stringify(x.sources) === JSON.stringify(input.sources)); if (i >= 0) { items[i] = { ...input, id: "b1" }; return { id: "b1", created: false }; } if (!o.createIfMissing) return null; items.push({ ...input, id: "b1" }); return { id: "b1", created: true }; } },
     now: () => new Date("2026-11-05T12:00:00Z"),
+    ...(intakeLabel ? { intakeLabel } : {}),
   });
   return { machine, store, writes, cards, decide, items, learned, kept, port, sizeDecide, creates };
 }
@@ -566,6 +569,44 @@ describe("a ticket's split (wave 15)", () => {
     expect(again.keys).toEqual(["PAY-101", "PAY-102"]);
     expect(x.creates).toHaveLength(2);
     expect((await x.store.get("PAY-101"))!.machineLinks).toEqual(expect.arrayContaining([{ kind: "risk_floor", target: "high" }]));
+  });
+
+  it("links every child from what create returned, without reading it back (a GitHub port cannot), with the origin's repo, dependency and a floor of at least medium", async () => {
+    intakeLabel = "ready-for-agent";
+    const { x, draft } = await proposed();
+    x.port.read = async (k) => { if (k === "PAY-12") return ticket(); throw new Error("the port cannot read a child by key"); };
+    await x.store.setMachine("PAY-12", { links: [{ kind: "repo", target: "/r/a" }] });
+    await x.machine.approve("PAY-12", tap(draft));
+    const b = (await x.store.get("PAY-102"))!;
+    expect(b.machineLinks).toEqual(expect.arrayContaining([{ kind: "origin", target: "PAY-12" }, { kind: "depends_on", target: "PAY-101" }, { kind: "risk_floor", target: "medium" }, { kind: "repo", target: "/r/a" }]));
+    expect((await x.store.get("PAY-101"))!.machineLinks).toEqual(expect.arrayContaining([{ kind: "origin", target: "PAY-12" }, { kind: "risk_floor", target: "medium" }]));
+    expect((await x.store.get("PAY-12"))!.machineLinks).toEqual(expect.arrayContaining([{ kind: "split_done", target: draft.id }]));
+  });
+
+  it("a split of a ticket with no card gives every child the floor of its origin's assessed blast radius: high stays high", async () => {
+    const { x, draft } = await proposed();
+    const last = (await x.store.get("PAY-12"))!.assessments.at(-1)!;
+    await x.store.appendAssessment("PAY-12", { ...last, blastRadius: "high" });
+    await x.machine.approve("PAY-12", tap(draft));
+    for (const k of ["PAY-101", "PAY-102"]) expect((await x.store.get(k))!.machineLinks).toEqual(expect.arrayContaining([{ kind: "risk_floor", target: "high" }]));
+  });
+
+  it("a GitHub child is created with the intake's label so it is seen; a Jira child with none", async () => {
+    intakeLabel = "ready-for-agent";
+    const seen: unknown[] = [];
+    const gh = setup({ size: { answer: sizeAnswer(6) }, split: {} });
+    const make = gh.port.create;
+    gh.port.create = async (origin, child, options) => (seen.push(options), make(origin, child, options));
+    await gh.machine.ingest(ticket({ tool: "github", id: "o/r#12", key: "o/r#12", permalink: "https://github.com/o/r/issues/12" }), ctx);
+    const row = (await gh.store.get("o/r#12"))!;
+    await gh.machine.approve("o/r#12", tap((row.drafts as any[]).find((d) => d.kind === "split")));
+    expect(seen).toEqual([{ labels: ["ready-for-agent"] }, { labels: ["ready-for-agent"] }]);
+    const jira = await proposed();
+    const jiraSeen: unknown[] = [];
+    const makeJ = jira.x.port.create;
+    jira.x.port.create = async (origin, child, options) => (jiraSeen.push(options), makeJ(origin, child, options));
+    await jira.x.machine.approve("PAY-12", tap(jira.draft));
+    expect(jiraSeen).toEqual([{}, {}]);
   });
 
   it("a ticket that depends on another needs that ticket's card first; then its card waits on it with the floor kept", async () => {
