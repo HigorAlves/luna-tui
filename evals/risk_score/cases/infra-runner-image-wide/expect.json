@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "blast_radius.score",
+      "min": 1.5,
+      "max": 2.5
+    }
+  ],
+  "rubric": "Infrastructure that every repository depends on: the widest reach.",
+  "label": {
+    "blast_radius": {
+      "score": 2
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "blast_radius": "A subsystem, a contract others implement, or infrastructure"
+    },
+    "why": "A shared CI runner image is infrastructure and a contract many repositories rely on, the top blast-radius level.",
+    "second": {
+      "label": {
+        "blast_radius": {
+          "score": 2
+        }
+      },
+      "agrees": true
+    }
+  }
+}

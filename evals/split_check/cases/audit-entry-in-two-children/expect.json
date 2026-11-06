@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "no_overlap.value",
+      "value": false
+    }
+  ],
+  "rubric": "The audit entry is asked of both the button child and the audit child.",
+  "label": {
+    "no_overlap": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "no_overlap": "Is every piece of the work in exactly one child?"
+    },
+    "why": "The audit log entry appears in the goal of the button child and again in the audit child, so that piece of work is in two children.",
+    "second": {
+      "label": {
+        "no_overlap": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "data_sensitivity.score",
+      "min": 1.5,
+      "max": 2.5
+    }
+  ],
+  "rubric": "Personal data written to a new store.",
+  "label": {
+    "data_sensitivity": {
+      "score": 2
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "data_sensitivity": "Credentials, payments, personal data"
+    },
+    "why": "An email address and a phone number are personal data, the top level of data sensitivity.",
+    "second": {
+      "label": {
+        "data_sensitivity": {
+          "score": 2
+        }
+      },
+      "agrees": true
+    }
+  }
+}

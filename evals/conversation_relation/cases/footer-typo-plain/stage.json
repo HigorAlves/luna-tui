@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "conversation_relation",
+  "pack": "conversation_relation",
+  "attempt": 1,
+  "task": {
+    "id": "footer-typo-plain",
+    "title": "footer-typo-plain",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "conversation": {
+      "channel": "eng",
+      "private": false,
+      "thread": [
+        "marta: the footer says \"Copyrigth 2026\""
+      ],
+      "latest": "the footer says \"Copyrigth 2026\"",
+      "author": {
+        "profile": "member",
+        "title": null
+      },
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "open",
+          "title": "Rotate the staging database credentials",
+          "summary": "The credentials were shared in a ticket and must be rotated."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -12,5 +12,37 @@
     "action": {
       "choice": "needs_decision"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "action": "a person must weigh it: the answer turns on something the scores cannot see"
+    },
+    "why": "A move depending on an unsigned contract and a date that may change: the answer turns on something the scores cannot see.",
+    "ruledOut": [
+      {
+        "question": "action",
+        "label": "do_now",
+        "why": "Starting now would commit before the contract is signed."
+      },
+      {
+        "question": "action",
+        "label": "schedule",
+        "why": "The date may move, so a backlog slot is a guess at what a person has to decide."
+      },
+      {
+        "question": "action",
+        "label": "decline",
+        "why": "Finance wants it and the score is 0.67: it is not worthless."
+      }
+    ],
+    "second": {
+      "label": {
+        "action": {
+          "choice": "needs_decision"
+        }
+      },
+      "agrees": true
+    }
   }
 }

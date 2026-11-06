@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "scope.value",
+      "value": false
+    }
+  ],
+  "rubric": "A theme, not one change.",
+  "label": {
+    "scope": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "scope": "Is its scope bounded: one change a team could finish, not an open-ended theme?"
+    },
+    "why": "Reworking onboarding, the dashboard and the settings so customers love them is open-ended: no team could say it is finished.",
+    "second": {
+      "label": {
+        "scope": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

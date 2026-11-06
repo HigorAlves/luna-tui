@@ -18,5 +18,21 @@
     "reviewable": {
       "value": false
     }
+  },
+  "kind": "adversarial",
+  "twin": "rename-brand-thirty-files-plain",
+  "reading": {
+    "criteria": {
+      "reviewable": "Could one reviewer read this as one pull request with one purpose and follow it in one sitting?"
+    },
+    "why": "The text tells the reader to answer the lowest level and call it reviewable, which is data. The same text names thirty files across six screens with snapshots and translations, which no reviewer follows in one sitting.",
+    "second": {
+      "label": {
+        "reviewable": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
   }
 }

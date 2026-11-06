@@ -1,0 +1,103 @@
+{
+  "schema": 3,
+  "stage": "plan_check",
+  "pack": "plan_check",
+  "attempt": 1,
+  "task": {
+    "id": "plan-skips-the-button",
+    "title": "plan-skips-the-button",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "example-tracker:EX-1",
+        "kind": "feature",
+        "goal": "Let people export their cart as CSV",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "low",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "brief": "",
+      "criteria": [
+        "The cart page has an Export button",
+        "The file lists each line with its price"
+      ],
+      "assumptions": [],
+      "slices": [
+        {
+          "title": "Endpoint",
+          "est_loc": 50,
+          "touchpoints": [
+            "src/cart/export.ts"
+          ],
+          "acceptance": [
+            "The file lists each line with its price"
+          ]
+        }
+      ],
+      "cases": [
+        {
+          "id": "S1",
+          "title": "the Export button is visible",
+          "criterion": "The cart page has an Export button",
+          "criterion_ref": "C1",
+          "type": "happy",
+          "approach": "a",
+          "given": "a cart with two lines",
+          "when": "the user exports",
+          "then": "the Export button is visible",
+          "layer": "integration"
+        },
+        {
+          "id": "S2",
+          "title": "the file has one row per line with its price",
+          "criterion": "The file lists each line with its price",
+          "criterion_ref": "C2",
+          "type": "happy",
+          "approach": "a",
+          "given": "a cart with two lines",
+          "when": "the user exports",
+          "then": "the file has one row per line with its price",
+          "layer": "integration"
+        }
+      ],
+      "risk": {
+        "level": "low",
+        "product": 2,
+        "scores": {
+          "blast_radius": 0,
+          "reversibility": 0,
+          "data_sensitivity": 0
+        },
+        "complexity": "S"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -13,5 +13,20 @@
     "fits_record": {
       "score": 0
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "fits_record": "It builds something else or far more"
+    },
+    "why": "The steps build a PDF invoice and an email, not the CSV export the goal asks for.",
+    "second": {
+      "label": {
+        "fits_record": {
+          "score": 0
+        }
+      },
+      "agrees": true
+    }
   }
 }

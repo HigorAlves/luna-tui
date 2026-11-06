@@ -42,5 +42,49 @@
     "complexity": {
       "choice": "L"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "blast_radius": "A subsystem, a contract others implement, or infrastructure",
+      "reversibility": "Data or external state changes that a revert does not undo",
+      "data_sensitivity": "Credentials, payments, personal data",
+      "complexity": "Several modules, or a new mechanism"
+    },
+    "why": "Moving card tokens to a new vault and deleting the old column reaches a subsystem, cannot be undone by a revert and handles payment data: the top level on all three. Several modules and a new store make it L.",
+    "ruledOut": [
+      {
+        "question": "complexity",
+        "label": "S",
+        "why": "It is not a few lines in one place; a vault and a migration are involved."
+      },
+      {
+        "question": "complexity",
+        "label": "M",
+        "why": "It spans the payments code, the vault client and a migration, more than one module."
+      },
+      {
+        "question": "complexity",
+        "label": "XL",
+        "why": "There is no staged rollout or redesign named in the goal, so L is the fair reading."
+      }
+    ],
+    "second": {
+      "label": {
+        "blast_radius": {
+          "score": 2
+        },
+        "reversibility": {
+          "score": 2
+        },
+        "data_sensitivity": {
+          "score": 2
+        },
+        "complexity": {
+          "choice": "L"
+        }
+      },
+      "agrees": true
+    }
   }
 }

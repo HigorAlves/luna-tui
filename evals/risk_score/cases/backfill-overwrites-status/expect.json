@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "reversibility.score",
+      "min": 1.5,
+      "max": 2.5
+    }
+  ],
+  "rubric": "An in-place overwrite of stored values: a revert of the code does not restore the old data.",
+  "label": {
+    "reversibility": {
+      "score": 2
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "reversibility": "Data or external state changes that a revert does not undo"
+    },
+    "why": "The change rewrites existing data in place, which a code revert does not undo: the top level of reversibility.",
+    "second": {
+      "label": {
+        "reversibility": {
+          "score": 2
+        }
+      },
+      "agrees": true
+    }
+  }
+}

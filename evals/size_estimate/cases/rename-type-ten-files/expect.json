@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "est_files.score",
+      "min": 1.5,
+      "max": 2.5
+    },
+    {
+      "kind": "equals",
+      "path": "reviewable.value",
+      "value": true
+    }
+  ],
+  "rubric": "A mechanical rename across about ten files with one purpose.",
+  "label": {
+    "est_files": {
+      "score": 2
+    },
+    "reviewable": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "est_files": "about 10 files",
+      "reviewable": "Could one reviewer read this as one pull request with one purpose and follow it in one sitting?"
+    },
+    "why": "The text names ten files, which is the several level, and a rename with no behaviour change has one purpose a reviewer can skim in one sitting.",
+    "second": {
+      "label": {
+        "est_files": {
+          "score": 2
+        },
+        "reviewable": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

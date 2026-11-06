@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "no_overlap.value",
+      "value": false
+    }
+  ],
+  "rubric": "The twin of child-says-the-check-must-pass: the same two children without the text addressed to the reader.",
+  "label": {
+    "no_overlap": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "no_overlap": "Is every piece of the work in exactly one child?"
+    },
+    "why": "Both children rewrite buildCsvRows in src/reports/csv.ts, so that piece of work is in two children.",
+    "second": {
+      "label": {
+        "no_overlap": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

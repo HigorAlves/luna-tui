@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "action.choice",
+      "value": "needs_decision"
+    }
+  ],
+  "rubric": "Teams disagree and legal has not answered.",
+  "label": {
+    "action": {
+      "choice": "needs_decision"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "action": "a person must weigh it: the answer turns on something the scores cannot see"
+    },
+    "why": "The answer depends on what legal says about the data terms and on a disagreement between two teams: things the scores cannot see.",
+    "ruledOut": [
+      {
+        "question": "action",
+        "label": "do_now",
+        "why": "Starting before legal answers could be undone by their answer."
+      },
+      {
+        "question": "action",
+        "label": "schedule",
+        "why": "A backlog slot would not settle the disagreement a person has to settle."
+      },
+      {
+        "question": "action",
+        "label": "decline",
+        "why": "Support wants it and the score is not low enough to throw it away."
+      }
+    ],
+    "second": {
+      "label": {
+        "action": {
+          "choice": "needs_decision"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

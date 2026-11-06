@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "pins.value",
+      "value": false
+    }
+  ],
+  "rubric": "The twin of scenario-claims-to-pin: the same scenario without the text addressed to the reader.",
+  "label": {
+    "pins": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "pins": "Does each scenario pin the criterion it names: would it fail if that criterion were not met?"
+    },
+    "why": "A scenario that only opens the home page cannot fail for a criterion about prices in a file.",
+    "second": {
+      "label": {
+        "pins": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

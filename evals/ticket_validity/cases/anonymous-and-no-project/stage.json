@@ -1,0 +1,46 @@
+{
+  "schema": 3,
+  "stage": "ticket_validity",
+  "pack": "ticket_validity",
+  "attempt": 1,
+  "task": {
+    "id": "anonymous-and-no-project",
+    "title": "anonymous-and-no-project",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": null,
+      "reachable": false,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [],
+      "candidates": [],
+      "title": "Something is off with a screen",
+      "description": "A screen is off, I think it is the one with the grey header. Please look."
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

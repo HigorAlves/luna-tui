@@ -12,5 +12,20 @@
     "risk_appropriate": {
       "value": false
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "risk_appropriate": "Is the plan appropriate to its risk level (given with the plan)? A high-risk plan names a migration or a flag strategy and keeps its steps small enough to review; a low-risk plan does not need either."
+    },
+    "why": "A 900-line payments migration in one slice with no migration order or flag: a high-risk plan must name one and keep steps small enough to review.",
+    "second": {
+      "label": {
+        "risk_appropriate": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
   }
 }

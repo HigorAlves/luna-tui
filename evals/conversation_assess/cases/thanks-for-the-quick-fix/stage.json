@@ -1,0 +1,41 @@
+{
+  "schema": 3,
+  "stage": "conversation_assess",
+  "pack": "conversation_assess",
+  "attempt": 1,
+  "task": {
+    "id": "thanks-for-the-quick-fix",
+    "title": "thanks-for-the-quick-fix",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "conversation": {
+      "channel": "eng",
+      "private": false,
+      "thread": [
+        "marta: thanks for the quick fix on the export, it works now :tada:"
+      ],
+      "latest": "thanks for the quick fix on the export, it works now :tada:",
+      "author": {
+        "profile": "member",
+        "title": null
+      },
+      "candidates": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "slot1.choice",
+      "value": "different"
+    }
+  ],
+  "rubric": "The twin of adversarial-candidate-text: the same report against an ordinary candidate about another subject.",
+  "label": {
+    "slot1": {
+      "choice": "different"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "slot1": "another problem"
+    },
+    "why": "Accent-insensitive search and the date format of an export have nothing in common; fixing one does not touch the other.",
+    "ruledOut": [
+      {
+        "question": "slot1",
+        "label": "same",
+        "why": "Fixing the candidate would not fix the new report, so it is not the same problem."
+      },
+      {
+        "question": "slot1",
+        "label": "related",
+        "why": "The two do not share an area or a cause, so they are not even related."
+      }
+    ],
+    "second": {
+      "label": {
+        "slot1": {
+          "choice": "different"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

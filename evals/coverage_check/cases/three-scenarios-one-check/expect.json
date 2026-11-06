@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "redundancy.score",
+      "min": 1.5,
+      "max": 2.5
+    }
+  ],
+  "rubric": "Three scenarios that all restate one check.",
+  "label": {
+    "redundancy": {
+      "score": 2
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "redundancy": "Most restate one check"
+    },
+    "why": "Each scenario exports the same cart and asserts the same two priced rows, so most restate one check: the heavy level.",
+    "second": {
+      "label": {
+        "redundancy": {
+          "score": 2
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "fits_record.score",
+      "min": 0.5,
+      "max": 1.5
+    }
+  ],
+  "rubric": "The CSV export plus a layout redesign nobody asked for.",
+  "label": {
+    "fits_record": {
+      "score": 1
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "fits_record": "It misses part of the goal or adds unasked work"
+    },
+    "why": "The first two steps build the export, but a third redesigns the cart page layout, which the goal does not ask for: partly.",
+    "second": {
+      "label": {
+        "fits_record": {
+          "score": 1
+        }
+      },
+      "agrees": true
+    }
+  }
+}

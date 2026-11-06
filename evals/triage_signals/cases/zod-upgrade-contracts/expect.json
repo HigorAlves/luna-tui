@@ -40,6 +40,23 @@
       "kind": "equals",
       "path": "archive.value",
       "value": false
+    },
+    {
+      "kind": "equals",
+      "path": "archive_reason.choice",
+      "value": "none"
+    },
+    {
+      "kind": "between",
+      "path": "who.score",
+      "min": -0.5,
+      "max": 0.5
+    },
+    {
+      "kind": "between",
+      "path": "what.score",
+      "min": -0.5,
+      "max": 0.5
     }
   ],
   "rubric": "A dependency upgrade with call-site updates and no behaviour change: a chore, ready (it states how to verify), small or medium. Calling it a feature is wrong. Not urgent: whenever. Backend work. The shared types every package imports: medium risk, not low and not high. It is real work or a real question: not a duplicate, not stale, so the archive suggestion is no.",
@@ -67,6 +84,151 @@
     },
     "archive": {
       "value": false
+    },
+    "archive_reason": {
+      "choice": "none"
+    },
+    "who": {
+      "score": 0
+    },
+    "what": {
+      "score": 0
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "kind": "Upkeep with no new behaviour: a refactor, dependencies, docs, CI",
+      "type_of_work": "Services, APIs, stages, persistence, adapters",
+      "ready": "Does the issue have testable acceptance criteria an agent could verify without asking anyone?",
+      "size": "One function or one file, with its test | Several files in one package",
+      "time": "No one is waiting",
+      "risk_prelim": "Shared code other features depend on",
+      "archive": "Should this be archived instead of worked: a duplicate, out of scope, stale, or nothing an agent can act on?",
+      "archive_reason": "It should be worked",
+      "who": "One person, or an internal tool",
+      "what": "A rough edge: a workaround exists"
+    },
+    "why": "A dependency bump with call-site changes and no behaviour change: a chore, ready because it states how to verify, backend, small or medium, not urgent, and medium risk because every package imports the shared types.",
+    "ruledOut": [
+      {
+        "question": "kind",
+        "label": "bug",
+        "why": "A dependency upgrade with no new behaviour. It is not: Something that works, or should work, is broken."
+      },
+      {
+        "question": "kind",
+        "label": "feature",
+        "why": "A dependency upgrade with no new behaviour. It is not: New behaviour a user or the pipeline can see."
+      },
+      {
+        "question": "kind",
+        "label": "task",
+        "why": "A dependency upgrade with no new behaviour. It is not: A defined piece of work with no new behaviour to design: a migration, a rename, a config change."
+      },
+      {
+        "question": "kind",
+        "label": "question",
+        "why": "A dependency upgrade with no new behaviour. It is not: It asks for an answer or a decision, not a change."
+      },
+      {
+        "question": "kind",
+        "label": "incident",
+        "why": "A dependency upgrade with no new behaviour. It is not: Production is down or wrong right now, data is lost, or a secret is exposed."
+      },
+      {
+        "question": "type_of_work",
+        "label": "frontend",
+        "why": "The change is in contracts, a backend package. It is not: Screens, views, keys, rendering, styling."
+      },
+      {
+        "question": "type_of_work",
+        "label": "infra",
+        "why": "The change is in contracts, a backend package. It is not: Deploys, CI, containers, cloud or runtime configuration."
+      },
+      {
+        "question": "type_of_work",
+        "label": "data",
+        "why": "The change is in contracts, a backend package. It is not: Schemas, migrations, backfills, pipelines, analytics."
+      },
+      {
+        "question": "type_of_work",
+        "label": "docs",
+        "why": "The change is in contracts, a backend package. It is not: Documentation or copy only."
+      },
+      {
+        "question": "type_of_work",
+        "label": "mixed",
+        "why": "The change is in contracts, a backend package. It is not: Two or more of the above in one change."
+      },
+      {
+        "question": "risk_prelim",
+        "label": "low",
+        "why": "Shared types other code depends on. It is not: Isolated code with tests, docs or copy."
+      },
+      {
+        "question": "risk_prelim",
+        "label": "high",
+        "why": "Shared types other code depends on. It is not: Auth, payments, data migrations, deletion, CI or infrastructure."
+      },
+      {
+        "question": "archive_reason",
+        "label": "duplicate",
+        "why": "It is real work. It is not: Another open ticket asks for the same."
+      },
+      {
+        "question": "archive_reason",
+        "label": "out_of_scope",
+        "why": "It is real work. It is not: Not this repository's or team's to do."
+      },
+      {
+        "question": "archive_reason",
+        "label": "stale",
+        "why": "It is real work. It is not: Overtaken by events; nobody needs it now."
+      },
+      {
+        "question": "archive_reason",
+        "label": "not_actionable",
+        "why": "It is real work. It is not: No change an agent could make or verify."
+      }
+    ],
+    "second": {
+      "label": {
+        "kind": {
+          "choice": "chore"
+        },
+        "type_of_work": {
+          "choice": "backend"
+        },
+        "ready": {
+          "value": true
+        },
+        "size": {
+          "choice": [
+            "S",
+            "M"
+          ]
+        },
+        "time": {
+          "score": 0
+        },
+        "risk_prelim": {
+          "choice": "medium"
+        },
+        "archive": {
+          "value": false
+        },
+        "archive_reason": {
+          "choice": "none"
+        },
+        "who": {
+          "score": 0
+        },
+        "what": {
+          "score": 0
+        }
+      },
+      "agrees": true
     }
   }
 }

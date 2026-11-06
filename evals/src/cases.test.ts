@@ -178,7 +178,7 @@ describe("the seed cases", () => {
 });
 
 /** The packs whose hand-written cases are checked for their reading (`checkReading`). Slices 9 and 10 add their packs; at the end it is every decision pack. */
-const READ: string[] = [];
+const READ: string[] = ["intake_dedup", "risk_score", "size_estimate", "split_check", "coverage_check", "plan_check", "ticket_validity", "ticket_recommend", "conversation_relation", "triage_signals", "ticket_assess", "conversation_assess"];
 
 describe("the readings of the hand-written cases", () => {
   const EVALS = resolve(import.meta.dirname, "..");

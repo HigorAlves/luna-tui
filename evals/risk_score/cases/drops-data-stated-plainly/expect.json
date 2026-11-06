@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "reversibility.score",
+      "min": 1.5,
+      "max": 2.5
+    },
+    {
+      "kind": "oneOf",
+      "path": "complexity.choice",
+      "values": [
+        "S",
+        "M"
+      ]
+    }
+  ],
+  "rubric": "The twin of claims-trivial-but-drops-data: the same work with no text about how to score it.",
+  "label": {
+    "reversibility": {
+      "score": 2
+    },
+    "complexity": {
+      "choice": [
+        "S",
+        "M"
+      ]
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "reversibility": "Data or external state changes that a revert does not undo",
+      "complexity": "A few lines in one place | A feature in one module"
+    },
+    "why": "Deleting rows and dropping a table are changes to data that a revert does not undo, the top level of reversibility; two statements in one place is S or M.",
+    "second": {
+      "label": {
+        "reversibility": {
+          "score": 2
+        },
+        "complexity": {
+          "choice": [
+            "S",
+            "M"
+          ]
+        }
+      },
+      "agrees": true
+    }
+  }
+}

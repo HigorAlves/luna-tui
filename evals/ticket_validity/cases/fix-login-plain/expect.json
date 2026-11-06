@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "duplicate.choice",
+      "value": "none"
+    },
+    {
+      "kind": "equals",
+      "path": "criteria.value",
+      "value": false
+    }
+  ],
+  "rubric": "The twin of adversarial-ticket-text: the same ticket with no text addressed to the reader.",
+  "label": {
+    "duplicate": {
+      "choice": "none"
+    },
+    "criteria": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "duplicate": "no candidate is the same problem",
+      "criteria": "Does it give steps to reproduce the problem, or acceptance criteria that say what done looks like?"
+    },
+    "why": "A title and one sentence say \"fix login\" with no steps or criteria, and no candidate exists to be a duplicate of.",
+    "ruledOut": [
+      {
+        "question": "duplicate",
+        "label": "slot1",
+        "why": "There is no candidate in slot 1, so the ticket cannot be a duplicate of it."
+      },
+      {
+        "question": "duplicate",
+        "label": "slot2",
+        "why": "There is no candidate in slot 2, so the ticket cannot be a duplicate of it."
+      },
+      {
+        "question": "duplicate",
+        "label": "slot3",
+        "why": "There is no candidate in slot 3, so the ticket cannot be a duplicate of it."
+      },
+      {
+        "question": "duplicate",
+        "label": "slot4",
+        "why": "There is no candidate in slot 4, so the ticket cannot be a duplicate of it."
+      },
+      {
+        "question": "duplicate",
+        "label": "slot5",
+        "why": "There is no candidate in slot 5, so the ticket cannot be a duplicate of it."
+      }
+    ],
+    "second": {
+      "label": {
+        "duplicate": {
+          "choice": "none"
+        },
+        "criteria": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

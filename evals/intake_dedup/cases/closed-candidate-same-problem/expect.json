@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "slot1.choice",
+      "value": "same"
+    }
+  ],
+  "rubric": "The same crash on the same screen, reported again against a candidate that was closed.",
+  "label": {
+    "slot1": {
+      "choice": "same"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "slot1": "the same problem: fixing one fixes the other"
+    },
+    "why": "The screen, the trigger (rotation) and the symptom (the app closes) match the candidate, so the fix of one is the fix of the other.",
+    "ruledOut": [
+      {
+        "question": "slot1",
+        "label": "related",
+        "why": "One fix closes both, which the related criterion excludes."
+      },
+      {
+        "question": "slot1",
+        "label": "different",
+        "why": "The screen and the trigger are the same as the candidate."
+      }
+    ],
+    "second": {
+      "label": {
+        "slot1": {
+          "choice": "same"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

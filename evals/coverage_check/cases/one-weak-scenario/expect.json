@@ -8,5 +8,38 @@
       "max": 0.75
     }
   ],
-  "rubric": "One scenario pins its criterion; the other says 'contains the prices' without saying which rows or values: whether they pin is a toss-up, so p should stay near the middle."
+  "rubric": "One scenario pins its criterion; the other says 'contains the prices' without saying which rows or values: whether they pin is a toss-up, so p should stay near the middle.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "pins": {
+            "value": true
+          }
+        },
+        "criteria": {
+          "pins": "Does each scenario pin the criterion it names: would it fail if that criterion were not met?"
+        },
+        "why": "The second scenario names the file and the prices, which can fail if the prices are missing."
+      },
+      {
+        "label": {
+          "pins": {
+            "value": false
+          }
+        },
+        "criteria": {
+          "pins": "Does each scenario pin the criterion it names: would it fail if that criterion were not met?"
+        },
+        "why": "It never says which rows or values to compare, so it could pass on a file with wrong prices."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

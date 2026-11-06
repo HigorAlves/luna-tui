@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "project.value",
+      "value": false
+    },
+    {
+      "kind": "equals",
+      "path": "reporter.value",
+      "value": false
+    }
+  ],
+  "rubric": "No reporter named by the tool and nothing that points at a project.",
+  "label": {
+    "project": {
+      "value": false
+    },
+    "reporter": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "project": "Can the ticket be tied to one identifiable project or repository of ours, from its text, labels and the code it points at?",
+      "reporter": "Is the reporter reachable: named by the tool, so they can be asked a question?"
+    },
+    "why": "The tool names no reporter, so nobody can be asked a question; the text, labels and files point at no project or repository.",
+    "second": {
+      "label": {
+        "project": {
+          "value": false
+        },
+        "reporter": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

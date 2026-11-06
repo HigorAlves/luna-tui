@@ -39,7 +39,172 @@
       "kind": "equals",
       "path": "archive.value",
       "value": false
+    },
+    {
+      "kind": "equals",
+      "path": "ready.value",
+      "value": false
+    },
+    {
+      "kind": "between",
+      "path": "who.score",
+      "min": 1.5,
+      "max": 2.5
+    },
+    {
+      "kind": "between",
+      "path": "what.score",
+      "min": 1.5,
+      "max": 2.5
+    },
+    {
+      "kind": "equals",
+      "path": "archive_reason.choice",
+      "value": "none"
     }
   ],
-  "rubric": "Production is down for every customer: the kind is incident, impact and time sensitivity are at the top of their rubrics, and the risk is not low (a payment path). Calling it a bug with normal urgency, or suggesting to archive it, is a real error."
+  "rubric": "Production is down for every customer: the kind is incident, impact and time sensitivity are at the top of their rubrics, and the risk is not low (a payment path). Calling it a bug with normal urgency, or suggesting to archive it, is a real error.",
+  "label": {
+    "kind": {
+      "choice": "incident"
+    },
+    "type_of_work": {
+      "choice": [
+        "backend",
+        "mixed"
+      ]
+    },
+    "ready": {
+      "value": false
+    },
+    "who": {
+      "score": 2
+    },
+    "what": {
+      "score": 2
+    },
+    "impact": {
+      "score": 2
+    },
+    "time": {
+      "score": 2
+    },
+    "risk_prelim": {
+      "choice": [
+        "medium",
+        "high"
+      ]
+    },
+    "archive": {
+      "value": false
+    },
+    "archive_reason": {
+      "choice": "none"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "kind": "Production is down or wrong right now, data is lost, or a secret is exposed",
+      "type_of_work": "Services, APIs, stages, persistence, adapters | Two or more of the above in one change",
+      "ready": "Does the issue have testable acceptance criteria an agent could verify without asking anyone?",
+      "who": "Every user, or the customers who pay",
+      "what": "A core flow is down, or data or money is wrong",
+      "impact": "Revenue, a launch, a contract or trust",
+      "time": "Now: a deadline within days, or production is wrong",
+      "risk_prelim": "Shared code other features depend on | Auth, payments, data migrations, deletion, CI or infrastructure",
+      "archive": "Should this be archived instead of worked: a duplicate, out of scope, stale, or nothing an agent can act on?",
+      "archive_reason": "It should be worked"
+    },
+    "why": "Every checkout answers 500 since a deploy with no order for 25 minutes: production is down for every customer, so the kind is incident and who, what, impact and time are at the top of their rubrics; it is a payment path, so the risk is not low.",
+    "ruledOut": [
+      {
+        "question": "kind",
+        "label": "bug",
+        "why": "Production is down right now. It is not: Something that works, or should work, is broken."
+      },
+      {
+        "question": "kind",
+        "label": "feature",
+        "why": "Production is down right now. It is not: New behaviour a user or the pipeline can see."
+      },
+      {
+        "question": "kind",
+        "label": "task",
+        "why": "Production is down right now. It is not: A defined piece of work with no new behaviour to design: a migration, a rename, a config change."
+      },
+      {
+        "question": "kind",
+        "label": "chore",
+        "why": "Production is down right now. It is not: Upkeep with no new behaviour: a refactor, dependencies, docs, CI."
+      },
+      {
+        "question": "kind",
+        "label": "question",
+        "why": "Production is down right now. It is not: It asks for an answer or a decision, not a change."
+      },
+      {
+        "question": "archive_reason",
+        "label": "duplicate",
+        "why": "It must be worked now. It is not: Another open ticket asks for the same."
+      },
+      {
+        "question": "archive_reason",
+        "label": "out_of_scope",
+        "why": "It must be worked now. It is not: Not this repository's or team's to do."
+      },
+      {
+        "question": "archive_reason",
+        "label": "stale",
+        "why": "It must be worked now. It is not: Overtaken by events; nobody needs it now."
+      },
+      {
+        "question": "archive_reason",
+        "label": "not_actionable",
+        "why": "It must be worked now. It is not: No change an agent could make or verify."
+      }
+    ],
+    "second": {
+      "label": {
+        "kind": {
+          "choice": "incident"
+        },
+        "type_of_work": {
+          "choice": [
+            "backend",
+            "mixed"
+          ]
+        },
+        "ready": {
+          "value": false
+        },
+        "who": {
+          "score": 2
+        },
+        "what": {
+          "score": 2
+        },
+        "impact": {
+          "score": 2
+        },
+        "time": {
+          "score": 2
+        },
+        "risk_prelim": {
+          "choice": [
+            "medium",
+            "high"
+          ]
+        },
+        "archive": {
+          "value": false
+        },
+        "archive_reason": {
+          "choice": "none"
+        }
+      },
+      "agrees": true
+    },
+    "note": "The case was committed with checks and no label; it is now labelled from the checks it already had plus the questions its text settles. ready is labelled false: it says what to do (roll back, patch, test) but no testable acceptance criteria."
+  }
 }

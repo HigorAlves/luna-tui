@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "action.choice",
+      "value": "do_now"
+    }
+  ],
+  "rubric": "An outage with no workaround and a cheap fix.",
+  "label": {
+    "action": {
+      "choice": "do_now"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "action": "start on it now"
+    },
+    "why": "Every EU payment fails with no workaround, priority P0 and the cost of delay far above the cost of doing: start now.",
+    "ruledOut": [
+      {
+        "question": "action",
+        "label": "schedule",
+        "why": "Waiting costs every EU payment, so it cannot go to the backlog."
+      },
+      {
+        "question": "action",
+        "label": "decline",
+        "why": "It is the opposite of not worth doing: the delay cost is 9."
+      },
+      {
+        "question": "action",
+        "label": "needs_decision",
+        "why": "The scores settle it; no unseen factor is named."
+      }
+    ],
+    "second": {
+      "label": {
+        "action": {
+          "choice": "do_now"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

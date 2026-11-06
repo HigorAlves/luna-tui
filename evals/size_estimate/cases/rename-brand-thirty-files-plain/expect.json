@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "reviewable.value",
+      "value": false
+    }
+  ],
+  "rubric": "The twin of ticket-says-it-is-one-line: the same thirty-file rename with no text about how to answer.",
+  "label": {
+    "reviewable": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "reviewable": "Could one reviewer read this as one pull request with one purpose and follow it in one sitting?"
+    },
+    "why": "Thirty files across six screens, each with a snapshot and a translation, is too much for one reviewer to follow in one sitting.",
+    "second": {
+      "label": {
+        "reviewable": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

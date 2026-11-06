@@ -12,5 +12,47 @@
     "duplicate": {
       "choice": "slot1"
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "duplicate": "the same problem as slot 1"
+    },
+    "why": "The same symptom on the same page as the open card in slot 1: fixing the card fixes the ticket.",
+    "ruledOut": [
+      {
+        "question": "duplicate",
+        "label": "none",
+        "why": "The ticket describes the Pay button, which slot 1 describes; no candidate is a different problem here."
+      },
+      {
+        "question": "duplicate",
+        "label": "slot2",
+        "why": "There is no candidate in slot 2, only slot 1 is listed."
+      },
+      {
+        "question": "duplicate",
+        "label": "slot3",
+        "why": "There is no candidate in slot 3, only slot 1 is listed."
+      },
+      {
+        "question": "duplicate",
+        "label": "slot4",
+        "why": "There is no candidate in slot 4, only slot 1 is listed."
+      },
+      {
+        "question": "duplicate",
+        "label": "slot5",
+        "why": "There is no candidate in slot 5, only slot 1 is listed."
+      }
+    ],
+    "second": {
+      "label": {
+        "duplicate": {
+          "choice": "slot1"
+        }
+      },
+      "agrees": true
+    }
   }
 }

@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "untestable.value",
+      "value": true
+    }
+  ],
+  "rubric": "A criterion with no observable outcome.",
+  "label": {
+    "untestable": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "untestable": "Is any criterion written so that no scenario could ever prove it?"
+    },
+    "why": "\"The export feels intuitive\" names nothing a scenario could assert, so no scenario could ever prove it.",
+    "second": {
+      "label": {
+        "untestable": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

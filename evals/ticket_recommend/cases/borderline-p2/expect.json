@@ -8,5 +8,38 @@
       "max": 0.85
     }
   ],
-  "rubric": "On the line between scheduling and declining: confidence stays moderate."
+  "rubric": "On the line between scheduling and declining: confidence stays moderate.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "action": {
+            "choice": "schedule"
+          }
+        },
+        "criteria": {
+          "action": "worth doing, but later: it goes to the backlog"
+        },
+        "why": "A page that loads in two seconds and bothers a few users is worth a backlog slot."
+      },
+      {
+        "label": {
+          "action": {
+            "choice": "decline"
+          }
+        },
+        "criteria": {
+          "action": "not worth the team's time"
+        },
+        "why": "Only a few users mention it and the score is 0.58: it might not be worth the team's time."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

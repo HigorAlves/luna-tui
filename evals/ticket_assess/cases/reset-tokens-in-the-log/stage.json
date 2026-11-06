@@ -1,0 +1,46 @@
+{
+  "schema": 3,
+  "stage": "ticket_assess",
+  "pack": "ticket_assess",
+  "attempt": 1,
+  "task": {
+    "id": "reset-tokens-in-the-log",
+    "title": "reset-tokens-in-the-log",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": "Ana",
+      "reachable": true,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [],
+      "candidates": [],
+      "title": "Password reset tokens are written to the application log",
+      "description": "Reported by one engineer in a review: reset tokens appear in clear text in the application log, which support and a vendor can read. The fix is to stop logging the field, in one file of the auth module; no other code depends on it and nothing new is needed."
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

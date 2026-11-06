@@ -1,0 +1,54 @@
+{
+  "schema": 3,
+  "stage": "ticket_recommend",
+  "pack": "ticket_recommend",
+  "attempt": 1,
+  "task": {
+    "id": "checkout-down-for-eu-cards",
+    "title": "checkout-down-for-eu-cards",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": "Ana",
+      "reachable": true,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [],
+      "candidates": [],
+      "title": "Checkout returns a 500 for every EU card",
+      "description": "Since this morning every payment with an EU card fails with a 500; customers are writing in and there is no workaround.",
+      "assessment": {
+        "priority": "P0",
+        "size": "S",
+        "blastRadius": "high",
+        "costOfDelay": 9,
+        "costOfDoing": 2,
+        "score": 4.5
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

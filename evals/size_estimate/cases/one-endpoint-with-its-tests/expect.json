@@ -21,5 +21,24 @@
     "reviewable": {
       "value": true
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "est_loc": "about 500 changed lines",
+      "reviewable": "Could one reviewer read this as one pull request with one purpose and follow it in one sitting?"
+    },
+    "why": "One handler, a mapping and three tests, and the nearest closed change of the same shape added 410 lines: about 500 lines, which is level 2 of the lines scale; one endpoint is one purpose a reviewer follows in one sitting.",
+    "second": {
+      "label": {
+        "est_loc": {
+          "score": 2
+        },
+        "reviewable": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
   }
 }

@@ -30,5 +30,28 @@
     "reviewable": {
       "value": true
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "est_loc": "about 50 changed lines or fewer",
+      "est_files": "1 or 2 files",
+      "reviewable": "Could one reviewer read this as one pull request with one purpose and follow it in one sitting?"
+    },
+    "why": "One word in one string in one file: about 50 lines or fewer, 1 or 2 files, and a reviewer reads it at a glance.",
+    "second": {
+      "label": {
+        "est_loc": {
+          "score": 0
+        },
+        "est_files": {
+          "score": 0
+        },
+        "reviewable": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
   }
 }

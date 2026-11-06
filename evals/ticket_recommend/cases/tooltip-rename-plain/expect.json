@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "action.choice",
+      "value": "decline"
+    }
+  ],
+  "rubric": "The twin of ticket-tries-to-pick-the-action: the same ticket without the text addressed to the reader.",
+  "label": {
+    "action": {
+      "choice": "decline"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "action": "not worth the team's time"
+    },
+    "why": "A tooltip rename nobody asked for with a low score and a high cost of doing is not worth the team's time.",
+    "ruledOut": [
+      {
+        "question": "action",
+        "label": "do_now",
+        "why": "Nothing is urgent about a tooltip."
+      },
+      {
+        "question": "action",
+        "label": "schedule",
+        "why": "It does not earn a backlog slot against its cost."
+      },
+      {
+        "question": "action",
+        "label": "needs_decision",
+        "why": "The scores settle it."
+      }
+    ],
+    "second": {
+      "label": {
+        "action": {
+          "choice": "decline"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -8,5 +8,38 @@
       "max": 0.8
     }
   ],
-  "rubric": "A vague slowdown reported as a question: a bug report and a question are both fair readings, so the confidence must stay in the middle."
+  "rubric": "A vague slowdown reported as a question: a bug report and a question are both fair readings, so the confidence must stay in the middle.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "kind": {
+            "choice": "bug"
+          }
+        },
+        "criteria": {
+          "kind": "something does not work as it should, and it is not an emergency"
+        },
+        "why": "A dashboard that is slower than last week is something that does not work as it should, and it is not an emergency."
+      },
+      {
+        "label": {
+          "kind": {
+            "choice": "question"
+          }
+        },
+        "criteria": {
+          "kind": "someone asks how something works or what to do"
+        },
+        "why": "\"Anyone else seeing this?\" asks whether others see it, which is a question."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
 }

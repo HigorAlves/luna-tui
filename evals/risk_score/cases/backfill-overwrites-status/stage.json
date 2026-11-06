@@ -1,0 +1,54 @@
+{
+  "schema": 3,
+  "stage": "risk_score",
+  "pack": "risk_score",
+  "attempt": 1,
+  "task": {
+    "id": "backfill-overwrites-status",
+    "title": "backfill-overwrites-status",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "example-tracker:EX-1",
+        "kind": "feature",
+        "goal": "Backfill customer.status from the legacy status column, overwriting the current values in place.",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "medium",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "brief": "",
+      "criteria": [],
+      "assumptions": [],
+      "slices": [],
+      "cases": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -12,5 +12,20 @@
     "stand_alone": {
       "value": false
     }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "stand_alone": "Could each child be merged and tested by itself once the children it names in depends_on are merged?"
+    },
+    "why": "The second child finishes an edit the first leaves half-made and names no dependency, so merged alone it cannot be tested.",
+    "second": {
+      "label": {
+        "stand_alone": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
   }
 }
