@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
-import { CACHE_ENV, type RunDeps, cacheVolumeFor, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
+import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
 import { EgressUnsupportedError } from "./egress.ts";
 
 function run(over: Partial<SandboxRun> = {}): SandboxRun {
@@ -423,5 +423,50 @@ describe("corepack in every container", () => {
     const bare = sandboxArgs(run(), "/in", "/out");
     expect(bare).toContain("COREPACK_ENABLE_DOWNLOAD_PROMPT=0");
     expect(bare).not.toContain("COREPACK_HOME=/cache/corepack");
+  });
+});
+
+describe("secrets reach a container by name only", () => {
+  const secret = ["sec", "ret", "y".repeat(10)].join("-");
+  it("are `-e NAME` with no value in the argument list of a stage and of a check", () => {
+    const stage = sandboxArgs(run({ secrets: { QA_PASSWORD: secret } }), "/in", "/out");
+    const check = sandboxExecArgs({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } } as never);
+    expect(stage).toEqual(expect.arrayContaining(["-e", "QA_PASSWORD"]));
+    expect(check).toEqual(expect.arrayContaining(["-e", "DB_URL"]));
+    for (const args of [stage, check]) for (const a of args) expect(a).not.toContain(secret);
+  });
+
+  it("go only into the environment of the docker client, for a stage and a check", async () => {
+    const seen: Array<NodeJS.ProcessEnv | undefined> = [];
+    const deps = {
+      exec: async (_c: string, args: string[], options?: { env?: NodeJS.ProcessEnv }) => (args[0] === "run" && seen.push(options?.env), args[0] === "wait" ? { code: 0, stdout: "0", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
+      execOrThrow: async (_c: string, args: string[], options?: { env?: NodeJS.ProcessEnv }) => (seen.push(options?.env), ""),
+      startServices: async () => ({ network: null, env: {}, teardown: async () => {} }),
+    } as unknown as Partial<RunDeps>;
+    await execInSandbox({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } }, {}, deps);
+    const dir = mkdtempSync(join(tmpdir(), "docker-secret-"));
+    await runSandbox(run({ runDir: dir, secrets: { QA_PASSWORD: secret } }), deps);
+    rmSync(dir, { recursive: true, force: true });
+    expect(seen.map((e) => e?.DB_URL ?? e?.QA_PASSWORD)).toEqual([secret, secret]);
+  });
+});
+
+describe("sandboxExecutor's secrets", () => {
+  it("loads the names a check declares from the store for its repository, passes the values, and refuses to run a check whose secret is missing", async () => {
+    const runs: Array<{ secrets?: Record<string, string> }> = [];
+    const fake = (async (r: { secrets?: Record<string, string> }) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
+    const loads: Array<[string, string[]]> = [];
+    const store = { folder: (repo: string) => `/secrets/${repo}`, load: async (repo: string, names: string[]) => (loads.push([repo, names]), names.includes("GONE_ONE") ? { values: {}, missing: [{ name: "GONE_ONE", reason: "absent" }] } : { values: Object.fromEntries(names.map((n) => [n, "v".repeat(10)])), missing: [] }) };
+    const exec = sandboxExecutor({ machine: "m", imageOf: async () => "img", secrets: store }, fake);
+    await exec("true", [], { cwd: "/wt/a/t1", repoPath: "/a/shop", secrets: ["DB_URL"] });
+    await exec("true", [], { cwd: "/wt/a/t1", repoPath: "/a/shop" });
+    expect(loads).toEqual([["/a/shop", ["DB_URL"]]]);
+    expect(runs[0]!.secrets).toEqual({ DB_URL: "v".repeat(10) });
+    expect(runs[1]!.secrets).toBeUndefined();
+    const error = await exec("true", [], { cwd: "/wt/a/t1", repoPath: "/a/shop", secrets: ["GONE_ONE"] }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SecretsMissingError);
+    expect((error as SecretsMissingError).detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "secrets", names: ["GONE_ONE"] });
+    expect(String((error as Error).message)).toContain("/secrets//a/shop");
+    expect(runs).toHaveLength(2);
   });
 });

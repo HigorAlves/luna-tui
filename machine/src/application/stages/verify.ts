@@ -10,6 +10,7 @@ import { RepoImageError } from "../repo-images.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { blockedPayloads } from "../egress-policy.ts";
 import { InstallFailedError } from "../install.ts";
+import { SecretsMissingError } from "../../adapters/docker/docker.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
@@ -186,7 +187,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     // change calls for), else what the tree says.
     const { checks: declared, services, decisions = {} } = await repoPolicy(task.repoPath ?? null);
     const reports: CheckReport[] = [];
-    let commands: Array<{ name: string; cmd: string; argv: string[] }>;
+    let commands: Array<{ name: string; cmd: string; argv: string[]; secrets?: string[] }>;
     let selectedChecks: CheckSpec[] = [];
     let noTests: boolean;
     const skipped: CheckReport[] = [];
@@ -206,7 +207,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     }
     const log: string[] = [];
     const deadline = Date.now() + CHECKS_TIMEOUT_MS;
-    for (const { name, cmd, argv } of commands) {
+    for (const { name, cmd, argv, secrets: declaredSecrets } of commands) {
       const remaining = deadline - Date.now();
       let result: ExecResult;
       let timedOut = false;
@@ -222,10 +223,11 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
             env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
             services,
             ...(task.repoPath ? { repoPath: task.repoPath } : {}),
+            ...(declaredSecrets && declaredSecrets.length > 0 ? { secrets: declaredSecrets } : {}),
           });
         } catch (error) {
           // The repository's image could not be built: an environment problem with the reason, not a crashed stage.
-          if (error instanceof InstallFailedError) return { outcome: "escalated", detail: error.detail };
+          if (error instanceof InstallFailedError || error instanceof SecretsMissingError) return { outcome: "escalated", detail: error.detail };
           if (error instanceof EgressUnsupportedError) return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
           if (!(error instanceof RepoImageError)) throw error;
           return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "checks", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };

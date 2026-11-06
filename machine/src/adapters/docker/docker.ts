@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { ServiceSpec } from "@hardness/contracts";
 
 import type { CredentialMount, RunCredential } from "../credentials/index.ts";
+import type { SecretStore } from "../../application/secrets.ts";
 import { type BlockedRow, type CardNetwork, findCardNetwork, openCardNetwork } from "./egress.ts";
 import { serviceName, startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
@@ -108,6 +109,8 @@ export interface SandboxRun {
   serviceEnv?: Record<string, string>;
   /** The list this run may reach (`egressFor`), and the machine's own image the proxy runs from (never a repository's). `runSandbox` opens a card network with a proxy for it, and removes both when the run ends. */
   egress?: { allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string };
+  /** Secret values by name, for this run only: passed as `-e NAME`, the values in the docker client's environment alone. */
+  secrets?: Record<string, string>;
   /** The run's card network (egress.ts): joined in place of the plain network, with the proxy as the only way out. */
   cardNetwork?: CardNetwork;
   /** More networks to join, by name (the browser run joins the app's). */
@@ -172,6 +175,8 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-e", `CLAUDE_CONFIG_DIR=${run.sessionMount ? "/session" : "/tmp/claude"}`,
     // The credential is passed by name; its value is only in docker's environment.
     ...Object.keys(run.credential.env).flatMap((name) => ["-e", name]),
+    // A scoped secret the same way: by name here, the value only in docker's environment.
+    ...Object.keys(run.secrets ?? {}).flatMap((name) => ["-e", name]),
     // The worktree is owned by the host user, not the container's; and there is no gpg key
     // in here, so a commit must not try to sign.
     ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]),
@@ -231,7 +236,7 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
         await mkdir(outDir, { recursive: true });
         await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
         await deps.execOrThrow("docker", sandboxArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }, inDir, outDir), {
-          env: { ...process.env, ...run.credential.env },
+          env: { ...process.env, ...run.credential.env, ...(run.secrets ?? {}) },
         });
       }
       const result = await waitSandbox(run, deps.exec);
@@ -326,6 +331,8 @@ export interface SandboxExec {
   services?: Record<string, ServiceSpec>;
   network?: string | null;
   serviceEnv?: Record<string, string>;
+  /** Secret values by name for this command only, passed as `-e NAME`; the values go in the docker client's environment alone. */
+  secrets?: Record<string, string>;
   /** The list the check may reach, as for a stage; `execInSandbox` opens and removes the network. */
   egress?: { allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string };
   /** The check's card network and any more networks to join, as for a stage. */
@@ -359,6 +366,7 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
   if (user) args.push("--user", user);
   args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...COREPACK_ENV.flatMap((env) => ["-e", env]), ...blankedEnv(), ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.env ?? {})) args.push("-e", `${key}=${value}`);
+  for (const name of Object.keys(run.secrets ?? {})) args.push("-e", name);
   args.push(...cacheArgs(run.cacheVolume));
   args.push(...networkArgs(run.network, run.serviceEnv, false, run.cardNetwork, run.alsoJoin, Object.keys(run.services ?? {})));
   // Writable: a test runner writes its cache next to the code (node_modules/.vite, go's are on the tmpfs).
@@ -382,7 +390,7 @@ export async function execInSandbox(
   try {
     const services = await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
     try {
-      const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }), options);
+      const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }), { ...options, ...(run.secrets ? { env: { ...process.env, ...run.secrets } } : {}) });
       await deps.exec("docker", ["rm", "-f", run.name]);
       return own ? { ...result, blocked: await own.blocked() } : result;
     } finally {
@@ -405,12 +413,14 @@ export function sandboxExecutor(
     egress?: (repoPath: string | undefined) => Promise<{ allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string }>;
     /** The repository's own `sandbox.cpu` and `sandbox.memory_gb`; absent, the defaults. */
     limitsOf?: (repoPath: string | undefined) => Promise<SandboxSize>;
+    /** The owner's store of this repository's scoped secrets; a check gets only the names it declares. */
+    secrets?: SecretStore;
   },
   run: typeof execInSandbox = execInSandbox) {
   return async (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string } = {},
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[] } = {},
   ): Promise<ExecResult> => {
     if (!options.cwd) throw new Error("sandboxExecutor needs cwd: the worktree to mount");
     // The image is the repository's, named by the caller: never guessed from the folder. No repository, the machine's image.
@@ -424,8 +434,16 @@ export function sandboxExecutor(
     }
     const gitIdentity =
       identity.GIT_AUTHOR_NAME && identity.GIT_AUTHOR_EMAIL ? { name: identity.GIT_AUTHOR_NAME, email: identity.GIT_AUTHOR_EMAIL } : null;
+    let secrets: Record<string, string> | undefined;
+    if (options.secrets && options.secrets.length > 0) {
+      if (!images.secrets || !options.repoPath) throw new SecretsMissingError(options.secrets.map((name) => ({ name, reason: "no secrets store is configured" })), "(no secrets store)");
+      const loaded = await images.secrets.load(options.repoPath, options.secrets);
+      if (loaded.missing.length > 0) throw new SecretsMissingError(loaded.missing, images.secrets.folder(options.repoPath));
+      secrets = loaded.values;
+    }
     return run(
       {
+        ...(secrets ? { secrets } : {}),
         name: `hardness-check-${randomUUID().slice(0, 8)}`,
         image,
         worktree: options.cwd,
@@ -441,6 +459,18 @@ export function sandboxExecutor(
       { signal: options.signal, timeoutMs: options.timeoutMs },
     );
   };
+}
+
+/** A step declares a secret the owner's store does not hold: nothing ran. The detail names the secret and the folder, never a value. */
+export class SecretsMissingError extends Error {
+  readonly detail: Record<string, unknown>;
+  constructor(missing: ReadonlyArray<{ name: string; reason: string }>, folder: string) {
+    const names = missing.map((m) => m.name);
+    const reason = `the step declares secrets the machine cannot read: ${missing.map((m) => `${m.name} (${m.reason})`).join("; ")}; put each in ${folder}/<NAME> (mode 600)`;
+    super(reason);
+    this.name = "SecretsMissingError";
+    this.detail = { escalation: "env_broken", envBroken: true, step: "secrets", names, reason, options: [`put the secret file(s) in ${folder}, then resume`] };
+  }
 }
 
 const isFile = (path: string): boolean => {

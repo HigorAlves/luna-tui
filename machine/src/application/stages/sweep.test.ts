@@ -98,3 +98,11 @@ describe("runChecks and what a check was refused", () => {
     expect(seen).toEqual([["unit", rows]]);
   });
 });
+
+describe("runChecks and secrets", () => {
+  it("passes each check only the names it declares: the one that declares none gets none", async () => {
+    const seen: Record<string, unknown> = {};
+    await runChecks({ commands: [{ name: "db", cmd: "a", argv: ["a"], secrets: ["DB_URL"] }, { name: "plain", cmd: "b", argv: ["b"], secrets: [] }], exec: async (cmd, _a, options) => ((seen[cmd] = (options as { secrets?: string[] }).secrets), { code: 0, stdout: "", stderr: "" }), cwd: "/w", env: {}, stage: "implementing", timeoutMs: 10_000 });
+    expect(seen).toEqual({ a: ["DB_URL"], b: undefined });
+  });
+});

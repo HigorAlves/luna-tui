@@ -27,10 +27,11 @@ import {
   restoreFiles,
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
-import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
+import { type SandboxResult, type SandboxRun, SecretsMissingError, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { type EgressPolicy, blockedPayloads } from "../egress-policy.ts";
 import type { InstallInput, InstallOutcome } from "../install.ts";
+import type { SecretStore } from "../secrets.ts";
 import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
@@ -79,6 +80,8 @@ export interface AgentDeps {
   egress?: EgressPolicy;
   /** Installs the card's dependencies from its lockfile before a writable stage (application/install.ts); absent, nothing is installed by the machine. */
   install?: (input: InstallInput) => Promise<InstallOutcome>;
+  /** The owner's store of a repository's scoped secrets; only the browser runs read it, for their QA target's credential. */
+  secrets?: SecretStore;
   /** Finds the project's own check commands; the locked-test replay runs the test one. */
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** Each repo's luna.yaml; one store is shared so a bad edit warns once. */
@@ -473,6 +476,20 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     }
     for (const note of installed.notes) await context.note?.(note).catch(() => {});
   }
+  // The one agent stage that holds a scoped secret: the browser run, the credential its QA target names (`credential: env:NAME`), by name in the
+  // prompt and by value only in the container's environment. Implementing and the rest get none, whatever a check declares.
+  let secretValues: Record<string, string> | undefined;
+  if (deps.secrets && (pack === "e2e" || pack === "recording")) {
+    const names = [...new Set((pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : policy.qaTargets).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])))];
+    if (names.length > 0) {
+      const loaded = await deps.secrets.load(task.repoPath, names);
+      if (loaded.missing.length > 0) {
+        credential.release();
+        return { outcome: "escalated", detail: new SecretsMissingError(loaded.missing, deps.secrets.folder(task.repoPath)).detail };
+      }
+      secretValues = loaded.values;
+    }
+  }
   // The run's own list: its engine's owner and each helper's, and for a browser run the hosts of the QA target(s) it may drive.
   const found = PACKS[pack];
   const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : found.helpers.map((h) => credentialOwner(h.engine)))];
@@ -483,6 +500,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   try {
   sandbox = await (deps.sandbox ?? runSandbox)({
     ...(egress ? { egress } : {}),
+    ...(secretValues ? { secrets: secretValues } : {}),
     name: container,
     attach: Boolean(resume),
     sessionMount,

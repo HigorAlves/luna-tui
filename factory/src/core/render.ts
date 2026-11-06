@@ -416,7 +416,8 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
           input.context.checks.map((c) => {
             const where = c.cwd && c.cwd !== "." ? ` in ${c.cwd.replace(/\/$/, "")}/` : "";
             const scope = c.paths && c.paths.length > 0 ? ` (for changes under ${c.paths.join(", ")})` : "";
-            return `${c.name}: \`${c.run}\`${where}${scope}`;
+            const machine = c.secrets && c.secrets.length > 0 ? " (run by the machine with its own secrets; do not chase its failure)" : "";
+            return `${c.name}: \`${c.run}\`${where}${scope}${machine}`;
           }),
         )
       : "(none declared; detect the suite from the tree)",

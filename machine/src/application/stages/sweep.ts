@@ -43,7 +43,7 @@ export interface CheckRun {
   missingTool?: { cmd: string; tail: string };
 }
 
-type Exec = (command: string, args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number; env?: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string }) => Promise<ExecResult & { blocked?: BlockedRow[] }>;
+type Exec = (command: string, args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number; env?: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[] }) => Promise<ExecResult & { blocked?: BlockedRow[] }>;
 
 /** Runs the commands in order inside one budget of `timeoutMs`; a command that finds the budget spent is reported as failed and skipped. */
 export async function runChecks(opts: { commands: readonly CheckCommand[]; exec: Exec; cwd: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; stage: string; timeoutMs: number; onBlocked?: (check: string, rows: BlockedRow[]) => void }): Promise<CheckRun> {
@@ -51,7 +51,7 @@ export async function runChecks(opts: { commands: readonly CheckCommand[]; exec:
   const log: string[] = [];
   const deadline = Date.now() + opts.timeoutMs;
   let missingTool: CheckRun["missingTool"];
-  for (const { name, cmd, argv } of opts.commands) {
+  for (const { name, cmd, argv, secrets } of opts.commands) {
     const remaining = deadline - Date.now();
     let result: ExecResult & { blocked?: BlockedRow[] };
     let timedOut = false;
@@ -59,7 +59,7 @@ export async function runChecks(opts: { commands: readonly CheckCommand[]; exec:
       result = { code: 1, stdout: "", stderr: "skipped: the checks budget ran out" };
       timedOut = true;
     } else {
-      result = await opts.exec(argv[0]!, argv.slice(1), { cwd: opts.cwd, ...(opts.signal ? { signal: opts.signal } : {}), timeoutMs: remaining, env: { ...opts.env, HARDNESS_STAGE: opts.stage }, ...(opts.services ? { services: opts.services } : {}), ...(opts.repoPath ? { repoPath: opts.repoPath } : {}) });
+      result = await opts.exec(argv[0]!, argv.slice(1), { cwd: opts.cwd, ...(opts.signal ? { signal: opts.signal } : {}), timeoutMs: remaining, env: { ...opts.env, HARDNESS_STAGE: opts.stage }, ...(opts.services ? { services: opts.services } : {}), ...(opts.repoPath ? { repoPath: opts.repoPath } : {}), ...(secrets && secrets.length > 0 ? { secrets } : {}) });
       timedOut = result.code !== 0 && Date.now() >= deadline;
     }
     if (result.blocked?.length) opts.onBlocked?.(name, result.blocked);

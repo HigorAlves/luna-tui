@@ -15,6 +15,7 @@ import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import type { SecretStore } from "../secrets.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
 import type { StageContext } from "../ports.ts";
 import type { Graph, GraphStamp } from "../graph.ts";
@@ -1360,6 +1361,40 @@ describe("the machine's install before a writable stage", () => {
     const result = await runAgent(d, context("implementing"), "implementing");
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ escalation: "env_broken", step: "install", tool: "pnpm", logTail: "boom" });
+    expect(started).toBe(false);
+  });
+});
+
+describe("scoped secrets and the agent stages", () => {
+  const secret = ["qa", "pw", "z".repeat(10)].join("-");
+  const store = (missing: string[] = []): SecretStore & { loads: Array<[string, string[]]> } => {
+    const loads: Array<[string, string[]]> = [];
+    return { loads, folder: () => "/home/me/.config/hardness/secrets/repo-1", load: async (r, names) => (loads.push([r, [...names]]), { values: Object.fromEntries(names.filter((n) => !missing.includes(n)).map((n) => [n, secret])), missing: missing.filter((m) => names.includes(m)).map((name) => ({ name, reason: "there is no such file" })) }) };
+  };
+  const withTarget = () => writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n    credential: env:QA_PASSWORD\nchecks:\n  - name: db\n    run: make db\n    secrets: [DB_URL]\n");
+
+  it("gives the browser run the credential its QA target names, by value only to the container, and implementing none even when a check declares one", async () => {
+    withTarget();
+    const s = store();
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s };
+    await runAgent(d, context("e2e"), "e2e");
+    expect(seen?.secrets).toEqual({ QA_PASSWORD: secret });
+    expect(JSON.stringify(seen?.input)).not.toContain(secret);
+    await runAgent(d, context("implementing"), "implementing");
+    expect(seen?.secrets).toBeUndefined();
+    await runAgent(d, context("triage"), "triage");
+    expect(seen?.secrets).toBeUndefined();
+  });
+
+  it("ends the stage as env_broken at step secrets, naming the secret and the folder and no value, and starts no container", async () => {
+    withTarget();
+    let started = false;
+    const d: AgentDeps = { ...deps(async (run) => ((started = true), fakeSandbox(output())(run))), secrets: store(["QA_PASSWORD"]) };
+    const result = await runAgent(d, context("e2e"), "e2e");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "secrets", names: ["QA_PASSWORD"] });
+    expect(JSON.stringify(result.detail)).toContain("/home/me/.config/hardness/secrets/repo-1");
+    expect(JSON.stringify(result.detail)).not.toContain(secret);
     expect(started).toBe(false);
   });
 });

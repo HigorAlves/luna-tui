@@ -35,6 +35,8 @@ import { dockerImages } from "../adapters/docker/image-build.ts";
 import { repoSlug } from "../adapters/graph/slug.ts";
 import { ensureGraphReady } from "../application/graph-ready.ts";
 import { type RepoImageEvent, repoImages as makeRepoImages } from "../application/repo-images.ts";
+import { homedir } from "node:os";
+import { repoSecrets } from "../adapters/credentials/repo-secrets.ts";
 import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { isClone } from "../adapters/git/clone.ts";
@@ -178,7 +180,9 @@ export async function buildRealStages(
     onEvent: (event) => imageEvents.sink(event),
   });
   const egress = buildEgress(config, policies);
+  const secrets = repoSecrets({ home: homedir() });
   const sandboxChecks = sandboxExecutor({
+    secrets,
     machine: config.runnerImage,
     imageOf: async (repoPath) => (await repoImages.ensure(repoPath)).image,
     ...(egress ? { egress: (repoPath: string | undefined) => egress.for({ repoPath: repoPath ?? null, kind: "check" }) } : {}),
@@ -206,6 +210,7 @@ export async function buildRealStages(
     image: config.runnerImage,
     ...(egress ? { egress } : {}),
     install,
+    secrets,
     repoImages,
     imageId,
     qaImage: config.runnerQaImage,
