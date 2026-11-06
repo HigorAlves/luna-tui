@@ -3,7 +3,7 @@
   "pack": "evidence_valid",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T22:49:27.668Z",
+  "at": "2026-11-06T06:49:55.865Z",
   "model": "claude-haiku-5-5",
   "summary": {
     "cases": 4,
@@ -11,18 +11,18 @@
     "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 1924.25,
-    "costUsd": 0.00189247,
+    "meanDurationMs": 2209.75,
+    "costUsd": 0.0018419700000000003,
     "judgeCostUsd": null,
     "calibration": {
       "n": 4,
       "labelled": 3,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 1,
-      "brier": 0.03856666666666667,
-      "ece": 0.17666666666666667,
-      "meanConfidence": 0.8174999999999999,
+      "coverage": 0.75,
+      "brier": 0.02829999999999998,
+      "ece": 0.15666666666666662,
+      "meanConfidence": 0.7825,
       "overconfident": 0
     }
   },
@@ -44,12 +44,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1881,
-      "costUsd": 0.0003926,
+      "durationMs": 2094,
+      "costUsd": 0.0005658000000000001,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.82,
+        "confidence": 0.8,
         "verdict": "proceed"
       }
     },
@@ -70,8 +70,8 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1553,
-      "costUsd": 0.00043439,
+      "durationMs": 1780,
+      "costUsd": 0.00040939000000000004,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
@@ -96,13 +96,13 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1863,
-      "costUsd": 0.0005623900000000001,
+      "durationMs": 2454,
+      "costUsd": 0.00035219000000000006,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": null,
-        "confidence": 0.8,
-        "verdict": "proceed"
+        "confidence": 0.6,
+        "verdict": "flag"
       }
     },
     {
@@ -122,12 +122,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2400,
-      "costUsd": 0.0005030900000000001,
+      "durationMs": 2511,
+      "costUsd": 0.0005145900000000001,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.72,
+        "confidence": 0.8,
         "verdict": "proceed"
       }
     }

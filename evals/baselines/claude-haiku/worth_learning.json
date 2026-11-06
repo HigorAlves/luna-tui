@@ -3,26 +3,26 @@
   "pack": "worth_learning",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T22:49:46.814Z",
+  "at": "2026-11-06T06:50:48.424Z",
   "model": "claude-haiku-5-5",
   "summary": {
-    "cases": 4,
-    "passed": 3,
-    "passRate": 0.75,
+    "cases": 6,
+    "passed": 5,
+    "passRate": 0.8333333333333334,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 2065.75,
-    "costUsd": 0.00163013,
+    "meanDurationMs": 2265.6666666666665,
+    "costUsd": 0.00236475,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
+      "n": 6,
+      "labelled": 4,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 1,
-      "brier": 0.05113333333333334,
-      "ece": 0.19333333333333336,
-      "meanConfidence": 0.83,
+      "coverage": 0.8333333333333334,
+      "brier": 0.03794999999999999,
+      "ece": 0.175,
+      "meanConfidence": 0.8033333333333333,
       "overconfident": 0
     }
   },
@@ -44,8 +44,8 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1374,
-      "costUsd": 0.00047159999999999997,
+      "durationMs": 1840,
+      "costUsd": 0.0003145,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
@@ -70,12 +70,38 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2101,
-      "costUsd": 0.00031501,
+      "durationMs": 2658,
+      "costUsd": 0.00056311,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.7,
+        "confidence": 0.75,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "many-overrides-small-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the worth_learning schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "worth.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2300,
+      "costUsd": 0.00045901000000000004,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.8,
         "verdict": "proceed"
       }
     },
@@ -91,18 +117,44 @@
         {
           "check": "worth.p within 0.25..0.75",
           "pass": false,
-          "detail": "found 0.9"
+          "detail": "found 0.87"
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1582,
-      "costUsd": 0.00040021,
+      "durationMs": 1856,
+      "costUsd": 0.00024721,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": null,
-        "confidence": 0.9,
+        "confidence": 0.87,
         "verdict": "proceed"
+      }
+    },
+    {
+      "id": "two-review-rounds-nothing-else",
+      "pass": true,
+      "schema": {
+        "check": "answer on the worth_learning schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "worth.p within 0.25..0.75",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2248,
+      "costUsd": 0.00031601000000000003,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": null,
+        "confidence": 0.65,
+        "verdict": "flag"
       }
     },
     {
@@ -122,12 +174,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3206,
-      "costUsd": 0.00044331000000000004,
+      "durationMs": 2692,
+      "costUsd": 0.00046491,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.75,
+        "confidence": 0.78,
         "verdict": "proceed"
       }
     }

@@ -304,39 +304,39 @@
     }
   },
   "event_class": {
-    "default": "jev",
+    "default": "claude:haiku",
     "fallback": [
-      "claude:haiku"
+      "codex:luna"
     ],
-    "reason": "jev: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points that goes to Jev, the cheapest",
-    "measuredAt": "2026-11-05",
+    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 0.86 (n 7), a tie within 2 points settled by cost",
+    "measuredAt": "2026-11-06",
     "scorecard": {
       "claude:haiku": {
-        "n": 4,
+        "n": 7,
         "accuracy": 1,
         "actedOnAccuracy": 1,
-        "coverage": 0.75,
-        "brier": 0.014699999999999996,
-        "ece": 0.09666666666666668,
-        "costPerCase": 0.0005186825
+        "coverage": 0.8571428571428571,
+        "brier": 0.010716666666666664,
+        "ece": 0.08499999999999985,
+        "costPerCase": 0.00039080000000000007
       },
       "codex:luna": {
-        "n": 4,
+        "n": 7,
         "accuracy": 1,
         "actedOnAccuracy": 1,
         "coverage": 1,
-        "brier": 0.00020000000000000033,
-        "ece": 0.013333333333333308,
+        "brier": 0.00015000000000000026,
+        "ece": 0.011666666666666603,
         "costPerCase": null
       },
       "jev": {
-        "n": 4,
-        "accuracy": 0.6666666666666666,
-        "actedOnAccuracy": 1,
-        "coverage": 0.75,
-        "brier": 0.03473333333333333,
-        "ece": 0.13333333333333328,
-        "costPerCase": 0.0000201075
+        "n": 7,
+        "accuracy": 0.8333333333333334,
+        "actedOnAccuracy": 0.8333333333333334,
+        "coverage": 1,
+        "brier": 0.13091666666666665,
+        "ece": 0.1216666666666667,
+        "costPerCase": 0.00002713142857142857
       }
     }
   },
@@ -345,72 +345,72 @@
     "fallback": [
       "claude:haiku"
     ],
-    "reason": "jev: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points that goes to Jev, the cheapest",
-    "measuredAt": "2026-11-05",
+    "reason": "jev: acted-on accuracy 1.00 at coverage 1.00 (n 5), a tie within 2 points that goes to Jev, the cheapest",
+    "measuredAt": "2026-11-06",
     "scorecard": {
       "claude:haiku": {
-        "n": 4,
+        "n": 5,
         "accuracy": 1,
         "actedOnAccuracy": 1,
         "coverage": 1,
-        "brier": 0.02416666666666666,
-        "ece": 0.15000000000000002,
-        "costPerCase": 0.00041844250000000005
+        "brier": 0.023724999999999986,
+        "ece": 0.14249999999999996,
+        "costPerCase": 0.00047297200000000005
       },
       "codex:luna": {
-        "n": 4,
+        "n": 5,
         "accuracy": 1,
         "actedOnAccuracy": 1,
         "coverage": 1,
-        "brier": 0.001366666666666669,
-        "ece": 0.029999999999999916,
+        "brier": 0.00025000000000000044,
+        "ece": 0.015000000000000013,
         "costPerCase": null
       },
       "jev": {
-        "n": 4,
+        "n": 5,
         "accuracy": 1,
         "actedOnAccuracy": 1,
         "coverage": 1,
-        "brier": 0.00693333333333333,
-        "ece": 0.06666666666666676,
-        "costPerCase": 0.00002123
+        "brier": 0.003649999999999997,
+        "ece": 0.04499999999999993,
+        "costPerCase": 0.000022316
       }
     }
   },
   "fix_scope": {
-    "default": "claude:haiku",
+    "default": "jev",
     "fallback": [
-      "codex:luna"
+      "claude:haiku"
     ],
-    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points settled by cost",
-    "measuredAt": "2026-11-05",
+    "reason": "jev: acted-on accuracy 1.00 at coverage 0.60 (n 5), a tie within 2 points that goes to Jev, the cheapest",
+    "measuredAt": "2026-11-06",
     "scorecard": {
       "claude:haiku": {
-        "n": 4,
+        "n": 5,
         "accuracy": 1,
         "actedOnAccuracy": 1,
         "coverage": 1,
-        "brier": 0.027499999999999986,
-        "ece": 0.15000000000000002,
-        "costPerCase": 0.00046285750000000007
+        "brier": 0.029975000000000005,
+        "ece": 0.1425,
+        "costPerCase": 0.00042500800000000005
       },
       "codex:luna": {
-        "n": 4,
+        "n": 5,
         "accuracy": 1,
         "actedOnAccuracy": 1,
         "coverage": 1,
-        "brier": 0.00046666666666666753,
-        "ece": 0.020000000000000018,
+        "brier": 0.00037500000000000066,
+        "ece": 0.01749999999999996,
         "costPerCase": null
       },
       "jev": {
-        "n": 4,
-        "accuracy": 0.6666666666666666,
+        "n": 5,
+        "accuracy": 0.75,
         "actedOnAccuracy": 1,
-        "coverage": 0.5,
-        "brier": 0.004700000000000001,
-        "ece": 0.056666666666666685,
-        "costPerCase": 0.0000211775
+        "coverage": 0.6,
+        "brier": 0.0031000000000000016,
+        "ece": 0.04500000000000005,
+        "costPerCase": 0.000021157999999999996
       }
     }
   },
@@ -419,25 +419,25 @@
     "fallback": [
       "codex:luna"
     ],
-    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points settled by cost",
-    "measuredAt": "2026-11-05",
+    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost",
+    "measuredAt": "2026-11-06",
     "scorecard": {
       "claude:haiku": {
         "n": 4,
         "accuracy": 1,
         "actedOnAccuracy": 1,
-        "coverage": 1,
-        "brier": 0.03856666666666667,
-        "ece": 0.17666666666666667,
-        "costPerCase": 0.0004731175
+        "coverage": 0.75,
+        "brier": 0.02829999999999998,
+        "ece": 0.15666666666666662,
+        "costPerCase": 0.00046049250000000007
       },
       "codex:luna": {
         "n": 4,
         "accuracy": 1,
         "actedOnAccuracy": 1,
         "coverage": 1,
-        "brier": 0.00020000000000000033,
-        "ece": 0.013333333333333308,
+        "brier": 0.0003000000000000005,
+        "ece": 0.016666666666666607,
         "costPerCase": null
       },
       "jev": {
@@ -445,8 +445,8 @@
         "accuracy": 0.3333333333333333,
         "actedOnAccuracy": 1,
         "coverage": 0.25,
-        "brier": 0.030166666666666665,
-        "ece": 0.16999999999999998,
+        "brier": 0.05346666666666667,
+        "ece": 0.21999999999999997,
         "costPerCase": 0.00001911
       }
     }
@@ -456,35 +456,35 @@
     "fallback": [
       "claude:haiku"
     ],
-    "reason": "jev: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points that goes to Jev, the cheapest",
-    "measuredAt": "2026-11-05",
+    "reason": "jev: acted-on accuracy 1.00 at coverage 0.67 (n 6), a tie within 2 points that goes to Jev, the cheapest",
+    "measuredAt": "2026-11-06",
     "scorecard": {
       "claude:haiku": {
-        "n": 4,
+        "n": 6,
         "accuracy": 1,
         "actedOnAccuracy": 1,
-        "coverage": 1,
-        "brier": 0.05113333333333334,
-        "ece": 0.19333333333333336,
-        "costPerCase": 0.0004075325
+        "coverage": 0.8333333333333334,
+        "brier": 0.03794999999999999,
+        "ece": 0.175,
+        "costPerCase": 0.000394125
       },
       "codex:luna": {
-        "n": 4,
+        "n": 6,
         "accuracy": 1,
         "actedOnAccuracy": 1,
         "coverage": 1,
-        "brier": 0.000600000000000001,
+        "brier": 0.000550000000000001,
         "ece": 0.020000000000000018,
         "costPerCase": null
       },
       "jev": {
-        "n": 4,
+        "n": 6,
         "accuracy": 1,
         "actedOnAccuracy": 1,
-        "coverage": 1,
-        "brier": 0.029366666666666662,
-        "ece": 0.15666666666666665,
-        "costPerCase": 0.0000161825
+        "coverage": 0.6666666666666666,
+        "brier": 0.046075,
+        "ece": 0.1825,
+        "costPerCase": 0.00001779333333333333
       }
     }
   },

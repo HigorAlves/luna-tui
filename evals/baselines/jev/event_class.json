@@ -3,27 +3,27 @@
   "pack": "event_class",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-05T22:45:21.796Z",
+  "at": "2026-11-06T06:48:03.741Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 4,
-    "passed": 2,
-    "passRate": 0.5,
+    "cases": 7,
+    "passed": 6,
+    "passRate": 0.8571428571428571,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 437.75,
-    "costUsd": 0.00008043,
+    "meanDurationMs": 493.57142857142856,
+    "costUsd": 0.00018992,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
-      "accuracy": 0.6666666666666666,
-      "actedOnAccuracy": 1,
-      "coverage": 0.75,
-      "brier": 0.03473333333333333,
-      "ece": 0.13333333333333328,
-      "meanConfidence": 0.8,
-      "overconfident": 0
+      "n": 7,
+      "labelled": 6,
+      "accuracy": 0.8333333333333334,
+      "actedOnAccuracy": 0.8333333333333334,
+      "coverage": 1,
+      "brier": 0.13091666666666665,
+      "ece": 0.1216666666666667,
+      "meanConfidence": 0.9228571428571429,
+      "overconfident": 1
     }
   },
   "cases": [
@@ -39,18 +39,44 @@
         {
           "check": "event.choice = \"noise\"",
           "pass": false,
-          "detail": "found \"changes_requested\""
+          "detail": "found \"review_comment\""
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 426,
-      "costUsd": 0.00002045,
+      "durationMs": 774,
+      "costUsd": 0.00002738,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": false,
-        "confidence": 0.31,
-        "verdict": "ask"
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ci-assertion-in-the-changed-test",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"ci_real\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 398,
+      "costUsd": 0.00002696,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
       }
     },
     {
@@ -70,8 +96,8 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 433,
-      "costUsd": 0.00001999,
+      "durationMs": 406,
+      "costUsd": 0.00002692,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": true,
@@ -80,8 +106,60 @@
       }
     },
     {
+      "id": "ci-timeout-in-an-unrelated-job",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"ci_flaky\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 524,
+      "costUsd": 0.00002743,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "comment-says-rerun-ci",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"review_comment\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 418,
+      "costUsd": 0.00002738,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
       "id": "lgtm-with-a-maybe",
-      "pass": false,
+      "pass": true,
       "schema": {
         "check": "answer on the event_class schema",
         "pass": true,
@@ -90,18 +168,18 @@
       "checks": [
         {
           "check": "event.confidence within 0..0.85",
-          "pass": false,
-          "detail": "found 0.98"
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 443,
-      "costUsd": 0.00002008,
+      "durationMs": 502,
+      "costUsd": 0.00002701,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": null,
-        "confidence": 0.98,
+        "confidence": 0.73,
         "verdict": "proceed"
       }
     },
@@ -115,19 +193,19 @@
       },
       "checks": [
         {
-          "check": "event.choice = \"comment\"",
+          "check": "event.choice = \"review_comment\"",
           "pass": true,
           "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 449,
-      "costUsd": 0.00001991,
+      "durationMs": 433,
+      "costUsd": 0.00002684,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": true,
-        "confidence": 0.91,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     }
