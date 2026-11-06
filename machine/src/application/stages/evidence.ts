@@ -129,41 +129,26 @@ async function prelude(deps: EvidenceDeps, context: StageContext): Promise<{ res
     }
   }
 
-  if (verdict === undefined && e2e?.detail?.skipped === true) {
-    const why = e2e.detail.reason ?? e2e.detail.note;
-    return {
-      result: {
-        outcome: "pass",
-        detail: {
-          step: "evidence",
-          verdict: "skipped",
-          artifactCount: 0,
-          thumbnails: [],
-          note: `e2e skipped${why ? `: ${String(why)}` : ""}`,
-          evidence: { verdict: "skipped", artifactCount: 0, manifest: null, thumbnails: [] },
-        },
-      },
-      facts: { e2e, qaDir, manifest, manifestPath, verdict: "skipped", scenarios: [], artifacts: [], approvedCount: 0, gaps: [] },
-    };
-  }
+  // A browser run that was skipped (an API or CLI change) left no manifest: its scenarios are still read from the card's rows below, so the proof Verify and Build gave survives.
+  const skippedRun = verdict === undefined && e2e?.detail?.skipped === true;
 
   // Each scenario's result comes from the card: the Verify Report's rows, else the e2e finish's manifest, else (a run from before wave 12a) the container's manifest by title.
   const reported = deps.latestFinish ? VerifyReport.safeParse((await deps.latestFinish(context.task.id, "ci_watch").catch(() => null))?.detail?.report) : null;
   const cardRows = (reported?.success ? cardRowsOf(reported.data.e2e.rows) : null) ?? cardRowsOf(e2e?.detail?.manifest);
   const cardVerdict = reported?.success ? reported.data.e2e.verdict : typeof e2e?.detail?.verdict === "string" ? e2e.detail.verdict : null;
   const gaps: string[] = [];
-  if (manifestState === "missing" && !cardRows) gaps.push(`no ${MANIFEST} from the e2e run`);
+  if (manifestState === "missing" && !cardRows && !skippedRun) gaps.push(`no ${MANIFEST} from the e2e run`);
   if (manifestState === "unreadable") gaps.push(`the ${MANIFEST} of the e2e run is unreadable`);
-  verdict = manifestState === "ok" ? verdict! : cardRows && cardVerdict ? cardVerdict : manifestState === "unreadable" ? "unreadable" : "missing";
+  verdict = skippedRun ? "skipped" : manifestState === "ok" ? verdict! : cardRows && cardVerdict ? cardVerdict : manifestState === "unreadable" ? "unreadable" : "missing";
 
-  const files = qaDir ? await walk(qaDir) : [];
+  const files = qaDir && !skippedRun ? await walk(qaDir) : [];
   const artifacts: NonNullable<StageResult["artifacts"]> = [];
   for (const path of files) {
     // A file over the cap, a link swapped in or anything unreadable is listed with no hash, and the store never keeps it.
     const sha256 = await hashRegularFile(path, MAX_MEDIA_BYTES).catch(() => null);
     artifacts.push({ kind: kindOf(path.slice(path.lastIndexOf("/") + 1)), path, label: relative(qaDir!, path), sha256: sha256 ?? "" });
   }
-  const approved = verdict === "skipped" || verdict === "unreadable" ? [] : approvedCases(context.approvals);
+  const approved = verdict === "unreadable" ? [] : approvedCases(context.approvals);
   const ids = approvedScenarios(context.approvals).map((s) => s.id);
   const legacyRows = Array.isArray(manifest.acceptance) ? manifest.acceptance : [];
   const chapters = Array.isArray(manifest.video?.chapters) ? manifest.video!.chapters! : [];
@@ -195,6 +180,23 @@ async function prelude(deps: EvidenceDeps, context: StageContext): Promise<{ res
   if (gaps.length > 0 && verdict === "pass") verdict = "partial";
   const shown = approved.length > 0 ? { rows: cardRows?.length ?? legacyRows.length, scenarios: scenarios.map(({ hasChapter: _, test: __, ...x }) => x) } : {};
   const thumbnails = artifacts.filter((a) => a.kind === "screenshot").slice(0, THUMBNAILS).map((a) => a.path);
+  if (skippedRun) {
+    const why = e2e!.detail!.reason ?? e2e!.detail!.note;
+    return {
+      result: {
+        outcome: "pass",
+        detail: {
+          step: "evidence",
+          verdict: "skipped",
+          artifactCount: 0,
+          thumbnails: [],
+          note: `e2e skipped${why ? `: ${String(why)}` : ""}`,
+          evidence: { verdict: "skipped", artifactCount: 0, manifest: null, thumbnails: [], ...shown },
+        },
+      },
+      facts: { e2e, qaDir, manifest, manifestPath, verdict: "skipped", scenarios, artifacts: [], approvedCount: approved.length, gaps },
+    };
+  }
   return {
     // Evidence shows less and says why: a gap is a note on the pack, never a failure.
     result: {
@@ -319,7 +321,8 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     };
 
     // 1. The format: kept from a previous pack, else decided; then a mechanical veto.
-    const fallback: Format = hasManifest ? "captures" : "text";
+    // A skipped browser run is an API or CLI change: its fallback is the terminal capture (downgraded to text below when Verify and Build gave nothing to show).
+    const fallback: Format = hasManifest || skipped ? "captures" : "text";
     let format: Format;
     let formatKept = false;
     let formatRecord: string | undefined;
@@ -329,7 +332,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     } else {
       format = fallback;
       const decide = deps.decideFormat;
-      if (decide && (facts.verdict !== "skipped" || !skipped)) {
+      if (decide) {
         try {
           const answer = await decide(evidenceContext, task.repoPath);
           formatRecord = recordIdOf(answer);
