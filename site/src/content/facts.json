@@ -14,6 +14,7 @@
     "evidence_valid": "claude:haiku",
     "finding_classify": "claude:haiku",
     "fix_scope": "claude:haiku",
+    "frame_privacy": "jev",
     "plan_check": "claude:haiku",
     "red_check": "claude:haiku",
     "risk_score": "codex:luna",
