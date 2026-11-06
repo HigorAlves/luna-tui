@@ -32,7 +32,7 @@ The timeline:
 1. Use the `video-critic` skill. State what the film is about from the hook and beats sheets alone, then compare with the scenarios and the transcript.
 2. Score the nine axes 1 to 10: hook, clarity, readability, motion, rhythm, composition, continuity, truth, sync. Default to rejection.
 3. List defects with `priority` (P0, P1, P2), `t` in seconds, `scene`, `element`, `symptom`, `mechanism` and a measurable `fix`.
-4. Answer `{message, verdict, scores, defects, weakestScene}`. `verdict` is `ship` only when every score is 8 or more and no defect is P0; else `one_more_pass`.
+4. Answer `{message, verdict, scores, defects, weakestScene, confidence}`. `verdict` is `ship` only when every score is 8 or more and no defect is P0; else `one_more_pass`. `confidence` (0 to 1) is how sure you are of the verdict; a `ship` under 0.5 is read as `one_more_pass`.
 
 ## Rules
 - Nobody answers a question during the run. If you cannot read a sheet, judge from the rest and say in `message` what you did not see; score nothing you did not examine above 7.
