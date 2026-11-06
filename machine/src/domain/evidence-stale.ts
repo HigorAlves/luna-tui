@@ -1,10 +1,9 @@
-// What a new head made stale in an Evidence Pack. Pure. The text (commit, results, findings, summary) is always made again; the captures only when the latest browser run
-// is not the one the pack was made from; the film only when what it shows may have changed: its scenarios, a newer run that changed a result or the steps, or a rendered
-// surface touched between the two commits. A pack with no `source` (made before this wave) is stale in every part.
+// What a new head made stale in an Evidence Pack. Pure. The text (commit, results, findings, summary) is always made again; the film only when what it shows may have changed: its scenarios, a newer run that changed a result or the steps, or a rendered
+// surface touched between the two commits. The captures are not a part: the stage always takes the latest run's screenshots, so nothing is redone for them and the report does not claim it. A pack with no `source` (made before this wave) has its text and its film made again.
 import type { EvidencePack } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
-export type StalePart = "text" | "captures" | "film";
+export type StalePart = "text" | "film";
 
 export interface StaleNow {
   /** The latest browser run's id. */
@@ -30,10 +29,9 @@ export function scenariosKeyOf(scenarios: readonly { id: string; title: string }
 
 export function staleParts(previous: EvidencePack | null, now: StaleNow): StalePart[] {
   const source = previous?.source;
-  if (!previous || !source) return ["text", "captures", "film"];
+  if (!previous || !source) return ["text", "film"];
   const parts: StalePart[] = ["text"];
   const newerRun = now.e2eRunId !== source.e2eRunId;
-  if (newerRun) parts.push("captures");
   const before = previous.scenarios.map((s) => s.result);
   const changedResult = newerRun && (now.results.length !== before.length || now.results.some((r, i) => r !== before[i]) || now.stepsSha !== source.stepsSha);
   if (now.scenariosKey !== source.scenariosKey || changedResult || now.changedPaths === null || touchesRenderedSurface(now.changedPaths)) parts.push("film");

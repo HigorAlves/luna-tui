@@ -15,8 +15,9 @@ describe("staleParts", () => {
     expect(staleParts(pack(), now())).toEqual(["text"]);
   });
 
-  it("the captures are stale when the latest browser run is not the one the pack was made from", () => {
-    expect(staleParts(pack(), now({ e2eRunId: "run-2" }))).toEqual(["text", "captures"]);
+  it("the captures are not listed as stale: nothing is redone for them (the stage always takes the latest run's screenshots)", () => {
+    expect(staleParts(pack(), now({ e2eRunId: "run-2" }))).toEqual(["text"]);
+    expect(staleParts(pack(), now({ e2eRunId: "run-2", results: ["fail"] }))).not.toContain("captures");
   });
 
   it("the film is stale when the scenarios changed", () => {
@@ -24,8 +25,8 @@ describe("staleParts", () => {
   });
 
   it("the film is stale when a newer browser run changed a scenario's result or the steps", () => {
-    expect(staleParts(pack(), now({ e2eRunId: "run-2", results: ["fail"] }))).toEqual(["text", "captures", "film"]);
-    expect(staleParts(pack(), now({ e2eRunId: "run-2", stepsSha: "steps-2" }))).toEqual(["text", "captures", "film"]);
+    expect(staleParts(pack(), now({ e2eRunId: "run-2", results: ["fail"] }))).toEqual(["text", "film"]);
+    expect(staleParts(pack(), now({ e2eRunId: "run-2", stepsSha: "steps-2" }))).toEqual(["text", "film"]);
     // a newer run that proved the same thing leaves the film alone
     expect(staleParts(pack(), now({ e2eRunId: "run-2" }))).not.toContain("film");
   });
@@ -35,10 +36,10 @@ describe("staleParts", () => {
     expect(staleParts(pack(), now({ changedPaths: null }))).toEqual(["text", "film"]);
   });
 
-  it("a pack with no source is stale in every part", () => {
+  it("a pack with no source has its text and its film made again", () => {
     const { source: _, ...bare } = pack();
-    expect(staleParts(bare as EvidencePack, now())).toEqual(["text", "captures", "film"]);
-    expect(staleParts(null, now())).toEqual(["text", "captures", "film"]);
+    expect(staleParts(bare as EvidencePack, now())).toEqual(["text", "film"]);
+    expect(staleParts(null, now())).toEqual(["text", "film"]);
   });
 });
 

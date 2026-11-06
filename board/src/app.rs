@@ -267,6 +267,8 @@ pub enum Mode {
     },
     /// `N` at the plan gate: the comment a rejection carries (required: the card ends, archived as rejected).
     Reject { id: String, text: String },
+    /// `n` on a card with an Evidence Pack: why it was not useful (a note is optional).
+    EvidenceNote { id: String, text: String },
     /// `Z` on a ticket: pick why it is archived; enter archives it.
     ArchiveReason { id: String, cursor: usize },
     /// `E` on an escalated ticket: pick the reason the escalation really had; enter sends the correction.
@@ -1651,6 +1653,15 @@ impl App {
                     self.open_ticket_editor(id);
                 }
             }
+            'y' | 'n' => {
+                if task.evidence.is_none() {
+                    self.notify("this ticket has no Evidence Pack yet", false);
+                } else if key == 'y' {
+                    self.act(|m| m.evidence_feedback(id, true, None), "noted: the pack was useful");
+                } else {
+                    self.mode = Mode::EvidenceNote { id: id.to_string(), text: String::new() };
+                }
+            }
             'R' => self.open_repo_picker(id),
             'N' => {
                 if crate::keys::rejectable(self, &task) {
@@ -1899,6 +1910,7 @@ impl App {
             Mode::Command { .. } => self.handle_command(key),
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::Reject { .. } => self.handle_reject(key),
+            Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
                 self.handle_confirm(key, &id)
@@ -3107,7 +3119,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "y", "n"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3617,6 +3629,27 @@ impl App {
     }
 
     /// `N`'s prompt: the comment is required; enter rejects the plan (the card is archived as rejected), esc cancels.
+    /// The note for a thumbs-down: enter sends it (empty is fine), esc cancels.
+    fn handle_evidence_note(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EvidenceNote { id, text } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => text.push(c),
+            KeyCode::Backspace => {
+                text.pop();
+            }
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let (id, note) = (id.clone(), text.trim().to_string());
+                self.mode = Mode::Normal;
+                self.act(|m| m.evidence_feedback(&id, false, Some(&note)), "noted: the pack was not useful");
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
     fn handle_reject(&mut self, key: KeyEvent) -> Outcome {
         let Mode::Reject { id, text } = &mut self.mode else {
             return Outcome::Continue;
@@ -5716,6 +5749,35 @@ mod workspace_key_tests {
         assert!(matches!(&app.mode, Mode::Reject { text, .. } if text == "n"));
         press(&mut app, KeyCode::Esc);
         assert!(matches!(app.mode, Mode::Detail(_)) || matches!(app.mode, Mode::Normal), "esc cancels");
+    }
+
+    fn with_pack(state: &str) -> App {
+        let mut app = open(state);
+        app.tasks[0].evidence = Some(serde_json::json!({"summary":"s","format":"text","commitSha":"abc1234","risk":"low","scenarios":[],"media":[]}));
+        app
+    }
+
+    #[test]
+    fn lowercase_n_on_a_card_with_a_pack_asks_for_a_note_and_esc_cancels() {
+        let mut app = with_pack("implementing");
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(&app.mode, Mode::EvidenceNote { text, .. } if text.is_empty()));
+        for c in "too long".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        assert!(matches!(&app.mode, Mode::EvidenceNote { text, .. } if text == "too long"));
+        press(&mut app, KeyCode::Esc);
+        assert!(!matches!(app.mode, Mode::EvidenceNote { .. }));
+    }
+
+    #[test]
+    fn y_and_n_on_a_card_with_no_pack_say_so_and_send_nothing() {
+        for key in ['y', 'n'] {
+            let mut app = open("implementing");
+            press(&mut app, KeyCode::Char(key));
+            assert!(!matches!(app.mode, Mode::EvidenceNote { .. }), "{key}");
+            assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("no Evidence Pack")), "{key}: {:?}", app.toast.as_ref().map(|t| t.text.clone()));
+        }
     }
 
     #[test]

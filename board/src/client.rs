@@ -309,6 +309,11 @@ impl Machine {
         self.post(&format!("/tasks/{id}/archive"), json!({ "reason": reason }))
     }
 
+    /// Says whether the card's Evidence Pack was useful (`y` / `n`), with a short note for a no. The machine keeps it as ground truth; it labels no decision.
+    pub fn evidence_feedback(&self, id: &str, useful: bool, note: Option<&str>) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/evidence/feedback"), evidence_feedback_body(useful, note))
+    }
+
     /// Corrects the reason an escalation was decided with, to one of `ESCALATION_REASONS`; the card stays where it is.
     pub fn correct_escalation_reason(&self, id: &str, reason: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/escalation-reason"), json!({ "reason": reason }))
@@ -598,6 +603,15 @@ fn decision_body(approve: bool, reason: Option<&str>, approver: Option<&str>) ->
     body
 }
 
+/// The body of an Evidence feedback: the fixed value, and the note only when there is one (trimmed, at most 500 characters, as the machine allows).
+fn evidence_feedback_body(useful: bool, note: Option<&str>) -> Value {
+    let mut body = json!({ "useful": useful });
+    if let Some(text) = note.map(str::trim).filter(|t| !t.is_empty()) {
+        body["note"] = json!(text.chars().take(500).collect::<String>());
+    }
+    body
+}
+
 /// The body of a rejection: `rejected` with its comment (the machine reads it as the reason), and the approver when there is one.
 fn reject_body(comment: &str, approver: Option<&str>) -> Value {
     let mut body = json!({ "decision": "rejected", "reason": comment });
@@ -615,6 +629,14 @@ mod tests {
     fn a_decision_names_its_approver_when_there_is_one_and_stays_as_it_was_when_not() {
         assert_eq!(decision_body(true, None, None), json!({ "decision": "approved", "reason": null }));
         assert_eq!(decision_body(false, Some("split it"), Some("ana")), json!({ "decision": "sent_back", "reason": "split it", "approver": "ana" }));
+    }
+
+    #[test]
+    fn the_feedback_body_is_the_fixed_value_and_a_note_only_when_there_is_one() {
+        assert_eq!(evidence_feedback_body(true, None), json!({ "useful": true }));
+        assert_eq!(evidence_feedback_body(false, Some("too long")), json!({ "useful": false, "note": "too long" }));
+        assert_eq!(evidence_feedback_body(false, Some("  ")), json!({ "useful": false }));
+        assert_eq!(evidence_feedback_body(false, Some(&"x".repeat(900)))["note"].as_str().unwrap().chars().count(), 500);
     }
 
     #[test]

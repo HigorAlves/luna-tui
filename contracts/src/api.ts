@@ -146,6 +146,10 @@ export interface TaskDiffFile {
   removed: number;
 }
 
+/** A person's answer on whether an Evidence Pack was useful: a boolean from the fixed set, and a short note that is flattened before anything keeps it. */
+export const EvidenceFeedbackInput = z.object({ useful: z.boolean(), note: z.string().max(500).optional() });
+export type EvidenceFeedbackInput = z.infer<typeof EvidenceFeedbackInput>;
+
 export const ArchiveInput = z.object({ reason: ArchiveReason });
 export type ArchiveInput = z.infer<typeof ArchiveInput>;
 

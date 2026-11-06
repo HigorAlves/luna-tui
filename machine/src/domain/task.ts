@@ -166,6 +166,14 @@ export class WorktreeUnpushedError extends Error {
   }
 }
 
+/** Feedback on an Evidence Pack the card does not have. */
+export class NoEvidenceError extends Error {
+  constructor(id: string) {
+    super(`task ${id} has no Evidence Pack to give feedback on`);
+    this.name = "NoEvidenceError";
+  }
+}
+
 /** No plan to edit: the ticket is neither awaiting the plan's approval nor at the test check. */
 export class NoPlanToEditError extends Error {
   constructor(id: string) {

@@ -208,6 +208,9 @@ pub struct Task {
     /// The Triage Record, once triage wrote one; absent before and from machines that predate it.
     #[serde(default)]
     pub record: Option<TriageRecord>,
+    /// The Evidence Pack the machine kept on the task (what `GET /tasks/:id` serialises); absent before Evidence and from machines that predate it.
+    #[serde(default)]
+    pub evidence: Option<Value>,
     /// What every stage run of this ticket has cost so far; None when unknown.
     #[serde(default)]
     pub spent_usd: Option<f64>,

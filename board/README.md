@@ -248,6 +248,8 @@ link is the board's `J`):
 | `R` | set the repo (search) |
 | `e` | edit: the plan, the cases or the ticket |
 | `o` | open: the file, the PR or the issue |
+| `y` | Evidence Pack was useful |
+| `n` | Evidence Pack was not useful (note) |
 | `E` | pick the selected stage's engine |
 
 **Move**

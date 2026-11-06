@@ -478,6 +478,11 @@ fn footer_line(app: &App) -> Line<'static> {
                 Span::from("   enter send · esc cancel").fg(c(SUBTEXT0)),
             ])
         }
+        Mode::EvidenceNote { text, .. } => Line::from(vec![
+            Span::from(" why was the pack not useful: ").fg(c(PEACH)).bold(),
+            Span::from(format!("{text}▏")),
+            Span::from("   enter send · esc cancel").fg(c(SUBTEXT0)),
+        ]),
         Mode::Reject { text, .. } => Line::from(vec![
             Span::from(" reject because: ").fg(c(RED)).bold(),
             Span::from(format!("{text}▏")),
@@ -894,6 +899,59 @@ pub(crate) fn evidence_lines(value: &Value) -> Vec<String> {
             lines.push(format!("{} @{:.1}{scene}: {}", d["priority"].as_str().unwrap_or("P?"), d["t"].as_f64().unwrap_or(0.0), d["symptom"].as_str().unwrap_or("")));
         }
     }
+    lines
+}
+
+/// The card's own Evidence Pack as the board shows it with no gate open: format and why it was degraded, the summary, results, scenarios, media (a web link, never a
+/// local path), the film's verdict and whether the pack is published. Every text is made plain.
+pub(crate) fn pack_lines(value: &Value) -> Vec<String> {
+    use crate::detail::plain;
+    let mut lines = Vec::new();
+    if let Some(format) = value["format"].as_str() {
+        lines.push(match value["note"].as_str() {
+            Some(note) => format!("format: {} (degraded: {})", plain(format), plain(note)),
+            None => format!("format: {}", plain(format)),
+        });
+    }
+    if let Some(summary) = value["summary"].as_str() {
+        lines.extend(wrap_words(&plain(summary), 76).into_iter().take(3));
+    }
+    let results = &value["results"];
+    if results.is_object() {
+        let layer = |v: &Value| match (v["passed"].as_u64(), v["total"].as_u64()) {
+            (Some(p), Some(t)) => format!("{p}/{t}"),
+            _ => "none".to_string(),
+        };
+        lines.push(format!("results: unit {} · integration {} · e2e {}", layer(&results["unit"]), layer(&results["integration"]), layer(&results["e2e"])));
+    }
+    for row in value["scenarios"].as_array().into_iter().flatten() {
+        let Some(text) = row["text"].as_str() else { continue };
+        let mark = match row["result"].as_str() {
+            Some("pass") => "✓",
+            Some("fail") => "✗",
+            Some("partial") => "~",
+            _ => "?",
+        };
+        lines.push(format!("{mark} {}", plain(text)));
+    }
+    let mut published = false;
+    for media in value["media"].as_array().into_iter().flatten() {
+        let url = media["url"].as_str().unwrap_or("");
+        published |= url.starts_with("https://");
+    }
+    for media in value["media"].as_array().into_iter().flatten().take(6) {
+        let Some(label) = media["label"].as_str() else { continue };
+        match media["url"].as_str() {
+            Some(url) if url.starts_with("https://") => lines.push(format!("media: {}  {}", plain(label), plain(url))),
+            _ => lines.push(format!("media: {} (local copy)", plain(label))),
+        }
+    }
+    if let Some(critic) = value["video"]["verdict"].as_str() {
+        let scores: Vec<f64> = value["video"]["scores"].as_object().map(|m| m.values().filter_map(Value::as_f64).collect()).unwrap_or_default();
+        let mean = if scores.is_empty() { String::new() } else { format!(" · {:.1}/10", scores.iter().sum::<f64>() / scores.len() as f64) };
+        lines.push(format!("critic: {}{mean}", plain(critic)));
+    }
+    lines.push(format!("published: {}", if published { "yes" } else { "no" }));
     lines
 }
 

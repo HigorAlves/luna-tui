@@ -9,7 +9,7 @@ import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -48,7 +48,7 @@ import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, ou
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
+export { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -148,6 +148,8 @@ export interface PipelineOptions {
   owners?: (repoPath: string, paths: string[]) => Promise<Exclude<OwnersFound, "failed">>;
   /** Keeps the approved plan and what changed before it (ground truth); answers where. A failure is logged and never blocks the approval. */
   groundTruth?: (task: TaskRow, approval: ApprovalRow) => Promise<string>;
+  /** Writes a person's thumbs on an Evidence Pack (`ground-truth/evidence/`); absent, the answer is only logged. */
+  evidenceFeedback?: (task: TaskRow, pack: EvidencePack, feedback: { useful: boolean; note?: string | undefined }, at: Date) => Promise<string>;
   /** Writes onto a decision's record what a person's decision at a gate says about it (RFC 0005 wave 7). */
   truth?: DecisionTruth;
   /** Spend ceilings in USD; either unset means no ceiling of that kind. */
@@ -318,6 +320,7 @@ export class Pipeline {
   private readonly closeDeps: CloseDeps | undefined;
   private readonly releaseKept: ((taskId: string) => Promise<void>) | undefined;
   private readonly groundTruth: PipelineOptions["groundTruth"];
+  private readonly evidenceFeedbackWriter: PipelineOptions["evidenceFeedback"];
   private readonly owners: PipelineOptions["owners"];
   private readonly truth: DecisionTruth | undefined;
   readonly budget: Required<Budget>;
@@ -366,6 +369,7 @@ export class Pipeline {
     this.closeDeps = options.closeDeps;
     this.releaseKept = options.releaseKept;
     this.groundTruth = options.groundTruth;
+    this.evidenceFeedbackWriter = options.evidenceFeedback;
     this.owners = options.owners;
     this.truth = options.truth;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
@@ -556,6 +560,14 @@ export class Pipeline {
 
   taskUsage(id: string): Promise<TaskUsage> {
     return this.store.taskUsage(id);
+  }
+
+  /** A person says whether the card's Evidence Pack was useful. A card with no pack is refused. The answer is a file for the retro and a row with ids and enums only (no `stage.` prefix: no container can write that kind). */
+  async evidenceFeedback(id: string, feedback: { useful: boolean; note?: string | undefined }): Promise<void> {
+    const task = await this.get(id);
+    if (!task.evidence) throw new NoEvidenceError(id);
+    await this.evidenceFeedbackWriter?.(task, task.evidence, feedback, new Date());
+    await this.log(id, "evidence.feedback", { useful: feedback.useful, format: task.evidence.format, sha: task.evidence.commitSha.slice(0, 7) });
   }
 
   async get(id: string): Promise<TaskRow> {

@@ -443,7 +443,11 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
 
 /// Whether the ship gate's Evidence Pack is High risk: shipping then needs an approver who did not approve the plan.
 fn ship_risk_is_high(detail: Option<&TaskDetail>) -> bool {
-    detail.and_then(|d| d.latest_approval("awaiting_ship")).is_some_and(|a| a.requested["evidence"]["risk"].as_str() == Some("high"))
+    // The open or last gate's pack, else the task's own: the same source the Evidence section shows.
+    detail.is_some_and(|d| match d.latest_approval("awaiting_ship") {
+        Some(a) => a.requested["evidence"]["risk"].as_str() == Some("high"),
+        None => d.task.evidence.as_ref().is_some_and(|p| p["risk"].as_str() == Some("high")),
+    })
 }
 
 fn heading(text: &str) -> Line<'static> {
@@ -738,7 +742,7 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
 
 /// Plan: the latest triage plan, decided or not, then what happened to it.
 /// Text from a run or a model, made safe for a terminal: every control character (an escape sequence included) becomes a space.
-fn plain(text: &str) -> String {
+pub(crate) fn plain(text: &str) -> String {
     text.chars().map(|ch| if ch.is_control() && ch != '\n' { ' ' } else { ch }).collect()
 }
 
@@ -1161,10 +1165,17 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
         return (vec![heading("Evidence"), Line::default(), muted("  loading…".into())], None);
     };
     let mut lines = vec![heading("Evidence")];
-    let verdict = d.latest_approval("awaiting_ship").map(|a| evidence_lines(&a.requested["evidence"])).unwrap_or_default();
+    // The pack from the open or last awaiting_ship gate when there is one, else the task's own (Evidence publishes with no gate).
+    let verdict = match d.latest_approval("awaiting_ship") {
+        Some(a) => evidence_lines(&a.requested["evidence"]),
+        None => d.task.evidence.as_ref().map(crate::ui::pack_lines).unwrap_or_default(),
+    };
     if !verdict.is_empty() {
         lines.push(Line::default());
-        lines.extend(verdict.iter().map(|l| Line::from(format!("  {l}"))));
+        lines.extend(verdict.iter().map(|l| Line::from(format!("  {}", plain(l)))));
+        if d.task.evidence.is_some() {
+            lines.push(muted("  y useful · n not useful (with a note)".into()));
+        }
     }
     lines.extend(verify_report_lines(d));
     lines.push(Line::default());
@@ -1533,6 +1544,43 @@ mod tests {
         assert!(text.contains("Browser run  fail"), "{text}");
         assert!(text.contains("✗ S1  export downloads a file  got a 500  shot.png"), "{text}");
         assert!(text.contains("○ S2  empty report"), "{text}");
+    }
+
+    #[test]
+    fn the_evidence_section_shows_the_task_s_pack_when_no_gate_is_open() {
+        let (mut task, detail) = fixture();
+        task.evidence = Some(serde_json::json!({
+            "summary":"Show the cart total.","format":"video","note":"the film is short","risk":"low","commitSha":"abc1234def",
+            "scenarios":[{"text":"Total shows","test":null,"result":"pass"},{"text":"Zero on empty","test":null,"result":"not_run"}],
+            "media":[{"kind":"video","label":"walk.mp4","url":"https://x/w.mp4"},{"kind":"report","label":"terminal.txt","url":"/Users/me/state/evidence/t/abc/terminal.txt"}],
+            "video":{"verdict":"ship","scores":{"hook":9},"defects":[]},
+            "results":{"unit":{"passed":3,"total":4},"integration":null,"e2e":{"verdict":"pass","passed":2,"total":2},"coverageDelta":null}}));
+        let mut detail = detail;
+        let mut task_detail_task = detail.task.clone();
+        task_detail_task.evidence = task.evidence.clone();
+        detail.task = task_detail_task;
+        let text = render(120, 50, &task, Some(&detail), Section::Evidence, 0).join("\n");
+        for part in ["format: video (degraded: the film is short)", "Show the cart total.", "✓ Total shows", "? Zero on empty", "media: walk.mp4  https://x/w.mp4", "critic: ship", "published: yes", "y useful · n not useful"] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
+        assert!(!text.contains("/Users/me"), "a local path is never printed: {text}");
+        assert!(text.contains("media: terminal.txt"), "{text}");
+    }
+
+    #[test]
+    fn a_pack_with_no_web_media_says_it_is_not_published_and_text_is_made_plain() {
+        let lines = crate::ui::pack_lines(&serde_json::json!({"summary":"hi\u{1b}[31m red","format":"text","scenarios":[],"media":[{"label":"a\u{1b}[2Jb","url":"/x/a.txt"}]}));
+        let text = lines.join("\n");
+        assert!(text.contains("published: no"), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+    }
+
+    #[test]
+    fn a_high_risk_pack_is_read_from_the_task_when_no_gate_is_open() {
+        let (_, mut detail) = fixture();
+        assert!(!ship_risk_is_high(Some(&detail)));
+        detail.task.evidence = Some(serde_json::json!({"risk":"high"}));
+        assert!(ship_risk_is_high(Some(&detail)));
     }
 
     #[test]
