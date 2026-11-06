@@ -70,7 +70,7 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
 }
 
 // slack_triage, chat_triage and eval_judge have no worktree and read no project context; their dry runs are below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "eval_judge").map((p) => p.id);
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "memory_answer" && p.id !== "eval_judge").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {

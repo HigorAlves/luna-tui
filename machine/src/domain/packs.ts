@@ -59,6 +59,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   pr_reply: ["awaiting_ship"],
   eval_judge: [],
   chat_triage: [],
+  memory_answer: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

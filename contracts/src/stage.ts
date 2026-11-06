@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
-import { MemoryContext } from "./memory.ts";
+import { MEMORY_CONTEXT_MAX_ITEMS, MemoryContext, RecalledMemory } from "./memory.ts";
 import { Scenario } from "./plan.ts";
 import { SizeContext, SplitContext } from "./split.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
@@ -153,6 +153,8 @@ export const PackId = z.enum([
   "eval_judge",
   // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
   "chat_triage",
+  // Not a task stage: answers a question over recalled memory items (RFC 0007), on demand.
+  "memory_answer",
   // Opens the plan stage (runs in test_design): reads the repo's code graph and names the components, files and owners the goal touches.
   "code_map",
   // A decision on Evidence (an evidence context, run on demand): which format shows the change best.
@@ -329,6 +331,15 @@ export const ChatTriageContext = z.object({
     .max(25),
 });
 export type ChatTriageContext = z.infer<typeof ChatTriageContext>;
+
+/** For memory_answer: the question and the items recall gave, as data. */
+export const MemoryAnswerContext = z.object({
+  question: z.string().min(1).max(1000),
+  items: z.array(RecalledMemory).max(MEMORY_CONTEXT_MAX_ITEMS),
+  /** Why the list is empty or short; null when nothing to say. */
+  note: z.string().max(300).nullable(),
+});
+export type MemoryAnswerContext = z.infer<typeof MemoryAnswerContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -1152,6 +1163,8 @@ export const StageInput = z.object({
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */
     chat: ChatTriageContext.nullable().optional(),
+    /** For memory_answer: the question and the recalled items. */
+    memoryAnswer: MemoryAnswerContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */
     blastRadius: z.array(z.string()).optional(),
     /** For verifying: how much of the change's added lines the repo's lcov report saw run; absent without a report. */

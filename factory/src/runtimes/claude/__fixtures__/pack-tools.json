@@ -589,6 +589,10 @@
     "allowedTools": [],
     "tools": []
   },
+  "memory_answer": {
+    "allowedTools": [],
+    "tools": []
+  },
   "code_map": {
     "allowedTools": [
       "Read",

@@ -2,7 +2,7 @@
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
 import { hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
-import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { type BudgetAlert, type EvidenceContext, type MemoryAnswerAnswer, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -12,7 +12,9 @@ import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 
 import { machineSecrets } from "./bootstrap/machine-secrets.ts";
-import { useTruthSecrets } from "./application/ground-truth.ts";
+import { truthName, useTruthSecrets, writeTruthFile } from "./application/ground-truth.ts";
+import { MemoryService } from "./application/memory-service.ts";
+import { repoSlug } from "./adapters/graph/slug.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
@@ -699,6 +701,13 @@ verifyDecisions.lastRed = async (taskId) => {
 };
 // A run folder a crash left holds a client's context: never kept.
 await packRuns?.clearLeftovers();
+/** What the API does with memory (RFC 0007): ask (the `memory_answer` pack over recalled items, or Cognee's own answer), recall for the host MCP server, the memory view's list, forget and adopt. */
+const memoryService = new MemoryService({
+  memory,
+  ...(packRuns ? { run: async (context) => (await ownCalls(packRuns).run({ pack: "memory_answer", context: { memoryAnswer: context } }, "memory")).answer as MemoryAnswerAnswer } : {}),
+  slugOf: repoSlug,
+  ...(config.groundTruth ? { onForgotten: async (record) => void (await writeTruthFile(config.stateDir, "memory_forget", truthName(`${record.at}-${record.id}.json`), record)) } : {}),
+});
 /** Intake's first read of a new issue: triage_signals on Jev through the same PackRuns, recorded
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
 const classifier = packRuns ? createIssueClassifier({ runs: ownCalls(packRuns) }) : null;
@@ -778,6 +787,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
   return { ok: true };
 };
 const app = createApp({
+  memory: memoryService,
   approveBase,
   repoHealth: () =>
     repoHealthOf({
