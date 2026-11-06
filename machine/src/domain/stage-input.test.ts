@@ -270,9 +270,9 @@ describe("buildStageInput", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "build_tests", "chat_triage", "ci_watch", "code_map", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "finding_classify", "implementing", "jira_intake", "plan", "plan_check", "plan_fast", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "pr_reply"].sort(),
+      ["addressing", "build_tests", "chat_triage", "ci_watch", "code_map", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "finding_classify", "implementing", "jira_intake", "plan", "plan_check", "plan_fast", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "pr_reply"].sort(),
     );
-    expect(Object.keys(PACK_LIMITS)).toHaveLength(42);
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(43);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
@@ -354,7 +354,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "escalation_reason" | "build_tests" | "plan" | "code_map" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "intake_dedup" | "ticket_validity" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "escalation_reason" | "build_tests" | "plan" | "code_map" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "intake_dedup" | "ticket_validity" | "ticket_assess" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();

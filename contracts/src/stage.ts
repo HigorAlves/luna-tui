@@ -165,6 +165,8 @@ export const PackId = z.enum([
   "intake_dedup",
   // A decision at the Ticket Machine (a ticket context, run on demand): can this ticket be worked on at all.
   "ticket_validity",
+  // A decision at the Ticket Machine: the four typed answers of an assessment (urgency, complexity, blast radius, risk of doing against not doing).
+  "ticket_assess",
   // Drafts the answer to a reviewer's question on a shipped PR from the Evidence Pack (runs in the shipping state, after the retro in PACKS order).
   "pr_reply",
 ]);

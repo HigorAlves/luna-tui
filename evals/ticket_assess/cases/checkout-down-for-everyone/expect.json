@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "production_down.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "who.score",
+      "value": 2
+    }
+  ],
+  "rubric": "Production is down for everyone: the flag is yes and who is the top of the rubric.",
+  "label": {
+    "production_down": {
+      "value": true
+    }
+  }
+}

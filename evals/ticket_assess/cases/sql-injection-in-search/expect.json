@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "security.value",
+      "value": true
+    }
+  ],
+  "rubric": "A reported injection with a disclosure date: the security flag is yes.",
+  "label": {
+    "security": {
+      "value": true
+    }
+  }
+}

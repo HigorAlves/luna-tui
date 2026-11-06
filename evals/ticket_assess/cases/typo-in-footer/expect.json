@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "security.value",
+      "value": false
+    },
+    {
+      "kind": "equals",
+      "path": "files.score",
+      "value": 0
+    }
+  ],
+  "rubric": "A one-string typo: no flags, one file, the bottom of the files rubric.",
+  "label": {
+    "security": {
+      "value": false
+    }
+  }
+}

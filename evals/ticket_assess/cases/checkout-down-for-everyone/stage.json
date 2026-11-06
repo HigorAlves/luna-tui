@@ -1,0 +1,46 @@
+{
+  "schema": 3,
+  "stage": "ticket_assess",
+  "pack": "ticket_assess",
+  "attempt": 1,
+  "task": {
+    "id": "ticket-assess",
+    "title": "Checkout returns 500 for every customer",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": "Ana",
+      "reachable": true,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [],
+      "candidates": [],
+      "title": "Checkout returns 500 for every customer",
+      "description": "Since the 14:00 deploy every payment fails with a 500. Revenue is stopped. The payments service is the only thing touched."
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

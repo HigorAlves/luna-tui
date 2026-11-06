@@ -341,3 +341,19 @@ describe("the ticket_validity decision pack", () => {
     expect(TicketContext.safeParse({ key: "A-1", title: "t", description: "d", type: null, priority: null, reporter: null, reachable: false, labels: [], sprint: null, dueAt: null, comments: [], linked: Array(21).fill("x"), epic: null, recent: [], files: [], candidates: [] }).success).toBe(false);
   });
 });
+
+describe("the ticket_assess decision pack", () => {
+  it("asks fifteen scores and five flags in one call, reading the same ticket context as ticket_validity", async () => {
+    const { PACKS } = await import("./index.ts");
+    const pack = PACKS.ticket_assess;
+    expect(pack.kind).toBe("decision");
+    const names = Object.keys(pack.questions);
+    expect(names).toHaveLength(20);
+    expect(names.slice(0, 5)).toEqual(["who", "what", "impact", "time", "demand"]);
+    const score = { score: 1, confidence: 0.8 };
+    const flag = { value: false, p: 0.1 };
+    const answer = Object.fromEntries(names.map((n) => [n, pack.questions[n]!.type === "score" ? score : flag]));
+    expect(pack.answer.safeParse(answer).success).toBe(true);
+    expect(pack.answer.safeParse({ ...answer, who: { score: 3, confidence: 0.8 } }).success).toBe(false);
+  });
+});

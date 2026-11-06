@@ -27,6 +27,7 @@ export const CONTEXT_OF = {
   worth_learning: { key: "ship", schema: ShipContext },
   intake_dedup: { key: "dedup", schema: DedupContext },
   ticket_validity: { key: "ticket", schema: TicketContext },
+  ticket_assess: { key: "ticket", schema: TicketContext },
 } as const;
 
 export type ContextPackId = keyof typeof CONTEXT_OF;
