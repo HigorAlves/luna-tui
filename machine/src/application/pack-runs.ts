@@ -409,7 +409,8 @@ export class PackRuns implements PackRunsPort {
       ...(call.taskId !== undefined ? { taskId: call.taskId } : {}),
       ...(call.stage !== undefined ? { stage: call.stage } : {}),
       // `context: "answers"` keeps the answer and nothing the model read: the record can still take a truth, it cannot become a case.
-      context: call.policy.learning.context === "answers" ? {} : stored.context,
+      // A client's record keeps its answer and not its context (as the log's header says): the machine's own calls keep the context, unless the repository asks for answers only.
+      context: call.policy.learning.context === "answers" || !call.own ? {} : stored.context,
       ...(call.policy.repo ? { repo: call.policy.repo } : {}),
       answer: call.answer,
       verdicts: call.decided.verdicts,
@@ -420,7 +421,7 @@ export class PackRuns implements PackRunsPort {
       // No repository is known to a pack call yet: what the machine did is the verdict under the pack's own bars.
       acted: { overall: call.decided.overall, below: call.decided.below, overrides: false },
       usage: { costUsd: call.usage.costUsd, durationMs: call.usage.durationMs, ...(call.movedFrom ? { movedFrom: call.movedFrom } : {}) },
-      redacted: call.policy.learning.context === "answers" ? 0 : stored.redacted,
+      redacted: call.policy.learning.context === "answers" || !call.own ? 0 : stored.redacted,
     };
     try {
       await this.deps.decisions.append(record);

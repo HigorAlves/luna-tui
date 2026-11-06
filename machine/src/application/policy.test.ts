@@ -90,4 +90,16 @@ describe("PolicyStore", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/luna\.yaml.*policy\.max_concurrent.*keeping the last good/);
   });
+
+  it("takes `learning` from the user's checkout, never from a luna.yaml a card carries in its own work folder", async () => {
+    const checkout = repo();
+    writeFileSync(join(checkout, CONFIG_FILE), "learning:\n  records: false\n  context: answers\n  traces: metadata\n");
+    // A card's work folder, as the pipeline lays one out: a copy of the repository the card's agent can edit, here under and beside the checkout.
+    for (const work of [join(checkout, ".orc", "worktrees", "card-1"), repo()]) {
+      mkdirSync(work, { recursive: true });
+      writeFileSync(join(work, CONFIG_FILE), "learning:\n  records: true\n  context: full\n  traces: host\n");
+    }
+    const store = new PolicyStore({ warn: () => {} });
+    expect((await store.for(checkout)).factory.learning).toMatchObject({ records: false, context: "answers", traces: "metadata" });
+  });
 });

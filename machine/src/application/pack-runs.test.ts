@@ -380,7 +380,7 @@ describe("decision records", () => {
     const appended: DecisionRecord[] = [];
     const { telemetry } = recordingTelemetry();
     const r = runs(fakeSandbox(answered), { telemetry, decisions: { append: async (record) => void appended.push(record) } });
-    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship");
+    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship", undefined, { own: true });
     expect(appended).toHaveLength(1);
     expect(appended[0]).toMatchObject({
       schema: 1,
@@ -512,6 +512,14 @@ describe("decision records", () => {
       expect((await keep((r) => r.run(ask, "intake", undefined, { own: true }))).origin).toBe("machine");
       expect((await keep((r) => r.run(ask, "intake"))).origin).toBe("client");
       expect((await keep((r) => r.run({ ...ask, stage: "ship" }, "ship"))).origin).toBe("client");
+    });
+
+    it("keeps a client's answer and not its context, while the machine's own call keeps both", async () => {
+      const client = await keep((r) => r.run(ask, "notch"));
+      expect(client).toMatchObject({ origin: "client", context: {}, redacted: 0, answer: { worth: { value: true, p: 0.93 } } });
+      expect(JSON.stringify(client)).not.toContain("retro");
+      const own = await keep((r) => r.run(ask, "intake", undefined, { own: true }));
+      expect(own.context).toMatchObject({ ship: { kind: "retro" } });
     });
 
     it("is the machine's through ownCalls, the wrapper every in-process caller of the machine uses", async () => {

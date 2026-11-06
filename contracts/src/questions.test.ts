@@ -465,3 +465,18 @@ describe("which packs are measured answer by answer", () => {
     expect(answer).toEqual(["conversation_assess", "ticket_assess", "triage_signals"]);
   });
 });
+
+describe("what a decision's answer can hold", () => {
+  it("is a label, a yes or no, a number and a confidence, for every decision pack: no free text, so nothing in an answer, a span output, a case's model answer or a queue target needs redaction", () => {
+    const decisions = Object.values(PACKS).filter((pack) => pack.kind === "decision");
+    expect(decisions.length).toBeGreaterThan(20);
+    for (const pack of decisions) {
+      const shape = (answerSchema((pack as unknown as { questions: never }).questions) as unknown as { shape: Record<string, { shape: Record<string, { def: { type: string } }> }> }).shape;
+      for (const [question, entry] of Object.entries(shape)) {
+        for (const [key, field] of Object.entries(entry.shape)) {
+          expect(["enum", "boolean", "number"], `${pack.id}.${question}.${key}`).toContain(field.def.type);
+        }
+      }
+    }
+  });
+});

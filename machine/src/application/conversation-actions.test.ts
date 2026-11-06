@@ -80,3 +80,35 @@ describe("ConversationActions.undo", () => {
     expect(calls).toEqual(["unbump b-1"]);
   });
 });
+
+describe("a private thread gives a card or a ticket no text", () => {
+  const secretText = "the plan is to let Bob go on friday";
+  it("creates no backlog candidate from a private thread, in any private kind", async () => {
+    for (const kind of ["group", "dm", "mpim"] as const) {
+      const { actions, added } = world();
+      await actions.apply(classified(conversationRow({ text: secretText, kind })), relation({ type: "new_candidate" }));
+      expect(added, kind).toEqual([]);
+    }
+  });
+
+  it("attaches a private thread to a card by its address alone: channel, time stamp, permalink and author id, never a word of it", async () => {
+    const seen: unknown[] = [];
+    const deps: ActionDeps = { attachThread: async (_card, thread) => (seen.push(thread), { priority: null }), bump: async () => {}, unbump: async () => {}, addCandidate: async () => ({ id: "x" }), linkedTo: async () => [] };
+    await new ConversationActions(deps, () => NOW).apply(conversationRow({ text: secretText, kind: "dm" }), relation({ type: "related_to_in_progress", target: "card-1" }));
+    expect(Object.keys(seen[0] as object).sort()).toEqual(["authorId", "channel", "permalink", "ts"]);
+    expect(JSON.stringify(seen)).not.toContain("Bob");
+  });
+
+  it("gives the issue, dedup and ticket contexts built from what a private thread yields no thread text", async () => {
+    const { candidateOf } = await import("../domain/conversation-candidate.ts");
+    const { buildContextPackInput } = await import("../domain/stage-input.ts");
+    const row = conversationRow({ text: secretText, kind: "dm" });
+    const { title, text } = candidateOf(row);
+    const inputs = [
+      buildContextPackInput("triage_signals", { issue: { title, description: text } } as never, "claude:haiku"),
+      buildContextPackInput("intake_dedup", { dedup: { title, text, candidates: [] } } as never, "claude:haiku"),
+      buildContextPackInput("ticket_validity", { ticket: { key: "C1", title, description: text, type: null, priority: null, reporter: null, reachable: false, labels: [], sprint: null, dueAt: null, comments: [], linked: [], epic: null, recent: [], files: [], candidates: [] } } as never, "claude:haiku"),
+    ];
+    for (const input of inputs) expect(JSON.stringify(input)).not.toContain("Bob");
+  });
+});
