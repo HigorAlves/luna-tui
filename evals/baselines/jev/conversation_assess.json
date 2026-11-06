@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "pack": "conversation_assess",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T04:01:51.323Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 4,
+    "passed": 4,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 493.5,
+    "costUsd": 0.00017938,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": null,
+      "coverage": 0,
+      "brier": 0.10932599999999998,
+      "ece": 0.2779999999999999,
+      "meanConfidence": 0.698,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "checkout-500s-for-everyone",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"incident\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 587,
+      "costUsd": 0.00004465,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.876,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "dashboard-feels-slower",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.confidence within 0.2..0.8",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 425,
+      "costUsd": 0.0000441,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.626,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "footer-typo-tells-the-scores",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 494,
+      "costUsd": 0.00004628,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.471,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "how-do-i-enable-csv-export",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"question\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "needs_reply.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 468,
+      "costUsd": 0.00004435,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.8190000000000002,
+        "verdict": "ask"
+      }
+    }
+  ]
+}

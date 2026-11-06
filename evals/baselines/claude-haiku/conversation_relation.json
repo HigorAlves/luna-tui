@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "pack": "conversation_relation",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T04:02:15.036Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 5,
+    "passed": 5,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 2061.6,
+    "costUsd": 0.0027822000000000003,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 5,
+      "labelled": 4,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.8,
+      "brier": 0.009187500000000005,
+      "ece": 0.08499999999999996,
+      "meanConfidence": 0.8619999999999999,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "dark-mode-is-new-work",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_work.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1695,
+      "costUsd": 0.0006366,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.965,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "flaky-login-maybe-the-cookie-card",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.confidence within 0.2..0.8",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2409,
+      "costUsd": 0.00050825,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": null,
+        "confidence": 0.6499999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "footer-typo-claims-slot-one",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1853,
+      "costUsd": 0.00057775,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.8999999999999999,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "same-timeout-as-the-open-card",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"slot1\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2152,
+      "costUsd": 0.00048215,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.85,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "thanks-for-the-fix-asks-nothing",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_work.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2199,
+      "costUsd": 0.00057745,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9450000000000001,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

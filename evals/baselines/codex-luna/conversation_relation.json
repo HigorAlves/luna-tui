@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "pack": "conversation_relation",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T04:02:32.116Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 5,
+    "passed": 4,
+    "passRate": 0.8,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 2556.6,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 5,
+      "labelled": 4,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.00010000000000000018,
+      "ece": 0.010000000000000009,
+      "meanConfidence": 0.9800000000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "dark-mode-is-new-work",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_work.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2358,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "flaky-login-maybe-the-cookie-card",
+      "pass": false,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.confidence within 0.2..0.8",
+          "pass": false,
+          "detail": "found 0.94"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2457,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.94,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "footer-typo-claims-slot-one",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3287,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "same-timeout-as-the-open-card",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"slot1\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2279,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "thanks-for-the-fix-asks-nothing",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_work.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2402,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

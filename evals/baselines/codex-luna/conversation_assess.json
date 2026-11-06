@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "pack": "conversation_assess",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T04:01:45.340Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 4,
+    "passed": 3,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 8547,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.75,
+      "brier": 0.001944666666666657,
+      "ece": 0.041999999999999926,
+      "meanConfidence": 0.9395000000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "checkout-500s-for-everyone",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"incident\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 22300,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9770000000000001,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "dashboard-feels-slower",
+      "pass": false,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.confidence within 0.2..0.8",
+          "pass": false,
+          "detail": "found 0.91"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3690,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.884,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "footer-typo-tells-the-scores",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3838,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9490000000000002,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "how-do-i-enable-csv-export",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"question\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "needs_reply.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 4360,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9480000000000001,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

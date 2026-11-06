@@ -13,6 +13,12 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | comment_intent | claude:haiku | 4 | 67% | 67% | 100% | 0.222 | 0.193 | $0.0004 | 2.1s | 2026-11-05 |
 | comment_intent | codex:luna | 4 | 67% | 67% | 100% | 0.321 | 0.310 | n/a | 2.5s | 2026-11-05 |
 | comment_intent | jev | 4 | 100% | 100% | 100% | 0.006 | 0.063 | $0.0000 | 0.4s | 2026-11-05 |
+| conversation_assess | claude:haiku | 4 | 100% | n/a | 0% | 0.027 | 0.162 | $0.0009 | 2.8s | 2026-11-06 |
+| conversation_assess | codex:luna | 4 | 100% | 100% | 75% | 0.002 | 0.042 | n/a | 4.1s | 2026-11-06 |
+| conversation_assess | jev | 4 | 100% | n/a | 0% | 0.109 | 0.278 | $0.0000 | 0.5s | 2026-11-06 |
+| conversation_relation | claude:haiku | 5 | 100% | 100% | 80% | 0.009 | 0.085 | $0.0006 | 2.2s | 2026-11-06 |
+| conversation_relation | codex:luna | 5 | 100% | 100% | 100% | 0.000 | 0.010 | n/a | 2.4s | 2026-11-06 |
+| conversation_relation | jev | 5 | 100% | 100% | 60% | 0.035 | 0.159 | $0.0000 | 0.5s | 2026-11-06 |
 | coverage_check | claude:haiku | 4 | 67% | 67% | 100% | 0.252 | 0.200 | $0.0006 | 3.4s | 2026-11-05 |
 | coverage_check | codex:luna | 4 | 67% | 67% | 100% | 0.325 | 0.318 | n/a | 2.9s | 2026-11-05 |
 | coverage_check | jev | 4 | 33% | 100% | 50% | 0.308 | 0.496 | $0.0000 | 0.4s | 2026-11-05 |
@@ -73,6 +79,8 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | pack | default | why |
 | --- | --- | --- |
 | comment_intent | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 4) |
+| conversation_assess | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 0.75 (n 4) |
+| conversation_relation | jev | jev: acted-on accuracy 1.00 at coverage 0.60 (n 5), a tie within 2 points that goes to Jev, the cheapest |
 | coverage_check | claude:haiku | claude:haiku: acted-on accuracy 0.67 at coverage 1.00 (n 4), a tie within 2 points settled by cost |
 | e2e_failure_cause | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
 | escalation_reason | jev | jev: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points that goes to Jev, the cheapest |

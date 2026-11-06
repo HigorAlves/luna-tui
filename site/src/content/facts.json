@@ -5,6 +5,8 @@
   "images": 3,
   "decisionDefaults": {
     "comment_intent": "jev",
+    "conversation_assess": "codex:luna",
+    "conversation_relation": "jev",
     "coverage_check": "claude:haiku",
     "e2e_failure_cause": "claude:haiku",
     "escalation_reason": "jev",

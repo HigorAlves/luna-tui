@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "pack": "conversation_relation",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T04:02:38.691Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 5,
+    "passed": 4,
+    "passRate": 0.8,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 473.6,
+    "costUsd": 0.00012751,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 5,
+      "labelled": 4,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.6,
+      "brier": 0.03459375,
+      "ece": 0.15875000000000006,
+      "meanConfidence": 0.8559999999999999,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "dark-mode-is-new-work",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_work.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 501,
+      "costUsd": 0.00002558,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.985,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "flaky-login-maybe-the-cookie-card",
+      "pass": false,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.confidence within 0.2..0.8",
+          "pass": false,
+          "detail": "found 0.99"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 457,
+      "costUsd": 0.00002528,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.915,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "footer-typo-claims-slot-one",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 505,
+      "costUsd": 0.00002604,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.755,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "same-timeout-as-the-open-card",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"slot1\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 456,
+      "costUsd": 0.000026,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.875,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "thanks-for-the-fix-asks-nothing",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_relation schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "related.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_work.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 449,
+      "costUsd": 0.00002461,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.75,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

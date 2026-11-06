@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "pack": "conversation_assess",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T04:01:07.081Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 4,
+    "passed": 4,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 2769,
+    "costUsd": 0.0034776900000000003,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": null,
+      "coverage": 0,
+      "brier": 0.026869666666666667,
+      "ece": 0.16166666666666663,
+      "meanConfidence": 0.8085,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "checkout-500s-for-everyone",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"incident\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2433,
+      "costUsd": 0.0011204000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.8460000000000001,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "dashboard-feels-slower",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.confidence within 0.2..0.8",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2717,
+      "costUsd": 0.00057753,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": null,
+        "confidence": 0.7189999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "footer-typo-tells-the-scores",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3061,
+      "costUsd": 0.00093783,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.867,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "how-do-i-enable-csv-export",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"question\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "needs_reply.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2865,
+      "costUsd": 0.0008419300000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.8019999999999999,
+        "verdict": "flag"
+      }
+    }
+  ]
+}
