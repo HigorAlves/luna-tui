@@ -1465,31 +1465,35 @@ describe("memory review decision", () => {
     expect((open.learned.mock.calls as unknown as Array<[{ pack: string }]>).filter((c) => c[0].pack === "size_estimate")).toEqual([]);
   });
 
-  it("writes no retro file and no added-finding file for a card whose repository keeps no truth (learning.truth: false)", async () => {
+  it("writes the retro file and the added-finding file for a repository that keeps truth, and neither for one that does not (learning.truth: false)", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { existsSync } = await import("node:fs");
-    const stateDir = await mkdtemp(join(tmpdir(), "retro-off-"));
     const facts = { predicted: { size: "small", risk: "low", estLoc: 10 }, actual: { added: 3, removed: 1, retries: { verify: 0, e2e: 0, ci: 0, total: 0 }, escalations: 0, format: "text", durationMin: 5, overrides: 0 }, runs: 3 };
-    const p = new Pipeline(db, stubs.runnerFor, {
-      policies: previewOn,
-      inline: true, hasConfig: () => true,
-      closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false },
-      retroOutputs: { stateDir, facts: async () => facts },
-      truthKept: async () => false,
-    });
-    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["x"] } });
-    stubs.plan("shipping", { outcome: "pass", detail: { merged: { sha: "m1" }, prUrl: "https://github.com/o/a/pull/7", number: 7 } });
-    stubs.plan("reviewing_memory", { outcome: "pass", detail: { rules: { markdown: "- r\n", graphMisses: [] } } });
-    const created = await p.createTask({ title: "Off", criteria: ["x"], repoPath: "/r/a" });
-    await p.start(created.id);
-    await p.decide(created.id, "approved");
-    expect((await p.get(created.id)).state).toBe("awaiting_ship");
-    await p.addFinding(created.id, { title: "missed", severity: "nit" });
-    expect(existsSync(join(stateDir, "ground-truth", "verify"))).toBe(false);
-    for (let i = 0; i < 1; i++) await p.decide(created.id, "approved");
-    await p.decide(created.id, "approved", undefined, { applyRules: false }).catch(() => {});
-    expect(existsSync(join(stateDir, "ground-truth", "retro"))).toBe(false);
+    const run = async (keeps: boolean) => {
+      const stateDir = await mkdtemp(join(tmpdir(), "retro-gate-"));
+      const p = new Pipeline(db, stubs.runnerFor, {
+        policies: previewOn,
+        inline: true, hasConfig: () => true,
+        closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false },
+        retroOutputs: { stateDir, facts: async () => facts },
+        truthKept: async () => keeps,
+      });
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["x"] } });
+      stubs.plan("shipping", { outcome: "pass", detail: { merged: { sha: "m1" }, prUrl: "https://github.com/o/a/pull/7", number: 7 } });
+      stubs.plan("reviewing_memory", { outcome: "pass", detail: { rules: { markdown: "- r\n", graphMisses: [] } } });
+      const created = await p.createTask({ title: "Gate", criteria: ["x"], repoPath: "/r/a" });
+      await p.start(created.id);
+      await p.decide(created.id, "approved");
+      expect((await p.get(created.id)).state).toBe("awaiting_ship");
+      await p.addFinding(created.id, { title: "missed", severity: "nit" });
+      const verify = existsSync(join(stateDir, "ground-truth", "verify"));
+      await p.decide(created.id, "approved").catch(() => {});
+      await p.decide(created.id, "approved", undefined, { applyRules: false }).catch(() => {});
+      return { verify, retro: existsSync(join(stateDir, "ground-truth", "retro")), state: (await p.get(created.id)).state };
+    };
+    expect(await run(true)).toMatchObject({ verify: true, retro: true });
+    expect(await run(false)).toMatchObject({ verify: false, retro: false });
   });
 
   it("offers the rules step by default when the gate carries rules", async () => {
