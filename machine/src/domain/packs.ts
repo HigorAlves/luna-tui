@@ -35,6 +35,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   // Decisions on change size, run on demand by the plan stage, the Ticket Machine and the split loop.
   size_estimate: [],
   split_check: [],
+  decompose: [],
   // The video pipeline runs inside evidence, sub-run by sub-run; `evidence` stays first in PACKS so the state still picks it.
   video_script: ["evidence"],
   recording: ["evidence"],

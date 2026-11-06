@@ -842,5 +842,9 @@
   "conversation_reply": {
     "allowedTools": [],
     "tools": []
+  },
+  "decompose": {
+    "allowedTools": [],
+    "tools": []
   }
 }

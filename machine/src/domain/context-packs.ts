@@ -24,6 +24,7 @@ export const CONTEXT_OF = {
   evidence_format: { key: "evidence", schema: EvidenceContext },
   size_estimate: { key: "size", schema: SizeContext },
   split_check: { key: "split", schema: SplitContext },
+  decompose: { key: "split", schema: SplitContext },
   event_class: { key: "ship", schema: ShipContext },
   comment_intent: { key: "ship", schema: ShipContext },
   fix_scope: { key: "ship", schema: ShipContext },

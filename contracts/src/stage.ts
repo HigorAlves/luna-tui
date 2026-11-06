@@ -158,6 +158,8 @@ export const PackId = z.enum([
   // Decisions on change size (wave 15): how big a change is, and whether a proposed split is sound.
   "size_estimate",
   "split_check",
+  // The decomposer (wave 15): proposes the children of a split; an agent pack with no tools, on demand.
+  "decompose",
   // Evidence's video pipeline (they run in the evidence state): the script and timeline, the recording of the approved steps, the cold critic, one fix round.
   "video_script",
   "recording",

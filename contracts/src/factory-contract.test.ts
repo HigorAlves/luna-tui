@@ -8,6 +8,8 @@ import { AGENT_PACKS, NO_ACCESS, PACKS, PACK_LIMITS, PackId, StageOutput, answer
 
 /** A minimal instance of a JSON schema: every required property, the first enum value,
  *  one item per array (so item shapes such as findings get exercised). */
+const PATTERN_SAMPLES: Record<string, string> = { "^C\\d{1,3}$": "C1" };
+
 function instance(schema: any): unknown {
   if (schema.const !== undefined) return schema.const;
   if (Array.isArray(schema.enum)) return schema.enum[0];
@@ -20,8 +22,14 @@ function instance(schema: any): unknown {
       return out;
     }
     case "array":
-      return schema.items ? [instance(schema.items)] : [];
+      return schema.items ? Array.from({ length: Math.max(1, schema.minItems ?? 1) }, () => instance(schema.items)) : [];
     case "string":
+      // A pattern is a shape the generator cannot invent: each one a pack uses has a sample here.
+      if (schema.pattern !== undefined) {
+        const sample = PATTERN_SAMPLES[schema.pattern];
+        if (sample === undefined) throw new Error(`no sample for the pattern ${schema.pattern}`);
+        return sample;
+      }
       return "x";
     case "integer":
     case "number":

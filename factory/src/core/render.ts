@@ -9,7 +9,7 @@ import type { TriageRecord } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
 import { CONVERSATION_VARIABLES, conversationText } from "./conversation-text.ts";
-import { renderTicket } from "./decide.ts";
+import { renderSplit, renderTicket } from "./decide.ts";
 import { DATA_NOTE, foreignBudget, foreignValue } from "./data-block.ts";
 import { callText } from "./transcript.ts";
 
@@ -371,6 +371,9 @@ function intakeText(intake: StageInput["context"]["intake"]): string {
   return lines.join("\n");
 }
 
+/** The split the decomposer works from: the origin and its criteria with ids, the map's files, the limits as numbers, and on a later round the last children and what was wrong. A stranger's words; the section above it in the prompt says so. */
+const splitText = (split: StageInput["context"]["split"]): string => (split ? renderSplit(split) : NONE);
+
 function graphText(graph: StageInput["context"]["graph"]): string {
   if (!graph) return "Code graph: (none: use Glob, Grep and Read)";
   const built = `built at ${graph.commit.slice(0, 7)} on ${graph.builtAt.slice(0, 10)}`;
@@ -393,6 +396,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{task.branch}}": txt(input.task.branch),
     "{{task.classification}}": classificationLines(input.task.classification),
     "{{task.record}}": recordText(input.task.record),
+    "{{context.split}}": splitText(input.context.split),
     "{{context.ticket}}": input.context.ticket ? renderTicket(input.context.ticket) : NONE,
     ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, NONE]))),
     "{{context.plan.map}}": mapText(input.context.plan?.map),

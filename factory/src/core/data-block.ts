@@ -62,7 +62,7 @@ const block = [
   "context.sweepFailures", "context.blastRadius", "context.checks", "context.scenarioTests", "context.coverage", "context.qaTargets", "context.video.narration", "context.video.sheets", "decisions", "priorFindings", "context.projectContext", "context.testCases", "context.ci", "context.review", "context.threads", "context.ship", "context.retro",
   "context.video.scenarios", "context.video.steps", "context.video.chapters", "context.video.target", "context.video.timeline", "context.video.report", "context.video.transcript", "context.video.fixCards",
   "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items",
-  "context.jira.issue", "context.jira.description", "context.jira.comments", "context.intake", "context.ticket",
+  "context.split", "context.jira.issue", "context.jira.description", "context.jira.comments", "context.intake", "context.ticket",
   "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone",
   "context.eval.rubric", "context.eval.input", "context.eval.checks", "context.eval.answer",
 ];
@@ -85,6 +85,7 @@ const CAPS: Readonly<Record<string, number>> = {
   "context.retro": 20_000,
   "context.projectContext": 12_000,
   "context.intake": 8000,
+  "context.split": 20_000,
   "context.ticket": 12_000,
   "context.conversation.thread": 12_000,
   "context.conversation.docs": 8000,

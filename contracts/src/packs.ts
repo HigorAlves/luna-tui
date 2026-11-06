@@ -15,6 +15,7 @@ import { DiffSummaryAnswer } from "./reports.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
+import { SplitChild } from "./split.ts";
 import { CodeMapAnswer, EscalationReason, Finding, LunaConfig, PackId, Risk, Slice, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
 
 /** The agent roles. A pack names one; the runner looks its definition up by this. */
@@ -45,6 +46,8 @@ export const AgentRole = z.enum([
   "video-director",
   "demo-recorder",
   "video-critic",
+  // Change size (wave 15): proposes the children of a split; no tools, no repository, the origin is in the input.
+  "decomposer",
   // Helpers a pack's role hands work to (packs' `helpers`); never a pack's own role.
   "security-reviewer",
   "reply-drafter",
@@ -371,6 +374,10 @@ export const PrReplyAnswer = z.object({
   scenarios: z.array(z.string()).max(20).optional(),
 });
 export type PrReplyAnswer = z.infer<typeof PrReplyAnswer>;
+
+/** decompose: the children of a split, 2 to 20 (the machine's limits are checked by script), each strict: it can carry no repository, branch or base. */
+export const DecomposeAnswer = z.object({ children: z.array(SplitChild).min(2).max(20), notes: z.string().max(1000).optional() });
+export type DecomposeAnswer = z.infer<typeof DecomposeAnswer>;
 
 /** ticket_reply: the draft that declines a ticket. A draft only: a person decides whether it is posted. */
 export const TicketReplyAnswer = z.object({ reply: z.string().max(1500), confidence: z.number().min(0).max(1) });
@@ -1215,6 +1222,22 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: ConversationReplyAnswer,
     template: "conversation_reply.md",
+  },
+  // Proposes the children of a split from the origin as data; on demand, in the decomposition loop, never in a task state. It reads hostile text: no tools at all.
+  decompose: {
+    id: "decompose",
+    kind: "agent",
+    agent: "decomposer",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 2,
+    timeoutMs: 5 * MINUTE,
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus", "codex:sol"] },
+    effort: "medium",
+    answer: DecomposeAnswer,
+    template: "decompose.md",
   },
   reviewing: {
     id: "reviewing",

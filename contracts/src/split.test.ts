@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PACKS, SizeContext, SplitChild, SplitContext, StageInput } from "./index.ts";
+import { AgentRole, NO_ACCESS, PACKS, PackId, SizeContext, SplitChild, SplitContext, StageInput } from "./index.ts";
 
 const child = { title: "Export button", goal: "Add the export button", acceptance_criteria: ["It downloads a file"], covers: ["C1"], files_hint: ["src/export.ts"], est_loc: 300, depends_on: [], order: 1 };
 
@@ -65,5 +65,32 @@ describe("the size_estimate and split_check decision packs", () => {
     expect(pack.kind).toBe("decision");
     expect(Object.keys(pack.questions)).toEqual(["covers", "no_overlap", "stand_alone"]);
     for (const q of Object.values(pack.questions)) expect(q.type).toBe("yesno");
+  });
+});
+
+describe("decompose: the agent pack that proposes the children", () => {
+  const twoChildren = [child, { ...child, title: "Export route", order: 2, depends_on: [1], covers: ["C2"] }];
+
+  it("is the decomposer with no tool, no repository and no web, not writable, two turns, five minutes", () => {
+    expect(PACKS.decompose).toMatchObject({ kind: "agent", agent: "decomposer", writable: false, maxTurns: 2, effort: "medium", template: "decompose.md", helpers: [], skills: [] });
+    expect(PACKS.decompose.kind === "agent" && PACKS.decompose.access).toEqual(NO_ACCESS);
+    expect(PACKS.decompose.timeoutMs).toBe(5 * 60_000);
+    expect(PACKS.decompose.engines.default).toBe("claude:sonnet");
+    expect([...PACKS.decompose.engines.allowed].sort()).toEqual(["claude:opus", "claude:sonnet", "codex:sol"]);
+  });
+
+  it("answers 2 to 20 strict children and notes of at most 1,000 characters", () => {
+    const { answer } = PACKS.decompose;
+    expect(answer.safeParse({ children: twoChildren }).success).toBe(true);
+    expect(answer.safeParse({ children: twoChildren, notes: "x".repeat(1000) }).success).toBe(true);
+    expect(answer.safeParse({ children: twoChildren, notes: "x".repeat(1001) }).success).toBe(false);
+    expect(answer.safeParse({ children: [child] }).success).toBe(false);
+    expect(answer.safeParse({ children: Array.from({ length: 21 }, () => child) }).success).toBe(false);
+    expect(answer.safeParse({ children: [child, { ...child, repoPath: "/etc" }] }).success).toBe(false);
+  });
+
+  it("reads the split context and nothing else of the task", () => {
+    expect(PackId.safeParse("decompose").success).toBe(true);
+    expect(AgentRole.options).toContain("decomposer");
   });
 });
