@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { execInSandbox } from "../adapters/docker/docker.ts";
-import { openCardNetwork } from "../adapters/docker/egress.ts";
+import { openCardNetwork, openPlainNetwork } from "../adapters/docker/egress.ts";
 import { startServices } from "../adapters/docker/services.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { parseLunaConfig } from "../domain/luna-config.ts";
@@ -46,6 +46,7 @@ describe.skipIf(!ready)("openApp against Docker", () => {
         install: async () => ({ ok: true, ran: [], notes: [], blocked: [] }),
         egress: { for: async () => ({ allow: ["github.com:443"], allowPrivate: [], proxyImage: image }) },
         openCardNetwork,
+        openPlainNetwork,
         startServices,
         exec: execInSandbox,
         docker: (args, options) => exec("docker", args, options ?? {}),

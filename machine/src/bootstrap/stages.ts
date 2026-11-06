@@ -43,7 +43,7 @@ import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { isClone } from "../adapters/git/clone.ts";
 import { DEFAULT_SANDBOX_SIZE, execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { removeLeftoverApps } from "../adapters/docker/app.ts";
-import { openCardNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
+import { openCardNetwork, openPlainNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
 import { startServices } from "../adapters/docker/services.ts";
 import { type AppDeps, openApp, openPreview } from "../application/app-session.ts";
 import { type EgressPolicy, blockedPayloads } from "../application/egress-policy.ts";
@@ -65,7 +65,7 @@ export interface RealStagesResult {
   real: Partial<Record<TaskState, StageRunner>>;
   /** The verifying stage's review pack, or null when agents are off; `main.ts` passes this
    *  straight into `verifyRunner({ runPack: verifyPack, ... })`. */
-  verifyPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) => Promise<StageResult>) | null;
+  verifyPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) => Promise<StageResult>) | null;
   /** Runs a project's checks inside the runner image; null when stages are stubs. */
   checksExec: ReturnType<typeof sandboxExecutor> | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
@@ -201,6 +201,7 @@ export async function buildRealStages(
     ...(egress ? { egress } : {}),
     secrets,
     openCardNetwork,
+    openPlainNetwork,
     startServices,
     exec: execInSandbox,
     docker: (args, options) => exec("docker", args, options ?? {}),
@@ -233,8 +234,8 @@ export async function buildRealStages(
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure, graphReady } : {}),
   };
-  const verifyPack = (context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) =>
-    runAgent(deps, context, "verifying", { ...(extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}), ...(extra?.coverage ? { coverage: extra.coverage } : {}) });
+  const verifyPack = (context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) =>
+    runAgent(deps, context, "verifying", { ...(extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}), ...(extra?.coverage ? { coverage: extra.coverage } : {}), ...(extra?.image ? { image: extra.image } : {}) });
   const agents = agentRunners(deps);
   const saveEvidence = (taskId: string, pack: EvidencePack) => evidenceDeps.save(taskId, { evidence: pack });
   const evidenceStore = new EvidenceStore(config.stateDir);
