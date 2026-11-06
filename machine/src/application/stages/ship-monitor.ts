@@ -132,7 +132,8 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   );
   // The calendar is read only through the port; a window the port cannot give counts as frozen (an unreadable date fails closed in `inFreeze`).
   const windows = await (deps.freeze ?? lunaYamlFreeze(deps.policies)).windows(task.repoPath).catch((): Freeze[] => [{ from: "", to: "", reason: "the freeze calendar could not be read" }]);
-  const paths = (await deps.github.prFiles(slug, number)).map((f) => f.path);
+  // Both names of a renamed file: the old path is as much the PR's change as the new one (a CODEOWNERS file moved away is a CODEOWNERS change).
+  const paths = (await deps.github.prFiles(slug, number)).flatMap((f) => (f.previousPath ? [f.path, f.previousPath] : [f.path]));
   const changesCodeowners = paths.some((p) => CODEOWNERS_PATHS.includes(p));
   // The reviews are read once a poll, for the owners and for the approval a fix needs.
   let reviewsRead: Promise<PrReview[]> | null = null;

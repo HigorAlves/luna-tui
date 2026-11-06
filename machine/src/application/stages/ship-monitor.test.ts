@@ -518,8 +518,8 @@ function loopWorld(over: { fresh?: boolean; choices?: Record<string, string>; co
       head = a[3]!;
       return out();
     }
-    if (a[0] === "diff" && a[1] === "--name-only") return out(over.changedFiles ?? "src/export.ts\n");
-    if (a[0] === "diff" && a[1] === "--numstat") return out(over.numstat ?? "3\t1\tsrc/export.ts\n");
+    if (a[0] === "diff" && a.includes("--name-only")) return out((over.changedFiles ?? "src/export.ts\n").split("\n").filter(Boolean).join("\0"));
+    if (a[0] === "diff" && a.includes("--numstat")) return out((over.numstat ?? "3\t1\tsrc/export.ts\n").split("\n").filter(Boolean).join("\0"));
     return out();
   };
   const choices: Record<string, string> = { event_class: "comment", comment_intent: "question", fix_scope: "in_place", evidence_valid: "refresh_text", ...over.choices };
@@ -867,6 +867,11 @@ describe("the review loop: what the security pass found", () => {
     const out = await mergeRunner(deps as never)(context);
     expect(out).toMatchObject({ outcome: "fail", detail: { notReady: true } });
     expect(calls(github, "mergePr")).toEqual([]);
+  });
+
+  it("a CODEOWNERS file renamed away is a CODEOWNERS change: the old name counts", async () => {
+    const { run } = setup({ prFiles: async () => [{ path: "src/notes.test.ts", additions: 1, deletions: 0, previousPath: ".github/CODEOWNERS" }] }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
+    expect(await run()).not.toMatchObject({ detail: { ready: expect.anything() } });
   });
 
   it("never lets event_class call a review that requests changes noise", async () => {

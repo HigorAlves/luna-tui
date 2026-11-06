@@ -224,7 +224,7 @@ export const ReviewContext = z.object({
   pr: PrFacts,
   /** `gh pr diff` output, tail-capped by the host. */
   diff: z.string(),
-  files: z.array(z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int() })),
+  files: z.array(z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int(), /** The name a renamed file had before. */ previousPath: z.string().optional() })),
   existingComments: z.array(
     z.object({ path: z.string().nullable(), line: z.number().int().nullable(), author: z.string(), body: z.string() }),
   ),

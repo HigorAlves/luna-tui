@@ -23,7 +23,7 @@ import { HOST_GIT, type GitExec, type RebaseResult } from "../../adapters/git/wo
 import { exec as realExec } from "../../adapters/process/exec.ts";
 import { refreshPackText } from "../../domain/evidence-refresh.ts";
 import { affectedScenarios } from "../../domain/affected-scenarios.ts";
-import { fixGuard } from "../../domain/fix-guard.ts";
+import { type FixGuardResult, fixGuard } from "../../domain/fix-guard.ts";
 import { carriesSecret, postable } from "../../domain/postable.ts";
 import type { PublishEvidence } from "../evidence-publish.ts";
 import { type GitHub, messageOf } from "../github.ts";
@@ -134,6 +134,26 @@ export async function resetTo(run: GitExec, worktreePath: string, ref: string): 
   await run("git", [...HOST_GIT, ...at(worktreePath), "clean", "-fd", "--quiet"]);
 }
 
+/**
+ * What the fix changed, read by the host from git and checked by the guard. Fails closed: a diff git cannot give is a refusal.
+ */
+export async function guardFix(run: GitExec, work: string, before: string, after: string, input: { scope: "in_place" | "re_verify_partial"; prFiles: string[] }): Promise<FixGuardResult> {
+  // No rename detection, NUL-separated: a moved file shows both its names (as a deletion and an addition), and no name is quoted or cut at a newline.
+  const names = await run("git", [...HOST_GIT, ...at(work), "diff", "--no-renames", "-z", "--name-only", before, after]);
+  const numstat = await run("git", [...HOST_GIT, ...at(work), "diff", "--no-renames", "-z", "--numstat", before, after]);
+  if (names.code !== 0 || numstat.code !== 0) return { ok: false, paths: [], reason: "the fix's diff could not be read" };
+  let added = 0;
+  let removed = 0;
+  const binary: string[] = [];
+  for (const record of numstat.stdout.split("\0")) {
+    const [a, r, ...path] = record.split("\t");
+    if (a === "-" && r === "-") binary.push(path.join("\t"));
+    added += Number(a) || 0;
+    removed += Number(r) || 0;
+  }
+  return fixGuard({ scope: input.scope, changed: names.stdout.split("\0").filter(Boolean), prFiles: input.prFiles, added, removed, binary });
+}
+
 export async function headOfWorktree(run: GitExec, worktreePath: string): Promise<string | null> {
   const out = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "HEAD"]);
   const sha = out.code === 0 ? out.stdout.trim() : "";
@@ -240,17 +260,8 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
 
   if (after !== before) {
     // The guard runs on what was committed, before any check: only the PR's own files and test files, no control-plane path, within the size of the scope.
-    const names = await run("git", [...HOST_GIT, ...at(work), "diff", "--name-only", before, after]);
-    const numstat = await run("git", [...HOST_GIT, ...at(work), "diff", "--numstat", before, after]);
-    let added = 0;
-    let removed = 0;
-    for (const line of numstat.stdout.split("\n")) {
-      const [a, r] = line.split("\t");
-      added += Number(a) || 0;
-      removed += Number(r) || 0;
-    }
-    const prFiles = (await deps.github.prFiles(input.slug, input.number).catch(() => [])).map((f) => f.path);
-    const guarded = fixGuard({ scope: input.scope, changed: names.stdout.split("\n").map((l) => l.trim()).filter(Boolean), prFiles, added, removed });
+    const prFiles = (await deps.github.prFiles(input.slug, input.number).catch(() => [])).flatMap((f) => (f.previousPath ? [f.path, f.previousPath] : [f.path]));
+    const guarded = await guardFix(run, work, before, after, { scope: input.scope, prFiles });
     if (!guarded.ok) return stop(escalated(`${postable(guarded.reason, 400)}; nothing was pushed`, "other", { paths: guarded.paths.slice(0, 10) }));
   }
 
@@ -303,9 +314,9 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
 
   const pack = input.pack;
   if (!pack) return out;
-  const names = await run("git", [...HOST_GIT, ...at(wt), "diff", "--name-only", before, after]);
+  const names = await run("git", [...HOST_GIT, ...at(wt), "diff", "--no-renames", "-z", "--name-only", before, after]);
   const stat = await run("git", [...HOST_GIT, ...at(wt), "diff", "--stat", "--no-color", before, after]);
-  const changedNames = names.stdout.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 200);
+  const changedNames = names.stdout.split("\0").filter(Boolean).slice(0, 200);
   const knownScenarios = pack.scenarios.map((s, i) => ({ id: `s${i + 1}`, text: s.text, result: s.result }));
   const tests = ((await deps.buildTests?.(task.id).catch(() => [])) ?? []).map((t) => ({ scenario: knownScenarios.find((k) => k.id === t.scenario || k.text === t.scenario)?.id ?? t.scenario, file: t.file }));
   const affected = affectedScenarios({ named: input.named ?? [], changed: changedNames, tests, known: knownScenarios });

@@ -4,14 +4,18 @@ import { describe, expect, it, vi } from "vitest";
 import type { GitExec } from "../../adapters/git/worktree.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { SECTION_END, SECTION_START } from "../../domain/evidence-markdown.ts";
 import { emptyCursor, saveCursor } from "../ship-cursor.ts";
-import { type FixInput, fixRound, postable } from "./ship-fixes.ts";
+import { at, configureMachineRepos, machineGitDir } from "../../adapters/git/machine-repo.ts";
+import { exec as realExec } from "../../adapters/process/exec.ts";
+import { type FixInput, fixRound, guardFix, postable } from "./ship-fixes.ts";
 
 const B = "b".repeat(40);
 const N = "e".repeat(40);
@@ -39,7 +43,8 @@ function setup(over: { addressed?: StageResult; commit?: boolean; checks?: Stage
       return ok();
     }
     if (a[0] === "merge-base") return ok();
-    if (a[0] === "diff" && a[1] === "--name-only") return ok(over.names ?? "src/export.ts\nsrc/other.ts\n");
+    if (a[0] === "diff" && a.includes("--name-only")) return ok((over.names ?? "src/export.ts\nsrc/other.ts\n").split("\n").filter(Boolean).join("\0"));
+    if (a[0] === "diff" && a.includes("--numstat")) return ok("");
     if (a[0] === "diff") return ok(" 2 files changed, 3 insertions(+)");
     if (a[0] === "push") return over.pushFails ? { code: 1, stdout: "", stderr: "rejected" } : ok();
     return ok();
@@ -341,5 +346,64 @@ describe("a re-stamp after a fix goes through the one publisher", () => {
     expect(s.publish).toHaveBeenCalledWith(expect.objectContaining({ approved: false }));
     expect(emitted).toEqual([["evidence.edited", expect.objectContaining({ sha: N.slice(0, 7) })]]);
     expect(await readdir(join(stateDir, "ground-truth", "evidence"))).toHaveLength(1);
+  });
+});
+
+describe("the fix guard against a real repository, through the pinned host git", () => {
+  const sh = (args: string[], env: Record<string, string> = {}) => execFileSync("git", args, { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", ...env } });
+  const body = Array.from({ length: 40 }, (_, i) => `line ${i} of a file that stays mostly the same`).join("\n") + "\n";
+
+  /** A workspace with the machine's repository for it; `files` are committed as the PR's head, `change` then makes the fix and commits it. */
+  async function world(files: Record<string, string | Buffer>, change: (dir: string) => void) {
+    configureMachineRepos(await mkdtemp(join(tmpdir(), "guard-m-")));
+    const work = await mkdtemp(join(tmpdir(), "guard-w-"));
+    sh(["init", "--bare", "-q", machineGitDir(work)]);
+    const g = (...args: string[]) => sh([...at(work), ...args]);
+    for (const [path, content] of Object.entries(files)) {
+      mkdirSync(dirname(join(work, path)), { recursive: true });
+      writeFileSync(join(work, path), content);
+    }
+    g("add", "-A");
+    g("-c", "commit.gpgsign=false", "commit", "-q", "-m", "head");
+    const before = g("rev-parse", "HEAD").trim();
+    change(work);
+    g("add", "-A");
+    g("-c", "commit.gpgsign=false", "commit", "-q", "-m", "fix");
+    return { work, before, after: g("rev-parse", "HEAD").trim() };
+  }
+  const guard = (w: { work: string; before: string; after: string }, prFiles: string[]) => guardFix(realExec, w.work, w.before, w.after, { scope: "in_place", prFiles });
+  const g = (work: string, ...args: string[]) => sh([...at(work), ...args]);
+
+  it("refuses a workflow file moved to a test file name with most of its content kept", async () => {
+    const w = await world({ ".github/workflows/ci.yml": body, "src/a.ts": "x\n" }, (dir) => {
+      g(dir, "mv", ".github/workflows/ci.yml", "src/ci.test.ts");
+      writeFileSync(join(dir, "src/ci.test.ts"), body + "// moved\n");
+    });
+    expect(await guard(w, ["src/a.ts"])).toMatchObject({ ok: false, paths: expect.arrayContaining([".github/workflows/ci.yml"]) });
+  });
+
+  it("refuses a CODEOWNERS deletion made as a rename", async () => {
+    const w = await world({ ".github/CODEOWNERS": "* @owner\n".repeat(20), "src/a.ts": "x\n" }, (dir) => {
+      g(dir, "mv", ".github/CODEOWNERS", "src/notes.test.ts");
+    });
+    expect(await guard(w, ["src/a.ts"])).toMatchObject({ ok: false, paths: expect.arrayContaining([".github/CODEOWNERS"]) });
+  });
+
+  it("counts a binary file as over the size cap", async () => {
+    const w = await world({ "src/a.test.ts": Buffer.from([0, 1, 2, 3, 0, 255]) }, (dir) => {
+      writeFileSync(join(dir, "src/a.test.ts"), Buffer.from([0, 9, 8, 7, 0, 254, 0, 0]));
+    });
+    expect(await guard(w, ["src/a.test.ts"])).toMatchObject({ ok: false, reason: expect.stringMatching(/binary/) });
+  });
+
+  it("reads a path with a non-ASCII name as it is, so a PR's own file passes", async () => {
+    const w = await world({ "src/café.ts": "a\n" }, (dir) => writeFileSync(join(dir, "src/café.ts"), "b\n"));
+    expect(await guard(w, ["src/café.ts"])).toEqual({ ok: true });
+    expect(await guard(w, ["src/other.ts"])).toMatchObject({ ok: false, paths: ["src/café.ts"] });
+  });
+
+  it("fails closed when the diff cannot be read", async () => {
+    const w = await world({ "src/a.ts": "a\n" }, (dir) => writeFileSync(join(dir, "src/a.ts"), "b\n"));
+    expect(await guardFix(realExec, w.work, "f".repeat(40), w.after, { scope: "in_place", prFiles: ["src/a.ts"] })).toMatchObject({ ok: false });
   });
 });

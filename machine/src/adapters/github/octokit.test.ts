@@ -285,6 +285,14 @@ describe("OctokitGitHub: shipping", () => {
     expect(all).toHaveLength(1);
   });
 
+  it("lists the files of a PR with the previous name of a renamed one", async () => {
+    const { github } = stub({ "pulls.listFiles": [{ filename: "src/n.test.ts", previous_filename: ".github/CODEOWNERS", additions: 1, deletions: 0 }, { filename: "src/a.ts", additions: 2, deletions: 1 }] });
+    expect(await github.prFiles("o/a", 7)).toEqual([
+      { path: "src/n.test.ts", additions: 1, deletions: 0, previousPath: ".github/CODEOWNERS" },
+      { path: "src/a.ts", additions: 2, deletions: 1 },
+    ]);
+  });
+
   it("lists every review with its author, state, commit and time, and a team's members by login", async () => {
     const { github, calls } = stub({
       "pulls.listReviews": [{ id: 1, user: { login: "ana" }, state: "APPROVED", commit_id: "abc", submitted_at: "t1", author_association: "MEMBER" }, { id: 2, user: null, state: "COMMENTED", submitted_at: "t2" }],

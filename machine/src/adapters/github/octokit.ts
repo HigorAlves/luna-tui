@@ -152,9 +152,10 @@ export class OctokitGitHub implements GitHub {
   async prFiles(slug: string, number: number) {
     const { owner, repo } = repoRef(slug);
     const files = await call(`listing the files of ${slug}#${number}`, () =>
-      this.octokit.paginate<{ filename: string; additions: number; deletions: number }>(this.octokit.rest.pulls.listFiles, { owner, repo, pull_number: number, per_page: 100 }),
+      this.octokit.paginate<{ filename: string; previous_filename?: string; additions: number; deletions: number }>(this.octokit.rest.pulls.listFiles, { owner, repo, pull_number: number, per_page: 100 }),
     );
-    return files.map((f) => ({ path: f.filename, additions: f.additions, deletions: f.deletions }));
+    // A renamed file lists its previous name too: both names are the PR's own, and both are checked against the control plane.
+    return files.map((f) => ({ path: f.filename, additions: f.additions, deletions: f.deletions, ...(f.previous_filename ? { previousPath: f.previous_filename } : {}) }));
   }
 
   async prComments(slug: string, number: number) {
