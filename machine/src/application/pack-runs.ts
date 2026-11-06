@@ -25,6 +25,7 @@
 // Spend: a call's cost is a pack_runs row the day's budget counts (spendSinceUsd), and a call
 // while the day is at its ceiling is refused before it runs. There is no monthly ceiling here:
 // that one is per repo (luna.yaml), and a call has no repo.
+import type { EgressPolicy } from "./egress-policy.ts";
 import { type CredentialOwner, type DecisionRecord, type EngineId, PACKS, type PackId, type RunInfo, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
@@ -116,6 +117,8 @@ export interface PackRunsDeps {
   store: PackRunStore;
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
+  /** The list a pack run may reach; absent, the run joins an ordinary bridge as before. */
+  egress?: EgressPolicy;
   now?: () => Date;
   /** Calls at once; defaults to PACK_RUNS_MAX. */
   max?: number;
@@ -269,7 +272,7 @@ export class PackRuns implements PackRunsPort {
       const input = buildContextPackInput(pack, context, engine);
       const run = await runPackOnce(
         { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: span.childEnv(), signal },
-        { credentials: this.deps.credentials, sandbox: this.deps.sandbox },
+        { credentials: this.deps.credentials, sandbox: this.deps.sandbox, ...(this.deps.egress ? { egress: this.deps.egress } : {}) },
       );
       if (run.error !== null) failure = signal?.aborted ? new RunAbortedError("the client left: the run was stopped") : new RunFailedError(run.error);
       else {

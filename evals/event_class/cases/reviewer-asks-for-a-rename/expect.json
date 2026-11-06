@@ -4,13 +4,13 @@
     {
       "kind": "equals",
       "path": "event.choice",
-      "value": "comment"
+      "value": "review_comment"
     }
   ],
   "rubric": "A person's note that asks for a change.",
   "label": {
     "event": {
-      "choice": "comment"
+      "choice": "review_comment"
     }
   }
 }

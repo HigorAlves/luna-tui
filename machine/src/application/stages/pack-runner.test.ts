@@ -1,21 +1,32 @@
+import { RepoImageError } from "../repo-images.ts";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { StageInput, type StageOutput } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, PACKS, StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialWaitError, type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
+import { envHash } from "../../domain/env-hash.ts";
+import { machineGitDir } from "../../adapters/git/machine-repo.ts";
+import { HOST_GIT } from "../../adapters/git/worktree.ts";
+import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import type { SecretStore } from "../secrets.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
 import type { StageContext } from "../ports.ts";
 import type { Graph, GraphStamp } from "../graph.ts";
 import { engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "../engine-gates.ts";
 
+/** What the agent does in its own repository, in the folder's own .git (the one the machine made for it). */
+const agent = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+
+/** git in a repository of the user's, or, for a card's workspace, in the machine's repository for it (the agent's commits arrive there). */
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
+  execFileSync("git", [...(existsSync(machineGitDir(cwd)) ? ["--git-dir=" + machineGitDir(cwd), "--work-tree=" + cwd] : []), "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
     encoding: "utf8",
   }).trim();
 
@@ -52,7 +63,21 @@ function fakeSandbox(
     seen = run;
     const out = join(run.runDir, "out");
     mkdirSync(out, { recursive: true });
+    // The factory's job in the container: the agent's commits leave as a bundle from the tip the run started at.
+    const scratchHead = () => {
+      try {
+        return agent(run.worktree, "rev-parse", "HEAD");
+      } catch {
+        return null;
+      }
+    };
+    const started = scratchHead();
     act(run);
+    const ended = scratchHead();
+    if (started && ended && ended !== started) {
+      mkdirSync(join(out, "bundles"), { recursive: true });
+      agent(run.worktree, "bundle", "create", join(out, "bundles", "1.bundle"), `${started}..HEAD`);
+    }
     writeFileSync(join(out, "result.json"), JSON.stringify(typeof result === "function" ? result() : result));
     writeFileSync(
       join(out, "events.jsonl"),
@@ -200,6 +225,33 @@ describe("agent stages through packs", () => {
     expect(result.detail).toMatchObject({ reason: "needs a new dependency", options: ["add it", "drop it"], escalation: "other" });
   });
 
+  it("leaves an escalated run's clone exactly as the agent left it, saves the uncommitted work on refs/luna/kept/<run>, and names the folder", async () => {
+    const answer = { kind: "escalated", summary: "stopped", reason: "needs a new dependency", options: [] };
+    const run = runners(fakeSandbox(output({ summary: "stopped", answer }), (r) => writeFileSync(join(r.worktree, "half.txt"), "half done\n")));
+    const result = await run.implementing!(context("implementing"));
+    expect(result.outcome).toBe("escalated");
+    const path = seen!.worktree;
+    expect(readFileSync(join(path, "half.txt"), "utf8")).toBe("half done\n");
+    expect(git(path, "status", "--porcelain")).toBe("?? half.txt");
+    expect(git(path, "show", "refs/luna/kept/run-1:half.txt")).toBe("half done");
+    expect(result.detail).toMatchObject({ keptSandbox: { path, ref: "refs/luna/kept/run-1", keepHours: 24, until: expect.any(String) } });
+    expect(existsSync(join(stateDir, "kept", "run-1.json"))).toBe(true);
+  });
+
+  it("still resets a failed run, which the next attempt starts over from", async () => {
+    const run = runners(fakeSandbox(output({ outcome: "fail", ok: false } as never), (r) => writeFileSync(join(r.worktree, "half.txt"), "x\n")));
+    await run.implementing!(context("implementing"));
+    expect(existsSync(join(seen!.worktree, "half.txt"))).toBe(false);
+  });
+
+  it("sizes the container from the repository's sandbox section, two CPUs and four gigabytes without one", async () => {
+    await runners(fakeSandbox(output())).triage!(context("triage"));
+    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 4 });
+    const small = { ...deps(fakeSandbox(output())), policies: { for: async () => ({ ...DEFAULT_POLICY, factory: { ...FACTORY_DEFAULTS, sandbox: { ...FACTORY_DEFAULTS.sandbox, cpu: 2, memory_gb: 3 } } }) } as never };
+    await agentRunners(small).triage!(context("triage"));
+    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 3 });
+  });
+
   it("carries the agent's typed escalation reason, and reads one off the enum as other", async () => {
     const answer = { kind: "escalated", summary: "stopped", reason: "the plan names a module that does not exist", options: [], escalation: "plan_wrong" };
     const wrong = await runners(fakeSandbox(output({ schema: 2 as const, outcome: "escalated" as const, summary: "stopped", answer }))).implementing!(context("implementing"));
@@ -214,8 +266,10 @@ describe("agent stages through packs", () => {
     const result = await runners(sandbox).implementing!(tampered);
     expect(result).toMatchObject({ outcome: "fail", detail: { error: "refusing to run implementing on branch main: the pipeline only writes task/* branches (or the branch it named for a Jira-linked task)" } });
     expect(sandbox).not.toHaveBeenCalled();
-    // A read-only pack on the same branch is fine: it changes nothing.
-    await runners(fakeSandbox(output())).triage!({ ...tampered, stage: "triage" });
+    // A read-only pack is refused too: a folder that is not a card's workspace (the repository's own checkout) is nobody's to run in.
+    const read = await runners(sandbox).triage!({ ...tampered, stage: "triage" });
+    expect(read).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("not a card's workspace") } });
+    expect(sandbox).not.toHaveBeenCalled();
   });
 
   it("keeps a linked task on the branch it already works on, even after Jira renamed the issue type", async () => {
@@ -282,15 +336,31 @@ describe("agent stages through packs", () => {
     });
   });
 
-  it("mounts the linked worktree's .git file read-only over /work/.git in every stage, and keeps the admin dir's pointers read-only in a writable one", async () => {
-    await runners(fakeSandbox(output())).triage!(context("triage"));
-    expect(seen!.mounts).toContainEqual({ host: join(seen!.worktree, ".git"), container: "/work/.git", readOnly: true });
+  it("runs a new card in its own clone: the repository's git dir is not mounted and its branches stay as they were", async () => {
+    const refs = () => execFileSync("git", ["-C", repo, "for-each-ref"], { encoding: "utf8" });
+    const before = refs();
     await runners(fakeSandbox(output())).implementing!(context("implementing"));
     expect(seen!.writable).toBe(true);
-    expect(seen!.mounts).toContainEqual({ host: join(seen!.worktree, ".git"), container: "/work/.git", readOnly: true });
-    const name = seen!.worktree.split("/").pop()!;
-    expect(existsSync(join(seen!.gitDir!, "worktrees", name, "commondir"))).toBe(true);
-    expect(seen!.gitReadOnly).toEqual(expect.arrayContaining(["hooks", "config", `worktrees/${name}/commondir`, `worktrees/${name}/gitdir`]));
+    expect(statSync(join(seen!.worktree, ".git")).isDirectory()).toBe(true);
+    expect(seen!.gitDir).toBeNull();
+    expect(seen!.mounts).not.toContainEqual(expect.objectContaining({ container: "/work/.git" }));
+    expect(execFileSync("git", ["-C", repo, "worktree", "list"], { encoding: "utf8" }).trim().split("\n")).toHaveLength(1);
+    expect(refs()).toBe(before);
+  });
+
+  it("moves a card still on a linked worktree to a workspace of its own before its next run, read-only or not, work and commits kept, and mounts no git dir", async () => {
+    const path = join(root, "worktrees", "repo", "task-linked");
+    execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", "task/linked", path]);
+    writeFileSync(join(path, "wip.txt"), "uncommitted\n");
+    const linked = (stage: StageContext["stage"]) => ({ ...context(stage), task: { ...context(stage).task, branch: "task/linked", worktreePath: path } }) as StageContext;
+    let carried = "";
+    await runners(fakeSandbox(output(), (run) => void (carried = readFileSync(join(run.worktree, "wip.txt"), "utf8")))).triage!(linked("triage"));
+    expect(carried).toBe("uncommitted\n");
+    expect(seen!.gitDir).toBeNull();
+    expect(seen!.mounts).not.toContainEqual(expect.objectContaining({ container: "/work/.git" }));
+    expect(existsSync(machineGitDir(path))).toBe(true);
+    expect(execFileSync("git", ["-C", repo, "worktree", "list"], { encoding: "utf8" })).not.toContain("task-linked");
+    expect(git(path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/linked");
   });
 
   it("gives the sandbox the repo's cache volume, so a retry or the next task of the repo installs warm", async () => {
@@ -455,9 +525,9 @@ describe("agent stages through packs", () => {
         () => output({ commit: made }),
         (r) => {
           writeFileSync(join(r.worktree, "b.txt"), "b\n");
-          git(r.worktree, "add", "-A");
-          git(r.worktree, "commit", "-q", "-m", "slice 1");
-          made = git(r.worktree, "rev-parse", "HEAD");
+          agent(r.worktree, "add", "-A");
+          agent(r.worktree, "commit", "-q", "-m", "slice 1");
+          made = agent(r.worktree, "rev-parse", "HEAD");
         },
       ),
     );
@@ -468,14 +538,146 @@ describe("agent stages through packs", () => {
     expect(git(seen!.worktree, "log", "--format=%s")).toBe("slice 1\ninit");
   });
 
+  it("runs the stage in the repository's own image, and records that image's id", async () => {
+    let made = "";
+    let seen: SandboxRun | undefined;
+    const d = { ...deps(fakeSandbox(() => output({ commit: made }), (r) => {
+      seen = r;
+      writeFileSync(join(r.worktree, "pnpm-lock.yaml"), "lock\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      made = agent(r.worktree, "rev-parse", "HEAD");
+    })), imageId: async (image: string) => `sha256:id-of-${image}`, repoImages: { ensure: async () => ({ image: "hardness-runner-shop:abc" }) } };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect(seen?.image).toBe("hardness-runner-shop:abc");
+    expect((result.detail?.env as { image: string }).image).toBe("sha256:id-of-hardness-runner-shop:abc");
+  });
+
+  it("makes triage wait for the repository's graph, and escalates as an environment problem when it cannot be built", async () => {
+    const sandbox = vi.fn();
+    const failing = { ...deps(sandbox), graphReady: async () => ({ state: "failed" as const, reason: "exit code 1" }) };
+    const result = await agentRunners(failing).triage!(context("triage"));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "graph" } });
+    expect(sandbox).not.toHaveBeenCalled();
+    const seen: boolean[] = [];
+    const going = { ...deps(fakeSandbox(output())), graphReady: async (i: { skip: boolean }) => (seen.push(i.skip), { state: "ready" as const }) };
+    await agentRunners(going).triage!(context("triage"));
+    expect(seen).toEqual([false]);
+  });
+
+  it("escalates as an environment problem, with the reason, when the repository's image cannot be built", async () => {
+    const sandbox = vi.fn();
+    const d = { ...deps(sandbox), repoImages: { ensure: async () => { throw new RepoImageError("step 3 failed: no such package"); } } };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, reason: expect.stringContaining("no such package") });
+    expect(sandbox).not.toHaveBeenCalled();
+  });
+
+  it("records the environment a passing Build ran in: the image id, the lockfiles at the head, the head, and their hash", async () => {
+    let made = "";
+    const d = { ...deps(fakeSandbox(() => output({ commit: made }), (r) => {
+      writeFileSync(join(r.worktree, "pnpm-lock.yaml"), "lock\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      made = agent(r.worktree, "rev-parse", "HEAD");
+    })), imageId: async (image: string) => `sha256:id-of-${image}` };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect(result.outcome).toBe("pass");
+    const env = result.detail?.env as { hash: string; image: string; commit: string; lockfiles: Record<string, string> };
+    expect(env).toMatchObject({ image: "sha256:id-of-img", commit: made });
+    expect(Object.keys(env.lockfiles)).toEqual(["pnpm-lock.yaml"]);
+    expect(env.hash).toBe(envHash(env));
+  });
+
+  it("records no environment for a Build that did not pass", async () => {
+    const d = { ...deps(fakeSandbox(output({ outcome: "fail", ok: false } as never))), imageId: async () => "sha256:x" };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect(result.outcome).not.toBe("pass");
+    expect(result.detail).not.toHaveProperty("env");
+  });
+
+  it("takes the run's commits in as a fast-forward of the card's branch in the machine's repository, whatever the agent's own repository says", async () => {
+    let made = "";
+    const run = runners(fakeSandbox(() => output({ commit: made }), (r) => {
+      writeFileSync(join(r.worktree, "b.txt"), "b\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      made = agent(r.worktree, "rev-parse", "HEAD");
+    }));
+    const result = await run.implementing!(context("implementing"));
+    expect(result.outcome).toBe("pass");
+    expect(result.run?.outputCommit).toBe(made);
+    expect(git(seen!.worktree, "rev-parse", "refs/heads/" + result.workspace!.branch)).toBe(made);
+    // And the branch shows in the user's repository, written by the machine.
+    expect(execFileSync("git", ["-C", repo, "rev-parse", result.workspace!.branch], { encoding: "utf8" }).trim()).toBe(made);
+  });
+
+  it("escalates head_moved, and takes nothing in, when the run's commits do not descend from the card's branch", async () => {
+    const run = runners(fakeSandbox(output(), (r) => {
+      // The machine moved the card's branch while the agent worked; the agent committed on the old tip.
+      writeFileSync(join(r.worktree, "machine.txt"), "m\n");
+      git(r.worktree, "add", "-A");
+      git(r.worktree, "commit", "-q", "-m", "the machine's own");
+      writeFileSync(join(r.worktree, "agent.txt"), "a\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "agent");
+    }));
+    const result = await run.implementing!(context("implementing"));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "head_moved" } });
+    expect(git(seen!.worktree, "log", "--format=%s", "-1")).toBe("the machine's own");
+  });
+
+  it("fails the run on a bundle it cannot read", async () => {
+    const cut = runners(fakeSandbox(output(), (r) => {
+      writeFileSync(join(r.worktree, "b.txt"), "b\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      mkdirSync(join(r.runDir, "out", "bundles"), { recursive: true });
+      writeFileSync(join(r.runDir, "out", "bundles", "9.bundle"), "# v2 git bundle\nnot a bundle");
+    }));
+    const result = await cut.implementing!(context("implementing"));
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("could not be taken in") } });
+  });
+
+  it("fails the run, before any host git reads the folder, when the agent left a nested repository: it is removed by plain file removal and its filter never runs", async () => {
+    const marker = join(root, "nested-filter-ran");
+    const run = runners(fakeSandbox(output(), (r) => {
+      const sub = join(r.worktree, "sub");
+      mkdirSync(sub);
+      execFileSync("git", ["init", "-q", sub]);
+      writeFileSync(join(sub, "f.txt"), "f\n");
+      writeFileSync(join(sub, ".gitattributes"), "* filter=x\n");
+      execFileSync("git", ["config", "--file", join(sub, ".git", "config"), "filter.x.clean", `touch ${marker}; cat`]);
+    }));
+    const result = await run.implementing!(context("implementing"));
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("nested repository") } });
+    expect(JSON.stringify(result.detail)).toContain("sub/.git");
+    expect(existsSync(join(seen!.worktree, "sub", ".git"))).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("fails the run when the folder differs from the branch tip after the commits came in", async () => {
+    const run = runners(fakeSandbox(output(), (r) => {
+      writeFileSync(join(r.worktree, "b.txt"), "b\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      // Left in the folder after the commit: not what the bundle carries.
+      writeFileSync(join(r.worktree, "b.txt"), "changed after the commit\n");
+    }));
+    const result = await run.implementing!(context("implementing"));
+    expect(result.outcome).toBe("fail");
+    expect(JSON.stringify(result.detail)).toContain("uncommitted changes");
+  });
+
   it("hands the latest verifying findings to implementing, keeping only confident ones", async () => {
     const f = (confidence: number, title: string) => ({
       path: "a.ts", line: 1, start_line: null, severity: "bug", title, body: "", suggestion_code: null, confidence,
     });
     const run = runners(fakeSandbox(output(), (r) => {
       writeFileSync(join(r.worktree, "b.txt"), "b\n");
-      git(r.worktree, "add", "-A");
-      git(r.worktree, "commit", "-q", "-m", "slice");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice");
     }));
     await run.implementing!({ ...context("implementing"), priorFindings: [f(0.9, "keep"), f(0.5, "drop")] });
     expect((seen?.input as { priorFindings: Array<{ title: string }> }).priorFindings.map((x) => x.title)).toEqual(["keep"]);
@@ -489,9 +691,9 @@ describe("agent stages through packs", () => {
       git(repo, "commit", "-q", "-m", "tests");
     };
     const commitIn = (cwd: string, msg = "slice") => {
-      git(cwd, "add", "-A");
-      git(cwd, "commit", "-q", "-m", msg);
-      return git(cwd, "rev-parse", "HEAD");
+      agent(cwd, "add", "-A");
+      agent(cwd, "commit", "-q", "-m", msg);
+      return agent(cwd, "rev-parse", "HEAD");
     };
     const expectLocked = async (act: (cwd: string) => void) => {
       seedTests();
@@ -509,9 +711,9 @@ describe("agent stages through packs", () => {
     it("fails and undoes a commit that modified an existing test", () =>
       expectLocked((cwd) => writeFileSync(join(cwd, "test", "cart.test.js"), "new\n")));
     it("fails and undoes a commit that deleted an existing test", () =>
-      expectLocked((cwd) => git(cwd, "rm", "-q", "test/cart.test.js")));
+      expectLocked((cwd) => agent(cwd, "rm", "-q", "test/cart.test.js")));
     it("fails and undoes a commit that renamed an existing test", () =>
-      expectLocked((cwd) => git(cwd, "mv", "test/cart.test.js", "src-moved.js")));
+      expectLocked((cwd) => agent(cwd, "mv", "test/cart.test.js", "src-moved.js")));
 
     // A test file that existed is allowed to change as long as the tests that were there
     // still pass against the new code: the machine puts the original file back, runs the
@@ -569,7 +771,7 @@ describe("agent stages through packs", () => {
       seedTests();
       const before = git(repo, "rev-parse", "HEAD");
       const run = withTestCommand(["sh", "-c", "exit 0"], fakeSandbox(output(), (r) => {
-        git(r.worktree, "rm", "-q", "test/cart.test.js");
+        agent(r.worktree, "rm", "-q", "test/cart.test.js");
         commitIn(r.worktree);
       }));
       const result = await run.implementing!(context("implementing"));
@@ -641,8 +843,8 @@ describe("agent stages through packs", () => {
   it("records the commit a writable pass ended on, and mounts a per-task session dir", async () => {
     const run = runners(fakeSandbox(output(), (r) => {
       writeFileSync(join(r.worktree, "a.txt"), "changed\n");
-      git(r.worktree, "add", "-A");
-      git(r.worktree, "commit", "-q", "-m", "slice");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice");
     }));
     const ctx = context("implementing");
     const result = await run.implementing!(ctx);
@@ -651,6 +853,18 @@ describe("agent stages through packs", () => {
     expect(result.run?.outputCommit).not.toBe(result.run?.inputCommit);
     expect(seen!.sessionMount).toBe(join(stateDir, "tasks", ctx.task.id, "session"));
     expect(existsSync(seen!.sessionMount!)).toBe(true);
+  });
+
+  it("gives the verifier no session folder of the card's, and no slice_list tool", async () => {
+    await runAgent(deps(fakeSandbox(output())), context("verifying"), "verifying");
+    expect(seen!.sessionMount).toBeUndefined();
+    expect(PACKS.verifying.access.luna ?? []).not.toContain("slice_list");
+  });
+
+  it("runs the verifier on another family than the implementer's when that credential is there, and says so on the run", async () => {
+    const started = vi.fn(async () => {});
+    await runAgent(deps(fakeSandbox(output())), { ...context("verifying"), started }, "verifying");
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ engine: "codex:sol" }));
   });
 
   it("caps the run's time at the minutes Build's budget has left, when that is smaller than its own limit", async () => {
@@ -886,8 +1100,9 @@ describe("the engine a stage runs on", () => {
   it("gives a verifying stage the Codex login its second opinion needs beside its own engine's, and releases both", async () => {
     const { credentials, log } = recordingCredentials();
     await runAgent({ ...deps(fakeSandbox(output(), () => log.push("sandbox"))), credentials }, context("verifying"), "verifying");
-    expect(seen!.credential).toEqual({ env: { KEY_FOR_CLAUDE_OPUS: "v", KEY_FOR_CODEX_SOL: "v" }, mounts: [] });
-    expect(log).toEqual(["prepare claude:opus", "prepare codex:sol", "sandbox", "release claude:opus", "release codex:sol"]);
+    // The reviewer is on the other family (codex:sol, which is also the second opinion's engine), so one credential serves both.
+    expect(seen!.credential).toEqual({ env: { KEY_FOR_CODEX_SOL: "v" }, mounts: [] });
+    expect(log).toEqual(["prepare codex:sol", "sandbox", "release codex:sol"]);
   });
 
   it("releases the credential when the sandbox throws", async () => {
@@ -907,8 +1122,8 @@ describe("the engine a stage runs on", () => {
     });
     const commitFiles = (...names: string[]) => (r: SandboxRun) => {
       for (const name of names) writeFileSync(join(r.worktree, name), "x\n");
-      git(r.worktree, "add", "-A");
-      git(r.worktree, "commit", "-q", "-m", "slice");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice");
     };
     const graphWith = (misses: unknown[]): Graph => ({
       stampOf: async () => null,
@@ -923,8 +1138,8 @@ describe("the engine a stage runs on", () => {
 
     const commitContent = (files: Record<string, string>) => (r: SandboxRun) => {
       for (const [name, text] of Object.entries(files)) writeFileSync(join(r.worktree, name), text);
-      git(r.worktree, "add", "-A");
-      git(r.worktree, "commit", "-q", "-m", "slice");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice");
     };
 
     it("fails the stage on a test switched off in place (a blocker), marks the run as a scope red and lists the issue with its severity", async () => {
@@ -1045,9 +1260,12 @@ describe("the engine a stage runs on", () => {
       expect((result.detail as { ledger: { slices: Array<{ status: string }> } }).ledger.slices[0]!.status).toBe("committed");
       const pushes = calls.filter((c) => c.includes("push"));
       expect(pushes).toHaveLength(1);
-      expect(pushes[0]!.slice(0, 4)).toEqual(["git", "-c", "core.hooksPath=/dev/null", "-C"]);
+      const lead = 1 + HOST_GIT.length;
+      expect(pushes[0]!.slice(0, lead + 1)).toEqual(["git", ...HOST_GIT, "-C"]);
       // A checkpoint goes to a ref that triggers no CI and is nobody's PR head; Deliver updates the branch itself.
-      expect(pushes[0]!.slice(5)).toEqual(["push", "--force", "origin", expect.stringMatching(/^HEAD:refs\/luna\/wip\/task\//)]);
+      expect(pushes[0]![lead + 2]).toMatch(/^--git-dir=/);
+      expect(pushes[0]![lead + 3]).toMatch(/^--work-tree=/);
+      expect(pushes[0]!.slice(lead + 4)).toEqual(["push", "--force", "origin", expect.stringMatching(/^HEAD:refs\/luna\/wip\/task\//)]);
       expect(pushOptions[0]?.timeoutMs).toBeGreaterThan(0);
       expect(pushOptions[0]?.signal).toBeInstanceOf(AbortSignal);
     });
@@ -1076,5 +1294,229 @@ describe("the engine a stage runs on", () => {
       // The first try and one retry after each of 1 s, 5 s and 25 s.
       expect(hostExec).toHaveBeenCalledTimes(4);
     });
+  });
+});
+
+describe("a stage's own list of hosts", () => {
+  const spec = { allow: ["github.com:443"], allowPrivate: [], proxyImage: "img" };
+  const withEgress = (sandbox: ReturnType<typeof fakeSandbox>) => {
+    const requests: unknown[] = [];
+    const d: AgentDeps = { ...deps(sandbox), egress: { for: async (request) => (requests.push(request), spec) } };
+    return { d, requests };
+  };
+
+  it("asks for the agent list of the run's repository with its engine's owner, and hands it to the sandbox with the machine's image", async () => {
+    const { d, requests } = withEgress(fakeSandbox(output()));
+    await runAgent(d, context("triage"), "triage");
+    expect(requests).toEqual([expect.objectContaining({ repoPath: repo, kind: "agent", owners: expect.arrayContaining(["claude"]), targets: [] })]);
+    expect(seen?.egress).toEqual(spec);
+  });
+
+  it("gives a browser run the host of the one QA target it is given", async () => {
+    writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n  - name: local\n    url: http://127.0.0.1:3000\n");
+    const { d, requests } = withEgress(fakeSandbox(output()));
+    await runAgent(d, context("e2e"), "e2e");
+    expect((requests[0] as { targets: string[] }).targets).toEqual(["staging.example.com:443"]); // the one target the machine chose: the first declared
+  });
+
+  it("runs as before without a policy", async () => {
+    await runAgent(deps(fakeSandbox(output())), context("triage"), "triage");
+    expect(seen?.egress).toBeUndefined();
+  });
+
+  it("emits one row per refused (host, port, via), at most 20 and then one `more`, never from the container", async () => {
+    const rows = Array.from({ length: 25 }, (_, i) => ({ host: `h${i}.example.com`, port: 443, via: "connect" as const, reason: "not_listed", count: 1 }));
+    const inner = fakeSandbox(output());
+    const { d } = withEgress(async (run) => ({ ...(await inner(run)), blocked: rows }));
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    await runAgent(d, { ...context("triage"), emit: async (kind, payload) => void emitted.push([kind, payload]) }, "triage");
+    const blocked = emitted.filter(([k]) => k === "sandbox.egress_blocked");
+    expect(blocked).toHaveLength(21);
+    expect(blocked[0]![1]).toEqual({ step: "stage", host: "h0.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 });
+    expect(blocked[20]![1]).toEqual({ step: "stage", more: 5 });
+  });
+
+  it("ends the stage as env_broken at step network when the daemon cannot make the isolated network", async () => {
+    const { d } = withEgress(async () => {
+      throw new EgressUnsupportedError("old daemon");
+    });
+    const result = await runAgent(d, context("triage"), "triage");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28"), options: expect.any(Array) });
+  });
+});
+
+describe("the machine's install before a writable stage", () => {
+  const outcome = { ok: true as const, ran: ["pnpm install --frozen-lockfile --ignore-scripts"], notes: ["restored tracked files the install changed (package.json)"], blocked: [{ host: "x.example.com", port: 443, via: "connect" as const, reason: "not_listed", count: 1 }] };
+
+  it("installs after the workspace is made and before the container, for implementing, with the card's commit, and not for a read-only pack", async () => {
+    const order: string[] = [];
+    const inner = fakeSandbox(output());
+    const calls: Array<Record<string, unknown>> = [];
+    const d: AgentDeps = { ...deps(async (run) => (order.push("sandbox"), inner(run))), install: async (input) => (order.push("install"), calls.push(input as never), outcome) };
+    const notes: string[] = [];
+    const emitted: string[] = [];
+    await runAgent(d, { ...context("implementing"), note: async (t) => void notes.push(t), emit: async (k, p) => void emitted.push(`${k}:${p.step}`) }, "implementing");
+    expect(order).toEqual(["install", "sandbox"]);
+    expect(calls[0]).toMatchObject({ taskId: "11111111-2222-3333-4444-555555555555", repoPath: repo });
+    expect(String(calls[0]!.commit)).toMatch(/^[0-9a-f]{40}$/);
+    expect(String(calls[0]!.workspace)).toContain(join(root, "worktrees"));
+    expect(notes.join(" ")).toContain("restored tracked files");
+    expect(emitted).toContain("sandbox.egress_blocked:install");
+    order.length = 0;
+    await runAgent(d, context("triage"), "triage");
+    expect(order).toEqual(["sandbox"]);
+  });
+
+  it("ends the stage as env_broken at step install, with the step's detail, and starts no container, when the install fails", async () => {
+    let started = false;
+    const d: AgentDeps = { ...deps(async (run) => ((started = true), fakeSandbox(output())(run))), install: async () => ({ ok: false, blocked: [], detail: { escalation: "env_broken", envBroken: true, step: "install", tool: "pnpm", lockfile: "pnpm-lock.yaml", reason: "x", logTail: "boom", options: [] } }) };
+    const result = await runAgent(d, context("implementing"), "implementing");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", step: "install", tool: "pnpm", logTail: "boom" });
+    expect(started).toBe(false);
+  });
+});
+
+describe("scoped secrets and the agent stages", () => {
+  const secret = ["qa", "pw", "z".repeat(10)].join("-");
+  const store = (missing: string[] = []): SecretStore & { loads: Array<[string, string[]]> } => {
+    const loads: Array<[string, string[]]> = [];
+    return { loads, folder: () => "/home/me/.config/hardness/secrets/repo-1", load: async (r, names) => (loads.push([r, [...names]]), { values: Object.fromEntries(names.filter((n) => !missing.includes(n)).map((n) => [n, secret])), missing: missing.filter((m) => names.includes(m)).map((name) => ({ name, reason: "there is no such file" })) }) };
+  };
+  const withTarget = () => writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n    credential: env:QA_PASSWORD\nchecks:\n  - name: db\n    run: make db\n    secrets: [DB_URL]\n");
+
+  it("gives the browser run the credential its QA target names, by value only to the container, and implementing none even when a check declares one", async () => {
+    withTarget();
+    const s = store();
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s };
+    await runAgent(d, context("e2e"), "e2e");
+    expect(seen?.secrets).toEqual({ QA_PASSWORD: secret });
+    // the names only, so the fill helper knows which variable is the QA login and never the engine's own key
+    expect(seen?.extraEnv?.LUNA_QA_CREDENTIALS).toBe("QA_PASSWORD");
+    expect(JSON.stringify(seen?.input)).not.toContain(secret);
+    await runAgent(d, context("implementing"), "implementing");
+    expect(seen?.secrets).toBeUndefined();
+    expect(seen?.extraEnv?.LUNA_QA_CREDENTIALS).toBeUndefined();
+    await runAgent(d, context("triage"), "triage");
+    expect(seen?.secrets).toBeUndefined();
+  });
+
+  it("ends the stage as env_broken at step secrets, naming the secret and the folder and no value, and starts no container", async () => {
+    withTarget();
+    let started = false;
+    const d: AgentDeps = { ...deps(async (run) => ((started = true), fakeSandbox(output())(run))), secrets: store(["QA_PASSWORD"]) };
+    const result = await runAgent(d, context("e2e"), "e2e");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "secrets", names: ["QA_PASSWORD"] });
+    expect(JSON.stringify(result.detail)).toContain("/home/me/.config/hardness/secrets/repo-1");
+    expect(JSON.stringify(result.detail)).not.toContain(secret);
+    expect(started).toBe(false);
+  });
+});
+
+describe("a secret's value in what a stage returns and leaves", () => {
+  const secret = ["out", "pw", "q".repeat(10)].join("-");
+  it("is replaced in the answer, the summary, the events and the files the run left, for a run that had secrets", async () => {
+    writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n    credential: env:QA_PASSWORD\n");
+    const store = { folder: () => "/f", load: async (_r: string, names: string[]) => ({ values: Object.fromEntries(names.map((n) => [n, secret])), missing: [] }) };
+    const inner = fakeSandbox(output({ summary: `typed ${secret}`, answer: { note: `pw ${secret}` } as never }), (r) => {
+      mkdirSync(join(r.runDir, "out", "files"), { recursive: true });
+      writeFileSync(join(r.runDir, "out", "files", "steps.jsonl"), `{"v":"${secret}"}`);
+    });
+    const d: AgentDeps = { ...deps(inner), secrets: store };
+    const result = await runAgent(d, context("e2e"), "e2e");
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).toContain("[secret:QA_PASSWORD]");
+    expect(readFileSync(join(stateDir, "runs", "run-1", "out", "files", "steps.jsonl"), "utf8")).toBe('{"v":"[secret:QA_PASSWORD]"}');
+  });
+});
+
+describe("the browser run's one target", () => {
+  const secret = ["tgt", "pw", "t".repeat(10)].join("-");
+  const store = (): SecretStore & { loads: string[][] } => {
+    const loads: string[][] = [];
+    return { loads, folder: () => "/f", load: async (_r, names) => (loads.push([...names]), { values: Object.fromEntries(names.map((n) => [n, `${secret}-${n}`])), missing: [] }) };
+  };
+  const two = () => writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n    credential: env:STAGING_PW\n  - name: prod-like\n    url: https://other.example.com\n    credential: env:OTHER_PW\n");
+
+  it("is the first declared QA target: the agent is told that one, its host is on the list, and only its credential is loaded and passed", async () => {
+    two();
+    const s = store();
+    const requests: Array<{ targets?: string[] }> = [];
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s, egress: { for: async (r) => (requests.push(r as never), { allow: [], allowPrivate: [], proxyImage: "img" }) } };
+    await runAgent(d, context("e2e"), "e2e");
+    expect(s.loads).toEqual([["STAGING_PW"]]);
+    expect(seen?.secrets).toEqual({ STAGING_PW: `${secret}-STAGING_PW` });
+    expect((seen?.input as { context: { qaTargets: Array<{ name: string }> } }).context.qaTargets.map((t) => t.name)).toEqual(["staging"]);
+    expect(requests[0]!.targets).toEqual(["staging.example.com:443"]);
+    expect(JSON.stringify(seen?.input)).not.toContain("OTHER_PW");
+  });
+
+  it("is the app the machine started when it is given one: no credential, the app's network joined, and the aliases kept off the proxy", async () => {
+    two();
+    const s = store();
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s };
+    await runAgent(d, context("e2e"), "e2e", { qaTarget: { name: "app", baseUrl: "http://luna-app:4000", credential: null }, alsoJoin: ["hardness-card-app"], noProxy: ["luna-app", "db"] });
+    expect((seen?.input as { context: { qaTargets: unknown[] } }).context.qaTargets).toEqual([{ name: "app", baseUrl: "http://luna-app:4000", credential: null }]);
+    expect(seen?.alsoJoin).toEqual(["hardness-card-app"]);
+    expect(seen?.noProxy).toEqual(["luna-app", "db"]);
+    expect(seen?.secrets).toBeUndefined();
+    expect(s.loads).toEqual([]);
+  });
+});
+
+describe("a value kept only for redaction, and the failure paths", () => {
+  const secret = ["kept", "pw", "r".repeat(10)].join("-");
+  const extra = { redactValues: { APP_KEY: secret } };
+
+  it("cleans the answer, the files and the events of an app's secret the browser run never held", async () => {
+    const inner = fakeSandbox(output({ summary: `echoed ${secret}`, answer: { note: secret } as never }), (r) => {
+      mkdirSync(join(r.runDir, "out", "files"), { recursive: true });
+      writeFileSync(join(r.runDir, "out", "files", "trace.har"), `{"body":"${secret}"}`);
+    });
+    const result = await runAgent(deps(inner), context("e2e"), "e2e", extra);
+    expect(seen?.secrets).toBeUndefined();
+    expect(JSON.stringify(seen?.input)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(readFileSync(join(stateDir, "runs", "run-1", "out", "files", "trace.har"), "utf8")).toBe('{"body":"[secret:APP_KEY]"}');
+  });
+
+  it("cleans the text of a run stopped as stuck", async () => {
+    const inner = fakeSandbox(output());
+    const result = await runAgent(deps(async (run) => ({ ...(await inner(run)), stuck: `looped on ${secret}` })), context("e2e"), "e2e", extra);
+    expect(result.outcome).toBe("fail");
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).toContain("[secret:APP_KEY]");
+  });
+
+  it("cleans the kept ledger of a run that timed out", async () => {
+    const inner = fakeSandbox(output());
+    const result = await runAgent(
+      deps(async (run) => {
+        const done = await inner(run);
+        writeFileSync(join(run.runDir, "out", "ledger.json"), JSON.stringify({ schema: 1, slices: [{ id: 1, title: `typed ${secret}`, status: "red", commit: null }] }));
+        return { ...done, timedOut: true };
+      }),
+      context("e2e"),
+      "e2e",
+      extra,
+    );
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).toContain("[secret:APP_KEY]");
+  });
+
+  it("cleans the message of an unreadable result", async () => {
+    const result = await runAgent(
+      deps(async (run) => {
+        mkdirSync(join(run.runDir, "out"), { recursive: true });
+        writeFileSync(join(run.runDir, "out", "result.json"), `${secret} is not json`);
+        return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: join(run.runDir, "t.log") };
+      }),
+      context("e2e"),
+      "e2e",
+      extra,
+    );
+    expect(JSON.stringify(result)).not.toContain(secret);
   });
 });

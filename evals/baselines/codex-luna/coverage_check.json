@@ -3,7 +3,7 @@
   "pack": "coverage_check",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T17:28:49.515Z",
+  "at": "2026-11-05T22:45:30.839Z",
   "model": "gpt-6-luna-fast",
   "summary": {
     "cases": 4,
@@ -11,7 +11,7 @@
     "passRate": 0.5,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 3189.75,
+    "meanDurationMs": 2728.25,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
@@ -20,9 +20,9 @@
       "accuracy": 0.6666666666666666,
       "actedOnAccuracy": 0.6666666666666666,
       "coverage": 1,
-      "brier": 0.3246962962962963,
-      "ece": 0.31777777777777794,
-      "meanConfidence": 0.9800000000000001,
+      "brier": 0.31588518518518516,
+      "ece": 0.31666666666666665,
+      "meanConfidence": 0.9824999999999999,
       "overconfident": 1
     }
   },
@@ -44,12 +44,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2535,
+      "durationMs": 3229,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.9666666666666668,
+        "confidence": 0.98,
         "verdict": "proceed"
       }
     },
@@ -70,12 +70,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2624,
+      "durationMs": 2507,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.9866666666666667,
+        "confidence": 0.9899999999999999,
         "verdict": "proceed"
       }
     },
@@ -101,12 +101,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3118,
+      "durationMs": 2537,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.98,
+        "confidence": 0.9866666666666667,
         "verdict": "proceed"
       }
     },
@@ -132,12 +132,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4482,
+      "durationMs": 2640,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": false,
-        "confidence": 0.9866666666666667,
+        "confidence": 0.9733333333333333,
         "verdict": "proceed"
       }
     }

@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "worth.p",
+      "min": 0.25,
+      "max": 0.75
+    }
+  ],
+  "rubric": "On size and plan, with two review rounds and nothing else: a mild signal, so p stays near the middle."
+}

@@ -1,0 +1,38 @@
+{
+  "schema": 3,
+  "stage": "frame_privacy",
+  "pack": "frame_privacy",
+  "attempt": 1,
+  "task": {
+    "id": "frame-privacy",
+    "title": "Frame privacy",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "frames",
+      "frames": {
+        "texts": [
+          "Team members",
+          "Priya Raman  priya.raman@example.com",
+          "Role: Admin"
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

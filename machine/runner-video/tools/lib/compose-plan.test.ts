@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chaptersMetadata, composePlan, ffmpegArgs } from "./compose-plan.ts";
+import { TRIM_SLACK_S, chaptersMetadata, composePlan, ffmpegArgs } from "./compose-plan.ts";
 import type { Timeline } from "./timeline.ts";
 
 const tl: Timeline = {
@@ -32,7 +32,7 @@ describe("composePlan", () => {
     const a = plan.segments.find((s) => s.scene === "a")!;
     expect(a).toEqual({ scene: "a", source: "recording", from: 5, to: 20, holdS: 5 });
     const b = plan.segments.find((s) => s.scene === "b")!;
-    expect(b).toEqual({ scene: "b", source: "recording", from: 20, to: 50, holdS: 0 });
+    expect(b).toEqual({ scene: "b", source: "recording", from: 20, to: 31, holdS: 0 });
   });
 
   it("runs a card for the longer of its slot and its clip plus 0.3 s", () => {
@@ -45,7 +45,7 @@ describe("composePlan", () => {
       { scene: "hook", wav: "/work/hook.wav", atS: 0 },
       { scene: "a", wav: "/work/a.wav", atS: 4 },
       { scene: "b", wav: "/work/b.wav", atS: 24.1 },
-      { scene: "end", wav: "/work/end.wav", atS: 54 },
+      { scene: "end", wav: "/work/end.wav", atS: 35 },
     ]);
   });
 
@@ -54,9 +54,9 @@ describe("composePlan", () => {
       ["Discounts in the cart", 0],
       ["A coupon counts once", 4],
       ["The total shows the discount", 24],
-      ["That is the change", 54],
+      ["That is the change", 35],
     ]);
-    expect(plan.totalS).toBe(58.8);
+    expect(plan.totalS).toBe(39.8);
   });
 
   it("refuses a demo scene with no mark or a scene with no narration", () => {
@@ -114,5 +114,27 @@ describe("chaptersMetadata", () => {
     const plan = composePlan(tl, narration, timing);
     const text = chaptersMetadata({ ...plan, chapters: [{ title: "A=B; #1", startS: 0 }, { title: "Two", startS: 4 }], totalS: 10 });
     expect(text).toBe(";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=4000\ntitle=A\\=B\\; \\#1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=4000\nEND=10000\ntitle=Two\n");
+  });
+});
+
+describe("composePlan: hold or trim against the voice", () => {
+  it("holds a stretch shorter than the clip, and cuts one longer than the clip by more than a second to clip + 1 s", () => {
+    // a: marks 5 to 20 = 15 s against a 10 s clip: 5 s over the slack, cut to 11 s. b: 20 to 50 = 30 s against a 10 s clip: cut to 11 s.
+    const longClips = { scenes: narration.scenes.map((s) => (s.id === "a" ? { ...s, durationS: 10 } : s)) };
+    const plan = composePlan(tl, longClips, timing);
+    expect(plan.segments.find((s) => s.scene === "a")).toEqual({ scene: "a", source: "recording", from: 5, to: 16, holdS: 0 });
+    expect(plan.segments.find((s) => s.scene === "b")).toEqual({ scene: "b", source: "recording", from: 20, to: 31, holdS: 0 });
+    expect(TRIM_SLACK_S).toBe(1);
+  });
+
+  it("keeps a stretch that is longer than its clip by no more than the slack", () => {
+    const close = { scenes: narration.scenes.map((s) => (s.id === "a" ? { ...s, durationS: 14.5 } : s)) };
+    expect(composePlan(tl, close, timing).segments.find((s) => s.scene === "a")).toEqual({ scene: "a", source: "recording", from: 5, to: 20, holdS: 0 });
+  });
+
+  it("starts each scene's audio where the trimmed film puts it", () => {
+    const longClips = { scenes: narration.scenes.map((s) => (s.id === "a" ? { ...s, durationS: 10 } : s)) };
+    const plan = composePlan(tl, longClips, timing);
+    expect(plan.audio.find((a) => a.scene === "b")!.atS).toBe(plan.chapters.find((c) => c.title === "The total shows the discount")!.startS);
   });
 });

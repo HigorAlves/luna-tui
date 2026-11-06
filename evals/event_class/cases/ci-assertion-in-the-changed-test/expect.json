@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "ci_real"
+    }
+  ],
+  "rubric": "A failing assertion in the test of the code this change adds.",
+  "label": {
+    "event": {
+      "choice": "ci_real"
+    }
+  }
+}

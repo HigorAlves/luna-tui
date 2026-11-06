@@ -14,6 +14,8 @@ export type ComposePlan = {
   totalS: number;
 };
 
+/** A recorded stretch longer than its narration clip by more than this is cut to the clip plus this. */
+export const TRIM_SLACK_S = 1;
 const GAP_S = 0.1;
 const CARD_PAD_S = 0.3;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -34,7 +36,9 @@ export function composePlan(tl: Timeline, narration: Narration, timing: Timing):
       const i = marks.findIndex((m) => m.scene === scene.id);
       if (i < 0) throw new Error(`no mark for demo scene "${scene.id}"`);
       const from = marks[i]!.t;
-      const to = marks[i + 1]?.t ?? timing.durationS ?? from + clip.durationS;
+      const end = marks[i + 1]?.t ?? timing.durationS ?? from + clip.durationS;
+      // Shorter than the clip: hold the last frame. Longer by more than the slack: cut to the clip plus the slack (D6).
+      const to = end - from > clip.durationS + TRIM_SLACK_S ? from + clip.durationS + TRIM_SLACK_S : end;
       seg = { scene: scene.id, source: "recording", from, to: r3(to), holdS: r3(Math.max(0, clip.durationS - (to - from))) };
     }
     const length = seg.source === "card" ? seg.to : r3(seg.to - seg.from + seg.holdS);

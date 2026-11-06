@@ -74,3 +74,31 @@ describe("startServices", () => {
     expect(calls.some((c) => c[1] === "exec")).toBe(false);
   });
 });
+
+describe("startServices on a card network it is given", () => {
+  const given = { name: "hardness-card-r1", dns: "172.30.0.2" };
+  it("starts the services on that network with its resolver, and neither creates nor removes a network", async () => {
+    const { calls, exec } = dockerFake();
+    const set = await startServices("r1", { postgres }, { exec, pollMs: 0, network: given });
+    expect(set.network).toBe("hardness-card-r1");
+    const run = calls.find((c) => c[1] === "run")!;
+    expect(run).toEqual(expect.arrayContaining(["--network", "hardness-card-r1", "--dns", "172.30.0.2", "--network-alias", "postgres"]));
+    await set.teardown();
+    expect(calls.some((c) => c[1] === "network")).toBe(false);
+    expect(calls.filter((c) => c[1] === "rm")).toEqual([["docker", "rm", "-f", "r1-svc-postgres"]]);
+  });
+
+  it("removes the services it started, and no network, when one does not come up", async () => {
+    const { calls, exec } = dockerFake([1]);
+    await expect(startServices("r1", { postgres: { ...postgres, ready: "false" } }, { exec, pollMs: 0, readyTimeoutMs: 0, network: given })).rejects.toThrow();
+    expect(calls.some((c) => c[1] === "network")).toBe(false);
+    expect(calls).toContainEqual(["docker", "rm", "-f", "r1-svc-postgres"]);
+  });
+
+  it("is what it was without one: its own network, made and removed", async () => {
+    const { calls, exec } = dockerFake();
+    const set = await startServices("r1", { postgres }, { exec, pollMs: 0 });
+    await set.teardown();
+    expect(calls.filter((c) => c[1] === "network").map((c) => c[2])).toEqual(["create", "rm"]);
+  });
+});

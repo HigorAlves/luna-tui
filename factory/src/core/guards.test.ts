@@ -56,6 +56,10 @@ describe("checkCall", () => {
       expect(checkCall({ tool: "bash", input: { command: "pnpmx" } }, LISTED)).toEqual({ allow: false, reason: expect.stringMatching(/not on this stage's command allow-list/) });
     });
 
+    it("refuses a write into the machine's layer", () => {
+      expect(checkCall({ tool: "bash", input: { command: "echo x > /opt/luna/bin/node" } }, LISTED)).toEqual({ allow: false, reason: expect.stringMatching(/writing to \/opt\/luna\/bin\/node/) });
+    });
+
     it("still applies the rules to a listed command", () => {
       expect(checkCall({ tool: "bash", input: { command: "cat x > /etc/y" } }, LISTED)).toEqual({ allow: false, reason: expect.stringMatching(/writing to \/etc\/y/) });
     });

@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "exposure.choice",
+      "value": "personal_data"
+    }
+  ],
+  "rubric": "A real-looking name with address, identity number and payment details: personal_data.",
+  "label": {
+    "exposure": {
+      "choice": "personal_data"
+    }
+  }
+}

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TaskRow } from "../../domain/task.ts";
 import type { Check } from "../github.ts";
 import { fakeGitHub } from "../../test/github.ts";
+import type { Decide } from "./check-decide.ts";
 import { ciWatchRunner } from "./ci.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 
@@ -11,7 +12,7 @@ const checks = (...states: Array<[string, string]>): Check[] =>
 const finding = { path: "a.ts", line: 1, start_line: null, severity: "test", title: "red", body: "", suggestion_code: null, confidence: 1 };
 const pack = (answer: Record<string, unknown>): StageResult => ({ outcome: "pass", detail: { answer } });
 
-function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] } }) {
+function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] }; classOf?: string | null; reruns?: number; autoRebase?: number }) {
   let poll = 0;
   let facts = 0;
   const github = fakeGitHub({
@@ -25,9 +26,12 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
   const exec = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
   const runPack = vi.fn(async (_context: StageContext, _ci?: unknown) => opts.pack ?? pack({ verdict: "green" }));
   const sleeps: number[] = [];
+  const decide = vi.fn<Decide>(async () => ({ class: { choice: opts.classOf ?? "real", confidence: 0.9 } }));
   const run = ciWatchRunner({
     github,
     runPack,
+    ...("classOf" in opts && opts.classOf === null ? {} : { decide }),
+    policy: async () => ({ reruns: opts.reruns ?? 1, autoRebase: opts.autoRebase ?? 1 }),
     slugOf: async () => "a/b",
     pollMs: 10,
     maxWaitMs: opts.maxWaitMs ?? 1_000,
@@ -48,7 +52,7 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run, context, github, runPack, sleeps, rebase, exec };
+  return { run, context, github, runPack, sleeps, rebase, exec, decide };
 }
 
 describe("ci_watch after a push", () => {
@@ -75,6 +79,72 @@ describe("ci_watch after a push", () => {
     const result = await run(context);
     expect(result.outcome).toBe("pass");
     expect((result.detail?.checks as Check[]).map((c) => c.name)).toEqual(["guard"]);
+  });
+});
+
+describe("ci_watch classifies a red run by a typed decision", () => {
+  const red = (...more: Check[][]) => [checks(["lint", "FAILURE"]), ...more];
+
+  it("asks ci_failure_class with the failing job and its log flattened and capped, as data", async () => {
+    const { run, context, decide } = setup({ polls: red(), pack: pack({ verdict: "fixable", summary: "s", findings: [finding] }) });
+    await run(context);
+    const [name, check] = decide.mock.calls[0]!;
+    expect(name).toBe("ci_failure_class");
+    expect(check).toMatchObject({ kind: "ci", ci: { job: "lint" } });
+    expect(check.ci!.log).toContain("FAIL src/a.test.ts &gt; boom");
+    expect(check.ci!.log).not.toContain("\n");
+    expect(check.ci!.log.length).toBeLessThanOrEqual(4000);
+  });
+
+  it("asks the investigator for the fix only when the class is a real failure, and fails with its findings", async () => {
+    const { run, context, runPack } = setup({ polls: red(), classOf: "real", pack: pack({ verdict: "flake", summary: "s", findings: [finding] }) });
+    const result = await run(context);
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ outcome: "fail", detail: { verdict: "fixable", class: "real" }, findings: [finding] });
+  });
+
+  it("re-runs a flake once (verify.ci_flaky_reruns) and passes when it goes green, never asking the investigator", async () => {
+    const { run, context, github, runPack } = setup({ polls: red(checks(["lint", "SUCCESS"])), classOf: "flake" });
+    const result = await run(context);
+    expect(runPack).not.toHaveBeenCalled();
+    expect(github.rerunFailedJobs).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("pass");
+  });
+
+  it("sends a flake that is still red after its re-runs to a person, not to Build", async () => {
+    const { run, context, github } = setup({ polls: red(checks(["lint", "FAILURE"]), checks(["lint", "FAILURE"])), classOf: "flake", reruns: 2 });
+    const result = await run(context);
+    expect(github.rerunFailedJobs).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ outcome: "escalated", detail: { class: "flake", escalation: "flaky_tests" } });
+  });
+
+  it("escalates a flake at once when the repository allows no re-run", async () => {
+    const { run, context, github } = setup({ polls: red(), classOf: "flake", reruns: 0 });
+    expect((await run(context)).outcome).toBe("escalated");
+    expect(github.rerunFailedJobs).not.toHaveBeenCalled();
+  });
+
+  it("sends an infrastructure failure to a person", async () => {
+    const { run, context, runPack } = setup({ polls: red(), classOf: "infra" });
+    const result = await run(context);
+    expect(runPack).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: "escalated", detail: { class: "infra", escalation: "env_broken" } });
+  });
+
+  it("rebases on a drift when verify.auto_rebase allows, and watches again; otherwise a person decides", async () => {
+    const on = setup({ polls: red(checks(["lint", "SUCCESS"]), checks(["lint", "SUCCESS"])), classOf: "drift" });
+    const result = await on.run(on.context);
+    expect(on.rebase).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ outcome: "pass", detail: { rebased: true } });
+    const off = setup({ polls: red(), classOf: "drift", autoRebase: 0 });
+    expect((await off.run(off.context)).outcome).toBe("escalated");
+    expect(off.rebase).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the investigator's own verdict when the decision cannot be had", async () => {
+    const { run, context, runPack } = setup({ polls: red(), classOf: null, pack: pack({ verdict: "fixable", summary: "s", findings: [finding] }) });
+    expect((await run(context)).outcome).toBe("fail");
+    expect(runPack).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -186,6 +256,14 @@ describe("ci_watch on a conflicting PR", () => {
     expect(result).toMatchObject({ outcome: "pass", detail: { step: "checks", rebased: true } });
     expect(rebase).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["push", "--force-with-lease", "origin", "hardness/t1"]));
+  });
+
+  it("goes to a person, with no rebase and no push, when verify.auto_rebase is 0", async () => {
+    const { run, context, rebase, exec } = setup({ polls: [green], mergeable: ["CONFLICTING"], autoRebase: 0 });
+    const result = await run(context);
+    expect(result.outcome).toBe("escalated");
+    expect(rebase).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
   });
 
   it("escalates as conflict_unresolvable when the PR still conflicts after the rebase", async () => {

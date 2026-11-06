@@ -2,14 +2,14 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../domain/task.ts";
 import { type CardFields, type ContextMissing, type DedupContext, contextComplete } from "@hardness/contracts";
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type DedupAnswer, checkDuplicates } from "./intake-dedup.ts";
@@ -18,7 +18,8 @@ import { type CardFieldsInput, appendSource, cardFieldsOf, cardOf, mergeFields, 
 import { canSeeKept, contextAsk, mergedNotice, questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
-import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
+import { type PipelineEvent, type Step, TransitionError, transition } from "../domain/transition.ts";
+import { isClone, unpushedCommits } from "../adapters/git/clone.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
@@ -29,9 +30,11 @@ import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
-import { EMITTABLE, type StageResult, type StageRunner } from "./ports.ts";
+import { blockerSetKey } from "../domain/finding-sets.ts";
+import { type RetroOutputs, acceptedMisses, appendAddedFinding, retroTruthOf, writeRetroTruth } from "./retro-outputs.ts";
+import { EMITTABLE, type StageContext, type StageResult, type StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
-import { buildProgressOf, buildReportOf, verifyReportOf } from "./reports.ts";
+import { buildProgressOf, buildReportOf, prFactsOf, verifyReportOf } from "./reports.ts";
 import { stageFactRows } from "./stage-facts.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -51,7 +54,7 @@ import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, ou
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
+export { ApproverRequiredError, FindingNotFoundError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -157,6 +160,12 @@ export interface NewTask extends Omit<CardFieldsInput, "source"> {
 }
 
 export interface PipelineOptions {
+  /** Looks at an open release question (the ship approval) against GitHub: `merged` closes it as an automatic approval, `withdraw` takes it back so the watch asks again, `keep` leaves it. Nothing polls while a person is asked, so `tick` calls it at most once per `shipProbeMs`. */
+  shipGateProbe?: (task: TaskRow, gate: ApprovalRow) => Promise<"merged" | "closed" | "withdraw" | "keep">;
+  /** The shortest time between two probes of one card's release question (the repository's poll interval); 0 probes on every tick. */
+  shipProbeMs?: number | null;
+  /** Ends a card's kept sandbox (its extra folders) when the card is resumed or closed. Never throws into the pipeline. */
+  releaseKept?: (taskId: string) => Promise<void>;
   /** Where each stage run is reported as a span; the no-op without a backend. */
   telemetry?: Telemetry;
   /** Called after each event is stored; the API streams these to the board. */
@@ -201,10 +210,14 @@ export interface PipelineOptions {
   diffStat?: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
   closeDeps?: CloseDeps;
+  /** Where a merged card's retro leaves its outputs (decision 25): the truth file's directory, the machine's own facts, the graph's misses file and the Build Report's out-of-map files. */
+  retroOutputs?: RetroOutputs;
   /** Who owns paths at the default branch, from CODEOWNERS (the code graph port's `owners`). The outside-approver rule reads only this, never a model's owners; absent, the rule is not enforced and says so. */
   owners?: (repoPath: string, paths: string[]) => Promise<Exclude<OwnersFound, "failed">>;
   /** Keeps the approved plan and what changed before it (ground truth); answers where. A failure is logged and never blocks the approval. */
   groundTruth?: (task: TaskRow, approval: ApprovalRow) => Promise<string>;
+  /** Writes a person's thumbs on an Evidence Pack (`ground-truth/evidence/`); absent, the answer is only logged. */
+  evidenceFeedback?: (task: TaskRow, pack: EvidencePack, feedback: { useful: boolean; note?: string | undefined }, at: Date) => Promise<string>;
   /** Writes onto a decision's record what a person's decision at a gate says about it (RFC 0005 wave 7). */
   truth?: DecisionTruth;
   /** Spend ceilings in USD; either unset means no ceiling of that kind. */
@@ -294,7 +307,7 @@ function casesOf(detail: Record<string, unknown> | undefined): StageRunCase[] | 
 
 
 /** Stages that only poll GitHub from the host: a restart runs them again. */
-const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "shipping"]);
+const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "awaiting_ship", "shipping"]);
 
 const objectOf = (value: unknown): Record<string, unknown> | undefined => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
 
@@ -377,9 +390,14 @@ export class Pipeline {
   private readonly revertCommit: (worktreePath: string, sha: string) => Promise<void>;
   private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   private readonly closeDeps: CloseDeps | undefined;
+  private readonly retroOutputs: RetroOutputs | undefined;
+  private readonly releaseKept: ((taskId: string) => Promise<void>) | undefined;
   private readonly groundTruth: PipelineOptions["groundTruth"];
+  private readonly evidenceFeedbackWriter: PipelineOptions["evidenceFeedback"];
   private readonly owners: PipelineOptions["owners"];
   private readonly truth: DecisionTruth | undefined;
+  private readonly shipGateProbe: PipelineOptions["shipGateProbe"];
+  private readonly shipProbeMs: number | null;
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
   private readonly policies: Pick<PolicyStore, "for">;
@@ -428,9 +446,14 @@ export class Pipeline {
     this.revertCommit = options.revertCommit ?? revertCommit;
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
+    this.retroOutputs = options.retroOutputs;
+    this.releaseKept = options.releaseKept;
     this.groundTruth = options.groundTruth;
+    this.evidenceFeedbackWriter = options.evidenceFeedback;
     this.owners = options.owners;
     this.truth = options.truth;
+    this.shipGateProbe = options.shipGateProbe;
+    this.shipProbeMs = options.shipProbeMs === undefined ? 0 : options.shipProbeMs;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
     this.policies = options.policies ?? new PolicyStore();
@@ -703,6 +726,42 @@ export class Pipeline {
     return this.store.taskUsage(id);
   }
 
+  /** A person says whether the card's Evidence Pack was useful. A card with no pack is refused. The answer is a file for the retro and a row with ids and enums only (no `stage.` prefix: no container can write that kind). */
+  /** The finding ids the last Verify reported (its classified rows and findings). */
+  private async reportedFindings(id: string): Promise<Map<string, string | null>> {
+    const detail = (await this.latestStageFinish(id, "verifying"))?.detail;
+    const found = new Map<string, string | null>();
+    for (const row of Array.isArray(detail?.findings) ? (detail!.findings as Array<{ id?: unknown }>) : []) if (typeof row?.id === "string" && row.id) found.set(row.id, null);
+    for (const row of Array.isArray(detail?.classified) ? (detail!.classified as Array<{ id?: unknown; recordId?: unknown }>) : []) if (typeof row?.id === "string" && row.id) found.set(row.id, typeof row.recordId === "string" ? row.recordId : null);
+    return found;
+  }
+
+  /** A person dismisses a finding while the card waits at awaiting_ship: `finding.dismissed` carries the id only; when Verify kept a classification record for it, the truth is "nit" (`ship_dismissed`). */
+  async dismissFinding(id: string, findingId: string): Promise<void> {
+    const task = await this.get(id);
+    if (task.state !== "awaiting_ship") throw new TransitionError(task, { type: "approved" });
+    const reported = await this.reportedFindings(id);
+    if (!reported.has(findingId)) throw new FindingNotFoundError(findingId);
+    await this.log(id, "finding.dismissed", { id: findingId });
+    const recordId = reported.get(findingId);
+    if (recordId) await this.truth?.learned({ pack: "finding_classify", recordId, label: { severity: { choice: "nit" } }, source: "ship_dismissed", taskId: id });
+  }
+
+  /** A person adds a finding Verify missed: the row holds the severity only; the text goes to the ground truth file. */
+  async addFinding(id: string, finding: { title: string; severity: "blocker" | "should_fix" | "nit"; path?: string | undefined; line?: number | undefined }): Promise<void> {
+    const task = await this.get(id);
+    if (task.state !== "awaiting_ship") throw new TransitionError(task, { type: "approved" });
+    if (this.retroOutputs) await appendAddedFinding(this.retroOutputs.stateDir, id, finding);
+    await this.log(id, "finding.added", { severity: finding.severity });
+  }
+
+  async evidenceFeedback(id: string, feedback: { useful: boolean; note?: string | undefined }): Promise<void> {
+    const task = await this.get(id);
+    if (!task.evidence) throw new NoEvidenceError(id);
+    await this.evidenceFeedbackWriter?.(task, task.evidence, feedback, new Date());
+    await this.log(id, "evidence.feedback", { useful: feedback.useful, format: task.evidence.format, sha: task.evidence.commitSha.slice(0, 7) });
+  }
+
   async get(id: string): Promise<TaskRow> {
     const task = await this.store.getTask(id);
     if (!task) throw new TaskNotFoundError(id);
@@ -909,10 +968,23 @@ export class Pipeline {
   }
 
   /** Deletes a task with its runs, approvals and events. Its worktree is kept. */
+  /** Whether a stage is running (or should be) for the task: a running state, or a `RUN_OR_GATE` state of the feature route with no open approval. */
+  private async runsAStage(task: TaskRow): Promise<boolean> {
+    if (RUNNING.has(task.state)) return true;
+    return task.route === "feature" && RUN_OR_GATE.has(task.state) && !(await this.approvals(task.id)).some((a) => a.decision === null);
+  }
+
+  /** The tasks `RUNNING` finds, and the feature cards at a `RUN_OR_GATE` state with no open approval: what a restart or the supervisor must account for. */
+  private async stuckRunning(): Promise<TaskRow[]> {
+    const stuck = await this.store.findStuckTasks(RUNNING);
+    for (const task of await this.store.findStuckTasks(RUN_OR_GATE)) if (task.route === "feature" && !(await this.approvals(task.id)).some((a) => a.decision === null)) stuck.push(task);
+    return stuck;
+  }
+
   /** Deletes the task and the checkout it worked in; the branch and its commits stay. Answers its tombstone's sequence number. */
   async delete(id: string): Promise<number> {
     const task = await this.get(id);
-    if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
+    if (await this.runsAStage(task)) throw new TaskBusyError(id, task.state);
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
     this.pausedOn.delete(id);
@@ -936,10 +1008,15 @@ export class Pipeline {
 
   /** Removes a task's worktree from disk once you are done with it. The task, its branch
    * and commits stay; only the checkout the agent worked in is gone. */
-  async removeWorktree(id: string): Promise<TaskRow> {
+  async removeWorktree(id: string, options: { discard?: boolean } = {}): Promise<TaskRow> {
     const task = await this.get(id);
-    if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
+    if (await this.runsAStage(task)) throw new TaskBusyError(id, task.state);
     if (!task.repoPath || !task.worktreePath) return task;
+    // A clone is the only copy of what no remote has: say so instead of dropping it silently.
+    if (!options.discard && isClone(task.worktreePath)) {
+      const unpushed = await unpushedCommits(task.worktreePath);
+      if (unpushed.length > 0) throw new WorktreeUnpushedError(id, unpushed.length);
+    }
     await removeWorktreeOnDisk(task.repoPath, task.worktreePath);
     await this.store.updateTask(id, { worktreePath: null });
     await this.log(id, "worktree.removed", { path: task.worktreePath });
@@ -1228,6 +1305,8 @@ export class Pipeline {
     const { approver } = options;
     const decision: "approved" | "sent_back" | "rejected" = wanted === "changes_requested" ? "sent_back" : wanted;
     const task = await this.get(id);
+    // A state that holds a stage or a gate answers a decision only while a gate is open: a watched card has nobody to answer.
+    if (RUN_OR_GATE.has(task.state) && task.route === "feature" && (await this.runsAStage(task))) throw new TransitionError(task, { type: decision === "approved" ? "approved" : "sent_back" });
     if (decision === "rejected") return this.reject(task, reason, options.auto === true);
     // The gate this decision closes, read before it moves: what a decision pack said about it is judged by what the person does here.
     const gate = this.truth && !options.auto ? (await this.approvals(id)).find((a) => a.decision === null) : undefined;
@@ -1281,16 +1360,20 @@ export class Pipeline {
         if (rule.outside === "required" && !outsideSatisfied(names, owners)) throw new OutsideApproverRequiredError(id, names.at(-1) ?? "");
       };
     }
-    // A High-risk pack ships only after an approver who is none of the plan's: the name is an attestation the monitor reads.
-    if (decision === "approved" && task.state === "awaiting_ship" && task.route !== "review" && task.evidence?.risk === "high") {
-      const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
-      const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
-      if (!approver) throw new ApproverRequiredError(id, "ship");
-      if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
-      await this.store.withTaskLock(id, async (_task, tx) => {
-        const gate = await tx.findOpenApproval(id);
-        if (gate && gate.kind === "awaiting_ship") await tx.updateApprovalRequested(gate, { ...gate.requested, shipApprover: approver });
-      });
+    // The release question (the watch asks it after readiness): a High-risk card ships only on the word of someone who is none of the plan's approvers and,
+    // when the gate names release owners, one of them. Team handles cannot be checked here: the name is an attestation. Nothing a model wrote picks them.
+    const release = task.state === "awaiting_ship" && task.route !== "review" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_ship" && a.decision === null && a.requested.gate === "ship_approval") : undefined;
+    if (release && decision === "sent_back") throw new TransitionError(task, { type: "sent_back" });
+    if (release && decision === "approved") {
+      if (release.requested.risk === "high" || task.evidence?.risk === "high") {
+        const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
+        const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
+        if (!approver) throw new ApproverRequiredError(id, "ship");
+        if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
+        const owners = Array.isArray(release.requested.releaseOwners) ? release.requested.releaseOwners.map(String) : [];
+        if (owners.length > 0 && !owners.some((o) => sameName(o, approver))) throw new NotReleaseOwnerError(id, approver);
+      }
+      if (typeof release.requested.head === "string") answered = { ...answered, head: release.requested.head };
     }
     if (approver) answered = { ...answered, approver };
     const record = { decision, reason, ...(answered ? { response: answered } : {}) };
@@ -1309,7 +1392,9 @@ export class Pipeline {
       return (await this.store.getTask(id)) ?? archived;
     }
     // A gate that carries triage's outcome came from triage; any other open approval is the plan stage's.
-    const event: PipelineEvent = decision === "approved" ? { type: "approved" } : { type: "sent_back", from: outcome === undefined ? "plan" : "triage" };
+    // The watch's release question says so on its approval; the preview gate (and a gate stored before this wave) has no such word.
+    const shipGate = task.state === "awaiting_ship" && (await this.approvals(id)).find((a) => a.kind === "awaiting_ship" && a.decision === null)?.requested.gate === "ship_approval" ? ({ gate: "ship_approval" } as const) : {};
+    const event: PipelineEvent = decision === "approved" ? { type: "approved", ...shipGate } : { type: "sent_back", from: outcome === undefined ? "plan" : "triage", ...shipGate };
     const moved = await this.dispatch(id, event, { decision: record, ...(guard ? { guard } : {}) });
     if (decision === "approved" && open && outcome === undefined) await this.keepGroundTruth(moved, open.id);
     if (gate) await this.learnFromGate(id, gate, decision, response);
@@ -1329,11 +1414,15 @@ export class Pipeline {
 
   /** A rejection: the plan gate's alone (an open plan, not triage's outcome and not a later gate). The card is archived with reason `rejected`, the comment kept. */
   private async reject(task: TaskRow, reason: string | undefined, auto: boolean): Promise<TaskRow> {
-    const open = task.state === "awaiting_approval" ? (await this.approvals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null) : undefined;
-    if (!open || auto || open.requested.outcome !== undefined) throw new RejectNotAllowedError(task.id, task.state);
+    const gateKind = task.state === "awaiting_approval" || (task.state === "awaiting_ship" && task.route !== "review") ? task.state : null;
+    const open = gateKind ? (await this.approvals(task.id)).find((a) => a.kind === gateKind && a.decision === null) : undefined;
+    // The plan gate, or the watch's release question; the preview gate and every other gate are not rejectable.
+    if (!open || auto || open.requested.outcome !== undefined || (gateKind === "awaiting_ship" && open.requested.gate !== "ship_approval")) throw new RejectNotAllowedError(task.id, task.state);
     const record = { decision: "rejected" as const, ...(reason ? { reason } : {}) };
-    const archived = await this.archive(task.id, "rejected", { onlyFrom: new Set<TaskState>(["awaiting_approval"]), decision: record });
+    const archived = await this.archive(task.id, "rejected", { onlyFrom: new Set<TaskState>([gateKind!]), decision: record });
     if (this.truth) await this.learnFromGate(task.id, open, "sent_back");
+    // The release question opens only when the checklist passes: rejecting it overrides a ready PR. Ids only; the retro counts it.
+    if (gateKind === "awaiting_ship") await this.log(task.id, "ship.override", { kind: "rejected_ready", items: [] });
     return archived;
   }
 
@@ -1431,6 +1520,8 @@ export class Pipeline {
     if (before.source?.kind === "notch" && before.state.startsWith("awaiting_")) {
       return this.dispatch(id, { type: "stop" }, { decision: { decision: "sent_back", reason: "stopped" } });
     }
+    // A state that holds a stage or a gate is aborted only while it runs a stage: with an open approval it is a gate, a 409 like any other.
+    if (RUN_OR_GATE.has(before.state) && !(await this.runsAStage(before))) throw new TransitionError(before, { type: "abort" });
     const task = await this.dispatch(id, { type: "abort" });
     this.loops.get(id)?.abort();
     await this.store.updateTask(id, { queued: false });
@@ -1644,7 +1735,7 @@ export class Pipeline {
    */
   async tick(): Promise<void> {
     const cutoff = Date.now() - ORPHAN_GRACE_MS;
-    for (const task of await this.store.findStuckTasks(RUNNING)) {
+    for (const task of await this.stuckRunning()) {
       if (task.queued || this.loops.has(task.id) || task.updatedAt.getTime() > cutoff) continue;
       await this.apply(task.id, { type: "crash", error: "no stage loop was driving it" }, {}).catch((error: unknown) =>
         console.error(`could not escalate orphaned task ${task.id}`, error),
@@ -1652,7 +1743,38 @@ export class Pipeline {
     }
     await this.rearmPaused();
     await this.autoApprovePlans();
+    await this.probeShipGates();
     await this.fillSlots();
+  }
+
+  private readonly shipProbedAt = new Map<string, number>();
+
+  /** An open release question is looked at against GitHub, at most once per interval: a PR merged on GitHub closes it as an automatic approval (no name
+   *  asked, no ground truth written); a head that moved or a checklist that no longer passes withdraws it, and the watch runs again. A probe that fails leaves it open. */
+  private async probeShipGates(): Promise<void> {
+    const probe = this.shipGateProbe;
+    if (!probe) return;
+    for (const task of await this.store.findStuckTasks(new Set<TaskState>(["awaiting_ship"]))) {
+      if (task.route !== "feature") continue;
+      const gate = (await this.store.listApprovals(task.id)).find((a) => a.kind === "awaiting_ship" && a.decision === null && a.requested.gate === "ship_approval");
+      if (!gate) {
+        this.shipProbedAt.delete(task.id);
+        continue;
+      }
+      const last = this.shipProbedAt.get(task.id);
+      // A machine-wide interval (`MACHINE_SHIP_POLL_INTERVAL`) wins; else the repository's `ship.poll_minutes`.
+      const every = this.shipProbeMs ?? (await this.policyFor(task.repoPath)).factory.ship.poll_minutes * 60_000;
+      if (last !== undefined && Date.now() - last < every) continue;
+      this.shipProbedAt.set(task.id, Date.now());
+      try {
+        const seen = await probe(task, gate);
+        if (seen === "merged") await this.dispatch(task.id, { type: "approved", gate: "ship_approval" }, { decision: { decision: "approved", reason: "merged on GitHub", response: { auto: true } }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+        else if (seen === "closed") await this.archive(task.id, "pr_closed", { onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+        else if (seen === "withdraw") await this.dispatch(task.id, { type: "sent_back", from: "plan", gate: "ship_approval" }, { decision: { decision: "sent_back", reason: "the PR changed: asked again when it is ready" }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+      } catch (error) {
+        console.error(`could not probe the release question of task ${task.id}`, error);
+      }
+    }
   }
 
   /** A plan that has waited the repo's `auto_approve_plan_minutes` is approved by itself when
@@ -1698,7 +1820,7 @@ export class Pipeline {
    * that was merely queued for a free slot lost nothing and is simply rescheduled.
    */
   async recover(): Promise<number> {
-    const stuck = await this.store.findStuckTasks(RUNNING);
+    const stuck = await this.stuckRunning();
     // A stage container the last machine started may still be running: re-attach to it and
     // ingest its result when it ends, rather than kill it and ask you whether to start over.
     const resumable = new Map<string, StageRunRow>();
@@ -1853,11 +1975,34 @@ export class Pipeline {
   }
 
   /** The memory review's proposal and whether the approval kept it, if the gate carried one. */
-  private async approvedRules(id: string): Promise<{ markdown: string; apply: boolean } | undefined> {
+  private async approvedRules(id: string): Promise<{ markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }> } | undefined> {
     const gate = (await this.approvals(id)).filter((a) => a.kind === "reviewing_memory" && a.decision === "approved").at(-1);
-    const rules = (gate?.requested as { rules?: { markdown?: unknown } } | undefined)?.rules;
+    const rules = (gate?.requested as { rules?: { markdown?: unknown; proposals?: unknown } } | undefined)?.rules;
     if (!gate || typeof rules?.markdown !== "string" || rules.markdown.trim() === "") return undefined;
-    return { markdown: rules.markdown, apply: gate.response?.applyRules !== false };
+    const proposals = Array.isArray(rules.proposals) ? (rules.proposals as Array<{ kind: string; title: string; body: string }>).filter((p) => typeof p?.kind === "string" && typeof p.title === "string" && typeof p.body === "string") : [];
+    return { markdown: rules.markdown, apply: gate.response?.applyRules !== false, ...(proposals.length > 0 ? { proposals } : {}) };
+  }
+
+  /** A merged card's retro: the truth file for the eval loop (written whether or not a retro ran) and the graph misses the Build Report also declared. Returns how many misses were recorded. Never throws. */
+  private async recordRetroOutputs(id: string, repoPath: string | null, adopted: boolean): Promise<number> {
+    const out = this.retroOutputs;
+    if (!out || !(await this.mergedPr(id))) return 0;
+    try {
+      const facts = await out.facts(id);
+      if (!facts) return 0;
+      const detail = (await this.latestStageFinish(id, "reviewing_memory"))?.detail;
+      const rules = detail?.rules && typeof detail.rules === "object" ? (detail.rules as { recalibration?: unknown; graphMisses?: unknown }) : null;
+      await writeRetroTruth(out.stateDir, retroTruthOf({ taskId: id, facts, retro: rules, adopted }));
+      await this.log(id, "ground_truth.written", { kind: "retro" });
+      const accepted = acceptedMisses(rules?.graphMisses, (await out.declaredFiles?.(id)) ?? []);
+      if (accepted.length > 0 && repoPath && out.graph) {
+        await out.graph.recordMisses(repoPath, { task: id, at: new Date().toISOString(), files: accepted });
+        return accepted.length;
+      }
+    } catch (error) {
+      console.error(`could not record the retro outputs of ${id}`, error);
+    }
+    return 0;
   }
 
   /** The task's PR when the last shipping run ended in a merge (the monitor's `detail.merged`), else null. */
@@ -1868,6 +2013,7 @@ export class Pipeline {
 
   /** Runs the host-side close step for a task that just closed and logs what it did. Never throws. */
   private async close(id: string): Promise<void> {
+    await this.releaseKept?.(id).catch((error: unknown) => console.error(`could not release the kept sandbox of ${id}`, error));
     if (!this.closeDeps) return;
     try {
       const task = await this.get(id);
@@ -1876,8 +2022,10 @@ export class Pipeline {
         await this.store.updateTask(id, { worktreePath: null });
       }
       await this.log(id, "task.closed", { ...report });
-      // The memory review's rules were written: the card learned something.
-      if (report.steps.some((step) => step.step === "rules" && step.ok && !step.note.startsWith("skipped"))) await this.log(id, "card.learned", {});
+      // What the retro leaves behind, recorded where it is used (never written into prompts or rules here).
+      const rulesWritten = report.steps.some((step) => step.step === "rules" && step.ok && !step.note.startsWith("skipped"));
+      const misses = await this.recordRetroOutputs(id, task.repoPath, rulesWritten);
+      if (rulesWritten || misses > 0) await this.log(id, "card.learned", { ...(rulesWritten ? { rules: 1 } : {}), ...(misses > 0 ? { misses } : {}) });
     } catch (error) {
       console.error(`could not close task ${id}`, error);
     }
@@ -1997,7 +2145,7 @@ export class Pipeline {
         }
         // ci_watch polls GitHub for up to 45 minutes, and shipping's monitor for days, and neither
         // computes anything: they give their slot back for that long, and the queue is looked at right away.
-        const polling = stage === "ci_watch" || stage === "shipping";
+        const polling = stage === "ci_watch" || stage === "awaiting_ship" || stage === "shipping";
         if (polling) {
           this.offPool.add(id);
           this.fillSlots().catch((error: unknown) => console.error(`could not fill slots during ${stage}`, error));
@@ -2038,10 +2186,18 @@ export class Pipeline {
         fallback = undefined;
         // An abort already moved the task on; this stage's result no longer applies.
         if (controller.signal.aborted) return;
+        // GitHub shows the PR closed and not merged (the stage read GitHub's own state, never a comment): the card is archived `pr_closed` here, by the loop
+        // that is driving it (`archive()` waits for the loop to end, which would be this one), and the close step runs.
+        if ((stage === "shipping" || stage === "awaiting_ship") && result.outcome === "fail" && result.detail?.prClosed === true) {
+          const archived = await this.apply(id, { type: "archive", reason: "pr_closed" }, {});
+          await this.store.updateTask(id, { queued: false });
+          if (archived.effect.kind === "done") await this.close(id);
+          return;
+        }
         // A merged PR closes the loop: one event the board and the places the task came from react to.
         if (stage === "shipping" && result.outcome === "pass" && result.detail?.merged) {
           const shipped = shippedEvent(await this.get(id), result.detail);
-          if (shipped) await this.log(id, "task.shipped", shipped);
+          if (shipped) await this.log(id, "ship.merged", shipped);
         }
         // A usage limit on one engine: the stage runs again at once on the pack's next fallback
         // that can run, and the task pauses only once there is none.
@@ -2068,6 +2224,14 @@ export class Pipeline {
                 ...(typeof result.detail?.reason === "string" ? { reason: result.detail.reason } : {}),
                 ...(stage === "triage" && TriageOutcome.safeParse(result.detail?.outcome).success ? { triage: result.detail!.outcome as TriageOutcome } : {}),
                 ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
+                ...(await this.blockerSet(id, stage, result)),
+                ...(await this.loopCap(id, stage, result)),
+                // The merge that did not happen because the PR is not ready; a fix that changed what a scenario shows (media from a new browser run).
+                ...(stage === "shipping" && result.detail?.notReady === true ? { notReady: true as const } : {}),
+                // The retro has something for a person (rules, prompt updates, graph misses): it waits for an answer; otherwise the card closes.
+                ...(stage === "reviewing_memory" && result.outcome === "pass" && result.detail?.rules != null ? { proposals: true as const } : {}),
+                ...(result.detail?.refresh === "media" ? { refresh: "media" as const } : {}),
+                ...(stage === "evidence" ? { preview: (await this.policyFor((await this.get(id)).repoPath)).factory.ship.preview === "on" } : {}),
               };
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.
         const decided = stage === "implementing" ? await this.decideBuildEscalation(id, result, planned, { secondScopeRed, stuck: stuck ?? null }) : null;
@@ -2083,6 +2247,11 @@ export class Pipeline {
               }
             : result.detail;
         const step = await this.apply(id, next, { detail });
+        // A retro with nothing to propose (or one that broke) ends the card here: no click, the close step runs.
+        if (step.effect.kind === "done") {
+          await this.close(id);
+          return;
+        }
         if (step.effect.kind === "pause") {
           this.scheduleResume(id, result.detail?.resetsAt);
           // One usage window is shared by every stage on the same credential: hold the queued
@@ -2100,7 +2269,7 @@ export class Pipeline {
         // queued task, and gets one as soon as a loop ends.
         if (stage && polling && this.active() > this.maxConcurrentTasks) {
           await this.enqueue(id);
-          await this.log(id, "slot.waited", { stage, reason: `the pool filled while ${stage === "ci_watch" ? "ci_watch" : "shipping"} was polling` });
+          await this.log(id, "slot.waited", { stage, reason: `the pool filled while ${stage} was polling` });
           return;
         }
       }
@@ -2225,6 +2394,8 @@ export class Pipeline {
           from: task.state,
           to: step.state,
           ...(step.reason ? { reason: step.reason } : {}),
+          // A state that holds a stage or a gate says which it is now: this step opened a gate.
+          ...(step.effect.kind === "wait" ? { gate: true } : {}),
         },
       });
       // The row says when it entered this state, stamped like the event, so the clocks need no event scan.
@@ -2331,6 +2502,27 @@ export class Pipeline {
     }
   }
 
+  /** What the draft PR's body is fed: the rows of the stages that ran before Deliver. */
+  private async prFacts(id: string): Promise<NonNullable<StageContext["prFacts"]>> {
+    const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
+    return prFactsOf(task, runs, events);
+  }
+
+  /** The failures the browser run's or CI's loop may have before a person is asked: the repository's `verify.e2e_rounds` or `verify.ci_rounds`. */
+  private async loopCap(id: string, stage: TaskState, result: StageResult): Promise<{ loopCap?: number }> {
+    if (result.outcome !== "fail" || (stage !== "e2e" && stage !== "ci_watch")) return {};
+    const { verify } = (await this.policyFor((await this.get(id)).repoPath)).factory;
+    return { loopCap: stage === "ci_watch" ? verify.ci_rounds : verify.e2e_rounds };
+  }
+
+  /** What Verify's failure tells the transition about its blocker findings: their set, and the rounds Build may have on one set (`verify.build_rounds`). */
+  private async blockerSet(id: string, stage: TaskState, result: StageResult): Promise<{ findingSet?: string; buildRounds?: number }> {
+    if (stage !== "verifying" || result.outcome !== "fail") return {};
+    const key = blockerSetKey(result.findings ?? []);
+    if (!key) return {};
+    return { findingSet: key, buildRounds: (await this.policyFor((await this.get(id)).repoPath)).factory.verify.build_rounds };
+  }
+
   /** The stuck detector's attempt-level rule: a stage that just failed for the third time in a
    *  row with the very same error is going nowhere; a human is cheaper than the rest of the
    *  retry cap. Returns the escalation reason, or null when the failures differ. */
@@ -2360,6 +2552,8 @@ export class Pipeline {
       (event) =>
         event.payload.stage === "verifying" ||
         event.payload.stage === "ci_watch" ||
+        // A card sent back from the browser run is handed that run's own findings, not the last Verify pass's.
+        (event.payload.stage === "e2e" && event.payload.status === "failed") ||
         (event.payload.stage === "implementing" && event.payload.status === "failed"),
     );
     // The pack runner reports findings at the result's top level; a stub or an older event
@@ -2486,6 +2680,8 @@ export class Pipeline {
     const attempt = resume?.attempt ?? (await this.store.countStageRunAttempts(id, stage)) + 1;
     const runId = resume?.runId ?? (await this.store.insertStageRun({ taskId: id, stage, attempt }));
     if (!resume) await this.log(id, "stage.started", { stage, attempt }, runId);
+    // A stage starting is the card resuming: whatever an earlier escalation kept besides the clone goes.
+    if (!resume) await this.releaseKept?.(id).catch((error: unknown) => console.error(`could not release the kept sandbox of ${id}`, error));
     if (fallback) await this.log(id, "stage.engine", { stage, pack: packForState(stage), engine: fallback.engine, reason: fallback.reason }, runId);
 
     const t0 = Date.now();
@@ -2521,6 +2717,7 @@ export class Pipeline {
         runId,
         approvals,
         priorFindings,
+        ...(stage === "delivering" ? { prFacts: await this.prFacts(id) } : {}),
         ...(replan ? { replan } : {}),
         ...(budgetMinutes !== undefined ? { budgetMinutes } : {}),
         ...(testsCommit ? { testsCommit } : {}),
@@ -2646,6 +2843,12 @@ export class Pipeline {
     const build = buildReportOf(task, runs, events, (await this.policyFor(task.repoPath)).factory.build);
     const ciPassed = runs.some((r) => r.stage === "ci_watch" && r.status === "passed");
     return { build, verify: ciPassed ? verifyReportOf(task, runs, events) : null };
+  }
+
+  /** A repository image's event as a row on the card that needed it: started, built, refused or failed (text already flattened and capped). */
+  async recordImageEvent(taskId: string, event: { kind: string } & Record<string, unknown>): Promise<void> {
+    const { kind, taskId: _t, ...payload } = event;
+    await this.log(taskId, kind, payload);
   }
 
   private async log(

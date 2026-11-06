@@ -23,6 +23,8 @@ export interface CheckCommand {
   cmd: string;
   /** What to exec: the line through `sh`, in `cwd` relative to the worktree. */
   argv: string[];
+  /** The names of the secrets this check declares; the machine loads and passes only these. */
+  secrets?: string[];
 }
 
 const quote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
@@ -34,5 +36,6 @@ export function checkCommand(check: CheckSpec): CheckCommand {
     name: check.name,
     cmd: cwd ? `${check.run} (in ${cwd})` : check.run,
     argv: ["sh", "-c", cwd ? `cd ${quote(cwd)} && ${check.run}` : check.run],
+    secrets: check.secrets ?? [],
   };
 }

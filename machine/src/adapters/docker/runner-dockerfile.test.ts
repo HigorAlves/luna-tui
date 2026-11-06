@@ -1,0 +1,57 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+const machineDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const dockerfile = readFileSync(join(machineDir, "runner", "Dockerfile"), "utf8");
+
+describe("the runner image's downloads", () => {
+  it("checks the standalone Python's sha256 for each architecture before unpacking it", () => {
+    for (const sum of ["126343c54daff4068efc1ac269518d0cc202d57857794948103dd1454e8881be", "b48451865bde9a39e2f3e71d7fdcbf1f32615f50f24d78dc50d04ede6501cf81"]) expect(dockerfile).toContain(sum);
+    expect(dockerfile.indexOf("sha256sum -c")).toBeGreaterThan(0);
+    expect(dockerfile.indexOf("sha256sum -c")).toBeLessThan(dockerfile.indexOf("tar -xz -C /opt/luna"));
+  });
+});
+
+describe("the egress proxy in the runner image", () => {
+  it("is copied to /opt/luna/egress/proxy.ts, labelled, and part of the image's build key", () => {
+    expect(dockerfile).toContain("COPY machine/runner/egress/proxy.ts /opt/luna/egress/proxy.ts");
+    expect(dockerfile).toContain('LABEL dev.hardness.egress="1"');
+    expect(dockerfile.indexOf("COPY machine/runner/egress/proxy.ts")).toBeLessThan(dockerfile.indexOf("chmod -R a+rX /opt/luna"));
+    expect(readFileSync(join(machineDir, "runner", "build.sh"), "utf8")).toContain("machine/runner/egress");
+  });
+
+  it("is let into the build context, checked by check-layer.sh, and type-checked", () => {
+    expect(readFileSync(join(machineDir, "..", ".dockerignore"), "utf8")).toContain("!machine/runner/egress");
+    expect(readFileSync(join(machineDir, "runner", "check-layer.sh"), "utf8")).toContain("/opt/luna/egress/proxy.ts --check");
+    expect(JSON.parse(readFileSync(join(machineDir, "tsconfig.json"), "utf8").replace(/^\s*\/\/.*$/gm, "")).include).toContain("runner/egress");
+    expect(readFileSync(join(machineDir, "runner", "layer.md"), "utf8")).toContain("egress/proxy.ts");
+  });
+});
+
+describe("the browser the machine launches", () => {
+  const FLAG = "--disable-features=EncryptedClientHello";
+  it("is started with encrypted ClientHello off, so the egress proxy can read its server name: the QA image's chromium-qa wrapper and the recorder's launch arguments", () => {
+    const qa = readFileSync(join(machineDir, "runner-qa", "Dockerfile"), "utf8");
+    expect(qa).toContain(FLAG);
+    expect(qa).toMatch(/chromium-qa/);
+    expect(qa).not.toMatch(/ln -s .*chromium-qa/);
+    expect(readFileSync(join(machineDir, "runner-video", "tools", "cards.ts"), "utf8")).toContain(FLAG);
+  });
+
+  it("is told to a browser launched another way, in the e2e prompt", () => {
+    expect(readFileSync(join(machineDir, "..", "factory", "prompts", "e2e.md"), "utf8")).toContain(FLAG);
+  });
+});
+
+describe("the QA login helper", () => {
+  it("is installed in the QA image as qa-fill, and the e2e and recording prompts tell the agent to use only it for a credential", () => {
+    expect(readFileSync(join(machineDir, "runner-qa", "Dockerfile"), "utf8")).toMatch(/COPY .*qa-fill\.mjs \/usr\/local\/bin\/qa-fill/);
+    for (const prompt of ["e2e", "recording"]) {
+      const text = readFileSync(join(machineDir, "..", "factory", "prompts", `${prompt}.md`), "utf8");
+      expect(text, prompt).toContain("qa-fill <selector> <VARIABLE>");
+      expect(text, prompt).toMatch(/never type, read, print or write a credential's value/);
+    }
+  });
+});

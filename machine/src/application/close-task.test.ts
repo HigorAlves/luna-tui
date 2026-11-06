@@ -1,3 +1,4 @@
+import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,21 @@ function worktree(): string {
 
 const task = (worktreePath: string | null) => ({ id: "t1", repoPath: "/repo", worktreePath });
 
+describe("closeTask: a card whose PR merged", () => {
+  it("removes its workspace after the rules step even when removal is not switched on; any other close keeps it", async () => {
+    const path = worktree();
+    const merged = fakeExec();
+    const report = await closeTask({ ...task(path), merged: { prUrl: "https://github.com/o/a/pull/7", number: 7 } }, { exec: merged.exec, worktreeRemove: false });
+    expect(merged.calls).toEqual([{ command: "git", args: [...HOST_GIT, "-C", "/repo", "worktree", "remove", "--force", path], cwd: undefined }]);
+    expect(report.worktreeRemoved).toBe(true);
+    expect(report.steps.map((s) => s.step)).toEqual(["watch-tab", "worktree"]);
+    const other = fakeExec();
+    const kept = await closeTask(task(worktree()), { exec: other.exec, worktreeRemove: false });
+    expect(other.calls).toEqual([]);
+    expect(kept.worktreeRemoved).toBe(false);
+  });
+});
+
 describe("closeTask", () => {
   it("closes the watch tab, and reports a failure to", async () => {
     const closed: string[] = [];
@@ -59,7 +75,7 @@ describe("closeTask", () => {
     const removed = fakeExec();
     const second = await closeTask(task(path), { exec: removed.exec, worktreeRemove: true });
     expect(removed.calls).toEqual([
-      { command: "git", args: ["-c", "core.hooksPath=/dev/null", "-C", "/repo", "worktree", "remove", "--force", path], cwd: undefined },
+      { command: "git", args: [...HOST_GIT, "-C", "/repo", "worktree", "remove", "--force", path], cwd: undefined },
     ]);
     expect(second.worktreeRemoved).toBe(true);
   });
@@ -143,7 +159,7 @@ describe("closeTask after a merge: the rules go to their own branch and a draft 
   function wire(over: { push?: number; defaultBranch?: string | null } = {}) {
     const calls: string[][] = [];
     const exec: CloseDeps["exec"] = async (_c, args) => {
-      const a = args.slice(args.indexOf("-C") + 2);
+      const a = args.slice(args.indexOf("-C") + 2).filter((a) => !a.startsWith("--git-dir=") && !a.startsWith("--work-tree="));
       calls.push(a);
       return { code: a[0] === "push" ? (over.push ?? 0) : 0, stdout: "", stderr: over.push ? "denied" : "" };
     };
@@ -166,6 +182,8 @@ describe("closeTask after a merge: the rules go to their own branch and a draft 
       "add docs/agents/project-context.md",
       "-c commit.gpgsign=false commit -m docs(context): rules from the memory review",
       "push -u origin luna/memory-0a1b2c3d",
+      // the rules step is first; the merged card's workspace is removed after it
+      `worktree remove --force ${path}`,
     ]);
     expect(readFileSync(join(path, "docs/agents/project-context.md"), "utf8")).toContain("- Run pnpm verify before any commit.");
     expect(opened).toHaveLength(1);
@@ -182,7 +200,8 @@ describe("closeTask after a merge: the rules go to their own branch and a draft 
     expect(refused.opened).toEqual([]);
     const odd = wire({ defaultBranch: "--upload-pack=x" });
     expect((await closeTask(target(worktree()), odd.deps)).steps[0]).toMatchObject({ ok: false, note: expect.stringContaining("default branch") });
-    expect(odd.calls).toEqual([]);
+    // nothing of the rules step ran: only the merged card's workspace removal did
+    expect(odd.calls.map((c) => c[0])).toEqual(["worktree"]);
   });
 });
 
@@ -208,7 +227,7 @@ describe("closeTask: the rules file is only ever a real file inside the worktree
 
   function wire() {
     const calls: string[][] = [];
-    const exec: CloseDeps["exec"] = async (_c, args) => (calls.push(args.slice(args.indexOf("-C") + 2)), { code: 0, stdout: "", stderr: "" });
+    const exec: CloseDeps["exec"] = async (_c, args) => (calls.push(args.slice(args.indexOf("-C") + 2).filter((a) => !a.startsWith("--git-dir=") && !a.startsWith("--work-tree="))), { code: 0, stdout: "", stderr: "" });
     const github = { openPr: async () => ({ url: "https://github.com/o/a/pull/9", number: 9, isDraft: true }) };
     const deps: CloseDeps = { exec, worktreeRemove: false, github, slugOf: async () => "o/a", defaultBranchOf: async () => "main" };
     return { calls, deps };
@@ -229,6 +248,15 @@ describe("closeTask: the rules file is only ever a real file inside the worktree
     });
   }
 
+  it("keeps the merged PR's own address clickable and breaks an address inside the rules", async () => {
+    const opened: Array<{ body: string }> = [];
+    const exec: CloseDeps["exec"] = async () => ({ code: 0, stdout: "", stderr: "" });
+    const deps: CloseDeps = { exec, worktreeRemove: false, github: { openPr: async (_s, pr) => (opened.push(pr), { url: "u", number: 9, isDraft: true }) }, slugOf: async () => "o/a", defaultBranchOf: async () => "main" };
+    await closeTask({ id: "0a1b2c3d-1111", title: "t", repoPath: "/repo", worktreePath: worktree(), rules: { markdown: "- see https://evil.example/a and www.evil.example/b and [x](https://evil.example/c)\n", apply: true }, merged: { prUrl: "https://github.com/o/a/pull/7", number: 7 } }, deps);
+    expect(opened[0]!.body).toContain(": https://github.com/o/a/pull/7\n");
+    expect(opened[0]!.body.replace("https://github.com/o/a/pull/7", "")).not.toMatch(/https?:\/\/|\bwww\.|\]\(/i);
+  });
+
   it("escapes HTML and redacts a token in the draft PR's body", async () => {
     // Built at run time: a literal of this shape blocks the push.
     const token = "gh" + "p_" + "d".repeat(24);
@@ -240,5 +268,38 @@ describe("closeTask: the rules file is only ever a real file inside the worktree
     expect(opened[0]!.body).not.toMatch(/<!--|<details>|ghp_/);
     expect(opened[0]!.body).toContain("&lt;!-- hidden --&gt;");
     expect(opened[0]!.body).toContain("[redacted]");
+  });
+});
+
+describe("closing a card whose workspace is a clone", () => {
+  it("removes a clone with nothing unpushed, folder and repository, and keeps one with commits the machine has not pushed, saying so", async () => {
+    const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
+    const { execFileSync } = await import("node:child_process");
+    const { exec } = await import("../adapters/process/exec.ts");
+    const { ensureClone } = await import("../adapters/git/clone.ts");
+    const { machineGitDir } = await import("../adapters/git/machine-repo.ts");
+    const { commitAll, workspaceFor } = await import("../adapters/git/worktree.ts");
+    const root = worktree();
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    const git = (cwd: string, ...a: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a]);
+    git(repo, "init", "-q", "-b", "main");
+    writeFileSync(join(repo, "a.txt"), "a");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "init");
+    const workspace = workspaceFor({ id: "11111111-2222-3333-4444-555555555555", title: "Fix it" } as never, repo, join(root, "cards"));
+    await ensureClone(repo, workspace);
+    const closed = await closeTask({ id: "t1", repoPath: repo, worktreePath: workspace.path }, { exec, worktreeRemove: true });
+    expect(closed.worktreeRemoved).toBe(true);
+    expect(existsSync(workspace.path)).toBe(false);
+    expect(existsSync(machineGitDir(workspace.path))).toBe(false);
+
+    await ensureClone(repo, workspace);
+    writeFileSync(join(workspace.path, "b.txt"), "b");
+    await commitAll(workspace.path, "work");
+    const kept = await closeTask({ id: "t1", repoPath: repo, worktreePath: workspace.path }, { exec, worktreeRemove: true });
+    expect(kept.worktreeRemoved).toBe(false);
+    expect(existsSync(workspace.path)).toBe(true);
+    expect(kept.steps.find((s) => s.step === "worktree")).toMatchObject({ ok: true, note: expect.stringMatching(/unpushed/) });
   });
 });

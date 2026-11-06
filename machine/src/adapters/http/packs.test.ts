@@ -1,6 +1,7 @@
 import { PACKS, PackId } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { previewOn } from "../../test/policies.ts";
 
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
@@ -19,7 +20,7 @@ afterAll(async () => {
 
 describe("GET /packs", () => {
   it("lists every pack in the registry with the states it runs in", async () => {
-    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     const response = await createApp({ db, pipeline, bus: new Bus() }).request("/packs");
     expect(response.status).toBe(200);
     const packs = (await response.json()) as Array<Record<string, unknown>>;

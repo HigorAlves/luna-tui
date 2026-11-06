@@ -2,6 +2,7 @@
 // off the list is a 400, and a task already ended is a 409.
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../../test/policies.ts";
 
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
@@ -24,7 +25,7 @@ beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
   bus = new Bus();
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
 });
 
 const archive = async (id: string, reason: unknown) => {

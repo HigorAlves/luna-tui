@@ -17,7 +17,7 @@ function stampFor(commit: string): GraphStamp {
   return { schema: 1, commit, builtAt: "2026-11-04T10:00:00Z", nodes: 3, edges: 2, communities: 1, graphify: "0.9.34" };
 }
 
-function setup(exitCode = 0) {
+function setup(exitCode = 0, extra: Partial<Parameters<typeof graphifyGraph>[0]> = {}) {
   const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "graph-")));
   const repo = join(stateDir, "repo");
   const checkout = join(stateDir, "wt", "graph");
@@ -41,6 +41,7 @@ function setup(exitCode = 0) {
     image: "img:1",
     worktreesDir: join(stateDir, "wt"),
     sandbox,
+    ...extra,
     git: {
       ensureCleanCheckout: async (_repo, path) => (checkouts.push(path), checkout),
       headCommit: async () => head,
@@ -62,7 +63,7 @@ describe("graphifyGraph.build", () => {
       writable: false,
       gitDir: null,
       credential: { env: {}, mounts: [] },
-      entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", head],
+      entrypoint: ["/opt/luna/python/bin/python3", "/opt/luna/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", head],
     });
     expect(seen[0]!.mounts).toEqual([{ host: expect.stringContaining(`building-${head}`), container: "/graph", readOnly: false }]);
     const dir = graph.currentDir(repo);
@@ -130,10 +131,73 @@ describe("graphifyGraph.build", () => {
     expect(existsSync(dir) ? readdirSync(dir).filter((n) => n.startsWith("building-")) : []).toEqual([]);
   });
 
+  it("runs one build for a repository however it is asked: the watch, a waiting card and a rebuild on merge share it, and the next request builds again", async () => {
+    const { graph, repo, seen, setHead } = setup();
+    const [first, second] = await Promise.all([graph.build(repo), graph.build(repo)]);
+    expect(seen).toHaveLength(1);
+    expect(second).toEqual(first);
+    setHead("b".repeat(40));
+    await graph.build(repo);
+    expect(seen).toHaveLength(2);
+  });
+
+  it("does not make one repository wait for another's build", async () => {
+    const { graph, repo, seen } = setup();
+    await Promise.all([graph.build(repo), graph.build(`${repo}-other`)]);
+    expect(seen).toHaveLength(2);
+  });
+
   it("knows nothing of a repo it never built", async () => {
     const { graph, repo } = setup();
     expect(graph.currentDir(repo)).toBeNull();
     expect(await graph.stampOf(repo)).toBeNull();
+  });
+});
+
+describe("a graph and the image that builds it", () => {
+  it("is built in the repository's own image, and the stamp records the image's id", async () => {
+    const { graph, repo, seen } = setup(0, { image: async (repoPath) => (repoPath === "/shop" ? "hardness-runner-shop:1" : "img:1"), imageId: async (image) => `sha256:id-of-${image}` });
+    const stamp = await graph.build("/shop");
+    expect(seen[0]?.image).toBe("hardness-runner-shop:1");
+    expect(stamp.image).toBe("sha256:id-of-hardness-runner-shop:1");
+    expect((await graph.stampOf("/shop"))?.image).toBe("sha256:id-of-hardness-runner-shop:1");
+    expect(repo).toBeTruthy();
+  });
+
+  it("is stale whatever its commit when the image's Graphify is another version, and is rebuilt before use", async () => {
+    let version = "0.9.34";
+    const { graph, repo, seen } = setup(0, { graphifyVersion: async () => version });
+    const first = await graph.build(repo);
+    expect(await graph.isFresh(repo, first, first.commit)).toBe(true);
+    await graph.build(repo);
+    expect(seen).toHaveLength(1);
+    version = "0.10.0";
+    expect(await graph.isFresh(repo, first, first.commit)).toBe(false);
+    await graph.build(repo);
+    expect(seen).toHaveLength(2);
+  });
+});
+
+describe("stamp.json written by a build in the repository's image", () => {
+  it("is not followed when it is a link, and a link planted by the build is replaced, not written through", async () => {
+    const outside = join(realpathSync(mkdtempSync(join(tmpdir(), "outside-"))), "target.json");
+    writeFileSync(outside, JSON.stringify(stampFor("a".repeat(40))));
+    const { graph, repo } = setup(0, { imageId: async () => "sha256:x" });
+    // a build that leaves stamp.json as a link out of its folder
+    const planted = setup(0, {
+      imageId: async () => "sha256:x",
+      sandbox: async (run: SandboxRun): Promise<SandboxResult> => {
+        const out = run.mounts!.find((m) => m.container === "/graph")!.host;
+        mkdirSync(join(out, "graphify-out"), { recursive: true });
+        writeFileSync(join(out, "graphify-out", "graph.json"), "{}");
+        symlinkSync(outside, join(out, "stamp.json"));
+        return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
+      },
+    });
+    await expect(planted.graph.build(planted.repo)).rejects.toBeInstanceOf(GraphBuildError);
+    expect(readFileSync(outside, "utf8")).toBe(JSON.stringify(stampFor("a".repeat(40))));
+    expect(graph).toBeDefined();
+    expect(repo).toBeDefined();
   });
 });
 
@@ -154,6 +218,23 @@ describe("graphifyGraph.isFresh", () => {
     expect(await graph.isFresh(root, stampFor(one), two)).toBe(false);
     expect(await graph.isFresh(root, stampFor(two), one)).toBe(true);
     expect(await graph.isFresh(root, stampFor("c".repeat(40)), two)).toBe(true);
+  });
+});
+
+describe("graphifyGraph.pastMisses", () => {
+  it("lists the files accepted outside the map, most frequent first, at most twenty, plain repository paths only", async () => {
+    const { graph, repo } = setup();
+    await graph.recordMisses(repo, { task: "t1", at: "2026-11-04T10:00:00Z", files: ["b.ts", "a.ts", "../escape", "/abs", "c d\ne", "src/x.ts"] });
+    await graph.recordMisses(repo, { task: "t2", at: "2026-11-04T11:00:00Z", files: ["a.ts", "src/x.ts", "a.ts"] });
+    await graph.recordMisses(repo, { task: "t3", at: "2026-11-04T12:00:00Z", files: ["a.ts"] });
+    expect(await graph.pastMisses!(repo)).toEqual(["a.ts", "src/x.ts", "b.ts"]);
+    for (let i = 0; i < 30; i++) await graph.recordMisses(repo, { task: `n${i}`, at: "t", files: [`f${i}.ts`] });
+    expect((await graph.pastMisses!(repo)).length).toBe(20);
+  });
+
+  it("is empty for a repository with no misses file", async () => {
+    const { graph, repo } = setup();
+    expect(await graph.pastMisses!(repo)).toEqual([]);
   });
 });
 

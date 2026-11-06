@@ -2,7 +2,7 @@
 // created to closed, and the Jira due date (the end of that day where the Jira site lives). Pure: the clocks are computed from the task row,
 // when its wait began, when its stage started and the targets in force; nothing is stored.
 // The same `30m`/`4h`/`3d`/`off` durations luna.yaml and the env use are parsed here.
-import { RUNNING, type SlaClock, type TaskSla, type TaskState, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { RUNNING, RUN_OR_GATE, type SlaClock, type TaskSla, type TaskState, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 
 import type { TaskRow } from "./task.ts";
 
@@ -47,6 +47,8 @@ export interface SlaInput {
   /** The repo's own targets; `null` fields fall back to `defaults`. */
   targets: Partial<SlaTargets> | null;
   defaults: SlaDefaults;
+  /** An approval is open: a state that holds a stage or a gate has a gate clock only then. */
+  gateOpen?: boolean;
 }
 
 /** Jira priority moves the gate target: Highest/High halve it, Lowest doubles it. */
@@ -74,7 +76,7 @@ export function computeSla(input: SlaInput, now: Date): TaskSla | null {
   const gateSecs = gateTarget === null ? null : Math.round(gateTarget * gateFactor(task.jira?.priority));
 
   let gate: TaskSla["gate"] = null;
-  if (WAITING_ON_USER.has(state) && gateSecs !== null) {
+  if ((RUN_OR_GATE.has(state) ? input.gateOpen === true : WAITING_ON_USER.has(state)) && gateSecs !== null) {
     const since = input.stateSince ?? task.createdAt;
     gate = { ...clock(since, gateSecs, now), since: since.toISOString(), state };
   }

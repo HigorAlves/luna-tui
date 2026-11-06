@@ -11,7 +11,7 @@ function fakeGit(answers: Record<string, ExecResult>) {
   const calls: string[] = [];
   const exec = async (_command: string, args: string[]) => {
     const dash = args.indexOf("-C");
-    const key = args.slice(dash + 2).join(" ");
+    const key = args.slice(dash + 2).filter((a) => !a.startsWith("--git-dir=") && !a.startsWith("--work-tree=")).join(" ");
     calls.push(key);
     return answers[key] ?? { code: 1, stdout: "", stderr: `unexpected: ${key}` };
   };

@@ -92,12 +92,23 @@ export const VerifyReport = z.object({
     verdict: z.string().nullable(),
     scenarios: z.array(z.object({ text: z.string(), result: z.string() })),
     artifacts: z.array(z.string()),
+    /** v2.2: the run by approved scenario, as the machine checked the manifest (artifacts are names of files that exist in the run's folder). */
+    rows: z.array(z.object({ scenario: z.string(), title: z.string(), criterion: z.string().nullable().optional(), result: z.string(), seen: z.string(), artifacts: z.array(z.string()) })).optional(),
   }),
   /** Whether the sandbox reproduces the failure: null until wave 11. */
   envReproduction: z.string().nullable(),
   /** Where a person overrode a verdict: empty until wave 12. */
   overrides: z.array(z.object({ finding: z.string(), by: z.string(), reason: z.string() })),
   version: z.number().int(),
+  // v2.2, wave 12a: all optional, so a report assembled before them still validates.
+  /** Who reviewed: the engine the last verifying run was on and its credential family (`claude`, `codex`, ...). */
+  review: z.object({ engine: z.string().nullable(), family: z.string().nullable() }).optional(),
+  /** The mutation run's score against the repository's minimum, when it ran. */
+  mutation: z.object({ score: z.number(), min: z.number() }).nullable().optional(),
+  /** What kind of CI failure the last red run was (real, flake, infra, drift), when one was judged. */
+  ciClass: z.string().nullable().optional(),
+  /** The failures each loop has had: Verify, the browser run, CI. */
+  rounds: z.object({ verify: z.number().int(), e2e: z.number().int(), ci: z.number().int() }).optional(),
 });
 export type VerifyReport = z.infer<typeof VerifyReport>;
 

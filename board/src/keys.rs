@@ -245,14 +245,30 @@ fn task_of(app: &App) -> Option<&Task> {
 pub(crate) fn sendable_back(t: &Task) -> bool {
     match t.state.as_str() {
         "awaiting_setup" | "awaiting_approval" | "awaiting_test_check" => true,
-        "awaiting_ship" => t.route != "review",
+        // Only while the machine waits on you: otherwise it is watching the PR, and a send-back has nothing to stop.
+        "awaiting_ship" => t.route != "review" && t.waiting_on_you,
         _ => false,
     }
 }
 
+/// `sendable_back` for the ticket as it is now: the release question (the ship approval) has two answers, approve or reject, and no send-back.
+pub(crate) fn sendable_back_now(app: &App, t: &Task) -> bool {
+    sendable_back(t) && !open_ship_approval(app, t)
+}
+
+/// Whether the ticket waits at the release question: an open ship approval in the loaded detail.
+pub(crate) fn open_ship_approval(app: &App, t: &Task) -> bool {
+    t.state == "awaiting_ship" && t.waiting_on_you && app.detail.as_ref().filter(|d| d.task.id == t.id).and_then(|d| d.open_approval()).is_some_and(|a| a.is_ship_approval())
+}
+
+/// Whether the ticket is at a gate. `awaiting_ship` and `reviewing_memory` also hold a running stage (the watch, the retro): they are gates only when the machine waits on you.
+pub(crate) fn at_gate(t: &Task) -> bool {
+    GATE_STATES.contains(&t.state.as_str()) && (!matches!(t.state.as_str(), "awaiting_ship" | "reviewing_memory") || t.waiting_on_you)
+}
+
 /// Whether `task` waits at the plan stage's own gate (not triage's reply or archive): the only gate a plan is rejected at.
 pub(crate) fn rejectable(app: &App, task: &Task) -> bool {
-    task.state == "awaiting_approval" && app.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome()).is_none()
+    (task.state == "awaiting_approval" && app.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome()).is_none()) || open_ship_approval(app, task)
 }
 
 fn with_task(app: &App, f: fn(&Task) -> Avail) -> Avail {
@@ -266,7 +282,7 @@ fn with_task(app: &App, f: fn(&Task) -> Avail) -> Avail {
 /// the same key never show together.
 fn gate_is(app: &App, states: &[&str]) -> Avail {
     match task_of(app) {
-        Some(task) if states.contains(&task.state.as_str()) => Avail::On,
+        Some(task) if states.contains(&task.state.as_str()) && at_gate(task) => Avail::On,
         _ => Avail::Hidden,
     }
 }
@@ -296,11 +312,21 @@ const GATE_STATES: &[&str] = &[
     "reviewing_memory",
 ];
 
+/// `On` at the ship gate: `release` for the release question (the ship approval), else the preview gate. `Hidden` elsewhere, so the meanings of `a` and `N` there never show together.
+fn ship_gate(app: &App, release: bool) -> Avail {
+    match task_of(app) {
+        Some(task) if task.state == "awaiting_ship" && task.waiting_on_you && open_ship_approval(app, task) == release => Avail::On,
+        _ => Avail::Hidden,
+    }
+}
+
 /// `a` when no gate entry applies: says why there is nothing to advance.
 fn advance_fallback(app: &App) -> Avail {
     match task_of(app) {
         None => Avail::Off("no ticket selected"),
-        Some(task) if GATE_STATES.contains(&task.state.as_str()) => Avail::Hidden,
+        Some(task) if at_gate(task) => Avail::Hidden,
+        Some(task) if task.state == "awaiting_ship" => Avail::Off("the machine is watching the PR"),
+        Some(task) if task.state == "reviewing_memory" => Avail::Off("the retro is running"),
         Some(task) if task.state == "closed" => Avail::Off("closed"),
         Some(task) if task.state == "archived" => Avail::Off("archived"),
         Some(task) if task.waiting_on_you => Avail::On,
@@ -366,7 +392,8 @@ const SHARED: &[Binding] = &[
     b("a", "archive the ticket (one click)", Group::Gate, Scope::Board, |app| plan_gate(app, Some("archive")), 90),
     b("a", "post the reply and close the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90),
     b("a", "approve the tests", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_test_check"]), 90),
-    b("a", "ship: approve and open the PR", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_ship"]), 90),
+    b("a", "ship: publish, watch the PR", Group::Gate, Scope::Board, |app| ship_gate(app, false), 90),
+    b("a", "ship: approve the release", Group::Gate, Scope::Board, |app| ship_gate(app, true), 90),
     b("a", "retry the escalation, with guidance", Group::Gate, Scope::Board, |app| gate_is(app, &["escalated"]), 90),
     b("a", "resume after the usage limit", Group::Gate, Scope::Board, |app| gate_is(app, &["paused_rate_limit"]), 90),
     b("a", "approve the memory review", Group::Gate, Scope::Board, |app| gate_is(app, &["reviewing_memory"]), 90),
@@ -389,19 +416,19 @@ const SHARED: &[Binding] = &[
         40,
     ),
     b("N", "reject the plan, with a comment", Group::Gate, Scope::Board, |app| plan_gate(app, None), 80),
+    b("N", "reject the release, archive the card", Group::Gate, Scope::Board, |app| ship_gate(app, true), 80),
     b(
         "r",
         "send back with a reason",
         Group::Gate,
         Scope::Board,
         |app| {
-            with_task(app, |t| {
-                if sendable_back(t) {
-                    Avail::On
-                } else {
-                    Avail::Off("only a setup, plan or tests go back")
-                }
-            })
+            match task_of(app) {
+                None => Avail::Off("no ticket selected"),
+                Some(t) if sendable_back_now(app, t) => Avail::On,
+                Some(t) if open_ship_approval(app, t) => Avail::Off("the release question is approved or rejected"),
+                Some(_) => Avail::Off("only a setup, plan or tests go back"),
+            }
         },
         85,
     ),
@@ -587,6 +614,8 @@ const BOARD: &[Binding] = &[
     cmd(b(":fold", "fold the focused column", Group::Commands, Scope::Board, on, 0), "fold"),
     cmd(b(":unfold", "unfold the focused column", Group::Commands, Scope::Board, on, 0), "unfold"),
     cmd(b(":setup <repo>", "propose the repo's luna.yaml", Group::Commands, Scope::Board, on, 0), "setup"),
+    cmd(b(":dismiss <finding id> [reason]", "dismiss a finding Verify reported", Group::Commands, Scope::Board, on, 0), "dismiss"),
+    cmd(b(":finding <blocker|should_fix|nit> <title>", "add a finding Verify missed", Group::Commands, Scope::Board, on, 0), "finding"),
     cmd(b(":slots <n>", "resize the pool", Group::Commands, Scope::Board, on, 0), "slots"),
     cmd(b(":drain", "take no new work", Group::Commands, Scope::Board, on, 0), "drain"),
     cmd(b(":resume", "carry on taking new work", Group::Commands, Scope::Board, on, 0), "resume"),
@@ -611,6 +640,8 @@ const DETAIL: &[Binding] = &[
     SHIP,
     b("e", "edit: the plan, the cases or the ticket", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 80),
     b("o", "open: the file, the PR or the issue", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 50),
+    b("y", "Evidence Pack was useful", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.evidence.is_some() { Avail::On } else { Avail::Off("no Evidence Pack yet") }), 40),
+    b("n", "Evidence Pack was not useful (note)", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.evidence.is_some() { Avail::On } else { Avail::Off("no Evidence Pack yet") }), 39),
     b(
         "E",
         "pick the selected stage's engine",
@@ -760,6 +791,7 @@ const DIGEST: &[Binding] = &[
 const FLOOR: &[Binding] = &[
     b("tab / shift+tab", "focus the next / previous repo", Group::Move, Scope::Floor, on, 70),
     b("R", "refresh the numbers", Group::App, Scope::Floor, on, 60),
+    b("A", "approve a waiting base image", Group::App, Scope::Floor, on, 55),
     b("esc / F / q", "close", Group::Move, Scope::Floor, on, 20),
     cmd(b("?", "keys", Group::App, Scope::Floor, on, 100), "help"),
 ];
@@ -1331,7 +1363,7 @@ mod tests {
         assert!(draft.contains(&"R set the repo (search)".to_string()), "a draft without a repo weights R up: {draft:?}");
         assert!(!draft.iter().any(|k| k.starts_with("r ")), "nothing to send back on a draft: {draft:?}");
         let ship = names(&app_with(vec![task("t1", "awaiting_ship", true, false, true)]));
-        assert_eq!(ship[1], "a ship: approve and open the PR");
+        assert_eq!(ship[1], "a ship: publish, watch the PR");
         assert!(footer_keys(&approval_app(), Scope::Board, 7).iter().all(|b| b.menu_key().is_none()), "no menu chords in the footer");
     }
 
@@ -1372,7 +1404,7 @@ mod tests {
     #[test]
     fn completions_narrow_by_prefix_and_stop_at_the_first_space() {
         let names = |typed: &str| completions(typed).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
-        assert_eq!(names("f"), ["filter", "fold", "floor"]);
+        assert_eq!(names("f"), ["filter", "fold", "finding", "floor"]);
         assert_eq!(names("fo"), ["fold"]);
         assert!(names("filter x").is_empty());
         assert_eq!(names("").len(), commands().len());
@@ -1486,5 +1518,15 @@ mod tests {
         for scope in [Scope::Board, Scope::Detail, Scope::Pulls, Scope::Slack, Scope::Watches, Scope::Inbox, Scope::Digest, Scope::Floor] {
             assert!(readme.contains(&format!("<!-- keys:start {} -->", scope.slug())), "the README documents {scope:?}");
                 }
+    }
+
+    #[test]
+    fn the_finding_commands_parse_their_arguments() {
+        assert_eq!(crate::app::parse_dismiss("f3 not a bug"), Ok(("f3".to_string(), Some("not a bug".to_string()))));
+        assert_eq!(crate::app::parse_dismiss("f3"), Ok(("f3".to_string(), None)));
+        assert!(crate::app::parse_dismiss("  ").is_err());
+        assert_eq!(crate::app::parse_finding("nit rename x"), Ok(("nit".to_string(), "rename x".to_string())));
+        assert!(crate::app::parse_finding("huge rename x").is_err() && crate::app::parse_finding("nit").is_err());
+        assert_eq!(crate::app::parse_finding(&format!("nit {}", "x".repeat(300))).unwrap().1.len(), 200);
     }
 }

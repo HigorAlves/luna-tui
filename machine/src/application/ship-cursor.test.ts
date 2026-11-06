@@ -17,6 +17,16 @@ describe("the ship cursor", () => {
     expect(await loadCursor(dir, "t1")).toBeNull();
   });
 
+  it("loads a cursor stored with the old event labels, and the new fields are optional", async () => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(join(dir, "tasks", "t1"), { recursive: true });
+    const old = { schema: 1, pr: { slug: "o/a", number: 3 }, since: null, seen: [], threads: {}, fixRounds: 0, ciReruns: 0, rebases: 0, published: null, decisions: [{ pack: "event_class", recordId: "r1", choice: "comment", further: true }] };
+    await writeFile(join(dir, "tasks", "t1", "ship.json"), JSON.stringify(old));
+    const loaded = await loadCursor(dir, "t1");
+    expect(loaded?.decisions?.[0]?.choice).toBe("comment");
+    expect(loaded?.lastEvents).toBeUndefined();
+  });
+
   it("round-trips under tasks/<id>/ship.json", async () => {
     const cursor: ShipCursor = { ...emptyCursor({ slug: "o/a", number: 3 }), since: "2026-11-04T10:00:00Z", seen: ["comment:1"], threads: { T1: { replies: 1, lastAt: "t", fixRounds: 2 } }, ciKey: "abc:77", fixRounds: 1, published: { sha: "abc" } };
     await saveCursor(dir, "t1", cursor);

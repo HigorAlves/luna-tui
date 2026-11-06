@@ -103,3 +103,11 @@ export function fallbackCandidates(pack: Pick<Pack, "engines">, tried: Iterable<
   const done = new Set(tried);
   return (pack.engines.fallback ?? []).filter((engine) => !done.has(engine));
 }
+
+/** The engine a reviewing pack runs on when it should not share the implementer's model family: the first allowed engine of another credential owner whose
+ *  credential this machine has, with the line that says why. Null when there is none (one family's credential, or a pack that allows one family): the pack runs as it does today. */
+export function reviewerEngine(pack: Pick<Pack, "engines">, implementer: EngineId, available: (engine: EngineId) => boolean): { engine: EngineId; reason: string } | null {
+  const own = credentialOwner(implementer);
+  const engine = pack.engines.allowed.find((e) => credentialOwner(e) !== own && available(e));
+  return engine ? { engine, reason: `the reviewer runs on another model family than the implementer (${implementer}): ${engine}` } : null;
+}

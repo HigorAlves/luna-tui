@@ -1,6 +1,9 @@
 import type { CheckSpec } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
+import { SecretsMissingError } from "../../adapters/docker/docker.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { InstallFailedError } from "../install.ts";
 import { runChecks, runSweep, selectSweep } from "./sweep.ts";
 
 const check = (name: string, over: Partial<CheckSpec> = {}): CheckSpec => ({ name, run: `run-${name}`, ...over });
@@ -87,5 +90,39 @@ describe("runSweep", () => {
     await runSweep(base({ impact: async (_r: string, files: string[]) => (seen.push(files), []) }), input);
     expect(seen).toEqual([["web/a.ts"]]);
     expect(await runSweep(base({ impact: async () => { throw new Error("no graph"); } }), input)).toMatchObject({ status: "passed" });
+  });
+});
+
+describe("runChecks and what a check was refused", () => {
+  it("hands the rows a check's container was refused to onBlocked, with the check's name", async () => {
+    const rows = [{ host: "evil.example.com", port: 443, via: "connect" as const, reason: "not_listed", count: 2 }];
+    const seen: Array<[string, unknown]> = [];
+    await runChecks({ commands: [{ name: "unit", cmd: "t", argv: ["t"] }, { name: "lint", cmd: "l", argv: ["l"] }], exec: async (cmd) => ({ code: 0, stdout: "", stderr: "", ...(cmd === "t" ? { blocked: rows } : {}) }), cwd: "/w", env: {}, stage: "implementing", timeoutMs: 10_000, onBlocked: (name, found) => void seen.push([name, found]) });
+    expect(seen).toEqual([["unit", rows]]);
+  });
+});
+
+describe("runChecks and secrets", () => {
+  it("passes each check only the names it declares: the one that declares none gets none", async () => {
+    const seen: Record<string, unknown> = {};
+    await runChecks({ commands: [{ name: "db", cmd: "a", argv: ["a"], secrets: ["DB_URL"] }, { name: "plain", cmd: "b", argv: ["b"], secrets: [] }], exec: async (cmd, _a, options) => ((seen[cmd] = (options as { secrets?: string[] }).secrets), { code: 0, stdout: "", stderr: "" }), cwd: "/w", env: {}, stage: "implementing", timeoutMs: 10_000 });
+    expect(seen).toEqual({ a: ["DB_URL"], b: undefined });
+  });
+});
+
+describe("runSweep when the environment cannot run a check", () => {
+  const policy = async () => ({ checks: [{ name: "lint", run: "x", secrets: ["DB_URL"] }], services: {}, wholeSuiteMinutes: 10 });
+  const sweep = (error: Error) => runSweep({ exec: async () => { throw error; }, changedPaths: async () => null, impact: async () => [], policy }, { worktree: "/w", repoPath: "/r", env: {} });
+
+  it("returns an escalation with the step and the reason for a failed install, a missing secret and a daemon without the isolated network", async () => {
+    const install = { escalation: "env_broken", envBroken: true, step: "install", tool: "npm", reason: "x", logTail: "t", options: [] };
+    expect(await sweep(new InstallFailedError(install))).toMatchObject({ status: "failed", escalated: install });
+    const secret = await sweep(new SecretsMissingError([{ name: "DB_URL", reason: "there is no such file" }], "/f"));
+    expect(secret.escalated).toMatchObject({ escalation: "env_broken", step: "secrets", names: ["DB_URL"] });
+    expect((await sweep(new EgressUnsupportedError("old"))).escalated).toMatchObject({ escalation: "env_broken", step: "network" });
+  });
+
+  it("still throws what it does not know", async () => {
+    await expect(sweep(new Error("disk full"))).rejects.toThrow("disk full");
   });
 });

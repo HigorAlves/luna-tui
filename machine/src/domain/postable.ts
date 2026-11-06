@@ -18,3 +18,7 @@ export function flattenLinks(text: string): string {
 
 /** Whether the text carried a token-shaped string: such a drafted text is never posted. */
 export const carriesSecret = (text: string): boolean => redact(text) !== text;
+
+/** A reply the machine built itself from fixed words and its own board link (the merged-card notice): `mergedNotice` flattened its words already, and
+ *  flattening it again would break the link it is there to carry. Anything else a person or a model wrote goes through `postable`. */
+export const isMachineNotice = (payload: Record<string, unknown>): boolean => payload.by === "machine" && payload.kind === "merged";

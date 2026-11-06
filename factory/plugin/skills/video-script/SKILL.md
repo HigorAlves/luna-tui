@@ -32,7 +32,7 @@ Scene ids are lowercase letters, digits, `-` and `_`. Scenes are contiguous: eac
 
 ## Rules the machine checks (an error stops the film)
 
-- One `demo` scene per approved scenario, titled verbatim. Duration at most 240 s.
+- One `demo` scene per approved scenario, titled verbatim. Duration at most the budget the prompt names (`evidence.video_budget_s`, 240 s by default).
 - A `hook` text starts by 3 s; px at least 84 for the hook and 48 for `cta` and `term` (at 1080).
 - A digit in any on-screen text or caption needs a `facts` entry that contains it, or the text must say `SCHEMATIC` or `Example data`.
 

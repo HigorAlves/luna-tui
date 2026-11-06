@@ -23,13 +23,14 @@ const pack = (over: Partial<EvidencePack> = {}): EvidencePack => ({
 
 describe("shippedEvent", () => {
   it("is built from the task's pack and the merge, with web urls only and no host path", () => {
-    const event = shippedEvent({ title: "Export CSV", evidence: pack() }, { merged: { sha: "m".repeat(40), by: "machine" }, prUrl: "https://github.com/o/a/pull/3", number: 3 });
+    const event = shippedEvent({ title: "Export CSV", evidence: pack() }, { merged: { sha: "m".repeat(40), by: "machine", method: "rebase" }, prUrl: "https://github.com/o/a/pull/3", number: 3 });
     expect(event).toEqual({
       title: "Export CSV",
       prUrl: "https://github.com/o/a/pull/3",
       number: 3,
       mergedSha: "m".repeat(40),
       by: "machine",
+      method: "rebase",
       format: "video",
       howToVerify: "Open the cart and press Export.",
       media: [{ kind: "video", label: "Walkthrough", url: "https://github.com/o/a/releases/download/luna-evidence/t1.mp4" }],
@@ -60,6 +61,11 @@ describe("shippedStream", () => {
   it("makes the stream message from a logged event, and nothing from any other", () => {
     const payload = { title: "t", prUrl: "u", number: 3, mergedSha: null, by: "machine", format: null, howToVerify: null, media: [] };
     expect(shippedStream({ taskId: "t1", kind: "task.shipped", payload, at: new Date("2026-11-04T12:00:00Z") })).toEqual({
+      type: "task.shipped",
+      shipped: { id: "t1", title: "t", prUrl: "u", number: 3, mergedSha: null, format: null, howToVerify: null, media: [], at: "2026-11-04T12:00:00.000Z" },
+    });
+    // the pipeline logs ship.merged now; the board still decodes the same stream message
+    expect(shippedStream({ taskId: "t1", kind: "ship.merged", payload: { ...payload, method: "squash" }, at: new Date("2026-11-04T12:00:00Z") })).toEqual({
       type: "task.shipped",
       shipped: { id: "t1", title: "t", prUrl: "u", number: 3, mergedSha: null, format: null, howToVerify: null, media: [], at: "2026-11-04T12:00:00.000Z" },
     });

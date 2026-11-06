@@ -42,7 +42,11 @@
           ],
           "howToVerify": "Open the cart and click Export."
         },
-        "myReplies": 0
+        "myReplies": 0,
+        "reading": {
+          "asks": "What the file holds for an empty cart.",
+          "proposedFix": ""
+        }
       }
     }
   },

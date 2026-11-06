@@ -3,26 +3,26 @@
   "pack": "event_class",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T12:09:43.661Z",
+  "at": "2026-11-06T06:47:54.771Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 4,
-    "passed": 3,
-    "passRate": 0.75,
+    "cases": 7,
+    "passed": 6,
+    "passRate": 0.8571428571428571,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2141,
+    "meanDurationMs": 2635.8571428571427,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
+      "n": 7,
+      "labelled": 6,
       "accuracy": 1,
       "actedOnAccuracy": 1,
       "coverage": 1,
-      "brier": 0.0001000000000000002,
-      "ece": 0.01000000000000012,
-      "meanConfidence": 0.9850000000000001,
+      "brier": 0.00015000000000000026,
+      "ece": 0.011666666666666603,
+      "meanConfidence": 0.9885714285714287,
       "overconfident": 0
     }
   },
@@ -44,12 +44,38 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2177,
+      "durationMs": 3349,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
         "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ci-assertion-in-the-changed-test",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"ci_real\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2268,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.98,
         "verdict": "proceed"
       }
     },
@@ -70,7 +96,59 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 1943,
+      "durationMs": 2094,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ci-timeout-in-an-unrelated-job",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"ci_flaky\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3601,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "comment-says-rerun-ci",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"review_comment\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2437,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
@@ -91,17 +169,17 @@
         {
           "check": "event.confidence within 0..0.85",
           "pass": false,
-          "detail": "found 0.97"
+          "detail": "found 0.99"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 1982,
+      "durationMs": 2168,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.97,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     },
@@ -115,14 +193,14 @@
       },
       "checks": [
         {
-          "check": "event.choice = \"comment\"",
+          "check": "event.choice = \"review_comment\"",
           "pass": true,
           "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2462,
+      "durationMs": 2534,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {

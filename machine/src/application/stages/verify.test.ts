@@ -1,3 +1,6 @@
+import { RepoImageError } from "../repo-images.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { InstallFailedError } from "../install.ts";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +10,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { findingId } from "@hardness/contracts";
 import type { Decide } from "./check-decide.ts";
 import { verifyRunner } from "./verify.ts";
 
@@ -38,6 +42,8 @@ function setup(opts: {
   services?: Record<string, { image: string; exports?: Record<string, string> }>;
   decide?: Decide | null;
   decisions?: Record<string, Record<string, { proceed?: number; flag?: number }>>;
+  /** The repo's `verify` section as the machine reads it. */
+  verify?: { coverage_drop_max?: number; mutation?: { command: string | null; min_score: number } };
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
@@ -52,7 +58,7 @@ function setup(opts: {
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
-    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {}, decisions: opts.decisions ?? {} }),
+    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {}, decisions: opts.decisions ?? {}, ...(opts.verify ? { verify: opts.verify } : {}) }),
     ...("decide" in opts ? { decide: opts.decide } : {}),
     changedPaths: async () => ("changed" in opts ? opts.changed! : null),
     ...(opts.diffSince ? { diffSince: opts.diffSince } : {}),
@@ -70,14 +76,57 @@ function setup(opts: {
 }
 
 describe("verifying stage", () => {
-  it("fails on a red check with its tail as a test finding, and never calls the pack", async () => {
+  describe("findings as the diagram draws them", () => {
+    const answer = (findings: unknown[]): StageResult => ({ outcome: "pass", detail: { answer: { summary: "s", findings } } });
+
+    it("gives each finding an id and merges duplicates, the highest level winning; an old-shape finding still reads", async () => {
+      const old = finding({ severity: "nit", confidence: 0.4 });
+      const again = finding({ severity: "blocker", confidence: 0.9 });
+      const other = finding({ line: 40, title: "other", severity: "should_fix", criterion_ref: "C2", category: "missing_criterion" });
+      const { run, context } = setup({ pack: answer([old, again, other]) });
+      const result = await run(context);
+      const found = result.findings as Array<{ id: string; severity: string; title: string; criterion_ref?: string }>;
+      expect(found).toHaveLength(2);
+      expect(found[0]).toMatchObject({ id: findingId(old as never), severity: "blocker", title: "off by one" });
+      expect(found[1]).toMatchObject({ id: findingId(other as never), criterion_ref: "C2" });
+    });
+
+    it("fails only on a blocker; should_fix and nit ride on the report", async () => {
+      const soft = setup({ pack: answer([finding({ severity: "should_fix", confidence: 1 }), finding({ line: 9, title: "n", severity: "nit", confidence: 1 })]) });
+      const passed = await soft.run(soft.context);
+      expect(passed.outcome).toBe("pass");
+      expect(passed.findings).toHaveLength(2);
+      const hard = setup({ pack: answer([finding({ severity: "blocker", confidence: 0.9 })]) });
+      expect((await hard.run(hard.context)).outcome).toBe("fail");
+    });
+  });
+
+  it("reviews first: a blocker in the review ends the stage before any check runs", async () => {
+    const { run, context, runPack, exec } = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "fail", summary: "broken", findings: [finding()] } } } });
+    const result = await run(context);
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(exec).not.toHaveBeenCalled();
+    expect(result.outcome).toBe("fail");
+    expect((result.detail as { step: string }).step).toBe("review");
+    expect(result.findings).toEqual([expect.objectContaining({ title: "off by one" })]);
+  });
+
+  it("a red check after a clean review fails with its output as a finding of category tests", async () => {
+    const { run, context, runPack } = setup({ checks: { "pnpm run test": { code: 1, stdout: "boom", stderr: "" } } });
+    const result = await run(context);
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("fail");
+    expect(result.findings).toEqual([expect.objectContaining({ category: "tests", body: "boom" })]);
+  });
+
+  it("fails on a red check with its tail as a test finding, after the review", async () => {
     const tail = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
     const { run, context, runPack, stateDir } = setup({
       checks: { "pnpm run test": { code: 1, stdout: tail, stderr: "" } },
     });
     const result = await run(context);
     expect(result.outcome).toBe("fail");
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
     const detail = result.detail as { step: string; failed: Array<{ name: string; tail: string; cmd: string }> };
     expect(detail.step).toBe("checks");
     expect(detail.failed).toHaveLength(1);
@@ -99,7 +148,7 @@ describe("verifying stage", () => {
     const result = await run(context);
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ reason: expect.stringMatching(/pnpm run test.*runner image/) });
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
   });
 
   it("runs every check as you: the identity git resolves for the repo rides into the check container", async () => {
@@ -205,16 +254,22 @@ describe("verifying stage", () => {
     };
     const lunaChecks = [{ name: "tests", run: "pnpm test", coverage: "coverage/lcov.info" }];
 
-    it("reads the report after a passing check, records it, adds a test finding per file with uncovered lines and hands the summary to the verifier", async () => {
+    it("reads the report after a passing check, records it, adds a test finding per file with uncovered lines and leaves the verifier to read the change first", async () => {
       const { run, context, runPack } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff });
       const result = await run(context);
       const summary = { files: [{ path: "src/a.ts", added: 4, covered: 3, uncovered: [12] }], total: { added: 4, covered: 3 }, report: "coverage/lcov.info" };
       expect(result.outcome).toBe("pass");
       expect(result.detail).toMatchObject({ coverage: summary });
-      expect(result.findings).toEqual([
-        expect.objectContaining({ path: "src/a.ts", line: 12, severity: "test", title: "coverage: 3 of 4 added lines in src/a.ts are not covered", body: "uncovered: 12", confidence: 0.9 }),
-      ]);
-      expect(runPack).toHaveBeenCalledWith(context, { coverage: summary });
+      // 3 of 4 added lines are covered: above the default bar (1 - 0.5), so the numbers ride on the report and no finding is raised.
+      expect(result.findings).toEqual([]);
+      expect(runPack).toHaveBeenCalledWith(context, {}); // the review runs before the suite, so it is not given the coverage
+    });
+
+    it("raises one should_fix finding of category tests naming the files when patch coverage is under 1 - verify.coverage_drop_max", async () => {
+      const { run, context } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff, verify: { coverage_drop_max: 0.1 } });
+      const result = await run(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "should_fix", category: "tests", path: "src/a.ts", body: expect.stringContaining("uncovered: src/a.ts (12)") })]);
     });
 
     it("notes a report that is missing and still passes", async () => {
@@ -245,7 +300,7 @@ describe("verifying stage", () => {
     it("reads no report when the check failed", async () => {
       const { run, context, runPack } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff, checks: { "sh -c pnpm test": { code: 1, stdout: "x", stderr: "" } } });
       const result = await run(context);
-      expect(runPack).not.toHaveBeenCalled();
+      expect(runPack).toHaveBeenCalledTimes(1);
       expect(result.detail).not.toHaveProperty("coverage");
     });
   });
@@ -277,20 +332,21 @@ describe("verifying stage", () => {
       expect(first[1].excerpt).not.toContain("line 19");
       const detail = result.detail as { classified: Array<Record<string, unknown>>; calibration: unknown };
       expect(detail.classified).toEqual([
-        { title: "first", path: "src/a.ts", line: 10, severity: "bug", classified: "blocker", confidence: 0.9, verdict: "proceed" },
-        { title: "second", path: "src/a.ts", line: 20, severity: "nit", classified: "should_fix", confidence: 0.9, verdict: "proceed" },
+        { id: findingId(findings[0] as never), title: "first", path: "src/a.ts", line: 10, severity: "bug", classified: "blocker", confidence: 0.9, verdict: "proceed" },
+        { id: findingId(findings[1] as never), title: "second", path: "src/a.ts", line: 20, severity: "nit", classified: "should_fix", confidence: 0.9, verdict: "proceed" },
       ]);
       expect(detail.calibration).toEqual({ agree: 1, disagree: 1, skipped: 0 });
     });
 
-    it("classifies at most the six most confident findings", async () => {
-      const findings = Array.from({ length: 7 }, (_, i) => finding({ path: "src/a.ts", line: i + 1, title: `f${i}`, severity: "nit", confidence: 0.5 + i / 20 }));
+    it("classifies every merged finding, twenty at most, the most severe first, each row by its id", async () => {
+      const findings = Array.from({ length: 22 }, (_, i) => finding({ path: "src/a.ts", line: i * 10 + 1, title: `f${i}`, severity: i === 21 ? "blocker" : "nit", confidence: 0.5 }));
       const decide = vi.fn<Decide>(async () => choose("nit"));
       const { run, context } = setup({ worktree: worktree(), pack: review(findings), decide });
       const result = await run(context);
-      expect(decide).toHaveBeenCalledTimes(6);
-      const titles = (result.detail as { classified: Array<{ title: string }> }).classified.map((c) => c.title);
-      expect(titles).not.toContain("f0");
+      expect(decide).toHaveBeenCalledTimes(20);
+      const rows = (result.detail as { classified: Array<{ title: string; id: string }> }).classified;
+      expect(rows[0]).toMatchObject({ title: "f21", id: findingId(findings[21] as never) });
+      expect(rows.map((c) => c.title)).not.toContain("f20");
     });
 
     it("keeps the excerpt inside the worktree: a path that climbs out gets none", async () => {
@@ -330,6 +386,70 @@ describe("verifying stage", () => {
     });
   });
 
+  describe("the mutation hook", () => {
+    const lunaChecks = [{ name: "tests", run: "pnpm test" }];
+    const mutation = (command: string | null) => ({ mutation: { command, min_score: 0.6 } });
+
+    it("runs the repository's command in the sandbox after the checks and makes a should_fix finding of a score under the minimum", async () => {
+      const { run, context, calls } = setup({ lunaChecks, verify: mutation("pnpm stryker run"), checks: { "sh -c pnpm stryker run": { code: 0, stdout: "killed 3\nmutation score: 0.4\n", stderr: "" } } });
+      const result = await run(context);
+      expect(calls.map((c) => c.join(" "))).toEqual(["sh -c pnpm test", "sh -c pnpm stryker run"]);
+      expect(result.outcome).toBe("pass");
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "should_fix", category: "tests", title: "mutation score 40% is below the 60% the repository asks for" })]);
+      expect(result.detail).toMatchObject({ mutation: { score: 0.4 } });
+    });
+
+    it("gives no score for a mutation run that exits non-zero, whatever it printed", async () => {
+      const s = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 2, stdout: "mutation score: 0.1", stderr: "" } } });
+      const result = await s.run(s.context);
+      expect(result.findings).toEqual([]);
+      expect((result.detail as { checks: unknown[] }).checks).toContainEqual({ name: "mutation", note: "the mutation run printed no score" });
+    });
+
+    it("raises nothing at or over the minimum, and notes a run that printed no score", async () => {
+      const ok = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 0, stdout: "mutation score: 90%", stderr: "" } } });
+      expect((await ok.run(ok.context)).findings).toEqual([]);
+      const none = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 0, stdout: "done", stderr: "" } } });
+      const result = await none.run(none.context);
+      expect(result.findings).toEqual([]);
+      expect((result.detail as { checks: unknown[] }).checks).toContainEqual({ name: "mutation", note: "the mutation run printed no score" });
+    });
+
+    it("runs in the card's repository: its image, list and install, like every other check (no call on the machine's bare defaults)", async () => {
+      const s = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 0, stdout: "mutation score: 90%", stderr: "" } } });
+      await s.run(s.context);
+      const options = s.exec.mock.calls.map((call) => call[2] as { repoPath?: string });
+      expect(options.map((o) => o.repoPath)).toEqual(["/repo", "/repo"]);
+    });
+
+    it("escalates as env_broken when the install before the mutation run fails, and says what its container was refused", async () => {
+      const detail = { escalation: "env_broken", envBroken: true, step: "install", reason: "x", options: [] };
+      const rows = [{ host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }];
+      const emitted: Array<[string, Record<string, unknown>]> = [];
+      const exec = vi.fn(async (_c: string, args: string[]) => {
+        if (args.join(" ") === "-c m") throw new InstallFailedError(detail);
+        return { code: 0, stdout: "ok", stderr: "", blocked: rows };
+      });
+      const runner = verifyRunner({
+        exec: exec as never, runPack: null, stateDir: mkdtempSync(join(tmpdir(), "verify-mut-")), detect: async () => ({ test: ["t"] }) as never,
+        gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null,
+        policy: async () => ({ checks: lunaChecks, services: {}, verify: mutation("m") }),
+      });
+      const ctx = { task: { id: "t1", worktreePath: "/wt", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal, emit: async (kind: string, payload: Record<string, unknown>) => void emitted.push([kind, payload]) } as unknown as StageContext;
+      expect(await runner(ctx)).toMatchObject({ outcome: "escalated", detail });
+      expect(emitted).toContainEqual(["sandbox.egress_blocked", expect.objectContaining({ step: "check", host: "evil.example.com" })]);
+    });
+
+    it("runs nothing when the command is unset, and not at all after a red check", async () => {
+      const unset = setup({ lunaChecks, verify: mutation(null) });
+      await unset.run(unset.context);
+      expect(unset.calls).toEqual([["sh", "-c", "pnpm test"]]);
+      const red = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c pnpm test": { code: 1, stdout: "x", stderr: "" } } });
+      await red.run(red.context);
+      expect(red.calls.map((c) => c.join(" "))).toEqual(["sh -c pnpm test"]);
+    });
+  });
+
   it("names a failed luna.yaml check by its own name, with its tail, so the finding reads like the file", async () => {
     const { run, context, runPack } = setup({
       lunaChecks: [{ name: "board tests", run: "cargo test", cwd: "board" }],
@@ -339,7 +459,7 @@ describe("verifying stage", () => {
     expect(result.outcome).toBe("fail");
     expect(result.detail).toMatchObject({ summary: "board tests failed", error: expect.stringContaining("cargo test (in board)") });
     expect(result.findings).toEqual([expect.objectContaining({ severity: "test", title: "board tests failed", body: "test x ... FAILED" })]);
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
   });
 
   it("asks for the repo's services beside every check, so a suite that needs a database gets one", async () => {
@@ -357,9 +477,9 @@ describe("verifying stage", () => {
     const result = await run(context);
     expect(runPack).toHaveBeenCalledOnce();
     expect(result.outcome).toBe("fail");
-    expect(result.findings).toEqual([f]);
-    expect(result.detail).toMatchObject({ step: "review", verdict: "fail", summary: "bug", findings: [f] });
-    expect((result.detail as { checks: Array<{ name: string }> }).checks.map((c) => c.name)).toEqual(["test", "lint"]);
+    expect(result.findings).toEqual([expect.objectContaining({ ...f, id: findingId(f as never) })]);
+    expect(result.detail).toMatchObject({ step: "review", verdict: "fail", summary: "bug", findings: [expect.objectContaining({ title: f.title })] });
+    expect(result.detail).not.toHaveProperty("checks");
   });
 
   it("passes when checks and the review pass", async () => {
@@ -371,7 +491,7 @@ describe("verifying stage", () => {
 
   it("computes the verdict mechanically when the answer has none", async () => {
     const low = finding({ confidence: 0.5 });
-    const nit = finding({ severity: "nit" });
+    const nit = finding({ severity: "nit", line: 50, title: "naming" });
     const mk = (findings: unknown[]) => ({ outcome: "pass" as const, detail: { answer: { findings } }, findings: [] });
     expect((await setup({ pack: mk([low, nit]) }).run(setup({}).context)).outcome).toBe("pass");
     const s = setup({ pack: mk([finding({ severity: "security" })]) });
@@ -383,7 +503,7 @@ describe("verifying stage", () => {
     const s = setup({ pack: { outcome: "pass", detail: {}, findings: [f] } });
     const result = await s.run(s.context);
     expect(result.outcome).toBe("fail");
-    expect(result.findings).toEqual([f]);
+    expect(result.findings).toEqual([expect.objectContaining({ ...f, id: findingId(f as never) })]);
   });
 
   it("skips the checks with a note when no test command is detected, and still runs the pack", async () => {
@@ -409,7 +529,7 @@ describe("verifying stage", () => {
       checks: { "pnpm run lint": { code: 1, stdout: "", stderr: "eslint: 3 errors" } },
     });
     const result = await run(context);
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
     expect(result.outcome).toBe("fail");
   });
 
@@ -448,6 +568,19 @@ describe("verifying stage", () => {
     const { run, context } = setup({ checks: { "pnpm run test": { code: 1, stdout: "boom", stderr: "" } } });
     const result = await run(context);
     expect((result.detail as { error: string }).error).toBe("`pnpm run test` failed:\nboom");
+  });
+
+  it("fails on a confident blocker whatever the verifier's own verdict says, and never runs the suite", async () => {
+    const s = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "pass", summary: "fine", findings: [finding({ severity: "blocker", confidence: 0.95 })] } } } });
+    const result = await s.run(s.context);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ verdict: "fail", step: "review" });
+    expect(s.exec).not.toHaveBeenCalled();
+  });
+
+  it("fails on a confident blocker when the pack only asked a question", async () => {
+    const s = setup({ pack: { outcome: "needs_input", detail: { answer: { findings: [finding({ severity: "security", confidence: 0.9 })] }, questions: [{ q: "?" }] } } });
+    expect((await s.run(s.context)).outcome).toBe("fail");
   });
 
   it("treats a pack that asks questions as a pass with a note", async () => {
@@ -516,6 +649,171 @@ describe("verifying stage", () => {
     const result = await s.run(s.context);
     expect(result.outcome).toBe("fail");
     expect(result.detail).toMatchObject({ error: "aborted" });
-    expect(s.runPack).not.toHaveBeenCalled();
+    expect(s.runPack).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("verify on a fresh clone", () => {
+  const card = { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" };
+  const build = (outcome: "pass" | "fail" | "escalated", broughtBack: { ok: boolean; reason?: string } = { ok: true }) => {
+    const seen = { cwd: [] as (string | undefined)[], packPath: "", removed: [] as string[], kept: [] as string[][], back: [] as string[][], made: [] as string[][] };
+    const runner = verifyRunner({
+      exec: async (_c, _a, options) => (seen.cwd.push(options.cwd), { code: 0, stdout: "", stderr: "" }),
+      runPack: async (context) => {
+        seen.packPath = context.task.worktreePath!;
+        return { outcome, detail: outcome === "pass" ? { answer: { verdict: "pass", findings: [], results: [], summary: "ok" } } : { reason: "r" }, workspace: { branch: "task/x", worktreePath: context.task.worktreePath! } } as StageResult;
+      },
+      stateDir: "/tmp/state",
+      detect: async () => ({ test: ["pnpm", "test"] }) as never,
+      gitIdentity: async () => ({ name: "a", email: "a@b" }),
+      changedPaths: async () => null,
+      fresh: {
+        make: async (path, branch, runId) => (seen.made.push([path, branch, runId]), { path: "/card.verify", commit: "a".repeat(40) }),
+        bringBack: async (path, freshPath, branch, from) => (seen.back.push([path, freshPath, branch, from]), broughtBack),
+        remove: async (path) => void seen.removed.push(path),
+        keep: async (path, taskId, runId) => void seen.kept.push([path, taskId, runId]),
+      },
+    });
+    const context = { task: card, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    return { runner, context, seen };
+  };
+
+  it("runs the checks and the review in the fresh clone, never in the card's folder, and names the commit it was made at", async () => {
+    const { runner, context, seen } = build("pass");
+    const result = await runner(context);
+    expect(seen.made).toEqual([["/card", "task/x", "run-1"]]);
+    expect(seen.cwd).toEqual(["/card.verify"]);
+    expect(seen.packPath).toBe("/card.verify");
+    expect(result.detail).toMatchObject({ freshClone: { commit: "a".repeat(40) } });
+    // The fresh folder is never the task's workspace.
+    expect(result.workspace).toBeUndefined();
+  });
+
+  it("brings the commits back after a pass, and removes the folder", async () => {
+    const { runner, context, seen } = build("pass");
+    expect((await runner(context)).outcome).toBe("pass");
+    expect(seen.back).toEqual([["/card", "/card.verify", "task/x", "a".repeat(40)]]);
+    expect(seen.removed).toEqual(["/card.verify"]);
+  });
+
+  it("fails the stage when what Verify left cannot come back as a fast-forward", async () => {
+    const { runner, context } = build("pass", { ok: false, reason: "not a fast-forward" });
+    const result = await runner(context);
+    expect(result.outcome).toBe("fail");
+    expect(JSON.stringify(result.detail)).toContain("not a fast-forward");
+  });
+
+  it("brings nothing back after a failure, and keeps the folder on an escalation", async () => {
+    const failed = build("fail");
+    await failed.runner(failed.context);
+    expect(failed.seen.back).toEqual([]);
+    expect(failed.seen.removed).toEqual(["/card.verify"]);
+    const escalated = build("escalated");
+    await escalated.runner(escalated.context);
+    expect(escalated.seen.back).toEqual([]);
+    expect(escalated.seen.removed).toEqual([]);
+    // Kept folders are registered, so the keep ends after sandbox.keep_hours.
+    expect(escalated.seen.kept).toEqual([["/card.verify", "t1", "run-1"]]);
+    expect(failed.seen.kept).toEqual([]);
+  });
+
+  describe("the environment comparison", () => {
+    const recorded = { hash: "h", image: "sha256:build", commit: "a".repeat(40), lockfiles: { "Cargo.lock": "h2" } };
+    const runnerFor = (current: { image: string; lockfiles: Record<string, string> }, built: typeof recorded | null = recorded) => {
+      const pack = vi.fn(async () => ({ outcome: "pass", detail: { answer: { verdict: "pass", findings: [], results: [], summary: "ok" } } }) as StageResult);
+      const runner = verifyRunner({
+        exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+        runPack: pack,
+        stateDir: "/tmp/state",
+        detect: async () => ({ test: ["t"] }) as never,
+        gitIdentity: async () => ({ name: "a", email: "a@b" }),
+        changedPaths: async () => null,
+        fresh: { make: async () => ({ path: "/card.verify", commit: recorded.commit }), bringBack: async () => ({ ok: true }), remove: async () => {} },
+        buildEnv: async () => built,
+        envOf: async (_path, commit) => ({ ...current, commit, hash: "x" }),
+      });
+      const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+      return { runner, context, pack };
+    };
+
+    it("says matched when the image and the lockfiles are the ones Build recorded", async () => {
+      const { runner, context } = runnerFor({ image: "sha256:build", lockfiles: { "Cargo.lock": "h2" } });
+      const result = await runner(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).toMatchObject({ envReproduction: "matched" });
+    });
+
+    it("fails with a blocker finding, category env, naming both images, before the review runs", async () => {
+      const { runner, context, pack } = runnerFor({ image: "sha256:other", lockfiles: { "Cargo.lock": "h2" } });
+      const result = await runner(context);
+      expect(result.outcome).toBe("fail");
+      expect(pack).not.toHaveBeenCalled();
+      expect(result.findings).toMatchObject([{ severity: "blocker", category: "env", body: expect.stringContaining("sha256:build") }]);
+      expect(result.findings![0]!.body).toContain("sha256:other");
+      expect(result.detail).toMatchObject({ envReproduction: expect.stringContaining("the runner image differs") });
+    });
+
+    it("fails on a lockfile that differs at the same commit", async () => {
+      const { runner, context } = runnerFor({ image: "sha256:build", lockfiles: { "Cargo.lock": "h9" } });
+      expect(await runner(context)).toMatchObject({ outcome: "fail", findings: [{ category: "env" }] });
+    });
+
+    it("compares nothing when Build recorded nothing", async () => {
+      const { runner, context } = runnerFor({ image: "sha256:other", lockfiles: {} }, null);
+      const result = await runner(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).not.toHaveProperty("envReproduction");
+    });
+  });
+});
+
+describe("with no sandbox to run the repository's checks in", () => {
+  it("runs nothing on the host and escalates as an environment problem", async () => {
+    const pack = vi.fn();
+    const runner = verifyRunner({ exec: null, runPack: pack, stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    const result = await runner(context);
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", reason: expect.stringContaining("never run on the host") } });
+    expect(pack).not.toHaveBeenCalled();
+  });
+});
+
+/** A review that finds nothing: Verify reviews first (12a), so a test of what the checks do needs one that lets the suite run. */
+const passingReview = vi.fn(async () => ({ outcome: "pass" as const, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } }));
+
+describe("when the repository's image cannot be built while a check runs", () => {
+  it("escalates as an environment problem with the reason, not as an exception", async () => {
+    const exec = async () => { throw new RepoImageError("step 3 failed: no such package"); };
+    const runner = verifyRunner({ exec: exec as never, runPack: passingReview, stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    expect(await runner(context)).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, reason: expect.stringContaining("no such package") } });
+  });
+});
+
+describe("the network a check runs on", () => {
+  const base = { runPack: passingReview, stateDir: mkdtempSync(join(tmpdir(), "verify-net-")), detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null };
+  const ctx = (emit?: StageContext["emit"]) => ({ task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal, ...(emit ? { emit } : {}) }) as unknown as StageContext;
+
+  it("escalates as env_broken at step network when the daemon cannot make the isolated one", async () => {
+    const runner = verifyRunner({ ...base, exec: (async () => { throw new EgressUnsupportedError("old daemon"); }) as never });
+    expect(await runner(ctx())).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28") } });
+  });
+
+  it("emits what a check's container was refused, as a check row", async () => {
+    const rows = [{ host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const runner = verifyRunner({ ...base, exec: (async () => ({ code: 0, stdout: "ok", stderr: "", blocked: rows })) as never });
+    await runner(ctx(async (kind, payload) => void emitted.push([kind, payload])));
+    expect(emitted).toContainEqual(["sandbox.egress_blocked", { step: "check", host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }]);
+  });
+});
+
+describe("when the install before a check fails", () => {
+  it("escalates as env_broken at step install with the step's own detail", async () => {
+    const detail = { escalation: "env_broken", envBroken: true, step: "install", tool: "npm", lockfile: "package-lock.json", reason: "x", logTail: "boom", options: [] };
+    const exec = async () => { throw new InstallFailedError(detail); };
+    const runner = verifyRunner({ exec: exec as never, runPack: passingReview, stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    expect(await runner(context)).toMatchObject({ outcome: "escalated", detail });
   });
 });

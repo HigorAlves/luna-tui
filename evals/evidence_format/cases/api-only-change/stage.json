@@ -50,7 +50,8 @@
       "videoImage": true,
       "changed": [
         "src/api/pricing.ts"
-      ]
+      ],
+      "checks": 4
     }
   },
   "limits": {

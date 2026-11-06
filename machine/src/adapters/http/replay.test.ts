@@ -3,6 +3,7 @@
 import type { StreamMessage } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { previewOn } from "../../test/policies.ts";
 
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
@@ -29,6 +30,7 @@ beforeEach(async () => {
   bus = new Bus();
   // As main.ts does: a created or moved task is published whole.
   pipeline = new Pipeline(db, stubs.runnerFor, {
+    policies: previewOn,
     inline: true,
     hasConfig: () => true,
     onEvent: (event) => {
@@ -139,7 +141,7 @@ describe("GET /events?since=", () => {
 
   it("reads it all from Postgres, so a new machine replays the same", async () => {
     await newTask("a");
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     const messages = listen("/events?since=0");
     await until(() => ready(messages), "ready");
     expect(changes(messages)).toEqual(["a"]);

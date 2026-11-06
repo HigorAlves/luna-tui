@@ -5,7 +5,7 @@ import { carriesSecret, flattenLinks, postable } from "./postable.ts";
 
 describe("postable", () => {
   it("shows a link's address in the open and drops an image", () => {
-    expect(postable("See [the docs](https://evil.example/login) now")).toBe("See the docs (https://evil.example/login) now");
+    expect(postable("See [the docs](https://evil.example/login) now")).toBe("See the docs (https\u200b://evil.example/login) now");
     expect(postable("before ![tracking pixel](https://evil.example/p.png) after")).toBe("before  after".replace("  ", " "));
     expect(flattenLinks("![a](http://x) [b](http://y)")).toBe(" b (http://y)");
   });
@@ -13,6 +13,12 @@ describe("postable", () => {
   it("still flattens lines, mentions, issue references and HTML, and redacts a token", () => {
     expect(postable("a\nb @bob #12 <b>x</b>")).toBe("a b @\u200bbob #\u200b12 &lt;b&gt;x&lt;/b&gt;");
     expect(postable(`key ${["ghp", "a".repeat(36)].join("_")}`)).toBe("key [redacted]");
+  });
+
+  it("leaves nothing GitHub would turn into a link in a bare address, a www. address or a labelled link", () => {
+    const out = postable("see https://evil.example/a and www.evil.example/b and [the docs](https://evil.example/c) and ![px](http://evil.example/p.png) and <https://evil.example/d> and GH-7");
+    expect(out).not.toMatch(/https?:\/\/|\bwww\.|\]\(|GH-\d/i);
+    expect(out).toContain("evil.example/a");
   });
 
   it("leaves no live link or image, however the label is written", () => {
@@ -26,7 +32,7 @@ describe("postable", () => {
     // A reference definition, which would arm a later `[a]`.
     expect(postable("[a]: https://evil.example/e")).not.toMatch(/\]:/);
     // The address stays readable.
-    expect(postable("[click\nhere](https://evil.example/a)")).toContain("https://evil.example/a");
+    expect(postable("[click\nhere](https://evil.example/a)")).toContain("https\u200b://evil.example/a");
   });
 
   it("does not backtrack on a long run of brackets", () => {

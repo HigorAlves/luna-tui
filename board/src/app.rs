@@ -97,6 +97,8 @@ pub struct FloorState {
     pub d30: Option<Metrics>,
     /// One row per repo over 7d; the table under the numbers.
     pub repos: Vec<RepoMetrics>,
+    /// Each repository's image and graph (`GET /repos`); empty from a machine without it.
+    pub health: Vec<crate::model::RepoHealth>,
     /// 0 is every repo; `i` is `repos[i - 1]`, and the numbers above are that repo's.
     pub cursor: usize,
     /// How fast you answer on Slack, 7d and 30d; None until both fetches succeed.
@@ -269,6 +271,8 @@ pub enum Mode {
     },
     /// `N` at the plan gate: the comment a rejection carries (required: the card ends, archived as rejected).
     Reject { id: String, text: String },
+    /// `n` on a card with an Evidence Pack: why it was not useful (a note is optional).
+    EvidenceNote { id: String, text: String },
     /// `Z` on a ticket: pick why it is archived; enter archives it.
     ArchiveReason { id: String, cursor: usize },
     /// `E` on an escalated ticket: pick the reason the escalation really had; enter sends the correction.
@@ -1647,10 +1651,10 @@ impl App {
                 }
             }
             'S' => {
-                if task.state == "awaiting_ship" {
+                if task.state == "awaiting_ship" && task.waiting_on_you {
                     return self.advance(id);
                 }
-                self.notify("nothing waiting to ship on this ticket", false);
+                self.notify(if task.state == "awaiting_ship" { "the machine is watching the PR; nothing to ship yet" } else { "nothing waiting to ship on this ticket" }, false);
             }
             'e' => {
                 let in_popup = matches!(&self.mode, Mode::Detail(open) if open == id);
@@ -1663,16 +1667,25 @@ impl App {
                     self.open_ticket_editor(id);
                 }
             }
+            'y' | 'n' => {
+                if task.evidence.is_none() {
+                    self.notify("this ticket has no Evidence Pack yet", false);
+                } else if key == 'y' {
+                    self.act(|m| m.evidence_feedback(id, true, None), "noted: the pack was useful");
+                } else {
+                    self.mode = Mode::EvidenceNote { id: id.to_string(), text: String::new() };
+                }
+            }
             'R' => self.open_repo_picker(id),
             'N' => {
                 if crate::keys::rejectable(self, &task) {
                     self.mode = Mode::Reject { id: id.to_string(), text: String::new() };
                 } else {
-                    self.notify("only the plan gate rejects", false);
+                    self.notify("only the plan gate and the release question reject", false);
                 }
             }
             'r' => {
-                if crate::keys::sendable_back(&task) {
+                if crate::keys::sendable_back_now(self, &task) {
                     self.mode = Mode::Reason {
                         id: id.to_string(),
                         approve: false,
@@ -1917,6 +1930,7 @@ impl App {
             Mode::Command { .. } => self.handle_command(key),
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::Reject { .. } => self.handle_reject(key),
+            Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
                 self.handle_confirm(key, &id)
@@ -1959,6 +1973,7 @@ impl App {
         let rows = if focused { Some(self.machine.metrics_for("7d", None, Some("repo"))) } else { None };
         // Engines are a bonus too: a machine from before them answers groupBy=engine with a 400.
         let by_engine = self.machine.metrics_for("7d", repo.as_ref().map(|r| r.as_deref()), Some("engine")).ok().and_then(|m| m.by_engine);
+        let health = self.machine.repo_health().unwrap_or_default();
         let engines = self.machine.engines().ok().filter(|e| e.iter().any(|e| e.spent_this_month_usd.is_some()));
         // The Slack block is a bonus: a machine without the inbox leaves it out, nothing else changes.
         let slack = self.machine.slack_metrics("7d").and_then(|d7| self.machine.slack_metrics("30d").map(|d30| (d7, d30))).ok();
@@ -1967,6 +1982,7 @@ impl App {
         };
         floor.slack = slack;
         floor.by_engine = by_engine;
+        floor.health = health;
         floor.engines = engines.unwrap_or_default();
         match d7 {
             Ok(m) => {
@@ -1996,13 +2012,14 @@ impl App {
 
     /// The keys `handle_floor` matches; the registry's Floor scope must list exactly these.
     #[cfg(test)]
-    pub(crate) const HANDLED_FLOOR: &[&str] = &["esc", "F", "q", "?", "R", "tab", "shift+tab"];
+    pub(crate) const HANDLED_FLOOR: &[&str] = &["esc", "F", "q", "?", "R", "A", "tab", "shift+tab"];
 
     fn handle_floor(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Esc | KeyCode::Char('F') | KeyCode::Char('q') => self.floor = None,
             KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('R') => self.refresh_floor(),
+            KeyCode::Char('A') => self.approve_pending_base(),
             KeyCode::Tab | KeyCode::BackTab => {
                 if let Some(floor) = self.floor.as_mut() {
                     floor.cycle(if key.code == KeyCode::Tab { 1 } else { -1 });
@@ -2014,6 +2031,26 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// A: approves the base the focused repository is waiting on (the machine checks it is the one in its luna.yaml).
+    fn approve_pending_base(&mut self) {
+        let Some(floor) = self.floor.as_ref() else { return };
+        let Some(repo) = floor.repos.get(floor.cursor.wrapping_sub(1)).and_then(|r| r.repo.clone()) else {
+            self.notify("focus a repository (tab) to approve its base".to_string(), true);
+            return;
+        };
+        let Some(base) = floor.health.iter().find(|h| h.repo == repo).and_then(|h| h.image.pending_base.clone()) else {
+            self.notify("that repository has no base waiting".to_string(), false);
+            return;
+        };
+        match self.machine.approve_base(&repo, &base) {
+            Ok(()) => {
+                self.notify(format!("approved base {}", crate::model::plain(&base, 60)), false);
+                self.refresh_floor();
+            }
+            Err(e) => self.notify(format!("approve base: {e}"), true),
+        }
     }
 
     /// The second key of `z…` (fold) and `g…` (group): `zc`/`zo` fold/unfold the focused
@@ -3354,7 +3391,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3743,7 +3780,7 @@ impl App {
     /// The names `run_command` knows, aliases left out.
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
-        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "dismiss", "finding", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
         "help",
     ];
 
@@ -3800,6 +3837,16 @@ impl App {
                     self.act(|m| m.setup_repo(&path), "setup started: approve its luna.yaml when it asks");
                 }
                 Err(error) => self.notify(error, true),
+            },
+            "dismiss" => match (self.selected_id(), parse_dismiss(rest)) {
+                (None, _) => self.notify("no ticket selected", true),
+                (_, Err(error)) => self.notify(error, true),
+                (Some(id), Ok((finding, reason))) => self.act(|m| m.dismiss_finding(&id, &finding, reason.as_deref()), "finding dismissed"),
+            },
+            "finding" => match (self.selected_id(), parse_finding(rest)) {
+                (None, _) => self.notify("no ticket selected", true),
+                (_, Err(error)) => self.notify(error, true),
+                (Some(id), Ok((severity, title))) => self.act(|m| m.add_finding(&id, &severity, &title), "finding added"),
             },
             "slots" => match rest.parse::<u64>() {
                 Ok(n) if n >= 1 => match self.machine.set_slots(n) {
@@ -3873,6 +3920,27 @@ impl App {
     }
 
     /// `N`'s prompt: the comment is required; enter rejects the plan (the card is archived as rejected), esc cancels.
+    /// The note for a thumbs-down: enter sends it (empty is fine), esc cancels.
+    fn handle_evidence_note(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EvidenceNote { id, text } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => text.push(c),
+            KeyCode::Backspace => {
+                text.pop();
+            }
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let (id, note) = (id.clone(), text.trim().to_string());
+                self.mode = Mode::Normal;
+                self.act(|m| m.evidence_feedback(&id, false, Some(&note)), "noted: the pack was not useful");
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
     fn handle_reject(&mut self, key: KeyEvent) -> Outcome {
         let Mode::Reject { id, text } = &mut self.mode else {
             return Outcome::Continue;
@@ -4184,6 +4252,29 @@ pub fn looks_like_jira_key(text: &str) -> bool {
         && project[1..].chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
         && !number.is_empty()
         && number.chars().all(|c| c.is_ascii_digit())
+}
+
+/// `:dismiss <finding id> [reason]`: the id the Verify report shows, and an optional reason that stays out of the stream.
+pub(crate) fn parse_dismiss(arg: &str) -> Result<(String, Option<String>), String> {
+    let arg = arg.trim();
+    let (id, reason) = arg.split_once(char::is_whitespace).map_or((arg, ""), |(i, r)| (i, r.trim()));
+    if id.is_empty() {
+        return Err("dismiss takes a finding id, e.g. :dismiss f3 not a bug".to_string());
+    }
+    Ok((id.to_string(), if reason.is_empty() { None } else { Some(reason.chars().take(500).collect()) }))
+}
+
+/// `:finding <blocker|should_fix|nit> <title>`.
+pub(crate) fn parse_finding(arg: &str) -> Result<(String, String), String> {
+    let arg = arg.trim();
+    let (severity, title) = arg.split_once(char::is_whitespace).map_or((arg, ""), |(s, t)| (s, t.trim()));
+    if !matches!(severity, "blocker" | "should_fix" | "nit") {
+        return Err("finding takes blocker, should_fix or nit, then a title, e.g. :finding nit rename x".to_string());
+    }
+    if title.is_empty() {
+        return Err("say what the finding is: :finding nit rename x".to_string());
+    }
+    Ok((severity.to_string(), title.chars().take(200).collect()))
 }
 
 fn setup_repo_path(arg: &str, root: Option<std::path::PathBuf>) -> Result<std::path::PathBuf, String> {
@@ -5976,6 +6067,35 @@ mod workspace_key_tests {
         assert!(matches!(app.mode, Mode::Detail(_)) || matches!(app.mode, Mode::Normal), "esc cancels");
     }
 
+    fn with_pack(state: &str) -> App {
+        let mut app = open(state);
+        app.tasks[0].evidence = Some(serde_json::json!({"summary":"s","format":"text","commitSha":"abc1234","risk":"low","scenarios":[],"media":[]}));
+        app
+    }
+
+    #[test]
+    fn lowercase_n_on_a_card_with_a_pack_asks_for_a_note_and_esc_cancels() {
+        let mut app = with_pack("implementing");
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(&app.mode, Mode::EvidenceNote { text, .. } if text.is_empty()));
+        for c in "too long".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        assert!(matches!(&app.mode, Mode::EvidenceNote { text, .. } if text == "too long"));
+        press(&mut app, KeyCode::Esc);
+        assert!(!matches!(app.mode, Mode::EvidenceNote { .. }));
+    }
+
+    #[test]
+    fn y_and_n_on_a_card_with_no_pack_say_so_and_send_nothing() {
+        for key in ['y', 'n'] {
+            let mut app = open("implementing");
+            press(&mut app, KeyCode::Char(key));
+            assert!(!matches!(app.mode, Mode::EvidenceNote { .. }), "{key}");
+            assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("no Evidence Pack")), "{key}: {:?}", app.toast.as_ref().map(|t| t.text.clone()));
+        }
+    }
+
     #[test]
     fn n_elsewhere_rejects_nothing() {
         for state in ["awaiting_ship", "awaiting_answers", "implementing"] {
@@ -5988,9 +6108,11 @@ mod workspace_key_tests {
     #[test]
     fn r_at_the_ship_gate_opens_the_note_prompt_for_a_feature_task_and_not_for_a_review() {
         let mut app = open("awaiting_ship");
+        app.tasks[0].waiting_on_you = true;
         press(&mut app, KeyCode::Char('r'));
         assert!(matches!(&app.mode, Mode::Reason { approve: false, text, .. } if text.is_empty()), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
         let mut review = open("awaiting_ship");
+        review.tasks[0].waiting_on_you = true;
         review.tasks[0].route = "review".to_string();
         press(&mut review, KeyCode::Char('r'));
         assert!(!matches!(review.mode, Mode::Reason { .. }), "a review verdict is not sent back");
@@ -6428,5 +6550,4 @@ pub fn record_changes(record: &TriageRecord, picks: &[usize; 5]) -> Vec<(String,
             (record.value_of(key) != Some(value)).then(|| (key.to_string(), value.to_string()))
         })
         .collect()
-
 }

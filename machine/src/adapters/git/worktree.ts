@@ -1,17 +1,28 @@
 // Task worktrees on the host. Each task gets its own branch and checkout; the agent works
 // there through a bind mount, and the machine commits on the host.
-import { existsSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+
 import { basename, join } from "node:path";
 
 import { branchLinkOf, jiraBranch, slug } from "../../domain/jira-link.ts";
 import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
+import { assertNoNestedRepository, at, isUnderWorkspaces, machineGitDir } from "./machine-repo.ts";
 
 export { slug };
 
-/** Every git command the machine runs on the host carries this: a stage can write into
- *  the shared .git dir, and a hook it left there must never execute as you. */
-export const HOST_GIT = ["-c", "core.hooksPath=/dev/null"] as const;
+/** Every git command the machine runs on the host carries this: a stage can write into a
+ *  workspace's .git dir, so a hook, a file-system monitor, an external diff driver, a submodule
+ *  or an `ext::` transport it left there must never execute as you. */
+export const HOST_GIT = [
+  "--no-optional-locks",
+  "--no-replace-objects",
+  "-c", "core.hooksPath=/dev/null",
+  "-c", "core.fsmonitor=",
+  "-c", "diff.external=",
+  "-c", "submodule.recurse=false",
+  "-c", "protocol.ext.allow=never",
+] as const;
 
 export interface Workspace {
   branch: string;
@@ -77,7 +88,7 @@ export async function rebaseOntoDefault(
 ): Promise<RebaseResult> {
   const base = await defaultBranchOf(repoPath);
   if (!base || !isBranchName(base)) return { ok: false, error: `no usable default branch: ${JSON.stringify(base ?? null)}`, conflicts: [] };
-  const git = (...args: string[]) => ["-c", "core.hooksPath=/dev/null", "-C", worktreePath, ...args];
+  const git = (...args: string[]) => [...HOST_GIT, ...at(worktreePath), ...args];
   // `--end-of-options`: whatever the name, it is a ref, never an option.
   const fetched = await run("git", git("fetch", "--quiet", "--end-of-options", "origin", base), { timeoutMs: FETCH_TIMEOUT });
   if (fetched.code !== 0) return { ok: false, error: `git fetch failed: ${(fetched.stderr || fetched.stdout).trim() || `exit code ${fetched.code}`}`, conflicts: [] };
@@ -180,12 +191,14 @@ export async function ensureCleanCheckout(repoPath: string, path: string): Promi
     return path;
   }
   await clearStaleLock(path);
-  await resetWorktree(path, sha);
+  // A read-only checkout (a linked worktree of the repo that no container can write): not a card's workspace.
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "reset", "--hard", "--quiet", sha]); // read-only checkout
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "clean", "-fd", "--quiet"]); // read-only checkout
   return path;
 }
 
 /** `origin/<default>` freshly fetched when the repo has an origin; HEAD otherwise. */
-async function startPoint(repoPath: string): Promise<string> {
+export async function startPoint(repoPath: string): Promise<string> {
   const head = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
   if (head.code !== 0) return "HEAD";
   const ref = head.stdout.trim().replace(/^refs\/remotes\//, "");
@@ -194,25 +207,24 @@ async function startPoint(repoPath: string): Promise<string> {
   return ref;
 }
 
-async function clearStaleLock(worktreePath: string): Promise<void> {
-  const gitDir = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--git-dir"]);
-  if (gitDir.code !== 0) return;
-  const dir = gitDir.stdout.trim();
-  const lock = join(dir.startsWith("/") ? dir : join(worktreePath, dir), "index.lock");
+export async function clearStaleLock(worktreePath: string): Promise<void> {
+  // No git runs here. A card's workspace has its index in the machine's repository; a read-only checkout (a linked worktree
+  // the machine made) names its git dir in its `.git` file.
+  let lock = join(machineGitDir(worktreePath), "index.lock");
+  if (!existsSync(machineGitDir(worktreePath))) {
+    try {
+      const pointer = /^gitdir: (.+)$/m.exec(readFileSync(join(worktreePath, ".git"), "utf8"));
+      if (!pointer) return;
+      lock = join(pointer[1]!.trim(), "index.lock");
+    } catch {
+      return;
+    }
+  }
   try {
     if (Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS) rmSync(lock, { force: true });
   } catch {
     // no lock, or gone already
   }
-}
-
-/** The admin dir of a linked worktree (`<common>/worktrees/<name>`); null for a main checkout or when git cannot say. */
-export async function worktreeAdminDir(worktreePath: string): Promise<string | null> {
-  const dir = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-dir"]);
-  const common = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  if (dir.code !== 0 || common.code !== 0) return null;
-  const admin = dir.stdout.trim();
-  return admin && admin !== common.stdout.trim() ? admin : null;
 }
 
 /**
@@ -222,12 +234,18 @@ export async function worktreeAdminDir(worktreePath: string): Promise<string | n
  * that should never have landed (e.g. one that touched a locked test file).
  */
 export async function resetWorktree(path: string, ref = "HEAD"): Promise<void> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "reset", "--hard", "--quiet", ref]);
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "clean", "-fd", "--quiet"]);
+  assertNoNestedRepository(path);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "reset", "--hard", "--quiet", ref]);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "clean", "-fd", "--quiet"]);
 }
 
-/** Removes a task's worktree from disk. The branch (and its commits) stays. */
+/** Removes a task's workspace from disk: a clone is deleted, a linked worktree is removed from its repository (its branch and commits stay). */
 export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+  if (existsSync(machineGitDir(worktreePath))) {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(machineGitDir(worktreePath), { recursive: true, force: true });
+    return;
+  }
   await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "remove", "--force", worktreePath]);
 }
 
@@ -240,13 +258,7 @@ export async function gitIdentity(repoPath: string): Promise<{ name: string; ema
 
 /** The repo's shared git dir, which the worktree's `.git` file points into. */
 export function commonGitDir(repoPath: string): Promise<string> {
-  return execOrThrow("git", [...HOST_GIT, 
-    "-C",
-    repoPath,
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ]);
+  return execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
 }
 
 /** The commit the task branch forked from: the merge base of the worktree's HEAD and the
@@ -254,7 +266,12 @@ export function commonGitDir(repoPath: string): Promise<string> {
 export async function branchBase(worktreePath: string, repoPath: string): Promise<string | null> {
   const repoHead = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "HEAD"]);
   if (repoHead.code !== 0) return null;
-  const base = await exec("git", [...HOST_GIT, "-C", worktreePath, "merge-base", "HEAD", repoHead.stdout.trim()]);
+  const head = repoHead.stdout.trim();
+  // A clone shares no objects with the repo: when the repo moved on, bring its HEAD over (a read of the repo, never a write to it).
+  if ((await exec("git", [...HOST_GIT, ...at(worktreePath), "cat-file", "-e", `${head}^{commit}`])).code !== 0) {
+    await exec("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repoPath, head], { timeoutMs: FETCH_TIMEOUT_MS });
+  }
+  const base = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "HEAD", head]);
   return base.code === 0 ? base.stdout.trim() || null : null;
 }
 
@@ -263,14 +280,24 @@ export async function branchBase(worktreePath: string, repoPath: string): Promis
 export async function changedPaths(worktreePath: string, repoPath: string): Promise<string[] | null> {
   const base = await branchBase(worktreePath, repoPath);
   if (!base) return null;
-  const out = await exec("git", [...HOST_GIT, "-C", worktreePath, "diff", "--name-only", `${base}..HEAD`]);
+  const out = await exec("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", `${base}..HEAD`]);
   if (out.code !== 0) return null;
   return out.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
+/** The files changed since `since` (a commit id the machine read), worktree-relative, for a delta check. Null when unknown: a ref that is not a commit id, a failed diff,
+ *  or an empty delta, so a caller runs every check. Nothing changed is never a reason to run nothing. */
+export async function changedSince(run: GitExec, worktreePath: string, since: string): Promise<string[] | null> {
+  if (!/^[0-9a-f]{40,64}$/.test(since)) return null;
+  const out = await run("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", `${since}..HEAD`]);
+  if (out.code !== 0) return null;
+  const names = out.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  return names.length > 0 ? names : null;
+}
+
 /** Lines added and removed on the branch since `base`, from `git diff --shortstat`. */
 export async function diffShortstat(path: string, base: string): Promise<{ added: number; removed: number }> {
-  const out = await execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--shortstat", `${base}..HEAD`]);
+  const out = await execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--shortstat", `${base}..HEAD`]);
   const added = Number(/(\d+) insertion/.exec(out)?.[1] ?? 0);
   const removed = Number(/(\d+) deletion/.exec(out)?.[1] ?? 0);
   return { added, removed };
@@ -283,28 +310,57 @@ export async function branchDiffStat(worktreePath: string, repoPath: string | nu
   return base ? diffShortstat(worktreePath, base) : null;
 }
 
+/** HEAD of the user's own repository (a checkout run reads it directly). */
+export function repoHead(repoPath: string): Promise<string> {
+  return execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "HEAD"]);
+}
+
+/** The id of each lockfile (by its fixed name) in the tree of `commit` in the card's repository: what the commit holds, never a file in the folder. */
+export async function lockfilesAt(path: string, commit: string, names: readonly string[]): Promise<Record<string, string>> {
+  const found: Record<string, string> = {};
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) return found;
+  for (const name of names) {
+    const out = await exec("git", [...HOST_GIT, ...at(path), "rev-parse", "--verify", "--quiet", `${commit}:${name}`]);
+    if (out.code === 0 && out.stdout.trim()) found[name] = out.stdout.trim();
+  }
+  return found;
+}
+
+/** The blob id of each named file in the tree of `commit` in the USER's own repository (its own git directory, as `repoHead` reads it): what the commit holds, never a file in a folder. */
+export async function blobsAtRepo(repoPath: string, commit: string, names: readonly string[]): Promise<Record<string, string>> {
+  const found: Record<string, string> = {};
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) return found;
+  for (const name of names) {
+    const out = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", "--quiet", `${commit}:${name}`]);
+    if (out.code === 0 && out.stdout.trim()) found[name] = out.stdout.trim();
+  }
+  return found;
+}
+
 export function headCommit(path: string): Promise<string> {
-  return execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", "HEAD"]);
+  return execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", "HEAD"]);
 }
 
 /** `git diff --name-status <from> <to>` in `path`, for checking what a commit touched. */
 export function diffNameStatus(path: string, from: string, to: string): Promise<string> {
-  return execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--name-status", from, to]);
+  return execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--name-status", from, to]);
 }
 
 /** `git diff <from> <to>` in `path`: the unified diff, for reading what a change added. */
 export function diffText(path: string, from: string, to: string): Promise<string> {
-  return execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--no-color", "--no-ext-diff", from, to]);
+  return execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--no-color", "--no-ext-diff", from, to]);
 }
 
 /** Undoes one commit with a new commit on top (never rewrites history a person may have fetched). */
 export async function revertCommit(path: string, sha: string): Promise<void> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "-c", "commit.gpgsign=false", "revert", "--no-edit", sha]);
+  assertNoNestedRepository(path);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "-c", "commit.gpgsign=false", "revert", "--no-edit", sha]);
 }
 
 /** Puts `files` back as they are at `ref`, leaving HEAD alone (undo with resetWorktree). */
 export async function restoreFiles(path: string, ref: string, files: string[]): Promise<void> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "checkout", ref, "--", ...files]);
+  assertNoNestedRepository(path);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "checkout", ref, "--", ...files]);
 }
 
 /**
@@ -312,11 +368,21 @@ export async function restoreFiles(path: string, ref: string, files: string[]): 
  * Commits are not signed: signing needs your passphrase, which a background run cannot ask for.
  */
 export async function commitAll(path: string, message: string): Promise<string | null> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "add", "-A"]);
-  const staged = await exec("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--quiet"]);
+  assertNoNestedRepository(path);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
+  await refuseGitlinks(path, "HEAD");
+  const staged = await exec("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--quiet"]);
   if (staged.code === 0) return null;
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", message]);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "-c", "commit.gpgsign=false", "commit", "-q", "-m", message]);
   return headCommit(path);
+}
+
+/** Fails, with the index put back to HEAD, when what is staged against `base` holds a gitlink (mode 160000): a nested repository the walk of the folder should have caught. */
+export async function refuseGitlinks(path: string, base: string): Promise<void> {
+  const raw = await execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--raw", "--no-renames", base]);
+  if (!/^:\d{6} 160000 /m.test(raw)) return;
+  await exec("git", [...HOST_GIT, ...at(path), "read-tree", "HEAD"]);
+  throw new Error("a nested repository (mode 160000) was staged; nothing was committed");
 }
 
 /** The new mode of each path in `git diff --raw` output (`:100644 120000 abc def A\tpath`), keyed by the new path. */
@@ -331,11 +397,13 @@ function modesOf(raw: string): Record<string, string> {
 
 /** Stages everything a stage left in the worktree (new files too) and reads what that adds to `base`, the commit the run started from: the name-status, the unified diff and each path's new mode. */
 export async function stagePending(path: string, base: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> }> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "add", "-A"]);
+  assertNoNestedRepository(path);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
+  await refuseGitlinks(path, base);
   const [nameStatus, diff, raw] = await Promise.all([
-    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--name-status", base]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--no-color", "--no-ext-diff", base]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--raw", base]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--name-status", base]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--no-color", "--no-ext-diff", base]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--raw", base]),
   ]);
   return { nameStatus, diff, modes: modesOf(raw) };
 }
@@ -343,25 +411,25 @@ export async function stagePending(path: string, base: string): Promise<{ nameSt
 /** What the commit `sha` changed, only when it is an ancestor of HEAD (the machine's own tests commit, never one found by its subject); null otherwise. */
 export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; parent: string } | null> {
   if (!/^[0-9a-f]{7,64}$/.test(sha)) return null;
-  if (!(await isAncestor(path, sha, "HEAD"))) return null;
+  if ((await exec("git", [...HOST_GIT, ...at(path), "merge-base", "--is-ancestor", sha, "HEAD"])).code !== 0) return null;
   const [nameStatus, diff, raw, parent] = await Promise.all([
-    execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--name-status", "--format=", sha]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--no-color", "--no-ext-diff", "--format=", sha]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--raw", "--format=", sha]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", `${sha}^`]).catch(() => ""),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "show", "--name-status", "--format=", sha]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "show", "--no-color", "--no-ext-diff", "--format=", sha]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "show", "--raw", "--format=", sha]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", `${sha}^`]).catch(() => ""),
   ]);
   return { nameStatus, diff, modes: modesOf(raw), parent };
 }
 
 /** The branch the worktree is on (`HEAD` when detached). */
 export function currentBranch(path: string): Promise<string> {
-  return execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", "--abbrev-ref", "HEAD"]);
+  return execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", "--abbrev-ref", "HEAD"]);
 }
 
 /** The commits between `sinceSha` and HEAD (`git log <sha>..HEAD`), newest first, each with its files' names and added and removed line counts (`--numstat`); never a diff, never selected by a date the agent could set. At most 100 commits, 200 files a commit and 300 characters of path; anything that is not a sha gives nothing. */
 export async function commitsSince(path: string, sinceSha: string): Promise<Array<{ sha: string; files: Array<{ path: string; added: number; removed: number }> }>> {
   if (!/^[0-9a-f]{7,64}$/.test(sinceSha)) return [];
-  const out = await exec("git", [...HOST_GIT, "-C", path, "log", `${sinceSha}..HEAD`, "-n", "100", "--numstat", "--format=commit %H"]);
+  const out = await exec("git", [...HOST_GIT, ...at(path), "log", `${sinceSha}..HEAD`, "-n", "100", "--numstat", "--format=commit %H"]);
   if (out.code !== 0) return [];
   const commits: Array<{ sha: string; files: Array<{ path: string; added: number; removed: number }> }> = [];
   for (const line of out.stdout.split("\n")) {
@@ -379,13 +447,18 @@ export async function commitsSince(path: string, sinceSha: string): Promise<Arra
 
 /** What the worktree has uncommitted or untracked, one `git status --porcelain` line each. */
 export async function dirtyFiles(path: string): Promise<string[]> {
-  const status = await execOrThrow("git", [...HOST_GIT, "-C", path, "status", "--porcelain"]);
+  assertNoNestedRepository(path);
+  const status = await execOrThrow("git", [...HOST_GIT, ...at(path), "status", "--porcelain"]);
   return status === "" ? [] : status.split("\n");
 }
 
 /** `owner/name` of the checkout's `origin` remote, or null when it has none or it is not on GitHub. */
 export async function originSlugOf(cwd: string): Promise<string | null> {
-  const url = await exec("git", [...HOST_GIT, "-C", cwd, "remote", "get-url", "origin"]);
+  // A card's workspace answers from the machine's repository; a repository's own path from itself; a folder under the workspaces
+  // directory with no repository of the machine's is nobody's to ask, so it fails closed (git there would read the folder's own `.git`).
+  const pinned = existsSync(machineGitDir(cwd));
+  if (!pinned && isUnderWorkspaces(cwd)) return null;
+  const url = await exec("git", [...HOST_GIT, ...(pinned ? at(cwd) : ["-C", cwd]), "remote", "get-url", "origin"]);
   if (url.code !== 0) return null;
   const match = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?\s*$/.exec(url.stdout.trim());
   return match ? `${match[1]}/${match[2]}` : null;
@@ -394,25 +467,4 @@ export async function originSlugOf(cwd: string): Promise<string | null> {
 /** A PR task's checkout: `<dir>/<repo>/pr-<number>-<head slug>`, beside the task worktrees. */
 export function prWorktreePath(repoPath: string, worktreesDir: string, number: number, headRef: string): string {
   return join(worktreesDir, basename(repoPath), `pr-${number}-${slug(headRef)}`);
-}
-
-/**
- * Checks a PR's head branch out at `path`, tracking `origin/<headRef>` after a fetch, so a
- * fix lands on the PR's own branch. An existing worktree is reused (its stale lock cleared),
- * not reset: a retry continues from what the last attempt pushed.
- */
-export async function ensurePrWorktree(repoPath: string, headRef: string, path: string): Promise<void> {
-  if (existsSync(join(path, ".git"))) {
-    await clearStaleLock(path);
-    return;
-  }
-  await exec("git", [...HOST_GIT, "-C", repoPath, "worktree", "prune"]);
-  const fetched = await exec(
-    "git",
-    [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "origin", `+refs/heads/${headRef}:refs/remotes/origin/${headRef}`],
-    { timeoutMs: FETCH_TIMEOUT_MS },
-  );
-  if (fetched.code !== 0) throw new Error(`git fetch origin ${headRef} failed: ${(fetched.stderr || fetched.stdout).trim()}`);
-  await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "add", "-B", headRef, path, `origin/${headRef}`]);
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "branch", "--set-upstream-to", `origin/${headRef}`, headRef]);
 }

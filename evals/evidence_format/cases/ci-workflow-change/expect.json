@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "format.choice",
+      "value": "text_only"
+    }
+  ],
+  "rubric": "A CI/CD change: no surface and nothing a person could run to see it, text_only.",
+  "label": {
+    "format": {
+      "choice": "text_only"
+    }
+  }
+}
