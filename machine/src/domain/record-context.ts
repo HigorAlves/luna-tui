@@ -8,15 +8,18 @@ import { redactDeep, secretRedactor } from "./redact-secrets.ts";
 
 /** What replaces a private conversation's text in the stored copy. */
 export const PRIVATE_TEXT = "[private]";
-/** A string longer than this, or holding whitespace, is text rather than an id or an enum value. */
-const TEXT_LENGTH = 40;
+/** Keys whose string is an id or an enum value, never free text. `channel` is kept only when it is a Slack id. */
+const KEPT_KEYS = new Set(["id", "kind", "profile", "relation", "at"]);
+const SLACK_ID = /^[CGD][A-Z0-9]{6,}$/;
 
-const isText = (value: string): boolean => /\s/.test(value) || value.length > TEXT_LENGTH;
-
-function maskText(value: unknown): unknown {
-  if (typeof value === "string") return isText(value) ? PRIVATE_TEXT : value;
-  if (Array.isArray(value)) return value.map(maskText);
-  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, maskText(item)]));
+/** In a private conversation every string is text, whatever its length, unless its key names an id or an enum. */
+function maskText(value: unknown, key?: string): unknown {
+  if (typeof value === "string") {
+    if (key === "channel") return SLACK_ID.test(value) ? value : PRIVATE_TEXT;
+    return key !== undefined && KEPT_KEYS.has(key) ? value : PRIVATE_TEXT;
+  }
+  if (Array.isArray(value)) return value.map((item) => maskText(item));
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, item]) => [k, maskText(item, k)]));
   return value;
 }
 

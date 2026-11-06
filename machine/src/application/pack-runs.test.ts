@@ -455,7 +455,7 @@ describe("decision records", () => {
       const answers = { related: { choice: "none", confidence: 0.9 }, new_work: { value: true, p: 0.9 } };
       const appended: DecisionRecord[] = [];
       await runs(fakeSandbox(output({ answer: answers })), { decisions: { append: async (record) => void appended.push(record) } }).run({ pack: "conversation_relation", context: { conversation } }, "intake", undefined, { own: true });
-      expect(appended[0]).toMatchObject({ private: true, origin: "machine", context: { conversation: { channel: "leadership", private: true, thread: ["[private]"], latest: "[private]" } } });
+      expect(appended[0]).toMatchObject({ private: true, origin: "machine", context: { conversation: { channel: "[private]", private: true, thread: ["[private]"], latest: "[private]" } } });
       expect(JSON.stringify(appended[0]!.context)).not.toContain("Bob");
     });
 
