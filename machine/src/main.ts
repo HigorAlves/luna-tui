@@ -257,7 +257,9 @@ const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signa
 let graphWatch: GraphWatch | null = null;
 // Memory (RFC 0007): the one instance every stage, route and loop reads. Quiet (`noMemory()`) when off or until Cognee answers; the boot
 // retries the connection, sends writes still pending and lines Cognee up with the table every hour (`start()` below).
-const memoryBoot_ = memoryBoot({ config: config.memory, db });
+/** Set further down, once the graph watch and the company poll exist: memory connects after boot, and what the boot skipped is synced then. */
+let onMemoryConnected: (() => void) | null = null;
+const memoryBoot_ = memoryBoot({ config: config.memory, db, onConnected: () => onMemoryConnected?.() });
 const memory: Memory = memoryBoot_.memory;
 /** What memory takes from a repository's default branch (docs, code graph) and from the company folder; both idle while memory is off. */
 const memoryDir = join(config.stateDir, "memory");
@@ -1087,6 +1089,11 @@ const companyPoll = (): void => {
   if (memory.enabled) void companyDocs.poll();
 };
 const companyTicker = config.memory.enabled && config.memoryDocs.dirs.length > 0 && config.memoryDocs.intervalSecs !== null ? new Ticker(companyPoll, config.memoryDocs.intervalSecs * 1000) : null;
+// Memory connected after boot: a graph pass (its afterBuild syncs the docs and the code graph) and a company poll, now rather than at the next timer.
+onMemoryConnected = () => {
+  void graphWatch?.tick();
+  if (companyTicker) companyPoll();
+};
 if (companyTicker) {
   companyTicker.start();
   companyPoll();

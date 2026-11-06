@@ -57,6 +57,20 @@ describe("memoryBoot", () => {
     boot.stop();
   });
 
+  it("tells the machine once when Cognee first takes the login, so what was skipped at boot is synced at once", async () => {
+    const cognee = fakeCognee();
+    cognee.down = true;
+    const connected: boolean[] = [];
+    const boot = memoryBoot({ config: config(), db, log: () => {}, makeClient: () => cognee, retryMs: 30, reconcileMs: 10_000, onConnected: () => connected.push(boot.memory.enabled) });
+    boot.start();
+    await wait(20);
+    expect(connected).toEqual([]);
+    cognee.down = false;
+    await wait(150);
+    expect(connected).toEqual([true]);
+    boot.stop();
+  });
+
   it("sends rows left pending by a Cognee that went away, on its retry loop", async () => {
     const cognee = fakeCognee();
     const boot = memoryBoot({ config: config(), db, log: () => {}, makeClient: () => cognee, retryMs: 30, reconcileMs: 10_000 });

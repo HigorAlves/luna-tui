@@ -27,6 +27,8 @@ export interface MemoryBootOptions {
   /** For tests. */
   makeClient?: (config: MemoryConfig & { password: string }) => CogneeClient;
   retryMs?: number;
+  /** Called once, when Cognee first takes the login: what the boot skipped while memory was quiet (the docs, the code graph, the company folder) can be synced at once instead of at the next timer. */
+  onConnected?: () => void;
   reconcileMs?: number;
 }
 
@@ -97,7 +99,14 @@ export function memoryBoot(options: MemoryBootOptions): MemoryBoot {
       const loop = (): void => {
         void (async () => {
           if (!service) {
-            if (await connect()) void memory.reconcile();
+            if (await connect()) {
+              void memory.reconcile();
+              try {
+                options.onConnected?.();
+              } catch (error) {
+                log({ event: "memory.on_connected_failed", error: String(error).slice(0, 200) });
+              }
+            }
             return;
           }
           await service.retryPending();
