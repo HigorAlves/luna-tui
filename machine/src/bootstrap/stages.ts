@@ -46,6 +46,7 @@ import { runSweep } from "../application/stages/sweep.ts";
 import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
+import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-probe.ts";
 
 export interface RealStagesResult {
   real: Partial<Record<TaskState, StageRunner>>;
@@ -57,6 +58,8 @@ export interface RealStagesResult {
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
    *  the credentials, the state dir, the worktrees dir and each repo's luna.yaml; null when agents are off or something is missing. */
   agentDeps: { image: string; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
+  /** What `Pipeline.tick` asks of an open release question (merged, withdrawn, kept); null when stages are stubs. */
+  shipGateProbe: ShipGateProbe | null;
 }
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
@@ -100,16 +103,16 @@ export async function buildRealStages(
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
-    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
+    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null, shipGateProbe: null };
   }
   // Every pack defaults to a Claude engine, so without Claude's credential nothing runs for real.
   if (!(await loadCredential())) {
     console.warn("no Claude credential in ~/.config/hardness: every stage is a stub");
-    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
+    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null, shipGateProbe: null };
   }
   if (!(await imageExists(config.runnerImage))) {
     console.warn(`image ${config.runnerImage} is missing (pnpm runner:build): every stage is a stub`);
-    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
+    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null, shipGateProbe: null };
   }
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
@@ -315,6 +318,7 @@ export async function buildRealStages(
           github,
           truth: truth ?? null,
           policies,
+          latestFinish: evidenceDeps.latestFinish,
           evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore },
           // The review loop: the decisions bind late; the sub-runs are the same packs the stages run, on the task's own worktree.
           loop: {
@@ -351,7 +355,7 @@ export async function buildRealStages(
       }),
     ),
   };
-  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { real, verifyPack, checksExec, shipGateProbe: shipGateProbe({ github, policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { image: config.runnerImage, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

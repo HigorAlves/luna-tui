@@ -9,7 +9,7 @@ import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -48,7 +48,7 @@ import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, ou
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
+export { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -106,6 +106,10 @@ export interface NewTask {
 }
 
 export interface PipelineOptions {
+  /** Looks at an open release question (the ship approval) against GitHub: `merged` closes it as an automatic approval, `withdraw` takes it back so the watch asks again, `keep` leaves it. Nothing polls while a person is asked, so `tick` calls it at most once per `shipProbeMs`. */
+  shipGateProbe?: (task: TaskRow, gate: ApprovalRow) => Promise<"merged" | "withdraw" | "keep">;
+  /** The shortest time between two probes of one card's release question (the repository's poll interval); 0 probes on every tick. */
+  shipProbeMs?: number;
   /** Ends a card's kept sandbox (its extra folders) when the card is resumed or closed. Never throws into the pipeline. */
   releaseKept?: (taskId: string) => Promise<void>;
   /** Where each stage run is reported as a span; the no-op without a backend. */
@@ -323,6 +327,8 @@ export class Pipeline {
   private readonly evidenceFeedbackWriter: PipelineOptions["evidenceFeedback"];
   private readonly owners: PipelineOptions["owners"];
   private readonly truth: DecisionTruth | undefined;
+  private readonly shipGateProbe: PipelineOptions["shipGateProbe"];
+  private readonly shipProbeMs: number;
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
   private readonly policies: Pick<PolicyStore, "for">;
@@ -372,6 +378,8 @@ export class Pipeline {
     this.evidenceFeedbackWriter = options.evidenceFeedback;
     this.owners = options.owners;
     this.truth = options.truth;
+    this.shipGateProbe = options.shipGateProbe;
+    this.shipProbeMs = options.shipProbeMs ?? 0;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
     this.policies = options.policies ?? new PolicyStore();
@@ -922,16 +930,20 @@ export class Pipeline {
         if (rule.outside === "required" && !outsideSatisfied(names, owners)) throw new OutsideApproverRequiredError(id, names.at(-1) ?? "");
       };
     }
-    // A High-risk pack ships only after an approver who is none of the plan's: the name is an attestation the monitor reads.
-    if (decision === "approved" && task.state === "awaiting_ship" && task.route !== "review" && task.evidence?.risk === "high") {
-      const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
-      const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
-      if (!approver) throw new ApproverRequiredError(id, "ship");
-      if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
-      await this.store.withTaskLock(id, async (_task, tx) => {
-        const gate = await tx.findOpenApproval(id);
-        if (gate && gate.kind === "awaiting_ship") await tx.updateApprovalRequested(gate, { ...gate.requested, shipApprover: approver });
-      });
+    // The release question (the watch asks it after readiness): a High-risk card ships only on the word of someone who is none of the plan's approvers and,
+    // when the gate names release owners, one of them. Team handles cannot be checked here: the name is an attestation. Nothing a model wrote picks them.
+    const release = task.state === "awaiting_ship" && task.route !== "review" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_ship" && a.decision === null && a.requested.gate === "ship_approval") : undefined;
+    if (release && decision === "sent_back") throw new TransitionError(task, { type: "sent_back" });
+    if (release && decision === "approved") {
+      if (release.requested.risk === "high" || task.evidence?.risk === "high") {
+        const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
+        const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
+        if (!approver) throw new ApproverRequiredError(id, "ship");
+        if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
+        const owners = Array.isArray(release.requested.releaseOwners) ? release.requested.releaseOwners.map(String) : [];
+        if (owners.length > 0 && !owners.some((o) => sameName(o, approver))) throw new NotReleaseOwnerError(id, approver);
+      }
+      if (typeof release.requested.head === "string") answered = { ...answered, head: release.requested.head };
     }
     if (approver) answered = { ...answered, approver };
     const record = { decision, reason, ...(answered ? { response: answered } : {}) };
@@ -972,10 +984,12 @@ export class Pipeline {
 
   /** A rejection: the plan gate's alone (an open plan, not triage's outcome and not a later gate). The card is archived with reason `rejected`, the comment kept. */
   private async reject(task: TaskRow, reason: string | undefined, auto: boolean): Promise<TaskRow> {
-    const open = task.state === "awaiting_approval" ? (await this.approvals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null) : undefined;
-    if (!open || auto || open.requested.outcome !== undefined) throw new RejectNotAllowedError(task.id, task.state);
+    const gateKind = task.state === "awaiting_approval" || (task.state === "awaiting_ship" && task.route !== "review") ? task.state : null;
+    const open = gateKind ? (await this.approvals(task.id)).find((a) => a.kind === gateKind && a.decision === null) : undefined;
+    // The plan gate, or the watch's release question; the preview gate and every other gate are not rejectable.
+    if (!open || auto || open.requested.outcome !== undefined || (gateKind === "awaiting_ship" && open.requested.gate !== "ship_approval")) throw new RejectNotAllowedError(task.id, task.state);
     const record = { decision: "rejected" as const, ...(reason ? { reason } : {}) };
-    const archived = await this.archive(task.id, "rejected", { onlyFrom: new Set<TaskState>(["awaiting_approval"]), decision: record });
+    const archived = await this.archive(task.id, "rejected", { onlyFrom: new Set<TaskState>([gateKind!]), decision: record });
     if (this.truth) await this.learnFromGate(task.id, open, "sent_back");
     return archived;
   }
@@ -1297,7 +1311,35 @@ export class Pipeline {
     }
     await this.rearmPaused();
     await this.autoApprovePlans();
+    await this.probeShipGates();
     await this.fillSlots();
+  }
+
+  private readonly shipProbedAt = new Map<string, number>();
+
+  /** An open release question is looked at against GitHub, at most once per interval: a PR merged on GitHub closes it as an automatic approval (no name
+   *  asked, no ground truth written); a head that moved or a checklist that no longer passes withdraws it, and the watch runs again. A probe that fails leaves it open. */
+  private async probeShipGates(): Promise<void> {
+    const probe = this.shipGateProbe;
+    if (!probe) return;
+    for (const task of await this.store.findStuckTasks(new Set<TaskState>(["awaiting_ship"]))) {
+      if (task.route !== "feature") continue;
+      const gate = (await this.store.listApprovals(task.id)).find((a) => a.kind === "awaiting_ship" && a.decision === null && a.requested.gate === "ship_approval");
+      if (!gate) {
+        this.shipProbedAt.delete(task.id);
+        continue;
+      }
+      const last = this.shipProbedAt.get(task.id);
+      if (last !== undefined && Date.now() - last < (this.shipProbeMs)) continue;
+      this.shipProbedAt.set(task.id, Date.now());
+      try {
+        const seen = await probe(task, gate);
+        if (seen === "merged") await this.dispatch(task.id, { type: "approved", gate: "ship_approval" }, { decision: { decision: "approved", reason: "merged on GitHub", response: { auto: true } }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+        else if (seen === "withdraw") await this.dispatch(task.id, { type: "sent_back", from: "plan", gate: "ship_approval" }, { decision: { decision: "sent_back", reason: "the PR changed: asked again when it is ready" }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+      } catch (error) {
+        console.error(`could not probe the release question of task ${task.id}`, error);
+      }
+    }
   }
 
   /** A plan that has waited the repo's `auto_approve_plan_minutes` is approved by itself when

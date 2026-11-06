@@ -18,7 +18,7 @@ import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { ApprovalEntity } from "../adapters/persistence/schemas.ts";
-import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
+import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureClone } from "../adapters/git/clone.ts";
@@ -753,65 +753,159 @@ describe("the preview gate follows ship.preview", () => {
   });
 });
 
-describe("the ship approver", () => {
+describe("the ship approval (the release question after readiness)", () => {
   const pack = (risk: "low" | "high") => ({ summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk, rollback: "revert", howToVerify: "run it", commitSha: "9c1f0e2a7b3d", media: [], at: "2026-11-04T00:00:00.000Z" });
-  /** A task whose plan Ana approved, parked at the preview gate with a pack of this risk. */
-  const atShip = async (risk: "low" | "high", planApprover = "ana") => {
+  /** A task whose plan Ana approved and whose preview gate is approved: the watch then asks the release question with these details. */
+  const atRelease = async (risk: "low" | "high", extra: Record<string, unknown> = {}) => {
+    stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk, question: "safe to release now?", ...extra } });
     const task = await pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"], evidence: pack(risk) });
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved", undefined, undefined, { approver: planApprover });
+    await pipeline.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
     expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
+    await pipeline.decide(task.id, "approved");
+    const open = (await pipeline.approvals(task.id)).find((a) => a.decision === null);
+    expect(open?.requested.gate).toBe("ship_approval");
     return task.id;
   };
 
-  it("needs no new name for a low-risk pack", async () => {
-    const id = await atShip("low");
-    expect((await pipeline.decide(id, "approved")).state).not.toBe("awaiting_ship");
+  it("the preview gate of a High-risk pack takes no name any more: the release question comes after readiness", async () => {
+    stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk: "high" } });
+    const task = await pipeline.createTask({ title: "Billing", criteria: ["c"], evidence: pack("high") });
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await expect(pipeline.decide(task.id, "approved")).resolves.toMatchObject({ state: "awaiting_ship" });
   });
 
-  it("refuses a high-risk pack's approval with no name, naming the ship gate, and leaves the gate open", async () => {
-    const id = await atShip("high");
+  it("needs no name for a low-risk release question, and runs the merge on approval", async () => {
+    const id = await atRelease("low");
+    expect((await pipeline.decide(id, "approved")).state).toBe("reviewing_memory");
+    expect((await stagesRun(id)).slice(-1)).toEqual(["shipping"]);
+  });
+
+  it("refuses a High-risk approval with no name, and leaves the question open", async () => {
+    const id = await atRelease("high");
     await expect(pipeline.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
     await expect(pipeline.decide(id, "approved")).rejects.toThrow(/ship/);
     expect((await pipeline.get(id)).state).toBe("awaiting_ship");
   });
 
-  it("refuses the plan's approver, and any of a High-risk plan's two", async () => {
-    const id = await atShip("high");
+  it("refuses the plan's approver, with another case or a trailing space too", async () => {
+    const id = await atRelease("high");
     await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).rejects.toBeInstanceOf(SameApproverError);
-    expect((await pipeline.get(id)).state).toBe("awaiting_ship");
-    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level: "high", scores: {} } } });
-    const two = await pipeline.createTask({ title: "Billing", criteria: ["c"], evidence: pack("high") });
-    await pipeline.start(two.id);
-    await pipeline.decide(two.id, "approved", undefined, undefined, { approver: "ana" });
-    await pipeline.decide(two.id, "approved", undefined, undefined, { approver: "bo" });
-    await expect(pipeline.decide(two.id, "approved", undefined, undefined, { approver: "bo" })).rejects.toBeInstanceOf(SameApproverError);
-    await expect(pipeline.decide(two.id, "approved", undefined, undefined, { approver: "ana" })).rejects.toBeInstanceOf(SameApproverError);
-    expect((await pipeline.decide(two.id, "approved", undefined, undefined, { approver: "cy" })).state).not.toBe("awaiting_ship");
-  });
-
-  it("ships with another name, keeps it on the approval, and records it on the gate's request", async () => {
-    const id = await atShip("high");
-    expect((await pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" })).state).not.toBe("awaiting_ship");
-    const gate = (await pipeline.approvals(id)).find((a) => a.kind === "awaiting_ship")!;
-    expect(gate).toMatchObject({ decision: "approved", response: { approver: "bo" }, requested: { shipApprover: "bo" } });
-  });
-
-  it("takes a name with a trailing space or another case for the same person, at the ship gate and at the plan gate", async () => {
-    const id = await atShip("high");
     await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "Ana " })).rejects.toBeInstanceOf(SameApproverError);
-    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level: "high", scores: {} } } });
-    const plan = await pipeline.createTask({ title: "Billing", criteria: ["c"] });
-    await pipeline.start(plan.id);
-    await pipeline.decide(plan.id, "approved", undefined, undefined, { approver: "alice" });
-    await expect(pipeline.decide(plan.id, "approved", undefined, undefined, { approver: "alice " })).rejects.toBeInstanceOf(SameApproverError);
-    await expect(pipeline.decide(plan.id, "approved", undefined, undefined, { approver: "ＡＬＩＣＥ" })).rejects.toBeInstanceOf(SameApproverError);
+    expect((await pipeline.get(id)).state).toBe("awaiting_ship");
   });
 
-  it("does not ask for a name when the preview is sent back", async () => {
-    const id = await atShip("high");
-    await pipeline.decide(id, "sent_back", "redo");
-    expect((await pipeline.stageRuns(id)).filter((r) => r.stage === "evidence")).toHaveLength(2);
+  it("when the gate names release owners, only one of them may approve a High-risk card", async () => {
+    const id = await atRelease("high", { releaseOwners: ["bo", "cy"] });
+    await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "dee" })).rejects.toBeInstanceOf(NotReleaseOwnerError);
+    expect((await pipeline.get(id)).state).toBe("awaiting_ship");
+    const moved = await pipeline.decide(id, "approved", undefined, undefined, { approver: "BO" });
+    expect(moved.state).toBe("reviewing_memory");
+  });
+
+  it("keeps the approver and the head the question was asked about on the approval", async () => {
+    const id = await atRelease("high");
+    await pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" });
+    const gate = (await pipeline.approvals(id)).filter((a) => a.kind === "awaiting_ship" && a.requested.gate === "ship_approval").at(-1)!;
+    expect(gate).toMatchObject({ decision: "approved", response: { approver: "bo", head: "h1" } });
+  });
+
+  it("a rejection archives the card with reason rejected and keeps the comment", async () => {
+    const id = await atRelease("high");
+    const out = await pipeline.decide(id, "rejected", "not today");
+    expect(out).toMatchObject({ state: "archived", archiveReason: "rejected" });
+    const gate = (await pipeline.approvals(id)).filter((a) => a.requested.gate === "ship_approval").at(-1)!;
+    expect(gate).toMatchObject({ decision: "rejected", reason: "not today" });
+  });
+
+  it("a person's send-back at the release question is refused: there is nothing to run again", async () => {
+    const id = await atRelease("low");
+    await expect(pipeline.decide(id, "sent_back", "redo")).rejects.toBeInstanceOf(TransitionError);
+    expect((await pipeline.get(id)).state).toBe("awaiting_ship");
+  });
+
+  it("the preview gate is still not rejectable, and a send-back there runs Evidence again", async () => {
+    const task = await pipeline.createTask({ title: "Login page", criteria: ["c"], evidence: pack("low") });
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await expect(pipeline.decide(task.id, "rejected", "no")).rejects.toBeInstanceOf(RejectNotAllowedError);
+    await pipeline.decide(task.id, "sent_back", "redo");
+    expect((await pipeline.stageRuns(task.id)).filter((r) => r.stage === "evidence")).toHaveLength(2);
+  });
+});
+
+describe("the open release question is probed once per poll interval", () => {
+  const pack = { summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk: "high" as const, rollback: "revert", howToVerify: "run it", commitSha: "9c1f0e2a7b3d", media: [], at: "2026-11-04T00:00:00.000Z" };
+  const learned: string[] = [];
+  const build = async (probe: (t: unknown, g: unknown) => Promise<"merged" | "withdraw" | "keep">, shipProbeMs = 0) => {
+    const truth = new DecisionTruth({ setTruth: async (p, id) => (learned.push(`${p}:${id}`), true), read: async () => ({ answer: {} }) as never }, { told: async () => {} });
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, shipGateProbe: probe as never, shipProbeMs, truth });
+    stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk: "high", decisions: { finding_classify: ["rec1"] } } });
+    const task = await p.createTask({ title: "Billing", criteria: ["c"], evidence: pack });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await p.decide(task.id, "approved");
+    learned.length = 0;
+    expect((await p.approvals(task.id)).find((a) => a.decision === null)?.requested.gate).toBe("ship_approval");
+    return { p, id: task.id };
+  };
+
+  it("a PR merged on GitHub closes the gate as an automatic approval: no name asked, no ground truth, and shipping records the merge", async () => {
+    const { p, id } = await build(async () => "merged");
+    await p.tick();
+    const gate = (await p.approvals(id)).filter((a) => a.requested.gate === "ship_approval").at(-1)!;
+    expect(gate).toMatchObject({ decision: "approved", response: { auto: true } });
+    expect(learned).toEqual([]);
+    expect((await stagesRun(id)).slice(-1)).toEqual(["shipping"]);
+  });
+
+  it("a head that moved or a checklist that no longer passes withdraws the gate, and the watch runs again", async () => {
+    const { p, id } = await build(async () => "withdraw");
+    stubs.plan("awaiting_ship", { outcome: "pass" });
+    const before = (await stagesRun(id)).filter((s) => s === "awaiting_ship").length;
+    await p.tick();
+    const gate = (await p.approvals(id)).filter((a) => a.requested.gate === "ship_approval")[0]!;
+    expect(gate).toMatchObject({ decision: "sent_back", reason: "the PR changed: asked again when it is ready" });
+    expect((await stagesRun(id)).filter((s) => s === "awaiting_ship").length).toBe(before + 1);
+    expect(learned).toEqual([]);
+  });
+
+  it("keep leaves the gate alone, and the probe runs at most once per interval", async () => {
+    const probe = vi.fn(async () => "keep" as const);
+    const { p, id } = await build(probe, 60_000);
+    await p.tick();
+    await p.tick();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect((await p.get(id)).state).toBe("awaiting_ship");
+    expect((await p.approvals(id)).find((a) => a.decision === null)).toBeDefined();
+  });
+
+  it("a probe that throws leaves the gate open", async () => {
+    const { p, id } = await build(async () => {
+      throw new Error("github down");
+    });
+    await p.tick();
+    expect((await p.approvals(id)).find((a) => a.decision === null)).toBeDefined();
+  });
+
+  it("a person's approval is ground truth for the finding records on the gate; a rejection writes none", async () => {
+    const approved = await build(async () => "keep");
+    await approved.p.decide(approved.id, "approved", undefined, undefined, { approver: "bo" });
+    expect(learned).toEqual(["finding_classify:rec1"]);
+    const rejected = await build(async () => "keep");
+    await rejected.p.decide(rejected.id, "rejected", "no");
+    expect(learned).toEqual([]);
+  });
+
+  it("does not probe the preview gate", async () => {
+    const probe = vi.fn(async () => "merged" as const);
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, shipGateProbe: probe, shipProbeMs: 0 });
+    const task = await p.createTask({ title: "Login", criteria: ["c"], evidence: pack });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await p.tick();
+    expect(probe).not.toHaveBeenCalled();
   });
 });
 

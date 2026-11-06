@@ -254,8 +254,16 @@ export class PlanApprovedError extends Error {
 /** A rejection anywhere but the plan gate: only a plan is rejected, and only while it waits. */
 export class RejectNotAllowedError extends Error {
   constructor(id: string, state: string) {
-    super(`task ${id} is ${state}: a card is rejected only at the plan gate`);
+    super(`task ${id} is ${state}: a card is rejected only at the plan gate or the release question`);
     this.name = "RejectNotAllowedError";
+  }
+}
+
+/** A High-risk release approved by someone the gate's release owners do not name. */
+export class NotReleaseOwnerError extends Error {
+  constructor(id: string, approver: string) {
+    super(`task ${id}: ${approver} is not one of the release owners this question names`);
+    this.name = "NotReleaseOwnerError";
   }
 }
 

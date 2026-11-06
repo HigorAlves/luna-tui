@@ -58,7 +58,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, WorktreeUnpushedError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, WorktreeUnpushedError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -186,6 +186,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof InvalidEscalationReasonError) return fail(c, 400, "invalid_reason", error.message);
     if (error instanceof ApproverRequiredError) return fail(c, 400, "approver_required", error.message);
     if (error instanceof SameApproverError) return fail(c, 409, "same_approver", error.message);
+    if (error instanceof NotReleaseOwnerError) return fail(c, 409, "not_release_owner", error.message);
     if (error instanceof OutsideApproverRequiredError) return fail(c, 409, "outside_approver_required", error.message);
     if (error instanceof PlanApprovedError) return fail(c, 409, "plan_approved", error.message);
     if (error instanceof RejectNotAllowedError) return fail(c, 409, "reject_not_allowed", error.message);

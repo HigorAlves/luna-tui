@@ -4,7 +4,7 @@
 // the policy's risk. A PR a person merges ends the wait the same way. The cursor file lets a
 // machine restart resume instead of escalate. Review activity and a red CI are recorded and noted
 // here; acting on them is the maintenance loop's.
-import { PrReplyAnswer, type EvidencePack, type Risk, type ShipContext } from "@hardness/contracts";
+import { PrReplyAnswer, type EvidencePack, type Risk, type ShipContext, type TaskState } from "@hardness/contracts";
 
 import { HOST_GIT, rebaseOntoDefault } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
@@ -46,6 +46,8 @@ export interface ShipMonitorDeps {
   evidence: EvidenceHandle;
   /** The review loop (slice 5): decisions, sub-run packs and the project's checks. Read at call time, so `decide` can be bound late. Absent, the monitor only notes activity. */
   loop?: ReviewLoop;
+  /** The latest finish of a stage on a card (the machine's own `stage_runs` row): the release question reads the finding records Verify kept. */
+  latestFinish?: (taskId: string, stage: TaskState) => Promise<{ runId: string; detail?: Record<string, unknown> } | null>;
   /** Told, when the PR merges, what its outcome says about event_class and comment_intent decisions (RFC 0005 wave 7). */
   truth?: TruthSink | null;
   stateDir: string;
@@ -71,6 +73,8 @@ export interface ShipFacts {
   risk: Risk;
   readiness: ReturnType<typeof mergeReadiness>;
   paths: string[];
+  /** Who answers the release question: `ship.release_owners`, else the CODEOWNERS owners of the PR's paths at the base ref. Facts, never a model's word. */
+  releaseOwners: string[];
 }
 
 export type ShipFactsDeps = Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "readCodeowners">;
@@ -100,7 +104,9 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   const policy = await deps.policies.for(task.repoPath);
   // No pack fails closed: the highest risk, and the readiness script names the missing pack.
   const risk: Risk = pack?.risk ?? "high";
-  const approver = context.approvals.findLast((a) => a.kind === "awaiting_ship" && a.decision === "approved")?.response?.approver;
+  // The release question's approval, when a person approved one: the head it was asked about is the one on its own request.
+  const askedHead = context.approvals.findLast((a) => a.kind === "awaiting_ship" && a.decision === "approved" && a.requested?.gate === "ship_approval")?.requested?.head;
+  const shipApproval = typeof askedHead === "string" ? { head: askedHead } : null;
   const listed = parseDependencies(pr.body);
   const dependencies = await Promise.all(
     listed.slice(0, MAX_DEPENDENCIES).map(async (n) => {
@@ -167,7 +173,6 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
     packSha: pack?.commitSha ?? null,
     policy: { autoMerge: policy.factory.ship.auto_merge, freeze: policy.freeze },
     risk,
-    shipApprover: risk === "high" && typeof approver === "string" && approver ? approver : null,
     now: now(),
     dependencies,
     owners,
@@ -177,8 +182,12 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
     staleDays: policy.factory.ship.stale_days,
     review,
     approvedOnHead: onHead,
+    shipApproval,
   });
-  return { pr, head, pack, risk, readiness, paths };
+  const named = policy.factory.ship.release_owners;
+  const fromCodeowners = codeownersText ? [...new Set(requiredOwners(paths, parseCodeownersChecked(codeownersText).rules).flatMap((r) => r.owners))] : [];
+  const releaseOwners = (named.length > 0 ? named : fromCodeowners).slice(0, 20);
+  return { pr, head, pack, risk, readiness, paths, releaseOwners };
 }
 
 /** The PR merged: the decisions it was waiting on are settled by what happened to their threads. Called wherever a merge is recorded. */
@@ -498,6 +507,27 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
             // The watch does not merge: it says the merge is due, at this head. `shipping` reads the facts again and merges.
             await saveCursor(deps.stateDir, task.id, cursor);
             return { outcome: "pass", detail: { ready: { head }, prUrl: url, number } };
+          } else if (readiness.needsShipApproval && head && pack) {
+            // Ready, and a person must say "safe to release now?" for this head. The gate opens after review and CI, never before.
+            await saveCursor(deps.stateDir, task.id, cursor);
+            await context.emit?.("ship.approval_needed", {}).catch(() => {});
+            const classified = (await deps.latestFinish?.(task.id, "verifying").catch(() => null))?.detail?.classified;
+            const records = (Array.isArray(classified) ? classified : []).flatMap((row: { recordId?: unknown }) => (typeof row?.recordId === "string" ? [row.recordId] : []));
+            return {
+              outcome: "needs_input",
+              detail: {
+                gate: "ship_approval",
+                head,
+                prUrl: url,
+                number,
+                risk: facts.risk,
+                checklist: readiness.checklist,
+                question: "safe to release now?",
+                releaseOwners: facts.releaseOwners,
+                evidence: { format: pack.format, summary: pack.summary, media: pack.media.map((m) => ({ label: m.label, url: m.url })), commitSha: pack.commitSha, risk: pack.risk, ...(pack.video ? { video: pack.video } : {}) },
+                ...(records.length > 0 ? { decisions: { finding_classify: records } } : {}),
+              },
+            };
           } else if (!readiness.ready) {
             const text = readiness.blockers.join("; ");
             if (text !== cursor.lastBlockers) {

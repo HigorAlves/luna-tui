@@ -222,7 +222,7 @@ const verifyDecisions: { decide: Decide | null } = { decide: null };
 const evidenceDecisions: { decide: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null } = { decide: null };
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
-const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
+const { real, verifyPack, checksExec, agentDeps, shipGateProbe } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -371,6 +371,7 @@ pipeline = new Pipeline(db, runnerFor, {
   closeDeps: { exec, worktreeRemove: false, watcher, github },
   ...(config.groundTruth ? { evidenceFeedback: evidenceFeedbackWriter(config.stateDir), groundTruth: groundTruthWriter(config.stateDir), escalationTruth: escalationTruthWriter(config.stateDir), commitsSince, headOf: headCommit } : {}),
   truth: decisionTruth,
+  ...(shipGateProbe ? { shipGateProbe, shipProbeMs: config.shipPoll.intervalMs ?? FACTORY_DEFAULTS.ship.poll_minutes * 60_000 } : {}),
   escalationDecide: buildDecisions,
   policies,
   // The queue's usage windows go by the engine each stage really runs on, credential fallback included.

@@ -61,7 +61,7 @@ function policyWith(over: (Partial<Policy> & { autoMerge?: "off" | "low" | "medi
 
 function setup(
   answers: Partial<GitHub> = {},
-  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean } = {},
+  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"] } = {},
 ) {
   const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => {}, ...answers });
   let clock = START.getTime();
@@ -84,6 +84,7 @@ function setup(
     // The review loop's decisions and sub-runs (slice 5); absent, the monitor only notes activity.
     ...(over.loop ? { loop: over.loop } : {}),
     ...(over.truth ? { truth: over.truth } : {}),
+    ...(over.latestFinish ? { latestFinish: over.latestFinish } : {}),
   };
   const context = {
     task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" },
@@ -101,6 +102,61 @@ function fakeGitHubFrom(fileAtRef: (slug: string, ref: string, path: string) => 
 }
 
 const calls = (github: ReturnType<typeof fakeGitHub>, method: string) => github.calls.filter((c) => c[0] === method);
+
+describe("the release question (ship approval) after readiness", () => {
+  const release = (head: string, extra: Record<string, unknown> = {}) => ({ kind: "awaiting_ship", decision: "approved", requested: { gate: "ship_approval", head, ...extra }, response: { approver: "bo", head } }) as never;
+  const FRESH = "1111111aaaa2222222bbbb3333333cccc4444444";
+
+  it("a High-risk card that is ready gets a needs_input with the checklist, the pack and the question, and says ship.approval_needed", async () => {
+    const { run, emitted } = setup({}, { policy: { autoMerge: "medium_when_review_required", factory: { ...DEFAULT_POLICY.factory, ship: { ...DEFAULT_POLICY.factory.ship, release_owners: ["bo", "cy"] } } }, pack: pack("high") });
+    const result = await run();
+    expect(result).toMatchObject({ outcome: "needs_input", detail: { gate: "ship_approval", head: HEAD, prUrl: REF.url, number: 3, risk: "high", question: "safe to release now?", releaseOwners: ["bo", "cy"] } });
+    const detail = result.detail as { checklist: Array<{ id: string; ok: boolean }>; evidence: { commitSha: string; risk: string } };
+    expect(detail.checklist).toHaveLength(12);
+    expect(detail.checklist.every((i) => i.ok)).toBe(true);
+    expect(detail.evidence).toMatchObject({ commitSha: HEAD, risk: "high" });
+    expect(emitted.map(([kind]) => kind)).toEqual(["ship.ready", "ship.approval_needed"]);
+  });
+
+  it("never before readiness: a red CI keeps the watch waiting and opens nothing", async () => {
+    let polls = 0;
+    const red = node({ commits: { nodes: [{ commit: { oid: HEAD, committedDate: "2026-11-03T10:00:00Z", statusCheckRollup: { state: "FAILURE", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: null }] } } } }] } });
+    const { run, slept } = setup({ prFacts: async () => red, prMerged: async () => (++polls < 3 ? open : merged) }, { policy: { autoMerge: "medium_when_review_required" }, pack: pack("high") });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "person" } } });
+    expect(slept.length).toBe(2);
+  });
+
+  it("the release owners are the CODEOWNERS owners of the PR's paths when the repository names none, never a model's word", async () => {
+    const { run } = setup({ prFiles: async () => [{ path: "src/a.ts", additions: 1, deletions: 0 }] }, { policy: { autoMerge: "medium_when_review_required" }, pack: pack("high"), codeowners: "src/ @ana @bo\n" });
+    expect(await run()).toMatchObject({ outcome: "needs_input", detail: { releaseOwners: ["@ana", "@bo"] } });
+  });
+
+  it("keeps the record ids Evidence kept for the findings on the gate", async () => {
+    const { run } = setup({}, { policy: { autoMerge: "medium_when_review_required" }, pack: pack("high"), latestFinish: async () => ({ runId: "r", detail: { classified: [{ recordId: "rec1" }, { recordId: "rec2" }, { nope: 1 }] } }) });
+    expect(await run()).toMatchObject({ detail: { decisions: { finding_classify: ["rec1", "rec2"] } } });
+  });
+
+  it("a ship approval for this head, with an approval on the head, is a merge due; one for an older head asks again", async () => {
+    const policy = { autoMerge: "medium_when_review_required" as const };
+    const approved = setup({}, { policy, pack: pack("high"), approvals: [release(HEAD)] });
+    expect(await approved.run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
+    const older = setup({}, { policy, pack: pack("high"), approvals: [release(FRESH)] });
+    expect(await older.run()).toMatchObject({ outcome: "needs_input", detail: { gate: "ship_approval", head: HEAD } });
+  });
+
+  it("a rejected or open ship approval is no approval", async () => {
+    const rejected = [{ kind: "awaiting_ship", decision: "rejected", requested: { gate: "ship_approval", head: HEAD }, response: null }] as never;
+    const { run } = setup({}, { policy: { autoMerge: "medium_when_review_required" }, pack: pack("high"), approvals: rejected });
+    expect(await run()).toMatchObject({ outcome: "needs_input" });
+  });
+
+  it("a Low-risk card under auto_merge low asks only when nobody approved the head", async () => {
+    const none = setup({ prReviews: async () => [] }, { policy: { autoMerge: "low" } });
+    expect(await none.run()).toMatchObject({ outcome: "needs_input", detail: { risk: "low" } });
+    const looked = setup({}, { policy: { autoMerge: "low" } });
+    expect(await looked.run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
+  });
+});
 
 describe("the ship monitor", () => {
   it("merges a green approved low-risk PR at the first poll when auto_merge allows it, with the head sha as the guard", async () => {
@@ -124,12 +180,12 @@ describe("the ship monitor", () => {
   it("says a merge is due only for a PR with an approval on the head, whatever the preview gate and GitHub's reviewDecision say", async () => {
     let polls = 0;
     const unseen = { prReviews: async () => [], prMerged: async () => (++polls < 2 ? open : merged) };
-    const none = setup(unseen, { policy: { autoMerge: "low" }, approvals: [{ kind: "awaiting_ship", decision: "approved", response: {} } as never] });
+    const none = setup(unseen, { policy: { autoMerge: "medium_when_review_required" }, approvals: [{ kind: "awaiting_ship", decision: "approved", response: {} } as never] });
     expect(await none.run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "person" } } });
     expect(calls(none.github, "mergePr")).toEqual([]);
     const looked = setup({}, { policy: { autoMerge: "low" } });
     expect(await looked.run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
-    const stranger = setup({ prReviews: async () => [{ author: "eve", state: "APPROVED", commitId: HEAD, at: "t", association: "NONE" }], prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(merged) }, { policy: { autoMerge: "low" } });
+    const stranger = setup({ prReviews: async () => [{ author: "eve", state: "APPROVED", commitId: HEAD, at: "t", association: "NONE" }], prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(merged) }, { policy: { autoMerge: "medium_when_review_required" } });
     expect(await stranger.run()).toMatchObject({ detail: { merged: { by: "person" } } });
   });
 
@@ -163,11 +219,10 @@ describe("the ship monitor", () => {
     expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
   });
 
-  it("never says a merge is due for a high-risk PR: a person is asked after readiness (slice 4)", async () => {
-    const high = setup({ prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(merged) }, { policy: { autoMerge: "medium" }, pack: pack("high") });
-    expect(await high.run()).toMatchObject({ detail: { merged: { by: "person" } } });
+  it("never says a merge is due for a high-risk PR with no ship approval: a person is asked after readiness", async () => {
+    const high = setup({}, { policy: { autoMerge: "medium" }, pack: pack("high") });
+    expect(await high.run()).toMatchObject({ outcome: "needs_input", detail: { gate: "ship_approval", risk: "high" } });
     expect(calls(high.github, "mergePr")).toEqual([]);
-    expect(high.notes.join("\n")).toMatch(/release approval/);
   });
 
   it("waits through a freeze window and merges after it", async () => {

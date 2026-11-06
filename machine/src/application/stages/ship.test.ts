@@ -14,7 +14,7 @@ const HEAD = "a".repeat(40);
 const MERGE_COMMIT = "b".repeat(40);
 const open = { merged: false, mergedSha: null, state: "open" as const, mergedAt: null };
 const context = { task: { id: "t1", title: "feat", description: "d", criteria: [], branch: "hardness/t1", worktreePath: "/wt", repoPath: "/repo", source: null } as unknown as TaskRow, stage: "shipping", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as StageContext;
-const facts = (canAutoMerge: boolean, head = HEAD, reason = "not ready: CI is red"): ShipFacts => ({ pr: {} as ShipFacts["pr"], head, pack: null, risk: "low", paths: [], readiness: { ready: canAutoMerge, canAutoMerge, blockers: canAutoMerge ? [] : [reason], reason, checklist: [] } as unknown as ShipFacts["readiness"] });
+const facts = (canAutoMerge: boolean, head = HEAD, reason = "not ready: CI is red"): ShipFacts => ({ pr: {} as ShipFacts["pr"], head, pack: null, risk: "low", paths: [], releaseOwners: [], readiness: { ready: canAutoMerge, canAutoMerge, blockers: canAutoMerge ? [] : [reason], reason, checklist: [] } as unknown as ShipFacts["readiness"] });
 
 async function wire(over: { github?: Parameters<typeof fakeGitHub>[0]; facts?: () => Promise<ShipFacts | null>; cursor?: boolean } = {}) {
   const stateDir = await mkdtemp(join(tmpdir(), "merge-"));
@@ -107,6 +107,46 @@ describe("mergeRunner (shipping)", () => {
     const github = fakeGitHub({ prMerged: async () => open });
     const run = mergeRunner({ github, policies: { for: async () => ({}) as never }, evidence: { load: async () => null }, stateDir, pollMs: 1, readFacts: async () => facts(false), settle: async () => {} });
     expect(await run(context)).toMatchObject({ outcome: "fail", detail: { notReady: true } });
+    expect(github.mergePr).not.toHaveBeenCalled();
+  });
+});
+
+describe("mergeRunner on a card that needed the release question", () => {
+  const FRESH = "c".repeat(40);
+  const node = {
+    id: "PR_1", number: 3, title: "t", body: null, url: "https://github.com/a/b/pull/3", isDraft: false, updatedAt: "2026-11-04T11:00:00Z", baseRefName: "main", headRefName: "hardness/t1",
+    author: { login: "me" }, headRepository: { nameWithOwner: "a/b" }, reviewDecision: "APPROVED", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewRequests: { nodes: [] }, reviewThreads: { nodes: [] },
+    commits: { nodes: [{ commit: { oid: HEAD, committedDate: new Date().toISOString(), statusCheckRollup: { state: "SUCCESS", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: null }] } } } }] },
+  };
+  const pack = { summary: "s", format: "text", scenarios: [], findings: [], outOfMap: [], risk: "high", rollback: "r", howToVerify: "h", commitSha: HEAD, media: [], at: "2026-11-04T00:00:00.000Z" };
+  const policy = { freeze: [], factory: { ship: { auto_merge: "medium_when_review_required", stale_days: 14, release_owners: [] } } };
+  const approval = (head: string) => ({ kind: "awaiting_ship", decision: "approved", requested: { gate: "ship_approval", head }, response: { approver: "bo", head } }) as never;
+
+  async function real(head: string) {
+    const stateDir = await mkdtemp(join(tmpdir(), "merge-"));
+    await saveCursor(stateDir, "t1", emptyCursor({ slug: "a/b", number: 3 }));
+    let merged = false;
+    const github = fakeGitHub({
+      viewer: async () => ({ login: "me", teams: [] }),
+      reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }),
+      prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }],
+      prFacts: async () => node as never, prHeadSha: async () => HEAD, prFiles: async () => [], fileAtRef: async () => null,
+      prMerged: async () => (merged ? { merged: true, mergedSha: MERGE_COMMIT, state: "closed", mergedAt: "t" } : open),
+      mergePr: async () => { merged = true; },
+    });
+    const run = mergeRunner({ github, policies: { for: async () => policy as never }, evidence: { load: async () => pack as never }, stateDir, pollMs: 1000, sleep: async () => {}, settle: async () => {} });
+    return { run: () => run({ ...context, approvals: [approval(head)] } as StageContext), github };
+  }
+
+  it("merges when the ship approval is for the head GitHub shows now, and an approval is on it", async () => {
+    const { run, github } = await real(HEAD);
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { sha: MERGE_COMMIT } } });
+    expect(github.mergePr).toHaveBeenCalledWith("a/b", 3, expect.objectContaining({ sha: HEAD }));
+  });
+
+  it("does not merge when the approval was for an older head: notReady, and the watch asks again", async () => {
+    const { run, github } = await real(FRESH);
+    expect(await run()).toMatchObject({ outcome: "fail", detail: { notReady: true } });
     expect(github.mergePr).not.toHaveBeenCalled();
   });
 });

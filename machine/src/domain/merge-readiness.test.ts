@@ -36,7 +36,6 @@ const input = (over: Partial<Parameters<typeof mergeReadiness>[0]> = {}): Parame
   packSha: HEAD,
   policy: { autoMerge: "low", freeze: [] },
   risk: "low",
-  shipApprover: null,
   now: NOW,
   dependencies: [],
   owners: { missing: [], unresolved: [] },
@@ -105,6 +104,7 @@ describe("mergeReadiness", () => {
 
   describe("canAutoMerge", () => {
     const cases: Array<[string, "off" | "low" | "medium", string | null, boolean]> = [
+      // the third column is the head a person's ship approval was for: only a High-risk card cannot merge without one
       ["low", "off", null, false],
       ["low", "low", null, true],
       ["low", "medium", null, true],
@@ -112,12 +112,12 @@ describe("mergeReadiness", () => {
       ["medium", "low", null, false],
       ["medium", "medium", null, true],
       ["high", "medium", null, false],
-      ["high", "off", "ana", false],
-      ["high", "low", "ana", false],
-      ["high", "medium", "ana", false],
+      ["high", "off", HEAD, false],
+      ["high", "low", HEAD, true],
+      ["high", "medium", HEAD, true],
     ];
-    it.each(cases)("%s risk, auto_merge %s, ship approver %s: %s", (risk, autoMerge, shipApprover, expected) => {
-      const out = mergeReadiness(input({ risk: risk as "low", policy: { autoMerge, freeze: [] }, shipApprover }));
+    it.each(cases)("%s risk, auto_merge %s, ship approval for %s: %s", (risk, autoMerge, approvedHead, expected) => {
+      const out = mergeReadiness(input({ risk: risk as "low", policy: { autoMerge, freeze: [] }, shipApproval: approvedHead ? { head: approvedHead } : null }));
       expect(out.ready).toBe(true);
       expect(out.canAutoMerge).toBe(expected);
     });
@@ -193,11 +193,63 @@ describe("auto-merge under the review rule (D4)", () => {
       expect(mergeReadiness(base({ policy: { autoMerge, freeze: [] }, approvedOnHead: false, pr: pr({ reviewDecision: "APPROVED" }) })).canAutoMerge).toBe(false);
     }
   });
-  it("off never merges; low merges only Low risk; medium merges Low and Medium on an approval; High is never merged here", () => {
+  it("off never merges; low merges only Low risk; medium merges Low and Medium on an approval; High is never merged without a ship approval", () => {
     expect(mergeReadiness(base({ policy: { autoMerge: "off", freeze: [] } })).canAutoMerge).toBe(false);
     expect(mergeReadiness(base({ policy: { autoMerge: "low", freeze: [] }, risk: "medium" })).canAutoMerge).toBe(false);
     expect(mergeReadiness(base({ policy: { autoMerge: "low", freeze: [] }, review: { required: false } })).canAutoMerge).toBe(true);
     expect(mergeReadiness(base({ policy: { autoMerge: "medium", freeze: [] }, risk: "medium", review: { required: false } })).canAutoMerge).toBe(true);
-    expect(mergeReadiness(base({ policy: { autoMerge: "medium", freeze: [] }, risk: "high", shipApprover: "ana" })).canAutoMerge).toBe(false);
+    expect(mergeReadiness(base({ policy: { autoMerge: "medium", freeze: [] }, risk: "high" })).canAutoMerge).toBe(false);
+  });
+});
+
+describe("the checklist and the ship approval (slice 4)", () => {
+  const IDS = ["pack", "draft", "ci", "conflicts", "approvals", "owners", "codeowners_change", "fix_approval", "evidence_head", "freeze", "blocked", "stale"];
+  const withMode = (autoMerge: "off" | "low" | "medium" | "medium_when_review_required", over: Partial<Parameters<typeof mergeReadiness>[0]> = {}) => input({ policy: { autoMerge, freeze: [] }, ...over });
+
+  it("lists the twelve items in a fixed order, all ok for a clean PR", () => {
+    const out = mergeReadiness(input());
+    expect(out.checklist.map((i) => i.id)).toEqual(IDS);
+    expect(out.checklist.every((i) => i.ok)).toBe(true);
+  });
+
+  it("marks the item that is not ok, with its detail, and blockers are those details", () => {
+    const out = mergeReadiness(input({ pr: pr({ isDraft: true, checks: { state: "failure", passed: 0, total: 1, failed: [], all: [] } }), packSha: "1111111aaaa" }));
+    const bad = out.checklist.filter((i) => !i.ok);
+    expect(bad.map((i) => i.id)).toEqual(["draft", "ci", "evidence_head"]);
+    expect(out.blockers).toEqual(["draft", "CI is red", "the pack shows 1111111, the head is 9c1f0e2"]);
+    expect(out.checklist.find((i) => i.id === "ci")).toMatchObject({ ok: false, detail: "CI is red" });
+  });
+
+  it("asks a person for a High-risk card once ready, never before", () => {
+    expect(mergeReadiness(withMode("medium_when_review_required", { risk: "high" })).needsShipApproval).toBe(true);
+    expect(mergeReadiness(withMode("medium_when_review_required", { risk: "high", pr: pr({ isDraft: true }) })).needsShipApproval).toBe(false);
+  });
+
+  it("does not ask with auto_merge off", () => {
+    expect(mergeReadiness(withMode("off", { risk: "high" })).needsShipApproval).toBe(false);
+  });
+
+  it("asks for low or medium modes when the risk is covered and nobody approved the head", () => {
+    expect(mergeReadiness(withMode("low", { approvedOnHead: false })).needsShipApproval).toBe(true);
+    expect(mergeReadiness(withMode("low", { approvedOnHead: true })).needsShipApproval).toBe(false);
+    expect(mergeReadiness(withMode("low", { risk: "medium", approvedOnHead: false })).needsShipApproval).toBe(false);
+    expect(mergeReadiness(withMode("medium", { risk: "medium", approvedOnHead: false })).needsShipApproval).toBe(true);
+    expect(mergeReadiness(withMode("medium_when_review_required", { approvedOnHead: false })).needsShipApproval).toBe(false);
+  });
+
+  it("merges a High-risk card only with a ship approval for the head, and an approval on the head where a review is required", () => {
+    const base = { risk: "high" as const, shipApproval: { head: HEAD } };
+    expect(mergeReadiness(withMode("medium_when_review_required", base)).canAutoMerge).toBe(true);
+    expect(mergeReadiness(withMode("medium_when_review_required", { ...base, approvedOnHead: false })).canAutoMerge).toBe(false);
+    expect(mergeReadiness(withMode("medium_when_review_required", { ...base, approvedOnHead: false, review: { required: false } })).canAutoMerge).toBe(true);
+    expect(mergeReadiness(withMode("medium_when_review_required", { ...base, shipApproval: { head: "1111111aaaa" } })).canAutoMerge).toBe(false);
+    expect(mergeReadiness(withMode("off", base)).canAutoMerge).toBe(false);
+    expect(mergeReadiness(withMode("medium_when_review_required", { risk: "high" })).canAutoMerge).toBe(false);
+  });
+
+  it("low and medium merge on a ship approval for the head in place of an approval on the head", () => {
+    expect(mergeReadiness(withMode("low", { approvedOnHead: false, shipApproval: { head: HEAD } })).canAutoMerge).toBe(true);
+    expect(mergeReadiness(withMode("low", { approvedOnHead: false, shipApproval: { head: "1111111aaaa" } })).canAutoMerge).toBe(false);
+    expect(mergeReadiness(withMode("medium_when_review_required", { approvedOnHead: false, shipApproval: { head: HEAD } })).canAutoMerge).toBe(false);
   });
 });
