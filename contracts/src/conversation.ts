@@ -37,6 +37,10 @@ export type CanonicalMessage = z.infer<typeof CanonicalMessage>;
 export const ConversationRelationType = z.enum(["related_to_in_progress", "related_to_backlog", "new_candidate", "none", "ask"]);
 export type ConversationRelationType = z.infer<typeof ConversationRelationType>;
 
+/** What kind of thing a thread is: the first question of `conversation_assess`. */
+export const ConversationKind = z.enum(["incident", "bug", "request", "question", "fyi", "chatter"]);
+export type ConversationKind = z.infer<typeof ConversationKind>;
+
 export interface ConversationClassification {
   /** incident, bug, request, question, fyi or chatter; set by the typed decision or by hand. */
   kind: string;
@@ -46,6 +50,13 @@ export interface ConversationClassification {
   at: string;
   /** Decision record ids by step. */
   records: Record<string, string>;
+  /** `ask`: the machine was not sure of the kind or of the need for a reply and waits for a person. Absent on a hand-set kind. */
+  verdict?: "ok" | "ask";
+  /** What the machine computed, kept for the board and the ground truth: its level, total, the flag that hit and each sub-score (1 to 3). */
+  priority?: string;
+  total?: number;
+  knockOut?: string | null;
+  scores?: Record<string, { score: number; confidence: number }>;
 }
 
 export interface ConversationRelation {

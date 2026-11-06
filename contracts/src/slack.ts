@@ -4,7 +4,7 @@
 import { z } from "zod";
 
 import type { Stats } from "./api.ts";
-import type { Conversation } from "./conversation.ts";
+import { type Conversation, ConversationKind } from "./conversation.ts";
 import type { EngineId } from "./engines.ts";
 
 /** Where an item sits for you. One split per item, picked by the machine's `splitOf`. */
@@ -161,6 +161,8 @@ export const SlackItemPatch = z.object({
   seen: z.boolean().optional(),
   /** A hand override of triage's priority. */
   priority: SlackPriority.optional(),
+  /** A hand-set kind of the conversation: settles an `ask` and is ground truth for the decision. */
+  kind: ConversationKind.optional(),
 });
 export type SlackItemPatch = z.infer<typeof SlackItemPatch>;
 

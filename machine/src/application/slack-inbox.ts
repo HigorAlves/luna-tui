@@ -47,9 +47,12 @@ import {
   toSlackItem,
   touch,
 } from "../domain/slack-item.ts";
-import { DEFAULT_SLA, LEARNED_TEMPLATE, RULES_TEMPLATE, type SlaTargets, type SlackRules, applyRules, firstLine, inQuietHours, learn, learnedPath, parseRules, withFloor } from "../domain/slack-rules.ts";
+import { DEFAULT_SLA, LEARNED_TEMPLATE, vipOf, RULES_TEMPLATE, type SlaTargets, type SlackRules, applyRules, firstLine, inQuietHours, learn, learnedPath, parseRules, withFloor } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { ChannelClaims } from "./channel-claims.ts";
+import { type Assessed, CATEGORY } from "./conversation-machine.ts";
+import type { ConversationTruth } from "./conversation-truth.ts";
+import { settled as threadQuiet } from "../domain/ticket-scope.ts";
 import type { NewTask } from "./pipeline.ts";
 import { type ChannelInfo, type Conversation, type RawMessage, type Slack, type SlackMe, type Usergroup, messageOf } from "./slack.ts";
 import type { SlackStore } from "./slack-store.ts";
@@ -132,6 +135,10 @@ export interface SlackInboxOptions {
   scope?: SlackScope;
   /** The channels repositories claim in `conversation.channels`; unset claims none. */
   claims?: ChannelClaims;
+  /** The Conversation Machine's chain. Without it (agents off) every item takes the `slack_triage` path as before. */
+  assessor?: { assess(row: SlackItemRow): Promise<Assessed> };
+  /** Ground truth of a hand-set kind or priority. */
+  truth?: Pick<ConversationTruth, "override">;
 }
 
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
@@ -280,6 +287,7 @@ export class SlackInbox implements SlackInboxPort {
    * when a due time, an overdue flag or a split flipped.
    */
   tick(): void {
+    this.kickTriage();
     const now = this.now();
     const items = this.snapshot.items.map((item) => ({ ...item, ...dueOf(item, now, this.sla), split: splitOf(item, now) }));
     this.publishIfChanged({ ...this.snapshot, items, quiet: this.lastRules ? inQuietHours(this.lastRules, now) : false });
@@ -737,6 +745,13 @@ export class SlackInbox implements SlackInboxPort {
         gathered.changed.set(id, { ...row, triage: this.keepOverride(row.triage, settled) });
         continue;
       }
+      if (this.chain(row)) {
+        // The thread must be quiet for the debounce; a message that mentions the person does not wait. A held item is picked up by the timer or the minute tick.
+        const seconds = this.claims.configOf(row.channel.id).conversation.debounce_seconds;
+        const hold = !row.matched.includes("me") && !threadQuiet(row.ts, this.now(), seconds);
+        this.triageQueue.set(id, { floor, failures: 0, notBefore: hold ? new Date(row.ts).getTime() + seconds * 1000 : 0 });
+        continue;
+      }
       if (!this.options.triager) {
         if (!this.warnedNoTriager) console.warn("slack inbox: no triager (agents off, or no credential or runner image): items are listed without triage");
         this.warnedNoTriager = true;
@@ -745,6 +760,16 @@ export class SlackInbox implements SlackInboxPort {
       // A new message resets the retry clock: the item is worth a fresh try.
       this.triageQueue.set(id, { floor, failures: 0, notBefore: 0 });
     }
+  }
+
+  /** Whether the Conversation Machine's chain handles this item: it is there and the conversation's repository has `auto` off (the default). */
+  private chain(row: SlackItemRow): boolean {
+    return !!this.options.assessor && this.claims.configOf(row.channel.id).conversation.auto !== "on";
+  }
+
+  /** The VIP rule of the rules file, for the enrichment's author profile. */
+  isVip(author: { id: string; name: string }): boolean {
+    return this.lastRules ? vipOf(this.lastRules, { ...author, isBot: false }) : false;
   }
 
   /**
@@ -777,13 +802,35 @@ export class SlackInbox implements SlackInboxPort {
   /** One pack run over the items given. A run that produced nothing re-queues them with backoff; past the last retry they stay untriaged. */
   private async drainTriage(queued: Map<string, { floor: SlackPriority | null; failures: number; notBefore: number }>): Promise<void> {
     const { triager, store } = this.options;
-    if (!triager || queued.size === 0) return;
+    if (queued.size === 0) return;
     const rows = new Map<string, SlackItemRow>();
     for (const id of queued.keys()) {
       const row = await store.item(id);
       if (row) rows.set(id, row);
     }
     if (rows.size === 0) return;
+    // The new chain: one typed call per conversation, the priority in code. A failed call retries on the clock and leaves triage as it was.
+    for (const [id, row] of [...rows]) {
+      if (!this.chain(row)) continue;
+      rows.delete(id);
+      const entry = queued.get(id)!;
+      let out: Assessed;
+      try {
+        out = await this.options.assessor!.assess(row);
+      } catch (error) {
+        console.warn(`slack inbox: conversation assess failed for ${id}: ${messageOf(error)}`);
+        const delay = TRIAGE_RETRY_MS[entry.failures];
+        if (delay !== undefined) this.triageQueue.set(id, { ...entry, failures: entry.failures + 1, notBefore: this.now().getTime() + delay });
+        continue;
+      }
+      const fresh = await store.item(id);
+      if (!fresh) continue;
+      const conversation = fresh.conversation ?? emptyConversation(fresh.channel);
+      const kept = conversation.classification?.by === "person" ? conversation.classification : out.classification;
+      await store.save([{ ...fresh, triage: withFloor(this.keepOverride(fresh.triage, out.triage), entry.floor), conversation: { ...conversation, classification: kept } }]);
+      await this.refresh(this.snapshot.polledAt, this.snapshot.error);
+    }
+    if (!triager || rows.size === 0) return;
     const [me, watches, rules] = await Promise.all([this.whoAmI(), store.watches(), this.rules()]);
     const toModel: TriageItem[] = [...rows.values()].map((row) => ({
       id: row.id,
@@ -944,7 +991,18 @@ export class SlackInbox implements SlackInboxPort {
     }
     if (patch.snoozedUntil !== undefined) next = { ...next, snoozedUntil: patch.snoozedUntil };
     if (patch.seen) next = { ...next, seenAt: next.seenAt ?? now };
+    if (patch.kind) {
+      const conversation = next.conversation ?? emptyConversation(next.channel);
+      const previous = conversation.classification;
+      next = {
+        ...next,
+        conversation: { ...conversation, classification: { ...(previous ?? { records: {} }), kind: patch.kind, confidence: 1, by: "person", at: now, verdict: "ok" } },
+        ...(next.triage ? { triage: { ...next.triage, category: CATEGORY[patch.kind] ?? next.triage.category } } : {}),
+      };
+      await this.options.truth?.override({ thread: row.id, classification: previous ?? null, kind: patch.kind }).catch(() => {});
+    }
     if (patch.priority) {
+      await this.options.truth?.override({ thread: row.id, classification: row.conversation?.classification ?? null, priority: patch.priority }).catch(() => {});
       const base: SlackTriage = next.triage ?? { priority: patch.priority, category: "fyi", expectsReply: false, summary: firstLine(next.text), why: "set by hand", draft: null, refs: [], deadline: null, by: "rules", triagedAt: now, overridden: true };
       next = { ...next, triage: { ...base, priority: patch.priority, overridden: true } };
     }

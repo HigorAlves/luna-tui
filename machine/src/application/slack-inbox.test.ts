@@ -7,6 +7,7 @@ import { RULES_TEMPLATE } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
 import { ChannelClaims } from "./channel-claims.ts";
+import type { Assessed } from "./conversation-machine.ts";
 import { AlreadyTaskError, BuiltinWatchError, NoItemError, SlackInbox } from "./slack-inbox.ts";
 import { NoSlackTokenError, type RawMessage, type SearchHit, noTokenSlack } from "./slack.ts";
 import type { TriageAnswer, TriageItem, Triager } from "./slack-triage.ts";
@@ -40,14 +41,17 @@ interface World {
   retentionDays?: number;
   scope?: "opted_in" | "all";
   claimed?: Record<string, string>;
+  conv?: Partial<typeof FACTORY_DEFAULTS.conversation>;
+  assessor?: { assess: (row: SlackItemRow) => Promise<Assessed> };
+  truth?: { override: (input: unknown) => Promise<void> };
 }
 
 const msg = (over: Partial<RawMessage> & { ts: string }): RawMessage => ({ user: "U2", botId: null, text: "", subtype: null, threadTs: null, replyCount: 0, latestReply: null, ...over });
 const hit = (over: Partial<SearchHit> & { ts: string }): SearchHit => ({ text: "<@U1> hi", user: "U2", channel: { id: "C1", name: "eng" }, permalink: `https://x.slack.com/archives/C1/p${over.ts.replace(".", "")}`, ...over });
 
-const stubClaims = (byChannel: Record<string, string>): ChannelClaims => {
+const stubClaims = (byChannel: Record<string, string>, conv: Partial<typeof FACTORY_DEFAULTS.conversation> = {}): ChannelClaims => {
   const c = new ChannelClaims(async () => [], async () => ({ conversation: FACTORY_DEFAULTS.conversation, scoring: FACTORY_DEFAULTS.scoring }));
-  Object.assign(c, { refresh: async () => {}, repoOf: (ch: string) => byChannel[ch] ?? null, claimed: () => new Set(Object.keys(byChannel)) });
+  Object.assign(c, { refresh: async () => {}, repoOf: (ch: string) => byChannel[ch] ?? null, configOf: () => ({ conversation: { ...FACTORY_DEFAULTS.conversation, ...conv }, scoring: FACTORY_DEFAULTS.scoring }), claimed: () => new Set(Object.keys(byChannel)) });
   return c;
 };
 
@@ -117,7 +121,9 @@ function setup(world: World = {}) {
     },
     markRead: world.markRead ?? false,
     scope: world.scope ?? "all",
-    ...(world.claimed ? { claims: stubClaims(world.claimed) } : {}),
+    ...(world.claimed || world.conv ? { claims: stubClaims(world.claimed ?? {}, world.conv) } : {}),
+    ...(world.assessor ? { assessor: world.assessor } : {}),
+    ...(world.truth ? { truth: world.truth as never } : {}),
     rulesPath: "/rules.md",
     socketToken: null,
     now: world.now ?? (() => NOW),
@@ -286,6 +292,77 @@ describe("SlackInbox.pollOnce", () => {
       expect(called(slack, "replies").every((c) => c[1] === "C1")).toBe(true);
       expect(called(slack, "history").map((c) => c[1])).not.toContain("C9");
       expect(store.rows.has(`C9:${ts(60)}`)).toBe(true);
+    });
+  });
+
+  describe("the conversation chain", () => {
+    const assessed = (over: Partial<Assessed> = {}): Assessed => ({
+      triage: { priority: "P1", category: "request", expectsReply: true, summary: "s", why: "bug; who 1", draft: null, refs: [], deadline: null, by: "model", triagedAt: iso(0), overridden: false },
+      classification: { kind: "bug", confidence: 0.9, by: "model", at: iso(0), records: { assess: "rec-1" }, verdict: "ok" },
+      verdict: "ok",
+      shortlist: [],
+      ...over,
+    });
+    const chain = (over: World = {}) => {
+      const calls: string[] = [];
+      const assessor = { assess: async (row: SlackItemRow) => (calls.push(row.id), assessed()) };
+      return { calls, ...setup({ assessor, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })], ...over }) };
+    };
+
+    it("runs the new chain for a repository with conversation.auto off, not the slack_triage pack", async () => {
+      const { inbox, store, calls, triaged } = chain();
+      await poll(inbox);
+      expect(calls).toEqual([`C1:${ts(10)}`]);
+      expect(triaged).toEqual([]);
+      const row = store.rows.get(`C1:${ts(10)}`)!;
+      expect(row.triage).toMatchObject({ priority: "P1", by: "model" });
+      expect(row.conversation?.classification).toMatchObject({ kind: "bug", records: { assess: "rec-1" } });
+    });
+
+    it("keeps the slack_triage pack, with its inline draft, for a repository with conversation.auto on", async () => {
+      const { inbox, calls, triaged } = chain({ conv: { auto: "on" } });
+      await poll(inbox);
+      expect(calls).toEqual([]);
+      expect(triaged).toHaveLength(1);
+    });
+
+    it("waits for the thread to be quiet for the debounce, unless the message mentions the person", async () => {
+      let nowMs = NOW.getTime();
+      const calls: string[] = [];
+      const assessor = { assess: async (row: SlackItemRow) => (calls.push(row.id), assessed()) };
+      const { inbox } = setup({ assessor, now: () => new Date(nowMs), scope: "opted_in", history: { C1: [msg({ ts: ts(0.5), text: "anyone seen this fail?" })] }, claimed: { C1: "/r" }, conv: { debounce_seconds: 90 } });
+      await inbox.pollOnce();
+      await inbox.idle();
+      expect(calls).toEqual([]);
+      nowMs += 120_000;
+      await inbox.pollOnce(true);
+      await inbox.idle();
+      inbox.tick();
+      await inbox.idle();
+      expect(calls).toEqual([`C1:${ts(0.5)}`]);
+      const mention = setup({ assessor, hits: [hit({ ts: ts(0.1), text: "<@U1> urgent" })] });
+      await poll(mention.inbox);
+      expect(calls).toHaveLength(2);
+    });
+
+    it("lists an unsure verdict with the machine's guess and waits for the person: PATCH kind settles it and is ground truth", async () => {
+      const overrides: unknown[] = [];
+      const assessor = { assess: async () => assessed({ verdict: "ask", classification: { kind: "bug", confidence: 0.4, by: "model", at: iso(0), records: { assess: "rec-1" }, verdict: "ask" } }) };
+      const { inbox, store } = setup({ assessor, hits: [hit({ ts: ts(10), text: "<@U1> hmm" })], truth: { override: async (i) => void overrides.push(i) } });
+      await poll(inbox);
+      const id = `C1:${ts(10)}`;
+      expect(store.rows.get(id)!.conversation?.classification).toMatchObject({ verdict: "ask", kind: "bug" });
+      const item = await inbox.patch(id, { kind: "question" });
+      expect(item.conversation?.classification).toMatchObject({ kind: "question", by: "person", verdict: "ok" });
+      expect(item.triage?.category).toBe("question");
+      expect(overrides).toMatchObject([{ thread: id, kind: "question" }]);
+    });
+
+    it("retries a failed call on the retry clock and leaves triage null meanwhile", async () => {
+      const assessor = { assess: async () => { throw new Error("container failed"); } };
+      const { inbox, store } = setup({ assessor, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
+      await poll(inbox);
+      expect(store.rows.get(`C1:${ts(10)}`)!.triage).toBeNull();
     });
   });
 

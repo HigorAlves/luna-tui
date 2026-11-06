@@ -226,7 +226,7 @@ function isMuted(rules: SlackRules, channel: RuleInput["channel"]): boolean {
   return rules.muted.includes(channel.id.toLowerCase()) || rules.muted.includes(channel.name.toLowerCase());
 }
 
-function isVip(rules: SlackRules, author: RuleInput["author"]): boolean {
+export function vipOf(rules: SlackRules, author: RuleInput["author"]): boolean {
   return rules.vips.includes(author.id.toLowerCase()) || rules.vips.includes(author.name.toLowerCase());
 }
 
@@ -236,7 +236,7 @@ export function applyRules(input: RuleInput, rules: SlackRules, now: Date): Rule
   if (isMuted(rules, input.channel)) return { drop: true, reason: "muted" };
   const text = input.text.toLowerCase();
   let floor: SlackPriority | null = watchFloor(input.matched, input.watches);
-  if (isVip(rules, input.author)) floor = higher(floor, "P1");
+  if (vipOf(rules, input.author)) floor = higher(floor, "P1");
   if (rules.p0Keywords.some((word) => text.includes(word))) floor = higher(floor, "P0");
   if (input.author.isBot && !input.mentionsMe) {
     return {

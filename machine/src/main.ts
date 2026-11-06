@@ -75,6 +75,9 @@ import type { DedupAnswer } from "./application/intake-dedup.ts";
 import { PgBacklogStore } from "./adapters/persistence/backlog-store.ts";
 import { Pipeline } from "./application/pipeline.ts";
 import { ChannelClaims } from "./application/channel-claims.ts";
+import { ConversationMachine } from "./application/conversation-machine.ts";
+import { enrichConversation } from "./application/conversation-enrich.ts";
+import { ConversationTruth } from "./application/conversation-truth.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
 import { createGitHub } from "./adapters/github/octokit.ts";
@@ -457,7 +460,29 @@ const slackInbox = new SlackInbox({
   retentionDays: config.retentionDays,
   scope: config.slackInbox.scope,
   claims: channelClaims,
+  // The Conversation Machine's chain: only where agents are on (the triager exists); the pack runs through `packRuns`, built below.
+  ...(triager ? { assessor: { assess: (row) => conversationMachine().assess(row) } } : {}),
+  truth: new ConversationTruth(config.stateDir, decisionTruth),
 });
+const conversationMachine = (): ConversationMachine => {
+  if (!packRuns) throw new Error("agents are off: the conversation machine has no model to ask");
+  return new ConversationMachine({
+    enrich: (row) =>
+      enrichConversation(
+        row,
+        {
+          userInfo: (id) => slackApi.userInfo(id),
+          isVip: (author) => slackInbox.isVip(author),
+          candidates: (repo, source) => pipeline.ticketCandidates(repo, source),
+          claimedCandidates: (repo) => pipeline.claimedRepoCandidates(repo),
+          claimedBy: (channel) => channelClaims.repoOf(channel),
+        },
+        new Date(),
+      ),
+    decide: async (context) => packRuns!.run({ pack: "conversation_assess", context: { conversation: context } }, INTAKE_CLIENT),
+    config: (channel) => channelClaims.configOf(channel),
+  });
+};
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
 const packRuns = buildPackRuns(config, {
