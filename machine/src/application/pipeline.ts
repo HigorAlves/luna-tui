@@ -191,7 +191,7 @@ export interface PipelineOptions {
   /** A card that came from a ticket the tracker port knows is split into child tickets, never child cards (slice 11 wires it): `knows` answers where the card's ticket lives, `create` makes the children there once a person approved. */
   splitTickets?: {
     knows(task: TaskRow): Promise<{ tool: string; key: string } | null>;
-    create(task: TaskRow, children: SplitChild[], gateId: string): Promise<{ keys: string[] }>;
+    create(task: TaskRow, children: SplitChild[], gateId: string, floor: "low" | "medium" | "high"): Promise<{ keys: string[] }>;
   };
   /** Looks at an open release question (the ship approval) against GitHub: `merged` closes it as an automatic approval, `withdraw` takes it back so the watch asks again, `keep` leaves it. Nothing polls while a person is asked, so `tick` calls it at most once per `shipProbeMs`. */
   shipGateProbe?: (task: TaskRow, gate: ApprovalRow) => Promise<"merged" | "closed" | "withdraw" | "keep">;
@@ -1708,16 +1708,16 @@ export class Pipeline {
     if (proposed.via !== via) throw new SplitChangedError(id, String(proposed.via), via);
     const kids = facts.children;
     const record = { decision: "approved" as const, ...(how.reason ? { reason: how.reason } : {}), response: { ...(how.approver ? { approver: how.approver } : {}), ...(how.approvers ? { approvers: how.approvers } : {}) } };
+    // A child is never riskier than the gate's own level allows to fall: its floor is the origin's risk.
+    const gateRisk = (open.requested.risk ?? {}) as { level?: unknown; machine?: unknown };
+    const floor: "low" | "medium" | "high" = gateRisk.level === "high" || gateRisk.machine === "high" ? "high" : gateRisk.level === "medium" || gateRisk.machine === "medium" ? "medium" : "low";
     if (via === "tickets") {
-      await this.splitTickets!.create(task, kids, open.id);
+      await this.splitTickets!.create(task, kids, open.id, floor);
       await this.log(id, "card.split", { children: kids.length, via: "tickets" });
       await this.archive(id, "split", { onlyFrom: new Set<TaskState>(["awaiting_approval"]), decision: record });
       if (how.gate) await this.learnFromGate(id, how.gate, "approved", {});
       return this.get(id);
     }
-    // A child is never riskier than the gate's own level allows to fall: its floor is the origin's risk.
-    const gateRisk = (open.requested.risk ?? {}) as { level?: unknown; machine?: unknown };
-    const floor: "low" | "medium" | "high" = gateRisk.level === "high" || gateRisk.machine === "high" ? "high" : gateRisk.level === "medium" || gateRisk.machine === "medium" ? "medium" : "low";
     const made = new Map<number, string>();
     const topological = kids.map((_, i) => i).sort((a, b) => kids[a]!.order - kids[b]!.order || a - b);
     for (const i of topological) {

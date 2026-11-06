@@ -2,7 +2,7 @@
 // and the needs-info comment are built by script in fixed words and numbers; the decline reply is written by the `ticket_reply` pack. Every
 // text goes through `postable()` and is refused when it carries a token-shaped string, whether it came from the pack or from an edit.
 // What was done to a draft (edited, ignored) is kept on it.
-import type { TicketContext } from "@hardness/contracts";
+import type { SplitChild, TicketContext } from "@hardness/contracts";
 
 import { carriesSecret, postable } from "../domain/postable.ts";
 import { type Recommendation, recommend } from "../domain/ticket-recommend.ts";
@@ -12,13 +12,16 @@ import type { AssessmentRecord } from "./ticket-assess.ts";
 export interface Draft {
   id: string;
   ticket: string;
-  kind: "assessment" | "needs_info" | "decline" | "not_ours" | "handover" | "reminder" | "park";
+  kind: "assessment" | "needs_info" | "decline" | "not_ours" | "handover" | "reminder" | "park" | "split";
   /** `waiting` for a tap; `edited` is still waiting, with the person's text; `ignored` is kept and never posted. */
   status: "waiting" | "edited" | "ignored" | "posting" | "posted";
   text: string;
   /** The machine's own text, kept beside an edit. */
   original?: string;
   history: Array<{ at: string; did: "edited" | "ignored" | "posted"; from: string }>;
+  /** A split draft: the proposed children, and the ones the tap already made (position and key), so a retry goes on and never makes a child twice. */
+  children?: SplitChild[];
+  created?: Array<{ n: number; key: string }>;
 }
 
 const fresh = (ticket: string, kind: Draft["kind"], text: string): Draft => ({ id: `${ticket}:${kind}`, ticket, kind, status: "waiting", text: postable(text), history: [] });
@@ -27,6 +30,12 @@ const fixed = (n: number, digits = 2) => n.toFixed(digits);
 
 export function assessmentDraft(ticket: string, r: AssessmentRecord, recommended: Recommendation | null, size: { estLoc: number; estFiles: number } | null = null): Draft {
   return fresh(ticket, "assessment", `Assessed: priority ${r.priority}, size ${r.size}, blast radius ${r.blastRadius}, score ${fixed(r.score)} (cost of delay ${fixed(r.costOfDelay, 1)} over cost of doing ${fixed(r.costOfDoing, 1)}).${recommended ? ` Recommended: ${recommended.replace(/_/g, " ")}.` : ""}${size ? ` Estimated size: about ${Math.round(size.estLoc)} lines in ${Math.round(size.estFiles)} files.` : ""}`);
+}
+
+/** The proposal of a split for a ticket: numbered, each with the estimate and what it comes after. Machine-built from model-written titles; nothing is created until a tap. */
+export function splitDraft(ticket: string, children: SplitChild[]): Draft {
+  const text = children.map((c, i) => `${i + 1}. ${c.title}, about ${c.est_loc} lines${c.depends_on.length > 0 ? `, after ${c.depends_on.join(", ")}` : ""}.`).join(" ");
+  return { id: `${ticket}:split`, ticket, kind: "split", status: "waiting", text: postable(text, 6000), history: [], children };
 }
 
 export function needsInfoDraft(ticket: string, missing: string[]): Draft {

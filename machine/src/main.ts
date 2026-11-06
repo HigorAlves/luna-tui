@@ -431,6 +431,14 @@ const channelClaims = new ChannelClaims(
 );
 
 pipeline = new Pipeline(db, runnerFor, {
+  // A card that came from a ticket is split into child tickets, created only after a person approves the split gate (never by a clock or a retry).
+  splitTickets: {
+    knows: (task) => ticketMachine.ticketOfCard(task),
+    create: (task, children, gateId, floor) => ticketMachine.ticketOfCard(task).then(async (origin) => {
+      if (!origin) throw new Error("the card's ticket is not known to the Ticket Machine");
+      return ticketMachine.splitChildren(origin.key, children, { id: gateId, floor });
+    }),
+  },
   // A resumed or closed card ends its kept sandbox: the extra folders go, the clone and its kept ref stay.
   releaseKept: async (taskId) => void (await expireKept({ stateDir: config.stateDir, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours, taskId })),
   onEvent: publish,
@@ -683,6 +691,16 @@ const ticketMachine = new TicketMachine({
   validity: { decide: async (c) => (await ticketPack("ticket_validity", c)) as never },
   assess: { decide: async (c) => (await ticketPack("ticket_assess", c)) as never },
   recommend: { decide: async (c) => (await ticketPack("ticket_recommend", c)) as never },
+  split: {
+    decompose: async (split) => {
+      if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
+      return (await packRuns.run({ pack: "decompose", context: { split }, stage: "plan" }, INTAKE_CLIENT)).answer as Record<string, unknown>;
+    },
+    check: async (split) => {
+      if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
+      return tagged(await packRuns.run({ pack: "split_check", context: { split } }, INTAKE_CLIENT)) as never;
+    },
+  },
   size: {
     decide: async (size) => {
       if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");

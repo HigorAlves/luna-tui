@@ -170,6 +170,8 @@ describe("approving a split", () => {
     const done = await approve(pipeline, id);
     expect(done).toMatchObject({ state: "archived", archiveReason: "split" });
     expect(create).toHaveBeenCalledTimes(1);
+    // The gate's own id and the origin's risk level go with the children: a child ticket keeps the floor.
+    expect(create).toHaveBeenCalledWith(expect.anything(), expect.any(Array), expect.any(String), expect.stringMatching(/^(low|medium|high)$/));
     expect(await count()).toBe(1);
     expect((await pipeline.events(id)).find((e) => e.kind === "card.split")?.payload).toEqual({ children: 2, via: "tickets" });
   });

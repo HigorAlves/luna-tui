@@ -144,6 +144,8 @@ export interface GitHub {
   /** Open issues (not PRs) carrying `label`. */
   listReadyIssues(slug: string, label: string): Promise<GhIssue[]>;
   commentOnIssue(slug: string, number: number, body: string): Promise<void>;
+  /** Opens a new issue in `slug` (a split's child ticket). A write: only on a person's tap. */
+  createIssue(slug: string, issue: { title: string; body: string }): Promise<{ number: number; url: string }>;
   /** The open PR whose head is `branch`, or null. */
   findPr(slug: string, branch: string): Promise<PrRef | null>;
   openPr(slug: string, pr: NewPr): Promise<PrRef>;
@@ -199,6 +201,7 @@ export function noTokenGitHub(): GitHub {
     threadResolved: () => Promise.resolve(false),
     listReadyIssues: refuse,
     commentOnIssue: refuse,
+    createIssue: refuse,
     findPr: refuse,
     openPr: refuse,
     retargetPr: refuse,

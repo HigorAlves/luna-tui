@@ -23,6 +23,11 @@ export interface Tickets {
   transition(key: string, to: string): Promise<void>;
   /** Leaves a link to `url` on the ticket. A write: only on a tap. */
   link(key: string, url: string): Promise<void>;
+  /**
+   * Creates a child ticket of `origin` (a split's part): in the origin's own project (Jira) or repository (GitHub), never anywhere the child names. A write:
+   * only on a tap, with a title and body the machine made postable.
+   */
+  create(origin: CanonicalTicket, child: { title: string; body: string }): Promise<{ key: string; permalink: string }>;
 }
 
 export class NoTicketTokenError extends Error {
@@ -35,7 +40,7 @@ export class NoTicketTokenError extends Error {
 /** The port with nothing behind it: every call fails with the same clear reason. */
 export function noTokenTickets(): Tickets {
   const refuse = () => Promise.reject(new NoTicketTokenError());
-  return { listInScope: refuse, read: refuse, comment: refuse, transition: refuse, link: refuse };
+  return { listInScope: refuse, read: refuse, comment: refuse, transition: refuse, link: refuse, create: refuse };
 }
 
 /** The ticket object as stored: one per key. The tool owns `canonical`; the machine owns the rest. */

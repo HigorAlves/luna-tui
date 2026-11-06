@@ -32,6 +32,12 @@ export class GitHubTickets implements Tickets {
     await this.github.commentOnIssue(slug, number, text);
   }
 
+  async create(origin: CanonicalTicket, child: { title: string; body: string }): Promise<{ key: string; permalink: string }> {
+    const { slug } = parse(origin.key);
+    const made = await this.github.createIssue(slug, { title: child.title, body: child.body });
+    return { key: `${slug}#${made.number}`, permalink: made.url };
+  }
+
   async transition(key: string): Promise<void> {
     parse(key);
     throw new GitHubError("a GitHub issue has no transitions the machine makes");

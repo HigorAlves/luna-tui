@@ -30,7 +30,7 @@ function wire() {
   const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true, jiraSite: "https://acme.atlassian.net" });
   const machine = new TicketMachine({
     store: new PgTicketStore(db),
-    port: () => ({ listInScope: async () => [], read: async () => { throw new Error("no"); }, comment: async () => {}, transition: async () => {}, link: async () => {} }),
+    port: () => ({ listInScope: async () => [], create: async () => { throw new Error("no create"); }, read: async () => { throw new Error("no"); }, comment: async () => {}, transition: async () => {}, link: async () => {} }),
     candidates: async () => [], config: async () => FACTORY_DEFAULTS, createCard: (input) => pipeline.createTask(input),
     validity: { decide: async () => ({ goal: y, criteria: y, scope: y, duplicate: { choice: "none", confidence: 0.9 }, project: y, reporter: y }) },
     assess: { decide: async () => Object.fromEntries([...["who", "what", "impact", "time", "demand", "files", "unknowns", "cross_team", "new_infra", "dependents", "traffic", "data_sensitivity", "reversibility", "regression", "compounding"].map((k) => [k, s]), ...["production_down", "data_loss", "security", "incident", "compliance_deadline"].map((k) => [k, f])]) as never },

@@ -50,6 +50,7 @@ export interface OctokitLike {
     issues: {
       listForRepo: unknown;
       createComment(params: Record<string, unknown>): Promise<unknown>;
+      create(params: Record<string, unknown>): Promise<{ data: { number: number; html_url: string } }>;
       listComments: unknown;
       updateComment(params: Record<string, unknown>): Promise<unknown>;
     };
@@ -402,6 +403,12 @@ export class OctokitGitHub implements GitHub {
   async commentOnIssue(slug: string, number: number, body: string): Promise<void> {
     const { owner, repo } = repoRef(slug);
     await call(`commenting on ${slug}#${number}`, () => this.octokit.rest.issues.createComment({ owner, repo, issue_number: number, body }));
+  }
+
+  async createIssue(slug: string, issue: { title: string; body: string }): Promise<{ number: number; url: string }> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`creating an issue in ${slug}`, () => this.octokit.rest.issues.create({ owner, repo, title: issue.title, body: issue.body }));
+    return { number: data.number, url: data.html_url };
   }
 
   async findPr(slug: string, branch: string): Promise<PrRef | null> {

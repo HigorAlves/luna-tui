@@ -30,7 +30,7 @@ const mk = () => {
   writes.length = 0;
   const machine = new TicketMachine({
     store: new PgTicketStore(db),
-    port: () => ({ listInScope: async () => [], read: async () => { throw new Error("no"); }, comment: async (k, t) => void writes.push(["comment", k, t]), transition: async (k, t) => void writes.push(["transition", k, t]), link: async () => {} }),
+    port: () => ({ listInScope: async () => [], create: async () => { throw new Error("no create"); }, read: async () => { throw new Error("no"); }, comment: async (k, t) => void writes.push(["comment", k, t]), transition: async (k, t) => void writes.push(["transition", k, t]), link: async () => {} }),
     candidates: async () => [], config: async () => FACTORY_DEFAULTS, createCard: async () => ({ id: "card-1" }),
     validity: { decide: async () => ({ goal: y, criteria: y, scope: y, duplicate: { choice: "none", confidence: 0.9 }, project: y, reporter: y }) },
     assess: { decide: async () => Object.fromEntries([...["who", "what", "impact", "time", "demand", "files", "unknowns", "cross_team", "new_infra", "dependents", "traffic", "data_sensitivity", "reversibility", "regression", "compounding"].map((k) => [k, s]), ...["production_down", "data_loss", "security", "incident", "compliance_deadline"].map((k) => [k, f])]) as never },

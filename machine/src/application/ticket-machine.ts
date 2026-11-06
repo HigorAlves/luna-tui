@@ -3,14 +3,17 @@
 // a card; only `approve`, `edit` and `card`, each started by a person's request, do. A clock or an event handler has no path to them.
 import { createHash } from "node:crypto";
 
-import { type BacklogAddInput, type CanonicalTicket, type FactoryConfig, PACKS, type SizeContext, type TaskSource, type TicketContext, applyPolicy, sizeLimits, sizeVerdict } from "@hardness/contracts";
+import { type BacklogAddInput, SplitChild, type CanonicalTicket, type FactoryConfig, PACKS, type SizeContext, type SplitContext, type TaskSource, type TicketContext, applyPolicy, sizeLimits, sizeVerdict } from "@hardness/contracts";
 
-import { carriesSecret } from "../domain/postable.ts";
+import { z } from "zod";
+
+import { carriesSecret, postable } from "../domain/postable.ts";
+import { decompositionLoop } from "./stages/decompose.ts";
 import type { Candidate } from "../domain/similarity.ts";
 import { buildValidityContext } from "./ticket-validity.ts";
 import type { AssessAnswer } from "../domain/ticket-score.ts";
 import { type AssessDeps, type AssessmentRecord, assessTicket } from "./ticket-assess.ts";
-import { type Draft, type RecommendDeps, type ReplyDeps, assessmentDraft, declineDraft, parkDraft, reminderDraft, editDraft, ignoreDraft, needsInfoDraft, notOursDraft, recommendWithDecision } from "./ticket-drafts.ts";
+import { type Draft, type RecommendDeps, type ReplyDeps, assessmentDraft, declineDraft, parkDraft, reminderDraft, editDraft, ignoreDraft, splitDraft, needsInfoDraft, notOursDraft, recommendWithDecision } from "./ticket-drafts.ts";
 import { ticketClocks } from "../domain/ticket-sla.ts";
 import { enrichTicket } from "./ticket-enrich.ts";
 import { type SizeDecision, type SizedCard, similarCards, sizeContextOf, sizeDecisionOf } from "./size-estimate.ts";
@@ -77,6 +80,8 @@ export interface TicketMachineDeps {
    * `candidates` (already filtered to what the ticket's audience may see) are looked up. Absent, an assessment carries no estimate.
    */
   size?: { decide(context: SizeContext, repoPath: string | null): Promise<Record<string, unknown>>; counted?(ids: string[]): Promise<Array<{ id: string; added: number; removed: number }>> };
+  /** The decomposer (an agent pack) and `split_check`, for a ticket whose recommendation is `split`. Absent, a ticket over the limit is only recommended `split`. */
+  split?: { decompose(context: SplitContext, repoPath: string | null): Promise<Record<string, unknown>>; check: ((context: SplitContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null };
   recommend: RecommendDeps;
   reply: ReplyDeps;
   /** The shared backlog, for `schedule` and for keeping an item's rank in step with a re-assessment. */
@@ -123,7 +128,9 @@ export class TicketMachine implements TicketIntake {
         const keep = (current as unknown as Draft[]).filter((d) => d.status === "posting" || d.status === "posted");
         return [...keep, ...drafts.filter((f) => !keep.some((k) => k.id === f.id))] as unknown as Record<string, unknown>[];
       });
-      await store.setMachine(ticket.key, { status, ...(ctx.repoPath ? { links: [{ kind: "repo", target: ctx.repoPath }] } : {}) });
+      // The machine's own links (an origin, the siblings it waits for, a floor) stay; only the repository link is replaced.
+      const kept = ((await store.get(ticket.key))?.machineLinks ?? []).filter((l) => l.kind !== "repo");
+      await store.setMachine(ticket.key, { status, ...(ctx.repoPath ? { links: [...kept, { kind: "repo", target: ctx.repoPath }] } : {}) });
     };
     const config = await this.deps.config(ctx.repoPath);
     const candidates = await this.deps.candidates(ticket, ctx.repoPath);
@@ -160,7 +167,27 @@ export class TicketMachine implements TicketIntake {
       const decline = await declineDraft(this.deps.reply, ticket.key, context, (why) => (refused = why));
       if (decline) drafts.push(decline);
     }
-    await done("assessed", { outcome: "workable", ...head, subScores: record.subScores, recommendation, ...(sized ? { sizeEstimate: { estLoc: sized.decision.estLoc, estFiles: sized.decision.estFiles, reviewable: !sized.decision.reviewableNo, confidence: sized.decision.confidence } } : {}) }, drafts);
+    // A recommendation of `split` runs the decomposition loop: a valid split is a draft for a tap, none is a person's decision. Nothing is created here.
+    let status = "assessed";
+    let splitFailed: string | null = null;
+    if (recommendation.action === "split" && this.deps.split) {
+      const isPart = (prev?.machineLinks ?? []).some((l) => l.kind === "origin");
+      const limits = sizeLimits(config.size);
+      const looked = isPart
+        ? null
+        : await decompositionLoop(
+            { decompose: (c) => this.deps.split!.decompose(c, ctx.repoPath), check: this.deps.split.check ? (c) => this.deps.split!.check!(c, ctx.repoPath) : null, bars: undefined },
+            { origin: { title: ticket.title, text: ticket.description, criteria: [] }, files: enrichment.files.map((path) => ({ path })), limits },
+          );
+      if (looked?.ok) {
+        drafts.push(splitDraft(ticket.key, looked.children));
+        status = "split_proposed";
+      } else {
+        status = "needs_decision";
+        splitFailed = looked ? looked.reason : "this ticket is itself part of a split; a part is not split again";
+      }
+    }
+    await done(status, { outcome: "workable", ...head, ...(splitFailed ? { split: { failed: splitFailed } } : {}), subScores: record.subScores, recommendation, ...(sized ? { sizeEstimate: { estLoc: sized.decision.estLoc, estFiles: sized.decision.estFiles, reviewable: !sized.decision.reviewableNo, confidence: sized.decision.confidence } } : {}) }, drafts);
     // A ticket already in the backlog keeps its rank in step with the new assessment (updated, never added).
     if (prev?.machineStatus === "scheduled" && this.deps.backlog) {
       const updated = await this.deps.backlog.upsertFromSource(backlogInput(ticket, ctx.repoPath, record), { createIfMissing: false }).catch(() => null);
@@ -238,6 +265,7 @@ export class TicketMachine implements TicketIntake {
   async approve(key: string, tap: { draft: string; hash: string; transition?: string }): Promise<void> {
     const row = await this.row(key);
     const draft = this.draftOf(row, tap.draft, tap.hash);
+    if (draft.kind === "split") return this.approveSplit(row, draft, tap.hash);
     await this.post(row, draft, draft, tap.hash, tap.transition);
     await this.keep(row, draft, "sent", null);
   }
@@ -246,6 +274,7 @@ export class TicketMachine implements TicketIntake {
   async edit(key: string, tap: { draft: string; hash: string; text: string; transition?: string }): Promise<void> {
     const row = await this.row(key);
     const draft = this.draftOf(row, tap.draft, tap.hash);
+    if (draft.kind === "split") throw new TicketRefusal("a split cannot be edited: approve it as drawn, or ignore it");
     const edited = editDraft(draft, tap.text, this.now());
     if (!edited) throw new TicketRefusal("the text carries a token-shaped string and is not posted");
     await this.post(row, draft, edited, tap.hash, tap.transition);
@@ -269,6 +298,15 @@ export class TicketMachine implements TicketIntake {
     const t = row.canonical;
     const last = [...row.assessments].reverse().find((a) => a.outcome === "workable");
     const repo = row.machineLinks.find((l) => l.kind === "repo")?.target;
+    // A ticket that depends on others needs a card for each first; its card waits on them (the dependency rule holds it).
+    const deps = row.machineLinks.filter((l) => l.kind === "depends_on").map((l) => l.target);
+    const cardIds: string[] = [];
+    for (const d of deps) {
+      const other = await this.deps.store.get(d);
+      if (!other?.cardId) throw new TicketRefusal(`${d} has no card yet: make it first`);
+      cardIds.push(other.cardId);
+    }
+    const floor = row.machineLinks.find((l) => l.kind === "risk_floor")?.target;
     const card = await this.deps.createCard({
       title: t.title,
       description: t.description,
@@ -278,11 +316,109 @@ export class TicketMachine implements TicketIntake {
       noJiraDetection: true,
       ...(t.reporter ? { reporter: { id: t.reporter.id, channel: t.tool } } : {}),
       ...(last ? { hints: { size: String(last.size), urgency: String(last.priority) } } : {}),
+      ...(cardIds.length > 0 || floor ? { stack: { ...(cardIds.length > 0 ? { dependsOn: cardIds } : {}), ...(floor === "low" || floor === "medium" || floor === "high" ? { riskFloor: floor } : {}) } } : {}),
     } as NewTask);
     await this.deps.store.setMachine(key, { cardId: card.id, status: "carded" });
     await this.acknowledge(key);
     await this.learn(row, "do_now");
     return card;
+  }
+
+  /**
+   * The tap on a split draft: claimed as `posting` under the row lock with the hash the person saw, the children created once each (progress is kept, so a retry
+   * goes on), then the origin is marked `epic`. A failure puts the draft back to `waiting` with what was made.
+   */
+  private async approveSplit(row: TicketRow, draft: Draft, hash: string): Promise<void> {
+    const children = z.array(SplitChild).safeParse(draft.children);
+    if (!children.success) throw new TicketRefusal("the split draft holds no readable children");
+    this.childTexts(row.canonical, children.data, new Map());
+    let claimed = false;
+    await this.deps.store.updateDrafts(row.key, (current) => {
+      const cur = (current as unknown as Draft[]).find((d) => d.id === draft.id);
+      if (!cur || (cur.status !== "waiting" && cur.status !== "edited") || hashOf(cur.text) !== hash) return current;
+      claimed = true;
+      return (current as unknown as Draft[]).map((d) => (d.id === draft.id ? { ...d, status: "posting" as const } : d)) as unknown as Record<string, unknown>[];
+    });
+    if (!claimed) throw new TicketRefusal("the draft is already being posted, or it changed since you read it");
+    try {
+      await this.splitChildren(row.key, children.data, { id: draft.id, draft: draft.id });
+    } catch (error) {
+      await this.deps.store.updateDrafts(row.key, (current) => (current as unknown as Draft[]).map((d) => (d.id === draft.id && d.status === "posting" ? { ...d, status: "waiting" as const } : d)) as unknown as Record<string, unknown>[]);
+      throw error instanceof TicketRefusal ? error : new TicketRefusal(`a child ticket could not be created, so the split stopped part way; approve again to go on: ${error instanceof Error ? error.message.slice(0, 200) : "unknown error"}`);
+    }
+    const at = this.now().toISOString();
+    await this.deps.store.updateDrafts(row.key, (current) => (current as unknown as Draft[]).map((d) => (d.id === draft.id ? { ...d, status: "posted" as const, history: [...d.history, { at, did: "posted" as const, from: d.text }] } : d)) as unknown as Record<string, unknown>[]);
+    await this.acknowledge(row.key);
+  }
+
+  /** The texts of every child, each made postable; the whole split is refused (nothing created) when one carries a token-shaped string. Titles and bodies are model-written. */
+  private childTexts(origin: CanonicalTicket, children: SplitChild[], keys: Map<number, string>): Array<{ title: string; body: string }> {
+    return children.map((c, i) => {
+      const parts = [`Part ${i + 1} of ${children.length} of ${origin.key}.`, c.goal, ...c.acceptance_criteria.map((a) => `- ${a}`), ...(c.depends_on.length > 0 ? [`After: ${c.depends_on.map((p) => keys.get(p) ?? `part ${p}`).join(", ")}`] : [])];
+      if ([c.title, ...parts].some((t) => carriesSecret(t))) throw new TicketRefusal("a child's text carries a token-shaped string: the split is not made");
+      return { title: postable(c.title, 200), body: parts.map((t, j) => (j === 0 || t.startsWith("After: ") ? t : postable(t, 1000))).join("\n") };
+    });
+  }
+
+  /**
+   * Creates a split's children in the tracker of `originKey`, in dependency order, once each under the split's id (`split.id`: a draft's id or a card gate's id): what was
+   * made is kept as links on the origin, so a retry makes only the rest. Then each child is read back, linked to its origin, its siblings and the risk floor, and assessed
+   * as any ticket; the origin becomes `epic` and one comment lists the keys. Only a person's tap reaches this.
+   */
+  async splitChildren(originKey: string, children: SplitChild[], split: { id: string; draft?: string; floor?: "low" | "medium" | "high" }): Promise<{ keys: string[] }> {
+    const row = await this.row(originKey);
+    const origin = row.canonical;
+    const port = this.deps.port(origin.tool);
+    const prefix = `${split.id}:`;
+    let links = [...row.machineLinks];
+    const made = new Map<number, string>();
+    for (const l of links) if (l.kind === "split_part" && l.target.startsWith(prefix)) {
+      const [n, key] = l.target.slice(prefix.length).split(":");
+      if (n && key) made.set(Number(n), key);
+    }
+    this.childTexts(origin, children, made);
+    const order = children.map((c, i) => ({ c, n: i + 1 })).sort((a, b) => a.c.order - b.c.order || a.n - b.n);
+    for (const { c, n } of order) {
+      if (made.has(n)) continue;
+      const text = this.childTexts(origin, children, made)[n - 1]!;
+      const created = await port.create(origin, text);
+      made.set(n, created.key);
+      links = [...links, { kind: "split_part", target: `${prefix}${n}:${created.key}` }, { kind: "child", target: created.key }];
+      await this.deps.store.setMachine(originKey, { links });
+      if (split.draft) {
+        const list = [...made].map(([m, key]) => ({ n: m, key })).sort((a, b) => a.n - b.n);
+        await this.deps.store.updateDrafts(originKey, (current) => (current as unknown as Draft[]).map((d) => (d.id === split.draft ? { ...d, created: list } : d)) as unknown as Record<string, unknown>[]);
+      }
+    }
+    const keys = children.map((_, i) => made.get(i + 1)!);
+    if (!links.some((l) => l.kind === "split_done" && l.target === split.id)) {
+      const repo = links.find((l) => l.kind === "repo")?.target ?? null;
+      for (const [i, c] of children.entries()) {
+        const key = keys[i]!;
+        let canonical: CanonicalTicket | null = null;
+        try {
+          canonical = await port.read(key);
+        } catch {
+          // Read back later by the intake; the link below still stands.
+        }
+        if (!canonical) continue;
+        await this.deps.store.read(canonical);
+        await this.deps.store.setMachine(key, { links: [{ kind: "origin", target: originKey }, ...c.depends_on.flatMap((p) => (keys[p - 1] ? [{ kind: "depends_on", target: keys[p - 1]! }] : [])), ...(split.floor ? [{ kind: "risk_floor", target: split.floor }] : []), ...(repo ? [{ kind: "repo", target: repo }] : [])] });
+        await this.ingest(canonical, { repoPath: repo, question: false, force: true }).catch((error: unknown) => console.warn(`ticket split: child ${key} was not assessed: ${error instanceof Error ? error.message : String(error)}`));
+      }
+      await this.deps.store.setMachine(originKey, { status: "epic", links: [...links, { kind: "split_done", target: split.id }] });
+      await port.comment(originKey, `Split into: ${keys.join(", ")}.`).catch(() => {});
+    }
+    return { keys };
+  }
+
+  /** The ticket a card came from, when the store holds that ticket with this card as its own: what lets a card's split create tickets. Null for every other card. */
+  async ticketOfCard(task: { id: string; source?: unknown; sources?: unknown }): Promise<{ tool: string; key: string } | null> {
+    const first = (task.source ?? (Array.isArray(task.sources) ? task.sources[0] : null)) as { kind?: string; key?: string; repo?: string; number?: number } | null;
+    const key = first?.kind === "jira" && typeof first.key === "string" ? first.key : first?.kind === "github" && typeof first.repo === "string" ? `${first.repo}#${first.number}` : null;
+    if (!key) return null;
+    const row = await this.deps.store.get(key);
+    return row && row.cardId === task.id ? { tool: row.canonical.tool, key } : null;
   }
 
   private async row(key: string): Promise<TicketRow> {

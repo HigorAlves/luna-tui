@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { type CanonicalTicket, SCORING_DEFAULTS, FACTORY_DEFAULTS } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,14 +35,21 @@ const ticket = (over: Partial<CanonicalTicket> = {}): CanonicalTicket => ({
   comments: [], attachments: [], sprint: null, dueAt: null, createdAt: null, updatedAt: "2026-11-05T10:00:00Z", permalink: "https://x/browse/PAY-12", ...over,
 });
 
-function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: boolean; noRecord?: boolean; reply?: string; hold?: Promise<void>; size?: { answer?: Record<string, unknown>; fail?: boolean; candidates?: Array<{ id: string; kind: "open" | "closed" | "backlog"; title: string; text: string; repo: string | null; closedAt: Date | null }>; counted?: Record<string, { added: number; removed: number }> } } = {}) {
+function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: boolean; noRecord?: boolean; reply?: string; hold?: Promise<void>; split?: { children?: Array<Record<string, unknown>> | "none"; failAt?: number; failTimes?: number }; size?: { answer?: Record<string, unknown>; fail?: boolean; candidates?: Array<{ id: string; kind: "open" | "closed" | "backlog"; title: string; text: string; repo: string | null; closedAt: Date | null }>; counted?: Record<string, { added: number; removed: number }> } } = {}) {
   const learned: Array<Record<string, any>> = [];
   const kept: Array<Record<string, any>> = [];
   const half = { score: 0.5, confidence: 1 };
   const silentAnswer = { ...assessAnswer, who: half, what: half, impact: half, time: half, demand: half, files: half, unknowns: half, cross_team: half, new_infra: half, dependents: half, traffic: half, data_sensitivity: half, reversibility: half, regression: { score: 1, confidence: 1 }, compounding: { score: 0, confidence: 1 } } as AssessAnswer;
   const writes: unknown[][] = [];
+  const creates: Array<{ origin: string; title: string; body: string }> = [];
+  let failures = 0;
   const port: Tickets = {
-    listInScope: async () => [], read: async () => ticket(),
+    listInScope: async () => [], create: async (origin, child) => {
+      if (over.split?.failAt !== undefined && creates.length + 1 === over.split.failAt && failures < (over.split.failTimes ?? 1)) { failures++; throw new Error("the tracker said no"); }
+      await over.hold;
+      creates.push({ origin: origin.key, ...child });
+      return { key: `PAY-${100 + creates.length}`, permalink: `https://x/browse/PAY-${100 + creates.length}` };
+    }, read: async (k) => (k === "PAY-12" ? ticket() : ticket({ id: k, key: k, title: `child ${k}` })),
     comment: async (k, t) => { await over.hold; writes.push(["comment", k, t]); }, transition: async (k, to) => void writes.push(["transition", k, to]), link: async (k, u) => void writes.push(["link", k, u]),
   };
   const cards: unknown[] = [];
@@ -58,15 +66,18 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: b
     candidates: async () => over.size?.candidates ?? [],
     config: async () => FACTORY_DEFAULTS,
     ...(over.size ? { size: { decide: sizeDecide, counted: async (ids: string[]) => ids.flatMap((id) => (over.size!.counted?.[id] ? [{ id, ...over.size!.counted[id]! }] : [])) } } : {}),
+    ...(over.split ? { split: { decompose: async () => ({ children: over.split!.children === "none" ? [] : over.split!.children ?? SPLIT_KIDS }), check: null } } : {}),
     createCard: async (input) => (cards.push(input), { id: "card-1" }),
     validity: { decide: decide.validity }, assess: { decide: decide.assess }, recommend: { decide: decide.recommend }, reply: { write: decide.write },
     truth: { learned: async (f) => (learned.push(f), true), draft: async (e) => void kept.push(e) },
     backlog: { upsertFromSource: async (input, o) => { const i = items.findIndex((x) => JSON.stringify(x.sources) === JSON.stringify(input.sources)); if (i >= 0) { items[i] = { ...input, id: "b1" }; return { id: "b1", created: false }; } if (!o.createIfMissing) return null; items.push({ ...input, id: "b1" }); return { id: "b1", created: true }; } },
     now: () => new Date("2026-11-05T12:00:00Z"),
   });
-  return { machine, store, writes, cards, decide, items, learned, kept, port, sizeDecide };
+  return { machine, store, writes, cards, decide, items, learned, kept, port, sizeDecide, creates };
 }
 const ctx = { repoPath: "/r/a", question: false };
+const kid = (title: string, over: Record<string, unknown> = {}) => ({ title, goal: `do ${title} in the refund service and keep the existing behaviour for every other payment path`, acceptance_criteria: [`${title} works`], covers: [], files_hint: ["src/a.ts"], est_loc: 800, depends_on: [], order: 1, ...over });
+const SPLIT_KIDS = [kid("Part A"), kid("Part B", { depends_on: [1], order: 2 })];
 const sizeAnswer = (loc: number, confidence = 0.95, reviewable = true) => ({ est_loc: { score: loc, confidence }, est_files: { score: 1, confidence }, reviewable: { value: reviewable, p: reviewable ? 0.95 : 0.05 } });
 
 describe("ingesting a ticket", () => {
@@ -453,5 +464,116 @@ describe("the size estimate of a ticket (wave 15)", () => {
     const x = setup();
     await x.machine.ingest(ticket(), ctx);
     expect(await last(x)).not.toHaveProperty("sizeEstimate");
+  });
+});
+
+describe("a ticket's split (wave 15)", () => {
+  const proposed = async (over: Parameters<typeof setup>[0] = {}) => {
+    const x = setup({ size: { answer: sizeAnswer(6) }, split: {}, ...over });
+    await x.machine.ingest(ticket(), ctx);
+    const row = (await x.store.get("PAY-12"))!;
+    return { x, row, draft: (row.drafts as any[]).find((d) => d.kind === "split") };
+  };
+  const tap = (draft: any) => ({ draft: draft.id, hash: createHash("sha256").update(draft.text).digest("hex").slice(0, 16) });
+
+  it("a split proposal for a ticket writes nothing before the tap: a draft with the children, the status split_proposed, no create, no comment", async () => {
+    const { x, row, draft } = await proposed();
+    expect(row.machineStatus).toBe("split_proposed");
+    expect(draft).toMatchObject({ kind: "split", status: "waiting", children: [{ title: "Part A" }, { title: "Part B" }] });
+    expect(draft.text).toMatch(/^1\. Part A/);
+    expect(draft.text).toContain("after 1");
+    expect(x.creates).toEqual([]);
+    expect(x.writes).toEqual([]);
+  });
+
+  it("with no valid split there is no draft: the assessment says why and a person decides", async () => {
+    const { x, row, draft } = await proposed({ split: { children: [kid("Only one")] } });
+    expect(draft).toBeUndefined();
+    expect(row.machineStatus).toBe("needs_decision");
+    expect(row.assessments.at(-1)).toMatchObject({ split: { failed: expect.any(String) } });
+    expect(x.creates).toEqual([]);
+  });
+
+  it("the tap creates the children in dependency order, once each, in the origin's own project, then marks the origin epic and says so once", async () => {
+    const { x, draft } = await proposed();
+    await x.machine.approve("PAY-12", tap(draft));
+    expect(x.creates.map((c) => c.title)).toEqual(["Part A", "Part B"]);
+    expect(x.creates.every((c) => c.origin === "PAY-12")).toBe(true);
+    expect(x.creates[0]!.body).toContain("Part 1 of 2 of PAY-12");
+    expect(x.creates[1]!.body).toContain("After: PAY-101");
+    const row = (await x.store.get("PAY-12"))!;
+    expect(row.machineStatus).toBe("epic");
+    expect(row.machineLinks.filter((l) => l.kind === "child").map((l) => l.target)).toEqual(["PAY-101", "PAY-102"]);
+    expect(x.writes.filter((w) => w[0] === "comment")).toEqual([["comment", "PAY-12", "Split into: PAY-101, PAY-102."]]);
+    expect((row.drafts as any[]).find((d) => d.kind === "split")).toMatchObject({ status: "posted", created: [{ n: 1, key: "PAY-101" }, { n: 2, key: "PAY-102" }] });
+    // Each child is read back, linked to its origin and the sibling it waits for, and assessed as any ticket.
+    const b = (await x.store.get("PAY-102"))!;
+    expect(b.machineLinks).toEqual(expect.arrayContaining([{ kind: "origin", target: "PAY-12" }, { kind: "depends_on", target: "PAY-101" }]));
+    expect(b.machineStatus).toBe("needs_decision");
+  });
+
+  it("refuses a tap on a draft the person did not see (another hash), and creates nothing", async () => {
+    const { x, draft } = await proposed();
+    await expect(x.machine.approve("PAY-12", { draft: draft.id, hash: "0000000000000000" })).rejects.toBeInstanceOf(TicketRefusal);
+    expect(x.creates).toEqual([]);
+  });
+
+  it("a failure partway leaves the draft waiting with what was made, and the retry makes only the rest", async () => {
+    const { x, draft } = await proposed({ split: { failAt: 2 } });
+    await expect(x.machine.approve("PAY-12", tap(draft))).rejects.toBeInstanceOf(TicketRefusal);
+    const mid = (await x.store.get("PAY-12"))!;
+    expect((mid.drafts as any[]).find((d) => d.kind === "split")).toMatchObject({ status: "waiting", created: [{ n: 1, key: "PAY-101" }] });
+    expect(mid.machineStatus).not.toBe("epic");
+    await x.machine.approve("PAY-12", tap(draft));
+    expect(x.creates.map((c) => c.title)).toEqual(["Part A", "Part B"]);
+    expect((await x.store.get("PAY-12"))!.machineStatus).toBe("epic");
+  });
+
+  it("two taps at once create the set once", async () => {
+    const { x, draft } = await proposed();
+    const both = await Promise.allSettled([x.machine.approve("PAY-12", tap(draft)), x.machine.approve("PAY-12", tap(draft))]);
+    expect(both.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(x.creates).toHaveLength(2);
+  });
+
+  it("refuses the whole split before any call when a child's text carries a token", async () => {
+    const { x, draft } = await proposed();
+    // The loop already redacts what it reads; this is a draft that was written some other way.
+    await x.store.updateDrafts("PAY-12", (current) => (current as any[]).map((d) => (d.id === draft.id ? { ...d, children: [d.children[0], { ...d.children[1], goal: `use ${secret()}` }] } : d)));
+    await expect(x.machine.approve("PAY-12", tap(draft))).rejects.toBeInstanceOf(TicketRefusal);
+    expect(x.creates).toEqual([]);
+  });
+
+  it("flattens and caps a child's title and keeps an address out of it", async () => {
+    const { x, draft } = await proposed({ split: { children: [kid("Part A @everyone see https://evil.example/x #9"), kid("Part B", { depends_on: [1], order: 2 })] } });
+    await x.machine.approve("PAY-12", tap(draft));
+    expect(x.creates[0]!.title).not.toMatch(/@everyone|https:\/\/|#9/);
+  });
+
+  it("refuses an edit of a split draft; an ignore keeps it and creates nothing", async () => {
+    const { x, draft } = await proposed();
+    await expect(x.machine.edit("PAY-12", { ...tap(draft), text: "other" })).rejects.toBeInstanceOf(TicketRefusal);
+    await x.machine.ignore("PAY-12", { draft: draft.id });
+    expect(x.creates).toEqual([]);
+    expect(((await x.store.get("PAY-12"))!.drafts as any[]).find((d) => d.kind === "split")).toMatchObject({ status: "ignored" });
+  });
+
+  it("the card gate's way: the same creation under the gate's id, once, keeping the floor on each child", async () => {
+    const { x } = await proposed();
+    const made = await x.machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "gate-1", floor: "high" });
+    expect(made.keys).toEqual(["PAY-101", "PAY-102"]);
+    const again = await x.machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "gate-1", floor: "high" });
+    expect(again.keys).toEqual(["PAY-101", "PAY-102"]);
+    expect(x.creates).toHaveLength(2);
+    expect((await x.store.get("PAY-101"))!.machineLinks).toEqual(expect.arrayContaining([{ kind: "risk_floor", target: "high" }]));
+  });
+
+  it("a ticket that depends on another needs that ticket's card first; then its card waits on it with the floor kept", async () => {
+    const { x } = await proposed();
+    await x.machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "gate-1", floor: "high" });
+    await expect(x.machine.card("PAY-102")).rejects.toThrow(/PAY-101/);
+    await x.store.setMachine("PAY-101", { cardId: "card-a" });
+    await x.machine.card("PAY-102");
+    expect(x.cards.at(-1)).toMatchObject({ stack: { dependsOn: ["card-a"], riskFloor: "high" } });
   });
 });

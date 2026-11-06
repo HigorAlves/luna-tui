@@ -61,3 +61,29 @@ describe("the port with no token", () => {
     await expect(port.comment("A-1", "x")).rejects.toThrow(/token/i);
   });
 });
+
+describe("creating a child ticket (wave 15)", () => {
+  const origin = (key: string, tool: "jira" | "github", type: string | null = "Story") => ({ tool, key, type, permalink: "https://x" }) as never;
+
+  it("Jira: in the project of the origin's own key, with the origin's issue type, else Task; the child names no project", async () => {
+    const jira = { createIssue: vi.fn(async (project: string, _t: string, _s: string, _d: string) => ({ key: `${project}-9`, url: `https://x/browse/${project}-9` })) };
+    const port = new JiraTickets(jira as unknown as Jira);
+    expect(await port.create(origin("PAY-12", "jira"), { title: "Part one", body: "Body" })).toEqual({ key: "PAY-9", permalink: "https://x/browse/PAY-9" });
+    expect(jira.createIssue).toHaveBeenCalledWith("PAY", "Story", "Part one", "Body");
+    await port.create(origin("PAY-12", "jira", null), { title: "t", body: "b" });
+    expect(jira.createIssue).toHaveBeenLastCalledWith("PAY", "Task", "t", "b");
+    await expect(port.create(origin("not a key", "jira"), { title: "t", body: "b" })).rejects.toThrow();
+  });
+
+  it("GitHub: in the origin's own repository, keyed owner/repo#number", async () => {
+    const github = { createIssue: vi.fn(async () => ({ number: 41, url: "https://github.com/o/r/issues/41" })) };
+    const port = new GitHubTickets(github as unknown as GitHub);
+    expect(await port.create(origin("o/r#3", "github"), { title: "Part", body: "B" })).toEqual({ key: "o/r#41", permalink: "https://github.com/o/r/issues/41" });
+    expect(github.createIssue).toHaveBeenCalledWith("o/r", { title: "Part", body: "B" });
+    await expect(port.create(origin("nope", "github"), { title: "t", body: "b" })).rejects.toThrow();
+  });
+
+  it("the port with no token refuses", async () => {
+    await expect(noTokenTickets().create(origin("A-1", "jira"), { title: "t", body: "b" })).rejects.toThrow(/token/i);
+  });
+});

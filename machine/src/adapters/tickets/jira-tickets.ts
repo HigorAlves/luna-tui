@@ -32,6 +32,13 @@ export class JiraTickets implements Tickets {
     await this.jira.transition(key, found.id);
   }
 
+  async create(origin: CanonicalTicket, child: { title: string; body: string }): Promise<{ key: string; permalink: string }> {
+    const project = /^([A-Z][A-Z0-9_]{1,15})-\d+$/.exec(origin.key)?.[1];
+    if (!project) throw new Error(`not a Jira issue key: ${origin.key.slice(0, 80)}`);
+    const made = await this.jira.createIssue(project, origin.type?.trim() || "Task", child.title, child.body);
+    return { key: made.key, permalink: made.url };
+  }
+
   link(key: string, url: string): Promise<void> {
     return this.jira.comment(key, `Linked: ${url}`);
   }
