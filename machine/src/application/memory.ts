@@ -82,7 +82,7 @@ export interface Memory {
   ingestDoc(doc: { repo: string | null; path: string; name: string; content: Buffer; anchors?: MemoryAnchors }): Promise<MemoryItem | null>;
   /** Retires a document that was deleted or moved. */
   removeDoc(doc: { repo: string | null; path: string }): Promise<void>;
-  /** Builds the code graph of `main` for a repository from a clean, writable copy (`dir`, a host path the Cognee service sees under its code root). */
+  /** Builds the code graph of `main` for a repository from a clean, writable copy (`dir`, a host path the Cognee service sees under its code root). THROWS when Cognee's add or cognify fails: the caller records the commit as ingested only after this resolves. The one exception to the port's never-throw rule. */
   ingestCode(code: { repo: string; dir: string; commit: string }): Promise<void>;
   /** Items this viewer may see, best first, capped. Never throws: a failure is an empty list with a note. */
   recall(query: RecallQuery): Promise<RecallResult>;

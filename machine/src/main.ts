@@ -69,7 +69,8 @@ import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
 import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
-import { type Memory, noMemory } from "./application/memory.ts";
+import type { Memory } from "./application/memory.ts";
+import { memoryBoot } from "./bootstrap/memory.ts";
 import { imageSpecOf } from "./domain/image-spec.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
@@ -237,8 +238,10 @@ let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = as
 const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
 let graphWatch: GraphWatch | null = null;
-// Memory (RFC 0007): the one instance every stage, route and loop reads. Off until the Cognee adapter is wired (wave M1).
-const memory: Memory = noMemory();
+// Memory (RFC 0007): the one instance every stage, route and loop reads. Quiet (`noMemory()`) when off or until Cognee answers; the boot
+// retries the connection, sends writes still pending and lines Cognee up with the table every hour (`start()` below).
+const memoryBoot_ = memoryBoot({ config: config.memory, db });
+const memory: Memory = memoryBoot_.memory;
 void memory;
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
  *  MACHINE_DISABLE_RUNTIMES turned off, or at a monthly cap (MACHINE_ENGINE_BUDGETS, a repo's
@@ -779,6 +782,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
 };
 const app = createApp({
   approveBase,
+  memoryFloor: () => memoryBoot_.floor(),
   repoHealth: () =>
     repoHealthOf({
       repos: [],
@@ -815,6 +819,8 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
     `machine listening on http://${config.host}:${info.port} · real stages: ${agents.join(", ")} · up to ${config.maxConcurrentTasks} task(s) at once${config.apiToken ? " · API token required" : ""}`,
   );
 });
+
+memoryBoot_.start();
 
 if (config.githubPrs.enabled) {
   console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s`);
@@ -959,6 +965,7 @@ const slaTicker = new Ticker(() => {
 slaTicker.start();
 
 async function shutdown(): Promise<void> {
+  memoryBoot_.stop();
   intake?.stop();
   jiraWatch?.stop();
   jiraIntake?.stop();
