@@ -236,6 +236,36 @@ Wave 15 reads `size.target_loc` (`[1000, 2000]`: what the decomposer aims at and
 
 Every stage and check container mounts a docker volume named `hardness-cache-<repo>` at `/cache`, with npm, pnpm, yarn, Go, cargo, pip and uv pointed at it. A retry, or the next task of the same repo, installs from that warm cache instead of the network. `docker volume rm hardness-cache-<repo>` starts a repo over.
 
+## Memory (Cognee)
+
+Memory is [Cognee](https://docs.cognee.ai/) run from its official image, unchanged ([RFC 0007](rfcs/0007-memory-with-cognee.md)). It is the one model path outside packs, and only with its own opt-in OpenAI key. `pnpm start` brings it up with the machine (about a 4 GB image, 1.5 to 2.5 GB of memory); `MACHINE_MEMORY=off` keeps the machine from using it.
+
+**Modes.** With `~/.config/hardness/cognee-openai-key` Cognee builds its graph and writes answers with OpenAI (`openai` mode, model `SERVICE_MODELS.cognee` in the catalog, metered on that key: use a separate OpenAI project with its own budget). Without it Cognee runs keyless (`local` mode): its local extractor builds a shallower graph and answer-writing search is off. Recall and the code graph work the same either way, and embeddings are always local (`BAAI/bge-small-en-v1.5` through fastembed), so search never calls OpenAI. The Floor (`GET /metrics`, field `memory`) says which mode memory is in, its items, writes waiting to be sent, items `cognify` processed today against the cap, and Cognee's tokens and cost today when it reports them.
+
+**Nothing is searchable until `cognify` has run** on the dataset: Cognee chunks and embeds what was added then. The daily cap (`memory.daily_cognify_items`) therefore also delays recall of new items, not only their graph.
+
+| Secret file in `~/.config/hardness` | Made by | What it is |
+|---|---|---|
+| `cognee-openai-key` | you, optional | Cognee's own OpenAI key; absent means local mode. Mode 600. |
+| `cognee-password` | `pnpm start`, once | the machine user's password (`machine@luna.example.com`); sign in to Cognee's UI with it |
+| `cognee-jwt-secret` | `pnpm start`, once | `FASTAPI_USERS_JWT_SECRET`, so tokens survive a container restart |
+| `cognee.env` | `pnpm start`, every start | the Cognee service's env file, rendered from the model catalog (LLM and key in `openai` mode, embedder, JWT secret, cache paths). Edit the files above, not this one |
+
+| Variable | Default | What it does |
+|---|---|---|
+| `MACHINE_MEMORY` | `on` | `off` makes the memory port `noMemory()`: nothing is remembered or recalled and Luna works as before. `on` with Cognee unreachable at boot is the same until it answers (retried every minute, said on the Floor) |
+| `COGNEE_URL` | `http://127.0.0.1:8010` (`http://cognee:8000` under compose) | Cognee's API as the machine reaches it |
+| `COGNEE_EMAIL` | `machine@luna.example.com` | the machine's Cognee user (Cognee refuses reserved domains such as `.local`); registered and logged in at boot |
+| `COGNEE_PASSWORD` | `cognee-password` file | overrides the file |
+| `MACHINE_MEMORY_DAILY_COGNIFY` | `200` | items `cognify` may process in a day, machine-wide; past it the machine stops asking until tomorrow |
+| `COGNEE_PORT` | `8010` | host port of Cognee's API (`127.0.0.1` only; Laminar holds 8000 and 8001) |
+| `COGNEE_UI_TAG` | `latest` | tag of Cognee's UI image (`--profile memory-ui`, at `127.0.0.1:3000`, which `pnpm start` includes) |
+| `COGNEE_EGRESS_ALLOW` | `api.openai.com,huggingface.co,*.huggingface.co,*.hf.co,pypi.org,files.pythonhosted.org` | what Cognee's proxy lets it reach. Everything past `api.openai.com` is for the first start, while the embedder's weights and the local extractor are downloaded onto the `cognee-data` volume; afterwards set it to `api.openai.com` and restart |
+
+**What Cognee can reach.** It sits on the internal `memory` network (no gateway) shared with the machine, the `cognee-proxy` service (the machine's egress proxy from the runner image, with the list above) and `cognee-gate`, a relay that publishes the API on `127.0.0.1:${COGNEE_PORT}`. Its HTTP and HTTPS go through the proxy; a direct connection fails. It also tries GitHub (a price table) and a telemetry host, which are refused and harmless (`LITELLM_LOCAL_MODEL_COST_MAP` and `TELEMETRY_DISABLED` are set to stop the attempts). Its code graph reads `/repos`, the host's `<MACHINE_STATE_DIR>/memory/code` mounted read-write. `docker compose up -d machine` starts the machine with no memory service.
+
+**`luna.yaml` `memory`.** `memory: off` (or `memory: { mode: off }`) keeps a repository out of memory. `daily_cognify_items` (default: the machine's cap) and `stale_lines` (default `200`: changed lines in an item's anchored files that make it stale) are read into `Policy.memory`.
+
 ## Compose
 
 `docker compose up` (and `pnpm start`) runs the machine in a container that drives your host's Docker through its socket. Every path the machine hands to `docker run` must exist at the same path on the host, so the compose file mounts these at identical paths:

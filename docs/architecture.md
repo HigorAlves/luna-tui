@@ -301,6 +301,16 @@ flowchart TD
 
 `GET /metrics` then reads the same runs back by repo, engine (`groupBy=engine`, cost per engine on the TUI) or fingerprint (`groupBy=fingerprint`).
 
+## Memory
+
+Memory ([RFC 0007](rfcs/0007-memory-with-cognee.md)) is Cognee, a compose service from its official image, and everything Luna-specific is on the machine's side of its REST API:
+
+- **The port** is `application/memory.ts` (`Memory`, with `noMemory()` as the off state); callers pass a viewer and never name a Cognee dataset. `domain/memory-datasets.ts` turns the viewer into the datasets it may read (one per repository and source, plus `docs`, `code:<repo>` and `company`).
+- **The adapter** is `adapters/cognee/`: `client.ts` (a typed client of the REST API with timeouts, a re-login on 401, errors with no token in them) and `memory.ts` (the `Memory` implementation). A write is a row first and an add second: a Cognee that is down leaves the row `pending`, and a one-minute loop sends it. Recall is a `CHUNKS` search with no model call under a 2 s budget, mapped back to rows by the `luna_id` each item was added with, capped at 12 items and 4 KB, and never throws. `reconcile()` (hourly) gives an upload made in Cognee's UI an `outside` row and retires a row whose data was deleted there.
+- **The table** is `memory_items` (`adapters/persistence/memory-store.ts`, port `application/memory-store.ts`): one row per item with its source, anchors, provenance, trust and status, plus a per-day counter of items `cognify` processed.
+- **Boot** is `bootstrap/memory.ts`: the port is `noMemory()` until Cognee takes the machine's login, then the real one. The Floor reads `GET /metrics` `memory`.
+- **Modes**: `openai` (Cognee has its own key, builds a graph and writes answers) and `local` (no key: its local extractor, no written answers); off with `MACHINE_MEMORY=off`.
+
 ## Repository layout
 
 | Path | What it is |
@@ -313,7 +323,7 @@ flowchart TD
 | `evals/` | Replay evals (`pnpm eval`): eval cases per pack, graded by schema, checks and the `eval_judge` pack (an agent pack) or by label and confidence (a decision pack), with a scorecard per engine; `harvest`, `dataset push`/`pull`, `scorecard` and `defaults` close the loop from recorded decisions to a default engine per slot. See [evals/README.md](../evals/README.md) and [Evals and calibration](#evals-and-calibration). |
 | `observe/` | ClickHouse config for the `observe` compose profile (Laminar, the local trace and eval UI; see [configuration](configuration.md#observability-laminar)). |
 | `docs/` | This folder. |
-| `compose.yaml` | Postgres and the machine (`docker compose up`); `pnpm dev` starts only Postgres; `--profile observe` adds Laminar. |
+| `compose.yaml` | Postgres, the machine and Cognee with its proxy and relay (`docker compose up`); `pnpm dev` starts only Postgres; `--profile observe` adds Laminar, `--profile memory-ui` Cognee's UI. |
 
 ## Layout inside `machine/src`
 
