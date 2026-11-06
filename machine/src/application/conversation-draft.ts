@@ -3,6 +3,7 @@
 // A card's part is built only when the relation's target is a card in the thread's own stored shortlist (what its channel could see), never from a message.
 import type { ConversationContext } from "@hardness/contracts";
 
+import { domainTokens, holdsForeignAddress } from "../domain/address-rule.ts";
 import { carriesSecret, postable } from "../domain/postable.ts";
 import { maskPii } from "../domain/secrets-check.ts";
 import type { SlackItemRow } from "../domain/slack-item.ts";
@@ -71,9 +72,9 @@ export class ConversationDrafter {
     };
     const answer = await this.deps.run(context);
     if (carriesSecret(answer.reply)) return null;
-    // A pack-written text keeps an address only when it is exactly one the machine gave (the card's PR link); any other is not kept.
-    const addresses = answer.reply.match(/(?:https?:\/\/|www\.)[^\s<>"')\]|]+/gi) ?? [];
-    if (addresses.some((a) => !given.has(a.replace(/[.,;:!?]+$/, "")))) {
+    // A pack-written text keeps an address only when it is exactly the one the machine gave (the card's PR link): a domain-shaped token or any other
+    // scheme drops it. A file name stands only when the token is in a docs excerpt the machine itself supplied.
+    if (holdsForeignAddress(answer.reply, { given, files: docs.flatMap(domainTokens) })) {
       onRefused?.(ADDRESS_REFUSED);
       return null;
     }

@@ -24,7 +24,7 @@ export function canonicalMessageOf(raw: RawMessage, ctx: MessageContext): Canoni
     channel: ctx.channel,
     author: ctx.author,
     text: screen(ctx.text ?? raw.text).text.slice(0, MESSAGE_CAPS.text),
-    attachments: (raw.files ?? []).slice(0, MESSAGE_CAPS.attachments).map((f) => ({ id: f.id, name: f.name, kind: f.kind })),
+    attachments: (raw.files ?? []).slice(0, MESSAGE_CAPS.attachments).map((f) => ({ id: f.id, name: screen(f.name).text.slice(0, 200), kind: f.kind })),
     mentions,
     permalink: ctx.permalink,
     ts: raw.ts,

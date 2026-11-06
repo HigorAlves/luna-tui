@@ -40,6 +40,14 @@ describe("canonicalMessageOf", () => {
     expect(m.editedAt).toBe(new Date(1700000200 * 1000).toISOString());
   });
 
+  it("screens an attachment's name for secrets and caps it at 200 characters", () => {
+    const key = ["sk", "-", "proj", "-", "a1B2c3D4e5F6g7H8i9J0k1L2"].join("");
+    const files = [{ id: "F1", name: `${key}.log`, kind: "text" }, { id: "F2", name: "n".repeat(500), kind: "text" }];
+    const out = canonicalMessageOf(raw({ files }), ctx).attachments;
+    expect(out[0]!.name).not.toContain("a1B2c3D4");
+    expect(out[0]!.name).toContain("[redacted]");
+    expect(out[1]!.name).toHaveLength(200);
+  });
   it("bounds the attachments", () => {
     const files = Array.from({ length: 14 }, (_, i) => ({ id: `F${i}`, name: "a", kind: "png" }));
     expect(canonicalMessageOf(raw({ files }), ctx).attachments).toHaveLength(MESSAGE_CAPS.attachments);

@@ -58,3 +58,33 @@ describe("maskPii", () => {
     expect(maskPii("deploy 1700000000.123 failed in 3 regions")).toBe("deploy 1700000000.123 failed in 3 regions");
   });
 });
+
+describe("screen: the shapes this project's credentials take", () => {
+  const join = (...parts: string[]) => parts.join("");
+  const body = "a1B2c3D4e5F6g7H8i9J0k1L2m3N4";
+  it("cuts OpenAI-style, gateway and decision-engine keys", () => {
+    for (const key of [join("sk", "-", "proj", "-", body), join("sk", "-", body), join("vck", "_", body), join("tsk", "_", body)]) {
+      const out = screen(`the key is ${key} ok`);
+      expect(out.text, key).toBe("the key is [redacted] ok");
+      expect(out.secrets).toBe(1);
+    }
+  });
+  it("cuts the password of a credential in an address and keeps the rest of it", () => {
+    const out = screen(join("postgres", "://", "app", ":", "hunter2hunter2", "@db.internal:5432/main"));
+    expect(out.text).toBe(join("postgres", "://", "app", ":", "[redacted]", "@db.internal:5432/main"));
+    expect(out.text).not.toContain("hunter2");
+    expect(out.secrets).toBe(1);
+  });
+  it("cuts the value of a password, secret or token assignment", () => {
+    for (const [line, kept] of [[join("pass", "word", "=", "correct-horse-battery"), "password="], [join("DB_PASS", "WORD", ": ", "s3cretValue"), "DB_PASSWORD: "], [join("tok", "en", ": ", "abc123def456"), "token: "], [join("client_", "secret", " = ", "\"zzTop99xx\""), "client_secret = "]] as const) {
+      const out = screen(`set ${line} now`);
+      expect(out.text, line).toContain("[redacted]");
+      expect(out.text, line).toContain(kept);
+      expect(out.text, line).not.toMatch(/horse|s3cretValue|abc123def|zzTop/);
+    }
+  });
+  it("leaves plain prose and an assignment with no value alone", () => {
+    const text = "the token expired; secret santa on friday, sk-learn is a library, and password=";
+    expect(screen(text).text).toBe(text);
+  });
+});

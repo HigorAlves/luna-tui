@@ -36,6 +36,23 @@ describe("repoDocs", () => {
     expect(out).not.toContain("outside secret");
     expect(out).not.toContain("checkout checkout checkout checkout checkout checkout checkout checkout checkout checkout checkout checkout");
   });
+  it("skips a docs folder that is itself a link to a folder outside", async () => {
+    const outside = repo({ "note.md": "## Checkout\nthe private note about checkout" });
+    const dir = repo({ "README.md": "## Checkout\nplain checkout words" });
+    symlinkSync(outside, join(dir, "docs"));
+    const out = (await repoDocs(dir, "checkout")).join("\n");
+    expect(out).toContain("plain checkout words");
+    expect(out).not.toContain("private note");
+  });
+  it("skips a linked sub-folder and a README that is a link", async () => {
+    const outside = repo({ "note.md": "## Checkout\nthe private note about checkout" });
+    const dir = repo({ "docs/a.md": "## Checkout\nplain checkout words" });
+    symlinkSync(outside, join(dir, "docs", "sub"));
+    symlinkSync(join(outside, "note.md"), join(dir, "README.md"));
+    const out = (await repoDocs(dir, "checkout")).join("\n");
+    expect(out).toContain("plain checkout words");
+    expect(out).not.toContain("private note");
+  });
   it("is empty for a missing checkout", async () => {
     expect(await repoDocs("/no/such/dir", "anything")).toEqual([]);
   });

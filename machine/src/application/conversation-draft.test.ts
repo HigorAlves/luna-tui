@@ -69,6 +69,18 @@ describe("ConversationDrafter", () => {
       expect(why).toEqual(["the reply held an address, so it was not kept"]);
     }
   });
+  it("drops a draft that holds a bare domain, with or without a path, and keeps the PR link repeated and a file name from the supplied docs", async () => {
+    const asked = row(relation());
+    for (const invented of ["Log in at dash-acme.example.com/verify", "Ask at evil.io", "It is on evil.example/a?b=1", "mail ops@evil.example"]) {
+      const why: string[] = [];
+      expect(await world(invented).drafter.draft(asked, (w) => why.push(w))).toBeNull();
+      expect(why).toEqual(["the reply held an address, so it was not kept"]);
+    }
+    const link = "https://github.com/acme/app/pull/4";
+    expect(await world(`It is in ${link}. Yes, ${link}`).drafter.draft(asked)).toBe(`It is in ${link}. Yes, ${link}`);
+    expect(await world("See checkout.md, it ships in 1.2.3.").drafter.draft(asked)).toBe("See checkout.md, it ships in 1.2.3.");
+    expect(await world("See other.md for it.").drafter.draft(asked)).toBeNull();
+  });
   it("sends the card's evidence summary and asks tone of the channel and the privacy of this conversation", async () => {
     const { drafter, contexts, toneCalls } = world();
     await drafter.draft(row(relation()));

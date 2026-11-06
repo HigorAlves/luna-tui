@@ -13,7 +13,16 @@ const MORE_SHAPES = [
   /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}/g,
   /\bAIza[0-9A-Za-z_-]{35}/g,
   /\bnpm_[A-Za-z0-9]{36}/g,
+  // OpenAI keys (`sk-`, `sk-proj-`, `sk-svcacct-`), the Vercel AI Gateway key (`vck_`) and the decision engine's (`tsk_`): the keys `docs/configuration.md` names.
+  /\bsk-[A-Za-z0-9][A-Za-z0-9_-]{19,}/g,
+  /\bvck_[A-Za-z0-9_-]{20,}/g,
+  /\btsk_[A-Za-z0-9_-]{20,}/g,
 ];
+
+/** `scheme://user:password@host`: the password only. */
+const URL_CREDENTIAL = /\b([a-z][a-z0-9+.-]{1,30}:\/\/[^\s:@/]{1,100}:)[^\s@/]{1,200}(?=@)/gi;
+/** `password=x`, `DB_PASSWORD: x`, `token: x`, `client_secret = "x"`: the value only (four characters or more, so prose and empty assignments stay). */
+const ASSIGNMENT = /\b((?:[A-Za-z0-9]+[_-])*(?:password|passwd|pwd|secret|token|api[_-]?key)\s*[:=]\s*["']?)(?!\[redacted\])[^\s"',;]{4,}/gi;
 
 const EMAIL = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,4}/g;
 /** A phone number needs a `+` or a separator: a bare run of digits is a timestamp or an id. */
@@ -54,6 +63,8 @@ export function screen(text: string): Screened {
   out = redact(out);
   secrets += (out.match(/\[redacted\]/g) ?? []).length - before;
   for (const shape of MORE_SHAPES) out = cut(out, shape);
+  out = out.replace(URL_CREDENTIAL, (_all, head: string) => (secrets++, `${head}${CUT}`));
+  out = out.replace(ASSIGNMENT, (_all, head: string) => (secrets++, `${head}${CUT}`));
   out = out.replace(CARD, (run) => {
     const digits = run.replace(/[ -]/g, "");
     if (digits.length < 13 || digits.length > 19 || !luhn(digits)) return run;
