@@ -293,6 +293,27 @@ describe("agent stages through packs", () => {
     expect(await runners(fakeSandbox(output())).implementing!(main)).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("refusing to run implementing on branch main") } });
   });
 
+  describe("the pushed memory block (RFC 0007, M2)", () => {
+    const block = { items: [{ id: "mem_1", kind: "finding" as const, text: "Check relative links.", source: "tui" as const, anchors: { files: [], commit: null }, stale: false, score: 1 }], note: null };
+
+    it("puts the recalled block in the input of the packs that get it, and in no other", async () => {
+      const asked: string[] = [];
+      const runners = agentRunners({ ...deps(fakeSandbox(output())), memoryFor: { recall: async (_task, pack) => (asked.push(pack), block) } });
+      await runners.triage!(context("triage"));
+      expect((seen!.input as unknown as StageInput).context.memory).toEqual(block);
+      await runAgent({ ...deps(fakeSandbox(output())), memoryFor: { recall: async (_t, pack) => (asked.push(pack), block) } }, context("reviewing_memory"), "reviewing_memory");
+      expect((seen!.input as unknown as StageInput).context.memory).toBeUndefined();
+      expect(asked).toEqual(["triage"]);
+    });
+
+    it("runs the stage without a block when the recall fails or memory is off", async () => {
+      await agentRunners({ ...deps(fakeSandbox(output())), memoryFor: { recall: async () => { throw new Error("down"); } } }).triage!(context("triage"));
+      expect((seen!.input as unknown as StageInput).context.memory).toBeUndefined();
+      await agentRunners({ ...deps(fakeSandbox(output())), memoryFor: { recall: async () => undefined } }).triage!(context("triage"));
+      expect((seen!.input as unknown as StageInput).context.memory).toBeUndefined();
+    });
+  });
+
   describe("the code graph", () => {
     const stamp: GraphStamp = { schema: 1, commit: "c".repeat(40), builtAt: "2026-11-04T10:00:00Z", nodes: 3, edges: 2, communities: 1, graphify: "0.9.34" };
     const graphOf = (has: boolean, fresh = true): Graph => ({

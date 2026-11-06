@@ -293,6 +293,22 @@ describe("the board search mailbox", () => {
   });
 });
 
+describe("the memory_recall mailbox", () => {
+  it("answers each numbered request with the machine's own answer, the same query twice being two requests, and ignores a bad scope", async () => {
+    const out = mkdtempSync(join(tmpdir(), "memory-recall-"));
+    mkdirSync(join(out, "checks"), { recursive: true });
+    const asked: Array<{ query: string; scope: string }> = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onMemoryRecall: async (r) => (asked.push(r), writeMailbox(out, "memory.json", JSON.stringify({ verdict: "ok", items: [], note: null }))) });
+    const ask = async (body: object) => (writeFileSync(join(out, "checks", "memory-request.json"), JSON.stringify(body)), settle(40));
+    await ask({ n: 1, query: "links", scope: "everything" });
+    await ask({ n: 1, query: "links", scope: "memory" });
+    await ask({ n: 2, query: "links", scope: "memory" });
+    await watch.stop();
+    expect(asked).toEqual([{ query: "links", scope: "memory" }, { query: "links", scope: "memory" }]);
+    expect(await waitFor(join(out, "checks", "memory.json"))).toEqual({ verdict: "ok", items: [], note: null });
+  });
+});
+
 describe("the mailbox is read and written as the container's, not the machine's", () => {
   const out = () => {
     const dir = mkdtempSync(join(tmpdir(), "mailbox-"));

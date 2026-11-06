@@ -4,8 +4,9 @@
 // owns the merge that the close step applies when the proposal is approved.
 import { readFile } from "node:fs/promises";
 
-import { type DecisionOverrides, type Ledger, PACKS, type ShipContext, applyPolicy } from "@hardness/contracts";
+import { type DecisionOverrides, type GateLesson, type GateRetirement, type Ledger, type LessonsContext, type MemoryExtractAnswer, PACKS, type RecalledMemory, type ShipContext, applyPolicy } from "@hardness/contracts";
 
+import { safe } from "../../domain/evidence-markdown.ts";
 import { recordIdOf } from "../decision-truth.ts";
 import type { EventRow, TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -28,6 +29,76 @@ export interface MemoryDeps {
   decide?: ((pack: "worth_learning", ship: ShipContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** The repo's own confidence bars for worth_learning (luna.yaml `policy.decisions`). */
   overrides?: (repoPath: string | null) => Promise<DecisionOverrides | undefined>;
+  /** Memory's lessons (RFC 0007, M2); absent (memory off), the retro proposes none. Every part may fail: the retro goes on without lessons. */
+  lessons?: {
+    /** The card's facts as the close step writes them, as text. */
+    facts: (taskId: string) => Promise<string[]>;
+    /** Runs memory_extract on the facts and the retro's proposals. */
+    extract: (context: LessonsContext, repoPath: string | null) => Promise<MemoryExtractAnswer | null>;
+    /** The active items most like this text, for the conflict check (the card's viewer). */
+    recall: (context: StageContext, text: string) => Promise<RecalledMemory[]>;
+    /** Runs memory_worth or memory_conflict on a lessons context. */
+    decide: (pack: "memory_worth" | "memory_conflict", context: LessonsContext, repoPath: string | null) => Promise<Record<string, unknown>>;
+  };
+}
+
+const PROPOSAL_MAX = 600;
+const LESSONS_MAX = 8;
+const CONFLICT_SLOTS = 5;
+
+/** The retro's proposals as short lines of text for memory_extract: the rules, the runbooks and ADRs, the prompt updates. Capped, flattened. */
+function proposalLines(answer: Record<string, unknown>): string[] {
+  const rules = (Array.isArray(answer.proposedRules) ? answer.proposedRules : []).map((r) => `rule: ${String((r as { rule?: unknown }).rule ?? "")}`);
+  const proposals = (Array.isArray(answer.proposals) ? answer.proposals : []).map((p) => `${String((p as { kind?: unknown }).kind ?? "proposal")}: ${String((p as { title?: unknown }).title ?? "")} - ${String((p as { body?: unknown }).body ?? "")}`);
+  const prompts = (Array.isArray(answer.promptUpdates) ? answer.promptUpdates : []).map((p) => `prompt ${String((p as { pack?: unknown }).pack ?? "")}: ${String((p as { change?: unknown }).change ?? "")}`);
+  return [...rules, ...proposals, ...prompts].map((line) => safe(line).slice(0, PROPOSAL_MAX)).filter((line) => line.length > 0).slice(0, 20);
+}
+
+/** The lessons and retirements the retro puts on its gate. Never throws: any failure is fewer lessons. */
+async function gatherLessons(deps: MemoryDeps, context: StageContext, answer: Record<string, unknown>): Promise<{ lessons: GateLesson[]; retirements: GateRetirement[] }> {
+  const lessons: GateLesson[] = [];
+  const retirements: GateRetirement[] = [];
+  const hooks = deps.lessons;
+  if (!hooks) return { lessons, retirements };
+  const repoPath = context.task.repoPath ?? null;
+  const overrides = await deps.overrides?.(repoPath).catch(() => undefined);
+  try {
+    const facts = (await hooks.facts(context.task.id).catch(() => [] as string[])).slice(0, 60);
+    const extracted = await hooks.extract({ kind: "extract", facts, proposals: proposalLines(answer) }, repoPath);
+    for (const candidate of (extracted?.lessons ?? []).slice(0, LESSONS_MAX)) {
+      // Only a confident no drops a candidate: an unsure or failed question leaves the decision to the person.
+      let record: string | null = null;
+      try {
+        const asked = await hooks.decide("memory_worth", { kind: "worth", candidate }, repoPath);
+        record = recordIdOf(asked) ?? null;
+        const keep = (asked.keep ?? {}) as { value?: unknown };
+        if (applyPolicy(PACKS.memory_worth, asked, overrides).overall === "proceed" && keep.value === false) continue;
+      } catch {
+        // kept
+      }
+      const id = `l${lessons.length + 1}`;
+      lessons.push({ id, text: candidate.text, kind: candidate.kind, files: candidate.files, reason: candidate.reason, ...(record ? { record } : {}) });
+      const recalled = (await hooks.recall(context, candidate.text).catch(() => [] as RecalledMemory[])).filter((r) => !r.stale).slice(0, CONFLICT_SLOTS);
+      if (recalled.length === 0) continue;
+      try {
+        const slots = recalled.map((r, i) => ({ slot: i + 1, id: r.id, kind: r.kind, text: r.text }));
+        const judged = await hooks.decide("memory_conflict", { kind: "conflict", candidate, recalled: slots }, repoPath);
+        const conflictRecord = recordIdOf(judged) ?? null;
+        const verdicts = applyPolicy(PACKS.memory_conflict, judged, overrides).verdicts;
+        for (const s of slots) {
+          const choice = (judged[`slot${s.slot}`] as { choice?: unknown } | undefined)?.choice;
+          const sure = verdicts[`slot${s.slot}`] === "proceed";
+          const certainty = choice === "contradicts" && sure ? "confident" : choice === "unsure" || (choice === "contradicts" && !sure) ? "unsure" : null;
+          if (certainty && !retirements.some((r) => r.itemId === s.id)) retirements.push({ itemId: s.id, text: s.text, lesson: id, certainty, ...(conflictRecord ? { record: conflictRecord } : {}), slot: s.slot });
+        }
+      } catch {
+        // no retirement proposed
+      }
+    }
+  } catch {
+    // a retro without lessons
+  }
+  return { lessons, retirements };
 }
 
 const answerOf = (detail: Record<string, unknown> | undefined): Record<string, unknown> => {
@@ -85,7 +156,9 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
       ...(Array.isArray(answer.proposals) ? { proposals: answer.proposals } : {}),
     };
     const hasLearned = Object.values(learned).some((v) => (v as unknown[]).length > 0);
-    if (markdown.trim() === "" && !hasLearned) {
+    // Memory's lessons ride the same gate; with memory off the retro is what it was.
+    const { lessons, retirements } = deps.lessons ? await gatherLessons(deps, context, answer) : { lessons: [], retirements: [] };
+    if (markdown.trim() === "" && !hasLearned && lessons.length === 0) {
       return {
         ...result,
         detail: { ...result.detail, rules: null, note: "no rules proposed: nothing repeated enough to be a pattern" },
@@ -103,6 +176,7 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
           incidents: countOf(answer.incidents),
           patterns: countOf(answer.patterns),
           ...learned,
+          ...(deps.lessons ? { lessons, retirements } : {}),
         },
       },
     };

@@ -11,6 +11,7 @@ import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
 import type { ModelEntry, RuntimeId } from "./models.ts";
 import { type CardFields, CardEntryFields } from "./card.ts";
+import { LessonAnswer } from "./memory.ts";
 import type { CardEventName } from "./card-events.ts";
 import type { TaskReports } from "./reports.ts";
 import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, ArchiveReason, type EvidencePack, type TriageRecord } from "./stage.ts";
@@ -187,6 +188,8 @@ export const DecisionInput = z.object({
   comment: z.string().max(2000).nullable().optional(),
   /** At the memory review gate: false approves without writing the proposed rules. */
   applyRules: z.boolean().optional(),
+  /** At the memory review gate: a person's answer to each lesson and retirement the retro proposed (`approve`, `edit` with the new text, or `drop`). Absent, no lesson is written and nothing is retired; `applyRules` is about the rules file alone. */
+  lessons: z.array(LessonAnswer).max(60).optional(),
   /** At a split gate: true keeps the card whole, which is a person's recorded answer (it lifts the size guard for this card). Dropped at any other gate. */
   keepWhole: z.boolean().optional(),
   /** Who is deciding, by name. A plan of High risk needs two distinct names; any decision keeps its own. */

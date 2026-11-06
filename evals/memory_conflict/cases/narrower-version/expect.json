@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "slot1.confidence",
+      "min": 0.3,
+      "max": 0.8
+    }
+  ],
+  "rubric": "A narrower version of the remembered rule: it may refine it or replace it, so confidence should stay near the middle.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "slot1": {
+            "choice": "consistent"
+          }
+        },
+        "criteria": {
+          "slot1": "they agree, overlap, or are about different things"
+        },
+        "why": "Pinning pnpm 10 refines using pnpm: the two agree."
+      },
+      {
+        "label": {
+          "slot1": {
+            "choice": "unsure"
+          }
+        },
+        "criteria": {
+          "slot1": "they might conflict but the texts alone do not settle it"
+        },
+        "why": "If pnpm 10 is not what the old item had in mind the two might conflict, and the texts alone do not say."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

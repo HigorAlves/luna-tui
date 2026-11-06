@@ -20,8 +20,8 @@ describe("lunaHandlers", () => {
     expect(await luna.call("nope", {})).toMatchObject({ error: "no luna tool nope" });
   });
 
-  it("describes the six tools for any runtime to serve", () => {
-    expect(Object.keys(LUNA_TOOLS).sort()).toEqual(["card_search", "decision_get", "scenario_red", "scope_check", "slice_init", "slice_list", "slice_set", "step"]);
+  it("describes the tools for any runtime to serve", () => {
+    expect(Object.keys(LUNA_TOOLS).sort()).toEqual(["card_search", "decision_get", "memory_recall", "scenario_red", "scope_check", "slice_init", "slice_list", "slice_set", "step"]);
   });
 });
 
@@ -123,5 +123,20 @@ describe("the build checks", () => {
     expect(await setup(0).luna.call("card_search", { query: "x" })).toMatchObject({ verdict: "skipped" });
     expect(await luna.call("card_search", { query: "x".repeat(301) })).toMatchObject({ error: expect.stringContaining("query") });
     expect(await luna.call("card_search", {})).toMatchObject({ error: expect.stringContaining("query") });
+  });
+
+  it("memory_recall writes the query and scope for the machine and returns its answer, or skipped; each call is its own request, and the input is bounded", async () => {
+    const { checksDir, luna } = setup(2000);
+    setTimeout(() => writeFileSync(join(checksDir, "memory.json"), JSON.stringify({ verdict: "ok", items: [{ id: "mem_0001", kind: "finding", text: "Check the relative links after a move.", stale: false }], note: null })), 20);
+    expect(await luna.call("memory_recall", { query: "readme links", scope: "memory" })).toMatchObject({ verdict: "ok", items: [{ id: "mem_0001" }] });
+    expect(JSON.parse(readFileSync(join(checksDir, "memory-request.json"), "utf8"))).toEqual({ n: 1, query: "readme links", scope: "memory" });
+    // The same call again is a new request: the machine tells it from the first by its number.
+    setTimeout(() => writeFileSync(join(checksDir, "memory.json"), JSON.stringify({ verdict: "ok", items: [], note: "nothing matched" })), 20);
+    expect(await luna.call("memory_recall", { query: "readme links", scope: "memory" })).toMatchObject({ verdict: "ok", items: [] });
+    expect(JSON.parse(readFileSync(join(checksDir, "memory-request.json"), "utf8")).n).toBe(2);
+    expect(await setup(0).luna.call("memory_recall", { query: "x", scope: "docs" })).toMatchObject({ verdict: "skipped" });
+    expect(await luna.call("memory_recall", { query: "x".repeat(301), scope: "memory" })).toMatchObject({ error: expect.stringContaining("query") });
+    expect(await luna.call("memory_recall", { query: "x", scope: "everything" })).toMatchObject({ error: expect.stringContaining("scope") });
+    expect(await luna.call("memory_recall", { scope: "code" })).toMatchObject({ error: expect.stringContaining("query") });
   });
 });
