@@ -45,6 +45,8 @@ export interface RunEnd {
   output?: Record<string, unknown>;
   /** The transcript on the host. Read, and only in `full` mode, by the adapter; never by callers. */
   transcriptPath?: string | null;
+  /** What the adapter passes the transcript through before it leaves the machine: the machine's secret values, the token shapes and the personal-data masking. */
+  scrub?: (text: string) => string;
 }
 
 export interface RunSpan {

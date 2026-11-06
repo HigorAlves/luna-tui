@@ -37,7 +37,8 @@ import { type ContextPackId, type PackContext, contextSchema, isContextPack } fr
 import { engineProblem, fallbackCandidates } from "../domain/engine-choice.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { recordContext } from "../domain/record-context.ts";
-import { redactDeep } from "../domain/redact-secrets.ts";
+import { redact } from "../domain/evidence-markdown.ts";
+import { redactDeep, secretRedactor } from "../domain/redact-secrets.ts";
 import { maskPii } from "../domain/secrets-check.ts";
 import { buildContextPackInput } from "../domain/stage-input.ts";
 import { type RunFacts, runFacts } from "../domain/task.ts";
@@ -169,6 +170,8 @@ function resetsIso(resetsAt: number | string | null): string | null {
   const date = typeof resetsAt === "number" ? new Date(resetsAt * 1000) : new Date(resetsAt);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
+
+const isPrivate = (context: PackContext): boolean => (context as { conversation?: { private?: unknown } }).conversation?.private === true;
 
 const usd = (value: number) => `$${value.toFixed(2)}`;
 
@@ -339,8 +342,10 @@ export class PackRuns implements PackRunsPort {
         costUsd: usage.costUsd,
         durationMs: usage.durationMs,
         info,
-        ...(keepsMore ? { transcriptPath: join(runDir, "transcript.log") } : {}),
-        ...(keepsMore && decided && origin.own === true ? { input: this.spanInput(context), output: { answer: answer!, verdicts: decided.verdicts, overall: decided.overall } } : {}),
+        // A transcript holds the model's own text (the draft reply to a DM) and a client's context: only the machine's own call, and
+        // never a private conversation's, may send it, and what leaves passes the stored copy's redaction and the personal-data masking.
+        ...(keepsMore && origin.own === true && !isPrivate(context) ? { transcriptPath: join(runDir, "transcript.log"), scrub: this.scrubber() } : {}),
+        ...(keepsMore && decided && origin.own === true ? { input: this.spanInput(context), output: redactDeep({ answer: answer!, verdicts: decided.verdicts, overall: decided.overall }, this.scrubber()) as Record<string, unknown> } : {}),
       });
       await rm(runDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -355,10 +360,16 @@ export class PackRuns implements PackRunsPort {
 
   /** What a span of the machine's own decision call carries as input: the stored copy of the context (secrets redacted, a private
    *  conversation's text gone) with email addresses and phone numbers masked. A private conversation's span says only that it was one. */
+  /** The machine's secret values, then the token shapes, then email addresses and phone numbers: what any text bound for the trace tool passes. */
+  private scrubber(): (text: string) => string {
+    const secret = secretRedactor(this.deps.secrets?.() ?? {});
+    return (text) => maskPii(redact(secret(text)));
+  }
+
   private spanInput(context: PackContext): { context: Record<string, unknown> } | { private: true } {
     const stored = recordContext(context as Record<string, unknown>, { secrets: this.deps.secrets?.() ?? {} });
-    if ((context as { conversation?: { private?: unknown } }).conversation?.private === true) return { private: true };
-    return { context: redactDeep(stored.context, maskPii) as Record<string, unknown> };
+    if (isPrivate(context)) return { private: true };
+    return { context: redactDeep(stored.context, this.scrubber()) as Record<string, unknown> };
   }
 
   /** Keeps a decision pack's validated answer with its context; the record's id, or undefined when none was kept.

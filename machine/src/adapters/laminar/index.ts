@@ -80,17 +80,17 @@ const NO_SPAN: RunSpan = { event: () => {}, traceId: () => null, childEnv: () =>
 const loadSdk = async (): Promise<LaminarSdk> => (await import("@lmnr-ai/lmnr")) as unknown as LaminarSdk;
 
 /** The transcript's text for the span: the tail of the file, or null when it cannot be read. */
-async function transcriptText(path: string): Promise<string | null> {
+async function transcriptText(path: string, scrub?: (text: string) => string): Promise<string | null> {
   const text = await readFile(path, "utf8").catch(() => null);
   if (text === null) return null;
   // The same redaction a stored record gets: a token shape, an email address, a phone number never reach the trace tool.
-  const clean = maskPii(redact(text));
+  const clean = maskPii(redact(scrub ? scrub(text) : text));
   return clean.length > TRANSCRIPT_MAX_CHARS ? CUT_MARK + clean.slice(-TRANSCRIPT_MAX_CHARS) : clean;
 }
 
 /** The run's facts as the span's output: every defined field of `end`, the result's `run` flattened. */
 function outputOf(end: RunEnd): Record<string, unknown> {
-  const { info, transcriptPath: _path, input: _input, output: _output, ...rest } = end;
+  const { info, transcriptPath: _path, input: _input, output: _output, scrub: _scrub, ...rest } = end;
   const output: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(rest)) if (value !== undefined) output[key] = value;
   if (info) Object.assign(output, { runtime: info.runtime, modelId: info.modelId, sdkVersion: info.sdk.version, fingerprint: info.fingerprint });
@@ -146,7 +146,7 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
         const output = outputOf(end);
         const keeps = options.mode === "host" || options.mode === "full";
         if (keeps && end.transcriptPath) {
-          const transcript = await transcriptText(end.transcriptPath);
+          const transcript = await transcriptText(end.transcriptPath, end.scrub);
           if (transcript !== null) output.transcript = transcript;
         }
         // A decision call of the pipeline's own: its context as the span's input and its answer in the

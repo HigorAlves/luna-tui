@@ -78,7 +78,7 @@ describe("PackRuns", () => {
   it("reports each call as one span: pack, engine and client at the start, the usage at the end, never the context nor the answer", async () => {
     const { telemetry, spans } = recordingTelemetry();
     const r = runs(fakeSandbox(output()), { telemetry });
-    await r.run({ pack: "chat_triage", context: { chat } }, "notch");
+    await r.run({ pack: "chat_triage", context: { chat } }, "notch", undefined, { own: true });
     expect(spans).toHaveLength(1);
     expect(spans[0]!.start).toEqual({ kind: "pack", pack: "chat_triage", engine: "claude:haiku", client: "notch" });
     expect(spans[0]!.end).toMatchObject({ outcome: "pass", engine: "claude:haiku", model: "gpt-6-luna", turns: 1, costUsd: 0.0031, durationMs: 4200, error: null });
@@ -111,7 +111,7 @@ describe("PackRuns", () => {
       mode: "host",
       run: () => ({ event: () => {}, traceId: () => null, childEnv: () => ({}), end: async (end) => void seenAtEnd.push(existsSync(end.transcriptPath!.replace(/transcript\.log$/, ""))) }),
     };
-    await runs(fakeSandbox(output()), { telemetry }).run({ pack: "chat_triage", context: { chat } }, null);
+    await runs(fakeSandbox(output()), { telemetry }).run({ pack: "chat_triage", context: { chat } }, null, undefined, { own: true });
     expect(seenAtEnd).toEqual([true]);
   });
 
@@ -439,6 +439,47 @@ describe("decision records", () => {
     expect(priv.spans[0]!.end!.input).toEqual({ private: true });
     expect(priv.spans[0]!.end).toMatchObject({ output: { answer: answers } });
     expect(JSON.stringify(priv.spans[0]!.end)).not.toContain("Bob");
+  });
+
+  describe("what a span may carry from the transcript", () => {
+    const conversation = { channel: "leadership", private: true, thread: ["marta: fire Bob on friday"], latest: "fire Bob on friday", author: { profile: "member", title: null }, candidates: [] };
+    const relation = { related: { choice: "none", confidence: 0.9 }, new_work: { value: true, p: 0.9 } };
+    const host = (): { telemetry: Telemetry; ends: RunEnd[] } => {
+      const ends: RunEnd[] = [];
+      const telemetry: Telemetry = { ...noTelemetry(), mode: "host", run: () => ({ event: () => {}, traceId: () => null, childEnv: () => ({}), end: async (end) => void ends.push(end) }) };
+      return { telemetry, ends };
+    };
+
+    it("attaches no transcript for a private conversation's call, in host mode", async () => {
+      const { telemetry, ends } = host();
+      await runs(fakeSandbox(output({ answer: relation })), { telemetry }).run({ pack: "conversation_relation", context: { conversation } }, "intake", undefined, { own: true });
+      expect(ends[0]).not.toHaveProperty("transcriptPath");
+    });
+
+    it("attaches no transcript for a client's call, whatever the mode", async () => {
+      const { telemetry, ends } = host();
+      await runs(fakeSandbox(output()), { telemetry }).run({ pack: "chat_triage", context: { chat } }, "notch");
+      expect(ends[0]).not.toHaveProperty("transcriptPath");
+    });
+
+    it("hands the adapter a scrubber that removes the machine's own secret values, and masks the span's output", async () => {
+      const secret = ["sec", "ret-value-", "9f8e7d6c"].join("");
+      const { telemetry, ends } = host();
+      const answers = { worth: { value: true, p: 0.93 } };
+      await runs(fakeSandbox(output({ answer: answers })), { telemetry, secrets: () => ({ SOME_KEY: secret }) }).run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship", undefined, { own: true });
+      expect(ends[0]!.scrub!(`the log says ${secret} and mail a@b.example`)).toBe("the log says [secret:SOME_KEY] and mail [email]");
+      expect(ends[0]).toHaveProperty("transcriptPath");
+    });
+
+    it("redacts a secret value in the span's input and output", async () => {
+      const secret = ["sec", "ret-value-", "9f8e7d6c"].join("");
+      const { telemetry, ends } = host();
+      const dedup = { title: "Login fails", text: `the log says ${secret}`, candidates: [] };
+      const slots = Object.fromEntries(Object.keys(PACKS.intake_dedup.questions).map((slot) => [slot, { choice: "different", confidence: 0.9 }]));
+      await runs(fakeSandbox(output({ answer: slots })), { telemetry, secrets: () => ({ SOME_KEY: secret }) }).run({ pack: "intake_dedup", context: { dedup } }, "intake", undefined, { own: true });
+      expect(JSON.stringify(ends[0]!.input)).not.toContain(secret);
+      expect(JSON.stringify(ends[0]!.input)).toContain("[secret:SOME_KEY]");
+    });
   });
 
   describe("whose a record is, and what it keeps", () => {

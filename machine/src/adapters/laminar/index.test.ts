@@ -202,6 +202,16 @@ describe("createLaminarTelemetry", () => {
     expect(spans[2]!.ended).toBe(true);
   });
 
+  it("passes the transcript through the scrubber the caller hands it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "laminar-"));
+    const transcript = join(dir, "transcript.log");
+    const secret = ["sec", "ret-value-", "9f8e7d6c"].join("");
+    writeFileSync(transcript, `draft reply with ${secret}\n`);
+    const full = await createLaminarTelemetry({ ...options, mode: "host" }, fakeSdk());
+    await full.run({ kind: "pack", pack: "chat_triage", engine: "claude:haiku", client: "board" }).end({ outcome: "pass", transcriptPath: transcript, scrub: (text) => text.split(secret).join("[secret:K]") });
+    expect(String((spans[0]!.output as Record<string, unknown>).transcript)).toBe("draft reply with [secret:K]\n");
+  });
+
   it("puts a decision call's context and answer on its span in full mode only, and never in metadata mode", async () => {
     const end = { outcome: "pass", input: { context: { ship: { kind: "retro" } } }, output: { answer: { worth: { value: true, p: 0.9 } }, verdicts: { worth: "proceed" }, overall: "proceed" } };
     const start = { kind: "pack", pack: "worth_learning", engine: "claude:haiku", client: "ship" } as const;
