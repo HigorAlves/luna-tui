@@ -49,6 +49,10 @@ export class PgTaskStore implements TaskStore {
     return { task, created };
   }
 
+  async taskByKey(key: string): Promise<TaskRow | null> {
+    return this.db.getRepository(TaskEntity).findOneBy({ idempotencyKey: key });
+  }
+
   private newRow(input: NewTaskRow): Partial<TaskRow> {
     return {
       title: input.title,

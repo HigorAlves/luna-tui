@@ -116,6 +116,14 @@ export class SplitChangedError extends Error {
   }
 }
 
+/** An automatic approval (a clock, a retry) reached a split gate: only a person's tap approves one. */
+export class SplitAutoApprovalError extends Error {
+  constructor(id: string) {
+    super(`task ${id} waits at a split gate: only a person approves a split`);
+    this.name = "SplitAutoApprovalError";
+  }
+}
+
 /** A person approved a gate whose split does not pass the checks as they are now (or that carries none): send it back, reject it, or keep the card whole. */
 export class SplitNotValidError extends Error {
   constructor(id: string) {
@@ -1546,6 +1554,7 @@ export class Pipeline {
       response = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (decision === "approved" && open && isSplitOutcome(outcome)) {
+      if (options.auto === true) throw new SplitAutoApprovalError(id);
       if (response?.keepWhole !== true && outcome === "split_failed") throw new SplitNotValidError(id);
       // The same names a plan of the origin's risk needs, for the split and for keeping the card whole; a first name only waits on the gate.
       const names = await this.splitApprovers(id, task, approver);
@@ -1557,7 +1566,7 @@ export class Pipeline {
       // Kept whole: the gate closes approved with the person's answer, and the plan stage runs again, which now plans without the size guard.
       const size = (open.requested.size ?? {}) as { estLoc?: unknown; planned?: unknown; by?: unknown; limit?: { hard?: unknown } };
       const lines = size.by === "plan" && typeof size.planned === "number" ? size.planned : size.estLoc;
-      const kept = await this.dispatch(id, { type: "sent_back", from: "plan" }, { decision: { decision: "approved", reason, response: { keepWhole: true, ...(approver ? { approver } : {}) } }, onlyFrom: new Set<TaskState>(["awaiting_approval"]) });
+      const kept = await this.dispatch(id, { type: "sent_back", from: "plan" }, { decision: { decision: "approved", reason, response: { keepWhole: true, ...(approver ? { approver } : {}), ...(names.names.length > 1 ? { approvers: names.names } : {}) } }, onlyFrom: new Set<TaskState>(["awaiting_approval"]) });
       await this.log(id, "size.overridden", { estLoc: typeof lines === "number" ? lines : 0, limit: typeof size.limit?.hard === "number" ? size.limit.hard : 0 });
       if (gate) await this.learnFromGate(id, gate, "approved", { keepWhole: true });
       return kept;
@@ -1637,6 +1646,8 @@ export class Pipeline {
     const event: PipelineEvent = decision === "approved" ? { type: "approved", ...shipGate } : { type: "sent_back", from: outcome === undefined || isSplitOutcome(outcome) ? "plan" : "triage", ...shipGate };
     const moved = await this.dispatch(id, event, { decision: record, ...(guard ? { guard } : {}) });
     if (decision === "approved" && open && outcome === undefined) await this.keepGroundTruth(moved, open.id);
+    // A split gate sent back leaves no half-made children behind: they were never started and are not wanted.
+    if (decision === "sent_back" && open && isSplitOutcome(outcome)) await this.archiveSplitLeftovers(id, open);
     if (gate) await this.learnFromGate(id, gate, decision, response);
     return moved;
   }
@@ -1736,7 +1747,7 @@ export class Pipeline {
           hints: { size: sizeBucketOf(kid.est_loc) },
           stack: { splitFrom: id, splitPart: { n, of: kids.length }, dependsOn: kid.depends_on.map((p) => made.get(p - 1)).filter((x): x is string => x !== undefined), startWhenReady: true, riskFloor: floor },
         },
-        `split:${id}:${n}`,
+        `split:${open.id}:${n}`,
       );
       made.set(i, child.id);
       if (created) await this.log(child.id, "card.child", { of: id, n, total: kids.length });
@@ -1755,6 +1766,15 @@ export class Pipeline {
     return this.get(id);
   }
 
+  /** The children a split gate made before it was sent back or rejected (keys `split:<gate>:<n>`): still drafts, never started, archived with fixed words. */
+  private async archiveSplitLeftovers(originId: string, gate: ApprovalRow): Promise<void> {
+    for (let n = 1; n <= 20; n++) {
+      const child = await this.store.taskByKey(`split:${gate.id}:${n}`);
+      if (!child || child.state !== "draft") continue;
+      await this.archive(child.id, "rejected", { onlyFrom: new Set<TaskState>(["draft"]), decision: { decision: "rejected", reason: "the split it came from was not approved: this part is not made" } }).catch((error: unknown) => console.warn(`could not archive part ${child.id} of ${originId}`, error));
+    }
+  }
+
   /** A rejection: the plan gate's alone (an open plan, not triage's outcome and not a later gate). The card is archived with reason `rejected`, the comment kept. */
   private async reject(task: TaskRow, reason: string | undefined, auto: boolean): Promise<TaskRow> {
     const gateKind = task.state === "awaiting_approval" || (task.state === "awaiting_ship" && task.route !== "review") ? task.state : null;
@@ -1763,6 +1783,7 @@ export class Pipeline {
     if (!open || auto || (open.requested.outcome !== undefined && !isSplitOutcome(open.requested.outcome)) || (gateKind === "awaiting_ship" && open.requested.gate !== "ship_approval")) throw new RejectNotAllowedError(task.id, task.state);
     const record = { decision: "rejected" as const, ...(reason ? { reason } : {}) };
     const archived = await this.archive(task.id, "rejected", { onlyFrom: new Set<TaskState>([gateKind!]), decision: record });
+    if (isSplitOutcome(open.requested.outcome)) await this.archiveSplitLeftovers(task.id, open);
     if (this.truth) await this.learnFromGate(task.id, open, "sent_back");
     // The release question opens only when the checklist passes: rejecting it overrides a ready PR. Ids only; the retro counts it.
     if (gateKind === "awaiting_ship") await this.log(task.id, "ship.override", { kind: "rejected_ready", items: [] });

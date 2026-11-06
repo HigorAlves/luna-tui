@@ -116,6 +116,8 @@ export interface TaskStore {
   /** Makes the task unless one already holds `key`, which it then answers instead; two calls
    *  racing on one key make one task. `created` says which happened. */
   createTaskOnce(input: NewTaskRow, key: string, requestHash: string): Promise<{ task: TaskRow; created: boolean }>;
+  /** The task made under `key` by `createTaskOnce`, or null. */
+  taskByKey(key: string): Promise<TaskRow | null>;
   listTasks(): Promise<TaskRow[]>;
   getTask(id: string): Promise<TaskRow | null>;
   /** The task made from an issue (`github`) or a PR (`github_pr`) of this repo and number. */

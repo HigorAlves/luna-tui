@@ -194,6 +194,65 @@ describe("approving a split", () => {
   });
 });
 
+describe("children are keyed by gate (wave 15 security pass)", () => {
+  it("a partial approval that left a child, a send-back, a new proposal and an approval that succeeds: the leftover is archived and never started, the new gate makes its own set", async () => {
+    stubs.plan("test_design", gate([part(1), part(2, { depends_on: [1] })]));
+    const id = await origin();
+    const real = pipeline.createTaskOnce.bind(pipeline);
+    let calls = 0;
+    const spy = vi.spyOn(pipeline, "createTaskOnce").mockImplementation(async (order, key) => {
+      calls += 1;
+      if (calls === 2) throw new Error("the database blinked");
+      return real(order, key);
+    });
+    await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
+    await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" })).rejects.toThrow("blinked");
+    spy.mockRestore();
+    const [leftover] = await children(id);
+    expect(leftover).toBeDefined();
+    stubs.plan("test_design", gate([part(1), part(2)]));
+    await pipeline.decide(id, "changes_requested", "split it differently");
+    expect((await pipeline.get(id)).state).toBe("awaiting_approval");
+    expect((await pipeline.get(leftover!)).state).toBe("archived");
+    expect(seen.filter((x) => x.id === leftover)).toEqual([]);
+    expect((await pipeline.events(leftover!)).some((e) => e.kind === "card.child")).toBe(true);
+    await approve(pipeline, id);
+    const made = (await children(id)).filter((c: string) => c !== leftover);
+    expect(made).toHaveLength(2);
+    expect((await pipeline.get(id)).archiveReason).toBe("split");
+    expect((await pipeline.get(leftover!)).state).toBe("archived");
+    expect((await pipeline.get(id)).card?.splitInto).toEqual(made);
+  });
+
+  it("a rejected split gate archives the children it left behind", async () => {
+    stubs.plan("test_design", gate([part(1), part(2, { depends_on: [1] })]));
+    const id = await origin();
+    const real = pipeline.createTaskOnce.bind(pipeline);
+    let calls = 0;
+    const spy = vi.spyOn(pipeline, "createTaskOnce").mockImplementation(async (order, key) => {
+      calls += 1;
+      if (calls === 2) throw new Error("the database blinked");
+      return real(order, key);
+    });
+    await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
+    await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" })).rejects.toThrow("blinked");
+    spy.mockRestore();
+    const [leftover] = await children(id);
+    await pipeline.decide(id, "rejected", "no");
+    expect((await pipeline.get(leftover!)).state).toBe("archived");
+  });
+});
+
+describe("an automatic approval at a split gate (wave 15 security pass)", () => {
+  it("is refused by decideNow itself, whatever called it: no child is made and the gate stays open", async () => {
+    stubs.plan("test_design", gate([part(1), part(2)]));
+    const id = await origin();
+    await expect(pipeline.decide(id, "approved", undefined, undefined, { auto: true })).rejects.toMatchObject({ name: "SplitAutoApprovalError" });
+    expect(await count()).toBe(1);
+    expect((await pipeline.get(id)).state).toBe("awaiting_approval");
+  });
+});
+
 describe("what an approved split teaches split_check", () => {
   it("confirms the record: every answer stands", async () => {
     const learned: Array<Record<string, unknown>> = [];
@@ -237,6 +296,14 @@ describe("who may approve a split", () => {
     const done = await pipeline.decide(id, "approved", "keep it", { keepWhole: true }, { approver: "bo" });
     expect(done.id).toBe(id);
     expect((await pipeline.approvals(id))[0]).toMatchObject({ decision: "approved", response: { keepWhole: true } });
+  });
+
+  it("records every approver's name when a high-risk card is kept whole", async () => {
+    stubs.plan("test_design", gate([part(1), part(2)]));
+    const id = await origin();
+    await pipeline.decide(id, "approved", "keep it", { keepWhole: true }, { approver: "ana" });
+    await pipeline.decide(id, "approved", "keep it", { keepWhole: true }, { approver: "bo" });
+    expect((await pipeline.approvals(id))[0]).toMatchObject({ response: { keepWhole: true, approver: "bo", approvers: ["ana", "bo"] } });
   });
 
   it("keeps one tap for an origin that is not high risk", async () => {
