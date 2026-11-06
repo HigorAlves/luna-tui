@@ -89,6 +89,8 @@ export interface CardFields {
   };
   /** The card this one was split from (an id); only the machine sets it, when a person approves a split. Its chain gives the card's depth. */
   splitFrom?: string;
+  /** The sources whose audience a child of a split inherits for the duplicate and size lookups (its origin's; never a place to post to). */
+  audience?: (TaskSource | CardSource)[];
   /** The cards a split made from this one, and which part of how many this card is. */
   splitInto?: string[];
   splitPart?: { n: number; of: number };

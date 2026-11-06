@@ -253,6 +253,22 @@ describe("an automatic approval at a split gate (wave 15 security pass)", () => 
   });
 });
 
+describe("a child inherits its origin's audience (wave 15 security pass)", () => {
+  it("sees no more closed cards than a stranger's Slack-born origin, though the child has no source of its own and posts nowhere", async () => {
+    stubs.plan("test_design", gate([part(1), part(2)]));
+    const slack = { kind: "slack", channel: "C1", ts: "1.1", url: "https://x/y" } as never;
+    const id = await origin(pipeline, { source: slack });
+    const plain = await pipeline.createTask({ title: "Typed in the TUI", description: "t", repoPath: "/r/app" });
+    await db.query("update tasks set state = 'closed', state_since = now(), diff_added = 10, diff_removed = 1 where id = $1", [plain.id]);
+    const before = (await pipeline.closedSized(await pipeline.get(id))).map((c) => c.id);
+    expect(before).not.toContain(plain.id);
+    await approve(pipeline, id);
+    const child = await pipeline.get((await pipeline.get(id)).card!.splitInto![0]!);
+    expect(child.source).toBeNull();
+    expect((await pipeline.closedSized(child)).map((c) => c.id)).toEqual(before);
+  });
+});
+
 describe("what an approved split teaches split_check", () => {
   it("confirms the record: every answer stands", async () => {
     const learned: Array<Record<string, unknown>> = [];

@@ -146,7 +146,7 @@ export const MAX_DEPENDENCIES = 20;
 
 /** What the machine alone says about a card in a stack (`NewTask.stack`): well-formed ids only, bounded lists, a floor that is a level. A card made from a split has its duplicate check marked answered, so wave 14's check never merges two parts of one split. Pure. */
 export function stackFieldsOf(
-  stack: { splitFrom?: string; splitPart?: { n: number; of: number }; dependsOn?: string[]; startWhenReady?: boolean; riskFloor?: "low" | "medium" | "high" } | undefined,
+  stack: { splitFrom?: string; splitPart?: { n: number; of: number }; dependsOn?: string[]; startWhenReady?: boolean; audience?: CardFields["audience"]; riskFloor?: "low" | "medium" | "high" } | undefined,
   at: string,
 ): Partial<CardFields> {
   if (!stack) return {};
@@ -157,6 +157,7 @@ export function stackFieldsOf(
   const riskFloor = stack.riskFloor === "low" || stack.riskFloor === "medium" || stack.riskFloor === "high" ? stack.riskFloor : undefined;
   return {
     ...(splitFrom ? { splitFrom } : {}),
+    ...(splitFrom && Array.isArray(stack.audience) ? { audience: stack.audience.slice(0, 20) } : {}),
     ...(splitPart ? { splitPart } : {}),
     ...(dependsOn.length > 0 ? { dependsOn } : {}),
     ...(stack.startWhenReady === true ? { startWhenReady: true } : {}),

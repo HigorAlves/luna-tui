@@ -192,7 +192,7 @@ export interface NewTask extends Omit<CardFieldsInput, "source"> {
   record?: TriageRecord | null;
   evidence?: EvidencePack | null;
   /** The machine's alone (a split's approval sets it; `POST /tasks` has no such field): what stacks this card on others. */
-  stack?: { splitFrom?: string; splitPart?: { n: number; of: number }; dependsOn?: string[]; startWhenReady?: boolean; riskFloor?: "low" | "medium" | "high" };
+  stack?: { audience?: ReturnType<typeof cardOf>["audience"]; splitFrom?: string; splitPart?: { n: number; of: number }; dependsOn?: string[]; startWhenReady?: boolean; riskFloor?: "low" | "medium" | "high" };
 }
 
 export interface PipelineOptions {
@@ -1314,8 +1314,8 @@ export class Pipeline {
   private async dedupCandidates(task: TaskRow): Promise<Candidate[]> {
     if (!task.repoPath) return [];
     // A card typed in the TUI has no source and is the operator's own: it sees everything of its repository. Any other card sees only what its reporter could already see.
-    const sources = cardOf(task).sources;
-    return this.candidatesFor({ repoPath: task.repoPath, sources, operator: sources.length === 0 && !task.jira, excludeId: task.id });
+    const sources = cardOf(task).audience ?? cardOf(task).sources;
+    return this.candidatesFor({ repoPath: task.repoPath, sources, operator: sources.length === 0 && !task.jira && (!cardOf(task).splitFrom || cardOf(task).audience !== undefined), excludeId: task.id });
   }
 
   /**
@@ -1325,8 +1325,9 @@ export class Pipeline {
   async closedSized(task: TaskRow): Promise<Array<Candidate & { diffAdded: number | null; diffRemoved: number | null }>> {
     if (!task.repoPath) return [];
     try {
-      const sources = cardOf(task).sources;
-      const operator = sources.length === 0 && !task.jira;
+      const sources = cardOf(task).audience ?? cardOf(task).sources;
+      // A child of a split has no source of its own: it is the operator's only when its origin was.
+      const operator = sources.length === 0 && !task.jira && (!cardOf(task).splitFrom || cardOf(task).audience !== undefined);
       const self = { repoPath: task.repoPath, sources };
       return (await this.store.listTasks())
         .filter((r) => r.id !== task.id && r.repoPath === task.repoPath && r.state === "closed" && !cardOf(r).mergedInto && r.diffAdded !== null && r.diffRemoved !== null)
@@ -1745,7 +1746,7 @@ export class Pipeline {
           noJiraDetection: true,
           originMachine: "automation",
           hints: { size: sizeBucketOf(kid.est_loc) },
-          stack: { splitFrom: id, splitPart: { n, of: kids.length }, dependsOn: kid.depends_on.map((p) => made.get(p - 1)).filter((x): x is string => x !== undefined), startWhenReady: true, riskFloor: floor },
+          stack: { audience: cardOf(task).audience ?? cardOf(task).sources, splitFrom: id, splitPart: { n, of: kids.length }, dependsOn: kid.depends_on.map((p) => made.get(p - 1)).filter((x): x is string => x !== undefined), startWhenReady: true, riskFloor: floor },
         },
         `split:${open.id}:${n}`,
       );
