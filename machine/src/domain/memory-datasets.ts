@@ -54,3 +54,10 @@ export function datasetsFor(viewer: MemoryViewer, known: readonly string[]): str
     }
   }
 }
+
+/** Whether the answer of this pack, for a card from this source, is posted in public: `pr_reply` always is (a reply on a shipped PR), and
+ *  any pack on a GitHub issue or PR posts there (triage's questions to the reporter, a reply). Slack, Jira and the TUI are private places.
+ *  The recall call sites build their viewer with this, never a literal `false`; the company dataset is dropped when it is true. */
+export function publicPostFor(pack: string, source: { kind: string }): boolean {
+  return pack === "pr_reply" || source.kind === "github" || source.kind === "github_pr";
+}

@@ -579,6 +579,8 @@ export interface RepoHealth {
     building: boolean;
     lastFailure: string | null;
   };
+  /** What memory (RFC 0007) takes from the default branch: its docs and code graph. A failure here never blocks a card. Absent when memory is off. */
+  memory?: { lastFailure: string | null };
 }
 
 /** One repo's slice of the window, for `GET /metrics?groupBy=repo`. */

@@ -30,7 +30,7 @@ import { DecisionLog } from "./application/decision-log.ts";
 import { ownCalls } from "./application/pack-runs.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
 import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
-import { commitsSince, headCommit } from "./adapters/git/worktree.ts";
+import { commitsSince, defaultHead, headCommit } from "./adapters/git/worktree.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
 import { loadCursor } from "./application/ship-cursor.ts";
@@ -69,6 +69,10 @@ import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
 import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
+import { blobAt, exportRepoCommit, treeAt } from "./adapters/git/main-export.ts";
+import { repoSlug } from "./adapters/graph/slug.ts";
+import { CompanyDocs } from "./application/memory-company-docs.ts";
+import { MemorySync } from "./application/memory-sync.ts";
 import { type Memory, noMemory } from "./application/memory.ts";
 import { imageSpecOf } from "./domain/image-spec.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
@@ -240,6 +244,10 @@ let graphWatch: GraphWatch | null = null;
 // Memory (RFC 0007): the one instance every stage, route and loop reads. Off until the Cognee adapter is wired (wave M1).
 const memory: Memory = noMemory();
 void memory;
+/** What memory takes from a repository's default branch (docs, code graph) and from the company folder; both idle while memory is off. */
+const memoryDir = join(config.stateDir, "memory");
+const memorySync = new MemorySync({ memory, git: { head: defaultHead, tree: treeAt, blob: blobAt, exportTo: exportRepoCommit }, slugOf: repoSlug, dir: memoryDir });
+const companyDocs = new CompanyDocs({ memory, dirs: config.memoryDocs.dirs, stateDir: memoryDir });
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
  *  MACHINE_DISABLE_RUNTIMES turned off, or at a monthly cap (MACHINE_ENGINE_BUDGETS, a repo's
  *  luna.yaml `budget.engines`), is unavailable, as if its credential were missing. */
@@ -788,6 +796,7 @@ const app = createApp({
       images: { status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null },
       graph,
       watch: { health: (repoPath) => graphWatch?.health(repoPath) ?? { building: false, lastFailure: null } },
+      ...(memory.enabled ? { memory: memorySync } : {}),
     }),
   db,
   pipeline,
@@ -903,6 +912,7 @@ graphWatch = new GraphWatch({
   graph,
   policies,
   repos: knownRepos,
+  afterBuild: (repoPath, head) => memorySync.sync(repoPath, head || undefined),
 });
 const graphTicker = config.agents && config.graphIntervalSecs !== null ? new Ticker(() => void graphWatch?.tick(), config.graphIntervalSecs * 1000) : null;
 if (graphTicker) {
@@ -911,6 +921,14 @@ if (graphTicker) {
   console.log(`graph: each repo's code graph rebuilt when its default branch moves, checked every ${config.graphIntervalSecs}s`);
 } else {
   console.log("graph: off (MACHINE_GRAPH_INTERVAL=off or agents off); stages run without a code graph");
+}
+
+/** The company folder (RFC 0007): polled while memory is on and `MACHINE_MEMORY_DOCS` names a folder. */
+const companyTicker = memory.enabled && config.memoryDocs.dirs.length > 0 && config.memoryDocs.intervalSecs !== null ? new Ticker(() => void companyDocs.poll(), config.memoryDocs.intervalSecs * 1000) : null;
+if (companyTicker) {
+  companyTicker.start();
+  void companyDocs.poll();
+  console.log(`memory: company folder (${config.memoryDocs.dirs.length}) read every ${config.memoryDocs.intervalSecs}s`);
 }
 
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
@@ -964,6 +982,7 @@ async function shutdown(): Promise<void> {
   jiraIntake?.stop();
   slaTicker.stop();
   graphTicker?.stop();
+  companyTicker?.stop();
   pulls.stop();
   slackInbox.stop();
   socket?.stop();

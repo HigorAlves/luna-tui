@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type EngineBudgets, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem, hostPatternProblem, normalizeHostPattern } from "@hardness/contracts";
@@ -42,6 +42,8 @@ export interface Config {
   githubToken: string | null;
   /** Seconds between checks of each repo's default branch for a graph rebuild; null (`MACHINE_GRAPH_INTERVAL=off`) turns the watch off. */
   graphIntervalSecs: number | null;
+  /** The company folder (RFC 0007): absolute host folders (`MACHINE_MEMORY_DOCS`, `:`-separated) whose md, txt and pdf files memory reads, polled every `intervalSecs` (`MACHINE_MEMORY_DOCS_INTERVAL`, default 600; null for `off`). Never from luna.yaml. */
+  memoryDocs: { dirs: string[]; intervalSecs: number | null };
   /** The PR inbox: poll every open PR involving you. `MACHINE_GITHUB_PRS=off` turns it off. */
   githubPrs: { enabled: boolean; intervalMs: number };
   /** The ship monitor: how often it reads the shipped PR, and how many days it waits for a merge before asking a person. */
@@ -158,6 +160,20 @@ function graphIntervalSecs(env: NodeJS.ProcessEnv): number | null {
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1) throw new Error(`MACHINE_GRAPH_INTERVAL must be a positive integer (seconds) or off, got "${raw}"`);
   return value;
+}
+
+/** `MACHINE_MEMORY_DOCS`: absolute folders separated by `:`; a relative one is an error (the machine reads only places you named in full). */
+function memoryDocs(env: NodeJS.ProcessEnv): Config["memoryDocs"] {
+  const dirs = (env.MACHINE_MEMORY_DOCS ?? "").split(":").map((d) => d.trim()).filter(Boolean);
+  for (const dir of dirs) if (!isAbsolute(dir)) throw new Error(`MACHINE_MEMORY_DOCS must list absolute folders, got "${dir}"`);
+  const raw = env.MACHINE_MEMORY_DOCS_INTERVAL;
+  let intervalSecs: number | null = 600;
+  if (raw === "off") intervalSecs = null;
+  else if (raw !== undefined && raw !== "") {
+    intervalSecs = Number(raw);
+    if (!Number.isInteger(intervalSecs) || intervalSecs < 1) throw new Error(`MACHINE_MEMORY_DOCS_INTERVAL must be a positive integer (seconds) or off, got "${raw}"`);
+  }
+  return { dirs: [...new Set(dirs)], intervalSecs };
 }
 
 /** The runtimes a kill switch may turn off: every pack's default runs on claude, so it stays on. */
@@ -420,6 +436,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000 },
     shipPoll: { intervalMs: shipSeconds === null ? null : shipSeconds * 1000 },
     graphIntervalSecs: graphIntervalSecs(env),
+    memoryDocs: memoryDocs(env),
     githubToken: env.GITHUB_TOKEN?.trim() || env.GH_TOKEN?.trim() || null,
     repoMap,
     reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),
