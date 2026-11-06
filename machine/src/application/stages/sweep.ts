@@ -7,6 +7,7 @@ import picomatch from "picomatch";
 import type { BlockedRow } from "../../adapters/docker/egress.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type CheckCommand, checkCommand } from "../../domain/checks.ts";
+import { envBrokenDetail } from "../env-broken.ts";
 
 const TAIL_LINES = 60;
 const GATE_NAME = /lint|type-?check|tsc|format|fmt|prettier|eslint|biome/i;
@@ -93,6 +94,8 @@ export interface SweepOutcome {
   note?: string;
   missingTool?: { cmd: string; tail: string };
   aborted?: boolean;
+  /** The environment, not the change, stopped a check (an install that failed, a declared secret that is missing, no isolated network): the stage escalates with this detail. */
+  escalated?: Record<string, unknown>;
 }
 
 const SWEEP_TIMEOUT_MS = 30 * 60_000;
@@ -104,7 +107,14 @@ export async function runSweep(deps: SweepDeps, input: { worktree: string; repoP
   const impact = changed && changed.length > 0 ? await deps.impact(input.repoPath, changed).catch(() => []) : [];
   const selected = selectSweep(checks, changed, impact, wholeSuiteMinutes);
   if (selected.length === 0) return { status: "skipped", ran: [], failed: [], note: "no check covers the change, so the regression sweep had nothing to run" };
-  const run = await runChecks({ commands: selected.map(checkCommand), exec: deps.exec, cwd: input.worktree, ...(input.signal ? { signal: input.signal } : {}), env: input.env, services, repoPath: input.repoPath, stage: "implementing", timeoutMs: deps.timeoutMs ?? SWEEP_TIMEOUT_MS, ...(input.onBlocked ? { onBlocked: input.onBlocked } : {}) });
+  let run: CheckRun;
+  try {
+    run = await runChecks({ commands: selected.map(checkCommand), exec: deps.exec, cwd: input.worktree, ...(input.signal ? { signal: input.signal } : {}), env: input.env, services, repoPath: input.repoPath, stage: "implementing", timeoutMs: deps.timeoutMs ?? SWEEP_TIMEOUT_MS, ...(input.onBlocked ? { onBlocked: input.onBlocked } : {}) });
+  } catch (error) {
+    const escalated = envBrokenDetail(error);
+    if (!escalated) throw error;
+    return { status: "failed", ran: [], failed: [], escalated };
+  }
   const failed = run.reports.filter((r) => !r.ok).map((r) => ({ name: r.name, tail: r.tail }));
   return { status: failed.length > 0 ? "failed" : "passed", ran: run.reports.map((r) => r.name), failed, ...(run.missingTool ? { missingTool: run.missingTool } : {}), ...(run.aborted ? { aborted: true } : {}) };
 }
