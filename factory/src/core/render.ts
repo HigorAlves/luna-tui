@@ -8,6 +8,7 @@ import { PACKS, type TaskClassification, answerJsonSchema, classificationLine, c
 import type { TriageRecord } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
+import { CONVERSATION_VARIABLES, conversationText } from "./conversation-text.ts";
 import { renderTicket } from "./decide.ts";
 import { callText } from "./transcript.ts";
 
@@ -384,6 +385,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{task.classification}}": classificationLines(input.task.classification),
     "{{task.record}}": recordText(input.task.record),
     "{{context.ticket}}": input.context.ticket ? renderTicket(input.context.ticket) : NONE,
+    ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, NONE]))),
     "{{context.plan.map}}": mapText(input.context.plan?.map),
     "{{context.plan.shortlist}}": shortlistText(input.context.plan?.shortlist),
     "{{context.plan.replan}}": replanText(input.context.plan?.replan),
@@ -473,6 +475,9 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   };
   // One pass over the template: a value is never scanned again, so client text that looks like a
   // placeholder ({{agent}} in a task title) stays as written.
+  for (const m of template.matchAll(/\{\{context\.conversation\.([A-Za-z.]+)\}\}/g)) {
+    if (!(m[1]! in CONVERSATION_VARIABLES)) throw new Error(`the template names {{context.conversation.${m[1]}}}, which no variable declares`);
+  }
   const body = template.replace(/\{\{[A-Za-z.]+\}\}/g, (key) => subs[key] ?? key);
   const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, ""].join("\n");
   return header + body;

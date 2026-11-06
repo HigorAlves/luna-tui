@@ -49,6 +49,7 @@ export const AgentRole = z.enum([
   "security-reviewer",
   "reply-drafter",
   "ticket-writer",
+  "thread-writer",
   "code-fixer",
   "second-opinion",
 ]);
@@ -361,6 +362,10 @@ export type PrReplyAnswer = z.infer<typeof PrReplyAnswer>;
 /** ticket_reply: the draft that declines a ticket. A draft only: a person decides whether it is posted. */
 export const TicketReplyAnswer = z.object({ reply: z.string().max(1500), confidence: z.number().min(0).max(1) });
 export type TicketReplyAnswer = z.infer<typeof TicketReplyAnswer>;
+
+/** conversation_reply: the draft reply to a Slack thread. A draft only: a person decides whether it is posted. */
+export const ConversationReplyAnswer = z.object({ reply: z.string().max(1500), confidence: z.number().min(0).max(1) });
+export type ConversationReplyAnswer = z.infer<typeof ConversationReplyAnswer>;
 
 export const HelperAnswer = z.object({ answer: z.string(), findings: z.array(Finding).optional() });
 export type HelperAnswer = z.infer<typeof HelperAnswer>;
@@ -1113,6 +1118,22 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: TicketReplyAnswer,
     template: "ticket_reply.md",
+  },
+  // Drafts the reply to a Slack thread from the card's state, its Evidence Pack and the docs as data; on demand, never in a task state, only ever a draft. It reads hostile text: no tools at all.
+  conversation_reply: {
+    id: "conversation_reply",
+    kind: "agent",
+    agent: "thread-writer",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 3,
+    timeoutMs: 2 * MINUTE,
+    engines: only("claude:haiku"),
+    effort: "low",
+    answer: ConversationReplyAnswer,
+    template: "conversation_reply.md",
   },
   reviewing: {
     id: "reviewing",

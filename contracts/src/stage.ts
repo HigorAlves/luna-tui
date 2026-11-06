@@ -171,6 +171,8 @@ export const PackId = z.enum([
   "conversation_assess",
   // A decision at the Conversation Machine over the same context: is the thread about one of the candidates, and does it ask for new work.
   "conversation_relation",
+  // Drafts the reply to a Slack thread from the card's state, its Evidence Pack and the repository's docs, all as data; the draft waits for a person.
+  "conversation_reply",
   // A decision at the Ticket Machine: what to do with a scored ticket where the scores alone cannot tell (do now, schedule, decline, needs decision).
   "ticket_recommend",
   // Drafts the reply that declines a ticket, from the ticket and its assessment as data; the draft waits for a person.
@@ -915,6 +917,19 @@ export const ConversationContext = z.object({
   latest: z.string().max(500),
   author: z.object({ profile: z.enum(["bot", "guest", "vip", "member"]), title: z.string().max(120).nullable() }),
   candidates: z.array(z.object({ slot: z.number().int().min(1).max(5), kind: z.enum(["open", "closed", "backlog"]), title: z.string().max(500), summary: z.string().max(1000) })).max(5),
+  /** For `conversation_reply` only: what the machine knows beyond the thread, each field already masked, flattened and capped by script. */
+  reply: z
+    .object({
+      /** The machine's own word for the relation (the `ConversationRelationType`). */
+      relation: z.enum(["related_to_in_progress", "related_to_backlog", "new_candidate", "none"]),
+      card: z.string().max(2000).nullable(),
+      evidence: z.string().max(2000).nullable(),
+      /** At most three excerpts of the claiming repository's docs. */
+      docs: z.array(z.string().max(1500)).max(3),
+      /** The last edits a person made to drafts of this channel: what the machine wrote, and what the person sent. */
+      tone: z.array(z.object({ machine: z.string().max(1500), person: z.string().max(1500) })).max(5),
+    })
+    .optional(),
 });
 export type ConversationContext = z.infer<typeof ConversationContext>;
 

@@ -43,6 +43,7 @@ interface World {
   claimed?: Record<string, string>;
   conv?: Partial<typeof FACTORY_DEFAULTS.conversation>;
   assessor?: { assess: (row: SlackItemRow) => Promise<Assessed> };
+  drafter?: { draft: (row: SlackItemRow) => Promise<string | null> };
   actions?: { apply: (row: SlackItemRow, relation: ConversationRelation) => Promise<{ relation: ConversationRelation; taskId?: string; priority?: SlackPriority }>; undo: (previous: ConversationRelation | null | undefined, next: ConversationRelation) => Promise<void> };
   truth?: { override: (input: unknown) => Promise<void>; relation?: (input: unknown) => Promise<void> };
 }
@@ -125,6 +126,7 @@ function setup(world: World = {}) {
     ...(world.claimed || world.conv ? { claims: stubClaims(world.claimed ?? {}, world.conv) } : {}),
     ...(world.assessor ? { assessor: world.assessor } : {}),
     ...(world.actions ? { actions: world.actions } : {}),
+    ...(world.drafter ? { drafter: world.drafter } : {}),
     ...(world.truth ? { truth: world.truth as never } : {}),
     rulesPath: "/rules.md",
     socketToken: null,
@@ -436,6 +438,26 @@ describe("SlackInbox.pollOnce", () => {
         await inbox.relate(`C1:${ts(10)}`, { relation: "related_to_backlog", target: "b-2" });
         expect(a.log).toEqual([`apply C1:${ts(10)} related_to_in_progress`, "undo related_to_backlog", `apply C1:${ts(10)} related_to_backlog`]);
         expect(created).toEqual([]);
+      });
+    });
+
+    describe("the draft", () => {
+      const relation = { type: "none" as const, target: null, confidence: 0.9, by: "model" as const, at: iso(0) };
+      it("is stored in triage.draft after the relation, from the row as the chain left it, and nothing is posted", async () => {
+        const seen: Array<ConversationRelation | null | undefined> = [];
+        const drafter = { draft: async (row: SlackItemRow) => (seen.push(row.conversation?.relation), "It is queued.") };
+        const { inbox, store, slack } = setup({ assessor: { assess: async () => assessed({ relation }) }, drafter, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
+        const post = vi.spyOn(slack, "postMessage");
+        await poll(inbox);
+        expect(store.rows.get(`C1:${ts(10)}`)!.triage?.draft).toBe("It is queued.");
+        expect(seen).toEqual([relation]);
+        expect(post).not.toHaveBeenCalled();
+      });
+      it("leaves no draft and retries when the run fails", async () => {
+        const drafter = { draft: async () => { throw new Error("container failed"); } };
+        const { inbox, store } = setup({ assessor: { assess: async () => assessed({ relation }) }, drafter, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
+        await poll(inbox);
+        expect(store.rows.get(`C1:${ts(10)}`)!.triage).toBeNull();
       });
     });
 

@@ -840,5 +840,9 @@
   "ticket_reply": {
     "allowedTools": [],
     "tools": []
+  },
+  "conversation_reply": {
+    "allowedTools": [],
+    "tools": []
   }
 }

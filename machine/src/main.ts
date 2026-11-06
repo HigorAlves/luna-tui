@@ -77,6 +77,8 @@ import { Pipeline } from "./application/pipeline.ts";
 import { ChannelClaims } from "./application/channel-claims.ts";
 import { ConversationMachine } from "./application/conversation-machine.ts";
 import { enrichConversation } from "./application/conversation-enrich.ts";
+import { ConversationDrafter } from "./application/conversation-draft.ts";
+import { repoDocs } from "./application/repo-docs.ts";
 import { ConversationActions } from "./application/conversation-actions.ts";
 import { ConversationTruth } from "./application/conversation-truth.ts";
 import { PolicyStore } from "./application/policy.ts";
@@ -469,6 +471,27 @@ const slackInbox = new SlackInbox({
   // The Conversation Machine's chain: only where agents are on (the triager exists); the pack runs through `packRuns`, built below.
   ...(triager ? { assessor: { assess: (row) => conversationMachine().assess(row) } } : {}),
   truth: new ConversationTruth(config.stateDir, decisionTruth),
+  // The reply draft: one `conversation_reply` run over the card's state, its evidence and the docs, all as data. Built lazily: `packRuns` is below.
+  drafter: new ConversationDrafter({
+    card: async (id) => {
+      const task = await pipeline.get(id).catch(() => null);
+      if (!task) return null;
+      const pr = (task as { prUrl?: string | null }).prUrl ?? null;
+      return { state: task.state.replace(/_/g, " "), title: task.title, pr, evidence: null };
+    },
+    rank: async (id) => {
+      const list = await backlog.list();
+      const at = list.findIndex((i) => i.id === id);
+      return at < 0 ? null : `it ranks ${at + 1} of ${list.length}`;
+    },
+    docs: (repo, text) => repoDocs(repo, text),
+    tone: async () => [],
+    run: async (context) => {
+      if (!packRuns) throw new Error("agents are off: no model to draft the reply");
+      const out = await packRuns.run({ pack: "conversation_reply", context: { conversation: context } }, INTAKE_CLIENT);
+      return out.answer as { reply: string; confidence: number };
+    },
+  }),
   // The relation's action: attach, bump, add. `backlog` is built below; it is read when a conversation is assessed, never before.
   actions: new ConversationActions({
     attachThread: (cardId, thread) => pipeline.attachThread(cardId, thread),

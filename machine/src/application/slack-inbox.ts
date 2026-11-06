@@ -151,6 +151,8 @@ export interface SlackInboxOptions {
   claims?: ChannelClaims;
   /** The Conversation Machine's chain. Without it (agents off) every item takes the `slack_triage` path as before. */
   assessor?: { assess(row: SlackItemRow): Promise<Assessed> };
+  /** The reply draft written after the relation: stored in `triage.draft`, never posted. A failing run retries the chain. */
+  drafter?: { draft(row: SlackItemRow): Promise<string | null> };
   /** What a relation does once it is not `ask` (attach, bump, add): never a post, never a card. Absent: the relation is stored and nothing else happens. */
   actions?: Pick<ConversationActions, "apply" | "undo">;
   /** Ground truth of a hand-set kind or priority. */
@@ -847,6 +849,18 @@ export class SlackInbox implements SlackInboxPort {
       let linked = fresh.linked;
       let triage = withFloor(this.keepOverride(fresh.triage, out.triage), entry.floor);
       const previous = conversation.relation;
+      // The draft is asked before any action runs: a failed run retries the chain, and no action has run yet to run twice.
+      if (relation && relation.type !== "ask" && this.options.drafter) {
+        try {
+          const text = await this.options.drafter.draft({ ...fresh, triage, conversation: { ...conversation, classification: kept, relation, shortlist: out.shortlist } });
+          if (text && triage) triage = { ...triage, draft: text };
+        } catch (error) {
+          console.warn(`slack inbox: conversation draft failed for ${id}: ${messageOf(error)}`);
+          const delay = TRIAGE_RETRY_MS[entry.failures];
+          if (delay !== undefined) this.triageQueue.set(id, { ...entry, failures: entry.failures + 1, notBefore: this.now().getTime() + delay });
+          continue;
+        }
+      }
       if (relation && relation.type !== "ask" && this.options.actions) {
         if (previous?.applied && previous.type === relation.type && previous.target === relation.target) relation = { ...relation, applied: previous.applied };
         else if (!relation.applied) {
