@@ -15,6 +15,8 @@ import {
   CodeMapAnswer,
   type DecisionOverrides,
   FACTORY_DEFAULTS,
+  type SizeContext,
+  sizeLimits,
   type FactoryConfig,
   PACKS,
   type PlanContext,
@@ -35,6 +37,7 @@ import {
 } from "@hardness/contracts";
 
 import type { RequiredOwners } from "../../domain/codeowners.ts";
+import { type SizeDecision, sizeAssessment, sizeContextOf, sizeDecisionOf } from "../size-estimate.ts";
 import type { GraphLocation } from "../graph.ts";
 import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
 import { type OwnersState, approvalRule, ownersStateOf, ruleFiles } from "../../domain/approvers.ts";
@@ -58,8 +61,13 @@ export interface PlanDeps {
   runPack: (pack: "plan" | "plan_fast" | "test_design" | "test_design_fast" | "code_map", context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
+  /** The size_estimate decision (full lane only, after risk_score and before the planner): null or absent skips it. `similar` lists the repository's nearest closed cards with a counted diff. */
+  size?: {
+    decide: ((size: SizeContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
+    similar?: (repoPath: string | null, card: { title: string; text: string }) => Promise<{ title: string; added: number; removed: number }[]>;
+  };
   /** Each repo's luna.yaml bars for the decisions. */
-  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { fast_lane?: FactoryConfig["fast_lane"]; plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number; approvers?: FactoryConfig["plan"]["approvers"] }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
+  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { size?: FactoryConfig["size"]; fast_lane?: FactoryConfig["fast_lane"]; plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number; approvers?: FactoryConfig["plan"]["approvers"] }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
   /** The machine's code graphs: a repo with one (and its luna.yaml `policy.graph` on) gets a code map before the plan. */
   graph?: {
     stampOf(repoPath: string): Promise<unknown | null>;
@@ -247,6 +255,24 @@ export function planStage(deps: PlanDeps): StageRunner {
     // A plan found wrong in Build, Verify or review comes back with its evidence: the planner's alone.
     const replanPart = context.replan ? { replan: context.replan } : {};
 
+    // size_estimate runs on the full lane, on the record and the code map, before the planner. What it says is read only when `est_loc` is sure; the plan's own sum rules once there is a plan.
+    const sizeLimit = sizeLimits((await deps.policies.for(task.repoPath)).factory?.size ?? FACTORY_DEFAULTS.size);
+    let sizeDecision: SizeDecision | null = null;
+    let sizeRecordId: string | undefined;
+    if (deps.size?.decide && task.record?.decision !== "fast_lane") {
+      try {
+        const similar = (await deps.size.similar?.(task.repoPath, { title: task.title, text: task.description }).catch(() => [])) ?? [];
+        const sizeContext = sizeContextOf({ title: task.title, text: task.description, criteria: task.criteria, files: map?.files.map((f) => ({ path: f.path, ...(f.role ? { role: f.role } : {}) })) ?? [], symbols: map?.entry_points ?? [], similar, limits: sizeLimit });
+        const sized = await deps.size.decide(sizeContext, task.repoPath);
+        const asked = PACKS.size_estimate;
+        const { verdicts } = applyPolicy({ questions: asked.questions, policy: asked.policy }, sized, (await deps.policies.for(task.repoPath)).decisions.size_estimate);
+        sizeDecision = sizeDecisionOf(sized, { sure: verdicts.est_loc === "proceed", reviewableSure: verdicts.reviewable === "proceed" });
+        sizeRecordId = recordIdOf(sized);
+      } catch (error) {
+        log(`plan stage: size_estimate skipped for task ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
     let lane: "fast" | "full" = task.record?.decision === "fast_lane" ? "fast" : "full";
     let laneNote: string | undefined;
     /** Planner runs on the current lane: the re-run cap counts from the last switch. */
@@ -433,6 +459,10 @@ export function planStage(deps: PlanDeps): StageRunner {
       ruleOwners = ownersStateOf(found);
       if (ruleOwners.state === "not_checked") flagged.add(`outside approver not checked: ${ruleOwners.reason}`);
     }
+    // The script that rules: the plan's own step estimates (else the slices'), against the repository's limits.
+    const plannedLoc = (extras.steps ?? plan!.slices).reduce((sum, st) => sum + (Number.isFinite(st.est_loc) ? st.est_loc : 0), 0);
+    const { size, flags: sizeFlags } = sizeAssessment({ decision: sizeDecision, planned: plannedLoc, limits: sizeLimit });
+    for (const f of sizeFlags) flagged.add(f);
     const verdicts = { coverage: coverage.verdict, plan: planCheck.verdict, risk: riskJudged.verdict };
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);
     if (map?.stale) flagged.add("map stale");
@@ -471,8 +501,9 @@ export function planStage(deps: PlanDeps): StageRunner {
         approvalRule: approvalRule(level, repoPlan?.approvers ?? FACTORY_DEFAULTS.plan.approvers, ruleOwners),
         ...(level === "high" ? { ruleOwners } : {}),
         verdicts,
+        size,
         // The decisions' records, so the gate's outcome can be written onto them (decision-truth.ts).
-        decisions: Object.fromEntries(([["coverage_check", coverage], ["plan_check", planCheck], ["risk_score", riskJudged]] as const).flatMap(([pack, judged]) => (judged.recordId ? [[pack, judged.recordId]] : []))),
+        decisions: Object.fromEntries(([["coverage_check", coverage], ["plan_check", planCheck], ["risk_score", riskJudged]] as const).flatMap(([pack, judged]) => (judged.recordId ? [[pack, judged.recordId]] : [])).concat(sizeRecordId ? [["size_estimate", sizeRecordId]] : [])),
         rounds: { tests: testRuns, plan: planRuns },
         flagged: [...flagged],
         map,

@@ -7,6 +7,7 @@ export * from "./coverage.ts";
 export * from "./plan-check.ts";
 export * from "./plan.ts";
 export * from "./split.ts";
+export * from "./size.ts";
 export * from "./entry-contract.ts";
 export * from "./card.ts";
 export * from "./backlog.ts";

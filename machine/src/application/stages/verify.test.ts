@@ -44,6 +44,10 @@ function setup(opts: {
   decisions?: Record<string, Record<string, { proceed?: number; flag?: number }>>;
   /** The repo's `verify` section as the machine reads it. */
   verify?: { coverage_drop_max?: number; mutation?: { command: string | null; min_score: number } };
+  /** The counted diff of the card's own change, and the repo's `size` section. */
+  counted?: { added: number; removed: number } | null;
+  size?: { target_loc: [number, number]; hard_limit_loc: number; max_children: number; max_rounds: number; depth: number };
+  approvals?: StageContext["approvals"];
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
@@ -58,7 +62,8 @@ function setup(opts: {
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
-    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {}, decisions: opts.decisions ?? {}, ...(opts.verify ? { verify: opts.verify } : {}) }),
+    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {}, decisions: opts.decisions ?? {}, ...(opts.verify ? { verify: opts.verify } : {}), ...(opts.size ? { size: opts.size } : {}) }),
+    ...("counted" in opts ? { diffStat: async () => opts.counted! } : {}),
     ...("decide" in opts ? { decide: opts.decide } : {}),
     changedPaths: async () => ("changed" in opts ? opts.changed! : null),
     ...(opts.diffSince ? { diffSince: opts.diffSince } : {}),
@@ -69,7 +74,7 @@ function setup(opts: {
     stage: "verifying",
     attempt: 1,
     runId: "run-1",
-    approvals: [],
+    approvals: opts.approvals ?? [],
     signal: controller.signal,
   };
   return { run, context, exec, runPack, calls, stateDir };
@@ -815,5 +820,31 @@ describe("when the install before a check fails", () => {
     const runner = verifyRunner({ exec: exec as never, runPack: passingReview, stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
     const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
     expect(await runner(context)).toMatchObject({ outcome: "escalated", detail });
+  });
+});
+
+describe("the counted size of the change", () => {
+  const found = (r: StageResult) => ((r.findings ?? []) as Array<{ category?: string; severity: string; title: string }>).filter((f) => f.category === "size");
+
+  it("is one should_fix finding of category size when the change's own diff is over the hard limit, and the stage still passes", async () => {
+    const { run, context } = setup({ counted: { added: 2400, removed: 300 } });
+    const result = await run(context);
+    expect(result.outcome).toBe("pass");
+    expect(found(result)).toEqual([expect.objectContaining({ severity: "should_fix", title: "the change is 2700 lines, over the limit of 2500" })]);
+    expect(((result.detail as { findings?: unknown[] }).findings ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("says nothing at or under the limit, with no count, or when an approved plan gate kept the card whole", async () => {
+    for (const opts of [{ counted: { added: 2000, removed: 500 } }, { counted: null }, {}] as const) {
+      const { run, context } = setup(opts);
+      expect(found(await run(context))).toEqual([]);
+    }
+    const kept = setup({ counted: { added: 3000, removed: 0 }, approvals: [{ kind: "awaiting_approval", decision: "approved", requested: { outcome: "split" }, response: { keepWhole: true } } as never] });
+    expect(found(await kept.run(kept.context))).toEqual([]);
+  });
+
+  it("reads the limit from the repository's size section", async () => {
+    const { run, context } = setup({ counted: { added: 150, removed: 0 }, size: { target_loc: [50, 80], hard_limit_loc: 100, max_children: 8, max_rounds: 3, depth: 2 } });
+    expect(found(await run(context))[0]?.title).toBe("the change is 150 lines, over the limit of 100");
   });
 });

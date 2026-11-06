@@ -1,11 +1,11 @@
 // The verifying stage, in the diagram's order: the review pack reads the change first, and only when no
 // blocker stands do the project's own checks run in the task worktree. A blocker fails the stage with the
 // findings and no suite run; a red check fails it with its output as a finding of category `tests`.
-import { FACTORY_DEFAULTS, type CheckSpec, type CoverageSummary, type DecisionOverrides, type Finding, type ServiceSpec, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, type CheckSpec, type FactoryConfig, type CoverageSummary, type DecisionOverrides, type Finding, type ServiceSpec, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
-import { branchBase, changedPaths as hostChangedPaths, diffText, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
+import { branchBase, branchDiffStat, changedPaths as hostChangedPaths, diffText, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import { RepoImageError } from "../repo-images.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { blockedPayloads } from "../egress-policy.ts";
@@ -53,13 +53,15 @@ export interface VerifyDeps {
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
    *  services to run beside each one. */
-  policy?: (repoPath: string | null) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec>; decisions?: Record<string, DecisionOverrides>; /** The repository's `verify` section: the coverage bar and the mutation hook; the defaults of `FACTORY_DEFAULTS.verify` when absent. */ verify?: { coverage_drop_max?: number; mutation?: { command: string | null; min_score: number } } }>;
+  policy?: (repoPath: string | null) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec>; decisions?: Record<string, DecisionOverrides>; /** The repository's `size` section (the hard limit). */ size?: FactoryConfig["size"]; /** The repository's `verify` section: the coverage bar and the mutation hook; the defaults of `FACTORY_DEFAULTS.verify` when absent. */ verify?: { coverage_drop_max?: number; mutation?: { command: string | null; min_score: number } } }>;
   /** The files the branch changed, worktree-relative; null when unknown (then every check runs). */
   changedPaths?: (worktreePath: string, repoPath: string) => Promise<string[] | null>;
   /** The machine's code graphs: when the repo has one, the files that depend on the change widen the checks and steer the review. */
   graph?: { currentDir(repoPath: string): string | null };
   /** The branch's diff against where it forked, for the coverage of its added lines; null when unknown. */
   diffSince?: (worktreePath: string, repoPath: string) => Promise<string | null>;
+  /** The counted diff of the card's own change (lines added and removed against where its branch forked); null when unknown. Absent, the size is not counted. */
+  diffStat?: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   /** Runs finding_classify on a check context; null (or absent) leaves the review's severities unclassified. Read at call time. */
   decide?: Decide | null;
 }
@@ -149,6 +151,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
   const repoPolicy: NonNullable<VerifyDeps["policy"]> = deps.policy ?? (async () => ({ checks: null, services: {} }));
   const changed = deps.changedPaths ?? hostChangedPaths;
   const diffSince = deps.diffSince ?? branchDiff;
+  const diffStat = deps.diffStat ?? branchDiffStat;
   /** The files the graph says depend on the change; empty without a graph or a readable one. */
   const radiusOf = async (repoPath: string, changedFiles: string[] | null): Promise<string[]> => {
     const dir = changedFiles && deps.graph?.currentDir(repoPath);
@@ -439,6 +442,16 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     }
     return assemble(pack, [...reviewed, ...coverageFindings], { checks: reports, ...coverageDetail, ...classification, ...noTestsNote });
   };
+  /** One should_fix finding when the counted diff is over `size.hard_limit_loc`, unless an approved plan gate carries `keepWhole` (a person's recorded override). */
+  const sizeFinding = async (context: StageContext, worktreePath: string | null | undefined, repoPath: string | null): Promise<Finding | null> => {
+    if (!worktreePath) return null;
+    const kept = context.approvals.some((a) => a.kind === "awaiting_approval" && a.decision === "approved" && (a.response as { keepWhole?: unknown } | null)?.keepWhole === true);
+    if (kept) return null;
+    const limit = ((await deps.policy?.(repoPath))?.size ?? FACTORY_DEFAULTS.size).hard_limit_loc;
+    const counted = await diffStat(worktreePath, repoPath).catch(() => null);
+    if (!counted || counted.added + counted.removed <= limit) return null;
+    return { path: "", line: 0, start_line: null, severity: "should_fix", category: "size", title: `the change is ${counted.added + counted.removed} lines, over the limit of ${limit}`, body: `${counted.added} lines added and ${counted.removed} removed; the limit is ${limit}. A change this size is hard to review as one pull request.`, suggestion_code: null, confidence: 1 };
+  };
   return async (context) => {
     const state = { radius: [] as string[] };
     const { task } = context;
@@ -473,6 +486,9 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       if (result.outcome !== "escalated") await deps.fresh!.remove(fresh.path);
       else await deps.fresh!.keep?.(fresh.path, task.id, context.runId);
     }
+    // The counted size is a finding, not a gate: a change that grew past the hard limit is said on the report and the PR, where its reviewer reads it.
+    const grown = result.outcome === "pass" ? await sizeFinding(context, task.worktreePath, task.repoPath) : null;
+    if (grown) result = { ...result, findings: [...(result.findings ?? []), grown], detail: { ...result.detail, ...(Array.isArray(result.detail?.findings) ? { findings: [...(result.detail!.findings as unknown[]), grown] } : {}) } };
     return state.radius.length > 0 ? { ...result, detail: { ...result.detail, blastRadius: state.radius } } : result;
   };
 }

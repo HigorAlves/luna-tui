@@ -241,7 +241,7 @@ if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISAB
 /** Triage's signals: the classifier is built after the stages (it needs PackRuns), so it is bound below. */
 const triageSignals: TriageSignalDeps = { classify: null, graph, policy: (repoPath) => policies.for(repoPath), save: (id, patch) => engineSpend.updateTask(id, patch) };
 /** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
-const planDecisions: { decide: PlanDeps["decide"] } = { decide: null };
+const planDecisions: { decide: PlanDeps["decide"]; size: { decide: NonNullable<PlanDeps["size"]>["decide"] } } = { decide: null, size: { decide: null } };
 /** Build's red and scope checks run through PackRuns too: bound once it exists. */
 const buildDecisions: { decide: Decide | null; budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> } = { decide: null };
 /** Verify's finding_classify (and e2e's failure cause) run through PackRuns as the `verify` client: bound once it exists. */
@@ -324,7 +324,7 @@ const realVerifyRunner = verifyRunner({
   },
   policy: async (repoPath) => {
     const { checks, services, decisions, factory } = await policies.for(repoPath);
-    return { checks, services, decisions, verify: factory.verify };
+    return { checks, services, decisions, verify: factory.verify, size: factory.size };
   },
 });
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
@@ -623,6 +623,7 @@ await packRuns?.clearLeftovers();
 const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
 if (classifier) triageSignals.classify = (issue, _repoPath, options) => classifier.classify(issue, options);
 if (packRuns) planDecisions.decide = async (pack, plan) => tagged(await packRuns.run({ pack, context: { plan }, stage: "plan" }, "plan"));
+if (packRuns) planDecisions.size.decide = async (size) => tagged(await packRuns.run({ pack: "size_estimate", context: { size }, stage: "plan" }, "plan"));
 if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "verify" }, "verify"));
 if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await packRuns.run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
 if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await packRuns.run({ pack, context: { ship }, stage: "ship" }, "ship"));

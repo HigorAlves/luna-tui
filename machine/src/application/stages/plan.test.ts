@@ -827,3 +827,81 @@ describe("planStage", () => {
     expect(planned.detail?.flagged).not.toContain("owners not checked: the code graph is stale (80 commits behind)");
   });
 });
+
+describe("planStage's size guard", () => {
+  const sizeAnswer = (loc: number, confidence = 0.95, reviewable = true) => ({ est_loc: { score: loc, confidence }, est_files: { score: 1, confidence }, reviewable: { value: reviewable, p: reviewable ? 0.95 : 0.05 } });
+  const near = planned({ slices: [{ title: "export", est_loc: 220, touchpoints: ["a.ts"], acceptance: ["no panic"] }, { title: "route", est_loc: 230, touchpoints: ["b.ts"], acceptance: ["stays selected"] }] });
+  const withSize = (answer: Record<string, unknown> | Error, over: Partial<PlanDeps> = {}) => {
+    const asked: Array<{ title: string; hard: number; repo: string | null }> = [];
+    const order: string[] = [];
+    const base = setup({ plan: [near] }, over);
+    const runPack = base.deps.runPack;
+    const decide = base.deps.decide!;
+    base.deps.runPack = async (pack, ctx, extra) => (order.push(pack), runPack(pack, ctx, extra));
+    base.deps.decide = async (pack, plan, repo) => (order.push(pack), decide(pack, plan, repo));
+    base.deps.size = {
+      decide: async (size, repo) => {
+        order.push("size_estimate");
+        asked.push({ title: size.title, hard: size.limit.hard, repo });
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+    };
+    return { run: planStage(base.deps), asked, order };
+  };
+  const big = planned({ slices: [{ title: "everything", est_loc: 3000, touchpoints: ["a.ts"], acceptance: ["x"] }] });
+
+  it("asks size_estimate after risk_score and before the planner, on the full lane, and records its answer on the gate", async () => {
+    const { run, asked, order } = withSize(sizeAnswer(2));
+    const result = await run(context());
+    expect(order.slice(0, 3)).toEqual(["risk_score", "size_estimate", "plan"]);
+    expect(asked).toEqual([{ title: "Panic", hard: 2500, repo: "/repo" }]);
+    expect(result.detail).toMatchObject({ size: { estLoc: 500, planned: 450, verdict: "within", by: "plan", limit: { target: [1000, 2000], hard: 2500 } }, flagged: [] });
+  });
+
+  it("flags a plan whose own steps add up over the hard limit, and still passes it to the gate: slice 4 turns the flag into the split exit", async () => {
+    const base = setup({ plan: [big] });
+    base.deps.size = { decide: async () => sizeAnswer(2) };
+    const result = await planStage(base.deps)(context());
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ size: { planned: 3000, verdict: "over", by: "plan" } });
+    expect((result.detail as { flagged: string[] }).flagged).toContain("over the size limit");
+  });
+
+  it("asks nothing of the decision on the fast lane, but still sums the plan's estimates", async () => {
+    let asked = 0;
+    const base = setup({ plan_fast: [big] });
+    base.deps.size = { decide: async () => (asked++, sizeAnswer(2)) };
+    const result = await planStage(base.deps)(context({ task: fastTask }));
+    expect(asked).toBe(0);
+    expect(result.detail).toMatchObject({ lane: "fast", size: { planned: 3000, verdict: "over" } });
+  });
+
+  it("reads an unsure answer into nothing and survives a failed call", async () => {
+    const unsure = withSize(sizeAnswer(6, 0.1));
+    const a = await unsure.run(context());
+    expect((a.detail as { flagged: string[] }).flagged).toEqual([]);
+    const failed = withSize(new Error("no runtime"));
+    const b = await failed.run(context());
+    expect(b.outcome).toBe("pass");
+    expect(b.detail).toMatchObject({ size: { estLoc: null, planned: 450, verdict: "within" } });
+  });
+
+  it("flags a confident not-reviewable inside the limits", async () => {
+    const { run } = withSize(sizeAnswer(2, 0.95, false));
+    expect(((await run(context())).detail as { flagged: string[] }).flagged).toEqual(["size: hard to review as one change"]);
+  });
+
+  it("takes the limits from the repository's luna.yaml size section", async () => {
+    const base = setup();
+    base.deps.policies = { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2 }, size: { target_loc: [5, 8], hard_limit_loc: 10, max_children: 8, max_rounds: 3, depth: 2 } } }) };
+    const result = await planStage(base.deps)(context());
+    expect(result.detail).toMatchObject({ size: { planned: 12, verdict: "over", limit: { target: [5, 8], hard: 10 } } });
+  });
+
+  it("changes nothing for a card on a repository with no size dependency: the plan's sum is the only addition", async () => {
+    const { run } = setup();
+    const result = await run(context());
+    expect(result.detail).toMatchObject({ size: { estLoc: null, planned: 12, verdict: "within" }, flagged: [] });
+  });
+});

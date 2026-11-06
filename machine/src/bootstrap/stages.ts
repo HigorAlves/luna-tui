@@ -106,7 +106,7 @@ export async function buildRealStages(
   /** Triage's first read of a ticket with no signals; `classify` is bound late, once PackRuns exists. */
   triageSignals?: TriageSignalDeps,
   /** The plan stage's decisions (coverage, plan check, risk): `decide` is bound late, once PackRuns exists; null runs the stage without them. */
-  planDecisions?: { decide: PlanDeps["decide"] },
+  planDecisions?: { decide: PlanDeps["decide"]; size?: { decide: NonNullable<PlanDeps["size"]>["decide"] } },
   /** The machine's code graphs, mounted read-only in every stage; `ensure` asks for a first build of a repo with none. */
   graphs?: { graph: Graph; ensure: (repoPath: string) => void; rebuild?: (repoPath: string) => void },
   /** Build's checks (red_check, scope_check): `decide` is bound late, once PackRuns exists; null runs Build without them. */
@@ -319,6 +319,12 @@ export async function buildRealStages(
       runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, extra.plan ? { plan: extra.plan } : {}),
       get decide() {
         return planDecisions?.decide ?? null;
+      },
+      // size_estimate, read at call time as `decide` is: main.ts binds it late.
+      size: {
+        get decide() {
+          return planDecisions?.size?.decide ?? null;
+        },
       },
       policies: { for: (repoPath) => policies.for(repoPath) },
       ...(graphs ? { graph: graphs.graph, graphReady } : {}),
