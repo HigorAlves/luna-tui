@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { previewOn } from "../../test/policies.ts";
 
 import type { EngineId, StageOutput } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
@@ -50,7 +51,7 @@ const credentials = (missing: EngineId[] = []): Credentials => ({
 });
 
 function appWith(body: StageOutput, opts: { missing?: EngineId[]; runs?: boolean; deps?: Partial<PackRunsDeps>; dailyUsd?: number } = {}) {
-  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true, budget: { dailyUsd: opts.dailyUsd ?? null } });
+  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, budget: { dailyUsd: opts.dailyUsd ?? null } });
   const runs = new PackRuns({
     image: "img", credentials: credentials(opts.missing), stateDir: mkdtempSync(join(tmpdir(), "runs-http-")), store: new PgPackRunStore(db), sandbox: sandboxOf(body), log: () => {},
     budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
@@ -150,7 +151,7 @@ describe("POST /runs", () => {
   });
 
   it("goes by the asked engine's own credential: with no Claude credential a codex:luna call runs and a claude one is 409; 503 only with MACHINE_AGENTS=off", async () => {
-    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     const config = { agents: true, runnerImage: "img", stateDir: mkdtempSync(join(tmpdir(), "runs-http-")) };
     const deps = { credentials: credentials(["claude:haiku", "claude:sonnet", "claude:opus"]), store: new PgPackRunStore(db), sandbox: sandboxOf(output()), log: () => {} };
     const app = createApp({ db, pipeline, bus: new Bus(), runs: buildPackRuns(config, deps) });

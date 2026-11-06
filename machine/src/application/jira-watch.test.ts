@@ -1,5 +1,6 @@
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { previewOn } from "../test/policies.ts";
 
 import { freshTestDatabase } from "../test/database.ts";
 import type { TaskRow } from "../domain/task.ts";
@@ -28,7 +29,7 @@ function wire(
   jira = fakeJira({ issues: [{ key: "PLAT-123", status: "In Progress", statusCategory: "indeterminate", priority: "High", dueAt: "2026-10-31", issueType: "Bug" }] }),
   over: { expiresAt?: string | null; retryBlocked?: (task: TaskRow) => Promise<void> } = {},
 ) {
-  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: SITE });
+  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, jiraSite: SITE });
   const published: string[] = [];
   const warnings: string[] = [];
   const expiry = new TokenExpiry(over.expiresAt ?? null);

@@ -2,12 +2,12 @@ import type { Task, TaskSla } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import { noTokenJira } from "../../application/jira.ts";
 import { JiraTasks, TokenExpiry } from "../../application/jira-tasks.ts";
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
 import { freshTestDatabase } from "../../test/database.ts";
+import { PREVIEW_ON } from "../../test/policies.ts";
 import { type FakeJira, SITE, fakeJira } from "../../test/jira.ts";
 import { createApp } from "./app.ts";
 import { Bus } from "./bus.ts";
@@ -25,7 +25,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
-  pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: SITE, policies: { for: async () => ({ ...DEFAULT_POLICY, jira: { project: "PLAT", intake: null, on: {}, comments: "milestones", fields: {}, branch: "{type}/{key}" } }) } });
+  pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: SITE, policies: { for: async () => ({ ...PREVIEW_ON, jira: { project: "PLAT", intake: null, on: {}, comments: "milestones", fields: {}, branch: "{type}/{key}" } }) } });
   jira = fakeJira({ issues: [{ key: "PLAT-123", summary: "Login page", status: "In Progress", issueType: "Bug", priority: "High", dueAt: "2026-10-31" }, { key: "PLAT-7", summary: "Login button colour", status: "To Do" }] });
   bus = new Bus();
 });

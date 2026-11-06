@@ -1,6 +1,7 @@
 import type { EngineId, Metrics, TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../../test/policies.ts";
 
 import { Pipeline } from "../../application/pipeline.ts";
 import type { StageResult } from "../../application/ports.ts";
@@ -29,7 +30,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, maxConcurrentTasks: 2 });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, maxConcurrentTasks: 2 });
 });
 
 const app = () => createApp({ db, pipeline, bus: new Bus() });
@@ -145,7 +146,7 @@ describe("GET /metrics", () => {
   it("reports the spend ceilings and what is left of the day's", async () => {
     expect((await getMetrics()).budget).toEqual({ taskUsd: null, dailyUsd: null, spentTodayUsd: 0, remainingTodayUsd: null });
 
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, maxConcurrentTasks: 2, budget: { taskUsd: 5, dailyUsd: 10 } });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, maxConcurrentTasks: 2, budget: { taskUsd: 5, dailyUsd: 10 } });
     const { closed } = await seed();
     await db.query("update stage_runs set cost_usd = 1.5 where task_id = $1 and stage = 'implementing'", [closed.id]);
     await db.query("update stage_runs set cost_usd = 4, started_at = now() - interval '2 days' where task_id = $1 and stage = 'triage'", [closed.id]);

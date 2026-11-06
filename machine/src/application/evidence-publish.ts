@@ -12,6 +12,8 @@ import { hashRegularFile, readRegularBytes } from "../adapters/fs/bounded.ts";
 import { releaseAssetStorage, EVIDENCE_TAG as TAG } from "../adapters/evidence-storage/release-asset.ts";
 import { BODY_CAP, COMMENT_MARKER, mergeSection, redact, renderEvidenceComment, renderEvidenceSection, stripSection } from "../domain/evidence-markdown.ts";
 import { type EvidenceStorage, localStorage } from "./evidence-storage.ts";
+import { emptyCursor, loadCursor, saveCursor } from "./ship-cursor.ts";
+import { packComplete, repairPack } from "../domain/evidence-pack.ts";
 import { MAX_MEDIA_BYTES, safeName } from "./evidence-store.ts";
 import { type GitHub, GitHubError } from "./github.ts";
 
@@ -168,3 +170,40 @@ export const publishEvidence: PublishEvidence = async ({ github, slug, number, t
 /** `publishEvidence` on the target the repository chose (`evidence.storage`: `release_asset`, the default, or `local`). */
 export const publishChosen = (kindOf: (repoPath: string | null) => Promise<"release_asset" | "local">): PublishEvidence => async (input) =>
   publishEvidence({ ...input, storage: (await kindOf(input.repoPath ?? null).catch(() => "release_asset" as const)) === "local" ? localStorage() : releaseAssetStorage(input.github) });
+
+export interface ReadyDeps {
+  github: GitHub;
+  publish: PublishEvidence;
+  /** Saves the pack, with its urls, on the task. */
+  save: (taskId: string, pack: EvidencePack) => Promise<void>;
+  stateDir: string;
+  /** The pack's own local dir for a commit. */
+  localDir: (taskId: string, sha: string) => string;
+  exists?: (path: string) => boolean;
+}
+
+export type Ready =
+  | { published: true; pack: EvidencePack; assets: number; readied: boolean; notes: string[] }
+  | { published: false; reason: string; pack: EvidencePack };
+
+/** Publishes a complete pack onto the PR whose head on GitHub is `headSha`, saves it, records that it was published at this head, and marks a draft PR ready.
+ *  The pack is checked first and repaired once by script; one whose commit is not the head, or that is still incomplete, is not published (the reason says why). */
+export async function publishAndReady(deps: ReadyDeps, input: { task: { id: string; repoPath: string | null }; slug: string; number: number; headSha: string; draft: boolean; pack: EvidencePack; approved: boolean }): Promise<Ready> {
+  const { task, slug, number, headSha, draft, approved } = input;
+  let pack = input.pack;
+  const checked = packComplete(pack, headSha, deps.exists);
+  if (!checked.ok) {
+    const fixed = repairPack(pack, checked.problems, deps.exists);
+    const after = packComplete(fixed.pack, headSha, deps.exists);
+    if (fixed.unfixed.length > 0 || !after.ok) return { published: false, reason: `the pack is not complete: ${[...fixed.unfixed, ...after.problems].join("; ")}`, pack: input.pack };
+    pack = fixed.pack;
+  }
+  const done = await deps.publish({ github: deps.github, slug, number, taskId: task.id, pack, localDir: deps.localDir(task.id, pack.commitSha), repoPath: task.repoPath, approved });
+  // With no token behind the port nothing was published: no cursor, no ready.
+  if (done.comment === "skipped") return { published: false, reason: "GitHub is not reachable with a token", pack };
+  await deps.save(task.id, done.pack);
+  const cursor = (await loadCursor(deps.stateDir, task.id)) ?? emptyCursor({ slug, number });
+  await saveCursor(deps.stateDir, task.id, { ...cursor, pr: { slug, number }, published: { sha: pack.commitSha } });
+  if (draft) await deps.github.markPrReady(slug, number);
+  return { published: true, pack: done.pack, assets: done.assets, readied: draft, notes: done.notes ?? [] };
+}

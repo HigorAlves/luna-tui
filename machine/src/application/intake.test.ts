@@ -1,5 +1,6 @@
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../test/policies.ts";
 
 import { Pipeline } from "./pipeline.ts";
 import { StubStages } from "./stages/stubs.ts";
@@ -18,7 +19,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
-  pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
+  pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
 });
 
 const issues = [

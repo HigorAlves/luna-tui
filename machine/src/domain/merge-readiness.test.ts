@@ -162,3 +162,25 @@ describe("mergeReadiness after a fix the loop made", () => {
     expect(mergeReadiness(input({ fixApproval: null }))).toMatchObject({ ready: true });
   });
 });
+
+describe("mergeReadiness: a person must have looked", () => {
+  const ready = (over: Partial<Parameters<typeof mergeReadiness>[0]> = {}) => mergeReadiness(input({ pr: pr({ reviewDecision: null }), ...over }));
+
+  it("does not let the machine merge a PR no person approved or looked at, and says an approving review is needed", () => {
+    const out = ready({ humanLook: false });
+    expect(out.ready).toBe(true);
+    expect(out.canAutoMerge).toBe(false);
+    expect(out.reason).toMatch(/approving review is needed/);
+  });
+
+  it("is satisfied by an approved awaiting_ship gate or by an approving review", () => {
+    expect(ready({ humanLook: true }).canAutoMerge).toBe(true);
+    expect(mergeReadiness(input({ pr: pr({ reviewDecision: "APPROVED" }), humanLook: false })).canAutoMerge).toBe(true);
+  });
+
+  it("still never merges a high-risk pack with no ship approver, whatever the look", () => {
+    const out = mergeReadiness(input({ risk: "high", humanLook: true, policy: { autoMerge: "medium", freeze: [] }, shipApprover: null }));
+    expect(out.canAutoMerge).toBe(false);
+  });
+});
+

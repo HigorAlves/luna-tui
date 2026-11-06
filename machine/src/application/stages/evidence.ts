@@ -14,6 +14,8 @@ import { parseNote } from "../../domain/fix-card.ts";
 import type { Policy } from "../../domain/policy.ts";
 import { approvedCases, approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
 import { EvidenceStore, MAX_MEDIA_BYTES, safeName } from "../evidence-store.ts";
+import { type PublishEvidence, publishAndReady } from "../evidence-publish.ts";
+import { type GitHub, GitHubError } from "../github.ts";
 import { copyRegularFile, hashRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
 import { screenFindings } from "../../domain/screen-text.ts";
 import { privacyTexts } from "../frame-privacy.ts";
@@ -225,7 +227,9 @@ export interface EvidenceStageDeps extends EvidenceDeps {
   /** Runs evidence_format on an evidence context and returns its answer; bound late, once PackRuns exists. Read at call time. */
   decideFormat: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** The repo's decision bars and its QA targets: how-to-verify names a target's URL from here, never from the manifest. */
-  policies: { for: (repoPath: string | null) => Promise<Pick<Policy, "decisions" | "qaTargets">> };
+  policies: { for: (repoPath: string | null) => Promise<Pick<Policy, "decisions" | "qaTargets"> & Partial<Pick<Policy, "factory">>> };
+  /** What publishing inside Evidence needs: the GitHub port, the publish function, and the worktree's GitHub slug. Absent, Ship publishes as before. */
+  publishing?: { github: GitHub; publish: PublishEvidence; slugOf: (worktreePath: string) => Promise<string | null> };
   /** Told the format the pack finally shipped with, after the vetoes and the video degrade (RFC 0005 wave 7). */
   truth?: TruthSink | null;
   /** The worktree's HEAD: the commit the pack shows. */
@@ -528,6 +532,37 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     await store.writePack(task.id, commitSha, pack);
     await deps.save(task.id, { evidence: pack });
 
+    // Publish and mark ready, inside Evidence, unless the repository keeps the preview gate. It only publishes what GitHub already has (the PR whose head is this
+    // pack's commit); it never pushes. Anything that stops it is a reason on the detail, never a failure: Ship publishes on its own path.
+    let shipped: { published: boolean; readied?: boolean; why?: string; pack?: EvidencePack } = { published: false, why: "publishing is not wired" };
+    if (deps.publishing) {
+      const preview = (await deps.policies.for(task.repoPath)).factory?.ship.preview === "on";
+      if (preview) shipped = { published: false, why: "ship.preview is on: the pack is published after the gate" };
+      else {
+        try {
+          const slug = task.worktreePath && task.branch ? await deps.publishing.slugOf(task.worktreePath) : null;
+          const found = slug && task.branch ? await deps.publishing.github.findPr(slug, task.branch) : null;
+          if (!slug || !found) shipped = { published: false, why: "no PR for this branch yet" };
+          else {
+            const head = await deps.publishing.github.prHeadSha(slug, found.number);
+            if (head !== pack.commitSha) shipped = { published: false, why: `the PR head on GitHub is not the pack's commit (${(head ?? "unknown").slice(0, 7)}, not ${pack.commitSha.slice(0, 7)})` };
+            else {
+              const done = await publishAndReady(
+                { github: deps.publishing.github, publish: deps.publishing.publish, save: (id, p) => deps.save(id, { evidence: p }), stateDir: deps.stateDir, localDir: (id, sha) => store.dirFor(id, sha) },
+                { task: { id: task.id, repoPath: task.repoPath ?? null }, slug, number: found.number, headSha: head, draft: found.isDraft, pack, approved: false },
+              );
+              if (done.published) {
+                shipped = { published: true, readied: done.readied, pack: done.pack };
+                await context.emit?.("evidence.published", { number: found.number, assets: done.assets, revision: pack.revision ?? 1 }).catch(() => {});
+              } else shipped = { published: false, why: done.reason };
+            }
+          }
+        } catch (error) {
+          shipped = { published: false, why: error instanceof GitHubError ? "GitHub is not reachable with a token" : `publishing failed: ${error instanceof Error ? error.message.slice(0, 120) : "unknown"}` };
+        }
+      }
+    }
+
     const evidence = objectOf(result.detail?.evidence) ?? {};
     return {
       ...result,
@@ -535,10 +570,13 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       detail: {
         ...result.detail,
         format,
+        published: shipped.published,
+        ...(shipped.readied !== undefined ? { readied: shipped.readied } : {}),
+        ...(shipped.why ? { publishedWhy: shipped.why } : {}),
         ...(formatKept ? { formatKept: true } : {}),
         // The verifier's finding_classify records the pack's findings were judged by: a person shipping with them is the truth.
         ...(findingRecords.length > 0 ? { decisions: { finding_classify: findingRecords } } : {}),
-        pack,
+        pack: shipped.pack ?? pack,
         evidence: {
           ...evidence,
           format,

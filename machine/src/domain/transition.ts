@@ -44,7 +44,7 @@ export type PipelineEvent =
   /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
   | { type: "start"; setup?: boolean }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
@@ -380,7 +380,8 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       if (outcome === "fail") return loopFailed(task, "ci", undefined, event.loopCap);
       break;
     case "evidence":
-      if (outcome === "pass") return wait("awaiting_ship", retries);
+      // With the preview on a person approves the pack before anything is public; otherwise Evidence has published it and Ship takes over.
+      if (outcome === "pass") return event.preview === true ? wait("awaiting_ship", retries) : run("shipping", retries);
       // Evidence shows less and says why; it never sends a card back to Build. A failure here is a card with no workspace, or a stage that broke: a person is asked, and the card resumes at Evidence.
       if (outcome === "fail") return escalate(event.reason || "evidence failed", "evidence", retries);
       break;

@@ -30,6 +30,19 @@ describe("archive", () => {
   });
 });
 
+describe("evidence without the preview gate", () => {
+  it("goes straight to shipping on a pass unless the repository keeps the preview", () => {
+    const step = transition(at("evidence"), { type: "stage_done", outcome: "pass" });
+    expect(step).toMatchObject({ state: "shipping", effect: { kind: "run", stage: "shipping" } });
+    expect(transition(at("evidence"), { type: "stage_done", outcome: "pass", preview: false })).toMatchObject({ state: "shipping" });
+    expect(transition(at("evidence"), { type: "stage_done", outcome: "pass", preview: true })).toMatchObject({ state: "awaiting_ship", effect: { kind: "wait", gate: "awaiting_ship" } });
+  });
+
+  it("a card already at awaiting_ship is approved or sent back as before", () => {
+    expect(transition(at("awaiting_ship"), { type: "sent_back" })).toMatchObject({ state: "evidence" });
+  });
+});
+
 describe("evidence at the ship gate", () => {
   it("a feature task sent back at awaiting_ship re-runs evidence", () => {
     expect(transition(at("awaiting_ship", { retries: { ...NO_RETRIES, total: 2 } }), { type: "sent_back" })).toMatchObject({ state: "evidence", effect: { kind: "run", stage: "evidence" }, retries: { total: 2 } });
@@ -127,7 +140,7 @@ describe("happy path", () => {
       pass, // e2e
       pass, // delivering
       pass, // ci_watch
-      pass, // evidence
+      { ...pass, preview: true }, // evidence, the repository keeps the preview gate
       approved, // ship targets
       pass, // shipping
       approved, // memory proposals

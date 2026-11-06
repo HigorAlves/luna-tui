@@ -114,6 +114,17 @@ describe("the ship monitor", () => {
     expect(notes.filter((n) => /auto-merge/.test(n))).toHaveLength(1);
   });
 
+  it("does not merge a PR no person approved or looked at, and merges once the preview gate was approved", async () => {
+    let polls = 0;
+    const unseen = { prFacts: async () => node({ reviewDecision: null }), prMerged: async () => (++polls < 2 ? open : merged) };
+    const none = setup(unseen, { policy: { autoMerge: "low" }, approvals: [] });
+    await none.run();
+    expect(calls(none.github, "mergePr")).toEqual([]);
+    const looked = setup({ prFacts: async () => node({ reviewDecision: null }) }, { policy: { autoMerge: "low" }, approvals: [{ kind: "awaiting_ship", decision: "approved", response: {} } as never] });
+    await looked.run();
+    expect(calls(looked.github, "mergePr")).toHaveLength(1);
+  });
+
   it("says ship.ready once, the first poll readiness is true, and ship.approval_needed when a person has to merge", async () => {
     let polls = 0;
     const { run, emitted } = setup({ prMerged: async () => (++polls < 3 ? open : merged) });

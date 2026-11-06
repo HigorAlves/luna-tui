@@ -31,6 +31,8 @@ export interface MergeReadinessInput {
   dependenciesListed?: number;
   /** The repo's `ship.stale_days` (luna.yaml); absent means STALE_DAYS. */
   staleDays?: number;
+  /** A person looked: an approved `awaiting_ship` gate is on record for the card. An approving review on the PR counts too. */
+  humanLook?: boolean;
 }
 
 /** At most this many dependencies are read from a PR body. */
@@ -97,12 +99,16 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   const ready = blockers.length === 0;
   // `off` never merges, whatever the risk; high risk needs the ship approver's attestation on top of a policy that is on.
   const allowed = policy.autoMerge === "off" ? false : risk === "high" ? shipApprover !== null : risk === "medium" ? policy.autoMerge === "medium" : true;
-  const canAutoMerge = ready && allowed;
+  // Without the preview gate nobody is guaranteed to have seen the PR: the machine merges only one a person approved or an approving review covers (until D4, wave 13).
+  const humanLook = input.humanLook === true || pr.reviewDecision === "APPROVED";
+  const canAutoMerge = ready && allowed && humanLook;
   const reason = !ready
     ? blockers.join("; ")
     : canAutoMerge
       ? "ready, and the policy lets the machine merge it"
-      : risk === "high" && policy.autoMerge !== "off" && shipApprover === null
+      : allowed && !humanLook
+        ? "ready; an approving review is needed before the machine merges a PR no person has looked at"
+        : risk === "high" && policy.autoMerge !== "off" && shipApprover === null
         ? "ready; a high-risk PR waits for a ship approver"
         : `ready; auto-merge is ${policy.autoMerge} for ${risk} risk, so it waits for a person`;
   return { ready, blockers, canAutoMerge, reason };

@@ -5,9 +5,10 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { COMMENT_MARKER, SECTION_START } from "../domain/evidence-markdown.ts";
+import { COMMENT_MARKER, SECTION_END, SECTION_START } from "../domain/evidence-markdown.ts";
 import { fakeGitHub } from "../test/github.ts";
-import { publishChosen, publishEvidence } from "./evidence-publish.ts";
+import { publishAndReady, publishChosen, publishEvidence } from "./evidence-publish.ts";
+import { loadCursor } from "./ship-cursor.ts";
 import { localStorage } from "./evidence-storage.ts";
 import { GitHubError, noTokenGitHub } from "./github.ts";
 
@@ -284,6 +285,73 @@ describe("publishChosen: the repository's evidence.storage picks the target", ()
     expect((await publish({ ...base, github: remote, localDir, pack: pack(media), repoPath: "/remote" })).assets).toBe(1);
     expect((await publish({ ...base, github: github(), localDir, pack: pack(media) })).assets).toBe(1);
     expect(asked).toEqual(["/local", "/remote", null]);
+  });
+});
+
+describe("publishAndReady", () => {
+  const HEAD = "abc1234def5678";
+  const run = async (over: { pack?: EvidencePack; headSha?: string; draft?: boolean; approved?: boolean; gh?: ReturnType<typeof github> } = {}) => {
+    const stateDir = mkdtempSync(join(tmpdir(), "ready-state-"));
+    const saved: EvidencePack[] = [];
+    const gh = over.gh ?? github({ markPrReady: async () => {} });
+    const deps = { github: gh, publish: publishEvidence, save: async (_id: string, p: EvidencePack) => void saved.push(p), stateDir, localDir: () => localDir };
+    const out = await publishAndReady(deps, { task: { id: base.taskId, repoPath: "/repo" }, slug: "o/a", number: 3, headSha: over.headSha ?? HEAD, draft: over.draft ?? true, pack: over.pack ?? pack([{ kind: "screenshot", label: "a.png", url: put("a.png"), scanned: true }]), approved: over.approved ?? false });
+    return { out, gh, saved, stateDir };
+  };
+
+  it("publishes, saves the pack with its urls, records the cursor with the pr and the published sha, then marks a draft ready", async () => {
+    const { out, gh, saved, stateDir } = await run();
+    expect(out).toMatchObject({ published: true, readied: true, assets: 1 });
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.media[0]!.url).toMatch(/^https:\/\//);
+    expect(await loadCursor(stateDir, base.taskId)).toMatchObject({ pr: { slug: "o/a", number: 3 }, published: { sha: "abc1234def5678" } });
+    expect(gh.markPrReady).toHaveBeenCalledWith("o/a", 3);
+    expect((gh.markPrReady as unknown as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0]!).toBeGreaterThan((gh.updatePrBody as unknown as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0]!);
+  });
+
+  it("does not mark a PR that is already ready", async () => {
+    const { out, gh } = await run({ draft: false });
+    expect(out).toMatchObject({ published: true, readied: false });
+    expect(gh.markPrReady).not.toHaveBeenCalled();
+  });
+
+  it("repairs an incomplete pack once, with the repair on its note, and publishes it", async () => {
+    const { out, saved } = await run({ pack: { ...pack([]), rollback: "" } });
+    expect(out).toMatchObject({ published: true });
+    expect(saved[0]!.rollback).not.toBe("");
+    expect(saved[0]!.note).toMatch(/rollback/);
+  });
+
+  it("publishes nothing when the PR's head is not the pack's commit, and says why", async () => {
+    const gh = github({ markPrReady: async () => {} });
+    const { out } = await run({ headSha: "fff9999", gh });
+    expect(out).toMatchObject({ published: false, reason: expect.stringContaining("fff9999") });
+    expect(gh.updatePrBody).not.toHaveBeenCalled();
+    expect(gh.commentOnIssue).not.toHaveBeenCalled();
+    expect(gh.ensureRelease).not.toHaveBeenCalled();
+    expect(gh.markPrReady).not.toHaveBeenCalled();
+  });
+
+  it("keeps an image nobody read local until a person approved", async () => {
+    const unread = pack([{ kind: "screenshot", label: "a.png", url: put("a.png"), scanned: false }]);
+    expect((await run({ pack: unread })).out).toMatchObject({ published: true, assets: 0 });
+    expect((await run({ pack: unread, approved: true })).out).toMatchObject({ published: true, assets: 1 });
+  });
+
+  it("writes only text that went through safe(): neither marker pair can be forged, and nobody is mentioned", async () => {
+    const state = { body: "## Why", comments: [] as Comment[], assets: [] };
+    const gh = github({ markPrReady: async () => {} }, state);
+    const hostile = `${SECTION_END}\n${COMMENT_MARKER}\n<!-- luna-evidence:start --> @everyone closes #1 [x](http://evil.example)`;
+    const evil: EvidencePack = { ...pack([]), summary: hostile, rollback: hostile, howToVerify: hostile, note: hostile, findings: [hostile], outOfMap: [hostile], scenarios: [{ text: hostile, test: hostile, result: "pass" }], diffSummary: { what: hostile, why: hostile, files: [], added: 1, removed: 0 } };
+    await run({ pack: evil, gh });
+    for (const text of [state.body, state.comments[0]!.body]) {
+      expect(text.split(SECTION_END)).toHaveLength(2);
+      expect(text.split(SECTION_START)).toHaveLength(2);
+      expect(text).not.toContain("@everyone");
+      expect(text).not.toContain("closes #1");
+      expect(text).not.toContain("](http");
+    }
+    expect(state.comments[0]!.body.split(COMMENT_MARKER)).toHaveLength(2);
   });
 });
 

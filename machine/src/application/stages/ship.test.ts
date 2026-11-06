@@ -179,11 +179,35 @@ describe("shipping with an Evidence Pack", () => {
     const { run, context, evidence, saved, published } = withEvidence(pack(), github);
     const result = await run(context);
     expect(result).toMatchObject({ outcome: "pass", detail: { prUrl: "https://x/pull/3", readied: true, published: { comment: "created", assets: 1 } } });
-    expect(evidence.publish).toHaveBeenCalledWith({ github, slug: "a/b", number: 3, taskId: "t1", pack: pack(), repoPath: expect.anything(), localDir: `/state/evidence/t1/${HEAD}` });
+    expect(evidence.publish).toHaveBeenCalledWith({ github, slug: "a/b", number: 3, taskId: "t1", pack: pack(), repoPath: expect.anything(), approved: false, localDir: `/state/evidence/t1/${HEAD}` });
     expect(saved).toEqual([["t1", published.pack]]);
     expect(github.markPrReady).toHaveBeenCalledWith("a/b", 3);
     // Published before the PR leaves draft.
     expect((evidence.publish as unknown as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]).toBeLessThan((github.markPrReady as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!);
+  });
+
+  it("hands the publish the person's approval when the preview gate was approved, and none otherwise", async () => {
+    const github = fakeGitHub({ findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: true }), prHeadSha: async () => HEAD, markPrReady: async () => {} });
+    const a = withEvidence(pack(), github);
+    await a.run({ ...a.context, approvals: [{ kind: "awaiting_ship", decision: "approved" } as never] });
+    expect(a.evidence.publish).toHaveBeenCalledWith(expect.objectContaining({ approved: true }));
+    const b = withEvidence(pack(), github);
+    await b.run(b.context);
+    expect(b.evidence.publish).toHaveBeenCalledWith(expect.objectContaining({ approved: false }));
+  });
+
+  it("repairs what a script can before it fails on an incomplete pack", async () => {
+    const github = fakeGitHub({ findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: false }), prHeadSha: async () => HEAD });
+    const w = withEvidence(pack({ rollback: "" }), github);
+    expect(await w.run(w.context)).toMatchObject({ outcome: "pass" });
+    expect(((w.evidence.publish as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as unknown as [{ pack: EvidencePack }])[0].pack.rollback).not.toBe("");
+  });
+
+  it("does not repair a pack whose commit is not the head: it is stale, not incomplete", async () => {
+    const github = fakeGitHub({ findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: false }), prHeadSha: async () => HEAD });
+    const w = withEvidence(pack({ rollback: "", commitSha: "fff9999" }), github);
+    expect(await w.run(w.context)).toMatchObject({ outcome: "escalated" });
+    expect(w.evidence.publish).not.toHaveBeenCalled();
   });
 
   it("also publishes onto a PR that is already ready", async () => {
@@ -221,15 +245,16 @@ describe("shipping with an Evidence Pack", () => {
     expect((await moved.run(moved.context)).detail).toMatchObject({ escalation: "head_moved" });
   });
 
-  it("fails naming what is missing from an incomplete pack, and publishes nothing", async () => {
+  it("repairs an incomplete pack (no rollback, no scenario) and publishes the repaired one instead of failing", async () => {
     const github = fakeGitHub({ findPr: async () => pr(true), prHeadSha: async () => HEAD, markPrReady: async () => {} });
     const { run, context, evidence } = withEvidence(pack({ rollback: "", scenarios: [] }), github);
     const result = await run(context);
-    expect(result.outcome).toBe("fail");
-    expect(String(result.detail?.error)).toMatch(/rollback/);
-    expect(String(result.detail?.error)).toMatch(/scenarios/);
-    expect(evidence.publish).not.toHaveBeenCalled();
-    expect(github.markPrReady).not.toHaveBeenCalled();
+    expect(result.outcome).toBe("pass");
+    const sent = (evidence.publish as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { pack: EvidencePack };
+    expect(sent.pack.rollback).not.toBe("");
+    expect(sent.pack.format).toBe("text");
+    expect(sent.pack.note).toMatch(/repaired/);
+    expect(github.markPrReady).toHaveBeenCalled();
   });
 
   it("ships as today, saying there was no pack, when the task has none", async () => {

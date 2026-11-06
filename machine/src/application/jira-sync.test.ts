@@ -1,5 +1,6 @@
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { PREVIEW_ON, previewOn } from "../test/policies.ts";
 
 import { DEFAULT_POLICY, type JiraPolicy } from "../domain/policy.ts";
 import { freshTestDatabase } from "../test/database.ts";
@@ -41,7 +42,7 @@ function wire(policy: JiraPolicy | null = jiraPolicy(), issue: Partial<Parameter
     inline: true,
     hasConfig: () => true,
     jiraSite: SITE,
-    policies: { for: async () => ({ ...DEFAULT_POLICY, jira: policy }) },
+    policies: { for: async () => ({ ...PREVIEW_ON, jira: policy }) },
     onEvent: (event) => void sync.handle(event),
   });
   sync = new JiraSync({ pipeline, jira, enabled: true, boardUrl: "http://board.local", now: () => new Date("2026-10-28T12:00:00Z") });

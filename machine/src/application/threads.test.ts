@@ -1,5 +1,6 @@
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../test/policies.ts";
 
 import { Pipeline } from "./pipeline.ts";
 import { StubStages } from "./stages/stubs.ts";
@@ -29,7 +30,7 @@ function wire(options: { slack?: boolean; enabled?: boolean; slackPort?: ReturnT
   const comments: string[][] = [];
   const posts: Array<Record<string, unknown>> = [];
   let replies: ThreadReplies;
-  const pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, onEvent: (event) => void replies.handle(event) });
+  const pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, onEvent: (event) => void replies.handle(event) });
   replies = new ThreadReplies({
     pipeline,
     enabled: options.enabled ?? true,
@@ -121,7 +122,7 @@ describe("ThreadReplies", () => {
 
     // A new machine over the same database finds the thread in the task's events.
     const again = wire({ slack: true });
-    const fresh = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, onEvent: (event) => void again.replies.handle(event) });
+    const fresh = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, onEvent: (event) => void again.replies.handle(event) });
     await fresh.decide(task.id, "sent_back", "redo");
     await again.replies.idle();
     expect(again.posts).toEqual([{ channel: "C123", thread_ts: "1.1", text: "Needs you: approve the plan." }]);

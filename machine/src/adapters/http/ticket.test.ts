@@ -2,6 +2,7 @@
 import type { TaskDiff } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../../test/policies.ts";
 
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
@@ -25,7 +26,7 @@ beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
   diffs.length = 0;
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
 });
 
 const taskDiff = async (worktreePath: string, repoPath: string | null, file?: string): Promise<TaskDiff> => {

@@ -3,7 +3,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { type FakeGitHub, fakeGitHub } from "../../test/github.ts";
+import { type GitHub, noTokenGitHub } from "../github.ts";
+import type { EvidencePack } from "@hardness/contracts";
 
 import { type EvidenceDeps, type EvidenceStageDeps, evidenceRunner, evidenceStage } from "./evidence.ts";
 import { type Learned, tagged } from "../decision-truth.ts";
@@ -355,6 +359,82 @@ describe("evidenceStage", () => {
     await run(taskContext({ record: { ...record, goal } }));
     const pack = (saved[0]![1] as { evidence: { summary: string } }).evidence;
     expect(pack.summary.split(/\s+/).length).toBeLessThanOrEqual(200);
+  });
+
+  describe("publishing and marking ready inside Evidence", () => {
+    const HEAD = "abc1234def";
+    const gh = (over: Record<string, unknown> = {}) => fakeGitHub({ findPr: async () => ({ url: "https://github.com/a/b/pull/3", number: 3, isDraft: true }), prHeadSha: async () => HEAD, markPrReady: async () => {}, ...over } as never);
+    const published = (assets = 2) => ({ pack: undefined as never, comment: "created" as const, assets, notes: [] });
+    const setup = (preview: "on" | "off", github: GitHub = gh(), over: Partial<EvidenceStageDeps> = {}) => {
+      const publish = vi.fn(async (input: { pack: EvidencePack }) => ({ ...published(), pack: input.pack }));
+      const { run, saved } = stage({
+        policies: { for: async () => ({ decisions: {}, qaTargets: [{ name: "local", baseUrl: "http://localhost:3000/app", credential: null }], factory: { ship: { preview } } as never }) },
+        publishing: { github, publish, slugOf: async () => "a/b" },
+        ...over,
+      });
+      const emitted: [string, Record<string, unknown>][] = [];
+      const ctx = { ...taskContext({ branch: "hardness/t1" }), emit: async (k: string, p: Record<string, unknown>) => void emitted.push([k, p]) } as unknown as StageContext;
+      return { run, saved, publish, emitted, ctx, github: github as FakeGitHub };
+    };
+
+    it("with the preview off publishes the pack to the PR whose head is the pack's commit, marks it ready and logs evidence.published with ids and counts", async () => {
+      browserRun();
+      const { run, publish, emitted, ctx, github } = setup("off");
+      const result = await run(ctx);
+      expect(result.outcome).toBe("pass");
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(publish.mock.calls[0]![0]).toMatchObject({ slug: "a/b", number: 3 });
+      expect(github.markPrReady).toHaveBeenCalledWith("a/b", 3);
+      expect(emitted).toEqual([["evidence.published", { number: 3, assets: 2, revision: 1 }]]);
+      expect(result.detail).toMatchObject({ published: true, readied: true });
+    });
+
+    it("with ship.preview on publishes nothing and touches no PR: the gate comes first", async () => {
+      browserRun();
+      const { run, publish, emitted, ctx, github } = setup("on");
+      const result = await run(ctx);
+      expect(result.outcome).toBe("pass");
+      expect(publish).not.toHaveBeenCalled();
+      expect(github.findPr).not.toHaveBeenCalled();
+      expect(github.markPrReady).not.toHaveBeenCalled();
+      expect(emitted).toEqual([]);
+      expect(result.detail).toMatchObject({ published: false, publishedWhy: expect.stringMatching(/preview/) });
+    });
+
+    it("publishes nothing when the PR's head on GitHub is not the pack's commit, and still passes", async () => {
+      browserRun();
+      const { run, publish, ctx } = setup("off", gh({ prHeadSha: async () => "fff9999" }));
+      const result = await run(ctx);
+      expect(result.outcome).toBe("pass");
+      expect(publish).not.toHaveBeenCalled();
+      expect(result.detail).toMatchObject({ published: false, publishedWhy: expect.stringMatching(/head/) });
+    });
+
+    it("publishes nothing with no PR, or with no token, and still passes", async () => {
+      browserRun();
+      const none = setup("off", gh({ findPr: async () => null }));
+      expect((await none.run(none.ctx)).detail).toMatchObject({ published: false, publishedWhy: expect.stringMatching(/no PR/) });
+      const noToken = setup("off", noTokenGitHub());
+      const result = await noToken.run(noToken.ctx);
+      expect(result.outcome).toBe("pass");
+      expect(noToken.publish).not.toHaveBeenCalled();
+      expect(result.detail).toMatchObject({ published: false });
+    });
+
+    it("passes the approval of a gate that was approved to the publish, never otherwise", async () => {
+      browserRun();
+      const open = setup("off");
+      await open.run(open.ctx);
+      expect(open.publish.mock.calls[0]![0]).toMatchObject({ approved: false });
+    });
+
+    it("does nothing about GitHub when no publishing is wired", async () => {
+      browserRun();
+      const { run, saved } = stage();
+      const result = await run(taskContext());
+      expect(saved).toHaveLength(1);
+      expect(result.detail).toMatchObject({ published: false });
+    });
   });
 
   describe("the text on screenshots is read before they are kept", () => {

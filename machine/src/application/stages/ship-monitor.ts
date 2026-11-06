@@ -399,6 +399,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
             dependenciesListed: listed.length,
             fixApproval,
             staleDays: policy.factory.ship.stale_days,
+            humanLook: context.approvals.some((a) => a.kind === "awaiting_ship" && a.decision === "approved"),
           });
           // A checks run that left failure and came back is a new red even under the same run id.
           if (deps.loop && pr.checks.state !== "failure") cursor.ciCycled = true;

@@ -2,6 +2,7 @@
 // ticket and talks about it; the machine only runs it.
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { PREVIEW_ON, previewOn } from "../test/policies.ts";
 
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { freshTestDatabase } from "../test/database.ts";
@@ -44,7 +45,7 @@ function wire() {
     jiraSite: SITE,
     policies: {
       for: async () => ({
-        ...DEFAULT_POLICY,
+        ...PREVIEW_ON,
         jira: { project: "PLAT", intake: null, on: { implementing: "In Progress", closed: "Done" }, comments: "gates", fields: {}, branch: "{type}/{key}" },
       }),
     },

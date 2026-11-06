@@ -7,7 +7,7 @@ import type { EvidencePack } from "@hardness/contracts";
 
 import { headCommit as worktreeHead, originSlugOf } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
-import { packComplete } from "../../domain/evidence-pack.ts";
+import { packComplete, repairPack } from "../../domain/evidence-pack.ts";
 import type { PublishEvidence } from "../evidence-publish.ts";
 import { type GitHub, messageOf } from "../github.ts";
 import type { StageResult, StageRunner } from "../ports.ts";
@@ -35,7 +35,7 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
   const slugOf = deps.slugOf ?? originSlugOf;
   const headOf = deps.headCommit ?? worktreeHead;
   /** The pack's turn at the gate: nothing to do (no pack), a stop (the head moved, the pack is incomplete), or what was published. */
-  const evidencePhase = async (slug: string, number: number, taskId: string, worktreePath: string, repoPath: string | null): Promise<{ stop: StageResult } | { published: Record<string, unknown>; note?: string } | { none: true }> => {
+  const evidencePhase = async (slug: string, number: number, taskId: string, worktreePath: string, repoPath: string | null, approved: boolean): Promise<{ stop: StageResult } | { published: Record<string, unknown>; note?: string } | { none: true }> => {
     const evidence = deps.evidence;
     if (!evidence) return { none: true };
     const pack = await evidence.load(taskId);
@@ -52,9 +52,16 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
         },
       };
     }
+    // What a script can fix is fixed before the stage fails on an incomplete pack.
+    let shown = pack;
     const complete = packComplete(pack, head);
-    if (!complete.ok) return { stop: { outcome: "fail", detail: { error: `the evidence pack is not complete: ${complete.problems.join("; ")}` } } };
-    const done = await evidence.publish({ github: deps.github, slug, number, taskId, pack, repoPath, localDir: evidence.store.dirFor(taskId, pack.commitSha) });
+    if (!complete.ok) {
+      const fixed = repairPack(pack, complete.problems);
+      const after = packComplete(fixed.pack, head);
+      if (fixed.unfixed.length > 0 || !after.ok) return { stop: { outcome: "fail", detail: { error: `the evidence pack is not complete: ${[...fixed.unfixed, ...after.problems].join("; ")}` } } };
+      shown = fixed.pack;
+    }
+    const done = await evidence.publish({ github: deps.github, slug, number, taskId, pack: shown, repoPath, approved, localDir: evidence.store.dirFor(taskId, pack.commitSha) });
     await evidence.save(taskId, done.pack);
     return { published: { comment: done.comment, assets: done.assets }, ...(note ? { note } : {}) };
   };
@@ -98,7 +105,7 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
       });
       // Delivering was skipped (an older task): open the PR ready, as shipping used to. A resumed run never opens another.
       const pr = existing ?? (resumed ? { url: `https://github.com/${resumed.slug}/pull/${resumed.number}`, number: resumed.number, isDraft: false } : await openTaskPr(deps.github, slug, context, false));
-      const phase: Awaited<ReturnType<typeof evidencePhase>> = already ? { published: { resumed: true } } : await evidencePhase(slug, pr.number, task.id, cwd, task.repoPath ?? null);
+      const phase: Awaited<ReturnType<typeof evidencePhase>> = already ? { published: { resumed: true } } : await evidencePhase(slug, pr.number, task.id, cwd, task.repoPath ?? null, context.approvals.some((a) => a.kind === "awaiting_ship" && a.decision === "approved"));
       if ("stop" in phase) return phase.stop;
       if (deps.stateDir && "published" in phase && !already) {
         const sha = (await headOf(cwd)).trim();

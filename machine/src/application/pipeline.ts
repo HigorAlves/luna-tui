@@ -1681,6 +1681,7 @@ export class Pipeline {
                 ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
                 ...(await this.blockerSet(id, stage, result)),
                 ...(await this.loopCap(id, stage, result)),
+                ...(stage === "evidence" ? { preview: (await this.policyFor((await this.get(id)).repoPath)).factory.ship.preview === "on" } : {}),
               };
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.
         const decided = stage === "implementing" ? await this.decideBuildEscalation(id, result, planned, { secondScopeRed, stuck: stuck ?? null }) : null;
