@@ -577,7 +577,12 @@ export function callTarget(name: string, input: Record<string, unknown>): { targ
   const page = (name === "Read" || name === "read_file") && (input.offset !== undefined || input.limit !== undefined) ? `:${input.offset ?? 0}+${input.limit ?? ""}` : "";
   const first = `${String(target).split("\n")[0]!}${page}`.slice(0, CALL_TARGET_MAX);
   const change = name === "Edit" || name === "MultiEdit" ? `${input.old_string ?? ""}\u0000${input.new_string ?? ""}${JSON.stringify(input.edits ?? "")}` : name === "Write" || name === "write_file" ? String(input.content ?? "") : null;
-  return change === null ? { target: first } : { target: first, fingerprint: createHash("sha1").update(change).digest("hex").slice(0, 8) };
+  // A luna tool (`mcp__luna__scenario_red`, `slice_set`, `decision_get`, ...) names no file: its arguments are what tell one call from the next, so five
+  // reports for five scenarios are five calls. The same arguments four times in a row are still a loop. `step` has its label as the target.
+  const byArguments = change === null && name.startsWith("mcp__luna__") && input.label === undefined && Object.keys(input).length > 0 ? JSON.stringify(input) : null;
+  const shown = first === "" ? String(input.scenario ?? input.key ?? input.query ?? "").split("\n")[0]!.slice(0, CALL_TARGET_MAX) : first;
+  const basis = change ?? byArguments;
+  return basis === null ? { target: shown } : { target: shown, fingerprint: createHash("sha1").update(basis).digest("hex").slice(0, 8) };
 }
 
 /** The transcript line for one tool call. */
