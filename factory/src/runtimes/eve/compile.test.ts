@@ -8,19 +8,27 @@ import { describe, expect, it } from "vitest";
 import { agentFiles, appName, compileAgent, eveTools, tokenBudgetPerTurn } from "./compile.ts";
 
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+/** Triage hands its reply to a helper; these rows are about a pack that has none. */
+const triage = { ...PACKS.triage, helpers: [] };
 const options = (over = {}) => ({ factoryRoot: FACTORY_ROOT, outDir: join(FACTORY_ROOT, ".eve-agents"), ...over });
+
+describe("eveTools for the ticket reply pack", () => {
+  it("gives the pack that reads hostile ticket text no tools at all", () => {
+    expect(eveTools(PACKS.ticket_reply.access)).toEqual([]);
+  });
+});
 
 describe("eveTools", () => {
   it("maps a pack's access to eve's tool names: no bash without commands, no write_file without write", () => {
     expect(eveTools(PACKS.slack_triage.access)).toEqual([]);
     expect(eveTools(PACKS.jira_intake.access)).toEqual(["read_file", "glob", "grep"]);
-    expect(eveTools(PACKS.triage.access)).toEqual(["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get"]);
-    expect(eveTools(PACKS.implementing.access)).toEqual(["bash", "read_file", "glob", "grep", "write_file", "step", "slice_init", "slice_set", "slice_list", "decision_get"]);
+    expect(eveTools(PACKS.triage.access)).toEqual(["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search"]);
+    expect(eveTools(PACKS.implementing.access)).toEqual(["bash", "read_file", "glob", "grep", "write_file", "step", "slice_init", "slice_set", "slice_list", "decision_get", "scope_check"]);
   });
 });
 
 describe("agentFiles", () => {
-  const files = agentFiles(PACKS.triage, options());
+  const files = agentFiles(triage, options());
 
   it("writes an agent on the engine's model, the pack's effort, no default tools and a usage limit", () => {
     const agent = files["agent/agent.ts"]!;
@@ -48,7 +56,7 @@ describe("agentFiles", () => {
 
   it("gives one tool file per tool the access grants, the guarded ones from the runtime, and the channel and sandbox", () => {
     expect(Object.keys(files).filter((f) => f.startsWith("agent/tools/")).sort()).toEqual(
-      ["bash", "decision_get", "glob", "grep", "read_file", "step", "web_fetch"].map((t) => `agent/tools/${t}.ts`),
+      ["bash", "card_search", "decision_get", "glob", "grep", "read_file", "step", "web_fetch"].map((t) => `agent/tools/${t}.ts`),
     );
     expect(files["agent/tools/bash.ts"]).toBe('export { bash as default } from "../../../../src/runtimes/eve/agent/tools.ts";\n');
     expect(files["agent/tools/step.ts"]).toContain('export default lunaTool("step");');
@@ -56,6 +64,7 @@ describe("agentFiles", () => {
     expect(files["agent/tools/web_fetch.ts"]).toBe('export { web_fetch as default } from "../../../../src/runtimes/eve/agent/tools.ts";\n');
     expect(files["agent/channels/eve.ts"]).toContain("src/runtimes/eve/agent/channel.ts");
     expect(files["agent/sandbox.ts"]).toContain("src/runtimes/eve/sandbox.ts");
+    expect(files["agent/instrumentation/laminar.ts"]).toBe('export { default } from "../../../../src/runtimes/eve/agent/laminar.ts";\n');
   });
 
   it("compiles web_fetch in only for a pack with the web", () => {
@@ -72,12 +81,13 @@ describe("agentFiles", () => {
 
   it("gives a pack with helpers a delegate tool over the bridge that names each helper, and a helper's run none", () => {
     const helper = { role: "security-reviewer", engine: "codex:sol" } as const;
-    const pack = { ...PACKS.triage, helpers: [helper] };
+    const pack = { ...triage, helpers: [helper] };
     const tool = agentFiles(pack, options())["agent/tools/delegate.ts"]!;
     expect(tool).toContain('import { delegateTool } from "../../../../src/runtimes/eve/agent/tools.ts";');
     expect(tool).toContain('["security-reviewer"]');
     expect(tool).toMatch(/- security-reviewer \(codex:sol\): Reviews a diff/);
-    expect(agentFiles(PACKS.triage, options())["agent/tools/delegate.ts"]).toBeUndefined();
+    expect(agentFiles(triage, options())["agent/tools/delegate.ts"]).toBeUndefined();
+    expect(agentFiles(PACKS.triage, options())["agent/tools/delegate.ts"]).toContain("reply-drafter");
     const child = helperPack(pack, helper);
     expect(appName(pack)).toBe("triage");
     expect(appName(child)).toBe("triage--security-reviewer");
@@ -103,10 +113,10 @@ describe("compileAgent", () => {
     // Inside the factory, as the real ones are, so the agent resolves eve from its node_modules.
     const outDir = mkdtempSync(join(FACTORY_ROOT, ".eve-agents-test-"));
     try {
-      const app = compileAgent(PACKS.triage, options({ outDir }));
+      const app = compileAgent(triage, options({ outDir }));
       expect(app).toBe(join(outDir, "triage"));
       expect(existsSync(join(app, "agent", "agent.ts"))).toBe(true);
-      expect(existsSync(join(app, "agent", "skills", "writing-plans", "SKILL.md"))).toBe(true);
+      expect(existsSync(join(app, "agent", "skills", "code-discovery", "SKILL.md"))).toBe(true);
       expect(existsSync(join(compileAgent(PACKS.slack_triage, options({ outDir })), "agent", "skills"))).toBe(false);
     } finally {
       rmSync(outDir, { recursive: true, force: true });

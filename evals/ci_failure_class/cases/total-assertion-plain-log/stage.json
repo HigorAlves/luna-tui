@@ -1,0 +1,35 @@
+{
+  "schema": 3,
+  "stage": "ci_failure_class",
+  "pack": "ci_failure_class",
+  "attempt": 1,
+  "task": {
+    "id": "total-assertion-plain-log",
+    "title": "total-assertion-plain-log",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "ci",
+      "ci": {
+        "job": "test (ubuntu)",
+        "log": "FAIL src/cart/total.test.ts\n  x totals include tax\n    expected 108, received 100\n      at src/cart/total.ts:12:9"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

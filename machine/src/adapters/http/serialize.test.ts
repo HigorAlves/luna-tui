@@ -6,8 +6,8 @@ import { toTask } from "./serialize.ts";
 
 const row = (): TaskRow => ({
   id: "t1", title: "x", description: "", criteria: [], repoPath: null, source: null, route: "feature", branch: null, worktreePath: null,
-  state: "draft", retries: { ...NO_RETRIES }, resumeTo: null, reason: null, queued: false, queuedAt: null, stateSince: null, idempotencyKey: null, requestHash: null, stages: {}, seq: "1",
-  diffAdded: null, diffRemoved: null, testsPassed: null, testsTotal: null, jira: null, classification: null,
+  state: "draft", retries: { ...NO_RETRIES }, resumeTo: null, reason: null, archiveReason: null, queued: false, queuedAt: null, stateSince: null, idempotencyKey: null, requestHash: null, stages: {}, seq: "1",
+  diffAdded: null, diffRemoved: null, testsPassed: null, testsTotal: null, jira: null, classification: null, record: null, evidence: null,
   createdAt: new Date(0), updatedAt: new Date(0),
 });
 
@@ -33,7 +33,37 @@ describe("toTask", () => {
     expect(task.tests).toEqual({ passed: 7, total: 9 });
   });
 
+  it("carries the triage record and the evidence pack, null when the task has none", () => {
+    expect(toTask(row())).toMatchObject({ record: null, evidence: null });
+    const record = { source: "github", kind: "bug", goal: "g", size: "small", urgency: "normal", risk: "low" as const, signals: {}, qa: [], decision: "plan" as const, reason: "r", at: "2026-11-03T12:00:00.000Z", model: "m" };
+    const evidence = { summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk: "none" as const, rollback: "revert", howToVerify: "run it", commitSha: "abc", media: [], at: "2026-11-03T12:00:00.000Z" };
+    expect(toTask({ ...row(), record, evidence })).toMatchObject({ record, evidence });
+  });
+
   it("carries the row's sequence number as a number", () => {
     expect(toTask({ ...row(), seq: "9007199254740" }).seq).toBe(9007199254740);
+  });
+});
+
+describe("toTask at the states that hold a stage or a gate", () => {
+  it("counts awaiting_ship and reviewing_memory as waiting on you only with an open gate, else as running", () => {
+    const gate = { state: "awaiting_ship" as const, requested: {} };
+    for (const state of ["awaiting_ship", "reviewing_memory"] as const) {
+      expect(toTask({ ...row(), state }, null, null, { lastRun: null, gate: null })).toMatchObject({ waitingOnYou: false, running: true });
+      expect(toTask({ ...row(), state, queued: true }, null, null, { lastRun: null, gate: null })).toMatchObject({ waitingOnYou: false, running: false });
+      expect(toTask({ ...row(), state }, null, null, { lastRun: null, gate: { ...gate, state } })).toMatchObject({ waitingOnYou: true, running: false });
+    }
+    expect(toTask({ ...row(), state: "awaiting_approval" })).toMatchObject({ waitingOnYou: true, running: false });
+    expect(toTask({ ...row(), state: "shipping" })).toMatchObject({ waitingOnYou: false, running: true });
+  });
+});
+
+describe("toEvent names", () => {
+  const row = (kind: string, payload: Record<string, unknown>) => ({ id: "5", taskId: "t", stageRunId: null, kind, payload, at: new Date("2026-11-05T00:00:00Z") });
+
+  it("sets the diagram's names on a row that has one, and leaves a row the diagram has no name for exactly as it was", async () => {
+    const { toEvent } = await import("./serialize.ts");
+    expect(toEvent(row("task.shipped", { number: 1 }))).toEqual({ id: "5", taskId: "t", kind: "task.shipped", payload: { number: 1 }, at: "2026-11-05T00:00:00.000Z", names: ["ship.merged"] });
+    expect(toEvent(row("stage.note", { note: "x" }))).toEqual({ id: "5", taskId: "t", kind: "stage.note", payload: { note: "x" }, at: "2026-11-05T00:00:00.000Z" });
   });
 });

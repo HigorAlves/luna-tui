@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "est_loc.score",
+      "min": 5.5,
+      "max": 6.5
+    },
+    {
+      "kind": "between",
+      "path": "est_files.score",
+      "min": 3.5,
+      "max": 4.5
+    },
+    {
+      "kind": "equals",
+      "path": "reviewable.value",
+      "value": false
+    }
+  ],
+  "rubric": "The other end of the rubric: a rewrite of about 150 files.",
+  "label": {
+    "est_loc": {
+      "score": 6
+    },
+    "est_files": {
+      "score": 4
+    },
+    "reviewable": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "est_loc": "about 8,000 changed lines or more",
+      "est_files": "50 files or more",
+      "reviewable": "Could one reviewer read this as one pull request with one purpose and follow it in one sitting?"
+    },
+    "why": "About 150 files fall in the largest files level, 50 files or more; the nearest closed change moved over 9,000 lines, so the lines level is the top, about 8,000 or more. No reviewer follows a rewrite of this size as one pull request.",
+    "second": {
+      "label": {
+        "est_loc": {
+          "score": 6
+        },
+        "est_files": {
+          "score": 4
+        },
+        "reviewable": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "slot1.confidence",
+      "min": 0.3,
+      "max": 0.85
+    }
+  ],
+  "rubric": "Same area and possibly the same cause, but not clearly the same problem: confidence should stay moderate.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "slot1": {
+            "choice": "related"
+          }
+        },
+        "criteria": {
+          "slot1": "touches the same area or cause, but fixing one does not fix the other"
+        },
+        "why": "Same page and the same area (load behaviour), but a time-out under load and a slow mobile load are not clearly one defect: fixing the cache may not fix it."
+      },
+      {
+        "label": {
+          "slot1": {
+            "choice": "same"
+          }
+        },
+        "criteria": {
+          "slot1": "the same problem: fixing one fixes the other"
+        },
+        "why": "A slow load and a time-out under load can have one root cause, so fixing it could fix both."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

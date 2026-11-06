@@ -1,0 +1,64 @@
+{
+  "schema": 3,
+  "stage": "coverage_check",
+  "pack": "coverage_check",
+  "attempt": 1,
+  "task": {
+    "id": "three-scenarios-one-check",
+    "title": "three-scenarios-one-check",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": null,
+      "brief": "",
+      "criteria": [
+        "The cart page has an Export button",
+        "The file lists each line with its price"
+      ],
+      "assumptions": [],
+      "slices": [],
+      "cases": [
+        {
+          "title": "Export 1",
+          "criterion": "The file lists each line with its price",
+          "approach": "Click Export on a cart with items A (2.50) and B (4.00) and assert two rows with those prices.",
+          "id": "S1",
+          "criterion_ref": "C2",
+          "type": "happy"
+        },
+        {
+          "title": "Export 2",
+          "criterion": "The file lists each line with its price",
+          "approach": "Export a cart with A (2.50) and B (4.00) and check the file has two rows with those prices.",
+          "id": "S2",
+          "criterion_ref": "C2",
+          "type": "happy"
+        },
+        {
+          "title": "Export 3",
+          "criterion": "The file lists each line with its price",
+          "approach": "Press Export on a cart holding A (2.50) and B (4.00); the file must hold exactly those two priced rows.",
+          "id": "S3",
+          "criterion_ref": "C2",
+          "type": "happy"
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

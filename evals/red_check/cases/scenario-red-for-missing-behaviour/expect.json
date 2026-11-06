@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "right_reason.value",
+      "value": true
+    }
+  ],
+  "rubric": "The function the scenario is about does not exist yet: the right reason.",
+  "label": {
+    "right_reason": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "right_reason": "Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture."
+    },
+    "why": "applyCoupon is not a function: the function the scenario is about does not exist yet, which is the behaviour missing.",
+    "second": {
+      "label": {
+        "right_reason": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

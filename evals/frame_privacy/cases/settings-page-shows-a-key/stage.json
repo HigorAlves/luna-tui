@@ -1,0 +1,39 @@
+{
+  "schema": 3,
+  "stage": "frame_privacy",
+  "pack": "frame_privacy",
+  "attempt": 1,
+  "task": {
+    "id": "frame-privacy",
+    "title": "Frame privacy",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "frames",
+      "frames": {
+        "texts": [
+          "API keys",
+          "Secret key",
+          "live-secret-a1b2c3d4e5f6a7b8c9d0e1f2",
+          "Copy  Revoke"
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

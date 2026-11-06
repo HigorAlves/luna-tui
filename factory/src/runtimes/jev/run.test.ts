@@ -18,8 +18,8 @@ const issue = { title: "Board crashes on resize", description: "Resize the termi
 
 const input = (context: Partial<StageInput["context"]> = { issue }): StageInput => ({
   schema: 3,
-  stage: "issue_classify",
-  pack: "issue_classify",
+  stage: "triage_signals",
+  pack: "triage_signals",
   attempt: 1,
   task: { id: "t1", title: "From the task", description: "Task text", criteria: [], repoPath: "", branch: "", source: null },
   plan: null,
@@ -35,7 +35,7 @@ function context(over: Partial<RunContext> = {}) {
   const events: RunEvent[] = [];
   const print = transcript((line) => lines.push(line));
   const ctx: RunContext = {
-    pack: PACKS.issue_classify,
+    pack: PACKS.triage_signals,
     engine: resolveEngine("jev"),
     input: input(),
     prompt: "",
@@ -53,9 +53,17 @@ function context(over: Partial<RunContext> = {}) {
 
 const answers = {
   kind: { type: "choice", choice: "bug", confidence: 0.91, probabilities: {} },
-  area: { type: "choice", choice: "board", confidence: 0.62, probabilities: {} },
+  type_of_work: { type: "choice", choice: "backend", confidence: 0.55, probabilities: {} },
   ready: { type: "noul", noul: 0.83 },
-  size: { type: "score", score: 1.4, confidence: 0.75, legend: {}, probabilities: {} },
+  size: { type: "choice", choice: "S", confidence: 0.75, probabilities: {} },
+  who: { type: "score", score: 1, confidence: 0.7, legend: {}, probabilities: {} },
+  what: { type: "score", score: 1, confidence: 0.7, legend: {}, probabilities: {} },
+  impact: { type: "score", score: 1, confidence: 0.7, legend: {}, probabilities: {} },
+  time: { type: "score", score: 0, confidence: 0.8, legend: {}, probabilities: {} },
+  demand: { type: "score", score: 0, confidence: 0.8, legend: {}, probabilities: {} },
+  risk_prelim: { type: "choice", choice: "low", confidence: 0.8, probabilities: {} },
+  archive: { type: "noul", noul: 0.05 },
+  archive_reason: { type: "choice", choice: "none", confidence: 0.9, probabilities: {} },
 };
 
 function fake(result: unknown = { model: "jev-2026-10", answers, usage: { input_tokens: 412, output_tokens: 9 } }) {
@@ -77,7 +85,7 @@ describe("the Jev runtime", () => {
     expect(request.state).toEqual(issue);
     expect(request.model).toBe(resolveEngine("jev").modelId);
     expect(request.questions.ready).toEqual({ type: "noul", instructions: expect.stringMatching(/acceptance criteria/) });
-    expect(Object.keys(request.questions)).toEqual(["kind", "area", "ready", "size"]);
+    expect(Object.keys(request.questions)).toEqual(["kind", "type_of_work", "ready", "size", "who", "what", "impact", "time", "demand", "risk_prelim", "archive", "archive_reason"]);
     expect(options.signal).toBeInstanceOf(AbortSignal);
   });
 
@@ -93,10 +101,10 @@ describe("the Jev runtime", () => {
     const run = await jevRuntime(() => typesafeTransport(() => client)).run(ctx);
     expect(run).toMatchObject({ ok: true, error: null, turns: 1, model: "jev-2026-10", rateLimited: false });
     expect(run.costUsd).toBeCloseTo((412 * 0.042) / 1_000_000, 8);
-    expect(run.structured).toEqual({ kind: { choice: "bug", confidence: 0.91 }, area: { choice: "board", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { score: 1.4, confidence: 0.75 } });
-    expect(PACKS.issue_classify.answer.safeParse(run.structured).success).toBe(true);
+    expect(run.structured).toEqual({ kind: { choice: "bug", confidence: 0.91 }, type_of_work: { choice: "backend", confidence: 0.55 }, ready: { value: true, p: 0.83 }, size: { choice: "S", confidence: 0.75 }, who: { score: 1, confidence: 0.7 }, what: { score: 1, confidence: 0.7 }, impact: { score: 1, confidence: 0.7 }, time: { score: 0, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } });
+    expect(PACKS.triage_signals.answer.safeParse(run.structured).success).toBe(true);
     expect(run.durationMs).toBeGreaterThanOrEqual(0);
-    expect(run.text).toBe("kind bug (0.91) · area board (0.62) · ready yes (p 0.83) · size 1.4 (0.75) · below 0.7: area");
+    expect(run.text).toBe("kind bug (0.91) · type_of_work backend (0.55) · ready yes (p 0.83) · size S (0.75) · who 1 (0.70) · what 1 (0.70) · impact 1 (0.70) · time 0 (0.80) · demand 0 (0.80) · risk_prelim low (0.80) · archive no (p 0.05) · archive_reason none (0.90) · below 0.6: type_of_work");
     expect(events).toContainEqual({ kind: "usage", payload: { model: "jev-2026-10", inputTokens: 412, outputTokens: 9, costUsd: 0.0000173 } });
     expect(lines.join("\n")).toContain("412 in · 9 out");
   });
@@ -148,7 +156,7 @@ describe("the Jev runtime", () => {
 
   it("ends the stage with the reason when the questions cannot be put in Jev's words, never throws", async () => {
     const { client } = fake();
-    const pack = { ...PACKS.issue_classify, questions: { kind: { type: "choice", instructions: "x", criteria: [] } } } as unknown as RunContext["pack"];
+    const pack = { ...PACKS.triage_signals, questions: { kind: { type: "choice", instructions: "x", criteria: [] } } } as unknown as RunContext["pack"];
     const run = await jevRuntime(() => typesafeTransport(() => client)).run(context({ pack }).ctx);
     expect(run).toMatchObject({ ok: false, structured: null, error: expect.stringMatching(/^jev: .*criteria/) });
   });
@@ -165,10 +173,18 @@ describe("the Jev runtime", () => {
 });
 
 const decided = {
-  kind: { type: "choice", choice: "bug", probabilities: { bug: 0.91, feature: 0.05, chore: 0.03, question: 0.01 } },
-  area: { type: "choice", choice: "board", probabilities: { board: 0.62, machine: 0.38 } },
+  kind: { type: "choice", choice: "bug", probabilities: { bug: 0.91, feature: 0.09 } },
+  type_of_work: { type: "choice", choice: "backend", probabilities: { backend: 0.55, frontend: 0.45 } },
   ready: { type: "boolean", probability: 0.83 },
-  size: { type: "score", score: 1.4, probabilities: { 0: 0.05, 1: 0.5, 2: 0.4, 3: 0.05 } },
+  size: { type: "choice", choice: "S", probabilities: { S: 0.75, M: 0.25 } },
+  who: { type: "score", score: 1, probabilities: { 1: 1 } },
+  what: { type: "score", score: 1, probabilities: { 0: 0.5, 1: 0.5 } },
+  impact: { type: "score", score: 1, probabilities: { 1: 1 } },
+  time: { type: "score", score: 0, probabilities: { 0: 1 } },
+  demand: { type: "score", score: 0, probabilities: { 0: 1 } },
+  risk_prelim: { type: "choice", choice: "low", probabilities: { low: 0.8, medium: 0.2 } },
+  archive: { type: "boolean", probability: 0.05 },
+  archive_reason: { type: "choice", choice: "none", probabilities: { none: 0.9, stale: 0.1 } },
 };
 
 function fakeDecide(result: unknown = { answers: decided, usage: { inputTokens: 380, outputTokens: 0 }, response: { modelId: "typesafe-ai/jev-1.14.0" }, providerMetadata: { typesafe: { confidence: { kind: 0.93 } } } }) {
@@ -191,7 +207,8 @@ describe("the Jev runtime on the Vercel AI Gateway", () => {
     expect(call.model).toBe("typesafe-ai/jev");
     expect(call.state).toEqual(issue);
     expect(call.questions.ready).toEqual({ type: "boolean", instructions: expect.stringMatching(/acceptance criteria/) });
-    expect(call.questions.size).toMatchObject({ type: "score", criteria: [expect.stringMatching(/^tiny: /), expect.anything(), expect.anything(), expect.stringMatching(/^large: /)] });
+    expect(call.questions.who).toMatchObject({ type: "score", criteria: [expect.stringMatching(/^few: /), expect.anything(), expect.stringMatching(/^everyone: /)] });
+    expect(call.questions.size).toMatchObject({ type: "choice", criteria: expect.objectContaining({ XS: expect.any(String), XL: expect.any(String) }) });
     expect(call.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
@@ -200,7 +217,7 @@ describe("the Jev runtime on the Vercel AI Gateway", () => {
     const { ctx, lines } = context();
     const run = await jevRuntime(() => transport).run(ctx);
     expect(run).toMatchObject({ ok: true, turns: 1, model: "typesafe-ai/jev-1.14.0" });
-    expect(run.structured).toEqual({ kind: { choice: "bug", confidence: 0.93 }, area: { choice: "board", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { score: 1.4, confidence: 0.5 } });
+    expect(run.structured).toEqual({ kind: { choice: "bug", confidence: 0.93 }, type_of_work: { choice: "backend", confidence: 0.55 }, ready: { value: true, p: 0.83 }, size: { choice: "S", confidence: 0.75 }, who: { score: 1, confidence: 1 }, what: { score: 1, confidence: 0.5 }, impact: { score: 1, confidence: 1 }, time: { score: 0, confidence: 1 }, demand: { score: 0, confidence: 1 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } });
     expect(run.costUsd).toBeCloseTo((380 * 0.042) / 1_000_000, 12);
     expect(lines.join("\n")).toContain("via gateway · 380 in · 0 out");
   });

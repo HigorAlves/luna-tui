@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "scope.p",
+      "min": 0.2,
+      "max": 0.8
+    }
+  ],
+  "rubric": "A ticket that bundles speed, filters and export: whether its scope is bounded is a judgement call, so the confidence must stay in the middle.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "scope": {
+            "value": true
+          }
+        },
+        "criteria": {
+          "scope": "Is its scope bounded: one change a team could finish, not an open-ended theme?"
+        },
+        "why": "Steps are given and it is about one page, the reports page, so a team could finish it."
+      },
+      {
+        "label": {
+          "scope": {
+            "value": false
+          }
+        },
+        "criteria": {
+          "scope": "Is its scope bounded: one change a team could finish, not an open-ended theme?"
+        },
+        "why": "It bundles speed, filters and an export, which is a theme more than one change."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

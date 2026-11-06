@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "e2e_failure_cause",
+  "pack": "e2e_failure_cause",
+  "attempt": 1,
+  "task": {
+    "id": "scenario-uses-the-old-label",
+    "title": "scenario-uses-the-old-label",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "e2e",
+      "e2e": {
+        "verdict": "fail",
+        "summary": "The scenario looked for a button the page never had.",
+        "criteria": [
+          {
+            "text": "Clicking Download starts a CSV download",
+            "result": "fail",
+            "note": "No element with text 'Download'. The page has a button labelled 'Export' and clicking it downloaded the CSV; the scenario was written against the old label."
+          }
+        ],
+        "attempt": 1
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

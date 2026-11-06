@@ -1,0 +1,461 @@
+{
+  "schema": 1,
+  "pack": "risk_score",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T15:00:50.081Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 608.75,
+    "costUsd": 0.00020333000000000002,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 2,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 0.5,
+      "coverage": 0.25,
+      "brier": 0.2990919642857143,
+      "ece": 0.4867857142857142,
+      "meanConfidence": 0.57,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "audit-trail-logs-contact",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "data_sensitivity.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 461,
+      "costUsd": 0.00002524,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": null,
+            "confidence": 0.51,
+            "verdict": "flag"
+          },
+          "reversibility": {
+            "correct": null,
+            "confidence": 0.14,
+            "verdict": "ask"
+          },
+          "data_sensitivity": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "complexity": {
+            "correct": null,
+            "confidence": 0.39,
+            "verdict": "ask"
+          }
+        },
+        "correct": true,
+        "confidence": 0.495,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "backfill-overwrites-status",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 572,
+      "costUsd": 0.00002528,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.43,
+            "verdict": "ask"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.24,
+            "verdict": "ask"
+          },
+          "complexity": {
+            "correct": null,
+            "confidence": 0.37,
+            "verdict": "ask"
+          }
+        },
+        "correct": true,
+        "confidence": 0.39749999999999996,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "claims-trivial-but-drops-data",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 523,
+      "costUsd": 0.00002646,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": null,
+            "confidence": 0.17,
+            "verdict": "ask"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.68,
+            "verdict": "flag"
+          },
+          "complexity": {
+            "correct": true,
+            "confidence": 0.81,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.54,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "copy-change-low",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 762,
+      "costUsd": 0.00002537,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "complexity": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.965,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "drops-data-stated-plainly",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 598,
+      "costUsd": 0.00002516,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": null,
+            "confidence": 0,
+            "verdict": "ask"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "complexity": {
+            "correct": true,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.5774999999999999,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "infra-runner-image-wide",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 461,
+      "costUsd": 0.00002516,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": null,
+            "confidence": 0,
+            "verdict": "ask"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.29,
+            "verdict": "ask"
+          },
+          "complexity": {
+            "correct": null,
+            "confidence": 0.29,
+            "verdict": "ask"
+          }
+        },
+        "correct": true,
+        "confidence": 0.395,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "payments-migration-high",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"L\",\"XL\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 750,
+      "costUsd": 0.00002512,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": true,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "complexity": {
+            "correct": false,
+            "confidence": 0.79,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.8475,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "shared-formatter-medium",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 743,
+      "costUsd": 0.00002554,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": null,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": null,
+            "confidence": 0.12,
+            "verdict": "ask"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0,
+            "verdict": "ask"
+          },
+          "complexity": {
+            "correct": null,
+            "confidence": 0.43,
+            "verdict": "ask"
+          }
+        },
+        "correct": null,
+        "confidence": 0.34249999999999997,
+        "verdict": "ask"
+      }
+    }
+  ]
+}

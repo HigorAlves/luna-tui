@@ -1,6 +1,7 @@
 import type { EngineId, Metrics, TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../../test/policies.ts";
 
 import { Pipeline } from "../../application/pipeline.ts";
 import type { StageResult } from "../../application/ports.ts";
@@ -29,7 +30,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, maxConcurrentTasks: 2 });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, maxConcurrentTasks: 2 });
 });
 
 const app = () => createApp({ db, pipeline, bus: new Bus() });
@@ -44,12 +45,11 @@ async function getMetrics(query = ""): Promise<Metrics> {
 async function seed() {
   const closed = await pipeline.createTask({ title: "closed" });
   await pipeline.start(closed.id);
-  for (let i = 0; i < 4; i++) await pipeline.decide(closed.id, "approved");
+  for (let i = 0; i < 2; i++) await pipeline.decide(closed.id, "approved");
 
   stubs.plan("verifying", fail, fail, fail);
   const escalated = await pipeline.createTask({ title: "escalated" });
   await pipeline.start(escalated.id);
-  await pipeline.decide(escalated.id, "approved");
   await pipeline.decide(escalated.id, "approved");
 
   const backlog = await pipeline.createTask({ title: "backlog" });
@@ -68,6 +68,18 @@ describe("percentile", () => {
   });
 });
 
+describe("GET /metrics for a card at a state that holds a stage or a gate", () => {
+  it("counts a watched card (awaiting_ship, no open approval) as running, and one with an open approval as waiting on you", async () => {
+    const watched = await pipeline.createTask({ title: "watched", repoPath: "/r/a" });
+    await db.query("update tasks set state = 'awaiting_ship' where id = $1", [watched.id]);
+    const m = await getMetrics();
+    expect(m.tasks).toMatchObject({ open: 1, waitingOnYou: 0, running: 1 });
+    await db.query("insert into approvals (task_id, kind, requested) values ($1, 'awaiting_ship', '{}'::jsonb)", [watched.id]);
+    const gated = await getMetrics();
+    expect(gated.tasks).toMatchObject({ open: 1, waitingOnYou: 1, running: 0 });
+  });
+});
+
 describe("GET /metrics", () => {
   it("is all zeros and nulls on an empty database", async () => {
     const m = await getMetrics();
@@ -80,19 +92,30 @@ describe("GET /metrics", () => {
     expect(m.queue).toEqual({ depth: 0, slots: { max: 2, active: 0, draining: false, latched: [] }, utilisation: 0 });
   });
 
+  it("carries the flow numbers from the named events: null on an empty database, a plan cycle and a build run for a task that went through", async () => {
+    expect((await getMetrics()).flow).toMatchObject({ planCycleMs: { median: null, n: 0 }, buildRuns: { value: null, n: 0 }, mergesPerWeek: { n: 0 }, changeFailureRate: { value: null }, timeToRestoreMs: { value: null } });
+    const task = await pipeline.createTask({ title: "flows" });
+    await pipeline.start(task.id);
+    for (let i = 0; i < 2; i++) await pipeline.decide(task.id, "approved");
+    const { flow } = await getMetrics();
+    expect(flow?.planCycleMs.n).toBe(1);
+    expect(flow?.planCycleMs.median).toBeGreaterThanOrEqual(0);
+    expect(flow?.buildRuns).toEqual({ value: 1, n: 1 });
+  });
+
   it("counts the gates answered in the window, the share inside the gate SLA and the median wait per gate", async () => {
     const { closed, escalated } = await seed();
     const m = await getMetrics();
-    // The closed task passed four gates (plan, test check, ship, memory); the escalated one answered two and still waits at escalated.
-    expect(m.gates.answered).toBe(6);
+    // The closed task passed three gates (plan, ship: the retro had nothing to propose and closed it); the escalated one answered one and still waits at escalated.
+    expect(m.gates.answered).toBe(3);
     expect(m.gates.withinSla).toBe(1);
-    expect(Object.keys(m.gates.waitMs).sort()).toEqual(["awaiting_approval", "awaiting_ship", "awaiting_test_check", "reviewing_memory"]);
+    expect(Object.keys(m.gates.waitMs).sort()).toEqual(["awaiting_approval", "awaiting_ship"]);
     expect(m.gates.waitMs.awaiting_approval!.median).toBeGreaterThanOrEqual(0);
     // An answer older than the SLA counts against it: push the closed task's plan approval back in time.
     await db.query("update events set at = at - interval '3 hours' where task_id = $1 and payload->>'to' = 'awaiting_approval'", [closed.id]);
     const late = await getMetrics();
-    expect(late.gates.answered).toBe(6);
-    expect(late.gates.withinSla).toBeCloseTo(5 / 6);
+    expect(late.gates.answered).toBe(3);
+    expect(late.gates.withinSla).toBeCloseTo(2 / 3);
     expect(late.gates.waitMs.awaiting_approval!.p90).toBeGreaterThan(2.5 * 3600 * 1000);
     expect(escalated.id).toBeTruthy();
   });
@@ -135,7 +158,7 @@ describe("GET /metrics", () => {
   it("reports the spend ceilings and what is left of the day's", async () => {
     expect((await getMetrics()).budget).toEqual({ taskUsd: null, dailyUsd: null, spentTodayUsd: 0, remainingTodayUsd: null });
 
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, maxConcurrentTasks: 2, budget: { taskUsd: 5, dailyUsd: 10 } });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, maxConcurrentTasks: 2, budget: { taskUsd: 5, dailyUsd: 10 } });
     const { closed } = await seed();
     await db.query("update stage_runs set cost_usd = 1.5 where task_id = $1 and stage = 'implementing'", [closed.id]);
     await db.query("update stage_runs set cost_usd = 4, started_at = now() - interval '2 days' where task_id = $1 and stage = 'triage'", [closed.id]);
@@ -163,11 +186,10 @@ describe("GET /metrics", () => {
   it("filters by repo, and groups by repo with one slim row per checkout", async () => {
     const a = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
     await pipeline.start(a.id);
-    for (let i = 0; i < 4; i++) await pipeline.decide(a.id, "approved");
+    for (let i = 0; i < 2; i++) await pipeline.decide(a.id, "approved");
     stubs.plan("verifying", fail, fail, fail);
     const b = await pipeline.createTask({ title: "b", repoPath: "/r/b" });
     await pipeline.start(b.id);
-    await pipeline.decide(b.id, "approved");
     await pipeline.decide(b.id, "approved");
     await pipeline.createTask({ title: "none" });
 

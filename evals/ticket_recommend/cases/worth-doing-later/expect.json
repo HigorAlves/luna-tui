@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "action.choice",
+      "value": "schedule"
+    }
+  ],
+  "rubric": "Worth doing but with a workaround and no date: schedule.",
+  "label": {
+    "action": {
+      "choice": "schedule"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "action": "worth doing, but later: it goes to the backlog"
+    },
+    "why": "Customers ask for it, there is a workaround and no date: worth doing but later.",
+    "ruledOut": [
+      {
+        "question": "action",
+        "label": "do_now",
+        "why": "There is a workaround and no date, so nothing forces it to start now."
+      },
+      {
+        "question": "action",
+        "label": "decline",
+        "why": "A priority P2 with real asks and a score of 0.67 is worth doing."
+      },
+      {
+        "question": "action",
+        "label": "needs_decision",
+        "why": "No unseen factor is named; the scores are enough."
+      }
+    ],
+    "second": {
+      "label": {
+        "action": {
+          "choice": "schedule"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

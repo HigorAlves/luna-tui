@@ -1,0 +1,61 @@
+{
+  "schema": 3,
+  "stage": "size_estimate",
+  "pack": "size_estimate",
+  "attempt": 1,
+  "task": {
+    "id": "receipt-tax-line",
+    "title": "receipt-tax-line",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "size": {
+      "title": "Show the order total with tax on the receipt",
+      "text": "Add a tax line and a total with tax to the receipt in one component and its helper, with two tests.",
+      "criteria": [
+        "The receipt shows the tax",
+        "The receipt shows the total with tax"
+      ],
+      "files": [
+        {
+          "path": "src/receipt/Receipt.tsx"
+        },
+        {
+          "path": "src/receipt/totals.ts"
+        }
+      ],
+      "symbols": [
+        "Receipt"
+      ],
+      "similar": [
+        {
+          "title": "Show discount on the receipt",
+          "added": 170,
+          "removed": 10
+        }
+      ],
+      "limit": {
+        "target": [
+          1000,
+          2000
+        ],
+        "hard": 2500
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

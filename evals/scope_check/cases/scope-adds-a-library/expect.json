@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "no_new_dependency.value",
+      "value": false
+    }
+  ],
+  "rubric": "A dependency nobody planned.",
+  "label": {
+    "no_new_dependency": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "no_new_dependency": "Does the change add no dependency, or only ones the plan or a declared reason calls for? The new dependencies are listed."
+    },
+    "why": "The change adds left-pad-csv, which the plan does not call for and no declared reason justifies.",
+    "second": {
+      "label": {
+        "no_new_dependency": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

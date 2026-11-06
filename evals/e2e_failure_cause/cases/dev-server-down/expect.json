@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "cause.choice",
+      "value": "env_flake"
+    }
+  ],
+  "rubric": "The target never answered: the scenario was never really tried.",
+  "label": {
+    "cause": {
+      "choice": "env_flake"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "cause": "the target, the dev server, the browser or a tool failed; the scenario was never really tried"
+    },
+    "why": "The browser got ERR_CONNECTION_REFUSED and the dev server was not running: the scenario was never really tried.",
+    "ruledOut": [
+      {
+        "question": "cause",
+        "label": "product_bug",
+        "why": "The target never answered. It is not: the app does not do what the scenario asks."
+      },
+      {
+        "question": "cause",
+        "label": "test_bug",
+        "why": "The target never answered. It is not: the scenario or the way it was driven is wrong; the app behaves as intended."
+      }
+    ],
+    "second": {
+      "label": {
+        "cause": {
+          "choice": "env_flake"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

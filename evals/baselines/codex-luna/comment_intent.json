@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "comment_intent",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T15:26:13.741Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 2453.125,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 0.8571428571428571,
+      "coverage": 1,
+      "brier": 0.13744285714285714,
+      "ece": 0.12714285714285722,
+      "meanConfidence": 0.9824999999999999,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "asks-for-a-behaviour-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"change_request\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1882,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "asks-how-it-works",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"question\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2438,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "claims-to-be-a-question",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"change_request\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1907,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "disputes-the-approach",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"disagreement\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1893,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "might-want-to-rename",
+      "pass": false,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.confidence within 0..0.85",
+          "pass": false,
+          "detail": "found 0.97"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 4856,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "reading-says-question-thread-asks-for-a-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"change_request\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1790,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "replace-format-plain",
+      "pass": false,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"change_request\"",
+          "pass": false,
+          "detail": "found \"disagreement\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2234,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": false,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "trailing-whitespace-nit",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"nit\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2625,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

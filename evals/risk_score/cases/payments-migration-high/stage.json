@@ -1,0 +1,54 @@
+{
+  "schema": 3,
+  "stage": "risk_score",
+  "pack": "risk_score",
+  "attempt": 1,
+  "task": {
+    "id": "risk-score",
+    "title": "Migrate stored card tokens to the new vault and delete the old column.",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "example-tracker:EX-1",
+        "kind": "feature",
+        "goal": "Migrate stored card tokens to the new vault and delete the old column.",
+        "size": "large",
+        "urgency": "normal",
+        "risk": "high",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "brief": "",
+      "criteria": [],
+      "assumptions": [],
+      "slices": [],
+      "cases": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

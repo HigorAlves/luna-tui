@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "intent.choice",
+      "value": "nit"
+    }
+  ],
+  "rubric": "A trailing space.",
+  "label": {
+    "intent": {
+      "choice": "nit"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "intent": "a small change nobody would block on"
+    },
+    "why": "A single trailing space is a small change nobody would block on.",
+    "ruledOut": [
+      {
+        "question": "intent",
+        "label": "question",
+        "why": "It is a small change nobody blocks on. It is not: asks something the pack or the diff can answer."
+      },
+      {
+        "question": "intent",
+        "label": "change_request",
+        "why": "It is a small change nobody blocks on. It is not: asks for a change in behaviour or code."
+      },
+      {
+        "question": "intent",
+        "label": "disagreement",
+        "why": "It is a small change nobody blocks on. It is not: disputes the approach or the plan."
+      }
+    ],
+    "second": {
+      "label": {
+        "intent": {
+          "choice": "nit"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

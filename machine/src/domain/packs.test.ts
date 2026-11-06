@@ -1,7 +1,7 @@
-import { PACKS, PackId, RUNNING } from "@hardness/contracts";
+import { PACKS, PackId, RUNNING, RUN_OR_GATE } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { packInfo, packStates } from "./packs.ts";
+import { packForState, packInfo, packStates } from "./packs.ts";
 
 describe("packStates", () => {
   it("is the stage of the same name for a stage pack", () => {
@@ -10,15 +10,30 @@ describe("packStates", () => {
     }
   });
 
-  it("runs the memory review inside shipping, and the inbox and on-demand packs in no task state", () => {
-    expect(packStates("reviewing_memory")).toEqual(["shipping"]);
+  it("runs the planner in test_design, beside the pack of that name, which the pipeline still picks for the state", () => {
+    expect(packStates("plan")).toEqual(["test_design"]);
+    expect(packStates("plan_fast")).toEqual(["test_design"]);
+    expect(packStates("build_tests")).toEqual(["implementing"]);
+    expect(packStates("code_map")).toEqual(["test_design"]);
+    expect(packStates("test_design_fast")).toEqual(["test_design"]);
+    expect(packStates("test_design")).toEqual(["test_design"]);
+    expect(packForState("test_design")).toBe("test_design");
+  });
+
+  it("runs the four video packs inside evidence, beside the pack of that name, which the pipeline still picks for the state", () => {
+    for (const id of ["video_script", "recording", "video_qa", "video_fix"] as const) expect(packStates(id)).toEqual(["evidence"]);
+    expect(packForState("evidence")).toBe("evidence");
+  });
+
+  it("runs the memory review in its own state, and the inbox and on-demand packs in no task state", () => {
+    expect(packStates("reviewing_memory")).toEqual(["reviewing_memory"]);
     expect(packStates("slack_triage")).toEqual([]);
     expect(packStates("jira_intake")).toEqual([]);
     expect(packStates("chat_triage")).toEqual([]);
   });
 
   it("names only states in which a stage runs", () => {
-    for (const id of PackId.options) for (const state of packStates(id)) expect(RUNNING.has(state)).toBe(true);
+    for (const id of PackId.options) for (const state of packStates(id)) expect(RUNNING.has(state) || RUN_OR_GATE.has(state)).toBe(true);
   });
 });
 

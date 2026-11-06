@@ -5,12 +5,12 @@ import type { ChecksState, PrCheck, PrSplit, PullRequest } from "@hardness/contr
 /** One GraphQL query per PR: everything the inbox needs about it. Variables: owner, name, number. */
 export const PR_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
-    number title body url isDraft updatedAt baseRefName headRefName
+    id number title body url isDraft updatedAt baseRefName headRefName
     author{login} headRepository{nameWithOwner}
     reviewDecision mergeable mergeStateStatus
     reviewRequests(first:50){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
     reviewThreads(first:100){nodes{isResolved}}
-    commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename
+    commits(last:1){nodes{commit{oid committedDate statusCheckRollup{state contexts(first:100){nodes{__typename
       ... on CheckRun{name status conclusion detailsUrl}
       ... on StatusContext{context state targetUrl}}}}}}}
   } } }`;
@@ -32,6 +32,8 @@ export interface StatusContextNode {
 
 /** The `pullRequest` object `PR_QUERY` answers with. */
 export interface PrNode {
+  /** The GraphQL node id; absent from older fixtures. */
+  id?: string | null;
   number: number;
   title: string;
   /** Absent from older fixtures; the review pack reads it. */
@@ -52,7 +54,7 @@ export interface PrNode {
   reviewThreads: { nodes: Array<{ isResolved: boolean }> };
   commits: {
     nodes: Array<{
-      commit: { statusCheckRollup: { state: string; contexts: { nodes: Array<CheckRunNode | StatusContextNode> } } | null };
+      commit: { oid?: string | null; committedDate?: string | null; statusCheckRollup: { state: string; contexts: { nodes: Array<CheckRunNode | StatusContextNode> } } | null };
     }>;
   };
 }
@@ -123,6 +125,10 @@ export function fromGraphQl(node: PrNode, repo: string, me: string, teams: strin
     checks: summarizeChecks(node.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? []),
     unresolvedThreads: node.reviewThreads.nodes.filter((t) => !t.isResolved).length,
     updatedAt: node.updatedAt,
+    headSha: node.commits.nodes[0]?.commit.oid ?? null,
+    headCommittedAt: node.commits.nodes[0]?.commit.committedDate ?? null,
+    nodeId: node.id ?? null,
+    body: node.body ?? null,
   };
 }
 

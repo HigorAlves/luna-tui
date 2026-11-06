@@ -1,6 +1,7 @@
 import type { IssueContext, JiraIntakeAnswer, TaskClassification } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../test/policies.ts";
 
 import { DEFAULT_POLICY, type JiraPolicy } from "../domain/policy.ts";
 import { freshTestDatabase } from "../test/database.ts";
@@ -46,7 +47,7 @@ function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"]; clas
   const read: IssueContext[] = [];
   const classify = over.classify;
   const classifier = classify ? { classify: async (issue: IssueContext) => (read.push(issue), classify(issue)) } : undefined;
-  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: "https://acme.atlassian.net" });
+  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, jiraSite: "https://acme.atlassian.net" });
   let now = new Date("2026-10-28T12:00:00Z");
   const logs: string[] = [];
   const intake = new JiraIntake({
@@ -62,7 +63,23 @@ function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"]; clas
   return { jira, pipeline, intake, triaged, hints, read, logs, setNow: (d: Date) => (now = d) };
 }
 
-describe("JiraIntake with issue_classify", () => {
+describe("JiraIntake with the ticket machine's scope", () => {
+  it("with a scope configured, ignores what is not assigned to it: no read, no comment, no ticket", async () => {
+    const jira = fakeJira({ issues: [{ key: "PLAT-1", summary: "mine", assignee: { id: "a1", name: "Ana" } }, { key: "PLAT-2", summary: "theirs", assignee: { id: "a2", name: "Carla" } }, { key: "PLAT-3", summary: "nobody's" }] });
+    const triaged: string[] = [];
+    const triager = { triage: async (issue: JiraIssue) => (triaged.push(issue.key), verdicts["PLAT-3"]!) };
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: "https://acme.atlassian.net" });
+    const factory = { ...DEFAULT_POLICY.factory, tickets: { ...DEFAULT_POLICY.factory.tickets, assignees: ["ana"] } };
+    const intake = new JiraIntake({ pipeline, jira, policies: { for: async () => ({ ...DEFAULT_POLICY, factory, jira: { ...policy } }) }, repos: async () => ["/r/a"], triager, now: () => new Date("2026-10-28T12:00:00Z"), log: () => {} });
+    await intake.tick();
+    expect(triaged).toEqual(["PLAT-1"]);
+    expect(jira.comments["PLAT-2"]).toBeUndefined();
+    expect(jira.comments["PLAT-3"]).toBeUndefined();
+    expect(await pipeline.findByJiraKey("PLAT-2")).toBeNull();
+  });
+});
+
+describe("JiraIntake with triage_signals", () => {
   it("reads each new issue first, declines a question Jev is sure of without jira_intake, saying why once with the classification", async () => {
     const { jira, pipeline, intake, triaged, read, logs } = wire({ classify: (issue) => classified(issue.title === "Rotate the prod password" ? "question" : "feature") });
     await intake.tick();
@@ -78,7 +95,7 @@ describe("JiraIntake with issue_classify", () => {
     expect(await pipeline.list()).toHaveLength(1);
   });
 
-  it("runs jira_intake as before on anything less, the classification passed as a hint and kept on the ticket", async () => {
+  it("runs jira_intake as before on anything less, the classification passed as a hint and not kept on the ticket (triage reads its own)", async () => {
     const unsure = classified("question", 0.6);
     const { jira, pipeline, intake, triaged, hints } = wire({ classify: (issue) => (issue.source === "jira:PLAT-3" ? unsure : classified("feature")) });
     await intake.tick();
@@ -86,7 +103,7 @@ describe("JiraIntake with issue_classify", () => {
     expect(hints).toEqual([classified("feature"), classified("feature"), unsure]);
     expect(jira.comments["PLAT-3"]).toEqual(["Not for an agent: needs production credentials"]);
     const [task] = await pipeline.list();
-    expect(task).toMatchObject({ title: "Add the login page", classification: classified("feature") });
+    expect(task).toMatchObject({ title: "Add the login page", classification: null });
   });
 
   it("without a classification (no Jev credential, a failed run) behaves exactly as without the classifier", async () => {

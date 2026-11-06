@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "reason.choice",
+      "value": "other"
+    }
+  ],
+  "rubric": "The twin of stopped-with-nothing-to-read-and-a-note: the same empty evidence with no note.",
+  "label": {
+    "reason": {
+      "choice": "other"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "reason": "none of these fits, or the evidence does not say"
+    },
+    "why": "Nothing in the summary, the output or the facts names a cause, so the evidence does not say.",
+    "ruledOut": [
+      {
+        "question": "reason",
+        "label": "plan_wrong",
+        "why": "Nothing in the evidence names a cause. It is not: the approved plan cannot be built as written: a step names something that does not exist, or the steps contradict each other or the code."
+      },
+      {
+        "question": "reason",
+        "label": "env_broken",
+        "why": "Nothing in the evidence names a cause. It is not: the environment is at fault: a service, a tool, a credential, the network or the container, not the change."
+      },
+      {
+        "question": "reason",
+        "label": "flaky_tests",
+        "why": "Nothing in the evidence names a cause. It is not: a test fails and passes on its own, with no change to the code it covers."
+      },
+      {
+        "question": "reason",
+        "label": "too_complex",
+        "why": "Nothing in the evidence names a cause. It is not: the change is bigger or harder than the plan allowed for, and the run ran out of room before it finished."
+      },
+      {
+        "question": "reason",
+        "label": "undeclared_scope",
+        "why": "Nothing in the evidence names a cause. It is not: the work needs files or changes the plan does not name."
+      }
+    ],
+    "second": {
+      "label": {
+        "reason": {
+          "choice": "other"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

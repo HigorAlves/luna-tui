@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "ci_real"
+    }
+  ],
+  "rubric": "A failing assertion in the test of the code this change adds.",
+  "label": {
+    "event": {
+      "choice": "ci_real"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "event": "a red CI run that fails in code or a test this change touches or should have kept working"
+    },
+    "why": "A failing assertion in the test of the code this change adds: red CI in code the change touches.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "ci_real"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

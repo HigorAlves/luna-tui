@@ -32,7 +32,7 @@ export interface JiraRestOptions {
 }
 
 /** The fields every issue read asks for; `comment` brings the comments along. */
-export const ISSUE_FIELDS = ["summary", "description", "status", "issuetype", "priority", "duedate", "labels", "updated", "comment"];
+export const ISSUE_FIELDS = ["summary", "description", "status", "issuetype", "priority", "duedate", "labels", "updated", "comment", "reporter", "assignee", "components"];
 /** The most issues one search page asks for. */
 export const SEARCH_PAGE = 50;
 /** The pauses before the second and third try of a call Jira or the network failed. */
@@ -55,6 +55,9 @@ const Fields = z
     duedate: z.string().optional().nullable(),
     labels: z.array(z.string()).optional(),
     updated: z.string().optional().nullable(),
+    reporter: z.object({ accountId: z.string().optional(), displayName: z.string().optional() }).optional().nullable(),
+    assignee: z.object({ accountId: z.string().optional(), displayName: z.string().optional() }).optional().nullable(),
+    components: z.array(z.object({ name: z.string() })).optional().nullable(),
     comment: z.object({ comments: z.array(Comment) }).optional().nullable(),
   })
   .passthrough();
@@ -96,6 +99,9 @@ function toIssue(site: string, raw: z.infer<typeof Issue>): JiraIssue {
     dueAt: f.duedate ?? null,
     labels: f.labels ?? [],
     updated: f.updated ?? null,
+    reporter: f.reporter?.accountId ? { id: f.reporter.accountId, ...(f.reporter.displayName ? { name: f.reporter.displayName } : {}) } : null,
+    assignee: f.assignee?.accountId ? { id: f.assignee.accountId, ...(f.assignee.displayName ? { name: f.assignee.displayName } : {}) } : null,
+    components: (f.components ?? []).map((c) => c.name),
     comments: (f.comment?.comments ?? []).map((c) => ({
       author: c.author?.displayName ?? "someone",
       authorId: c.author?.accountId ?? null,

@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "action.choice",
+      "value": "decline"
+    }
+  ],
+  "rubric": "Taste, no demand, large and costly: decline.",
+  "label": {
+    "action": {
+      "choice": "decline"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "action": "not worth the team's time"
+    },
+    "why": "A rename nobody asked for: taste, low priority, large size and the highest cost of doing, so it is not worth the team's time.",
+    "ruledOut": [
+      {
+        "question": "action",
+        "label": "do_now",
+        "why": "Nothing here is urgent: priority is P3 and the delay costs little."
+      },
+      {
+        "question": "action",
+        "label": "schedule",
+        "why": "It is not worth doing later either; the cost of doing is 7 against a delay cost of 2."
+      },
+      {
+        "question": "action",
+        "label": "needs_decision",
+        "why": "The scores already settle it, nothing unseen turns the answer."
+      }
+    ],
+    "second": {
+      "label": {
+        "action": {
+          "choice": "decline"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "parent_changed"
+    }
+  ],
+  "rubric": "The parent changed.",
+  "label": {
+    "event": {
+      "choice": "parent_changed"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "event": "the PR this one is stacked on changed"
+    },
+    "why": "The PR this one is stacked on changed.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "parent_changed"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

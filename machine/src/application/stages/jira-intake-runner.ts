@@ -8,6 +8,7 @@
 // ticket it makes (or does not) is the record, and the line logged says the rest. The run folder
 // (`<stateDir>/jira-intake/<key>-<time>`: the issue's text, the transcript) goes once the run
 // answered; a failed run's stays, so the transcript says why, until the retention sweep.
+import type { EgressPolicy } from "../egress-policy.ts";
 import { JiraIntakeAnswer, type JiraIntakeContext, PACKS, type TaskClassification, resolveEngine } from "@hardness/contracts";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -33,6 +34,8 @@ export interface JiraIntakeDeps {
   worktreesDir: string;
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
+  /** The list a pack run may reach; absent, the run joins an ordinary bridge as before. */
+  egress?: EgressPolicy;
   /** Prepares the clean checkout of a repo and answers its path; tests pass a fake. */
   checkout?: (repoPath: string) => Promise<string>;
   now?: () => Date;
@@ -43,7 +46,7 @@ export interface JiraIntakeDeps {
 /** The port JiraIntake triages through; null (agents off) imports every issue as it is. */
 export interface JiraTriager {
   /** The pack's verdict on one issue, or null when the run failed (logged). `classification`,
-   *  issue_classify's first read when intake ran it, rides in the pack's context as a hint. */
+   *  triage_signals's first read when intake ran it, rides in the pack's context as a hint. */
   triage(issue: JiraIssue, repoPath: string | null, classification?: TaskClassification | null): Promise<JiraIntakeAnswer | null>;
 }
 
@@ -104,7 +107,7 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
         }
         const run = await runPackOnce(
           { name: `hardness-jira-intake-${stamp.toLowerCase()}`, image: deps.image, runDir, worktree: work, input, engine, labels: { luna: "jira-intake" } },
-          { credentials: deps.credentials, sandbox: deps.sandbox },
+          { credentials: deps.credentials, sandbox: deps.sandbox, ...(deps.egress ? { egress: deps.egress } : {}) },
         );
         if (run.error !== null) error = run.error;
         else {

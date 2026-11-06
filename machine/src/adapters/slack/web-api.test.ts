@@ -112,11 +112,30 @@ describe("createSlack", () => {
     });
     const slack = createSlack("t", { fetch: world.fetch });
     expect(await slack.history("C1", "1.0", 50)).toEqual([
-      { ts: "2.0", user: null, botId: "B1", text: "b", subtype: "bot_message", threadTs: null, replyCount: 2, latestReply: "5.0" },
-      { ts: "3.0", user: "U2", botId: null, text: "c", subtype: null, threadTs: null, replyCount: 0, latestReply: null },
+      { ts: "2.0", user: null, botId: "B1", text: "b", subtype: "bot_message", threadTs: null, replyCount: 2, latestReply: "5.0", files: [], editedTs: null },
+      { ts: "3.0", user: "U2", botId: null, text: "c", subtype: null, threadTs: null, replyCount: 0, latestReply: null, files: [], editedTs: null },
     ]);
     expect(world.calls[0]!.params).toMatchObject({ channel: "C1", oldest: "1.0", limit: "50", inclusive: "false" });
     expect((await slack.replies("C1", "1.0", "2.0")).map((m) => m.ts)).toEqual(["3.5", "4.0"]);
+  });
+
+  it("keeps a shared file as a reference and the time of an edit", async () => {
+    const world = fakeSlack({
+      "conversations.history": {
+        ok: true,
+        messages: [{ ts: "2.0", user: "U2", text: "see", subtype: "file_share", files: [{ id: "F1", name: "trace.log", filetype: "text", url_private: "https://files.slack.com/x" }], edited: { user: "U2", ts: "2.5" } }],
+      },
+    });
+    const slack = createSlack("t", { fetch: world.fetch });
+    const [m] = await slack.history("C1", "1.0", 50);
+    expect(m!.files).toEqual([{ id: "F1", name: "trace.log", kind: "text" }]);
+    expect(m!.editedTs).toBe("2.5");
+  });
+
+  it("reads whether a user is a guest and what their title is", async () => {
+    const world = fakeSlack({ "users.info": { ok: true, user: { id: "U7", name: "guest.g", is_bot: false, is_restricted: true, profile: { title: "Contractor" } } } });
+    const slack = createSlack("t", { fetch: world.fetch });
+    expect(await slack.userInfo("U7")).toMatchObject({ isGuest: true, title: "Contractor" });
   });
 
   it("caches users and channels, names them sensibly and finds permalinks", async () => {
@@ -127,8 +146,8 @@ describe("createSlack", () => {
       "conversations.open": { ok: true, channel: { id: "D9" } },
     });
     const slack = createSlack("t", { fetch: world.fetch });
-    expect(await slack.userInfo("U2")).toEqual({ id: "U2", name: "marta", isBot: false });
-    expect(await slack.userInfo("U2")).toEqual({ id: "U2", name: "marta", isBot: false });
+    expect(await slack.userInfo("U2")).toEqual({ id: "U2", name: "marta", isBot: false, isGuest: false, title: null });
+    expect(await slack.userInfo("U2")).toEqual({ id: "U2", name: "marta", isBot: false, isGuest: false, title: null });
     expect(await slack.channelInfo("D1")).toEqual({ id: "D1", name: "U2", kind: "dm" });
     await slack.channelInfo("D1");
     expect(world.calls.filter((c) => c.method === "users.info")).toHaveLength(1);

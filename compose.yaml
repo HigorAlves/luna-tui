@@ -1,6 +1,7 @@
 # `docker compose up` (or `pnpm start`) runs Postgres and the machine: local "prod", nothing
 # to keep running on the side. `pnpm dev` starts only Postgres (`docker compose up postgres`)
 # and runs the machine on the host with hot reload, for working on the harness itself.
+# `docker compose --profile observe up -d` adds Laminar, the local trace and eval UI (docs/configuration.md).
 name: hardness-dev
 
 services:
@@ -84,8 +85,18 @@ services:
       # The kill switch and the per-engine monthly caps (docs/configuration.md).
       MACHINE_DISABLE_RUNTIMES: ${MACHINE_DISABLE_RUNTIMES:-}
       MACHINE_ENGINE_BUDGETS: ${MACHINE_ENGINE_BUDGETS:-}
+      # Run traces to the local Laminar (`docker compose --profile observe up -d`; docs/configuration.md "Observability").
+      # The key is also read from ~/.config/hardness/lmnr-project-api-key (mounted below).
+      LMNR_PROJECT_API_KEY: ${LMNR_PROJECT_API_KEY:-}
+      LMNR_BASE_URL: ${LMNR_BASE_URL:-http://lmnr-app}
+      # Stage containers are siblings started through the host's Docker: they reach Laminar through the host's published ports.
+      LMNR_STAGE_BASE_URL: ${LMNR_STAGE_BASE_URL:-http://host.docker.internal}
+      LMNR_HTTP_PORT: ${LMNR_HTTP_PORT:-8000}
+      LMNR_GRPC_PORT: ${LMNR_GRPC_PORT:-8001}
+      MACHINE_TRACES: ${MACHINE_TRACES:-}
       RUNNER_IMAGE: ${RUNNER_IMAGE:-hardness-runner:dev}
       RUNNER_QA_IMAGE: ${RUNNER_QA_IMAGE:-hardness-runner-qa:dev}
+      RUNNER_VIDEO_IMAGE: ${RUNNER_VIDEO_IMAGE:-hardness-runner-video:dev}
       # gh and git push to GitHub over https with this token (`pnpm start` passes `gh auth token`).
       GH_TOKEN: ${GH_TOKEN:-}
       # The Codex (ChatGPT) login for `codex:*` engines: your Codex home, mounted below. The machine
@@ -116,5 +127,127 @@ services:
       # Read-write: a run that refreshed the Codex token writes it back (a temp file, then a rename).
       - ${CODEX_HOME:-${HOME}/.codex}:/root/.codex-host
 
+  # Laminar (laminar.sh, Apache 2.0): traces of every stage and pack run, and the replay evals'
+  # scorecards, in a UI at http://localhost:5667. Opt-in: `docker compose --profile observe up -d`,
+  # create a project in the UI, put its API key in ~/.config/hardness/lmnr-project-api-key and
+  # restart the machine. The lightweight upstream stack, without a queue: for one machine on one
+  # computer. Its stores are its own (never the machine's Postgres). Everything binds to localhost;
+  # the secrets below are local defaults you may override from .env. No LLM key: Laminar's AI
+  # features stay off, the eval_judge pack judges.
+  lmnr-postgres:
+    image: postgres:16
+    profiles: ["observe"]
+    environment:
+      POSTGRES_USER: ${LMNR_POSTGRES_USER:-lmnr}
+      POSTGRES_PASSWORD: ${LMNR_POSTGRES_PASSWORD:-lmnr}
+      POSTGRES_DB: ${LMNR_POSTGRES_DB:-lmnr}
+    volumes:
+      - lmnr-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LMNR_POSTGRES_USER:-lmnr} -d ${LMNR_POSTGRES_DB:-lmnr}"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+
+  lmnr-clickhouse:
+    image: clickhouse/clickhouse-server:26.5
+    profiles: ["observe"]
+    environment:
+      CLICKHOUSE_USER: ${LMNR_CLICKHOUSE_USER:-lmnr}
+      CLICKHOUSE_PASSWORD: ${LMNR_CLICKHOUSE_PASSWORD:-lmnr}
+    volumes:
+      - lmnr-clickhouse-data:/var/lib/clickhouse/
+      - lmnr-clickhouse-logs:/var/log/clickhouse-server/
+      - ./observe/clickhouse-profiles.xml:/etc/clickhouse-server/users.d/lmnr.xml:ro
+      - ./observe/clickhouse-server.xml:/etc/clickhouse-server/config.d/lmnr.xml:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  lmnr-quickwit:
+    image: quickwit/quickwit:v0.9.1
+    profiles: ["observe"]
+    environment:
+      QW_DATA_DIR: /quickwit/qwdata
+    command: ["run"]
+    volumes:
+      - lmnr-quickwit-data:/quickwit/qwdata
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7280 && printf 'GET /health/livez HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  lmnr-app:
+    image: ghcr.io/lmnr-ai/app-server
+    profiles: ["observe"]
+    depends_on:
+      lmnr-postgres:
+        condition: service_healthy
+      lmnr-clickhouse:
+        condition: service_started
+      lmnr-quickwit:
+        condition: service_healthy
+    ports:
+      # The SDK's HTTP and gRPC ports, for `pnpm dev` and `pnpm eval` on the host; the compose machine reaches lmnr-app by name.
+      - "127.0.0.1:${LMNR_HTTP_PORT:-8000}:8000"
+      - "127.0.0.1:${LMNR_GRPC_PORT:-8001}:8001"
+    environment:
+      PORT: 8000
+      GRPC_PORT: 8001
+      ENVIRONMENT: LITE
+      DATABASE_URL: postgres://${LMNR_POSTGRES_USER:-lmnr}:${LMNR_POSTGRES_PASSWORD:-lmnr}@lmnr-postgres:5432/${LMNR_POSTGRES_DB:-lmnr}
+      SHARED_SECRET_TOKEN: ${LMNR_SHARED_SECRET_TOKEN:-local-shared-secret}
+      CLICKHOUSE_URL: http://lmnr-clickhouse:8123
+      CLICKHOUSE_USER: ${LMNR_CLICKHOUSE_USER:-lmnr}
+      CLICKHOUSE_PASSWORD: ${LMNR_CLICKHOUSE_PASSWORD:-lmnr}
+      CLICKHOUSE_RO_USER: ${LMNR_CLICKHOUSE_USER:-lmnr}
+      CLICKHOUSE_RO_PASSWORD: ${LMNR_CLICKHOUSE_PASSWORD:-lmnr}
+      # Exactly 32 bytes as 64 hex characters; a local default, override from .env for anything shared.
+      AEAD_SECRET_KEY: ${LMNR_AEAD_SECRET_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      QUICKWIT_SEARCH_URL: http://lmnr-quickwit:7280
+      QUICKWIT_INGEST_URL: http://lmnr-quickwit:7281
+      QUICKWIT_SPANS_INDEX_ID: spans_v2
+
+  lmnr-frontend:
+    image: ghcr.io/lmnr-ai/frontend
+    profiles: ["observe"]
+    depends_on:
+      lmnr-postgres:
+        condition: service_healthy
+      lmnr-clickhouse:
+        condition: service_started
+      lmnr-quickwit:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${LMNR_FRONTEND_PORT:-5667}:5667"
+    environment:
+      PORT: 5667
+      ENVIRONMENT: LITE
+      DATABASE_URL: postgres://${LMNR_POSTGRES_USER:-lmnr}:${LMNR_POSTGRES_PASSWORD:-lmnr}@lmnr-postgres:5432/${LMNR_POSTGRES_DB:-lmnr}
+      BACKEND_URL: http://lmnr-app:8000
+      BACKEND_RT_URL: http://lmnr-app:8002
+      SHARED_SECRET_TOKEN: ${LMNR_SHARED_SECRET_TOKEN:-local-shared-secret}
+      NEXTAUTH_URL: http://localhost:${LMNR_FRONTEND_PORT:-5667}
+      NEXTAUTH_SECRET: ${LMNR_NEXTAUTH_SECRET:-local-nextauth-secret}
+      NEXT_PUBLIC_URL: http://localhost:${LMNR_FRONTEND_PORT:-5667}
+      LAMINAR_TELEMETRY_DISABLED: "true"
+      CLICKHOUSE_URL: http://lmnr-clickhouse:8123
+      CLICKHOUSE_USER: ${LMNR_CLICKHOUSE_USER:-lmnr}
+      CLICKHOUSE_PASSWORD: ${LMNR_CLICKHOUSE_PASSWORD:-lmnr}
+      CLICKHOUSE_RO_USER: ${LMNR_CLICKHOUSE_USER:-lmnr}
+      CLICKHOUSE_RO_PASSWORD: ${LMNR_CLICKHOUSE_PASSWORD:-lmnr}
+      CLICKHOUSE_POSTGRES_HOST: lmnr-postgres
+      CLICKHOUSE_POSTGRES_PORT: "5432"
+      CLICKHOUSE_POSTGRES_DATABASE: ${LMNR_POSTGRES_DB:-lmnr}
+      CLICKHOUSE_POSTGRES_SCHEMA: public
+      AEAD_SECRET_KEY: ${LMNR_AEAD_SECRET_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      QUICKWIT_SEARCH_URL: http://lmnr-quickwit:7280
+
 volumes:
   pgdata:
+  lmnr-pgdata:
+  lmnr-clickhouse-data:
+  lmnr-clickhouse-logs:
+  lmnr-quickwit-data:

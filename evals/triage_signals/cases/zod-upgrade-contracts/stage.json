@@ -1,0 +1,36 @@
+{
+  "schema": 3,
+  "stage": "triage_signals",
+  "pack": "triage_signals",
+  "attempt": 1,
+  "task": {
+    "id": "eval-zod-upgrade-contracts",
+    "title": "Classify issue",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "issue": {
+      "title": "Bump zod in contracts and drop the deprecated string format helpers",
+      "description": "zod 4.8 deprecates `z.string().url()` and friends in favour of `z.url()`. contracts/src uses the old form in a handful of schemas (stage.ts, api.ts). Bump zod in contracts/package.json and switch those call sites; no behaviour change. Done when `pnpm --filter @hardness/contracts test` and typecheck pass with no deprecation warnings.",
+      "labels": [
+        "dependencies"
+      ],
+      "source": "jira:EVAL-12"
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

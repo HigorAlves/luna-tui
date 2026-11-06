@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "escalation_reason",
+  "pack": "escalation_reason",
+  "attempt": 1,
+  "task": {
+    "id": "ran-out-of-room-with-slices-left",
+    "title": "ran-out-of-room-with-slices-left",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "escalation",
+      "escalation": {
+        "stage": "implementing",
+        "summary": "Three slices were still open when the budget ran out; each needed changes in a new layer.",
+        "agentReason": "too_complex",
+        "agentWord": "this is a much bigger change than the plan said",
+        "output": "FAIL cart.test.ts > totals the cart\n  expected 3 received 2",
+        "facts": [
+          "the budget is spent: 91 of 90 minutes (minutes)",
+          "2 consecutive reds at the end of the ledger",
+          "3 of 5 slices done"
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -37,6 +37,8 @@ pub enum Scope {
     Board,
     Detail,
     Pulls,
+    Backlog,
+    Tickets,
     Slack,
     Watches,
     Inbox,
@@ -47,10 +49,12 @@ pub enum Scope {
 }
 
 impl Scope {
-    pub const ALL: [Scope; 10] = [
+    pub const ALL: [Scope; 12] = [
         Scope::Board,
         Scope::Detail,
         Scope::Pulls,
+        Scope::Backlog,
+        Scope::Tickets,
         Scope::Slack,
         Scope::Watches,
         Scope::Inbox,
@@ -66,6 +70,8 @@ impl Scope {
             Scope::Board => "Board",
             Scope::Detail => "Ticket",
             Scope::Pulls => "Pulls",
+            Scope::Backlog => "Backlog",
+            Scope::Tickets => "Tickets",
             Scope::Slack => "Slack",
             Scope::Watches => "Watches",
             Scope::Inbox => "Inbox",
@@ -82,6 +88,8 @@ impl Scope {
             Scope::Board => "board",
             Scope::Detail => "detail",
             Scope::Pulls => "pulls",
+            Scope::Backlog => "backlog",
+            Scope::Tickets => "tickets",
             Scope::Slack => "slack",
             Scope::Watches => "watches",
             Scope::Inbox => "inbox",
@@ -124,6 +132,7 @@ impl Group {
             Group::Gate => "Gate",
             Group::Ticket => match scope {
                 Scope::Pulls => "Pull request",
+                Scope::Backlog => "Item",
                 Scope::Slack => "Message",
                 Scope::Watches => "Watch",
                 _ => "Ticket",
@@ -231,6 +240,37 @@ fn task_of(app: &App) -> Option<&Task> {
     app.focus_task()
 }
 
+/// Whether `r` may send the ticket back: a setup, a plan or the tests, and the ship gate of a
+/// feature task (the preview: a note sends it back to Evidence); a review's verdict is not sent back.
+pub(crate) fn sendable_back(t: &Task) -> bool {
+    match t.state.as_str() {
+        "awaiting_setup" | "awaiting_approval" | "awaiting_test_check" => true,
+        // Only while the machine waits on you: otherwise it is watching the PR, and a send-back has nothing to stop.
+        "awaiting_ship" => t.route != "review" && t.waiting_on_you,
+        _ => false,
+    }
+}
+
+/// `sendable_back` for the ticket as it is now: the release question (the ship approval) has two answers, approve or reject, and no send-back.
+pub(crate) fn sendable_back_now(app: &App, t: &Task) -> bool {
+    sendable_back(t) && !open_ship_approval(app, t)
+}
+
+/// Whether the ticket waits at the release question: an open ship approval in the loaded detail.
+pub(crate) fn open_ship_approval(app: &App, t: &Task) -> bool {
+    t.state == "awaiting_ship" && t.waiting_on_you && app.detail.as_ref().filter(|d| d.task.id == t.id).and_then(|d| d.open_approval()).is_some_and(|a| a.is_ship_approval())
+}
+
+/// Whether the ticket is at a gate. `awaiting_ship` and `reviewing_memory` also hold a running stage (the watch, the retro): they are gates only when the machine waits on you.
+pub(crate) fn at_gate(t: &Task) -> bool {
+    GATE_STATES.contains(&t.state.as_str()) && (!matches!(t.state.as_str(), "awaiting_ship" | "reviewing_memory") || t.waiting_on_you)
+}
+
+/// Whether `task` waits at the plan stage's own gate (not triage's reply or archive): the only gate a plan is rejected at.
+pub(crate) fn rejectable(app: &App, task: &Task) -> bool {
+    (task.state == "awaiting_approval" && app.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome()).is_none_or(|o| matches!(o, "split" | "split_failed"))) || open_ship_approval(app, task)
+}
+
 fn with_task(app: &App, f: fn(&Task) -> Avail) -> Avail {
     match task_of(app) {
         Some(task) => f(task),
@@ -242,9 +282,21 @@ fn with_task(app: &App, f: fn(&Task) -> Avail) -> Avail {
 /// the same key never show together.
 fn gate_is(app: &App, states: &[&str]) -> Avail {
     match task_of(app) {
-        Some(task) if states.contains(&task.state.as_str()) => Avail::On,
+        Some(task) if states.contains(&task.state.as_str()) && at_gate(task) => Avail::On,
         _ => Avail::Hidden,
     }
+}
+
+/// `On` at the plan gate: with `outcome` None the plan stage's own gate (or one whose detail is not
+/// loaded yet), with `Some(outcome)` the gate triage opened to confirm a reply or an archive in
+/// one click. `Hidden` anywhere else, so the three meanings of `a` there never show together.
+fn plan_gate(app: &App, outcome: Option<&str>) -> Avail {
+    let Some(task) = task_of(app) else { return Avail::Hidden };
+    if task.state != "awaiting_approval" {
+        return Avail::Hidden;
+    }
+    let open = app.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome());
+    if open == outcome { Avail::On } else { Avail::Hidden }
 }
 
 /// The states one of the `a` entries names.
@@ -260,12 +312,23 @@ const GATE_STATES: &[&str] = &[
     "reviewing_memory",
 ];
 
+/// `On` at the ship gate: `release` for the release question (the ship approval), else the preview gate. `Hidden` elsewhere, so the meanings of `a` and `N` there never show together.
+fn ship_gate(app: &App, release: bool) -> Avail {
+    match task_of(app) {
+        Some(task) if task.state == "awaiting_ship" && task.waiting_on_you && open_ship_approval(app, task) == release => Avail::On,
+        _ => Avail::Hidden,
+    }
+}
+
 /// `a` when no gate entry applies: says why there is nothing to advance.
 fn advance_fallback(app: &App) -> Avail {
     match task_of(app) {
         None => Avail::Off("no ticket selected"),
-        Some(task) if GATE_STATES.contains(&task.state.as_str()) => Avail::Hidden,
+        Some(task) if at_gate(task) => Avail::Hidden,
+        Some(task) if task.state == "awaiting_ship" => Avail::Off("the machine is watching the PR"),
+        Some(task) if task.state == "reviewing_memory" => Avail::Off("the retro is running"),
         Some(task) if task.state == "closed" => Avail::Off("closed"),
+        Some(task) if task.state == "archived" => Avail::Off("archived"),
         Some(task) if task.waiting_on_you => Avail::On,
         Some(_) => Avail::Off("a stage is running; X aborts it"),
     }
@@ -325,13 +388,26 @@ const SHARED: &[Binding] = &[
     cmd(b("a", "start", Group::Gate, Scope::Board, |app| gate_is(app, &["draft"]), 90), "start"),
     b("a", "approve the setup", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_setup"]), 90),
     b("a", "answer triage's questions", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_answers"]), 90),
-    b("a", "approve the plan", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_approval"]), 90),
+    b("a", "approve the plan", Group::Gate, Scope::Board, |app| plan_gate(app, None), 90),
+    b("a", "approve the split", Group::Gate, Scope::Board, |app| plan_gate(app, Some("split")), 90),
+    b("a", "archive the ticket (one click)", Group::Gate, Scope::Board, |app| plan_gate(app, Some("archive")), 90),
+    b("a", "post the reply and close the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90),
     b("a", "approve the tests", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_test_check"]), 90),
-    b("a", "ship: approve and open the PR", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_ship"]), 90),
+    b("a", "ship: publish, watch the PR", Group::Gate, Scope::Board, |app| ship_gate(app, false), 90),
+    b("a", "ship: approve the release", Group::Gate, Scope::Board, |app| ship_gate(app, true), 90),
     b("a", "retry the escalation, with guidance", Group::Gate, Scope::Board, |app| gate_is(app, &["escalated"]), 90),
     b("a", "resume after the usage limit", Group::Gate, Scope::Board, |app| gate_is(app, &["paused_rate_limit"]), 90),
     b("a", "approve the memory review", Group::Gate, Scope::Board, |app| gate_is(app, &["reviewing_memory"]), 90),
     b("a", "advance", Group::Gate, Scope::Board, advance_fallback, 90),
+    b(
+        "T",
+        "correct the triage record",
+        Group::Gate,
+        Scope::Board,
+        |app| with_task(app, |t| if t.record.is_none() { Avail::Off("triage has not written a record yet") } else if matches!(t.state.as_str(), "awaiting_answers" | "awaiting_approval") { Avail::On } else { Avail::Off("the record is corrected at triage's questions or the plan gate") }),
+        45,
+    ),
+    b("p", "post these questions at the source", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_answers"]), 45),
     b(
         "A",
         "memory review: approve, skip the rules",
@@ -340,19 +416,21 @@ const SHARED: &[Binding] = &[
         |app| with_task(app, |t| if t.state == "reviewing_memory" { Avail::On } else { Avail::Off("no memory review waiting") }),
         40,
     ),
+    b("N", "reject the plan, with a comment", Group::Gate, Scope::Board, |app| plan_gate(app, None), 80),
+    b("N", "reject the split, with a comment", Group::Gate, Scope::Board, |app| match plan_gate(app, Some("split")) { Avail::On => Avail::On, _ => plan_gate(app, Some("split_failed")) }, 80),
+    b("N", "reject the release, archive the card", Group::Gate, Scope::Board, |app| ship_gate(app, true), 80),
     b(
         "r",
         "send back with a reason",
         Group::Gate,
         Scope::Board,
         |app| {
-            with_task(app, |t| {
-                if matches!(t.state.as_str(), "awaiting_setup" | "awaiting_approval" | "awaiting_test_check") {
-                    Avail::On
-                } else {
-                    Avail::Off("only a setup, plan or tests go back")
-                }
-            })
+            match task_of(app) {
+                None => Avail::Off("no ticket selected"),
+                Some(t) if sendable_back_now(app, t) => Avail::On,
+                Some(t) if open_ship_approval(app, t) => Avail::Off("the release question is approved or rejected"),
+                Some(_) => Avail::Off("only a setup, plan or tests go back"),
+            }
         },
         85,
     ),
@@ -377,6 +455,28 @@ const SHARED: &[Binding] = &[
             })
         },
         40,
+    ),
+    b(
+        "Z",
+        "archive, with a reason",
+        Group::Ticket,
+        Scope::Board,
+        |app| {
+            with_task(app, |t| match t.state.as_str() {
+                "closed" => Avail::Off("closed"),
+                "archived" => Avail::Off("archived"),
+                _ => Avail::On,
+            })
+        },
+        43,
+    ),
+    b(
+        "C",
+        "correct the escalation reason",
+        Group::Ticket,
+        Scope::Board,
+        |app| with_task(app, |t| if t.state == "escalated" { Avail::On } else { Avail::Off("not escalated") }),
+        44,
     ),
     b("d", "delete (asks first)", Group::Ticket, Scope::Board, |app| with_task(app, |_| Avail::On), 42),
     b("f", "open or focus the agent's watch tab", Group::Ticket, Scope::Board, |app| with_task(app, |_| Avail::On), 41),
@@ -493,6 +593,8 @@ const BOARD: &[Binding] = &[
     cmd(b("I", "Inbox: what needs you, by why", Group::Views, Scope::Board, on, 20), "inbox"),
     cmd(b("D", "Digest: what changed since last time", Group::Views, Scope::Board, on, 20), "digest"),
     cmd(b("P", "Pulls: every open PR involving you", Group::Views, Scope::Board, on, 20), "prs"),
+    cmd(b("B", "Backlog: candidates, not tickets yet", Group::Views, Scope::Board, on, 20), "backlog"),
+    cmd(b("K", "Tickets: held, assessed, waiting on you", Group::Views, Scope::Board, on, 20), "tickets"),
     cmd(b("S", "Slack: mentions, DMs and watches", Group::Views, Scope::Board, on, 20), "slack"),
     // Marks & bulk.
     b("v", "mark the ticket; a X d w act on marks", Group::Marks, Scope::Board, |app| with_task(app, |_| Avail::On), 25),
@@ -514,6 +616,9 @@ const BOARD: &[Binding] = &[
     cmd(b(":fold", "fold the focused column", Group::Commands, Scope::Board, on, 0), "fold"),
     cmd(b(":unfold", "unfold the focused column", Group::Commands, Scope::Board, on, 0), "unfold"),
     cmd(b(":setup <repo>", "propose the repo's luna.yaml", Group::Commands, Scope::Board, on, 0), "setup"),
+    cmd(b(":whole", "keep a split card whole (recorded)", Group::Commands, Scope::Board, on, 0), "whole"),
+    cmd(b(":dismiss <finding id> [reason]", "dismiss a finding Verify reported", Group::Commands, Scope::Board, on, 0), "dismiss"),
+    cmd(b(":finding <blocker|should_fix|nit> <title>", "add a finding Verify missed", Group::Commands, Scope::Board, on, 0), "finding"),
     cmd(b(":slots <n>", "resize the pool", Group::Commands, Scope::Board, on, 0), "slots"),
     cmd(b(":drain", "take no new work", Group::Commands, Scope::Board, on, 0), "drain"),
     cmd(b(":resume", "carry on taking new work", Group::Commands, Scope::Board, on, 0), "resume"),
@@ -522,6 +627,13 @@ const BOARD: &[Binding] = &[
     cmd(b(":inbox", "open the Inbox", Group::Commands, Scope::Board, on, 0), "inbox"),
     cmd(b(":digest", "open the Digest", Group::Commands, Scope::Board, on, 0), "digest"),
     cmd(b(":prs", "open Pulls", Group::Commands, Scope::Board, on, 0), "prs"),
+    cmd(b(":backlog", "open the Backlog", Group::Commands, Scope::Board, on, 0), "backlog"),
+    cmd(b(":tickets", "open the Tickets view", Group::Commands, Scope::Board, on, 0), "tickets"),
+    cmd(b(":ticket-edit <text>", "post your text, not the draft's", Group::Commands, Scope::Tickets, on, 0), "ticket-edit"),
+    cmd(b(":dedup duplicate <n> | related <ns> | neither", "answer the duplicate question", Group::Commands, Scope::Board, on, 0), "dedup"),
+    cmd(b(":dup <id>", "close as a duplicate of that ticket", Group::Commands, Scope::Board, on, 0), "dup"),
+    cmd(b(":undup", "bring a closed duplicate back", Group::Commands, Scope::Board, on, 0), "undup"),
+    cmd(b(":context repo|project|text <value>", "answer Intake: repo, project or text", Group::Commands, Scope::Board, on, 0), "context"),
     cmd(b(":slack", "open Slack", Group::Commands, Scope::Board, on, 0), "slack"),
     cmd(b(":jira <KEY>", "link that Jira issue (bare: the search)", Group::Commands, Scope::Board, on, 0), "jira"),
     cmd(b(":help", "this sheet", Group::Commands, Scope::Board, on, 0), "help"),
@@ -531,6 +643,8 @@ const DETAIL: &[Binding] = &[
     SHIP,
     b("e", "edit: the plan, the cases or the ticket", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 80),
     b("o", "open: the file, the PR or the issue", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 50),
+    b("y", "Evidence Pack was useful", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.evidence.is_some() { Avail::On } else { Avail::Off("no Evidence Pack yet") }), 40),
+    b("n", "Evidence Pack was not useful (note)", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.evidence.is_some() { Avail::On } else { Avail::Off("no Evidence Pack yet") }), 39),
     b(
         "E",
         "pick the selected stage's engine",
@@ -539,6 +653,8 @@ const DETAIL: &[Binding] = &[
         |app| if app.detail_section == Section::Engines { Avail::On } else { Avail::Off("only in the Engines section (9)") },
         45,
     ),
+    b("M", "close as a duplicate of another", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 40),
+    b("U", "bring a closed duplicate back", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.merged_into.is_some() { Avail::On } else { Avail::Off("not merged into another ticket") }), 39),
     b("h / l", "previous / next section", Group::Move, Scope::Detail, on, 30),
     b("1-9", "jump to that section", Group::Move, Scope::Detail, on, 10),
     b("j / k", "scroll, or pick a run / file", Group::Move, Scope::Detail, on, 28),
@@ -594,15 +710,49 @@ const PULLS: &[Binding] = &[
     cmd(b("?", "keys", Group::App, Scope::Pulls, on, 100), "help"),
 ];
 
+/// The Tickets view: what the ticket machine holds, and the taps that let anything leave the machine.
+const TICKETS: &[Binding] = &[
+    b("a", "approve: post the waiting draft", Group::Ticket, Scope::Tickets, ticket_waiting, 90),
+    b("e", "edit: post your own text instead", Group::Ticket, Scope::Tickets, ticket_waiting, 85),
+    b("x", "ignore: keep the draft, never post it", Group::Ticket, Scope::Tickets, ticket_waiting, 80),
+    b("c", "card: make a board ticket from it", Group::Ticket, Scope::Tickets, |app| if app.ticket_under_cursor().is_some() { Avail::On } else { Avail::Off("no ticket selected") }, 75),
+    b("s", "schedule: to the backlog, by score", Group::Ticket, Scope::Tickets, |app| if app.ticket_under_cursor().is_some() { Avail::On } else { Avail::Off("no ticket selected") }, 70),
+    b("j / k", "previous / next ticket", Group::Move, Scope::Tickets, on, 30),
+    b("esc / K / q", "close", Group::Move, Scope::Tickets, on, 20),
+    b("R", "fetch the tickets again", Group::App, Scope::Tickets, on, 60),
+    cmd(b("?", "keys", Group::App, Scope::Tickets, on, 100), "help"),
+];
+
+fn ticket_waiting(app: &App) -> Avail {
+    match app.ticket_under_cursor() {
+        Some(t) if !t.waiting().is_empty() => Avail::On,
+        Some(_) => Avail::Off("no draft waiting on it"),
+        None => Avail::Off("no ticket selected"),
+    }
+}
+
+/// The Backlog view: ranked candidates that are not tickets yet.
+const BACKLOG: &[Binding] = &[
+    b("p", "promote: make it a ticket", Group::Ticket, Scope::Backlog, |app| if app.backlog_under_cursor().is_some() { Avail::On } else { Avail::Off("no item selected") }, 90),
+    b("b", "bump: one more report of it", Group::Ticket, Scope::Backlog, |app| if app.backlog_under_cursor().is_some() { Avail::On } else { Avail::Off("no item selected") }, 85),
+    b("d", "decline: drop it from the backlog", Group::Ticket, Scope::Backlog, |app| if app.backlog_under_cursor().is_some() { Avail::On } else { Avail::Off("no item selected") }, 80),
+    b("j / k", "previous / next item", Group::Move, Scope::Backlog, on, 30),
+    b("esc / B / q", "close", Group::Move, Scope::Backlog, on, 20),
+    b("R", "fetch the backlog again", Group::App, Scope::Backlog, on, 60),
+    cmd(b("?", "keys", Group::App, Scope::Backlog, on, 100), "help"),
+];
+
 const SLACK: &[Binding] = &[
     b("r", "reply: edit the draft, ctrl+s posts", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Reply), 90),
     b("t", "ticket: a Backlog task from the thread", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Task), 85),
-    b("d", "done: clear it here", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Done), 80),
+    b("d", "done: clear it; a draft asks why", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Done), 80),
     b("s", "snooze: 1h, 3h, tomorrow or Monday", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Snooze), 75),
     b("o", "open the message in Slack", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Open), 60),
     b("N", "nudge: a one-line reminder", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Nudge), 70),
     b("!", "priority up one step", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Bump), 40),
     b("-", "priority down one step", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Lower), 39),
+    b("c", "kind: what the thread is", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Kind), 38),
+    b("L", "link: the work it is about", Group::Ticket, Scope::Slack, |app| slack_key(app, SlackKey::Relation), 37),
     b("j / k", "previous / next message", Group::Move, Scope::Slack, on, 30),
     b("h / l", "previous / next split", Group::Move, Scope::Slack, on, 29),
     b("1-6", "jump to that split", Group::Move, Scope::Slack, on, 10),
@@ -646,6 +796,7 @@ const DIGEST: &[Binding] = &[
 const FLOOR: &[Binding] = &[
     b("tab / shift+tab", "focus the next / previous repo", Group::Move, Scope::Floor, on, 70),
     b("R", "refresh the numbers", Group::App, Scope::Floor, on, 60),
+    b("A", "approve a waiting base image", Group::App, Scope::Floor, on, 55),
     b("esc / F / q", "close", Group::Move, Scope::Floor, on, 20),
     cmd(b("?", "keys", Group::App, Scope::Floor, on, 100), "help"),
 ];
@@ -668,7 +819,7 @@ const HELP: &[Binding] = &[
     b("esc / q", "close", Group::App, Scope::Help, on, 60),
 ];
 
-const TOTAL: usize = BOARD.len() + SHARED.len() + count_except(SHARED, "J") + count_except(SHARED, "A") + DETAIL.len() + INBOX.len() + PULLS.len() + SLACK.len() + WATCHES.len() + DIGEST.len() + FLOOR.len() + EDITOR.len() + HELP.len();
+const TOTAL: usize = BOARD.len() + SHARED.len() + count_except(SHARED, "J") + count_except(SHARED, "A") + DETAIL.len() + INBOX.len() + PULLS.len() + BACKLOG.len() + TICKETS.len() + SLACK.len() + WATCHES.len() + DIGEST.len() + FLOOR.len() + EDITOR.len() + HELP.len();
 
 /// Copies `rows` into `out` under `scope`, skipping the key `except` (the view handles it
 /// itself: `A` approves the Inbox split, `J` scrolls the popup).
@@ -724,6 +875,8 @@ const fn build() -> [Binding; TOTAL] {
     copy_into(SHARED, Scope::Inbox, "A", &mut out, &mut at);
     copy_into(INBOX, Scope::Inbox, "", &mut out, &mut at);
     copy_into(PULLS, Scope::Pulls, "", &mut out, &mut at);
+    copy_into(BACKLOG, Scope::Backlog, "", &mut out, &mut at);
+    copy_into(TICKETS, Scope::Tickets, "", &mut out, &mut at);
     copy_into(SLACK, Scope::Slack, "", &mut out, &mut at);
     copy_into(WATCHES, Scope::Watches, "", &mut out, &mut at);
     copy_into(DIGEST, Scope::Digest, "", &mut out, &mut at);
@@ -758,6 +911,10 @@ pub fn active_scope(app: &App) -> Scope {
         Scope::Digest
     } else if app.pulls.is_some() {
         Scope::Pulls
+    } else if app.backlog.is_some() {
+        Scope::Backlog
+    } else if app.tickets.is_some() {
+        Scope::Tickets
     } else if app.slack.is_some() {
         Scope::Slack
     } else {
@@ -1069,6 +1226,7 @@ mod tests {
             app_with(vec![task("t1", "paused_rate_limit", true, false, true)]),
             app_with(vec![task("t1", "reviewing_memory", true, false, true)]),
             app_with(vec![task("t1", "closed", true, false, false)]),
+            app_with(vec![task("t1", "archived", true, false, false)]),
             app_with(Vec::new()),
         ]
     }
@@ -1113,9 +1271,67 @@ mod tests {
         let approval = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
         let a = bindings_for(&approval, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
         assert_eq!((a.0.label, a.1), ("approve the plan", Avail::On));
+        // A gate triage opened for a reply or an archive says what `a` does there, once its detail is loaded.
+        for (outcome, label) in [("archive", "archive the ticket (one click)"), ("conversation", "post the reply and close the ticket")] {
+            let mut gate = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
+            let task_json = r#"{"id":"t1","title":"Login page","description":"","criteria":[],"repoPath":"/r/app","branch":null,"worktreePath":"/w/app","state":"awaiting_approval","column":"Build",
+                "waitingOnYou":true,"running":false,"queued":false,"retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+                "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
+            gate.detail = Some(
+                serde_json::from_str(&format!(
+                    r#"{{"task":{task_json},"stageRuns":[],"events":[],"approvals":[{{"id":"p","kind":"awaiting_approval","decision":null,"requested":{{"outcome":"{outcome}"}}}}]}}"#
+                ))
+                .unwrap(),
+            );
+            let shown: Vec<&str> = bindings_for(&gate, Scope::Board).into_iter().filter(|(b, _)| b.keys == "a").map(|(b, _)| b.label).collect();
+            assert_eq!(shown, [label], "{outcome}");
+        }
         let running = app_with(vec![task("t1", "implementing", true, true, true)]);
         let a = bindings_for(&running, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
         assert_eq!(a.1, Avail::Off("a stage is running; X aborts it"));
+    }
+
+    #[test]
+    fn a_split_gate_has_approve_the_split_and_reject_and_a_failed_one_has_no_approve() {
+        let at = |outcome: &str| {
+            let mut gate = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
+            let task_json = r#"{"id":"t1","title":"Login page","description":"","criteria":[],"repoPath":"/r/app","branch":null,"worktreePath":"/w/app","state":"awaiting_approval","column":"Build",
+                "waitingOnYou":true,"running":false,"queued":false,"retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+                "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
+            gate.detail = Some(serde_json::from_str(&format!(r#"{{"task":{task_json},"stageRuns":[],"events":[],"approvals":[{{"id":"p","kind":"awaiting_approval","decision":null,"requested":{{"outcome":"{outcome}"}}}}]}}"#)).unwrap());
+            gate
+        };
+        let shown = |app: &App, key: &str| bindings_for(app, Scope::Board).into_iter().filter(|(b, a)| b.keys == key && *a != Avail::Hidden).map(|(b, _)| b.label).collect::<Vec<_>>();
+        assert_eq!(shown(&at("split"), "a"), ["approve the split"]);
+        assert_eq!(shown(&at("split"), "N"), ["reject the split, with a comment"]);
+        assert!(shown(&at("split_failed"), "a").is_empty(), "a failed split has nothing to approve: {:?}", shown(&at("split_failed"), "a"));
+        assert_eq!(shown(&at("split_failed"), "N"), ["reject the split, with a comment"]);
+        assert!(crate::keys::rejectable(&at("split"), &at("split").tasks[0]) && crate::keys::rejectable(&at("split_failed"), &at("split_failed").tasks[0]));
+        assert!(!crate::keys::rejectable(&at("archive"), &at("archive").tasks[0]));
+        assert!(commands().iter().any(|(n, _)| *n == "whole"), ":whole is in the command table");
+    }
+
+    #[test]
+    fn z_archives_a_ticket_that_has_not_ended_and_says_why_it_cannot_otherwise() {
+        let find = |app: &App| bindings_for(app, Scope::Board).into_iter().find(|(b, _)| b.keys == "Z").map(|(_, a)| a).unwrap();
+        for state in ["draft", "awaiting_approval", "implementing", "escalated"] {
+            assert_eq!(find(&app_with(vec![task("t1", state, true, false, false)])), Avail::On, "{state}");
+        }
+        assert_eq!(find(&app_with(vec![task("t1", "closed", true, false, false)])), Avail::Off("closed"));
+        assert_eq!(find(&app_with(vec![task("t1", "archived", true, false, false)])), Avail::Off("archived"));
+        assert_eq!(find(&app_with(Vec::new())), Avail::Off("no ticket selected"));
+        // Nothing to advance on an archived ticket, and no gate entry claims it.
+        let archived = app_with(vec![task("t1", "archived", true, false, false)]);
+        let a = bindings_for(&archived, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
+        assert_eq!(a.1, Avail::Off("archived"));
+    }
+
+    #[test]
+    fn c_corrects_the_escalation_reason_only_on_an_escalated_ticket() {
+        let find = |app: &App| bindings_for(app, Scope::Board).into_iter().find(|(b, _)| b.keys == "C").map(|(_, a)| a).unwrap();
+        assert_eq!(find(&app_with(vec![task("t1", "escalated", true, false, false)])), Avail::On);
+        assert_eq!(find(&app_with(vec![task("t1", "implementing", true, true, true)])), Avail::Off("not escalated"));
+        assert_eq!(find(&app_with(Vec::new())), Avail::Off("no ticket selected"));
     }
 
     #[test]
@@ -1138,6 +1354,29 @@ mod tests {
     }
 
     #[test]
+    fn n_rejects_at_the_plan_stage_gate_and_nowhere_else() {
+        let find = |app: &App, key: &str| bindings_for(app, Scope::Board).into_iter().find(|(b, _)| b.keys == key).map(|(_, a)| a);
+        assert_eq!(find(&app_with(vec![task("t1", "awaiting_approval", true, false, true)]), "N"), Some(Avail::On));
+        for state in ["awaiting_ship", "awaiting_answers", "awaiting_test_check", "implementing", "draft", "escalated"] {
+            assert_eq!(find(&app_with(vec![task("t1", state, true, false, true)]), "N"), None, "{state}");
+        }
+        assert_eq!(find(&app_with(vec![]), "N"), None);
+        let names = footer_keys(&app_with(vec![task("t1", "awaiting_approval", true, false, true)]), Scope::Board, 9).into_iter().map(|b| format!("{} {}", b.keys, b.label)).collect::<Vec<_>>();
+        assert!(names.contains(&"N reject the plan, with a comment".to_string()), "{names:?}");
+    }
+
+    #[test]
+    fn send_back_is_available_at_the_ship_gate_for_a_feature_task_only() {
+        let find = |app: &App, key: &str| bindings_for(app, Scope::Board).into_iter().find(|(b, _)| b.keys == key).map(|(_, a)| a).unwrap();
+        let ship = app_with(vec![task("t1", "awaiting_ship", true, false, true)]);
+        assert_eq!(find(&ship, "r"), Avail::On);
+        let mut review = task("t2", "awaiting_ship", true, false, true);
+        review.route = "review".to_string();
+        assert_eq!(find(&app_with(vec![review]), "r"), Avail::Off("only a setup, plan or tests go back"));
+        assert_eq!(find(&app_with(vec![task("t3", "implementing", true, true, true)]), "r"), Avail::Off("only a setup, plan or tests go back"));
+    }
+
+    #[test]
     fn the_footer_changes_with_the_ticket() {
         let names = |app: &App| footer_keys(app, Scope::Board, 7).into_iter().map(|b| format!("{} {}", b.keys, b.label)).collect::<Vec<_>>();
         let approval = names(&app_with(vec![task("t1", "awaiting_approval", true, false, true)]));
@@ -1149,7 +1388,7 @@ mod tests {
         assert!(draft.contains(&"R set the repo (search)".to_string()), "a draft without a repo weights R up: {draft:?}");
         assert!(!draft.iter().any(|k| k.starts_with("r ")), "nothing to send back on a draft: {draft:?}");
         let ship = names(&app_with(vec![task("t1", "awaiting_ship", true, false, true)]));
-        assert_eq!(ship[1], "a ship: approve and open the PR");
+        assert_eq!(ship[1], "a ship: publish, watch the PR");
         assert!(footer_keys(&approval_app(), Scope::Board, 7).iter().all(|b| b.menu_key().is_none()), "no menu chords in the footer");
     }
 
@@ -1190,7 +1429,7 @@ mod tests {
     #[test]
     fn completions_narrow_by_prefix_and_stop_at_the_first_space() {
         let names = |typed: &str| completions(typed).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
-        assert_eq!(names("f"), ["filter", "fold", "floor"]);
+        assert_eq!(names("f"), ["filter", "fold", "finding", "floor"]);
         assert_eq!(names("fo"), ["fold"]);
         assert!(names("filter x").is_empty());
         assert_eq!(names("").len(), commands().len());
@@ -1251,6 +1490,8 @@ mod tests {
         parity(Scope::Detail, handled::DETAIL);
         parity(Scope::Inbox, handled::INBOX);
         parity(Scope::Pulls, handled::PULLS);
+        parity(Scope::Backlog, handled::BACKLOG);
+        parity(Scope::Tickets, handled::TICKETS);
         parity(Scope::Slack, handled::SLACK);
         parity(Scope::Watches, handled::WATCHES);
         parity(Scope::Digest, handled::DIGEST);
@@ -1302,5 +1543,15 @@ mod tests {
         for scope in [Scope::Board, Scope::Detail, Scope::Pulls, Scope::Slack, Scope::Watches, Scope::Inbox, Scope::Digest, Scope::Floor] {
             assert!(readme.contains(&format!("<!-- keys:start {} -->", scope.slug())), "the README documents {scope:?}");
                 }
+    }
+
+    #[test]
+    fn the_finding_commands_parse_their_arguments() {
+        assert_eq!(crate::app::parse_dismiss("f3 not a bug"), Ok(("f3".to_string(), Some("not a bug".to_string()))));
+        assert_eq!(crate::app::parse_dismiss("f3"), Ok(("f3".to_string(), None)));
+        assert!(crate::app::parse_dismiss("  ").is_err());
+        assert_eq!(crate::app::parse_finding("nit rename x"), Ok(("nit".to_string(), "rename x".to_string())));
+        assert!(crate::app::parse_finding("huge rename x").is_err() && crate::app::parse_finding("nit").is_err());
+        assert_eq!(crate::app::parse_finding(&format!("nit {}", "x".repeat(300))).unwrap().1.len(), 200);
     }
 }

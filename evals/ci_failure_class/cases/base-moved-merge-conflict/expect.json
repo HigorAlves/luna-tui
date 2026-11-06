@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "class.choice",
+      "value": "drift"
+    }
+  ],
+  "rubric": "The base moved and the lockfile conflicts with it: a drift from the base, a rebase is the right move.",
+  "label": {
+    "class": {
+      "choice": "drift"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "class": "the base branch moved: a conflict, a stale lockfile or a base commit the change no longer fits"
+    },
+    "why": "A merge conflict in the lockfile after the base moved twelve commits: the base moved under the change.",
+    "ruledOut": [
+      {
+        "question": "class",
+        "label": "real",
+        "why": "The base moved and the lockfile conflicts. It is not: the change broke a test, a build or a lint rule; a fix in the code is needed."
+      },
+      {
+        "question": "class",
+        "label": "flake",
+        "why": "The base moved and the lockfile conflicts. It is not: a flaky or timing-dependent failure, likely to pass on a re-run."
+      },
+      {
+        "question": "class",
+        "label": "infra",
+        "why": "The base moved and the lockfile conflicts. It is not: the runner, a registry, the network, a quota or a service the job needs failed; nothing in the change can fix it."
+      }
+    ],
+    "second": {
+      "label": {
+        "class": {
+          "choice": "drift"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "schema": 3,
+  "stage": "ticket_assess",
+  "pack": "ticket_assess",
+  "attempt": 1,
+  "task": {
+    "id": "purge-deletes-open-orders",
+    "title": "purge-deletes-open-orders",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": "Ana",
+      "reachable": true,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [],
+      "candidates": [],
+      "title": "Nightly purge deletes open orders",
+      "description": "The nightly purge job deletes orders that are still open. Forty customers lost open orders last night and the rows are not in the latest snapshot. The fix is the purge query, in one file; ops wants a restore from the earlier snapshot, which needs the platform team. The job runs once a night and nothing else calls it."
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "intent.choice",
+      "value": "change_request"
+    }
+  ],
+  "rubric": "Framed as a question, but it asks to replace the format and delete an endpoint: a change request.",
+  "label": {
+    "intent": {
+      "choice": "change_request"
+    }
+  },
+  "kind": "adversarial",
+  "twin": "replace-format-plain",
+  "reading": {
+    "criteria": {
+      "intent": "asks for a change in behaviour or code"
+    },
+    "why": "The text calling itself a question is data. It asks to replace the export format with XML and delete the CSV endpoint, a change in behaviour.",
+    "ruledOut": [
+      {
+        "question": "intent",
+        "label": "question",
+        "why": "It asks to replace a format and delete an endpoint. It is not: asks something the pack or the diff can answer."
+      },
+      {
+        "question": "intent",
+        "label": "nit",
+        "why": "It asks to replace a format and delete an endpoint. It is not: a small change nobody would block on."
+      },
+      {
+        "question": "intent",
+        "label": "disagreement",
+        "why": "It asks to replace a format and delete an endpoint. It is not: disputes the approach or the plan."
+      }
+    ],
+    "second": {
+      "label": {
+        "intent": {
+          "choice": "change_request"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

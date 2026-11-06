@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "fits_record.score",
+      "min": 0.5,
+      "max": 1.5
+    }
+  ],
+  "rubric": "Only the endpoint is planned; the button criterion has no step.",
+  "label": {
+    "fits_record": {
+      "score": 1
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "fits_record": "It misses part of the goal or adds unasked work"
+    },
+    "why": "The plan builds the file but no step adds the Export button the goal names, so it misses part of the goal.",
+    "second": {
+      "label": {
+        "fits_record": {
+          "score": 1
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -1,0 +1,329 @@
+{
+  "schema": 1,
+  "pack": "ci_failure_class",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T15:10:46.538Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 9,
+    "passed": 8,
+    "passRate": 0.8888888888888888,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 1756.111111111111,
+    "costUsd": 0.00331852,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 9,
+      "labelled": 8,
+      "acted": 8,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.006237499999999998,
+      "ece": 0.07374999999999987,
+      "meanConfidence": 0.9233333333333333,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "assertion-fails-and-the-base-moved-in-the-same-code",
+      "pass": false,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.confidence within 0..0.8",
+          "pass": false,
+          "detail": "found 0.9"
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1882,
+      "costUsd": 0.00038980000000000004,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "assertion-fails-on-changed-code",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"real\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2034,
+      "costUsd": 0.00026154,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "base-moved-merge-conflict",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"drift\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1493,
+      "costUsd": 0.00042374000000000003,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "log-says-it-is-a-flake-but-the-assertion-is-real",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"real\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2205,
+      "costUsd": 0.00059324,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "registry-times-out-on-install",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"infra\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1768,
+      "costUsd": 0.00026404,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "runner-lost-connection",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"infra\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1885,
+      "costUsd": 0.00025074,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "stale-lockfile-after-the-base-moved",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"drift\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1579,
+      "costUsd": 0.00026524,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "timing-test-fails-as-it-sometimes-does-on-the-base",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"flake\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1583,
+      "costUsd": 0.00045654,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "total-assertion-plain-log",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ci_failure_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "class.choice = \"real\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1376,
+      "costUsd": 0.00041364,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "class": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

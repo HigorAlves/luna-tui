@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { previewOn } from "../../test/policies.ts";
 
-import type { EngineId, StageOutput } from "@hardness/contracts";
+import { type DecisionRecord, type EngineId, PACKS, type StageOutput, resolveEngine } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -50,7 +51,7 @@ const credentials = (missing: EngineId[] = []): Credentials => ({
 });
 
 function appWith(body: StageOutput, opts: { missing?: EngineId[]; runs?: boolean; deps?: Partial<PackRunsDeps>; dailyUsd?: number } = {}) {
-  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true, budget: { dailyUsd: opts.dailyUsd ?? null } });
+  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, budget: { dailyUsd: opts.dailyUsd ?? null } });
   const runs = new PackRuns({
     image: "img", credentials: credentials(opts.missing), stateDir: mkdtempSync(join(tmpdir(), "runs-http-")), store: new PgPackRunStore(db), sandbox: sandboxOf(body), log: () => {},
     budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
@@ -73,6 +74,14 @@ describe("POST /runs", () => {
     expect(JSON.stringify(rows)).not.toMatch(/rollout|Approved/);
   });
 
+  it("keeps a decision record as a client's, whatever client name the request sends: the header never makes a call the machine's own", async () => {
+    const appended: DecisionRecord[] = [];
+    const retro = { kind: "retro", retro: { predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 640, removed: 90, retries: { verify: 2, e2e: 1, ci: 1, total: 5 }, escalations: 1, format: "captures", durationMin: 310 }, runs: 14 } };
+    const app = appWith(output({ answer: { worth: { value: true, p: 0.93 } } }), { deps: { decisions: { append: async (record) => void appended.push(record) } } });
+    for (const client of ["intake", "plan", "ship"]) expect((await post(app, { pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, client)).status).toBe(200);
+    expect(appended.map((r) => [r.client, r.origin])).toEqual([["intake", "client"], ["plan", "client"], ["ship", "client"]]);
+  });
+
   it("is 400 for a pack that runs in a task, eval_judge, an engine the pack does not allow, a context that does not fit, or a bad client name", async () => {
     const app = appWith(output());
     const cases: Array<[unknown, string]> = [
@@ -80,7 +89,7 @@ describe("POST /runs", () => {
       [{ pack: "eval_judge", context: {} }, "not_on_demand"],
       [{ pack: "chat_triage", engine: "claude:opus", context: { chat } }, "engine_not_allowed"],
       [{ pack: "chat_triage", context: { issue: { title: "t", description: "d" } } }, "invalid_request"],
-      [{ pack: "issue_classify", context: { issue: { title: "t" } } }, "invalid_request"],
+      [{ pack: "triage_signals", context: { issue: { title: "t" } } }, "invalid_request"],
       [{ pack: "nope", context: {} }, "invalid_request"],
     ];
     for (const [body, error] of cases) {
@@ -94,10 +103,23 @@ describe("POST /runs", () => {
 
   it("is 409 runtime_disabled for an engine on a runtime MACHINE_DISABLE_RUNTIMES turned off, without running", async () => {
     const credentials = gatedCredentials(fixedCredentials({}), [runtimeKillSwitch(["jev"])]);
-    const response = await post(appWith(output(), { deps: { credentials } }), { pack: "issue_classify", context: { issue: { title: "t", description: "d" } } });
+    const response = await post(appWith(output(), { deps: { credentials } }), { pack: "triage_signals", engine: "jev", context: { issue: { title: "t", description: "d" } } });
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "runtime_disabled", message: "jev: disabled by MACHINE_DISABLE_RUNTIMES" });
     expect(await db.query("select 1 from pack_runs")).toEqual([]);
+  });
+
+  it("runs a decision pack on its fallback when its default engine's runtime is off, and accepts the engine by name", async () => {
+    // The measured default moves when the pack is measured again: the test reads it instead of naming an engine.
+    const engines = PACKS.triage_signals.engines;
+    const credentials = gatedCredentials(fixedCredentials({}), [runtimeKillSwitch([resolveEngine(engines.default).runtime])]);
+    const issue = { title: "t", description: "d" };
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
+    const fell = await post(appWith(output({ answer: labels }), { deps: { credentials } }), { pack: "triage_signals", context: { issue } });
+    expect(fell.status).toBe(200);
+    expect(((await fell.json()) as { usage: { engine: string } }).usage.engine).toBe(engines.fallback![0]);
+    const named = await post(appWith(output({ answer: labels })), { pack: "triage_signals", engine: engines.fallback![0], context: { issue } });
+    expect(named.status).toBe(200);
   });
 
   it("is 409 budget for an engine at its monthly cap, without running", async () => {
@@ -106,7 +128,7 @@ describe("POST /runs", () => {
     const response = await post(appWith(output(), { deps: { credentials } }), { pack: "chat_triage", engine: "codex:luna", context: { chat } });
     expect(response.status).toBe(200);
     const over = gatedCredentials(fixedCredentials({}), [engineBudgetGate({ budgets: { "codex:luna": 0, jev: 2 }, spend: { engineSpendSinceUsd: async () => new Map([["jev", 2.5]]) } })]);
-    const refused = await post(appWith(output(), { deps: { credentials: over } }), { pack: "issue_classify", context: { issue: { title: "t", description: "d" } } });
+    const refused = await post(appWith(output(), { deps: { credentials: over } }), { pack: "triage_signals", engine: "jev", context: { issue: { title: "t", description: "d" } } });
     expect(refused.status).toBe(409);
     expect(await refused.json()).toEqual({ error: "budget", message: "jev: over its monthly budget ($2.50 of $2.00 on jev)" });
   });
@@ -139,7 +161,7 @@ describe("POST /runs", () => {
   });
 
   it("goes by the asked engine's own credential: with no Claude credential a codex:luna call runs and a claude one is 409; 503 only with MACHINE_AGENTS=off", async () => {
-    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     const config = { agents: true, runnerImage: "img", stateDir: mkdtempSync(join(tmpdir(), "runs-http-")) };
     const deps = { credentials: credentials(["claude:haiku", "claude:sonnet", "claude:opus"]), store: new PgPackRunStore(db), sandbox: sandboxOf(output()), log: () => {} };
     const app = createApp({ db, pipeline, bus: new Bus(), runs: buildPackRuns(config, deps) });

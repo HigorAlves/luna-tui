@@ -73,7 +73,7 @@ describe("createJiraTriager", () => {
     expect(logs).toEqual(["jira intake: PLAT-123 ready: clear (4 turn(s) · $0.0310)"]);
   });
 
-  it("passes issue_classify's first read in context.jira as a hint when intake has one, and leaves it out when not", async () => {
+  it("passes triage_signals's first read in context.jira as a hint when intake has one, and leaves it out when not", async () => {
     const classification = { kind: "bug", area: "board", ready: true, size: 1, confidence: 0.9, at: NOW.toISOString(), model: "typesafe-ai/jev" };
     const triager = createJiraTriager(deps(fakeSandbox(output())));
     await triager.triage(issue, "/r/a", classification);

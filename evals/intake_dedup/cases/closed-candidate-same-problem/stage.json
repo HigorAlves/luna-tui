@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "intake_dedup",
+  "pack": "intake_dedup",
+  "attempt": 1,
+  "task": {
+    "id": "closed-candidate-same-problem",
+    "title": "closed-candidate-same-problem",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "dedup": {
+      "title": "App crashes when I rotate the phone on the settings screen",
+      "text": "Every time I turn the phone sideways on Settings the app closes.",
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "closed",
+          "title": "Settings screen crashes on orientation change",
+          "summary": "A null reference after the rotation; fixed in the last release but reopened by one user."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

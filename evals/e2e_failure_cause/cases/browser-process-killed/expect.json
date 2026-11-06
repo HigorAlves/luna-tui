@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "cause.choice",
+      "value": "env_flake"
+    }
+  ],
+  "rubric": "The browser died before the scenario ran.",
+  "label": {
+    "cause": {
+      "choice": "env_flake"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "cause": "the target, the dev server, the browser or a tool failed; the scenario was never really tried"
+    },
+    "why": "The browser process was killed before the first step and the second row was never tried: a tool failed and the scenario was never really tried.",
+    "ruledOut": [
+      {
+        "question": "cause",
+        "label": "product_bug",
+        "why": "A tool failed before the scenario was tried. It is not: the app does not do what the scenario asks."
+      },
+      {
+        "question": "cause",
+        "label": "test_bug",
+        "why": "A tool failed before the scenario was tried. It is not: the scenario or the way it was driven is wrong; the app behaves as intended."
+      }
+    ],
+    "second": {
+      "label": {
+        "cause": {
+          "choice": "env_flake"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

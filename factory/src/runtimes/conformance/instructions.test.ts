@@ -36,6 +36,6 @@ describe("runtime instructions", () => {
   });
 
   it("Jev: nothing but the questions", () => {
-    expect(jev.instructions(PACKS.issue_classify, FACTORY_ROOT)).toEqual({ role: "", rules: "", skills: [] });
+    expect(jev.instructions(PACKS.triage_signals, FACTORY_ROOT)).toEqual({ role: "", rules: "", skills: [] });
   });
 });

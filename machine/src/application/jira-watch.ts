@@ -7,8 +7,9 @@
 // the `retryBlocked` hook (JiraSync.retry), which clears the mark when the move lands. Like
 // GitHubPulls it runs on a timer, never throws, and backs off a rate limit. It also warns, once
 // a day inside the last two weeks, that the token named by `MACHINE_JIRA_TOKEN_EXPIRES` is about to go.
-import type { JiraLink } from "@hardness/contracts";
+import { JiraLink, isTerminal } from "@hardness/contracts";
 
+import { canonicalTicketOf } from "../domain/ticket.ts";
 import { jiraOf } from "../domain/jira-link.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { type Jira, JiraAuthError, JiraError, messageOf } from "./jira.ts";
@@ -25,6 +26,8 @@ export interface JiraWatchOptions {
   /** Told about a task whose link changed in something the board shows. */
   publish?: (task: TaskRow) => void;
   /** Tries the declared transition a blocked link still waits for; JiraSync.retry in the machine. */
+  /** The ticket machine's events: each linked issue, as a canonical ticket, with its card. Never posts; a failure is a warning. */
+  tickets?: { handle(ticket: import("@hardness/contracts").CanonicalTicket, task: TaskRow): Promise<unknown> };
   retryBlocked?: (task: TaskRow) => Promise<void>;
   expiry?: TokenExpiry;
   now?: () => Date;
@@ -97,7 +100,7 @@ export class JiraWatch {
   private async poll(): Promise<void> {
     this.nextDelayMs = this.options.intervalMs;
     this.warnExpiry();
-    const tasks = (await this.options.pipeline.list()).filter((t) => t.state !== "closed" && jiraOf(t));
+    const tasks = (await this.options.pipeline.list()).filter((t) => !isTerminal(t.state) && jiraOf(t));
     if (tasks.length > 0 && this.timeZone === undefined) {
       try {
         this.timeZone = (await this.options.jira.me()).timeZone;
@@ -121,6 +124,7 @@ export class JiraWatch {
         const changed = next.status !== link.status || next.priority !== link.priority || next.dueAt !== link.dueAt || next.issueType !== link.issueType || timeZone !== (link.timeZone ?? null);
         let updated = await this.options.pipeline.setJira(task.id, next);
         if (changed || !task.jira) this.options.publish?.(updated);
+        await this.options.tickets?.handle(canonicalTicketOf({ tool: "jira", issue }), updated).catch((error: unknown) => this.warn(`jira watch: ticket events for ${link.key}: ${messageOf(error)}`));
         if (endedInJira(issue.status, issue.statusCategory) && !endedInJira(link.status, null) && next.status !== link.status) {
           await this.options.pipeline.record(task.id, "jira.moved", { status: issue.status, key: link.key });
         }

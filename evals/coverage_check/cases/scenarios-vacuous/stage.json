@@ -1,0 +1,56 @@
+{
+  "schema": 3,
+  "stage": "coverage_check",
+  "pack": "coverage_check",
+  "attempt": 1,
+  "task": {
+    "id": "coverage-check",
+    "title": "Add a CSV export button to the cart page.",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": null,
+      "brief": "",
+      "criteria": [
+        "Exports are fast",
+        "The file lists each line with its price"
+      ],
+      "assumptions": [],
+      "slices": [],
+      "cases": [
+        {
+          "title": "Looks fine",
+          "criterion": "Exports are fast",
+          "approach": "Open the app and check that it looks fast and fine.",
+          "id": "S1",
+          "criterion_ref": "C1",
+          "type": "happy"
+        },
+        {
+          "title": "Works",
+          "criterion": "The file lists each line with its price",
+          "approach": "Click Export and make sure it works.",
+          "id": "S2",
+          "criterion_ref": "C2",
+          "type": "happy"
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

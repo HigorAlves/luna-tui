@@ -1,0 +1,115 @@
+// What the ship monitor remembers between polls and across a machine restart: the last activity
+// it handled, the replies and fix rounds spent, and whether the Evidence Pack is already
+// published. A machine-written JSON file under `<stateDir>/tasks/<taskId>/`, so the task's state
+// sweep removes it with the task. A damaged file is read as no cursor: the monitor starts over.
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import { z } from "zod";
+
+/** The activity ids kept; older ones fall off, and `since` keeps them from coming back. */
+export const SEEN_CAP = 500;
+
+const ShipCursorSchema = z.object({
+  schema: z.literal(1),
+  pr: z.object({ slug: z.string(), number: z.number().int() }),
+  since: z.string().nullable(),
+  seen: z.array(z.string()),
+  threads: z.record(z.string(), z.object({ replies: z.number().int(), lastAt: z.string(), fixRounds: z.number().int().optional() })),
+  fixRounds: z.number().int(),
+  ciReruns: z.number().int(),
+  rebases: z.number().int(),
+  published: z.object({ sha: z.string() }).nullable(),
+  /** When the monitor first started on this PR, for the longest wait. */
+  startedAt: z.string().optional(),
+  /** The machine asked GitHub to merge (or queued the PR): a merge seen later is its own. */
+  mergeRequested: z.boolean().optional(),
+  /** The PR sits in the repo's merge queue: the monitor does not ask to merge it again. */
+  queued: z.boolean().optional(),
+  /** The checks left failure since the last red was handled: the same run id coming back red is a new red (GitHub keeps the run id across a re-run). */
+  ciCycled: z.boolean().optional(),
+  /** The red CI the loop last handled (`<head>:<run ids>`): the same red is not asked about twice. */
+  ciKey: z.string().optional(),
+  /** Decisions awaiting the PR's outcome (RFC 0005 wave 7): what was asked, the record, and what has happened since. */
+  decisions: z
+    .array(z.object({ pack: z.enum(["event_class", "comment_intent", "fix_scope"]), recordId: z.string(), choice: z.string(), threadId: z.string().optional(), further: z.boolean().optional() }))
+    .optional(),
+  /** The evidence_valid answer that sent Evidence to run again, and the scenario results (by id) the pack had: the re-made pack is compared with them when it lands. */
+  validity: z.object({ recordId: z.string(), before: z.record(z.string(), z.string()) }).optional(),
+  /** Threads the machine itself resolved in a fix round: its own resolution says nothing about what the reviewer meant. */
+  resolvedByMachine: z.array(z.string()).optional(),
+  /** The blockers last noted, so a poll that finds the same ones says nothing. */
+  lastBlockers: z.string().optional(),
+  /** GitHub itself answered `reviewDecision: REVIEW_REQUIRED` for this PR at some poll: a review is required here (kept as evidence the rule reader may not see), with the base branch it was seen on: it is forgotten when the PR's base changes. An old cursor holds the bare flag, read as seen on the current base. */
+  reviewRequiredSeen: z.union([z.boolean(), z.object({ base: z.string() })]).optional(),
+  /** The classes facts decided at the last poll (`conflict`, `base_moved`, `freeze`, `blocked_by_other_pr`): one `ship.event` per change. */
+  lastEvents: z.array(z.string()).optional(),
+  /** Comments read by the `pr_reply` read step on this PR (at most `MAX_PR_READS`). */
+  reads: z.number().int().optional(),
+  /** The fixes pushed: the commit, the scope, a line, and the scenarios the fix may have changed. */
+  fixes: z.array(z.object({ sha: z.string(), scope: z.enum(["in_place", "re_verify_partial"]), summary: z.string(), affected: z.array(z.object({ id: z.string(), text: z.string(), result: z.string() })) })).optional(),
+  /** The last thing that happened on the PR (a new activity item, a new head, a change of the checks' state, a fix): the quiet clock counts from it. Set when the watch starts. */
+  lastActivityAt: z.string().optional(),
+  /** What `lastActivityAt` was last compared with (head, checks, fixes, last activity id): a poll that finds it changed is activity. */
+  activitySig: z.string().optional(),
+  /** When this quiet period was reminded and escalated; both are cleared by activity. */
+  remindedAt: z.string().nullable().optional(),
+  escalatedAt: z.string().nullable().optional(),
+  /** The head that was re-verified for staleness, and when: the stale clock counts from `at` for that head. */
+  reverified: z.object({ sha: z.string(), at: z.string() }).optional(),
+  /** sha256 of the Evidence section as the machine last published it: a different section in the PR body is a person's edit. */
+  publishedSection: z.string().optional(),
+  /** The last poll's readiness, for the board (`shipViewOf`): the checklist, the merge rule's answer, the review rule. Facts and fixed words; the details are flattened when the view is built. */
+  view: z
+    .object({
+      head: z.string().nullable(),
+      ready: z.boolean(),
+      checklist: z.array(z.object({ id: z.string(), ok: z.boolean(), detail: z.string() })),
+      canAutoMerge: z.boolean(),
+      reason: z.string(),
+      reviewRequired: z.boolean().nullable(),
+      reviewBy: z.string().nullable(),
+      at: z.string(),
+    })
+    .optional(),
+  /** The last event class the watch logged (an enum value) and when. */
+  lastEvent: z.object({ class: z.string(), at: z.string() }).optional(),
+  /** How many times the branch was rebased onto a parent that changed (at most `STACK_REBASES_MAX`, then a person). */
+  stackRebases: z.number().int().optional(),
+  /** The head at which the card left its stack, and when: approvals given at or before `at`, and an Evidence Pack made then, do not count for this card. */
+  unstacked: z.object({ head: z.string(), at: z.string() }).optional(),
+  /** The parent state a person was last asked about (`gone`): the same state is not asked twice. */
+  stackGone: z.string().optional(),
+  /** `ship.ready` was logged: readiness is announced the first time it is true. */
+  readyNoted: z.boolean().optional(),
+});
+export type ShipCursor = z.infer<typeof ShipCursorSchema>;
+
+export function emptyCursor(pr: { slug: string; number: number }): ShipCursor {
+  return { schema: 1, pr, since: null, seen: [], threads: {}, fixRounds: 0, ciReruns: 0, rebases: 0, published: null };
+}
+
+const fileOf = (stateDir: string, taskId: string) => join(stateDir, "tasks", taskId, "ship.json");
+
+export async function loadCursor(stateDir: string, taskId: string): Promise<ShipCursor | null> {
+  let text: string;
+  try {
+    text = await readFile(fileOf(stateDir, taskId), "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = ShipCursorSchema.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCursor(stateDir: string, taskId: string, cursor: ShipCursor): Promise<void> {
+  const file = fileOf(stateDir, taskId);
+  await mkdir(join(stateDir, "tasks", taskId), { recursive: true });
+  const tmp = `${file}.tmp`;
+  await writeFile(tmp, JSON.stringify({ ...cursor, seen: cursor.seen.slice(-SEEN_CAP) }));
+  await rename(tmp, file);
+}

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "validity.choice",
+      "value": "refresh_media"
+    }
+  ],
+  "rubric": "The label and position of the button changed: what is on screen differs from the screenshots.",
+  "label": {
+    "validity": {
+      "choice": "refresh_media"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "validity": "a scenario's outcome or what is on screen changed"
+    },
+    "why": "The button label and position changed, so what is on screen differs from the screenshots.",
+    "ruledOut": [
+      {
+        "question": "validity",
+        "label": "valid",
+        "why": "What is on screen changed. It is not: nothing a scenario shows changed."
+      },
+      {
+        "question": "validity",
+        "label": "refresh_text",
+        "why": "What is on screen changed. It is not: the summary, the findings or how to verify changed."
+      }
+    ],
+    "second": {
+      "label": {
+        "validity": {
+          "choice": "refresh_media"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

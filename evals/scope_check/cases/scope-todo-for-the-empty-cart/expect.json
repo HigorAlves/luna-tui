@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "no_todo.value",
+      "value": false
+    }
+  ],
+  "rubric": "A TODO standing in for work the slice should have done.",
+  "label": {
+    "no_todo": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "no_todo": "Does the change leave no TODO, FIXME or XXX that stands in for work the slice should have done? The added ones are listed."
+    },
+    "why": "The slice is the export, and the empty-cart case belongs to it: the added TODO stands in for work that should have been done.",
+    "second": {
+      "label": {
+        "no_todo": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

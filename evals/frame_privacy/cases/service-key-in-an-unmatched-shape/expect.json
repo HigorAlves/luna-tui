@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "exposure.choice",
+      "value": "credential"
+    }
+  ],
+  "rubric": "A key shown in full in a shape the redactors do not match.",
+  "label": {
+    "exposure": {
+      "choice": "credential"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "exposure": "a password, an API key, a token or a connection string shown in full"
+    },
+    "why": "A service key shown in full beside Copy and Rotate is a credential, however its shape is written.",
+    "ruledOut": [
+      {
+        "question": "exposure",
+        "label": "none",
+        "why": "A key is shown in full. It is not: nothing sensitive: ordinary interface text, and synthetic or placeholder data (names like Jane Doe, addresses at example.com, obviously fake numbers)."
+      },
+      {
+        "question": "exposure",
+        "label": "personal_data",
+        "why": "A key is shown in full. It is not: a real person's name together with contact, address, identity or payment details; synthetic or placeholder data is none."
+      }
+    ],
+    "second": {
+      "label": {
+        "exposure": {
+          "choice": "credential"
+        }
+      },
+      "agrees": true
+    },
+    "note": "The key is written as svc-key- and hex, a shape neither the redactors nor the token-shape test in the cases match, so the case can be committed; it is a made-up value."
+  }
+}

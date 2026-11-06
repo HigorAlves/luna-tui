@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_classify",
+  "pack": "finding_classify",
+  "attempt": 1,
+  "task": {
+    "id": "finding-classify",
+    "title": "Finding: Rename tmp to rows",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/export.ts",
+        "line": 8,
+        "severity": "blocker",
+        "title": "Rename tmp to rows",
+        "body": "`tmp` is vague; `rows` would read better.",
+        "confidence": 0.8
+      },
+      "excerpt": "6  const header = ['item', 'price'];\n7  const tmp = lines.map(toRow);\n8  return [header, ...tmp].join('\\n');"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -49,6 +49,13 @@ export interface PullRequest {
   /** The PR task in flight for this PR, if any. */
   task: { id: string; state: string; route: PrAction } | null;
   updatedAt: string;
+  /** The head commit and its date; null from sources that do not say (older fixtures). */
+  headSha: string | null;
+  headCommittedAt: string | null;
+  /** The GraphQL node id, for the merge queue. */
+  nodeId: string | null;
+  /** The PR's description; Ship reads `Depends on #N` from it. */
+  body: string | null;
 }
 
 /** `GET /github/prs` and the `github.prs` stream event. */

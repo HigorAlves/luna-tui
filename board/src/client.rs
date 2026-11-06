@@ -18,6 +18,8 @@ use ureq::{
     typestate::AgentScope,
 };
 
+use crate::backlog::BacklogEntry;
+use crate::tickets::{TicketEntry, encode_key};
 use crate::model::{
     EngineCatalog, EngineInfo, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
     StreamMessage, Task, TaskDetail, TaskDiff, TestCase, TicketText,
@@ -126,6 +128,10 @@ impl Machine {
             .map_err(|e| (String::new(), format!("unexpected reply from the machine: {e}")))?;
         if status >= 400 {
             let code = body["error"].as_str().unwrap_or_default().to_string();
+            // A 409 `not_schedulable` names what the item waits for: the message carries it.
+            if body["blockedBy"].is_array() {
+                return Err((code, crate::backlog::refusal_text(&body)));
+            }
             return Err((code, body["message"].as_str().unwrap_or("request failed").to_string()));
         }
         Ok(body)
@@ -216,6 +222,12 @@ impl Machine {
         Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/plan"))).send_json(body))
     }
 
+    /// Corrects the Triage Record at a gate: `(key, value)` pairs from `RECORD_FIELDS`, enum values only.
+    pub fn edit_record(&self, id: &str, changes: &[(String, String)]) -> Result<Task, String> {
+        let body: serde_json::Map<String, Value> = changes.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+        Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/record"))).send_json(Value::Object(body)))
+    }
+
     /// Replaces test_design's cases while they wait for your check.
     pub fn edit_cases(&self, id: &str, cases: &[TestCase]) -> Result<Task, String> {
         let cases: Vec<Value> = cases
@@ -234,6 +246,16 @@ impl Machine {
     }
 
     /// `GET /engines`: each engine's credential, and this month's spend against its cap.
+    /// Each repository's image and graph health; a machine from before them answers 404.
+    pub fn repo_health(&self) -> Result<Vec<crate::model::RepoHealth>, String> {
+        Self::typed(self.agent.get(self.url("/repos")).call())
+    }
+
+    /// Approves the exact base the repository's luna.yaml names now; the machine refuses any other reference.
+    pub fn approve_base(&self, repo: &str, base: &str) -> Result<(), String> {
+        Self::json(self.agent.post(self.url("/repos/base/approve")).send_json(json!({ "repo": repo, "base": base }))).map(|_| ())
+    }
+
     pub fn engines(&self) -> Result<Vec<EngineInfo>, String> {
         Self::typed(self.agent.get(self.url("/engines")).call())
     }
@@ -262,13 +284,24 @@ impl Machine {
         self.post("/repos/setup", json!({ "repoPath": repo_path }))
     }
 
-    /// Approves (or sends back) whatever the task waits on, with an optional reason.
+    /// Approves (or sends back) whatever the task waits on, with an optional reason, as
+    /// `LUNA_APPROVER` when it is set: a plan of High risk needs two distinct names.
     pub fn decide(&self, id: &str, approve: bool, reason: Option<&str>) -> Result<Task, String> {
-        let decision = if approve { "approved" } else { "sent_back" };
-        self.post(
-            &format!("/tasks/{id}/decision"),
-            json!({ "decision": decision, "reason": reason }),
-        )
+        self.post(&format!("/tasks/{id}/decision"), decision_body(approve, reason, approver().as_deref()))
+    }
+
+    /// Keeps a split card as one card: the split gate approved with `keepWhole`, recorded with the approver's name. Only a split gate takes it.
+    pub fn keep_whole(&self, id: &str) -> Result<Task, String> {
+        let mut body = json!({ "decision": "approved", "keepWhole": true });
+        if let Some(name) = approver() {
+            body["approver"] = json!(name);
+        }
+        self.post(&format!("/tasks/{id}/decision"), body)
+    }
+
+    /// Rejects the plan the task waits on: the card ends archived as rejected and the comment is kept. Only the plan gate takes it.
+    pub fn reject(&self, id: &str, comment: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/decision"), reject_body(comment, approver().as_deref()))
     }
 
     /// Approves the memory review without writing its proposed rules to project-context.md.
@@ -291,6 +324,36 @@ impl Machine {
         self.post(&format!("/tasks/{id}/abort"), json!({}))
     }
 
+    /// Posts triage's open questions where the ticket came from (the machine does it once; asking again posts nothing new).
+    pub fn post_questions(&self, id: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/questions/post"), json!({}))
+    }
+
+    /// Ends the ticket as archived, with one of `ARCHIVE_REASONS`.
+    pub fn archive(&self, id: &str, reason: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/archive"), json!({ "reason": reason }))
+    }
+
+    /// Says whether the card's Evidence Pack was useful (`y` / `n`), with a short note for a no. The machine keeps it as ground truth; it labels no decision.
+    pub fn evidence_feedback(&self, id: &str, useful: bool, note: Option<&str>) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/evidence/feedback"), evidence_feedback_body(useful, note))
+    }
+
+    /// Dismisses a finding the last Verify reported (the card waits at the ship gate, or its PR is watched); the reason is kept as ground truth, out of the stream.
+    pub fn dismiss_finding(&self, id: &str, finding: &str, reason: Option<&str>) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/findings/{}/dismiss", path_segment(finding)), dismiss_body(reason))
+    }
+
+    /// Adds a finding Verify missed, with a severity (`blocker`, `should_fix`, `nit`) and a title.
+    pub fn add_finding(&self, id: &str, severity: &str, title: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/findings"), json!({ "severity": severity, "title": title }))
+    }
+
+    /// Corrects the reason an escalation was decided with, to one of `ESCALATION_REASONS`; the card stays where it is.
+    pub fn correct_escalation_reason(&self, id: &str, reason: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/escalation-reason"), json!({ "reason": reason }))
+    }
+
     pub fn resume(&self, id: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/resume"), json!({}))
     }
@@ -298,6 +361,46 @@ impl Machine {
     /// Removes the task's worktree from disk; the task and its branch stay.
     pub fn remove_worktree(&self, id: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/worktree/remove"), json!({}))
+    }
+
+    /// The ranked backlog.
+    pub fn backlog(&self) -> Result<Vec<BacklogEntry>, String> {
+        Self::typed(self.agent.get(self.url("/backlog")).call())
+    }
+
+    /// The tickets the ticket machine holds, with their drafts.
+    pub fn tickets(&self) -> Result<Vec<TicketEntry>, String> {
+        Self::typed(self.agent.get(self.url("/tickets")).call())
+    }
+
+    /// A tap on a ticket: `approve`, `edit`, `ignore`, `card` or `backlog`; `body` carries the draft id and hash (and the text for an edit).
+    pub fn ticket_act(&self, key: &str, action: &str, body: Value) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&format!("/tickets/{}/{action}", encode_key(key)))).send_json(body)).map(|_| ())
+    }
+
+    /// `bump`, `promote` or `decline` on a backlog item.
+    pub fn backlog_act(&self, id: &str, action: &str) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&format!("/backlog/{id}/{action}"))).send_json(json!({}))).map(|_| ())
+    }
+
+    /// A person's answer at Intake's dedup gate: `choice` is `duplicate`, `related` or `neither`, `of` ids the gate listed.
+    pub fn answer_dedup(&self, id: &str, choice: &str, of: &[String]) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/dedup"), json!({ "choice": choice, "of": of }))
+    }
+
+    /// The task is a duplicate of `into`: it closes, merged into it.
+    pub fn merge_into(&self, id: &str, into: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/merge"), json!({ "into": into }))
+    }
+
+    /// Undoes a merge: the duplicate comes back as a new card (the answer).
+    pub fn unmerge(&self, id: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/unmerge"), json!({}))
+    }
+
+    /// What a person gives Intake's context gate: a repository, a project or more text; the card is checked again.
+    pub fn give_context(&self, id: &str, given: Value) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/context"), given)
     }
 
     /// The PR inbox as the machine last polled it.
@@ -348,8 +451,15 @@ impl Machine {
 
     /// Posts `text` as you, in the item's thread (or channel). Nothing is added to it.
     /// Posts `text` in the item's thread as you; `nudge` has the machine prefix a mention of the item's author.
-    pub fn slack_reply(&self, id: &str, text: &str, nudge: bool) -> Result<(), String> {
-        Self::json(self.agent.post(self.url(&slack_item_path(id, "/reply"))).send_json(json!({ "text": text, "nudge": nudge }))).map(|_| ())
+    /// `draft` is the id and hash of the waiting draft you were shown: with them the machine settles that draft, without them it only posts.
+    pub fn slack_reply(&self, id: &str, text: &str, nudge: bool, draft: Option<(&str, &str)>) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&slack_item_path(id, "/reply"))).send_json(slack_reply_body(text, nudge, draft))).map(|_| ())
+    }
+
+    /// What you say a thread is about: a stored answer (and a truth record), never a post. `target` is an id of the item's stored shortlist.
+    pub fn slack_relation(&self, id: &str, relation: &str, target: Option<&str>) -> Result<crate::model::SlackItem, String> {
+        let value = Self::json(self.agent.post(self.url(&slack_item_path(id, "/relation"))).send_json(json!({ "relation": relation, "target": target })))?;
+        serde_json::from_value(value).map_err(|e| e.to_string())
     }
 
     /// A Backlog ticket from the item; `repo_path` None leaves the repo to set later.
@@ -421,6 +531,16 @@ impl Machine {
 }
 
 /// `/slack/items/<id><verb>`; the id carries `:` and `.`, so it travels percent-encoded.
+/// The body of a Slack reply: the text, the nudge flag and, for a draft's tap, the draft's id and hash.
+fn slack_reply_body(text: &str, nudge: bool, draft: Option<(&str, &str)>) -> Value {
+    let mut body = json!({ "text": text, "nudge": nudge });
+    if let Some((id, hash)) = draft {
+        body["draftId"] = json!(id);
+        body["draftHash"] = json!(hash);
+    }
+    body
+}
+
 fn slack_item_path(id: &str, verb: &str) -> String {
     format!("/slack/items/{}{verb}", urlencoding(id))
 }
@@ -516,7 +636,7 @@ fn spawn_stream(shared: Arc<RwLock<String>>, candidates: Vec<String>, token: Opt
 /// snapshot does not say which window it covers. Unknown event types are never an error.
 fn parse_stream_event(event: &str, data: &str) -> Option<StreamMessage> {
     match event {
-        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" | "github.prs" | "slack.items" => {
+        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" | "github.prs" | "slack.items" | "task.shipped" => {
             serde_json::from_str(data).ok()
         }
         _ => None,
@@ -561,9 +681,79 @@ fn urlencoding(value: &str) -> String {
     out
 }
 
+/// Who is deciding: `LUNA_APPROVER`, when it names someone.
+fn approver() -> Option<String> {
+    std::env::var("LUNA_APPROVER").ok().map(|name| name.trim().to_string()).filter(|name| !name.is_empty())
+}
+
+/// The body of `POST /tasks/:id/decision`; the approver rides along only when there is one.
+fn decision_body(approve: bool, reason: Option<&str>, approver: Option<&str>) -> Value {
+    let mut body = json!({ "decision": if approve { "approved" } else { "sent_back" }, "reason": reason });
+    if let Some(name) = approver {
+        body["approver"] = json!(name);
+    }
+    body
+}
+
+/// The body of an Evidence feedback: the fixed value, and the note only when there is one (trimmed, at most 500 characters, as the machine allows).
+/// One path segment, percent-encoded: a finding id is the machine's, but a typed one is not trusted to keep a `/` or a `?` out of the URL.
+fn path_segment(text: &str) -> String {
+    text.bytes().map(|b| if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.') { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+fn dismiss_body(reason: Option<&str>) -> Value {
+    match reason {
+        Some(r) if !r.trim().is_empty() => json!({ "reason": r.trim() }),
+        _ => json!({}),
+    }
+}
+
+fn evidence_feedback_body(useful: bool, note: Option<&str>) -> Value {
+    let mut body = json!({ "useful": useful });
+    if let Some(text) = note.map(str::trim).filter(|t| !t.is_empty()) {
+        body["note"] = json!(text.chars().take(500).collect::<String>());
+    }
+    body
+}
+
+/// The body of a rejection: `rejected` with its comment (the machine reads it as the reason), and the approver when there is one.
+fn reject_body(comment: &str, approver: Option<&str>) -> Value {
+    let mut body = json!({ "decision": "rejected", "reason": comment });
+    if let Some(name) = approver {
+        body["approver"] = json!(name);
+    }
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reply_carries_the_draft_id_and_hash_only_when_it_was_opened_on_a_draft() {
+        assert_eq!(slack_reply_body("hi", false, Some(("d1", "abc"))), json!({ "text": "hi", "nudge": false, "draftId": "d1", "draftHash": "abc" }));
+        assert_eq!(slack_reply_body("hi", true, None), json!({ "text": "hi", "nudge": true }));
+    }
+
+    #[test]
+    fn a_decision_names_its_approver_when_there_is_one_and_stays_as_it_was_when_not() {
+        assert_eq!(decision_body(true, None, None), json!({ "decision": "approved", "reason": null }));
+        assert_eq!(decision_body(false, Some("split it"), Some("ana")), json!({ "decision": "sent_back", "reason": "split it", "approver": "ana" }));
+    }
+
+    #[test]
+    fn the_feedback_body_is_the_fixed_value_and_a_note_only_when_there_is_one() {
+        assert_eq!(evidence_feedback_body(true, None), json!({ "useful": true }));
+        assert_eq!(evidence_feedback_body(false, Some("too long")), json!({ "useful": false, "note": "too long" }));
+        assert_eq!(evidence_feedback_body(false, Some("  ")), json!({ "useful": false }));
+        assert_eq!(evidence_feedback_body(false, Some(&"x".repeat(900)))["note"].as_str().unwrap().chars().count(), 500);
+    }
+
+    #[test]
+    fn a_rejection_is_the_rejected_decision_with_its_comment_and_the_approver_when_there_is_one() {
+        assert_eq!(reject_body("not now", None), json!({ "decision": "rejected", "reason": "not now" }));
+        assert_eq!(reject_body("not now", Some("ana")), json!({ "decision": "rejected", "reason": "not now", "approver": "ana" }));
+    }
 
     #[test]
     fn metrics_stream_events_are_ignored_not_errors() {
@@ -585,6 +775,18 @@ mod tests {
         ));
         let closed = parse_stream_event("task.closed", r#"{"type":"task.closed","id":"t1"}"#);
         assert!(matches!(closed, Some(StreamMessage::Closed { ref id }) if id == "t1"));
+    }
+
+    #[test]
+    fn task_shipped_is_parsed_with_what_shipped() {
+        let shipped = parse_stream_event(
+            "task.shipped",
+            r##"{"type":"task.shipped","shipped":{"id":"t1","title":"Export CSV","prUrl":"https://github.com/o/a/pull/7","number":7,"mergedSha":"9c1f0e2a","format":"video","howToVerify":null,"media":[{"kind":"video","label":"Walkthrough","url":"https://x/w.mp4"}],"at":"2026-11-04T12:00:00.000Z"}}"##,
+        );
+        assert!(matches!(
+            shipped,
+            Some(StreamMessage::TaskShipped { ref shipped }) if shipped.number == 7 && shipped.title == "Export CSV" && shipped.how_to_verify.is_none()
+        ));
     }
 
     #[test]
@@ -677,5 +879,50 @@ mod pr_tests {
         assert!(matches!(event, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.len() == 3 && snapshot.socket == "connected"));
         let bare = parse_stream_event("slack.items", r#"{"type":"slack.items","snapshot":{"items":[],"watches":[],"me":null,"polledAt":null,"error":null,"socket":"off"}}"#);
         assert!(matches!(bare, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.is_empty()));
+    }
+
+    #[test]
+    fn a_finding_id_travels_as_one_encoded_path_segment() {
+        assert_eq!(path_segment("f-3_a.b"), "f-3_a.b");
+        assert_eq!(path_segment("a/b?c d"), "a%2Fb%3Fc%20d");
+        assert_eq!(dismiss_body(None), json!({}));
+        assert_eq!(dismiss_body(Some(" no ")), json!({"reason":"no"}));
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+    };
+
+    use super::*;
+
+    #[test]
+    fn promoting_a_blocked_item_returns_the_machine_s_refusal_with_what_blocks_it() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let json = r#"{"error":"not_schedulable","message":"this item waits for 1 dependency that is not there yet","blockedBy":[{"id":"c1","kind":"card","state":"unreadable"}]}"#;
+                let _ = reader.into_inner().write_all(format!("HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{json}", json.len()).as_bytes());
+            }
+        });
+        let error = Machine::at(&format!("http://{addr}")).backlog_act("item-1", "promote").unwrap_err();
+        assert_eq!(error, "this item waits for 1 dependency that is not there yet: c1 (unreadable)");
     }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# integrations.sh - Jira, the Slack inbox and the machine's own settings, written to the root .env
+# integrations.sh - Jira, the Slack inbox, Laminar and the machine's own settings, written to the root .env
 # (0600), which compose reads for `pnpm start`; machine/.env links to it for `pnpm dev`. Each
 # answer left empty keeps what is there, and each set of keys is tried against its service.
 set -euo pipefail
@@ -60,6 +60,28 @@ slack() {
   info "Then press S on the board, and W to add the handles and channels addressed to you."
 }
 
+laminar() {
+  ui_section "Laminar (local traces and evals)"
+  info "Laminar runs beside the machine: docker compose --profile observe up -d, then http://localhost:5667."
+  info "Create a project there and paste its API key; the machine and pnpm eval read it from $CONFIG_DIR/lmnr-project-api-key."
+  if cred_present lmnr-project-api-key && ! ui_confirm "Laminar key found. Replace it?"; then success "Laminar keeps its key"; return 0; fi
+  local value
+  value=$(ui_secret "Laminar project API key")
+  [ -n "$value" ] || { warn "Nothing pasted; Laminar left as it was."; return 0; }
+  cred_write lmnr-project-api-key "$value" && success "Saved $CONFIG_DIR/lmnr-project-api-key"
+  info "metadata: one span per run from the machine (pack, engine, model, turns, cost, outcome); the key stays on the host."
+  info "full: also the transcript, and the stage container gets the key and continues the trace (every model turn and tool call, prompts included)."
+  case "$(ui_choose "What should each run report?" "metadata (recommended)" "full")" in
+    full) env_set MACHINE_TRACES full ;;
+    *) env_set MACHINE_TRACES metadata ;;
+  esac
+  # Laminar's own secrets, once, instead of the published defaults in compose.yaml.
+  [ -n "$(env_get LMNR_AEAD_SECRET_KEY)" ] || env_set LMNR_AEAD_SECRET_KEY "$(openssl rand -hex 32)"
+  [ -n "$(env_get LMNR_SHARED_SECRET_TOKEN)" ] || env_set LMNR_SHARED_SECRET_TOKEN "$(openssl rand -hex 24)"
+  [ -n "$(env_get LMNR_NEXTAUTH_SECRET)" ] || env_set LMNR_NEXTAUTH_SECRET "$(openssl rand -hex 24)"
+  success "Laminar's compose secrets are in $ENV_FILE"
+}
+
 machine_settings() {
   ui_section "Machine settings"
   keep_or_set LUNA_REPOS_DIR "Where your repos live (mounted into the machine; worktrees go under it)" "$HOME/Developer"
@@ -69,9 +91,10 @@ machine_settings() {
 }
 
 ui_header "Integrations" "Written to $ENV_FILE (0600). Empty answers keep what is there."
-picked=$(ui_choose_many "What should the machine connect to?" "" "Jira" "Slack inbox" "Machine settings")
+picked=$(ui_choose_many "What should the machine connect to?" "" "Jira" "Slack inbox" "Laminar" "Machine settings")
 grep -qx "Jira" <<<"$picked" && jira
 grep -qx "Slack inbox" <<<"$picked" && slack
+grep -qx "Laminar" <<<"$picked" && laminar
 grep -qx "Machine settings" <<<"$picked" && machine_settings
 [ -z "$picked" ] && info "Nothing picked; run make integrations any time."
 

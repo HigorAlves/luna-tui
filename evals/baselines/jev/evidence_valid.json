@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "evidence_valid",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T15:29:22.247Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 485.5,
+    "costUsd": 0.00015406,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 4,
+      "accuracy": 0.7142857142857143,
+      "actedOnAccuracy": 1,
+      "coverage": 0.5,
+      "brier": 0.07588571428571426,
+      "ece": 0.1314285714285714,
+      "meanConfidence": 0.595,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "button-label-changed",
+      "pass": false,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"refresh_media\"",
+          "pass": false,
+          "detail": "found \"refresh_text\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 650,
+      "costUsd": 0.00001915,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": false,
+            "confidence": 0.2,
+            "verdict": "ask"
+          }
+        },
+        "correct": false,
+        "confidence": 0.2,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "comment-only-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"valid\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 398,
+      "costUsd": 0.00001869,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "empty-cart-outcome-flipped",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"refresh_media\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 430,
+      "costUsd": 0.00001903,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.91,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "extracted-a-helper",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"valid\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 588,
+      "costUsd": 0.00001919,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.94,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "how-to-verify-moved",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"refresh_text\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 449,
+      "costUsd": 0.00001974,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.91,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "summary-wording-and-howto",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 537,
+      "costUsd": 0.00001903,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.5,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "thread-says-valid-but-ui-changes",
+      "pass": false,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"refresh_media\"",
+          "pass": false,
+          "detail": "found \"valid\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 425,
+      "costUsd": 0.00001957,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": false,
+            "confidence": 0.09,
+            "verdict": "ask"
+          }
+        },
+        "correct": false,
+        "confidence": 0.09,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "totals-row-changed-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"refresh_media\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 407,
+      "costUsd": 0.00001966,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.33,
+            "verdict": "ask"
+          }
+        },
+        "correct": true,
+        "confidence": 0.33,
+        "verdict": "ask"
+      }
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "schema": 3,
+  "stage": "evidence_format",
+  "pack": "evidence_format",
+  "attempt": 1,
+  "task": {
+    "id": "evidence-format",
+    "title": "Evidence format: Show the new export button",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "evidence": {
+      "record": {
+        "source": "example-tracker:EX-1",
+        "kind": "feature",
+        "goal": "Show the new export button",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "low",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "risk": "low",
+      "webSurface": true,
+      "e2e": {
+        "ran": true,
+        "verdict": "pass",
+        "hasVideo": false,
+        "hasSteps": true,
+        "scenarios": 3,
+        "skippedReason": null
+      },
+      "videoImage": false,
+      "changed": [
+        "src/cart/CartPage.tsx"
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -61,6 +61,17 @@ describe("settle", () => {
   });
 });
 
+describe("finish: tokens", () => {
+  it("writes the runtime's own token count, and null when the runtime could not count", () => {
+    const dir = outDir();
+    finish(dir, PACKS.implementing, { ...EMPTY_RUN, ok: true, structured: { kind: "done", summary: "s" }, tokens: { input: 1200, output: 340, cached: 9000 } }, state({}));
+    expect(read(dir, "result.json")).toMatchObject({ usage: { tokens: { input: 1200, output: 340, cached: 9000 } } });
+    const none = outDir();
+    finish(none, PACKS.implementing, { ...EMPTY_RUN, ok: true, structured: { kind: "done", summary: "s" } }, state({}));
+    expect(read(none, "result.json")).toMatchObject({ usage: { tokens: null } });
+  });
+});
+
 describe("finish", () => {
   it("writes a schema-3 result the machine's contract accepts, with the ledger and the session", () => {
     const dir = outDir();
@@ -94,6 +105,21 @@ describe("finish", () => {
     const result = finish(dir, PACKS.triage, { ...EMPTY_RUN, ok: false, error: "boom", rateLimited: true, resetsAt: 1700000000 }, state());
     expect(result).toMatchObject({ ok: false, outcome: "fail", error: "boom", rateLimited: true, resetsAt: 1700000000, summary: "" });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
+  });
+});
+
+describe("scanArtifacts media", () => {
+  it("maps narration audio to audio and caption files to captions", () => {
+    const dir = outDir();
+    mkdirSync(join(dir, "files", "video"), { recursive: true });
+    for (const name of ["voice.wav", "voice.mp3", "walkthrough.srt", "walkthrough.vtt", "meta.json"]) writeFileSync(join(dir, "files", "video", name), "x");
+    expect(scanArtifacts(dir).map((a) => [a.kind, a.label])).toEqual([
+      ["report", "meta.json"],
+      ["audio", "voice.mp3"],
+      ["audio", "voice.wav"],
+      ["captions", "walkthrough.srt"],
+      ["captions", "walkthrough.vtt"],
+    ]);
   });
 });
 

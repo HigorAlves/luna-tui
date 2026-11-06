@@ -3,7 +3,8 @@
 import type { TaskDiff, TaskDiffFile } from "@hardness/contracts";
 
 import type { ExecResult } from "../process/exec.ts";
-import { HOST_GIT } from "./worktree.ts";
+import { at } from "./machine-repo.ts";
+import { BASE_REF, HOST_GIT } from "./worktree.ts";
 
 export type GitExec = (command: string, args: string[]) => Promise<ExecResult>;
 
@@ -61,14 +62,20 @@ function parseNameStatus(text: string): Array<{ path: string; status: TaskDiffFi
 
 /** The ref the branch is diffed against: origin's default branch, else `main`, else the repo's own HEAD. */
 async function baseRef(exec: GitExec, worktreePath: string, repoPath: string | null): Promise<string | null> {
-  const git = (cwd: string, ...args: string[]) => exec("git", [...HOST_GIT, "-C", cwd, ...args]);
-  const origin = await git(worktreePath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD");
+  const work = (...args: string[]) => exec("git", [...HOST_GIT, ...at(worktreePath), ...args]);
+  // A stacked card is shown against its parent's branch, as it was cut: its own change only.
+  if ((await work("rev-parse", "--verify", "--quiet", `${BASE_REF}^{commit}`)).code === 0) return BASE_REF;
+  const origin = await work("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD");
   if (origin.code === 0 && origin.stdout.trim()) return origin.stdout.trim().replace(/^refs\/remotes\//, "");
-  const main = await git(worktreePath, "rev-parse", "--verify", "--quiet", "main");
+  const main = await work("rev-parse", "--verify", "--quiet", "main");
   if (main.code === 0) return "main";
   if (!repoPath) return null;
-  const repoHead = await git(repoPath, "rev-parse", "HEAD");
-  return repoHead.code === 0 ? repoHead.stdout.trim() || null : null;
+  const repoHead = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "HEAD"]);
+  const sha = repoHead.code === 0 ? repoHead.stdout.trim() : "";
+  if (!sha) return null;
+  // The card's repository holds only its own history: bring the repository's HEAD over (a read of the repository).
+  if ((await work("cat-file", "-e", `${sha}^{commit}`)).code !== 0) await work("fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repoPath, sha);
+  return sha;
 }
 
 /**
@@ -79,11 +86,11 @@ async function baseRef(exec: GitExec, worktreePath: string, repoPath: string | n
  */
 export async function taskDiff(exec: GitExec, worktreePath: string, repoPath: string | null, file?: string): Promise<TaskDiff> {
   const git = async (...args: string[]) => {
-    const result = await exec("git", [...HOST_GIT, "-C", worktreePath, ...args]);
+    const result = await exec("git", [...HOST_GIT, ...at(worktreePath), ...args]);
     if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${(result.stderr || result.stdout).trim()}`);
     return result.stdout;
   };
-  const head = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "HEAD"]);
+  const head = await exec("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "HEAD"]);
   if (head.code !== 0) throw new NoWorktreeError(worktreePath);
   const ref = await baseRef(exec, worktreePath, repoPath);
   // A worktree with no base to speak of (no origin, no main, no repo): the whole history is the change.

@@ -25,7 +25,7 @@ impl Group {
     /// Where a ticket's latest change belongs, if it is worth a line.
     pub fn of(task: &Task) -> Option<Group> {
         match task.state.as_str() {
-            "closed" => Some(Group::Closed),
+            "closed" | "archived" => Some(Group::Closed),
             "escalated" => Some(Group::Escalated),
             "awaiting_ship" | "shipping" | "reviewing_memory" => Some(Group::Shipped),
             _ if task.waiting_on_you => Some(Group::NeedsYou),
@@ -79,6 +79,7 @@ mod tests {
     #[test]
     fn a_ticket_s_latest_change_lands_in_one_of_four_groups_or_none() {
         assert_eq!(Group::of(&task("a", "closed", false, "2026-10-22T23:00:00Z")), Some(Group::Closed));
+        assert_eq!(Group::of(&task("a", "archived", false, "2026-10-22T23:00:00Z")), Some(Group::Closed));
         assert_eq!(Group::of(&task("a", "escalated", false, "2026-10-22T23:00:00Z")), Some(Group::Escalated));
         assert_eq!(Group::of(&task("a", "awaiting_ship", true, "2026-10-22T23:00:00Z")), Some(Group::Shipped), "the ship gate means delivered");
         assert_eq!(Group::of(&task("a", "awaiting_approval", true, "2026-10-22T23:00:00Z")), Some(Group::NeedsYou));

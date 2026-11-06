@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "pins.value",
+      "value": true
+    },
+    {
+      "kind": "between",
+      "path": "redundancy.score",
+      "min": -0.5,
+      "max": 0.5
+    },
+    {
+      "kind": "equals",
+      "path": "untestable.value",
+      "value": false
+    }
+  ],
+  "rubric": "Three scenarios that each prove something the others do not.",
+  "label": {
+    "pins": {
+      "value": true
+    },
+    "redundancy": {
+      "score": 0
+    },
+    "untestable": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "pins": "Does each scenario pin the criterion it names: would it fail if that criterion were not met?",
+      "redundancy": "Each proves something the others do not",
+      "untestable": "Is any criterion written so that no scenario could ever prove it?"
+    },
+    "why": "A button check, a priced-rows check and an empty-cart check each name their criterion and fail on their own; none restates another, and each criterion can be proved.",
+    "second": {
+      "label": {
+        "pins": {
+          "value": true
+        },
+        "redundancy": {
+          "score": 0
+        },
+        "untestable": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

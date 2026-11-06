@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "blocked_by_other_pr"
+    }
+  ],
+  "rubric": "Blocked by another open PR.",
+  "label": {
+    "event": {
+      "choice": "blocked_by_other_pr"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "event": "this PR waits on another open PR"
+    },
+    "why": "The event says the PR waits on another open PR, #412.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "blocked_by_other_pr"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

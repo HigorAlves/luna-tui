@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   AGENT_PACKS,
@@ -7,7 +8,18 @@ import {
   ChatTriageAnswer,
   ChatTriageContext,
   CloneInput,
+  EscalationReason,
+  EvidenceContext,
+  PrReplyAnswer,
+  ShipContext,
+  VideoContext,
+  CheckContext,
+  EvidencePack,
   EvalJudgeAnswer,
+  CodeMapAnswer,
+  PlanAnswer,
+  PlanContext,
+  TestDesignAnswer,
   EvalJudgeContext,
   JiraIntakeContext,
   TaskClassification,
@@ -30,6 +42,7 @@ import {
   TaskSource,
   TaskState,
   TestCase,
+  TriageRecord,
   ThreadsContext,
   VerifyResult,
   resolveEngine,
@@ -193,13 +206,110 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "issue_classify", "eval_judge", "chat_triage"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply"].sort(),
     );
-    const onDemand: string[] = ["slack_triage", "jira_intake", "issue_classify", "eval_judge", "chat_triage"];
+    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "size_estimate", "split_check", "decompose", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "conversation_assess", "conversation_relation", "conversation_reply"];
+    // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
+    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
     for (const pack of PackId.options) {
-      if (onDemand.includes(pack)) expect(TaskState.options).not.toContain(pack);
+      if (onDemand.includes(pack) || runsInAnotherState.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
     }
+  });
+});
+
+describe("the build_tests pack", () => {
+  it("is the test writer on sonnet: writes tests in the worktree with the implementer's tools, no commit, never production code", () => {
+    expect(PACKS.build_tests).toMatchObject({ kind: "agent", agent: "test-writer", helpers: [], writable: true, template: "build_tests.md", engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+    const impl = PACKS.implementing.kind === "agent" ? PACKS.implementing.access : null;
+    const writer = PACKS.build_tests.kind === "agent" ? PACKS.build_tests.access : null;
+    expect(writer).toMatchObject({ read: true, write: true });
+    expect(writer!.commands).toEqual(expect.arrayContaining(impl!.commands.filter((c) => !c.startsWith("git commit"))));
+  });
+});
+
+describe("the plan pack", () => {
+  it("is the planner on opus, read-only with the web and the decision tool, 30 turns, answering a plan", () => {
+    expect(PACKS.plan).toMatchObject({
+      kind: "agent", agent: "planner", helpers: [], skills: ["writing-plans", "code-discovery"], writable: false, maxTurns: 30, effort: "high", template: "plan.md",
+      engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] },
+    });
+    expect(PACKS.plan.kind === "agent" && PACKS.plan.access).toMatchObject({ read: true, web: true, write: false, luna: expect.arrayContaining(["decision_get"]) });
+  });
+
+  it("has a fast lane: the same plan and scenarios on sonnet at low effort, 15 turns, for a small low-risk ticket", () => {
+    expect(PACKS.plan_fast).toMatchObject({ kind: "agent", agent: "fast-planner", helpers: [], writable: false, maxTurns: 15, effort: "low", template: "plan_fast.md", answer: PlanAnswer, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+    expect(PACKS.test_design_fast).toMatchObject({ kind: "agent", agent: "test-designer", helpers: [], writable: false, maxTurns: 15, effort: "low", template: "test_design_fast.md", answer: TestDesignAnswer, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+    expect(PlanAnswer.safeParse({ kind: "needs_full_plan", summary: "a second component appears" }).success).toBe(true);
+  });
+
+  it("answers done with the plan, or questions", () => {
+    const slice = { title: "s", est_loc: 10, touchpoints: ["a.ts"], acceptance: ["ok"] };
+    const plan = { kind: "done", summary: "s", brief: "b", criteria: ["c"], assumptions: ["a"], slices: [slice], rollback: "revert the commit" };
+    expect(PlanAnswer.parse(plan)).toEqual(plan);
+    expect(PlanAnswer.safeParse({ kind: "questions", summary: "s", questions: [{ question: "q", recommended: "r" }] }).success).toBe(true);
+    expect(PlanAnswer.safeParse({ ...plan, kind: "maybe" }).success).toBe(false);
+  });
+});
+
+describe("the code_map pack", () => {
+  it("is the code-mapper on haiku at low effort, 8 turns, read-only with the graph's verbs, git shortlog and git log", () => {
+    expect(PACKS.code_map).toMatchObject({
+      kind: "agent", agent: "code-mapper", helpers: [], writable: false, maxTurns: 8, effort: "low", template: "code_map.md", answer: CodeMapAnswer,
+      engines: { default: "claude:haiku", allowed: ["claude:haiku"] },
+    });
+    const access = PACKS.code_map.kind === "agent" ? PACKS.code_map.access : null;
+    expect(access).toMatchObject({ read: true, write: false, web: false });
+    expect(access?.commands).toEqual(expect.arrayContaining(["graphify query", "graphify affected", "graphify god-nodes", "git shortlog", "git log"]));
+  });
+
+  it("answers components, files with a role, entry points, owners and a confidence, with an optional note", () => {
+    const map = { components: ["board keys"], files: [{ path: "board/src/keys.rs", role: "change" }, { path: "board/src/model.rs", role: "read" }, { path: "board/src/keys_test.rs", role: "test" }], entry_points: ["keys::handle"], owners: ["@marta"], confidence: 0.8 };
+    expect(CodeMapAnswer.parse({ ...map, note: "no tests found" })).toEqual({ ...map, note: "no tests found" });
+    expect(CodeMapAnswer.safeParse({ ...map, confidence: 1.4 }).success).toBe(false);
+    expect(CodeMapAnswer.safeParse({ components: [], files: [] }).success).toBe(false);
+    expect(CodeMapAnswer.safeParse({ ...map, files: [{ path: "a.rs", role: "delete" }] }).success).toBe(false);
+  });
+
+  it("still reads a map written before roles: a plain string is a file to change, and no entry points is none", () => {
+    const v1 = { components: ["board keys"], files: ["board/src/keys.rs"], owners: ["@marta"], confidence: 0.8 };
+    expect(CodeMapAnswer.parse(v1)).toEqual({ ...v1, files: [{ path: "board/src/keys.rs", role: "change" }], entry_points: [] });
+    expect(CodeMapAnswer.parse({ ...v1, files: [{ path: "a.rs" }] }).files).toEqual([{ path: "a.rs", role: "change" }]);
+  });
+
+  it("carries what the machine adds from the graph: whether it is stale and how far behind", () => {
+    const map = { components: [], files: [], owners: [], confidence: 0.5 };
+    expect(CodeMapAnswer.parse({ ...map, stale: true, behind: 120 })).toMatchObject({ stale: true, behind: 120 });
+    expect(CodeMapAnswer.parse({ ...map, stale: false, behind: null })).toMatchObject({ stale: false, behind: null });
+    expect(CodeMapAnswer.parse(map).stale).toBeUndefined();
+  });
+
+  it("has a JSON schema the agent can answer: files are objects with a role", () => {
+    const schema = JSON.stringify(z.toJSONSchema(CodeMapAnswer, { target: "draft-2020-12" }));
+    expect(schema).toContain("role");
+  });
+
+  it("rides on a plan context as an optional map", () => {
+    const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
+    const map = { components: ["c"], files: [{ path: "a.ts", role: "change" }], entry_points: [], owners: [], confidence: 0.5 };
+    expect(PlanContext.parse({ ...plan, map })).toEqual({ ...plan, map });
+    expect(PlanContext.parse({ ...plan, map: null }).map).toBeNull();
+    expect(PlanContext.parse(plan).map).toBeUndefined();
+  });
+
+  it("carries the shortlist the machine located, for the mapper to confirm", () => {
+    const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
+    const shortlist = { files: ["a.ts"], symbols: ["applyCoupon"], components: ["cart"], owners: ["@marta"] };
+    expect(PlanContext.parse({ ...plan, shortlist })).toEqual({ ...plan, shortlist });
+    expect(PlanContext.parse(plan).shortlist).toBeUndefined();
+  });
+  it("carries the risk the plan was written for: level, the three scores, the product and the complexity; a context without it still parses", () => {
+    const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
+    const risk = { level: "medium", product: 9, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 0 }, complexity: "L" };
+    expect(PlanContext.parse({ ...plan, risk })).toEqual({ ...plan, risk });
+    expect(PlanContext.safeParse({ ...plan, risk: { ...risk, complexity: undefined } }).success).toBe(true);
+    expect(PlanContext.safeParse({ ...plan, risk: { ...risk, level: "huge" } }).success).toBe(false);
+    expect(PlanContext.parse(plan).risk).toBeUndefined();
   });
 });
 
@@ -290,8 +400,9 @@ describe("TaskClassification", () => {
 });
 
 describe("ArtifactKind", () => {
-  it("lists the nine kinds", () => {
-    expect(ArtifactKind.options).toHaveLength(9);
+  it("lists the eleven kinds, audio and captions among them", () => {
+    expect(ArtifactKind.options).toHaveLength(11);
+    expect(ArtifactKind.options).toEqual(expect.arrayContaining(["audio", "captions"]));
   });
 });
 
@@ -363,3 +474,208 @@ describe("PR tasks", () => {
     expect(MergeInput.parse({}).method).toBe("squash");
   });
 });
+
+describe("TriageRecord and EvidencePack", () => {
+  const record = { source: "github", kind: "bug", goal: "Pressing j on an empty list must not panic", size: "small", urgency: "normal", risk: "low",
+    signals: { kind: { answer: "bug", confidence: 0.91 } }, qa: [], decision: "plan", reason: "clear repro, one file", at: "2026-11-03T12:00:00.000Z", model: "typesafe/jev" };
+  const evidence = { summary: "The list no longer panics", format: "captures", scenarios: [{ text: "j on an empty list keeps the board up", test: "board::tests::empty_list_j", result: "pass" }],
+    findings: [], outOfMap: [], risk: "low", rollback: "revert the commit", howToVerify: "cargo test empty_list_j", commitSha: "8cb5509", media: [{ kind: "screenshot", label: "after", url: "evidence/1/8cb5509/after.png" }], at: "2026-11-03T12:00:00.000Z" };
+  it("round-trip, and refuse a risk off the scale", () => {
+    expect(TriageRecord.parse(record)).toEqual(record);
+    expect(EvidencePack.parse(evidence)).toEqual(evidence);
+    expect(TriageRecord.safeParse({ ...record, risk: "huge" }).success).toBe(false);
+    expect(EvidencePack.safeParse({ ...evidence, format: "slides" }).success).toBe(false);
+  });
+  it("take a scenario that was not run, and a pack stored with the old values still parses", () => {
+    const notRun = { ...evidence, scenarios: [{ text: "a", test: null, result: "not_run" }] };
+    expect(EvidencePack.parse(notRun)).toEqual(notRun);
+    for (const result of ["pass", "fail", "partial", "skipped"]) expect(EvidencePack.safeParse({ ...evidence, scenarios: [{ text: "a", test: null, result }] }).success).toBe(true);
+    expect(EvidencePack.safeParse({ ...evidence, scenarios: [{ text: "a", test: null, result: "maybe" }] }).success).toBe(false);
+  });
+  it("keep the critic's confidence on the film, optional", () => {
+    const video = { file: "w.mp4", durationS: 10, verdict: "ship", scores: {}, defects: [], rounds: 1 };
+    expect(EvidencePack.parse({ ...evidence, video }).video).not.toHaveProperty("confidence");
+    expect(EvidencePack.parse({ ...evidence, video: { ...video, confidence: 0.8 } }).video?.confidence).toBe(0.8);
+    expect(EvidencePack.safeParse({ ...evidence, video: { ...video, confidence: 1.5 } }).success).toBe(false);
+  });
+  it("take a video context with a budget, absent for an older one", () => {
+    expect(VideoContext.shape.budgetS.safeParse(undefined).success).toBe(true);
+    expect(VideoContext.shape.budgetS.safeParse(90).success).toBe(true);
+    expect(VideoContext.shape.budgetS.safeParse(-1).success).toBe(false);
+  });
+  it("take a frames check context for frame_privacy, and a context from before it still parses", () => {
+    expect(CheckContext.safeParse({ kind: "frames", frames: { texts: ["Cart total $12"] } }).success).toBe(true);
+    expect(CheckContext.safeParse({ kind: "frames", frames: { texts: Array.from({ length: 41 }, () => "x") } }).success).toBe(false);
+    expect(CheckContext.safeParse({ kind: "frames", frames: { texts: ["x".repeat(1001)] } }).success).toBe(false);
+    expect(CheckContext.safeParse({ kind: "red" }).success).toBe(true);
+  });
+  it("take a media entry's scanned flag, optional", () => {
+    const media = { kind: "screenshot", label: "a.png", url: "/x/a.png" };
+    expect(EvidencePack.parse({ ...evidence, media: [media] }).media[0]).not.toHaveProperty("scanned");
+    expect(EvidencePack.parse({ ...evidence, media: [{ ...media, scanned: false }] }).media[0]?.scanned).toBe(false);
+  });
+  it("take a source for staleness, optional", () => {
+    expect(EvidencePack.parse(evidence)).not.toHaveProperty("source");
+    const source = { e2eRunId: "run-1", scenariosKey: "k", stepsSha: null };
+    expect(EvidencePack.parse({ ...evidence, source }).source).toEqual(source);
+  });
+  it("take a diff summary and a revision, and a pack stored without them still parses", () => {
+    const plain = EvidencePack.parse(evidence);
+    expect(plain).not.toHaveProperty("diffSummary");
+    expect(plain).not.toHaveProperty("revision");
+    const rich = { ...evidence, revision: 2, diffSummary: { what: "Adds the total", why: "The ticket asks for it", files: ["web/cart.tsx"], added: 12, removed: 3 } };
+    expect(EvidencePack.parse(rich)).toEqual(rich);
+    expect(EvidencePack.parse({ ...rich, diffSummary: { what: "", why: "", files: [], added: null, removed: null } }).diffSummary?.added).toBeNull();
+    expect(EvidencePack.safeParse({ ...rich, revision: 1.5 }).success).toBe(false);
+  });
+  it("carry a video's verdict, scores and defects, and a note when a format was degraded", () => {
+    const video = { file: "walkthrough.mp4", durationS: 92.4, verdict: "ship", scores: { hook: 8, clarity: 9 }, rounds: 1, defects: [{ priority: "P1", t: 12.5, scene: "cart", element: "cta", symptom: "the headline is cut off", fix: "shorten the heading to two lines" }], transcript: "Here is the cart." };
+    const rich = { ...evidence, format: "video", note: "the critic passed round 2", video, media: [{ kind: "video", label: "walkthrough", url: "w.mp4" }, { kind: "cover", label: "cover", url: "c.jpg" }, { kind: "captions", label: "captions", url: "c.srt" }, { kind: "audio", label: "voice", url: "v.wav" }] };
+    expect(EvidencePack.parse(rich)).toEqual(rich);
+    expect(EvidencePack.parse({ ...evidence, video: null }).video).toBeNull();
+    expect(EvidencePack.safeParse({ ...rich, video: { ...video, verdict: "maybe" } }).success).toBe(false);
+    expect(EvidencePack.safeParse({ ...rich, video: { ...video, defects: [{ ...video.defects[0], priority: "P9" }] } }).success).toBe(false);
+  });
+  it("ride on the stage input's task, absent or null for a task without them", () => {
+    const task = { ...stageInputExample.task, record, evidence };
+    expect(StageInput.parse({ ...stageInputExample, task }).task).toMatchObject({ record, evidence });
+    expect(StageInput.parse({ ...stageInputExample, task: { ...stageInputExample.task, record: null, evidence: null } }).task.record).toBeNull();
+    expect(StageInput.parse(stageInputExample).task.record).toBeUndefined();
+  });
+});
+
+describe("ShipContext", () => {
+  const event = { actor: "ana", isBot: false, isMe: false, kind: "comment" as const, body: "why a map here?", url: null };
+
+  it("is what Ship's decisions read, and rides on the stage input's context", () => {
+    expect(ShipContext.parse({ kind: "event", event })).toEqual({ kind: "event", event });
+    expect(ShipContext.safeParse({ kind: "other" }).success).toBe(false);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...event, body: "x".repeat(2001) } }).success).toBe(false);
+    expect(StageInput.parse({ ...stageInputExample, schema: 3, context: { projectContext: null, ship: { kind: "event", event } } }).context.ship?.event?.actor).toBe("ana");
+  });
+});
+
+describe("ShipContext ci events", () => {
+  const ci = { actor: "ci", isBot: true, isMe: false, kind: "ci" as const, state: "failure", body: "build", url: null, job: "build", log: "boom" };
+  it("carries a job (200) and the tail of a log (4000)", () => {
+    expect(ShipContext.parse({ kind: "event", event: ci }).event).toEqual(ci);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...ci, job: "x".repeat(201) } }).success).toBe(false);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...ci, log: "x".repeat(4001) } }).success).toBe(false);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...ci, log: "x".repeat(4000) } }).success).toBe(true);
+  });
+});
+
+describe("EvidencePack fixes", () => {
+  const base = { summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk: "low" as const, rollback: "r", howToVerify: "h", commitSha: "a", media: [], at: "t" };
+  it("takes at most 20 fixes, and a pack without any parses", () => {
+    const fix = { sha: "a", scope: "in_place" as const, summary: "s", at: "t" };
+    expect(EvidencePack.safeParse(base).success).toBe(true);
+    expect(EvidencePack.safeParse({ ...base, fixes: Array(20).fill(fix) }).success).toBe(true);
+    expect(EvidencePack.safeParse({ ...base, fixes: Array(21).fill(fix) }).success).toBe(false);
+  });
+});
+
+describe("the read step's shapes", () => {
+  const thread = { id: "T1", path: "a.ts", line: 1, comments: [{ author: "ana", body: "rename x", at: "t" }] };
+  const comment = { thread, pack: { summary: "s", scenarios: [{ id: "s1", text: "t", result: "pass" }], howToVerify: "h" }, myReplies: 0 };
+  it("a comment carries an optional reading; a fix optional affected scenarios", () => {
+    expect(ShipContext.parse({ kind: "comment", comment: { ...comment, reading: { asks: "a rename", proposedFix: "rename x to y" } } }).comment?.reading).toEqual({ asks: "a rename", proposedFix: "rename x to y" });
+    expect(ShipContext.safeParse({ kind: "comment", comment }).success).toBe(true);
+    expect(ShipContext.safeParse({ kind: "fix", fix: { changed: [], diffSummary: "", scenarios: [], threadSummary: "", affected: [{ id: "s1", text: "t", result: "pass" }] } }).success).toBe(true);
+  });
+  it("PrReplyAnswer takes asks (300), proposedFix (600), scenarios (20); an empty reply and an old answer parse", () => {
+    const base = { reply: "", resolves: false, confidence: 0.8 };
+    expect(PrReplyAnswer.safeParse(base).success).toBe(true);
+    expect(PrReplyAnswer.safeParse({ ...base, asks: "x".repeat(300), proposedFix: "y".repeat(600), scenarios: Array(20).fill("s1") }).success).toBe(true);
+    expect(PrReplyAnswer.safeParse({ ...base, asks: "x".repeat(301) }).success).toBe(false);
+    expect(PrReplyAnswer.safeParse({ ...base, proposedFix: "y".repeat(601) }).success).toBe(false);
+    expect(PrReplyAnswer.safeParse({ ...base, scenarios: Array(21).fill("s1") }).success).toBe(false);
+  });
+});
+
+describe("ShipContext caps", () => {
+  const thread = (comments: unknown[]) => ({ kind: "comment", comment: { thread: { id: "T", path: null, line: null, comments }, pack: { summary: "s", scenarios: [], howToVerify: "h" }, myReplies: 0 } });
+  const one = { author: "a", body: "b", at: "t" };
+  it("takes at most 50 comments of at most 4000 characters, and a diff summary of at most 4000", () => {
+    expect(ShipContext.safeParse(thread(Array(50).fill(one))).success).toBe(true);
+    expect(ShipContext.safeParse(thread(Array(51).fill(one))).success).toBe(false);
+    expect(ShipContext.safeParse(thread([{ ...one, body: "x".repeat(4001) }])).success).toBe(false);
+    const fix = (diffSummary: string) => ({ kind: "fix", fix: { changed: [], diffSummary, scenarios: [], threadSummary: "t" } });
+    expect(ShipContext.safeParse(fix("x".repeat(4000))).success).toBe(true);
+    expect(ShipContext.safeParse(fix("x".repeat(4001))).success).toBe(false);
+  });
+});
+
+describe("EvidenceContext and head_moved", () => {
+  const e2e = { ran: true, verdict: "pass", hasVideo: true, hasSteps: true, scenarios: 3, skippedReason: null };
+  const context = { record: null, risk: "low", webSurface: true, e2e, videoImage: false };
+  it("is what evidence_format reads, and rides on the stage input's context", () => {
+    expect(EvidenceContext.parse(context)).toEqual(context);
+    expect(EvidenceContext.parse({ ...context, record: null, risk: null, changed: ["a.ts"] }).changed).toEqual(["a.ts"]);
+    expect(EvidenceContext.safeParse({ ...context, risk: "huge" }).success).toBe(false);
+    expect(EvidenceContext.safeParse({ ...context, e2e: { ...e2e, scenarios: 1.5 } }).success).toBe(false);
+    expect(StageInput.parse({ ...stageInputExample, schema: 3, context: { projectContext: null, evidence: context } }).context.evidence).toEqual(context);
+  });
+  it("head_moved is an escalation reason", () => {
+    expect(EscalationReason.options).toContain("head_moved");
+  });
+});
+
+describe("the video packs", () => {
+  const video = (id: "video_script" | "video_fix" | "recording" | "video_qa") => PACKS[id] as Exclude<(typeof PACKS)[typeof id], { kind: "decision" }>;
+
+  it("video_script and video_fix are the video director on sonnet: they answer the script and the timeline and can write nothing, not even /out", () => {
+    for (const id of ["video_script", "video_fix"] as const) {
+      expect(video(id)).toMatchObject({ kind: "agent", agent: "video-director", helpers: [], skills: ["video-script"], writable: false, maxTurns: 25, timeoutMs: 600_000, effort: "medium", template: `${id}.md`, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+      expect(video(id).access).toMatchObject({ read: true, write: false });
+    }
+  });
+
+  it("recording is the demo recorder: the QA skills and a browser job's commands, 40 turns, 20 minutes", () => {
+    expect(video("recording")).toMatchObject({ agent: "demo-recorder", skills: ["demo-recording", "qa-targets", "playwright-qa"], writable: true, maxTurns: 40, timeoutMs: 1_200_000, effort: "medium", template: "recording.md", engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+    expect(video("recording").access.commands).toEqual(expect.arrayContaining(["node", "npx", "npx playwright", "ffmpeg", "curl", "command -v"]));
+  });
+
+  it("video_qa is a read-only critic that defaults to haiku and may fall back to codex:sol", () => {
+    expect(video("video_qa")).toMatchObject({ agent: "video-critic", skills: ["video-critic"], writable: false, maxTurns: 12, timeoutMs: 480_000, template: "video_qa.md", engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:sol"], fallback: ["codex:sol"] } });
+    expect(video("video_qa").access).toMatchObject({ read: true, write: false });
+  });
+
+  it("answers: the script pair gives a script and a timeline, the recorder its marks, the critic scores and defects", () => {
+    expect(AgentRole.options).toEqual(expect.arrayContaining(["video-director", "demo-recorder", "video-critic"]));
+    const script = { script: "# s", timeline: { meta: {} }, facts: [{ claim: "c", source: "s" }], durationEstimateS: 60 };
+    expect(PACKS.video_script.answer.safeParse(script).success).toBe(true);
+    expect(PACKS.video_fix.answer.safeParse({ ...script, kind: "escalated", escalation: "other", reason: "r" }).success).toBe(true);
+    expect(PACKS.video_script.answer.safeParse({ ...script, durationEstimateS: "long" }).success).toBe(false);
+    expect(PACKS.recording.answer.safeParse({ timing: { marks: [{ scene: "a", t: 1.5 }] }, recordingPath: "/out/files/video/recording.webm", scenesRecorded: ["a"] }).success).toBe(true);
+    const scores = { hook: 8, clarity: 8, readability: 8, motion: 8, rhythm: 8, composition: 8, continuity: 8, truth: 8, sync: 8 };
+    const qa = { message: "ships", verdict: "ship", scores, defects: [{ priority: "P1", t: 12.5, scene: "cart", element: "cta", symptom: "cut off", mechanism: "overflow", fix: "wrap the heading" }], weakestScene: "cart" };
+    expect(PACKS.video_qa.answer.safeParse(qa).success).toBe(true);
+    expect(PACKS.video_qa.answer.safeParse({ ...qa, scores: { ...scores, hook: 11 } }).success).toBe(false);
+    expect(PACKS.video_qa.answer.safeParse({ ...qa, verdict: "degraded" }).success).toBe(false);
+  });
+});
+
+describe("VideoContext", () => {
+  const context = {
+    scenarios: [{ title: "A coupon counts once", criterion: "c1", approach: "apply twice" }],
+    record: null,
+    pack: { summary: "s", howToVerify: "open it", risk: "low" },
+    steps: ['{"scenario":"a","step":"click"}'],
+    chapters: [{ title: "A", start: 0 }],
+    target: { name: "local", baseUrl: "http://127.0.0.1:3000", credential: null },
+    narration: [{ id: "a", durationS: 12.5 }],
+    timeline: null,
+    report: null,
+    transcript: null,
+    sheets: ["/evidence/sheets/beats_sheet.jpg"],
+    fixCards: [{ t: 12.5, scene: "cart", element: "cta", text: "cut off", priority: "P1" }],
+  };
+  it("is what the video packs read, and rides on the stage input's context", () => {
+    expect(VideoContext.parse(context)).toEqual(context);
+    expect(VideoContext.safeParse({ ...context, steps: Array.from({ length: 401 }, () => "x") }).success).toBe(false);
+    expect(VideoContext.safeParse({ ...context, fixCards: [{ t: null, scene: null, element: null, text: "x", priority: "P3" }] }).success).toBe(false);
+    expect(StageInput.parse({ ...stageInputExample, schema: 3, context: { projectContext: null, video: context } }).context.video).toEqual(context);
+  });
+});
+ 

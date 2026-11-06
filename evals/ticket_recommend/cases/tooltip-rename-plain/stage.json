@@ -1,0 +1,54 @@
+{
+  "schema": 3,
+  "stage": "ticket_recommend",
+  "pack": "ticket_recommend",
+  "attempt": 1,
+  "task": {
+    "id": "tooltip-rename-plain",
+    "title": "tooltip-rename-plain",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": "Ana",
+      "reachable": true,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [],
+      "candidates": [],
+      "title": "Rename the settings icon's tooltip",
+      "description": "Rename the tooltip of the settings icon from \"Settings\" to \"Preferences\"; nobody asked for it, it is taste.",
+      "assessment": {
+        "priority": "P3",
+        "size": "L",
+        "blastRadius": "low",
+        "costOfDelay": 2,
+        "costOfDoing": 7,
+        "score": 0.29
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -3,6 +3,7 @@ import type {
   EngineId,
   Finding,
   NeedsInputItem,
+  PlanContext,
   RequestedAction,
   RunInfo,
   TaskState,
@@ -10,6 +11,10 @@ import type {
 
 import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 import type { StageOutcome } from "../domain/transition.ts";
+
+/** The rows a running stage may log through `emit`: the diagram's names for facts only it knows. Never a kind other code acts on (`transition`, `task.reply`...). */
+export const EMITTABLE = ["ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "evidence.stale", "scenario.red", "build.checkpoint", "build.sweep_failed", "scenario.green", "sla.reminder", "sla.escalated", "evidence.edited", "ship.override", "sandbox.egress_blocked"] as const;
+export type EmittableKind = (typeof EMITTABLE)[number];
 
 export interface StageContext {
   task: TaskRow;
@@ -20,6 +25,16 @@ export interface StageContext {
   runId: string;
   /** Everything decided on this task so far, oldest first: answers, approvals, guidance. */
   approvals: ApprovalRow[];
+  /** For the plan stage after a plan was found wrong in Build, Verify or review: who raised it and the evidence (data, flattened and capped). */
+  replan?: NonNullable<PlanContext["replan"]>;
+  /** For implementing: the commit the card's first implementing run started from, read from the machine's own `stage_runs` rows (never an event row, never a ref): the scope base when there is no tests commit. */
+  firstInputCommit?: string;
+  /** For implementing: the sha of the tests commit the machine itself made on an earlier run of this card (kept on that run's finish row); the tests step trusts no other. */
+  testsCommit?: string;
+  /** For implementing: the minutes Build's budget has left; a run's time limit is the smaller of its own and this. */
+  budgetMinutes?: number;
+  /** For delivering: what the draft PR's body is fed, from the rows of the stages before it (the open findings, the files outside the map, each scenario's test file). */
+  prFacts?: { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string> };
   /** Findings from the latest verifying run, fed to the next implementing attempt. */
   priorFindings?: Finding[];
   /** Aborted when you abort the task; the runner should stop its container. */
@@ -32,6 +47,12 @@ export interface StageContext {
   started?: (facts: { container: string; inputCommit: string | null; engine?: EngineId }) => Promise<void>;
   /** Puts a line on the task's activity while the stage runs (`stage.note`): a wait, a fallback, anything the run should say before it ends. */
   note?: (text: string) => Promise<void>;
+  /** Logs a row the v2.2 diagram names (`ship.ready`, `ship.event`...) while the stage runs; the payload is ids, counts and enum values only. */
+  emit?: (kind: EmittableKind, payload: Record<string, unknown>) => Promise<void>;
+  /** What the stage container needs in its environment to continue this run's trace (the
+   *  telemetry's `childEnv()`); empty when nothing is traced. The pack runner passes it as the
+   *  sandbox's `extraEnv`. */
+  traceEnv?: Record<string, string>;
 }
 
 export interface StageResult {
@@ -46,7 +67,7 @@ export interface StageResult {
   events?: Array<{ at: string; kind: string; payload: Record<string, unknown> }>;
   /** Files the pack produced, already copied; `path` is absolute on the host. */
   artifacts?: Array<{ kind: ArtifactKind; path: string; label: string; sha256: string }>;
-  usage?: { turns: number | null; costUsd: number | null };
+  usage?: { turns: number | null; costUsd: number | null; /** The runtime's own count; null where it cannot report one. */ tokens?: { input: number; output: number; cached?: number } | null };
   /** Questions for the gate; shown as the approval's `questions`. */
   needsInput?: NeedsInputItem[];
   /** Outward actions awaiting approval; shown as the approval's `actions`. */

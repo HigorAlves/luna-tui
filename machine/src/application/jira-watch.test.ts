@@ -1,5 +1,6 @@
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { previewOn } from "../test/policies.ts";
 
 import { freshTestDatabase } from "../test/database.ts";
 import type { TaskRow } from "../domain/task.ts";
@@ -28,7 +29,7 @@ function wire(
   jira = fakeJira({ issues: [{ key: "PLAT-123", status: "In Progress", statusCategory: "indeterminate", priority: "High", dueAt: "2026-10-31", issueType: "Bug" }] }),
   over: { expiresAt?: string | null; retryBlocked?: (task: TaskRow) => Promise<void> } = {},
 ) {
-  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: SITE });
+  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, jiraSite: SITE });
   const published: string[] = [];
   const warnings: string[] = [];
   const expiry = new TokenExpiry(over.expiresAt ?? null);
@@ -77,7 +78,7 @@ describe("JiraWatch", () => {
 
     const closed = await pipeline.createTask({ title: "PLAT-123 y" });
     await pipeline.start(closed.id);
-    for (let i = 0; i < 4; i++) await pipeline.decide(closed.id, "approved");
+    for (let i = 0; i < 2; i++) await pipeline.decide(closed.id, "approved");
     jira.issues.get("PLAT-123")!.status = "Cancelled";
     await watch.pollOnce();
     expect((await pipeline.events(closed.id)).filter((e) => e.kind === "jira.moved")).toEqual([]);
@@ -138,5 +139,17 @@ describe("JiraWatch", () => {
     setNow(new Date("2026-10-29T13:00:00Z"));
     await watch.pollOnce();
     expect(warnings.filter((w) => w.includes("expires in"))).toHaveLength(2);
+  });
+});
+
+describe("JiraWatch with the ticket machine's events", () => {
+  it("hands each linked issue, as a canonical ticket with its task, to the ticket events, and a failing handler stops nothing", async () => {
+    const jira = fakeJira({ issues: [{ key: "PLAT-123", status: "In Progress", statusCategory: "indeterminate", priority: "High", dueAt: null, issueType: "Bug", assignee: { id: "a1", name: "Ana" } }] });
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: SITE });
+    await pipeline.createTask({ title: "PLAT-123 fix it" });
+    const seen: Array<[string, string | null]> = [];
+    const watch = new JiraWatch({ pipeline, jira, intervalMs: 300_000, now: () => NOW, warn: () => {}, tickets: { handle: async (ticket, task) => { seen.push([ticket.key, ticket.assignee]); void task; throw new Error("boom"); } } });
+    await watch.pollOnce();
+    expect(seen).toEqual([["PLAT-123", "Ana"]]);
   });
 });

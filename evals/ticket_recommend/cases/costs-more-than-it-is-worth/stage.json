@@ -1,0 +1,54 @@
+{
+  "schema": 3,
+  "stage": "ticket_recommend",
+  "pack": "ticket_recommend",
+  "attempt": 1,
+  "task": {
+    "id": "ticket-recommend",
+    "title": "Rename an internal label",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": "Ana",
+      "reachable": true,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [],
+      "candidates": [],
+      "title": "Rename an internal label",
+      "description": "Rename the internal label \"foo\" to \"bar\" across the admin tool; nobody asked, it is taste.",
+      "assessment": {
+        "priority": "P3",
+        "size": "L",
+        "blastRadius": "low",
+        "costOfDelay": 2,
+        "costOfDoing": 7,
+        "score": 0.29
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

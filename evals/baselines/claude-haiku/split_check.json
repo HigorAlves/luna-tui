@@ -1,0 +1,352 @@
+{
+  "schema": 1,
+  "pack": "split_check",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T15:21:56.674Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 5,
+    "passRate": 0.625,
+    "meanJudgeScore": null,
+    "meanTurns": 1.5,
+    "meanDurationMs": 40181.625,
+    "costUsd": 0.004510650000000001,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 6,
+      "labelled": 5,
+      "acted": 3,
+      "accuracy": 0.8,
+      "actedOnAccuracy": 0.6666666666666666,
+      "coverage": 0.6666666666666666,
+      "brier": 0.17435333333333336,
+      "ece": 0.20733333333333342,
+      "meanConfidence": 0.8144444444444444,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "a-criterion-nobody-owns",
+      "pass": true,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "covers.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2471,
+      "costUsd": 0.0008545,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "covers": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "no_overlap": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "stand_alone": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8700000000000001,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "audit-entry-in-two-children",
+      "pass": true,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_overlap.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3729,
+      "costUsd": 0.0008666500000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "covers": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "no_overlap": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "stand_alone": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7833333333333333,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "child-says-the-check-must-pass",
+      "pass": false,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": false,
+        "detail": "timed out after 1 minutes"
+      },
+      "checks": [
+        {
+          "check": "no_overlap.value = false",
+          "pass": false,
+          "detail": "no answer"
+        }
+      ],
+      "judge": null,
+      "turns": 0,
+      "durationMs": 202500,
+      "costUsd": null,
+      "model": null
+    },
+    {
+      "id": "second-half-of-the-same-edit",
+      "pass": true,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "stand_alone.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 9946,
+      "costUsd": 0.00049455,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "covers": {
+            "correct": null,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "no_overlap": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "stand_alone": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.86,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "shared-helper-in-two-children",
+      "pass": true,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_overlap.p within 0.3..0.7",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 10075,
+      "costUsd": 0.00071965,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "covers": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "no_overlap": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "stand_alone": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.75,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "three-children-cover-the-ticket",
+      "pass": false,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": false,
+        "detail": "timed out after 1 minutes"
+      },
+      "checks": [
+        {
+          "check": "covers.value = true",
+          "pass": false,
+          "detail": "no answer"
+        },
+        {
+          "check": "no_overlap.value = true",
+          "pass": false,
+          "detail": "no answer"
+        },
+        {
+          "check": "stand_alone.value = true",
+          "pass": false,
+          "detail": "no answer"
+        }
+      ],
+      "judge": null,
+      "turns": 0,
+      "durationMs": 85312,
+      "costUsd": null,
+      "model": null
+    },
+    {
+      "id": "two-children-rewrite-csv-rows-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_overlap.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 4727,
+      "costUsd": 0.00092585,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "covers": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "no_overlap": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "stand_alone": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7666666666666667,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "two-children-two-criteria",
+      "pass": false,
+      "schema": {
+        "check": "answer on the split_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "covers.value = true",
+          "pass": false,
+          "detail": "found false"
+        },
+        {
+          "check": "no_overlap.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "stand_alone.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2693,
+      "costUsd": 0.00064945,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "covers": {
+            "correct": false,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "no_overlap": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "stand_alone": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.8566666666666668,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

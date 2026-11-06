@@ -1,0 +1,36 @@
+{
+  "schema": 3,
+  "stage": "frame_privacy",
+  "pack": "frame_privacy",
+  "attempt": 1,
+  "task": {
+    "id": "database-url-shown-plain",
+    "title": "database-url-shown-plain",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "frames",
+      "frames": {
+        "texts": [
+          "DATABASE_URL = postgres://admin:hunter2@db.example.com:5432/prod"
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

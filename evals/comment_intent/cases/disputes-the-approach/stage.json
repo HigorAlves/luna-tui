@@ -1,0 +1,60 @@
+{
+  "schema": 3,
+  "stage": "comment_intent",
+  "pack": "comment_intent",
+  "attempt": 1,
+  "task": {
+    "id": "disputes-the-approach",
+    "title": "disputes-the-approach",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "comment",
+      "comment": {
+        "thread": {
+          "id": "THREAD-1",
+          "path": "src/cart/export.ts",
+          "line": 12,
+          "comments": [
+            {
+              "author": "reviewer-one",
+              "body": "I do not think a synchronous CSV download is the right design here; a background job that emails the file would avoid the time-outs. I would not merge this approach.",
+              "at": "2026-11-02T10:00:00.000Z"
+            }
+          ]
+        },
+        "pack": {
+          "summary": "Adds a CSV export of the cart.",
+          "scenarios": [
+            {
+              "text": "CSV has a row per line",
+              "result": "pass"
+            }
+          ],
+          "howToVerify": "Open the cart and click Export."
+        },
+        "myReplies": 0,
+        "reading": {
+          "asks": "What the file holds for an empty cart.",
+          "proposedFix": ""
+        }
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

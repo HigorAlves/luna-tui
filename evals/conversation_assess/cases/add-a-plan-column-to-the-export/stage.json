@@ -1,0 +1,41 @@
+{
+  "schema": 3,
+  "stage": "conversation_assess",
+  "pack": "conversation_assess",
+  "attempt": 1,
+  "task": {
+    "id": "add-a-plan-column-to-the-export",
+    "title": "add-a-plan-column-to-the-export",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "conversation": {
+      "channel": "eng",
+      "private": false,
+      "thread": [
+        "priya: could we add a column with the plan name to the billing export? finance would like it next quarter"
+      ],
+      "latest": "could we add a column with the plan name to the billing export? finance would like it next quarter",
+      "author": {
+        "profile": "member",
+        "title": null
+      },
+      "candidates": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

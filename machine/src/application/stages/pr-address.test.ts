@@ -1,10 +1,12 @@
+import { at } from "../../adapters/git/machine-repo.ts";
+import { HOST_GIT } from "../../adapters/git/worktree.ts";
 import { describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
-import { prAddressRunner, prFollowUpRunner } from "./pr-address.ts";
+import { followUp, prAddressRunner, prFollowUpRunner } from "./pr-address.ts";
 
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
 const bad = (stderr: string): ExecResult => ({ code: 1, stdout: "", stderr });
@@ -99,7 +101,7 @@ describe("the follow-up: push, reply, resolve", () => {
     const { run, calls, github } = setup();
     const result = await run(context({ stage: "delivering" }));
     expect(result.outcome).toBe("pass");
-    expect(calls[0]).toEqual(["git", "-c", "core.hooksPath=/dev/null", "-C", "/wt", "push", "-u", "origin", "feat/export"]);
+    expect(calls[0]).toEqual(["git", ...HOST_GIT, ...at("/wt"), "push", "-u", "origin", "feat/export"]);
     expect(github.replyToThread.mock.calls).toEqual([["T1", "Fixed in abc."], ["T2", "Kept as is."]]);
     expect(github.resolveThread.mock.calls).toEqual([["T1"]]);
     expect(result.detail).toMatchObject({ replied: 2, resolved: 1, skipped: [] });
@@ -117,5 +119,32 @@ describe("the follow-up: push, reply, resolve", () => {
     const failed = await refused.run(context({ stage: "delivering" }));
     expect(failed.outcome).toBe("fail");
     expect(String(failed.detail?.error)).toMatch(/T2/);
+  });
+});
+
+describe("followUp: the replies of an answer, posted and resolved", () => {
+  it("replies to each thread, resolves the marked ones and skips a thread resolved meanwhile", async () => {
+    const github = fakeGitHub({ threadResolved: async (id) => id === "T2", replyToThread: async () => {}, resolveThread: async () => {} });
+    const replies = [
+      { threadId: "T1", body: "Fixed.", resolve: true },
+      { threadId: "T2", body: "Done.", resolve: true },
+      { threadId: "T3", body: "Kept.", resolve: false },
+    ];
+    expect(await followUp(github, replies)).toEqual({ ok: true, replied: 2, resolved: 1, skipped: ["T2"] });
+    expect(github.replyToThread.mock.calls).toEqual([["T1", "Fixed."], ["T3", "Kept."]]);
+    expect(github.resolveThread.mock.calls).toEqual([["T1"]]);
+  });
+
+  it("stops at a refused reply, saying which thread and what was done so far", async () => {
+    const github = fakeGitHub({
+      threadResolved: async () => false,
+      replyToThread: async (id) => {
+        if (id === "T2") throw new Error("locked");
+      },
+      resolveThread: async () => {},
+    });
+    const out = await followUp(github, [{ threadId: "T1", body: "a", resolve: true }, { threadId: "T2", body: "b", resolve: false }]);
+    expect(out).toMatchObject({ ok: false, replied: 1, resolved: 1 });
+    expect((out as { error: string }).error).toMatch(/T2.*locked/);
   });
 });

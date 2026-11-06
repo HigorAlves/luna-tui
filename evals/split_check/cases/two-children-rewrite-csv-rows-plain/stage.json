@@ -1,0 +1,120 @@
+{
+  "schema": 3,
+  "stage": "split_check",
+  "pack": "split_check",
+  "attempt": 1,
+  "task": {
+    "id": "two-children-rewrite-csv-rows-plain",
+    "title": "two-children-rewrite-csv-rows-plain",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "split": {
+      "origin": {
+        "title": "CSV export of reports",
+        "text": "Reports can be exported as CSV from the API and from the web page, and the export is logged for audit.",
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "GET /reports/:id/export.csv returns the report as CSV"
+          },
+          {
+            "id": "C2",
+            "text": "The reports page has an Export button that downloads it"
+          },
+          {
+            "id": "C3",
+            "text": "Every export writes an audit log entry"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "src/reports/api.ts"
+        },
+        {
+          "path": "src/reports/page.tsx"
+        },
+        {
+          "path": "src/audit/log.ts"
+        }
+      ],
+      "limit": {
+        "target": [
+          1000,
+          2000
+        ],
+        "hard": 2500,
+        "maxChildren": 8
+      },
+      "children": [
+        {
+          "title": "Rewrite buildCsvRows for the endpoint",
+          "goal": "Rewrite buildCsvRows in src/reports/csv.ts so the endpoint streams rows.",
+          "acceptance_criteria": [
+            "The endpoint streams rows"
+          ],
+          "covers": [
+            "C1"
+          ],
+          "files_hint": [
+            "src/reports/csv.ts"
+          ],
+          "est_loc": 300,
+          "depends_on": [],
+          "order": 1
+        },
+        {
+          "title": "Rewrite buildCsvRows for the page",
+          "goal": "Rewrite buildCsvRows in src/reports/csv.ts so the page can show a preview",
+          "acceptance_criteria": [
+            "The page previews rows"
+          ],
+          "covers": [
+            "C2"
+          ],
+          "files_hint": [
+            "src/reports/csv.ts"
+          ],
+          "est_loc": 300,
+          "depends_on": [],
+          "order": 2
+        },
+        {
+          "title": "Audit log for exports",
+          "goal": "Write an audit log entry on every export, from the endpoint's handler",
+          "acceptance_criteria": [
+            "An export writes one audit entry"
+          ],
+          "covers": [
+            "C3"
+          ],
+          "files_hint": [
+            "src/audit/log.ts"
+          ],
+          "est_loc": 200,
+          "depends_on": [
+            1
+          ],
+          "order": 3
+        }
+      ],
+      "round": 1
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

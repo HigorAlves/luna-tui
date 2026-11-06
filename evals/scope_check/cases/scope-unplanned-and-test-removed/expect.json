@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "planned_or_declared.value",
+      "value": false
+    },
+    {
+      "kind": "equals",
+      "path": "no_test_removed.value",
+      "value": false
+    }
+  ],
+  "rubric": "An unplanned auth file changed with no reason, and a test was removed. Whether that also counts as an unrelated refactor is not what this case asks: an unplanned file and a removed legacy test can be read either way.",
+  "label": {
+    "planned_or_declared": {
+      "value": false
+    },
+    "no_test_removed": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "planned_or_declared": "Is every changed file either planned (in the planned files) or declared with a reason that justifies it? The undeclared files are listed; any of them is a no.",
+      "no_test_removed": "Does the change remove no test? The removed tests are listed; a test removed with the code it covered still counts as removed unless a declared reason explains it."
+    },
+    "why": "src/auth/session.ts changed with no reason and is not planned, and a legacy test was removed with no declared reason.",
+    "second": {
+      "label": {
+        "planned_or_declared": {
+          "value": false
+        },
+        "no_test_removed": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

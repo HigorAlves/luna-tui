@@ -1,0 +1,46 @@
+{
+  "schema": 3,
+  "stage": "intake_dedup",
+  "pack": "intake_dedup",
+  "attempt": 1,
+  "task": {
+    "id": "second-slot-is-the-match",
+    "title": "second-slot-is-the-match",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "dedup": {
+      "title": "Password reset email never arrives",
+      "text": "I asked for a reset link twice and nothing came, not even in spam.",
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "open",
+          "title": "Profile photo upload fails above 2 MB",
+          "summary": "Uploading a larger photo returns a generic error."
+        },
+        {
+          "slot": 2,
+          "kind": "closed",
+          "title": "Reset link email is not delivered",
+          "summary": "Users who request a password reset get no email; the mail queue was stuck."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

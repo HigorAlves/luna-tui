@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "coverage_check",
+  "pack": "coverage_check",
+  "attempt": 1,
+  "task": {
+    "id": "one-criterion-cannot-be-proved",
+    "title": "one-criterion-cannot-be-proved",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": null,
+      "brief": "",
+      "criteria": [
+        "The cart page has an Export button",
+        "The export feels intuitive"
+      ],
+      "assumptions": [],
+      "slices": [],
+      "cases": [
+        {
+          "title": "Button is visible",
+          "criterion": "The cart page has an Export button",
+          "approach": "Open /cart with two items and assert a button named Export is present; remove the feature flag and assert it is absent.",
+          "id": "S1",
+          "criterion_ref": "C1",
+          "type": "happy"
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

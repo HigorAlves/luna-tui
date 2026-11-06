@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "evidence_valid",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T15:29:09.050Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 3716,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.0005285714285714296,
+      "ece": 0.021428571428571352,
+      "meanConfidence": 0.97375,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "button-label-changed",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"refresh_media\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 13617,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "comment-only-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"valid\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2079,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "empty-cart-outcome-flipped",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"refresh_media\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2619,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "extracted-a-helper",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"valid\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2158,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "how-to-verify-moved",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"refresh_text\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2526,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "summary-wording-and-howto",
+      "pass": false,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.confidence within 0..0.85",
+          "pass": false,
+          "detail": "found 0.94"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1986,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.94,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "thread-says-valid-but-ui-changes",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"refresh_media\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1936,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "totals-row-changed-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_valid schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "validity.choice = \"refresh_media\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2807,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "validity": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

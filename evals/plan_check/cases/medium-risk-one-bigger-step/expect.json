@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "risk_appropriate.p",
+      "min": 0.25,
+      "max": 0.75
+    }
+  ],
+  "rubric": "A medium-risk change to a shared formatter in one 180-line step with no flag: whether that suits the risk is a judgement call, so p should stay near the middle.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "risk_appropriate": {
+            "value": true
+          }
+        },
+        "criteria": {
+          "risk_appropriate": "Is the plan appropriate to its risk level (given with the plan)? A high-risk plan names a migration or a flag strategy and keeps its steps small enough to review; a low-risk plan does not need either."
+        },
+        "why": "A medium-risk change to one formatter in one 180-line step is reviewable and needs no migration."
+      },
+      {
+        "label": {
+          "risk_appropriate": {
+            "value": false
+          }
+        },
+        "criteria": {
+          "risk_appropriate": "Is the plan appropriate to its risk level (given with the plan)? A high-risk plan names a migration or a flag strategy and keeps its steps small enough to review; a low-risk plan does not need either."
+        },
+        "why": "A shared formatter used widely might deserve a flag or smaller steps even at medium risk."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "event_class",
+  "pack": "event_class",
+  "attempt": 1,
+  "task": {
+    "id": "parent-pr-has-new-commits",
+    "title": "parent-pr-has-new-commits",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "event",
+      "event": {
+        "actor": "github",
+        "isBot": true,
+        "isMe": false,
+        "kind": "push",
+        "state": null,
+        "body": "The pull request this one is stacked on (#409) has new commits since this branch was cut.",
+        "url": null
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

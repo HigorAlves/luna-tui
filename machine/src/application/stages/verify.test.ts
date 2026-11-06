@@ -1,3 +1,6 @@
+import { RepoImageError } from "../repo-images.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { InstallFailedError } from "../install.ts";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +9,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { TaskRow } from "../../domain/task.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import type { StageContext, StageResult } from "../ports.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { findingId } from "@hardness/contracts";
+import type { Decide } from "./check-decide.ts";
 import { verifyRunner } from "./verify.ts";
 
 const finding = (over: Record<string, unknown> = {}) => ({
@@ -28,9 +34,20 @@ function setup(opts: {
   noPack?: boolean;
   identity?: { name: string; email: string } | null;
   /** The repo's own checks from luna.yaml; undefined means none declared. */
-  lunaChecks?: Array<{ name: string; run: string; cwd?: string; paths?: string[] }>;
+  lunaChecks?: Array<{ name: string; run: string; cwd?: string; paths?: string[]; coverage?: string }>;
+  /** A real directory standing in for the task worktree (default /wt). */
+  worktree?: string;
+  diffSince?: (worktreePath: string, repoPath: string) => Promise<string | null>;
   changed?: string[] | null;
   services?: Record<string, { image: string; exports?: Record<string, string> }>;
+  decide?: Decide | null;
+  decisions?: Record<string, Record<string, { proceed?: number; flag?: number }>>;
+  /** The repo's `verify` section as the machine reads it. */
+  verify?: { coverage_drop_max?: number; mutation?: { command: string | null; min_score: number } };
+  /** The counted diff of the card's own change, and the repo's `size` section. */
+  counted?: { added: number; removed: number } | null;
+  size?: { target_loc: [number, number]; hard_limit_loc: number; max_children: number; max_rounds: number; depth: number };
+  approvals?: StageContext["approvals"];
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
@@ -45,30 +62,76 @@ function setup(opts: {
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
-    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {} }),
+    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {}, decisions: opts.decisions ?? {}, ...(opts.verify ? { verify: opts.verify } : {}), ...(opts.size ? { size: opts.size } : {}) }),
+    ...("counted" in opts ? { diffStat: async () => opts.counted! } : {}),
+    ...("decide" in opts ? { decide: opts.decide } : {}),
     changedPaths: async () => ("changed" in opts ? opts.changed! : null),
+    ...(opts.diffSince ? { diffSince: opts.diffSince } : {}),
   });
   const controller = opts.controller ?? new AbortController();
   const context: StageContext = {
-    task: { id: "t1", worktreePath: "/wt", repoPath: "/repo" } as unknown as TaskRow,
+    task: { id: "t1", worktreePath: opts.worktree ?? "/wt", repoPath: "/repo" } as unknown as TaskRow,
     stage: "verifying",
     attempt: 1,
     runId: "run-1",
-    approvals: [],
+    approvals: opts.approvals ?? [],
     signal: controller.signal,
   };
   return { run, context, exec, runPack, calls, stateDir };
 }
 
 describe("verifying stage", () => {
-  it("fails on a red check with its tail as a test finding, and never calls the pack", async () => {
+  describe("findings as the diagram draws them", () => {
+    const answer = (findings: unknown[]): StageResult => ({ outcome: "pass", detail: { answer: { summary: "s", findings } } });
+
+    it("gives each finding an id and merges duplicates, the highest level winning; an old-shape finding still reads", async () => {
+      const old = finding({ severity: "nit", confidence: 0.4 });
+      const again = finding({ severity: "blocker", confidence: 0.9 });
+      const other = finding({ line: 40, title: "other", severity: "should_fix", criterion_ref: "C2", category: "missing_criterion" });
+      const { run, context } = setup({ pack: answer([old, again, other]) });
+      const result = await run(context);
+      const found = result.findings as Array<{ id: string; severity: string; title: string; criterion_ref?: string }>;
+      expect(found).toHaveLength(2);
+      expect(found[0]).toMatchObject({ id: findingId(old as never), severity: "blocker", title: "off by one" });
+      expect(found[1]).toMatchObject({ id: findingId(other as never), criterion_ref: "C2" });
+    });
+
+    it("fails only on a blocker; should_fix and nit ride on the report", async () => {
+      const soft = setup({ pack: answer([finding({ severity: "should_fix", confidence: 1 }), finding({ line: 9, title: "n", severity: "nit", confidence: 1 })]) });
+      const passed = await soft.run(soft.context);
+      expect(passed.outcome).toBe("pass");
+      expect(passed.findings).toHaveLength(2);
+      const hard = setup({ pack: answer([finding({ severity: "blocker", confidence: 0.9 })]) });
+      expect((await hard.run(hard.context)).outcome).toBe("fail");
+    });
+  });
+
+  it("reviews first: a blocker in the review ends the stage before any check runs", async () => {
+    const { run, context, runPack, exec } = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "fail", summary: "broken", findings: [finding()] } } } });
+    const result = await run(context);
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(exec).not.toHaveBeenCalled();
+    expect(result.outcome).toBe("fail");
+    expect((result.detail as { step: string }).step).toBe("review");
+    expect(result.findings).toEqual([expect.objectContaining({ title: "off by one" })]);
+  });
+
+  it("a red check after a clean review fails with its output as a finding of category tests", async () => {
+    const { run, context, runPack } = setup({ checks: { "pnpm run test": { code: 1, stdout: "boom", stderr: "" } } });
+    const result = await run(context);
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("fail");
+    expect(result.findings).toEqual([expect.objectContaining({ category: "tests", body: "boom" })]);
+  });
+
+  it("fails on a red check with its tail as a test finding, after the review", async () => {
     const tail = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
     const { run, context, runPack, stateDir } = setup({
       checks: { "pnpm run test": { code: 1, stdout: tail, stderr: "" } },
     });
     const result = await run(context);
     expect(result.outcome).toBe("fail");
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
     const detail = result.detail as { step: string; failed: Array<{ name: string; tail: string; cmd: string }> };
     expect(detail.step).toBe("checks");
     expect(detail.failed).toHaveLength(1);
@@ -90,7 +153,7 @@ describe("verifying stage", () => {
     const result = await run(context);
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ reason: expect.stringMatching(/pnpm run test.*runner image/) });
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
   });
 
   it("runs every check as you: the identity git resolves for the repo rides into the check container", async () => {
@@ -139,6 +202,259 @@ describe("verifying stage", () => {
     expect(result.detail).toMatchObject({ checks: [{ name: "board tests", ok: true }, { name: "machine tests", skipped: "no change under machine/**" }] });
   });
 
+  describe("the regression sweep", () => {
+    const withGraph = (changed: string[] | null) => {
+      const graphDir = mkdtempSync(join(tmpdir(), "verify-graph-"));
+      mkdirSync(join(graphDir, "graphify-out"));
+      writeFileSync(
+        join(graphDir, "graphify-out", "graph.json"),
+        JSON.stringify({ nodes: [{ id: "A", source_file: "board/src/a.rs" }, { id: "M", source_file: "machine/src/m.ts" }], links: [{ source: "M", target: "A" }] }),
+      );
+      const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
+      const calls: string[][] = [];
+      const runPack = vi.fn(async (_context: StageContext, _extra?: { blastRadius?: string[] }) => ({ outcome: "pass" as const, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } }));
+      const run = verifyRunner({
+        exec: async (command, args) => (calls.push([command, ...args]), { code: 0, stdout: "", stderr: "" }),
+        runPack,
+        stateDir,
+        gitIdentity: async () => ({ name: "A", email: "a@x.dev" }),
+        policy: async () => ({
+          checks: [
+            { name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] },
+            { name: "machine tests", run: "pnpm test", cwd: "machine", paths: ["machine/**"] },
+          ],
+          services: {},
+        }),
+        changedPaths: async () => changed,
+        graph: { currentDir: (repo) => (repo === "/repo" ? graphDir : null) },
+      });
+      return { run, calls, runPack };
+    };
+    const context = { task: { id: "t1", worktreePath: "/wt", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+
+    it("widens the check selection with the files that depend on the change, hands them to the reviewer and records them", async () => {
+      const { run, calls, runPack } = withGraph(["board/src/a.rs"]);
+      const result = await run(context);
+      expect(calls.map((c) => c[2])).toEqual(["cd 'board' && cargo test", "cd 'machine' && pnpm test"]);
+      expect(runPack).toHaveBeenCalledWith(context, { blastRadius: ["machine/src/m.ts"] });
+      expect(result.detail).toMatchObject({ blastRadius: ["machine/src/m.ts"] });
+    });
+
+    it("changes nothing when the repo has no graph", async () => {
+      const { run, calls, runPack } = withGraph(["board/src/a.rs"]);
+      const bare = verifyRunner({ exec: async (c, a) => (calls.push([c, ...a]), { code: 0, stdout: "", stderr: "" }), runPack, stateDir: mkdtempSync(join(tmpdir(), "verify-")), gitIdentity: async () => ({ name: "A", email: "a@x" }), policy: async () => ({ checks: null, services: {} }), detect: async () => ({ manager: "pnpm", test: ["t"] }) as never, changedPaths: async () => ["board/src/a.rs"], graph: { currentDir: () => null } });
+      const result = await bare(context);
+      expect(result.detail).not.toHaveProperty("blastRadius");
+      expect(runPack).toHaveBeenLastCalledWith(context, {});
+    });
+  });
+
+  describe("coverage of the change's added lines", () => {
+    const diff = ["diff --git a/src/a.ts b/src/a.ts", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -9,1 +10,5 @@", " ctx", "+a", "+b", "+c", "+d", ""].join("\n");
+    const worktree = () => {
+      const dir = mkdtempSync(join(tmpdir(), "verify-wt-"));
+      mkdirSync(join(dir, "coverage"), { recursive: true });
+      writeFileSync(join(dir, "coverage", "lcov.info"), ["SF:/work/src/a.ts", "DA:11,1", "DA:12,0", "DA:13,2", "DA:14,1", "end_of_record", ""].join("\n"));
+      return dir;
+    };
+    const lunaChecks = [{ name: "tests", run: "pnpm test", coverage: "coverage/lcov.info" }];
+
+    it("reads the report after a passing check, records it, adds a test finding per file with uncovered lines and leaves the verifier to read the change first", async () => {
+      const { run, context, runPack } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff });
+      const result = await run(context);
+      const summary = { files: [{ path: "src/a.ts", added: 4, covered: 3, uncovered: [12] }], total: { added: 4, covered: 3 }, report: "coverage/lcov.info" };
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).toMatchObject({ coverage: summary });
+      // 3 of 4 added lines are covered: above the default bar (1 - 0.5), so the numbers ride on the report and no finding is raised.
+      expect(result.findings).toEqual([]);
+      expect(runPack).toHaveBeenCalledWith(context, {}); // the review runs before the suite, so it is not given the coverage
+    });
+
+    it("raises one should_fix finding of category tests naming the files when patch coverage is under 1 - verify.coverage_drop_max", async () => {
+      const { run, context } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff, verify: { coverage_drop_max: 0.1 } });
+      const result = await run(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "should_fix", category: "tests", path: "src/a.ts", body: expect.stringContaining("uncovered: src/a.ts (12)") })]);
+    });
+
+    it("notes a report that is missing and still passes", async () => {
+      const { run, context } = setup({ worktree: mkdtempSync(join(tmpdir(), "verify-wt-")), lunaChecks, diffSince: async () => diff });
+      const result = await run(context);
+      expect(result.outcome).toBe("pass");
+      expect((result.detail as { checks: unknown[] }).checks).toContainEqual({ name: "tests", note: "coverage report coverage/lcov.info not found" });
+      expect(result.detail).not.toHaveProperty("coverage");
+    });
+
+    it("treats a report path that is a directory as not found", async () => {
+      const wt = worktree();
+      mkdirSync(join(wt, "coverage", "dir.info"), { recursive: true });
+      const { run, context } = setup({ worktree: wt, lunaChecks: [{ name: "tests", run: "pnpm test", coverage: "coverage/dir.info" }], diffSince: async () => diff });
+      const result = await run(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).not.toHaveProperty("coverage");
+      expect(JSON.stringify(result.detail?.checks)).toContain("coverage report coverage/dir.info not found");
+    });
+
+    it("does not read a report path that climbs out of the worktree", async () => {
+      const { run, context } = setup({ worktree: worktree(), lunaChecks: [{ name: "tests", run: "pnpm test", coverage: "../../etc/passwd" }], diffSince: async () => diff });
+      const result = await run(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).not.toHaveProperty("coverage");
+    });
+
+    it("reads no report when the check failed", async () => {
+      const { run, context, runPack } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff, checks: { "sh -c pnpm test": { code: 1, stdout: "x", stderr: "" } } });
+      const result = await run(context);
+      expect(runPack).toHaveBeenCalledTimes(1);
+      expect(result.detail).not.toHaveProperty("coverage");
+    });
+  });
+
+  describe("finding_classify after the review", () => {
+    const worktree = () => {
+      const dir = mkdtempSync(join(tmpdir(), "verify-wt-"));
+      mkdirSync(join(dir, "src"), { recursive: true });
+      writeFileSync(join(dir, "src", "a.ts"), Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n"));
+      writeFileSync(join(dir, "..", `${dir.split("/").pop()}-secret.txt`), "outside");
+      return dir;
+    };
+    const review = (findings: unknown[]): StageResult => ({ outcome: "pass", detail: { answer: { verdict: "pass", summary: "fine", findings } } });
+    const choose = (choice: string) => ({ severity: { choice, confidence: 0.9 } });
+
+    it("classifies each finding with an excerpt, records the rows and the calibration, and leaves the outcome alone", async () => {
+      const findings = [finding({ path: "src/a.ts", line: 10, severity: "bug", title: "first", confidence: 0.9 }), finding({ path: "src/a.ts", line: 20, severity: "nit", title: "second", confidence: 0.6 })];
+      const decide = vi.fn<Decide>(async (_pack, check) => choose(check.finding?.title === "first" ? "blocker" : "should_fix"));
+      const base = setup({ worktree: worktree(), pack: review(findings) });
+      const { run, context } = setup({ worktree: worktree(), pack: review(findings), decide });
+      const result = await run(context);
+      expect(result.outcome).toBe((await base.run(base.context)).outcome);
+      expect(decide).toHaveBeenCalledTimes(2);
+      const first = decide.mock.calls.find(([, c]) => c.finding?.title === "first")!;
+      expect(first[0]).toBe("finding_classify");
+      expect(first[1].kind).toBe("finding");
+      expect(first[1].excerpt).toContain("line 10");
+      expect(first[1].excerpt).toContain("line 2\n");
+      expect(first[1].excerpt).not.toContain("line 19");
+      const detail = result.detail as { classified: Array<Record<string, unknown>>; calibration: unknown };
+      expect(detail.classified).toEqual([
+        { id: findingId(findings[0] as never), title: "first", path: "src/a.ts", line: 10, severity: "bug", classified: "blocker", confidence: 0.9, verdict: "proceed" },
+        { id: findingId(findings[1] as never), title: "second", path: "src/a.ts", line: 20, severity: "nit", classified: "should_fix", confidence: 0.9, verdict: "proceed" },
+      ]);
+      expect(detail.calibration).toEqual({ agree: 1, disagree: 1, skipped: 0 });
+    });
+
+    it("classifies every merged finding, twenty at most, the most severe first, each row by its id", async () => {
+      const findings = Array.from({ length: 22 }, (_, i) => finding({ path: "src/a.ts", line: i * 10 + 1, title: `f${i}`, severity: i === 21 ? "blocker" : "nit", confidence: 0.5 }));
+      const decide = vi.fn<Decide>(async () => choose("nit"));
+      const { run, context } = setup({ worktree: worktree(), pack: review(findings), decide });
+      const result = await run(context);
+      expect(decide).toHaveBeenCalledTimes(20);
+      const rows = (result.detail as { classified: Array<{ title: string; id: string }> }).classified;
+      expect(rows[0]).toMatchObject({ title: "f21", id: findingId(findings[21] as never) });
+      expect(rows.map((c) => c.title)).not.toContain("f20");
+    });
+
+    it("keeps the excerpt inside the worktree: a path that climbs out gets none", async () => {
+      const wt = worktree();
+      const decide = vi.fn<Decide>(async () => choose("nit"));
+      const { run, context } = setup({ worktree: wt, pack: review([finding({ path: `../${wt.split("/").pop()}-secret.txt`, line: 1 })]), decide });
+      await run(context);
+      expect(decide.mock.calls[0]![1].excerpt ?? "").toBe("");
+    });
+
+    it("reads no excerpt from a directory or from a file over the size cap: only regular files of a sane size", async () => {
+      const wt = worktree();
+      writeFileSync(join(wt, "src", "big.ts"), "x".repeat(1_100_000));
+      const decide = vi.fn<Decide>(async () => choose("nit"));
+      const { run, context } = setup({ worktree: wt, pack: review([finding({ path: "src", line: 1, title: "dir" }), finding({ path: "src/big.ts", line: 1, title: "big" })]), decide });
+      await run(context);
+      for (const [, check] of decide.mock.calls) expect(check.excerpt ?? "").toBe("");
+    });
+
+    it("records nothing without a decide, and a skipped decision counts as skipped", async () => {
+      const findings = [finding({ path: "src/a.ts", line: 3, severity: "nit" })];
+      const none = setup({ worktree: worktree(), pack: review(findings), decide: null });
+      expect((await none.run(none.context)).detail).not.toHaveProperty("classified");
+      const failing = setup({ worktree: worktree(), pack: review(findings), decide: async () => { throw new Error("no jev"); } });
+      const detail = (await failing.run(failing.context)).detail as { classified: Array<{ classified: unknown; verdict: string }>; calibration: unknown };
+      expect(detail.classified[0]).toMatchObject({ classified: null, confidence: null, verdict: "skipped" });
+      expect(detail.calibration).toEqual({ agree: 0, disagree: 0, skipped: 1 });
+    });
+
+    it("never changes the verdict, whatever the classification says", async () => {
+      const findings = [finding({ path: "src/a.ts", line: 3, severity: "bug", confidence: 0.95 })];
+      const failing: StageResult = { outcome: "pass", detail: { answer: { verdict: "fail", summary: "bad", findings } } };
+      const a = setup({ worktree: worktree(), pack: failing, decide: async () => choose("nit") });
+      const b = setup({ worktree: worktree(), pack: failing });
+      expect((await a.run(a.context)).outcome).toBe("fail");
+      expect((await b.run(b.context)).outcome).toBe("fail");
+    });
+  });
+
+  describe("the mutation hook", () => {
+    const lunaChecks = [{ name: "tests", run: "pnpm test" }];
+    const mutation = (command: string | null) => ({ mutation: { command, min_score: 0.6 } });
+
+    it("runs the repository's command in the sandbox after the checks and makes a should_fix finding of a score under the minimum", async () => {
+      const { run, context, calls } = setup({ lunaChecks, verify: mutation("pnpm stryker run"), checks: { "sh -c pnpm stryker run": { code: 0, stdout: "killed 3\nmutation score: 0.4\n", stderr: "" } } });
+      const result = await run(context);
+      expect(calls.map((c) => c.join(" "))).toEqual(["sh -c pnpm test", "sh -c pnpm stryker run"]);
+      expect(result.outcome).toBe("pass");
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "should_fix", category: "tests", title: "mutation score 40% is below the 60% the repository asks for" })]);
+      expect(result.detail).toMatchObject({ mutation: { score: 0.4 } });
+    });
+
+    it("gives no score for a mutation run that exits non-zero, whatever it printed", async () => {
+      const s = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 2, stdout: "mutation score: 0.1", stderr: "" } } });
+      const result = await s.run(s.context);
+      expect(result.findings).toEqual([]);
+      expect((result.detail as { checks: unknown[] }).checks).toContainEqual({ name: "mutation", note: "the mutation run printed no score" });
+    });
+
+    it("raises nothing at or over the minimum, and notes a run that printed no score", async () => {
+      const ok = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 0, stdout: "mutation score: 90%", stderr: "" } } });
+      expect((await ok.run(ok.context)).findings).toEqual([]);
+      const none = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 0, stdout: "done", stderr: "" } } });
+      const result = await none.run(none.context);
+      expect(result.findings).toEqual([]);
+      expect((result.detail as { checks: unknown[] }).checks).toContainEqual({ name: "mutation", note: "the mutation run printed no score" });
+    });
+
+    it("runs in the card's repository: its image, list and install, like every other check (no call on the machine's bare defaults)", async () => {
+      const s = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 0, stdout: "mutation score: 90%", stderr: "" } } });
+      await s.run(s.context);
+      const options = s.exec.mock.calls.map((call) => call[2] as { repoPath?: string });
+      expect(options.map((o) => o.repoPath)).toEqual(["/repo", "/repo"]);
+    });
+
+    it("escalates as env_broken when the install before the mutation run fails, and says what its container was refused", async () => {
+      const detail = { escalation: "env_broken", envBroken: true, step: "install", reason: "x", options: [] };
+      const rows = [{ host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }];
+      const emitted: Array<[string, Record<string, unknown>]> = [];
+      const exec = vi.fn(async (_c: string, args: string[]) => {
+        if (args.join(" ") === "-c m") throw new InstallFailedError(detail);
+        return { code: 0, stdout: "ok", stderr: "", blocked: rows };
+      });
+      const runner = verifyRunner({
+        exec: exec as never, runPack: null, stateDir: mkdtempSync(join(tmpdir(), "verify-mut-")), detect: async () => ({ test: ["t"] }) as never,
+        gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null,
+        policy: async () => ({ checks: lunaChecks, services: {}, verify: mutation("m") }),
+      });
+      const ctx = { task: { id: "t1", worktreePath: "/wt", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal, emit: async (kind: string, payload: Record<string, unknown>) => void emitted.push([kind, payload]) } as unknown as StageContext;
+      expect(await runner(ctx)).toMatchObject({ outcome: "escalated", detail });
+      expect(emitted).toContainEqual(["sandbox.egress_blocked", expect.objectContaining({ step: "check", host: "evil.example.com" })]);
+    });
+
+    it("runs nothing when the command is unset, and not at all after a red check", async () => {
+      const unset = setup({ lunaChecks, verify: mutation(null) });
+      await unset.run(unset.context);
+      expect(unset.calls).toEqual([["sh", "-c", "pnpm test"]]);
+      const red = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c pnpm test": { code: 1, stdout: "x", stderr: "" } } });
+      await red.run(red.context);
+      expect(red.calls.map((c) => c.join(" "))).toEqual(["sh -c pnpm test"]);
+    });
+  });
+
   it("names a failed luna.yaml check by its own name, with its tail, so the finding reads like the file", async () => {
     const { run, context, runPack } = setup({
       lunaChecks: [{ name: "board tests", run: "cargo test", cwd: "board" }],
@@ -148,7 +464,7 @@ describe("verifying stage", () => {
     expect(result.outcome).toBe("fail");
     expect(result.detail).toMatchObject({ summary: "board tests failed", error: expect.stringContaining("cargo test (in board)") });
     expect(result.findings).toEqual([expect.objectContaining({ severity: "test", title: "board tests failed", body: "test x ... FAILED" })]);
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
   });
 
   it("asks for the repo's services beside every check, so a suite that needs a database gets one", async () => {
@@ -166,9 +482,9 @@ describe("verifying stage", () => {
     const result = await run(context);
     expect(runPack).toHaveBeenCalledOnce();
     expect(result.outcome).toBe("fail");
-    expect(result.findings).toEqual([f]);
-    expect(result.detail).toMatchObject({ step: "review", verdict: "fail", summary: "bug", findings: [f] });
-    expect((result.detail as { checks: Array<{ name: string }> }).checks.map((c) => c.name)).toEqual(["test", "lint"]);
+    expect(result.findings).toEqual([expect.objectContaining({ ...f, id: findingId(f as never) })]);
+    expect(result.detail).toMatchObject({ step: "review", verdict: "fail", summary: "bug", findings: [expect.objectContaining({ title: f.title })] });
+    expect(result.detail).not.toHaveProperty("checks");
   });
 
   it("passes when checks and the review pass", async () => {
@@ -180,7 +496,7 @@ describe("verifying stage", () => {
 
   it("computes the verdict mechanically when the answer has none", async () => {
     const low = finding({ confidence: 0.5 });
-    const nit = finding({ severity: "nit" });
+    const nit = finding({ severity: "nit", line: 50, title: "naming" });
     const mk = (findings: unknown[]) => ({ outcome: "pass" as const, detail: { answer: { findings } }, findings: [] });
     expect((await setup({ pack: mk([low, nit]) }).run(setup({}).context)).outcome).toBe("pass");
     const s = setup({ pack: mk([finding({ severity: "security" })]) });
@@ -192,7 +508,7 @@ describe("verifying stage", () => {
     const s = setup({ pack: { outcome: "pass", detail: {}, findings: [f] } });
     const result = await s.run(s.context);
     expect(result.outcome).toBe("fail");
-    expect(result.findings).toEqual([f]);
+    expect(result.findings).toEqual([expect.objectContaining({ ...f, id: findingId(f as never) })]);
   });
 
   it("skips the checks with a note when no test command is detected, and still runs the pack", async () => {
@@ -218,7 +534,7 @@ describe("verifying stage", () => {
       checks: { "pnpm run lint": { code: 1, stdout: "", stderr: "eslint: 3 errors" } },
     });
     const result = await run(context);
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
     expect(result.outcome).toBe("fail");
   });
 
@@ -257,6 +573,19 @@ describe("verifying stage", () => {
     const { run, context } = setup({ checks: { "pnpm run test": { code: 1, stdout: "boom", stderr: "" } } });
     const result = await run(context);
     expect((result.detail as { error: string }).error).toBe("`pnpm run test` failed:\nboom");
+  });
+
+  it("fails on a confident blocker whatever the verifier's own verdict says, and never runs the suite", async () => {
+    const s = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "pass", summary: "fine", findings: [finding({ severity: "blocker", confidence: 0.95 })] } } } });
+    const result = await s.run(s.context);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ verdict: "fail", step: "review" });
+    expect(s.exec).not.toHaveBeenCalled();
+  });
+
+  it("fails on a confident blocker when the pack only asked a question", async () => {
+    const s = setup({ pack: { outcome: "needs_input", detail: { answer: { findings: [finding({ severity: "security", confidence: 0.9 })] }, questions: [{ q: "?" }] } } });
+    expect((await s.run(s.context)).outcome).toBe("fail");
   });
 
   it("treats a pack that asks questions as a pass with a note", async () => {
@@ -325,6 +654,226 @@ describe("verifying stage", () => {
     const result = await s.run(s.context);
     expect(result.outcome).toBe("fail");
     expect(result.detail).toMatchObject({ error: "aborted" });
-    expect(s.runPack).not.toHaveBeenCalled();
+    expect(s.runPack).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("verify on a fresh clone", () => {
+  const card = { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" };
+  const build = (outcome: "pass" | "fail" | "escalated", broughtBack: { ok: boolean; reason?: string } = { ok: true }) => {
+    const seen = { cwd: [] as (string | undefined)[], packPath: "", removed: [] as string[], kept: [] as string[][], back: [] as string[][], made: [] as string[][] };
+    const runner = verifyRunner({
+      exec: async (_c, _a, options) => (seen.cwd.push(options.cwd), { code: 0, stdout: "", stderr: "" }),
+      runPack: async (context) => {
+        seen.packPath = context.task.worktreePath!;
+        return { outcome, detail: outcome === "pass" ? { answer: { verdict: "pass", findings: [], results: [], summary: "ok" } } : { reason: "r" }, workspace: { branch: "task/x", worktreePath: context.task.worktreePath! } } as StageResult;
+      },
+      stateDir: "/tmp/state",
+      detect: async () => ({ test: ["pnpm", "test"] }) as never,
+      gitIdentity: async () => ({ name: "a", email: "a@b" }),
+      changedPaths: async () => null,
+      fresh: {
+        make: async (path, branch, runId) => (seen.made.push([path, branch, runId]), { path: "/card.verify", commit: "a".repeat(40) }),
+        bringBack: async (path, freshPath, branch, from) => (seen.back.push([path, freshPath, branch, from]), broughtBack),
+        remove: async (path) => void seen.removed.push(path),
+        keep: async (path, taskId, runId) => void seen.kept.push([path, taskId, runId]),
+      },
+    });
+    const context = { task: card, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    return { runner, context, seen };
+  };
+
+  it("runs the checks and the review in the fresh clone, never in the card's folder, and names the commit it was made at", async () => {
+    const { runner, context, seen } = build("pass");
+    const result = await runner(context);
+    expect(seen.made).toEqual([["/card", "task/x", "run-1"]]);
+    expect(seen.cwd).toEqual(["/card.verify"]);
+    expect(seen.packPath).toBe("/card.verify");
+    expect(result.detail).toMatchObject({ freshClone: { commit: "a".repeat(40) } });
+    // The fresh folder is never the task's workspace.
+    expect(result.workspace).toBeUndefined();
+  });
+
+  it("brings the commits back after a pass, and removes the folder", async () => {
+    const { runner, context, seen } = build("pass");
+    expect((await runner(context)).outcome).toBe("pass");
+    expect(seen.back).toEqual([["/card", "/card.verify", "task/x", "a".repeat(40)]]);
+    expect(seen.removed).toEqual(["/card.verify"]);
+  });
+
+  it("fails the stage when what Verify left cannot come back as a fast-forward", async () => {
+    const { runner, context } = build("pass", { ok: false, reason: "not a fast-forward" });
+    const result = await runner(context);
+    expect(result.outcome).toBe("fail");
+    expect(JSON.stringify(result.detail)).toContain("not a fast-forward");
+  });
+
+  it("brings nothing back after a failure, and keeps the folder on an escalation", async () => {
+    const failed = build("fail");
+    await failed.runner(failed.context);
+    expect(failed.seen.back).toEqual([]);
+    expect(failed.seen.removed).toEqual(["/card.verify"]);
+    const escalated = build("escalated");
+    await escalated.runner(escalated.context);
+    expect(escalated.seen.back).toEqual([]);
+    expect(escalated.seen.removed).toEqual([]);
+    // Kept folders are registered, so the keep ends after sandbox.keep_hours.
+    expect(escalated.seen.kept).toEqual([["/card.verify", "t1", "run-1"]]);
+    expect(failed.seen.kept).toEqual([]);
+  });
+
+  describe("the environment comparison", () => {
+    const recorded = { hash: "h", image: "sha256:build", commit: "a".repeat(40), lockfiles: { "Cargo.lock": "h2" } };
+    const runnerFor = (current: { image: string; lockfiles: Record<string, string> }, built: typeof recorded | null = recorded) => {
+      const pack = vi.fn(async () => ({ outcome: "pass", detail: { answer: { verdict: "pass", findings: [], results: [], summary: "ok" } } }) as StageResult);
+      const runner = verifyRunner({
+        exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+        runPack: pack,
+        stateDir: "/tmp/state",
+        detect: async () => ({ test: ["t"] }) as never,
+        gitIdentity: async () => ({ name: "a", email: "a@b" }),
+        changedPaths: async () => null,
+        fresh: { make: async () => ({ path: "/card.verify", commit: recorded.commit }), bringBack: async () => ({ ok: true }), remove: async () => {} },
+        buildEnv: async () => built,
+        envOf: async (_path, commit) => ({ ...current, commit, hash: "x" }),
+      });
+      const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+      return { runner, context, pack };
+    };
+
+    it("says matched when the image and the lockfiles are the ones Build recorded", async () => {
+      const { runner, context } = runnerFor({ image: "sha256:build", lockfiles: { "Cargo.lock": "h2" } });
+      const result = await runner(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).toMatchObject({ envReproduction: "matched" });
+    });
+
+    it("fails with a blocker finding, category env, naming both images, before the review runs", async () => {
+      const { runner, context, pack } = runnerFor({ image: "sha256:other", lockfiles: { "Cargo.lock": "h2" } });
+      const result = await runner(context);
+      expect(result.outcome).toBe("fail");
+      expect(pack).not.toHaveBeenCalled();
+      expect(result.findings).toMatchObject([{ severity: "blocker", category: "env", body: expect.stringContaining("sha256:build") }]);
+      expect(result.findings![0]!.body).toContain("sha256:other");
+      expect(result.detail).toMatchObject({ envReproduction: expect.stringContaining("the runner image differs") });
+    });
+
+    it("fails on a lockfile that differs at the same commit", async () => {
+      const { runner, context } = runnerFor({ image: "sha256:build", lockfiles: { "Cargo.lock": "h9" } });
+      expect(await runner(context)).toMatchObject({ outcome: "fail", findings: [{ category: "env" }] });
+    });
+
+    it("compares, runs the checks and runs the review in one image, chosen once, even when the repository's image moves in between", async () => {
+      // A floating base moves: each resolution of the repository's image answers a new one.
+      let resolutions = 0;
+      const imageOf = vi.fn(async () => `sha256:moving-${++resolutions}`);
+      const compared: Array<string | undefined> = [];
+      const execImages: Array<string | undefined> = [];
+      const pack = vi.fn(async (_context: StageContext, _extra?: { image?: string }) => ({ outcome: "pass", detail: { answer: { verdict: "pass", findings: [], results: [], summary: "ok" } } }) as StageResult);
+      const runner = verifyRunner({
+        exec: async (_c, _a, options) => (execImages.push(options.image), { code: 0, stdout: "", stderr: "" }),
+        runPack: pack,
+        stateDir: "/tmp/state",
+        detect: async () => ({ test: ["t"] }) as never,
+        gitIdentity: async () => ({ name: "a", email: "a@b" }),
+        changedPaths: async () => null,
+        fresh: { make: async () => ({ path: "/card.verify", commit: recorded.commit }), bringBack: async () => ({ ok: true }), remove: async () => {} },
+        buildEnv: async () => ({ ...recorded, image: "sha256:moving-1" }),
+        imageOf,
+        envOf: async (_path, commit, _repo, image) => (compared.push(image), { image: image ?? "", lockfiles: recorded.lockfiles, commit, hash: "x" }),
+      });
+      const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+      const result = await runner(context);
+      expect(result.outcome).toBe("pass");
+      expect(imageOf).toHaveBeenCalledTimes(1);
+      expect(compared).toEqual(["sha256:moving-1"]);
+      expect(execImages.length).toBeGreaterThan(0);
+      expect(new Set(execImages)).toEqual(new Set(["sha256:moving-1"]));
+      expect(pack.mock.calls[0]![1]).toMatchObject({ image: "sha256:moving-1" });
+    });
+
+    it("compares nothing when Build recorded nothing", async () => {
+      const { runner, context } = runnerFor({ image: "sha256:other", lockfiles: {} }, null);
+      const result = await runner(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).not.toHaveProperty("envReproduction");
+    });
+  });
+});
+
+describe("with no sandbox to run the repository's checks in", () => {
+  it("runs nothing on the host and escalates as an environment problem", async () => {
+    const pack = vi.fn();
+    const runner = verifyRunner({ exec: null, runPack: pack, stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    const result = await runner(context);
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", reason: expect.stringContaining("never run on the host") } });
+    expect(pack).not.toHaveBeenCalled();
+  });
+});
+
+/** A review that finds nothing: Verify reviews first (12a), so a test of what the checks do needs one that lets the suite run. */
+const passingReview = vi.fn(async () => ({ outcome: "pass" as const, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } }));
+
+describe("when the repository's image cannot be built while a check runs", () => {
+  it("escalates as an environment problem with the reason, not as an exception", async () => {
+    const exec = async () => { throw new RepoImageError("step 3 failed: no such package"); };
+    const runner = verifyRunner({ exec: exec as never, runPack: passingReview, stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    expect(await runner(context)).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, reason: expect.stringContaining("no such package") } });
+  });
+});
+
+describe("the network a check runs on", () => {
+  const base = { runPack: passingReview, stateDir: mkdtempSync(join(tmpdir(), "verify-net-")), detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null };
+  const ctx = (emit?: StageContext["emit"]) => ({ task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal, ...(emit ? { emit } : {}) }) as unknown as StageContext;
+
+  it("escalates as env_broken at step network when the daemon cannot make the isolated one", async () => {
+    const runner = verifyRunner({ ...base, exec: (async () => { throw new EgressUnsupportedError("old daemon"); }) as never });
+    expect(await runner(ctx())).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28") } });
+  });
+
+  it("emits what a check's container was refused, as a check row", async () => {
+    const rows = [{ host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const runner = verifyRunner({ ...base, exec: (async () => ({ code: 0, stdout: "ok", stderr: "", blocked: rows })) as never });
+    await runner(ctx(async (kind, payload) => void emitted.push([kind, payload])));
+    expect(emitted).toContainEqual(["sandbox.egress_blocked", { step: "check", host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }]);
+  });
+});
+
+describe("when the install before a check fails", () => {
+  it("escalates as env_broken at step install with the step's own detail", async () => {
+    const detail = { escalation: "env_broken", envBroken: true, step: "install", tool: "npm", lockfile: "package-lock.json", reason: "x", logTail: "boom", options: [] };
+    const exec = async () => { throw new InstallFailedError(detail); };
+    const runner = verifyRunner({ exec: exec as never, runPack: passingReview, stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    expect(await runner(context)).toMatchObject({ outcome: "escalated", detail });
+  });
+});
+
+describe("the counted size of the change", () => {
+  const found = (r: StageResult) => ((r.findings ?? []) as Array<{ category?: string; severity: string; title: string }>).filter((f) => f.category === "size");
+
+  it("is one should_fix finding of category size when the change's own diff is over the hard limit, and the stage still passes", async () => {
+    const { run, context } = setup({ counted: { added: 2400, removed: 300 } });
+    const result = await run(context);
+    expect(result.outcome).toBe("pass");
+    expect(found(result)).toEqual([expect.objectContaining({ severity: "should_fix", title: "the change is 2700 lines, over the limit of 2500" })]);
+    expect(((result.detail as { findings?: unknown[] }).findings ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("says nothing at or under the limit, with no count, or when an approved plan gate kept the card whole", async () => {
+    for (const opts of [{ counted: { added: 2000, removed: 500 } }, { counted: null }, {}] as const) {
+      const { run, context } = setup(opts);
+      expect(found(await run(context))).toEqual([]);
+    }
+    const kept = setup({ counted: { added: 3000, removed: 0 }, approvals: [{ kind: "awaiting_approval", decision: "approved", requested: { outcome: "split" }, response: { keepWhole: true } } as never] });
+    expect(found(await kept.run(kept.context))).toEqual([]);
+  });
+
+  it("reads the limit from the repository's size section", async () => {
+    const { run, context } = setup({ counted: { added: 150, removed: 0 }, size: { target_loc: [50, 80], hard_limit_loc: 100, max_children: 8, max_rounds: 3, depth: 2 } });
+    expect(found(await run(context))[0]?.title).toBe("the change is 150 lines, over the limit of 100");
   });
 });

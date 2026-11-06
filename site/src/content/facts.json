@@ -1,6 +1,33 @@
 {
-  "states": 22,
+  "states": 23,
   "columns": 8,
-  "packs": 16,
-  "images": 2
+  "packs": 53,
+  "images": 3,
+  "decisionDefaults": {
+    "ci_failure_class": "jev",
+    "comment_intent": "jev",
+    "conversation_assess": "claude:haiku",
+    "conversation_relation": "jev",
+    "coverage_check": "claude:haiku",
+    "e2e_failure_cause": "jev",
+    "escalation_reason": "jev",
+    "event_class": "claude:haiku",
+    "evidence_format": "claude:haiku",
+    "evidence_valid": "codex:luna",
+    "finding_classify": "codex:luna",
+    "fix_scope": "jev",
+    "frame_privacy": "jev",
+    "intake_dedup": "jev",
+    "plan_check": "claude:haiku",
+    "red_check": "codex:luna",
+    "risk_score": "codex:luna",
+    "scope_check": "claude:haiku",
+    "size_estimate": "codex:luna",
+    "split_check": "codex:luna",
+    "ticket_assess": "claude:haiku",
+    "ticket_recommend": "codex:luna",
+    "ticket_validity": "codex:luna",
+    "triage_signals": "codex:luna",
+    "worth_learning": "jev"
+  }
 }

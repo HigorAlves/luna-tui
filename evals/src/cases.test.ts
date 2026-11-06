@@ -1,11 +1,17 @@
-import { PACK_LIMITS, StageInput } from "@hardness/contracts";
+import { PACKS, PACK_LIMITS, StageInput } from "@hardness/contracts";
+import { contextSchema } from "@hardness/machine/decisions";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { baselinePath, caseInput, judgeInput, loadCases, prepareWorktree, verdictOf } from "./cases.ts";
+import { readingProblems } from "./preflight.ts";
+import { TOKEN_SHAPE } from "./scrub.ts";
+import { baselinePath, caseInput, datasetCases, judgeInput, loadCases, parseTrials, prepareWorktree, verdictOf } from "./cases.ts";
+
+/** Every `@host` whose host is not a reserved one: `.example`, `example.com|org|net` or `.invalid`. */
+const unsafeAddresses = (text: string): string[] => [...text.matchAll(/@([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi)].map((m) => m[1]!).filter((host) => !/(?:^|\.)example(?:\.(?:com|org|net))?$|\.invalid$|^example$/i.test(host));
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 
@@ -99,12 +105,37 @@ describe("the runs' inputs", () => {
   });
 });
 
+describe("cases from a dataset", () => {
+  const retro = { kind: "retro", retro: { predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 640, removed: 90, retries: { verify: 2, e2e: 1, ci: 1, total: 5 }, escalations: 1, format: "captures", durationMs: 1, durationMin: 310 }, runs: 14 } };
+
+  it("makes an EvalCase of each labelled datapoint, the taskId as its id, and skips a bad one", () => {
+    const { cases, skipped } = datasetCases("worth_learning", [
+      { taskId: "reviewed/1", data: { ship: retro }, target: { worth: { value: true } } },
+      { taskId: "broken", data: { ship: { kind: "nope" } }, target: { worth: { value: true } } },
+    ]);
+    expect(cases.map((c) => [c.id, c.pack, c.input.pack])).toEqual([["reviewed-1", "worth_learning", "worth_learning"]]);
+    expect(cases[0]!.expect.checks).toEqual([{ kind: "equals", path: "worth.value", value: true }]);
+    expect(skipped.map((s) => s.taskId)).toEqual(["broken"]);
+  });
+
+  it("reads --trials as 1 to 20", () => {
+    expect([parseTrials(undefined), parseTrials("3")]).toEqual([1, 3]);
+    for (const bad of ["0", "21", "x", "1.5"]) expect(() => parseTrials(bad)).toThrow(/--trials/);
+  });
+});
+
+describe("the case gate", () => {
+  it("refuses a host that is not reserved, and accepts the reserved ones", () => {
+    expect(unsafeAddresses("a@acme.dev b@corp.internal c@mail.example d@example.org e@x.invalid")).toEqual(["acme.dev", "corp.internal"]);
+  });
+});
+
 describe("the seed cases", () => {
   const EVALS = resolve(import.meta.dirname, "..");
   const packs = readdirSync(EVALS, { withFileTypes: true }).filter((d) => d.isDirectory() && existsSync(join(EVALS, d.name, "cases"))).map((d) => d.name);
 
-  it("cover triage, slack_triage and issue_classify, three cases each at least", () => {
-    expect(packs.sort()).toEqual(expect.arrayContaining(["issue_classify", "slack_triage", "triage"]));
+  it("cover triage, slack_triage and triage_signals, three cases each at least", () => {
+    expect(packs.sort()).toEqual(expect.arrayContaining(["triage_signals", "slack_triage", "triage"]));
     for (const pack of packs) expect(loadCases(EVALS, pack as "triage").length).toBeGreaterThanOrEqual(3);
   });
 
@@ -113,8 +144,46 @@ describe("the seed cases", () => {
       const repo = evalCase.input.task.repoPath;
       if (repo !== "") expect(existsSync(join(ROOT, repo)), `${evalCase.id}: ${repo}`).toBe(true);
       const text = JSON.stringify(evalCase);
-      expect(text, evalCase.id).not.toMatch(/xox[abposr]-|ghp_|github_pat_|\bsk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{20,}/);
-      expect(text, evalCase.id).not.toMatch(/@(?!example)[a-z0-9-]+\.(com|io|dev|net|org)\b/i);
+      expect(text, evalCase.id).not.toMatch(TOKEN_SHAPE);
+      expect(unsafeAddresses(text), evalCase.id).toEqual([]);
     }
+  });
+
+  const decisions = Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
+
+  it("has a case for each of the twenty-five decision packs' four kinds: two clear, one borderline checked on confidence, one adversarial", () => {
+    expect(decisions).toHaveLength(25);
+    for (const pack of decisions) {
+      const cases = loadCases(EVALS, pack as "triage");
+      expect(cases.length, pack).toBeGreaterThanOrEqual(4);
+      const labelled = cases.filter((c) => c.expect.label);
+      const borderline = cases.filter((c) => !c.expect.label && c.expect.checks.some((k) => k.kind === "between" && /\.(p|confidence)$/.test(k.path)));
+      expect(labelled.length, `${pack}: labelled`).toBeGreaterThanOrEqual(pack === "triage_signals" ? 1 : 3);
+      expect(borderline.length, `${pack}: borderline`).toBeGreaterThanOrEqual(1);
+      // A label that names an answer's key must name one of the pack's questions, and a case is never left for review once committed.
+      for (const c of cases) {
+        for (const question of Object.keys(c.expect.label ?? {})) expect(Object.keys(PACKS[pack as "worth_learning"].questions), `${pack}/${c.id}`).toContain(question);
+        expect(c.expect.review, `${pack}/${c.id}`).toBeUndefined();
+      }
+    }
+  });
+
+  it.each(decisions)("%s: every context parses with the pack's context schema, and a clear or adversarial case has checks", (pack) => {
+    for (const c of loadCases(EVALS, pack as "triage")) {
+      const context = Object.fromEntries(Object.entries(c.input.context).filter(([key, value]) => key !== "projectContext" && value !== undefined));
+      expect(contextSchema(pack as "worth_learning").safeParse(context).success, `${pack}/${c.id}`).toBe(true);
+      expect(c.expect.checks.length, `${pack}/${c.id}`).toBeGreaterThan(0);
+    }
+  });
+});
+
+/** Every decision pack: a pack added later is checked from its first case. */
+const READ: string[] = Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
+
+describe("the readings of the hand-written cases", () => {
+  const EVALS = resolve(import.meta.dirname, "..");
+  it("hold for every pack in READ: the label is tied to the pack's own criterion text, the twin differs, a borderline case has two readings", () => {
+    const problems = READ.flatMap((pack) => readingProblems(EVALS, pack as "worth_learning"));
+    expect(problems).toEqual([]);
   });
 });

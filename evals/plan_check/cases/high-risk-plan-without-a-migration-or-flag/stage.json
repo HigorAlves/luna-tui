@@ -1,0 +1,79 @@
+{
+  "schema": 3,
+  "stage": "plan_check",
+  "pack": "plan_check",
+  "attempt": 1,
+  "task": {
+    "id": "plan-check",
+    "title": "Add a CSV export button to the cart page.",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "example-tracker:EX-1",
+        "kind": "feature",
+        "goal": "Move card tokens to the new vault and drop the old column",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "high",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "brief": "",
+      "criteria": [
+        "Every token is readable from the vault"
+      ],
+      "assumptions": [],
+      "slices": [
+        {
+          "title": "Drop the old tokens column and backfill in one change",
+          "est_loc": 900,
+          "touchpoints": [
+            "db/migrations/0042_tokens.sql",
+            "src/payments/vault.ts",
+            "src/payments/charge.ts"
+          ],
+          "acceptance": [
+            "Every token is readable from the vault"
+          ]
+        }
+      ],
+      "cases": [],
+      "risk": {
+        "level": "high",
+        "product": 18,
+        "scores": {
+          "blast_radius": 0,
+          "reversibility": 0,
+          "data_sensitivity": 0
+        },
+        "complexity": "XL"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

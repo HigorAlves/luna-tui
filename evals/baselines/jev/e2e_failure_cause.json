@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "e2e_failure_cause",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T15:42:18.913Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 530.5,
+    "costUsd": 0.00016519,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 6,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 1,
+      "coverage": 0.75,
+      "brier": 0.014514285714285714,
+      "ece": 0.06857142857142849,
+      "meanConfidence": 0.77,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "app-returns-500",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"product_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 575,
+      "costUsd": 0.0000205,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.94,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "browser-process-killed",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"env_flake\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 485,
+      "costUsd": 0.00002113,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 1,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "dev-server-down",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"env_flake\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 566,
+      "costUsd": 0.00002104,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 1,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "export-500-plain-summary",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"product_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 422,
+      "costUsd": 0.00002016,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-expects-the-wrong-total",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"test_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 382,
+      "costUsd": 0.00002125,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.92,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-uses-the-old-label",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"test_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 388,
+      "costUsd": 0.00002071,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 1,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "selector-timeout",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.confidence within 0..0.8",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 387,
+      "costUsd": 0.00001982,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": null,
+            "confidence": 0.04,
+            "verdict": "ask"
+          }
+        },
+        "correct": null,
+        "confidence": 0.04,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "summary-blames-the-scenario",
+      "pass": false,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"product_bug\"",
+          "pass": false,
+          "detail": "found \"test_bug\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1039,
+      "costUsd": 0.00002058,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": false,
+            "confidence": 0.3,
+            "verdict": "ask"
+          }
+        },
+        "correct": false,
+        "confidence": 0.3,
+        "verdict": "ask"
+      }
+    }
+  ]
+}

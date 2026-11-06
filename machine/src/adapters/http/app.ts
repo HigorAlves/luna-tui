@@ -4,13 +4,19 @@ import {
   AnswersInput,
   type ApiError,
   CloneInput,
+  ArchiveInput,
+  AddFindingInput,
+  DismissFindingInput,
+  EvidenceFeedbackInput,
   DecisionInput,
+  EscalationReasonInput,
   EngineId,
   type PrAction,
   PrActionInput,
   type PullRequest,
   EditCasesInput,
   EditPlanInput,
+  EditRecordInput,
   EditStagesInput,
   JiraCreateInput,
   JiraLinkInput,
@@ -18,23 +24,37 @@ import {
   type MetricsGroupBy,
   type TaskDiff,
   type TaskSla,
+  CARD_EVENT_NAMES,
+  CardEventName,
+  BacklogAddInput,
+  TicketApproveInput,
+  TicketEditInput,
+  TicketIgnoreInput,
+  ContextInput,
+  DedupAnswerInput,
+  MergeCardInput,
   NewTaskInput,
   PACKS,
   PackId,
   RunInput,
   SetupRepoInput,
   SlackItemPatch,
+  SlackRelationInput,
   SlackReplyInput,
   SlackTaskInput,
   SlackWatchInput,
   SlackWatchPatch,
   type StreamMessage,
+  type ShipView,
   StubPlanInput,
   TaskSource,
   TaskState,
   UpdateTaskInput,
+  type RepoHealth,
 } from "@hardness/contracts";
 import { type Context, Hono } from "hono";
+import { type Backlog, BacklogItemNotFoundError, NotSchedulableError } from "../../application/backlog.ts";
+import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DataSource } from "typeorm";
@@ -52,12 +72,13 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitAutoApprovalError, SplitChangedError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
-import { AlreadyTaskError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
+import { tapOf } from "../../application/slack-send.ts";
+import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, NoWatchError, SlackRefusedError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
 import { NoJiraTokenError } from "../../application/jira.ts";
 import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type JiraTasksPort, NoIssueError, NoProjectError, NotchTaskError } from "../../application/jira-tasks.ts";
@@ -80,9 +101,17 @@ const IDEMPOTENCY_KEY_MAX = 200;
 const RECENT_EVENTS = 50;
 
 export interface AppDeps {
+  /** Each repository's image and graph health for `GET /repos`; absent, the list is empty. */
+  repoHealth?: () => Promise<RepoHealth[]>;
+  /** Approves a base for a repository (refused unless it is the one in the repository's luna.yaml on the user's checkout); absent, `POST /repos/base/approve` is absent. */
+  approveBase?: (repo: string, base: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   db: DataSource;
   pipeline: Pipeline;
   bus: Bus;
+  /** The shared backlog; without it the `/backlog` routes are absent. */
+  backlog?: Backlog;
+  /** The Ticket Machine; without it the `/tickets` routes are absent. */
+  tickets?: TicketMachine;
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
@@ -99,6 +128,8 @@ export interface AppDeps {
   jira?: JiraTasksPort;
   /** The ticket's SLA clocks, computed when a task is answered or published; without it every task shows `sla: null`. */
   sla?: (task: TaskRow) => Promise<TaskSla | null>;
+  /** The watched PR's checklist and clocks for `GET /tasks/:id`; without it `ship` is null. */
+  shipView?: (taskId: string) => Promise<ShipView | null>;
   /** The same for a whole list at once (`GET /tasks`); falls back to `sla` per task. */
   slaAll?: (tasks: TaskRow[]) => Promise<Map<string, TaskSla | null>>;
   /** Whether this machine has each engine's credential, for `GET /engines`; defaults to the machine's own. */
@@ -156,7 +187,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -168,9 +199,34 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof TaskNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
+    if (error instanceof WorktreeUnpushedError) return fail(c, 409, "unpushed_commits", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
+    if (error instanceof TicketNotFound) return fail(c, 404, "not_found", error.message);
+    if (error instanceof TicketRefusal) return fail(c, 409, "ticket_refused", error.message);
+    if (error instanceof BacklogItemNotFoundError) return fail(c, 404, "not_found", error.message);
+    if (error instanceof NotSchedulableError) return fail(c, 409, "not_schedulable", error.message, { blockedBy: error.blockedBy });
+    if (error instanceof UnknownRepositoryError) return fail(c, 400, "unknown_repository", error.message);
+    if (error instanceof DedupAnswerError) return fail(c, 400, "invalid_candidate", error.message);
+    if (error instanceof MergeError) return fail(c, 409, "cannot_merge", error.message);
+    if (error instanceof NoContextGateError) return fail(c, 409, "no_context_gate", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
+    if (error instanceof FindingNotFoundError) return fail(c, 404, "not_found", error.message);
+    if (error instanceof NoEvidenceError) return fail(c, 409, "no_evidence", error.message);
+    if (error instanceof NoQuestionsToPostError) return fail(c, 409, "no_questions", error.message);
+    if (error instanceof QuestionsCarrySecretError) return fail(c, 409, "secret", error.message);
+    if (error instanceof RecordNotEditableError) return fail(c, 409, "record_locked", error.message);
     if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
+    if (error instanceof NoEscalationToCorrectError) return fail(c, 409, "no_escalation", error.message);
+    if (error instanceof InvalidEscalationReasonError) return fail(c, 400, "invalid_reason", error.message);
+    if (error instanceof ApproverRequiredError) return fail(c, 400, "approver_required", error.message);
+    if (error instanceof SameApproverError) return fail(c, 409, "same_approver", error.message);
+    if (error instanceof NotReleaseOwnerError) return fail(c, 409, "not_release_owner", error.message);
+    if (error instanceof OutsideApproverRequiredError) return fail(c, 409, "outside_approver_required", error.message);
+    if (error instanceof PlanApprovedError) return fail(c, 409, "plan_approved", error.message);
+    if (error instanceof RejectNotAllowedError) return fail(c, 409, "reject_not_allowed", error.message);
+    if (error instanceof SplitChangedError) return fail(c, 409, "split_changed", error.message);
+    if (error instanceof SplitAutoApprovalError) return fail(c, 409, "split_needs_a_person", error.message);
+    if (error instanceof SplitNotValidError) return fail(c, 409, "split_not_valid", error.message);
     if (error instanceof StageStartedError) return fail(c, 409, "stage_started", error.message);
     if (error instanceof SourceImmutableError) return fail(c, 400, "source_immutable", error.message);
     if (error instanceof RepoPathLockedError) return fail(c, 409, "has_worktree", error.message);
@@ -183,6 +239,8 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof ForkError) return fail(c, 409, "fork", error.message);
     if (error instanceof OwnPrError) return fail(c, 409, "own_pr", error.message);
     if (error instanceof CloneError) return fail(c, 400, "invalid_request", error.message);
+    if (error instanceof SlackRefusedError) return fail(c, 409, "slack_refused", error.message);
+    if (error instanceof BadRelationError) return fail(c, 400, "invalid_request", error.message);
     if (error instanceof NoItemError) return fail(c, 404, "no_item", error.message);
     if (error instanceof NoWatchError) return fail(c, 404, "no_watch", error.message);
     if (error instanceof NoSlackTokenError) return fail(c, 409, "no_token", error.message);
@@ -240,6 +298,19 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     return c.json(pipeline.setSlots(max));
   });
 
+  app.get("/repos", async (c) => c.json((await repoHealth?.()) ?? []));
+
+  if (approveBase) {
+    // A base runs the stage's process and can read its credential: a person approves the exact reference, here, and only for the base the repository names now.
+    app.post("/repos/base/approve", async (c) => {
+      const body = (await c.req.json().catch(() => null)) as { repo?: unknown; base?: unknown } | null;
+      if (typeof body?.repo !== "string" || typeof body.base !== "string" || !body.repo || !body.base) throw new BadRequest("repo and base are required");
+      const result = await approveBase(body.repo, body.base);
+      if (!result.ok) throw new BadRequest(result.reason);
+      return c.json({ repo: body.repo, base: body.base, approved: true });
+    });
+  }
+
   app.get("/metrics", async (c) => {
     let since: Date;
     try {
@@ -289,13 +360,15 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
 
   app.get("/tasks/:id", async (c) => {
     const id = taskId(c);
-    const [task, stageRuns, approvals, events, artifacts, usage] = await Promise.all([
+    const [task, stageRuns, approvals, events, artifacts, usage, reports, buildProgress] = await Promise.all([
       pipeline.get(id),
       pipeline.stageRuns(id),
       pipeline.approvals(id),
       pipeline.events(id),
       pipeline.artifacts(id),
       pipeline.taskUsage(id),
+      pipeline.reports(id),
+      pipeline.buildProgress(id),
     ]);
     return c.json({
       task: await serialize(task, usage),
@@ -303,6 +376,9 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       approvals: approvals.map(toApproval),
       events: events.slice(-RECENT_EVENTS).map(toEvent),
       artifacts: artifacts.map(toArtifact),
+      reports,
+      buildProgress,
+      ship: (await shipView?.(id).catch(() => null)) ?? null,
     });
   });
 
@@ -320,6 +396,22 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const task = await serialize(await pipeline.editPlan(id, patch));
     bus.publish({ type: "task.updated", task, seq: task.seq });
     return c.json(task);
+  });
+
+  /** A person's correction of the Triage Record while the card waits at a gate: enum values only. */
+  app.patch("/tasks/:id/record", async (c) => {
+    const id = taskId(c);
+    const patch = await body(c, EditRecordInput);
+    const task = await serialize(await pipeline.editRecord(id, patch));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  /** A person's tap: post the open questions where the card came from. Idempotent. */
+  app.post("/tasks/:id/questions/post", async (c) => {
+    const id = taskId(c);
+    const { task, posted } = await pipeline.postQuestions(id);
+    return c.json({ ...(await serialize(task)), posted });
   });
 
   app.patch("/tasks/:id/cases", async (c) => {
@@ -374,9 +466,112 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
   app.post("/tasks/:id/decision", async (c) => {
     const id = taskId(c);
-    const { decision, reason, applyRules } = await body(c, DecisionInput);
-    const response = applyRules === undefined ? undefined : { applyRules };
-    return c.json(await serialize(await pipeline.decide(id, decision, reason ?? undefined, response)));
+    const { decision, reason, comment, applyRules, approver, keepWhole } = await body(c, DecisionInput);
+    const response = applyRules === undefined && keepWhole === undefined ? undefined : { ...(applyRules === undefined ? {} : { applyRules }), ...(keepWhole === undefined ? {} : { keepWhole }) };
+    return c.json(await serialize(await pipeline.decide(id, decision, reason ?? comment ?? undefined, response, approver ? { approver } : {})));
+  });
+
+  /** Corrects the reason an escalation was decided with (the enum only); the card stays at its escalated gate. */
+  app.post("/tasks/:id/escalation-reason", async (c) => {
+    const id = taskId(c);
+    const { reason } = await body(c, EscalationReasonInput);
+    return c.json(await serialize(await pipeline.correctEscalationReason(id, reason)));
+  });
+
+  /** Ends the task as archived with a reason (duplicate, sla_expired, rejected, not_for_agent, pr_closed). */
+  app.post("/tasks/:id/archive", async (c) => {
+    const id = taskId(c);
+    const { reason } = await body(c, ArchiveInput);
+    const task = await serialize(await pipeline.archive(id, reason));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  /** Intake's context gate: a person picks the repository or project, or adds text; the card goes back through the check. */
+  app.post("/tasks/:id/context", async (c) => {
+    const id = taskId(c);
+    const task = await serialize(await pipeline.provideContext(id, await body(c, ContextInput)));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  if (backlog) {
+    const itemId = (c: Context): string => {
+      const id = c.req.param("id") ?? "";
+      if (!z.uuid().safeParse(id).success) throw new BacklogItemNotFoundError(id);
+      return id;
+    };
+    app.get("/backlog", async (c) => c.json(await backlog.list()));
+    app.post("/backlog", async (c) => c.json(await backlog.add(await body(c, BacklogAddInput)), 201));
+    app.post("/backlog/:id/bump", async (c) => c.json(await backlog.bump(itemId(c))));
+    app.post("/backlog/:id/promote", async (c) => {
+      const task = await serialize(await backlog.promote(itemId(c)));
+      bus.publish({ type: "task.updated", task, seq: task.seq });
+      return c.json(task, 201);
+    });
+    app.post("/backlog/:id/decline", async (c) => {
+      const id = itemId(c);
+      await backlog.decline(id);
+      return c.json({ id });
+    });
+  }
+
+  if (tickets) {
+    // The taps. Each is a person's request; nothing else in the machine reaches a write on a ticket. `:key` is checked in the machine before any store or adapter sees it.
+    const key = (c: Context): string => c.req.param("key") ?? "";
+    app.get("/tickets", async (c) => c.json(await tickets.list()));
+    app.post("/tickets/:key/approve", async (c) => (await tickets.approve(key(c), await body(c, TicketApproveInput)), c.json(await tickets.view(key(c)))));
+    app.post("/tickets/:key/edit", async (c) => (await tickets.edit(key(c), await body(c, TicketEditInput)), c.json(await tickets.view(key(c)))));
+    app.post("/tickets/:key/ignore", async (c) => (await tickets.ignore(key(c), await body(c, TicketIgnoreInput)), c.json(await tickets.view(key(c)))));
+    app.post("/tickets/:key/backlog", async (c) => c.json(await tickets.schedule(key(c)), 201));
+    app.post("/tickets/:key/card", async (c) => c.json(await tickets.card(key(c)), 201));
+  }
+
+  /** Intake's dedup gate: "duplicate of one", "related to some" or "neither". */
+  app.post("/tasks/:id/dedup", async (c) => {
+    const id = taskId(c);
+    const task = await serialize(await pipeline.answerDedup(id, await body(c, DedupAnswerInput)));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  /** A person marks the task as a duplicate of another card: its report merges into it. */
+  app.post("/tasks/:id/merge", async (c) => {
+    const id = taskId(c);
+    const { into } = await body(c, MergeCardInput);
+    const task = await serialize(await pipeline.merge(id, into));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  /** A person undoes a merge: the duplicate comes back as a new card. */
+  app.post("/tasks/:id/unmerge", async (c) => {
+    const task = await serialize(await pipeline.unmerge(taskId(c)));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  /** A person's thumbs on the card's Evidence Pack: useful or not, with a short note. A card with no pack is a 409 (no_evidence). */
+  app.post("/tasks/:id/evidence/feedback", async (c) => {
+    const id = taskId(c);
+    const { useful, note } = await body(c, EvidenceFeedbackInput);
+    await pipeline.evidenceFeedback(id, { useful, note });
+    return c.json(await serialize(await pipeline.get(id)));
+  });
+
+  /** A person dismisses one of the findings the last Verify reported, while the card waits at awaiting_ship. */
+  app.post("/tasks/:id/findings/:findingId/dismiss", async (c) => {
+    const id = taskId(c);
+    const { reason } = await body(c, DismissFindingInput);
+    await pipeline.dismissFinding(id, c.req.param("findingId").slice(0, 200), reason);
+    return c.json(await serialize(await pipeline.get(id)));
+  });
+
+  /** A person adds a finding Verify missed. */
+  app.post("/tasks/:id/findings", async (c) => {
+    const id = taskId(c);
+    await pipeline.addFinding(id, await body(c, AddFindingInput));
+    return c.json(await serialize(await pipeline.get(id)));
   });
 
   app.post("/tasks/:id/abort", async (c) => c.json(await serialize(await pipeline.abort(taskId(c)))));
@@ -385,7 +580,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   app.post("/tasks/:id/resume", async (c) => c.json(await serialize(await pipeline.windowReset(taskId(c)))));
 
   /** Removes the task's worktree from disk; the task and its branch stay. */
-  app.post("/tasks/:id/worktree/remove", async (c) => c.json(await serialize(await pipeline.removeWorktree(taskId(c)))));
+  app.post("/tasks/:id/worktree/remove", async (c) => c.json(await serialize(await pipeline.removeWorktree(taskId(c), { discard: c.req.query("discard") === "true" }))));
 
   if (pulls) {
     // The PR inbox: what the last poll saw, a poll on demand, a merge, and a clone for a repo
@@ -424,12 +619,13 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     // how fast you answer, and the listings the board's watch popup completes from.
     app.get("/slack/items", (c) => c.json(slack.snapshot));
     app.post("/slack/refresh", async (c) => c.json(await slack.pollOnce(true)));
-    app.patch("/slack/items/:id", async (c) => c.json(await slack.patch(c.req.param("id"), await body(c, SlackItemPatch))));
+    app.patch("/slack/items/:id", async (c) => c.json(await slack.patch(c.req.param("id"), await body(c, SlackItemPatch), tapOf("PATCH /slack/items/:id"))));
+    app.post("/slack/items/:id/relation", async (c) => c.json(await slack.relate(c.req.param("id"), await body(c, SlackRelationInput))));
     app.post("/slack/items/:id/reply", async (c) => {
-      const { text, nudge } = await body(c, SlackReplyInput);
-      return c.json(await slack.reply(c.req.param("id"), text, nudge ?? false));
+      const { text, nudge, draftId, draftHash } = await body(c, SlackReplyInput);
+      return c.json(await slack.reply(c.req.param("id"), text, tapOf("POST /slack/items/:id/reply"), nudge ?? false, draftId && draftHash ? { id: draftId, hash: draftHash } : undefined));
     });
-    app.post("/slack/items/:id/task", async (c) => c.json(await serialize(await slack.toTask(c.req.param("id"), await body(c, SlackTaskInput))), 201));
+    app.post("/slack/items/:id/task", async (c) => c.json(await serialize(await slack.toTask(c.req.param("id"), await body(c, SlackTaskInput), tapOf("POST /slack/items/:id/task"))), 201));
     app.get("/slack/watches", async (c) => c.json(await slack.watches()));
     app.post("/slack/watches", async (c) => c.json(await slack.addWatch(await body(c, SlackWatchInput)), 201));
     app.patch("/slack/watches/:id", async (c) => c.json(await slack.patchWatch(c.req.param("id"), await body(c, SlackWatchPatch))));
@@ -487,6 +683,9 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   app.get("/events", (c) => {
     const since = c.req.query("since");
     const source = c.req.query("source") ?? null;
+    const wanted = c.req.query("names");
+    const names = wanted === undefined ? null : new Set(wanted.split(",").map((n) => n.trim()).filter((n) => n !== ""));
+    for (const n of names ?? []) if (!CardEventName.safeParse(n).success) throw new BadRequest(`names must be diagram event names (${CARD_EVENT_NAMES.join(", ")}), got "${n.slice(0, 40)}"`);
     if (since !== undefined && !/^\d+$/.test(since)) throw new BadRequest(`since must be a sequence number, got "${since}"`);
     if (source !== null && !SOURCE_KINDS.includes(source)) throw new BadRequest(`source must be one of ${SOURCE_KINDS.join(", ")}, got "${source}"`);
     return streamSSE(c, async (stream) => {
@@ -503,7 +702,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
         sourceOf: (taskId: string) => pipeline.get(taskId).then((task) => task.source?.kind ?? null, () => null),
         write,
       };
-      const feed = since === undefined && source === null ? null : new ReplayFeed(deps, since === undefined ? null : Number(since), source);
+      const feed = since === undefined && source === null && names === null ? null : new ReplayFeed(deps, since === undefined ? null : Number(since), source, names as ReadonlySet<CardEventName> | null);
       unsubscribe = bus.subscribe((message) => (feed ? feed.offer(message) : void write(message)));
       stream.onAbort(unsubscribe);
 

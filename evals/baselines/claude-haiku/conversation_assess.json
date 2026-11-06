@@ -1,0 +1,1000 @@
+{
+  "schema": 1,
+  "pack": "conversation_assess",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T15:36:43.472Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 3079.125,
+    "costUsd": 0.00818561,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 1,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.125,
+      "brier": 0.03370957142857146,
+      "ece": 0.1795714285714285,
+      "meanConfidence": 0.803125,
+      "overconfident": 0
+    },
+    "perQuestion": {
+      "kind": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.05045714285714287,
+        "ece": 0.17428571428571427,
+        "meanConfidence": 0.7975,
+        "overconfident": 0
+      },
+      "needs_reply": {
+        "n": 8,
+        "labelled": 2,
+        "acted": 2,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.625,
+        "brier": 0.005799999999999999,
+        "ece": 0.07000000000000006,
+        "meanConfidence": 0.76375,
+        "overconfident": 0
+      },
+      "production_down": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 7,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.0012142857142857164,
+        "ece": 0.03285714285714292,
+        "meanConfidence": 0.9662499999999999,
+        "overconfident": 0
+      },
+      "data_loss": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.0007333333333333346,
+        "ece": 0.02666666666666684,
+        "meanConfidence": 0.9525,
+        "overconfident": 0
+      },
+      "security": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 7,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.0008857142857142873,
+        "ece": 0.028571428571428692,
+        "meanConfidence": 0.9724999999999999,
+        "overconfident": 0
+      },
+      "who": {
+        "n": 8,
+        "labelled": 1,
+        "acted": 1,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.375,
+        "brier": 0.009999999999999995,
+        "ece": 0.09999999999999998,
+        "meanConfidence": 0.6375,
+        "overconfident": 0
+      },
+      "what": {
+        "n": 8,
+        "labelled": 3,
+        "acted": 3,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.021666666666666664,
+        "ece": 0.1333333333333333,
+        "meanConfidence": 0.7437499999999999,
+        "overconfident": 0
+      },
+      "impact": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 3,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.06747499999999998,
+        "ece": 0.2175,
+        "meanConfidence": 0.7225,
+        "overconfident": 0
+      },
+      "time": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.03125,
+        "ece": 0.15833333333333327,
+        "meanConfidence": 0.7687499999999999,
+        "overconfident": 0
+      },
+      "demand": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 5,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.625,
+        "brier": 0.07375000000000001,
+        "ece": 0.2583333333333333,
+        "meanConfidence": 0.7062499999999999,
+        "overconfident": 0
+      }
+    },
+    "answers": {
+      "n": 80,
+      "labelled": 49,
+      "acted": 46,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.7625,
+      "brier": 0.027730612244897968,
+      "ece": 0.11877551020408152,
+      "meanConfidence": 0.8031250000000002,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "add-a-plan-column-to-the-export",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"request\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2372,
+      "costUsd": 0.0011608,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8059999999999998,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "api-key-in-the-public-readme",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice in [\"incident\",\"bug\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3502,
+      "costUsd": 0.00111793,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.788,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "checkout-500s-for-everyone",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"incident\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2483,
+      "costUsd": 0.0008845300000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.876,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "dashboard-feels-slower",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.confidence within 0.2..0.8",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3443,
+      "costUsd": 0.00112183,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "production_down": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.6819999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "footer-typo-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice in [\"bug\",\"request\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3307,
+      "costUsd": 0.00096633,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8389999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "footer-typo-tells-the-scores",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice in [\"bug\",\"request\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3902,
+      "costUsd": 0.00104813,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8109999999999997,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "how-do-i-enable-csv-export",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"question\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "needs_reply.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2813,
+      "costUsd": 0.0008827300000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7599999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "thanks-for-the-quick-fix",
+      "pass": true,
+      "schema": {
+        "check": "answer on the conversation_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.choice = \"chatter\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "needs_reply.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2811,
+      "costUsd": 0.0010033300000000002,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "needs_reply": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8630000000000001,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

@@ -71,3 +71,37 @@ describe("SlaClocks", () => {
     expect(sla?.stage).toBeNull();
   });
 });
+
+describe("SlaClocks and the triage gates' reminder", () => {
+  const since = new Date("2026-11-01T00:00:00Z");
+  const task = (state: string) => ({ id: "t", state, createdAt: since, stateSince: since, jira: null }) as never;
+  const clocks = (policy: object) => new SlaClocks({ pipeline: { policyFor: async () => ({ ...DEFAULT_POLICY, ...policy }) as never, runningStageStarts: async () => new Map(), approvals: async () => [] }, defaults: { gate: 172_800, cycle: null }, now: () => new Date("2026-11-01T01:00:00Z") });
+  const triage = (days: number) => ({ factory: { ...DEFAULT_POLICY.factory, triage: { ...DEFAULT_POLICY.factory.triage, sla: { reminder_days: days, archive_days: 5 } } } });
+
+  it("reminds after the repo's triage.sla.reminder_days at the setup and questions gates, when its sla block names no gate", async () => {
+    expect((await clocks(triage(1)).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(86_400);
+    expect((await clocks(triage(1)).for(task("awaiting_setup")))?.gate?.targetSecs).toBe(86_400);
+    expect((await clocks(triage(1)).for(task("awaiting_approval")))?.gate?.targetSecs).toBe(172_800);
+    expect((await clocks({ ...triage(1), sla: { gate: 600 } }).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(600);
+    expect((await clocks(triage(2)).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(172_800);
+  });
+
+  const plan = (reminder_days: number) => ({ factory: { ...DEFAULT_POLICY.factory, plan: { ...DEFAULT_POLICY.factory.plan, sla: { reminder_days, escalate_days: 5 } } } });
+
+  it("reminds at the plan gate after the repo's plan.sla.reminder_days, when its sla block names no gate; the repo's block wins", async () => {
+    expect((await clocks(plan(1)).for(task("awaiting_approval")))?.gate?.targetSecs).toBe(86_400);
+    expect((await clocks(plan(3)).for(task("awaiting_approval")))?.gate?.targetSecs).toBe(259_200);
+    expect((await clocks({ ...plan(1), sla: { gate: 600 } }).for(task("awaiting_approval")))?.gate?.targetSecs).toBe(600);
+    // The plan's days are the plan gate's: they move no other gate.
+    expect((await clocks(plan(1)).for(task("awaiting_test_check")))?.gate?.targetSecs).toBe(172_800);
+    expect((await clocks(plan(1)).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(172_800);
+  });
+
+  it("reminds at the open ship approval after the repo's ship.sla.reminder_days; with no open approval the watch has no gate clock", async () => {
+    const ship = (reminder_days: number) => ({ factory: { ...DEFAULT_POLICY.factory, ship: { ...DEFAULT_POLICY.factory.ship, sla: { reminder_days, escalate_days: 5 } } } });
+    const withGate = (policy: object, open: boolean) => new SlaClocks({ pipeline: { policyFor: async () => ({ ...DEFAULT_POLICY, ...policy }) as never, runningStageStarts: async () => new Map(), approvals: async () => (open ? [{ decision: null }] : []) as never }, defaults: { gate: 172_800, cycle: null }, now: () => new Date("2026-11-01T01:00:00Z") });
+    expect((await withGate(ship(1), true).for(task("awaiting_ship")))?.gate?.targetSecs).toBe(86_400);
+    expect((await withGate(ship(3), true).for(task("awaiting_ship")))?.gate?.targetSecs).toBe(259_200);
+    expect(((await withGate(ship(1), false).for(task("awaiting_ship")))?.gate ?? null)).toBeNull();
+  });
+});

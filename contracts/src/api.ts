@@ -9,7 +9,10 @@ import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
 import type { ModelEntry, RuntimeId } from "./models.ts";
-import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
+import { type CardFields, CardEntryFields } from "./card.ts";
+import type { CardEventName } from "./card-events.ts";
+import type { TaskReports } from "./reports.ts";
+import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, ArchiveReason, type EvidencePack, type TriageRecord } from "./stage.ts";
 
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
@@ -21,7 +24,14 @@ export const NewTaskInput = z.object({
   start: z.boolean().optional(),
   /** The engine per pack for this task, over the repo's luna.yaml and the pack's default. */
   stages: StageEngines.optional(),
+  // The v2.2 entry contract (card.ts). Accepted and ignored in wave 8; wave 14 stores them.
+  ...CardEntryFields,
 });
+
+/** The `create_card` entry contract of the v2.2 diagram: `NewTaskInput` with its optional sources,
+ *  reporter, hints, origin machine and attachments. One schema, so a task created today parses as a card. */
+export const CreateCardInput = NewTaskInput;
+export type CreateCardInput = z.infer<typeof CreateCardInput>;
 
 /** `PATCH /tasks/:id/stages`: the engine per pack to set; null goes back to luna.yaml's, else the pack's default. */
 export const EditStagesInput = z.object({ stages: z.partialRecord(PackId, EngineId.nullable()) });
@@ -42,6 +52,8 @@ export type RunInput = z.infer<typeof RunInput>;
 export interface RunResult {
   answer: Record<string, unknown>;
   usage: { model: string; engine: EngineId; turns: number; durationMs: number; costUsd: number | null };
+  /** The decision record this call left (a decision pack with records on), so a later fact can name it. Host use. */
+  recordId?: string;
 }
 
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
@@ -68,6 +80,21 @@ export const EditPlanInput = z
     brief: z.string().optional(),
     criteria: z.array(z.string()).optional(),
     assumptions: z.array(z.string()).optional(),
+    /** The plan's steps; the slices Build reads follow them. */
+    steps: z.array(z.object({ description: z.string().min(1).max(500), files: z.array(z.string().min(1).max(300)).max(50), done_when: z.array(z.string().max(500)).max(20), est_loc: z.number().int().min(0).max(100_000) })).max(30).optional(),
+    rollback: z.string().max(4000).optional(),
+    /** The plan's risk level. The machine's own level is a floor: a higher one applies at once, a lower one is kept with its reason and shown. */
+    risk: z.object({ level: z.enum(["low", "medium", "high"]), reason: z.string().min(1).max(500) }).optional(),
+    /** The code map, corrected; kept with its reason as ground truth. */
+    map: z
+      .object({
+        components: z.array(z.string().max(200)).max(50).optional(),
+        files: z.array(z.object({ path: z.string().min(1).max(300), role: z.enum(["change", "read", "test"]) })).max(200),
+        entry_points: z.array(z.string().max(300)).max(50).optional(),
+        owners: z.array(z.string().max(200)).max(50).optional(),
+        reason: z.string().min(1).max(500),
+      })
+      .optional(),
   })
   .refine((input) => Object.keys(input).length > 0, { message: "give at least one field to edit" });
 export type EditPlanInput = z.infer<typeof EditPlanInput>;
@@ -75,9 +102,23 @@ export type EditPlanInput = z.infer<typeof EditPlanInput>;
 /** One plan edit, kept on the approval's `requested.revisions`: only the fields that changed. */
 export interface PlanRevision {
   at: string;
-  before: EditPlanInput;
-  after: EditPlanInput;
+  before: Partial<EditPlanInput>;
+  after: Partial<EditPlanInput>;
 }
+
+/** `PATCH /tasks/:id/record`: a person's correction of the Triage Record while the card waits at a gate. Enum values only, so nothing a
+ *  client types reaches a prompt; at least one field. */
+export const EditRecordInput = z
+  .object({
+    kind: z.enum(["bug", "feature", "task", "chore", "question", "incident"]).optional(),
+    typeOfWork: z.enum(["frontend", "backend", "infra", "data", "docs", "mixed"]).optional(),
+    size: z.enum(["XS", "S", "M", "L", "XL"]).optional(),
+    riskPrelim: z.enum(["low", "medium", "high"]).optional(),
+    priority: z.enum(["P0", "P1", "P2", "P3"]).optional(),
+  })
+  .strict()
+  .refine((input) => Object.values(input).some((v) => v !== undefined), { message: "give at least one field to correct" });
+export type EditRecordInput = z.infer<typeof EditRecordInput>;
 
 /** `PATCH /tasks/:id/cases`: replaces test_design's cases while the test check is open. */
 export const EditCasesInput = z.object({
@@ -105,14 +146,62 @@ export interface TaskDiffFile {
   removed: number;
 }
 
+/** `POST /tasks/:id/context`: what a person gives Intake's context gate. Any one of them; the card is checked again. `reporterChannel` is the channel the card's reporter can be reached on, for a card whose reporter has none. */
+export const ContextInput = z.object({
+  repoPath: z.string().trim().min(1).max(1000).optional(),
+  project: z.string().trim().min(1).max(120).optional(),
+  text: z.string().trim().min(1).max(20_000).optional(),
+  reporterChannel: z.string().trim().min(1).max(200).optional(),
+});
+export type ContextInput = z.infer<typeof ContextInput>;
+
+/** `POST /tasks/:id/merge`: the task is a duplicate of `into`. */
+export const MergeCardInput = z.object({ into: z.string().uuid() });
+export type MergeCardInput = z.infer<typeof MergeCardInput>;
+
+/** `POST /tasks/:id/dedup`: a person's answer at the dedup gate. `of` names listed candidates only. */
+export const DedupAnswerInput = z.object({ choice: z.enum(["duplicate", "related", "neither"]), of: z.array(z.string().uuid()).max(5).optional() });
+export type DedupAnswerInput = z.infer<typeof DedupAnswerInput>;
+
+/** A person's answer on whether an Evidence Pack was useful: a boolean from the fixed set, and a short note that is flattened before anything keeps it. */
+/** A person dismisses a finding Verify reported (the card waits at awaiting_ship): the reason stays out of the stream. */
+export const DismissFindingInput = z.object({ reason: z.string().max(500).optional() });
+export type DismissFindingInput = z.infer<typeof DismissFindingInput>;
+/** A person adds a finding Verify missed. */
+export const AddFindingInput = z.object({ title: z.string().min(1).max(200), severity: z.enum(["blocker", "should_fix", "nit"]), path: z.string().max(300).optional(), line: z.number().int().min(1).max(1_000_000).optional() });
+export type AddFindingInput = z.infer<typeof AddFindingInput>;
+export const EvidenceFeedbackInput = z.object({ useful: z.boolean(), note: z.string().max(500).optional() });
+export type EvidenceFeedbackInput = z.infer<typeof EvidenceFeedbackInput>;
+
+/** `split` is the machine's alone: only the approval of a split archives a card with it. */
+export const ArchiveInput = z.object({ reason: ArchiveReason.exclude(["split"]) });
+export type ArchiveInput = z.infer<typeof ArchiveInput>;
+
 export const DecisionInput = z.object({
-  decision: z.enum(["approved", "sent_back"]),
+  /** `changes_requested` is `sent_back` under its diagram name (both are kept); `rejected` ends the card and is the plan gate's alone. */
+  decision: z.enum(["approved", "changes_requested", "rejected", "sent_back"]),
   // Clients may send `null` for "no reason" rather than omitting the field.
-  reason: z.string().nullable().optional(),
+  reason: z.string().max(2000).nullable().optional(),
+  /** The same thing under the diagram's word: a comment with the decision. `reason` wins when both are given. */
+  comment: z.string().max(2000).nullable().optional(),
   /** At the memory review gate: false approves without writing the proposed rules. */
   applyRules: z.boolean().optional(),
+  /** At a split gate: true keeps the card whole, which is a person's recorded answer (it lifts the size guard for this card). Dropped at any other gate. */
+  keepWhole: z.boolean().optional(),
+  /** Who is deciding, by name. A plan of High risk needs two distinct names; any decision keeps its own. */
+  approver: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .refine((name) => ["Latin", "Cyrillic", "Greek"].filter((script) => new RegExp(`\\p{Script=${script}}`, "u").test(name)).length <= 1, { message: "a name mixes letters of different scripts" })
+    .optional(),
 });
 export type DecisionInput = z.infer<typeof DecisionInput>;
+
+/** `POST /tasks/:id/escalation-reason`: a person corrects the reason Build's escalation was decided with. The six reasons only; the correction labels the decision record and moves nothing. */
+export const EscalationReasonInput = z.object({ reason: z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"]) });
+export type EscalationReasonInput = z.infer<typeof EscalationReasonInput>;
 
 export const AnswersInput = z.object({
   answers: z.record(z.string(), z.string()),
@@ -139,9 +228,13 @@ export interface Retries {
   e2e: number;
   ci: number;
   total: number;
+  /** Implementer runs taken on a stronger engine after a too_complex escalation. */
+  stronger?: number;
+  /** The next implementing run is that one shot. */
+  strongerNext?: boolean;
 }
 
-export interface Task {
+export interface Task extends CardFields {
   id: string;
   title: string;
   description: string;
@@ -164,6 +257,8 @@ export interface Task {
   retries: Retries;
   resumeTo: TaskState | null;
   reason: string | null;
+  /** Why the task was archived; null for any other state. */
+  archiveReason: ArchiveReason | null;
   /** What every stage run of this task has cost so far; null when unknown or nothing ran. */
   spentUsd: number | null;
   /** Wall time its stage runs took so far; null when unknown. */
@@ -178,8 +273,12 @@ export interface Task {
   sla: TaskSla | null;
   /** The task's own engine per pack (`PATCH /tasks/:id/stages`); a pack left out runs on luna.yaml's, else its default. */
   stages: StageEngines;
-  /** What issue_classify said about the issue the task came from; null when intake did not run it. */
+  /** What triage_signals said about the issue the task came from; null when intake did not run it. */
   classification: TaskClassification | null;
+  /** What triage decided and why; null before it ran. */
+  record: TriageRecord | null;
+  /** What shows the change does what the ticket asked; null before verifying made it. */
+  evidence: EvidencePack | null;
   /** The task's place in the change sequence: every change to it takes a higher one (`GET /events?since=`). */
   seq: number;
   /** The latest stage run that ended, and what it said; null before one has. */
@@ -252,7 +351,7 @@ export interface Approval {
   id: string;
   kind: TaskState;
   requested: Record<string, unknown>;
-  decision: "approved" | "sent_back" | "answered" | null;
+  decision: "approved" | "sent_back" | "rejected" | "answered" | null;
   reason: string | null;
   response: Record<string, unknown> | null;
   createdAt: string;
@@ -265,6 +364,8 @@ export interface TaskEvent {
   kind: string;
   payload: Record<string, unknown>;
   at: string;
+  /** The v2.2 diagram's name(s) for the fact this row records; absent for a row the diagram has no name for. */
+  names?: CardEventName[];
 }
 
 /** `GET /engines`: one row per engine, and whether this machine can run it. Never a credential's value. */
@@ -303,6 +404,36 @@ export interface PackInfo {
   states: TaskState[];
 }
 
+/** What Build shows while it runs: each scenario red or green, the budget used against its limits and the last checkpoint pushed. */
+export interface BuildProgress {
+  scenarios: Array<{ id: string; state: "red" | "green" }>;
+  budget: { iterations: number; tokens: number | null; minutes: number; limits: { max_iterations: number; max_tokens: number; max_minutes: number } };
+  lastCheckpoint: { sha: string; follows: "red" | "green"; at: string } | null;
+}
+
+/** What a watched PR looks like from the board: the readiness checklist, why the machine will or will not merge, the clocks. Facts and fixed words only: no reviewer text, no thread. Every field read from a stored view is optional on the way back in. */
+export interface ShipView {
+  pr: { slug: string; number: number; url: string };
+  /** The head the last poll read; null before the first poll. */
+  head: string | null;
+  ready: boolean;
+  /** One entry per checklist item (fixed in code), each with its detail flattened and capped. */
+  checklist: Array<{ id: string; ok: boolean; detail: string }>;
+  /** Whether the machine may merge by itself, and the reason in a sentence. */
+  autoMerge: { allowed: boolean; reason: string };
+  /** Whether the repository requires a review (null: unreadable, so manual) and what requires it. */
+  review: { required: boolean | null; by: string | null };
+  fixRounds: number;
+  /** The PR sits in the merge queue. */
+  queued: boolean;
+  /** When the last activity on the PR was: the quiet clocks count from it. */
+  quietSince: string | null;
+  /** The last event class the watch logged, with its time. */
+  lastEvent: { class: string; at: string } | null;
+  /** When the checklist was read. */
+  at: string | null;
+}
+
 /** `GET /tasks/:id` */
 export interface TaskDetail {
   task: Task;
@@ -310,6 +441,12 @@ export interface TaskDetail {
   approvals: Approval[];
   events: TaskEvent[];
   artifacts: Artifact[];
+  /** The v2.2 Build and Verify Reports, assembled from the task's runs and events; each null until its stage passed. */
+  reports?: TaskReports;
+  /** Build's progress, live; null for a card that has not begun to build. */
+  buildProgress?: BuildProgress | null;
+  /** The watched PR's checklist and clocks; null for a card with no ship cursor. */
+  ship?: ShipView | null;
 }
 
 /**
@@ -326,6 +463,7 @@ export interface TaskDetail {
  * - `budget.alert`: a spend crossed 80, 90 or 100% of a ceiling (a task's, a repo's month's, the day's).
  * - `github.prs`: the PR inbox changed; carries the whole snapshot.
  * - `slack.items`: the Slack inbox changed; carries the whole snapshot, watches included.
+ * - `task.shipped`: the task's PR merged; what shipped, where, and how to check it.
  */
 export type StreamMessage =
   | { type: "task.updated"; task: Task; seq: number }
@@ -336,7 +474,21 @@ export type StreamMessage =
   | { type: "stage.started"; taskId: string; label: string; cwd: string; container: string }
   | { type: "task.closed"; id: string }
   | { type: "github.prs"; snapshot: PrSnapshot }
-  | { type: "slack.items"; snapshot: SlackSnapshot };
+  | { type: "slack.items"; snapshot: SlackSnapshot }
+  | { type: "task.shipped"; shipped: TaskShipped };
+
+/** What `task.shipped` carries: the merged PR and the evidence behind it (web urls only). */
+export interface TaskShipped {
+  id: string;
+  title: string;
+  prUrl: string;
+  number: number;
+  mergedSha: string | null;
+  format: string | null;
+  howToVerify: string | null;
+  media: { kind: string; label: string; url: string }[];
+  at: string;
+}
 
 /** A spend passing a threshold of a ceiling; raised once per scope and threshold. */
 export interface BudgetAlert {
@@ -358,6 +510,33 @@ export interface Stats {
   p90: number | null;
 }
 
+/** A number and the count it rests on; the value is null when nothing backs it. */
+export interface FlowCount {
+  value: number | null;
+  n: number;
+}
+
+/** `Stats` and the count it rests on. */
+export type FlowStats = Stats & { n: number };
+
+/** The v2.2 diagram's flow numbers, read from the named events (`namesOf`) of the window. */
+export interface FlowMetrics {
+  /** Triage passed to plan approved, for plans approved in the window. */
+  planCycleMs: FlowStats;
+  /** The test designer's rounds per planned task, mean, for plans made in the window. */
+  coverageRounds: FlowCount;
+  /** Implementer runs per task, mean, for builds finished in the window. */
+  buildRuns: FlowCount;
+  /** Created to merged, for tasks merged in the window. */
+  leadTimeMs: FlowStats;
+  /** Merges in the window, scaled to a week. */
+  mergesPerWeek: FlowCount;
+  /** Null: nothing records a failed change yet. */
+  changeFailureRate: FlowCount & { reason: string };
+  /** Null: nothing records a failed change yet. */
+  timeToRestoreMs: FlowCount & { reason: string };
+}
+
 /** `GET /metrics?since=<7d|30d|ISO>`. Numbers with no data are null, never NaN. */
 /** The stage pool: size, in use, and whether the machine is draining. `GET /health`, `POST /drain`, `POST /resume` and `PATCH /slots` all answer with it. */
 export interface Slots {
@@ -372,6 +551,34 @@ export interface Slots {
 export interface UsageLatch {
   owner: CredentialOwner;
   until: string;
+}
+
+/** One repository's sandbox image and code graph, for `GET /repos`. Text (a base's name, a failure reason) is untrusted: flattened and capped by the machine, still never rendered as markup. */
+export interface RepoHealth {
+  /** The checkout's path. */
+  repo: string;
+  image: {
+    /** The image its stages run in: the machine's, or its own. */
+    inUse: string;
+    /** The base `sandbox.image.base` names; null when the repository runs on the machine's image. */
+    base: string | null;
+    /** When its own image was built by this machine; null when unknown or not its own. */
+    builtAt: string | null;
+    lastFailure: string | null;
+    /** A base the repository's luna.yaml names that no person approved yet (flattened, capped); it runs on the machine's image until `POST /repos/base/approve`. */
+    pendingBase: string | null;
+  };
+  graph: {
+    /** `policy.graph` is on. */
+    on: boolean;
+    commit: string | null;
+    /** Commits the default branch has over the graph's; null when unknown. */
+    behind: number | null;
+    graphify: string | null;
+    builtAt: string | null;
+    building: boolean;
+    lastFailure: string | null;
+  };
 }
 
 /** One repo's slice of the window, for `GET /metrics?groupBy=repo`. */
@@ -447,6 +654,8 @@ export interface Metrics {
   };
   /** Gates answered within their SLA over gates answered, and the median wait per gate (ms). */
   gates: { withinSla: number | null; answered: number; waitMs: Record<string, Stats> };
+  /** The diagram's flow numbers; absent on a machine from before wave 8. */
+  flow?: FlowMetrics;
   /** Share of tasks whose first run of the stage passed. */
   firstPassRate: {
     verifying: number | null;

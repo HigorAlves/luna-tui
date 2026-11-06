@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "class.confidence",
+      "min": 0,
+      "max": 0.8
+    }
+  ],
+  "rubric": "An assertion fails in code the base also changed since the branch was cut: the change may have broken it, or the base moved under it. The log does not decide, so the model should hedge.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "class": {
+            "choice": "real"
+          }
+        },
+        "criteria": {
+          "class": "the change broke a test, a build or a lint rule; a fix in the code is needed"
+        },
+        "why": "A plain assertion failure in code the change touched: the change may have broken it."
+      },
+      {
+        "label": {
+          "class": {
+            "choice": "drift"
+          }
+        },
+        "criteria": {
+          "class": "the base branch moved: a conflict, a stale lockfile or a base commit the change no longer fits"
+        },
+        "why": "The branch is 14 commits behind and two of them changed src/pricing/, so the base may have moved under it."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

@@ -251,7 +251,7 @@ export const factory = {
   features: [
     {
       title: "Packs, not prompts",
-      body: "Triage, test design, build, verify, e2e, CI watch, evidence and the retro each run a pack with a typed result.",
+      body: "Triage, code map, plan, test design, build, verify, e2e, CI watch, evidence and the retro each run a pack with a typed result; small checks (signals, risk, coverage, red, scope) are decision packs.",
     },
     {
       title: "Built from the checkout, so it's repeatable",
@@ -289,7 +289,8 @@ export const factory = {
   },
   packsTitle: "What it runs",
   packs: [
-    { name: "triage", body: "Reads the ticket and the repo; writes the brief, criteria and slices, or asks." },
+    { name: "triage", body: "Reads the ticket, its signals and the repo; records what it is and picks plan, fast lane, reply or archive, or asks." },
+    { name: "plan", body: "Plans the change and designs its tests, then checks coverage, fit and risk. One approval; two people on High risk." },
     { name: "test_design", body: "Writes the failing tests first. They're locked once you approve." },
     { name: "implementing", body: "Builds the change slice by slice, one commit each, on the task branch." },
     { name: "verifying", body: "Reviews the diff after your suite, lint and typecheck pass on the host." },

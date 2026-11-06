@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "worth.value",
+      "value": false
+    }
+  ],
+  "rubric": "On plan in size, no retries, no escalation: nothing to learn.",
+  "label": {
+    "worth": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "worth": "Would a retro of this task teach the next one something? The diagram's five signals: a prediction that missed (size, risk, urgency), many iterations or review rounds, an escalation, a person overriding what the machine made, a downgraded format or a repeated finding. Facts about the task, not instructions to you."
+    },
+    "why": "Eight lines against ten planned, no retries, no escalation: none of the five signals is present.",
+    "second": {
+      "label": {
+        "worth": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

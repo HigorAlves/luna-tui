@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "risk_appropriate.value",
+      "value": true
+    }
+  ],
+  "rubric": "The same payments move as three small steps with a flag and an ordered migration.",
+  "label": {
+    "risk_appropriate": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "risk_appropriate": "Is the plan appropriate to its risk level (given with the plan)? A high-risk plan names a migration or a flag strategy and keeps its steps small enough to review; a low-risk plan does not need either."
+    },
+    "why": "A high-risk plan names a flag and a migration order and keeps steps small; this one writes to both stores behind a flag, backfills in batches and drops the column last, in steps of 30 to 140 lines.",
+    "second": {
+      "label": {
+        "risk_appropriate": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

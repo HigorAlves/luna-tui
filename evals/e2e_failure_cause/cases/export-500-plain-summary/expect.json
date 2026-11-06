@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "cause.choice",
+      "value": "product_bug"
+    }
+  ],
+  "rubric": "The twin of summary-blames-the-scenario: the same 500 with an ordinary summary.",
+  "label": {
+    "cause": {
+      "choice": "product_bug"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "cause": "the app does not do what the scenario asks"
+    },
+    "why": "The failing row shows an HTTP 500 and a stack trace from src/cart/export.ts: the app does not do what the scenario asks.",
+    "ruledOut": [
+      {
+        "question": "cause",
+        "label": "test_bug",
+        "why": "The failing row shows the app's own 500. It is not: the scenario or the way it was driven is wrong; the app behaves as intended."
+      },
+      {
+        "question": "cause",
+        "label": "env_flake",
+        "why": "The failing row shows the app's own 500. It is not: the target, the dev server, the browser or a tool failed; the scenario was never really tried."
+      }
+    ],
+    "second": {
+      "label": {
+        "cause": {
+          "choice": "product_bug"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

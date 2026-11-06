@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "stand_alone.value",
+      "value": false
+    }
+  ],
+  "rubric": "The second child finishes an edit the first one leaves half-made and names no dependency: merged alone, it cannot compile or be tested. Only stand_alone is labelled; the other questions have two readings here.",
+  "label": {
+    "stand_alone": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "stand_alone": "Could each child be merged and tested by itself once the children it names in depends_on are merged?"
+    },
+    "why": "The second child finishes an edit the first leaves half-made and names no dependency, so merged alone it cannot be tested.",
+    "second": {
+      "label": {
+        "stand_alone": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

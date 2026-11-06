@@ -69,6 +69,7 @@ pub(crate) fn look_color(look: Look) -> Color {
         Look::Paused => c(LAVENDER),
         Look::Draft => c(SUBTEXT0),
         Look::Done => c(GREEN),
+        Look::Archived => c(MUTED),
     }
 }
 
@@ -82,6 +83,7 @@ pub(crate) fn look_glyph(look: Look) -> &'static str {
         Look::Paused => "⏳",
         Look::Draft => "○",
         Look::Done => "✓",
+        Look::Archived => "–",
     }
 }
 
@@ -139,6 +141,22 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
+    if let Some(state) = app.tickets.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::Command { .. })) {
+        render_tickets(frame, body, app, state);
+        frame.render_widget(footer_line(app), footer);
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
+        }
+        return;
+    }
+    if let Some(state) = app.backlog.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+        render_backlog(frame, body, app, state);
+        frame.render_widget(footer_line(app), footer);
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
+        }
+        return;
+    }
     if let Some(state) = app.pulls.as_ref().filter(|_| {
         matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ConfirmClose { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help { .. })
     }) {
@@ -163,6 +181,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
             app.mode,
             Mode::Normal
                 | Mode::SlackSnooze { .. }
+                | Mode::SlackDismiss { .. }
+                | Mode::SlackPick { .. }
                 | Mode::SlackReply { .. }
                 | Mode::SlackTask { .. }
                 | Mode::SlackWatchAdd { .. }
@@ -177,7 +197,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         match &app.mode {
             Mode::SlackSnooze { cursor, .. } => render_slack_snooze(frame, *cursor),
-            Mode::SlackReply { id, area, vim, nudge } => render_slack_reply(frame, app, id, area, vim, *nudge),
+            Mode::SlackDismiss { .. } => render_slack_dismiss(frame),
+            Mode::SlackPick { id, relation, cursor } => render_slack_pick(frame, app, id, *relation, *cursor),
+            Mode::SlackReply { id, area, vim, nudge, .. } => render_slack_reply(frame, app, id, area, vim, *nudge),
             Mode::SlackTask { id, title, repo } => render_slack_task(frame, app, id, title, repo.as_deref()),
             Mode::SlackWatchAdd { query, cursor } => render_slack_watch_add(frame, app, query, *cursor),
             Mode::SlackActions { cursor } => render_slack_actions(frame, app, *cursor),
@@ -230,6 +252,21 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     " Abort the running stage? ",
                     "The container is stopped and the ticket waits for you.",
                 );
+            }
+        }
+        Mode::ArchiveReason { id, cursor } => {
+            if let Some(task) = app.task(id) {
+                render_archive_reason(frame, task, *cursor);
+            }
+        }
+        Mode::EscalationReason { id, cursor } => {
+            if let Some(task) = app.task(id) {
+                render_escalation_reason(frame, task, *cursor);
+            }
+        }
+        Mode::RecordEdit { id, field, picks } => {
+            if let Some(task) = app.task(id) {
+                render_record_edit(frame, task, *field, picks);
             }
         }
         Mode::ConfirmWorktree(id) => {
@@ -391,6 +428,12 @@ fn header_line(app: &App) -> Line<'static> {
     if app.floor.is_some() {
         spans.push(Span::from("  [floor]").fg(c(BLUE)).bold());
     }
+    if app.backlog.is_some() {
+        spans.push(Span::from("  [backlog]").fg(c(BLUE)).bold());
+    }
+    if app.tickets.is_some() {
+        spans.push(Span::from("  [tickets]").fg(c(BLUE)).bold());
+    }
     if app.pulls.is_some() {
         spans.push(Span::from("  [pulls]").fg(c(BLUE)).bold());
     }
@@ -448,6 +491,7 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from("   enter keep · esc clear").fg(c(SUBTEXT0)),
         ]),
         Mode::Reason { approve, text, .. } => {
+            let placeholder = if text.is_empty() && !*approve { app.tasks.iter().find(|t| matches!(&app.mode, Mode::Reason { id, .. } if *id == t.id)).and_then(|t| reason_placeholder(&t.state)) } else { None };
             let prompt = if *approve {
                 " guidance for the retry (optional): "
             } else {
@@ -456,9 +500,20 @@ fn footer_line(app: &App) -> Line<'static> {
             Line::from(vec![
                 Span::from(prompt).fg(c(ACCENT)).bold(),
                 Span::from(format!("{text}▏")),
+                Span::from(placeholder.map(|p| format!(" {p}")).unwrap_or_default()).fg(c(SUBTEXT0)),
                 Span::from("   enter send · esc cancel").fg(c(SUBTEXT0)),
             ])
         }
+        Mode::EvidenceNote { text, .. } => Line::from(vec![
+            Span::from(" why was the pack not useful: ").fg(c(PEACH)).bold(),
+            Span::from(format!("{text}▏")),
+            Span::from("   enter send · esc cancel").fg(c(SUBTEXT0)),
+        ]),
+        Mode::Reject { text, .. } => Line::from(vec![
+            Span::from(" reject because: ").fg(c(RED)).bold(),
+            Span::from(format!("{text}▏")),
+            Span::from("   enter reject (the card ends) · esc cancel").fg(c(SUBTEXT0)),
+        ]),
         Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) | Mode::ConfirmWorktree(_) => {
             hint(&[("y", "yes"), ("n", "no")])
         }
@@ -467,10 +522,15 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
         Mode::ConfirmClose { .. } => hint(&[("y", "close the PR"), ("n", "cancel")]),
         Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
+        Mode::RecordEdit { .. } => hint(&[("j/k", "field"), ("h/l", "value"), ("enter", "send what changed"), ("esc", "cancel")]),
+        Mode::ArchiveReason { .. } => hint(&[("j/k 1-5", "pick"), ("enter", "archive"), ("esc", "cancel")]),
+        Mode::EscalationReason { .. } => hint(&[("j/k 1-6", "pick"), ("enter", "correct the reason"), ("esc", "cancel")]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::EnginePicker { .. } => hint(&[("j/k", "move"), ("enter", "set"), ("esc", "back")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
+        Mode::SlackPick { .. } => hint(&[("j/k", "pick"), ("enter", "save"), ("esc", "cancel")]),
         Mode::SlackSnooze { .. } => hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")]),
+        Mode::SlackDismiss { .. } => hint(&[("n", "no reply needed"), ("b", "bad draft"), ("s", "skip"), ("esc", "cancel")]),
         Mode::SlackTask { .. } => hint(&[("y", "create the ticket"), ("n", "cancel")]),
         Mode::SlackWatchAdd { .. } => hint(&[("type", "@handle, #channel or a word"), ("↑/↓", "pick"), ("enter", "watch"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
@@ -493,6 +553,8 @@ fn view_footer(app: &App) -> Line<'static> {
         Scope::Digest => hint(&[("j/k", "move"), ("enter", "jump to the ticket"), ("o", "open the PR"), ("esc", "close")]),
         Scope::Inbox => hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]),
         Scope::Pulls => hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]),
+        Scope::Backlog => hint(&[("j/k", "move"), ("p", "promote"), ("b", "bump"), ("d", "decline"), ("R", "refetch"), ("esc", "close")]),
+        Scope::Tickets => hint(&[("j/k", "move"), ("a", "approve"), ("e", "edit"), ("x", "ignore"), ("c", "card"), ("s", "backlog"), ("R", "refetch"), ("esc", "close")]),
         Scope::Watches => hint(&[("j/k", "move"), ("n", "add"), ("e", "floor"), ("d", "delete"), ("space", "on/off"), ("esc", "close")]),
         Scope::Slack => hint(&[
             ("j/k", "move"),
@@ -802,24 +864,133 @@ pub(crate) fn slice_lines(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// "verdict", "N artifacts" and up to three artifact paths from `requested.evidence`.
+/// The reason prompt's hint at a gate that takes a structured note, if it does.
+pub(crate) fn reason_placeholder(state: &str) -> Option<&'static str> {
+    (state == "awaiting_ship").then_some("what to change (t=12.5 scene=<id> el=<id> …)")
+}
+
+/// `text` wrapped at word boundaries to `width` columns.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(last) if last.chars().count() + 1 + word.chars().count() <= width => {
+                last.push(' ');
+                last.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
+}
+
+/// The Evidence Pack from `requested.evidence`: its format (and why it degraded), the summary's first
+/// three lines, the verdict and artifact count and up to three paths as before, a line per scenario,
+/// up to six media, and for a video the critic's verdict, mean score and first two defects.
 pub(crate) fn evidence_lines(value: &Value) -> Vec<String> {
     let Some(verdict) = value["verdict"].as_str() else { return Vec::new() };
     let count = value["artifactCount"].as_u64().unwrap_or(0);
-    let mut lines = vec![
-        format!("verdict: {verdict}"),
-        format!("{count} artifact{}", if count == 1 { "" } else { "s" }),
-    ];
+    let mut lines = Vec::new();
+    if let Some(format) = value["format"].as_str() {
+        lines.push(match value["note"].as_str() {
+            Some(note) => format!("format: {format} (degraded: {note})"),
+            None => format!("format: {format}"),
+        });
+    }
+    if let Some(summary) = value["summary"].as_str() {
+        lines.extend(wrap_words(summary, 76).into_iter().take(3));
+    }
+    lines.push(format!("verdict: {verdict}"));
+    lines.push(format!("{count} artifact{}", if count == 1 { "" } else { "s" }));
     lines.extend(json_list(&value["thumbnails"]).into_iter().take(3));
+    for row in value["scenarios"].as_array().into_iter().flatten() {
+        let Some(text) = row["text"].as_str() else { continue };
+        let mark = match row["result"].as_str() {
+            Some("pass") => "✓",
+            Some("fail") => "✗",
+            Some("partial") => "~",
+            _ => "?",
+        };
+        lines.push(format!("{mark} {text}"));
+    }
+    for media in value["media"].as_array().into_iter().flatten().take(6) {
+        if let (Some(label), Some(url)) = (media["label"].as_str(), media["url"].as_str()) {
+            lines.push(format!("media: {label}  {url}"));
+        }
+    }
+    let video = &value["video"];
+    if let Some(critic) = video["verdict"].as_str() {
+        let scores: Vec<f64> = video["scores"].as_object().map(|m| m.values().filter_map(Value::as_f64).collect()).unwrap_or_default();
+        let defects = video["defects"].as_array().cloned().unwrap_or_default();
+        let mean = if scores.is_empty() { String::new() } else { format!(" · {:.1}/10", scores.iter().sum::<f64>() / scores.len() as f64) };
+        lines.push(format!("critic: {critic}{mean} · {} defect{}", defects.len(), if defects.len() == 1 { "" } else { "s" }));
+        for d in defects.iter().take(2) {
+            let scene = d["scene"].as_str().map(|s| format!(" {s}")).unwrap_or_default();
+            lines.push(format!("{} @{:.1}{scene}: {}", d["priority"].as_str().unwrap_or("P?"), d["t"].as_f64().unwrap_or(0.0), d["symptom"].as_str().unwrap_or("")));
+        }
+    }
+    lines
+}
+
+/// The card's own Evidence Pack as the board shows it with no gate open: format and why it was degraded, the summary, results, scenarios, media (a web link, never a
+/// local path), the film's verdict and whether the pack is published. Every text is made plain.
+pub(crate) fn pack_lines(value: &Value) -> Vec<String> {
+    use crate::detail::plain;
+    let mut lines = Vec::new();
+    if let Some(format) = value["format"].as_str() {
+        lines.push(match value["note"].as_str() {
+            Some(note) => format!("format: {} (degraded: {})", plain(format), plain(note)),
+            None => format!("format: {}", plain(format)),
+        });
+    }
+    if let Some(summary) = value["summary"].as_str() {
+        lines.extend(wrap_words(&plain(summary), 76).into_iter().take(3));
+    }
+    let results = &value["results"];
+    if results.is_object() {
+        let layer = |v: &Value| match (v["passed"].as_u64(), v["total"].as_u64()) {
+            (Some(p), Some(t)) => format!("{p}/{t}"),
+            _ => "none".to_string(),
+        };
+        lines.push(format!("results: unit {} · integration {} · e2e {}", layer(&results["unit"]), layer(&results["integration"]), layer(&results["e2e"])));
+    }
+    for row in value["scenarios"].as_array().into_iter().flatten() {
+        let Some(text) = row["text"].as_str() else { continue };
+        let mark = match row["result"].as_str() {
+            Some("pass") => "✓",
+            Some("fail") => "✗",
+            Some("partial") => "~",
+            _ => "?",
+        };
+        lines.push(format!("{mark} {}", plain(text)));
+    }
+    // The publish result the machine stamped on the pack; a pack from before that field is read from its links.
+    let published = value["published"].as_bool().unwrap_or_else(|| value["media"].as_array().into_iter().flatten().any(|m| m["url"].as_str().unwrap_or("").starts_with("https://")));
+    for media in value["media"].as_array().into_iter().flatten().take(6) {
+        let Some(label) = media["label"].as_str() else { continue };
+        match media["url"].as_str() {
+            Some(url) if url.starts_with("https://") => lines.push(format!("media: {}  {}", plain(label), plain(url))),
+            _ => lines.push(format!("media: {} (local copy)", plain(label))),
+        }
+    }
+    if let Some(critic) = value["video"]["verdict"].as_str() {
+        let scores: Vec<f64> = value["video"]["scores"].as_object().map(|m| m.values().filter_map(Value::as_f64).collect()).unwrap_or_default();
+        let mean = if scores.is_empty() { String::new() } else { format!(" · {:.1}/10", scores.iter().sum::<f64>() / scores.len() as f64) };
+        lines.push(format!("critic: {}{mean}", plain(critic)));
+    }
+    lines.push(format!("published: {}", if published { "yes" } else { "no" }));
     lines
 }
 
 /// Counts, calibration and the proposed rules text from `requested.rules`, at most 12 lines of
 /// it, each cut to `width` columns. Empty when the review proposed nothing.
 pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
-    let Some(markdown) = value["markdown"].as_str().filter(|m| !m.trim().is_empty()) else {
+    let markdown = value["markdown"].as_str().unwrap_or("");
+    let recalibration = value["recalibration"].as_array().map_or(0, Vec::len);
+    let updates = value["promptUpdates"].as_array().map_or(0, Vec::len);
+    if markdown.trim().is_empty() && recalibration == 0 && updates == 0 {
         return Vec::new();
-    };
+    }
     const MAX: usize = 12;
     let mut counts = format!(
         "{} incident(s) · {} pattern(s)",
@@ -831,6 +1002,9 @@ pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     }
     let text: Vec<&str> = markdown.lines().filter(|l| !l.trim().is_empty()).collect();
     let mut lines = vec![counts];
+    if recalibration > 0 || updates > 0 {
+        lines.push(format!("recalibration: {recalibration} · prompt updates: {updates}"));
+    }
     lines.extend(text.iter().take(MAX).map(|l| l.chars().take(width).collect::<String>()));
     if text.len() > MAX {
         lines.push(format!("… +{} more", text.len() - MAX));
@@ -894,9 +1068,19 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
             format!("jira blocked: no transition to \"{}\" from \"{}\"{why}", s("wanted"), s("current"))
         }
         "jira.moved" => format!("jira moved to {}", s("status")),
+        "sandbox.egress_blocked" => match p["more"].as_u64() {
+            Some(more) => format!("blocked: {more} more ({})", detail::plain(&s("step"))),
+            None => {
+                let count = p["count"].as_u64().filter(|c| *c > 1).map(|c| format!(" x{c}")).unwrap_or_default();
+                format!("blocked: {}:{} ({}, {}){count}", detail::plain(&s("host")), p["port"], detail::plain(&s("step")), detail::plain(&s("via")))
+            }
+        },
         other => other.to_string(),
     };
-    format!("{time}  {what}")
+    match event.names.first() {
+        Some(name) => format!("{time}  {name} · {what}"),
+        None => format!("{time}  {what}"),
+    }
 }
 
 /// Popup asking to confirm a delete or an abort.
@@ -1083,6 +1267,70 @@ fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
 /// The PR view: a header of splits with their counts and when GitHub was last polled; the
 /// split's PRs oldest first as an aligned list on the left; the selected PR drawn by the same
 /// widget the ticket popup uses on the right (from 100 columns; `x` shows it narrower).
+/// The Backlog view: the machine's ranking, one row per candidate, the selected one's text and sources beside it.
+fn render_backlog(frame: &mut Frame, area: Rect, app: &App, state: &crate::backlog::BacklogState) {
+    let now = now_secs();
+    let items = &app.backlog_items;
+    let selected = state.cursor.min(items.len().saturating_sub(1));
+    let [list_area, detail_area] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).title(Line::from(format!(" Backlog {} ", items.len())).bold());
+    let inner = block.inner(list_area);
+    let mut lines = Vec::new();
+    if items.is_empty() {
+        lines.push(Line::from(Span::from("  ✓ nothing waiting").fg(c(GREEN))));
+    }
+    let visible = (inner.height as usize).max(1);
+    let start = selected.saturating_sub(visible / 2).min(items.len().saturating_sub(visible));
+    for (row, item) in items.iter().enumerate().skip(start).take(visible) {
+        let text = truncate(&item.row(now), inner.width.saturating_sub(2) as usize);
+        lines.push(if row == selected { Line::from(Span::from(format!("▸ {text}")).fg(c(BASE)).bg(c(ACCENT)).bold()) } else { Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0))) });
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), list_area);
+    let side = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(MUTED))).padding(Padding::horizontal(1)).title(Line::from(" Item ").bold());
+    let lines = match items.get(selected) {
+        Some(item) => {
+            let mut lines = vec![Line::from(Span::from(crate::detail::plain(&item.title).replace('\n', " ")).bold())];
+            lines.push(Line::from(Span::from(format!("size {} · demand {} · score {:.2}{}", crate::detail::plain(&item.size), item.demand, item.score, if item.stale { " · stale" } else { "" })).fg(c(SUBTEXT0))));
+            if let Some(repo) = &item.repo {
+                lines.push(Line::from(Span::from(format!("repo {}", crate::detail::plain(repo))).fg(c(SUBTEXT0))));
+            }
+            lines.extend(item.source_lines().into_iter().map(|s| Line::from(Span::from(format!("from {s}")).fg(c(SUBTEXT0)))));
+            lines.extend(item.blocked_lines().into_iter().map(|s| Line::from(Span::from(format!("⛔ {s}")).fg(c(RED)))));
+            lines.push(Line::default());
+            lines.extend(crate::detail::plain(&item.text).lines().take(12).map(|l| Line::from(l.to_string())));
+            lines
+        }
+        None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+    };
+    frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
+}
+
+/// The Tickets view: one row per ticket in scope, the selected one's scores, links and waiting draft beside it.
+fn render_tickets(frame: &mut Frame, area: Rect, app: &App, state: &crate::tickets::TicketsState) {
+    let items = &app.ticket_items;
+    let selected = state.cursor.min(items.len().saturating_sub(1));
+    let [list_area, detail_area] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).title(Line::from(format!(" Tickets {} ", items.len())).bold());
+    let inner = block.inner(list_area);
+    let mut lines = Vec::new();
+    if items.is_empty() {
+        lines.push(Line::from(Span::from("  ✓ nothing held").fg(c(GREEN))));
+    }
+    let visible = (inner.height as usize).max(1);
+    let start = selected.saturating_sub(visible / 2).min(items.len().saturating_sub(visible));
+    for (row, item) in items.iter().enumerate().skip(start).take(visible) {
+        let text = truncate(&item.row(), inner.width.saturating_sub(2) as usize);
+        lines.push(if row == selected { Line::from(Span::from(format!("▸ {text}")).fg(c(BASE)).bg(c(ACCENT)).bold()) } else { Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0))) });
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), list_area);
+    let side = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(MUTED))).padding(Padding::horizontal(1)).title(Line::from(" Ticket ").bold());
+    let lines = match items.get(selected) {
+        Some(item) => item.detail_lines().into_iter().map(Line::from).collect(),
+        None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+    };
+    frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
+}
+
 fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     let now = now_secs();
     let counts = pulls::counts(&app.prs.prs);
@@ -1132,7 +1380,11 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     let inner = list_block.inner(list_area);
     let mut lines = Vec::new();
     if items.is_empty() {
-        lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
+        if app.slack_snapshot.scope.as_deref() == Some("opted_in") && app.slack_snapshot.opted_in == Some(0) {
+            lines.push(Line::from(Span::from("  nothing is opted in: watch a channel with W, or list it in conversation.channels of a repository's luna.yaml").fg(c(SUBTEXT0))));
+        } else {
+            lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
+        }
     }
     // A window of rows around the cursor, so a long split never hides the selected PR.
     let visible = (inner.height as usize).max(1);
@@ -1516,6 +1768,10 @@ fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
         lines.push(Line::from(Span::from("new since you cleared it").fg(c(YELLOW)).bold()));
     }
     lines.push(Line::default());
+    for (name, text) in slack::conversation_lines(item, now).into_iter().filter(|(n, _)| *n != "waiting") {
+        let style = if name == "asks you" || name == "knock-out" { Style::new().fg(c(YELLOW)) } else { Style::new() };
+        lines.push(Line::from(vec![Span::from(format!("{name:<9}")).fg(c(SUBTEXT0)), Span::from(text).style(style)]));
+    }
     for message in &item.context {
         lines.push(muted(format!("@{}  {}", message.user.name, message.text)));
     }
@@ -1549,9 +1805,14 @@ fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
             if let Some(deadline) = &triage.deadline {
                 lines.push(field("deadline", deadline.clone()));
             }
-            if let Some(draft) = triage.draft.as_deref().filter(|d| !d.is_empty()) {
+            if let Some((_, waiting)) = slack::conversation_lines(item, now).into_iter().find(|(n, _)| *n == "waiting") {
+                lines.push(field("waiting", waiting));
+            }
+            // The waiting draft's own text first (the one a reply sends), else the classifier's reply.
+            let waiting = item.draft.as_ref().map(|d| d.text.as_str()).filter(|d| !d.is_empty());
+            if let Some(draft) = waiting.or(triage.draft.as_deref().filter(|d| !d.is_empty())) {
                 lines.push(Line::default());
-                lines.push(field("draft", draft.to_string()));
+                lines.push(field("draft", crate::detail::plain(draft)));
             }
         }
         None => lines.push(field("triage", "not yet".to_string())),
@@ -1730,6 +1991,121 @@ fn render_slack_watch_add(frame: &mut Frame, app: &App, query: &str, cursor: usi
 }
 
 /// `s`: how long the item sleeps.
+/// `Z`: why the ticket is archived. The five reasons the machine knows, one per line.
+fn render_archive_reason(frame: &mut Frame, task: &Task, cursor: usize) {
+    let area = centered(frame.area(), 52, crate::model::ARCHIVE_REASONS.len() as u16 + 4);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" archive #{} — why? ", task.short_id())).bold());
+    let lines: Vec<Line> = crate::model::ARCHIVE_REASONS
+        .iter()
+        .enumerate()
+        .map(|(i, (name, means))| {
+            let selected = i == cursor;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(format!("{}  ", i + 1)).fg(c(SUBTEXT0)),
+                Span::from(format!("{name:<14}")).style(style),
+                Span::from(*means).fg(c(SUBTEXT0)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `E`: the reason the escalation really had, one of the six, one per line.
+fn render_escalation_reason(frame: &mut Frame, task: &Task, cursor: usize) {
+    let area = centered(frame.area(), 64, crate::model::ESCALATION_REASONS.len() as u16 + 4);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" escalation #{}: why, really? ", task.short_id())).bold());
+    let lines: Vec<Line> = crate::model::ESCALATION_REASONS
+        .iter()
+        .enumerate()
+        .map(|(i, (name, means))| {
+            let selected = i == cursor;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(format!("{}  ", i + 1)).fg(c(SUBTEXT0)),
+                Span::from(format!("{name:<17}")).style(style),
+                Span::from(*means).fg(c(SUBTEXT0)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `T`: the Triage Record's five correctable fields, each with the value the picker is on; a value off the record's own is marked.
+fn render_record_edit(frame: &mut Frame, task: &Task, field: usize, picks: &[usize; 5]) {
+    let area = centered(frame.area(), 52, crate::model::RECORD_FIELDS.len() as u16 + 4);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" correct the record of #{} ", task.short_id())).bold());
+    let lines: Vec<Line> = crate::model::RECORD_FIELDS
+        .iter()
+        .enumerate()
+        .map(|(i, (key, label, values))| {
+            let selected = i == field;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            let value = values[picks[i]];
+            let changed = task.record.as_ref().is_some_and(|r| r.value_of(key) != Some(value));
+            Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(format!("{label:<14}")).fg(c(SUBTEXT0)),
+                Span::from(format!("◂ {value} ▸")).style(style),
+                Span::from(if changed { "  (you)" } else { "" }).fg(c(YELLOW)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `c` and `L`: the machine's own list, one line each; nothing here posts.
+fn render_slack_pick(frame: &mut Frame, app: &App, id: &str, relation: bool, cursor: usize) {
+    let Some(item) = app.slack_item(id) else { return };
+    let (title, rows): (&str, Vec<String>) = if relation {
+        (" about which work? ", slack::relation_choices(item).into_iter().map(|c| c.label).collect())
+    } else {
+        (" what kind of thread? ", slack::KINDS.iter().map(|k| k.to_string()).collect())
+    };
+    let area = centered(frame.area(), 64, rows.len() as u16 + 4);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).padding(Padding::horizontal(2)).title(Line::from(title).bold());
+    let lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let selected = i == cursor;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            Line::from(vec![Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)), Span::from(row.clone()).style(style)])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+fn render_slack_dismiss(frame: &mut Frame) {
+    let area = centered(frame.area(), 40, 7);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).padding(Padding::horizontal(2)).title(Line::from(" why dismiss the draft? ").bold());
+    let lines = vec![
+        Line::from(vec![Span::from("n  ").fg(c(SUBTEXT0)), Span::from("no reply needed")]),
+        Line::from(vec![Span::from("b  ").fg(c(SUBTEXT0)), Span::from("a reply was needed, not this one")]),
+        Line::from(vec![Span::from("s  ").fg(c(SUBTEXT0)), Span::from("skip: no reason")]),
+    ];
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 fn render_slack_snooze(frame: &mut Frame, cursor: usize) {
     let area = centered(frame.area(), 36, slack::SNOOZE_OPTIONS.len() as u16 + 4);
     frame.render_widget(Clear, area);
@@ -1907,7 +2283,8 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
 
     // The per-repo table takes the bottom when there is more than one repo to compare, the
     // per-engine one sits above it once there are numbers.
-    let repo_height = if floor.repos.is_empty() { 0 } else { (floor.repos.len() as u16 + 3).min(area.height / 3) };
+    // A repository with no task numbers yet still has a health panel (and a row to focus), so the table is sized by either.
+    let repo_height = if floor.repos.is_empty() && floor.health.is_empty() { 0 } else { (floor.focusable() as u16 + 3 + floor.health.len() as u16 * 3).min(area.height / 2) };
     let engine_rows = floor_engine_rows(floor);
     let engine_height = match (&floor.d7, &floor.by_engine) {
         (None, _) => 0,
@@ -2059,6 +2436,25 @@ fn render_floor_repos(frame: &mut Frame, area: Rect, floor: &FloorState, head_st
             &fmt_usd(Some(r.cost_usd)),
         );
         out.push(Line::from(Span::from(text).style(if focused { Style::new().fg(c(ACCENT)).bold() } else { Style::new() })));
+    }
+    // Repositories the machine knows that have no task numbers yet: a row each, so tab reaches them.
+    let only = floor.health_only();
+    for (i, h) in only.iter().enumerate().take(room.saturating_sub(1 + floor.repos.len())) {
+        let focused = floor.cursor == floor.repos.len() + i + 1;
+        let text = row(if focused { "▌ " } else { "  " }, &crate::model::plain(h.name(), 15), "–", "–", "–", "–", "–", "–");
+        out.push(Line::from(Span::from(text).style(if focused { Style::new().fg(c(ACCENT)).bold() } else { Style::new() })));
+    }
+    // Under the table: each repository's image and graph, and what failed.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    for h in &floor.health {
+        if out.len() + 3 > area.height as usize {
+            break;
+        }
+        out.push(Line::from(Span::from(format!("  {:<16}{}", truncate(h.name(), 15), h.image_line(now))).style(label_style)));
+        out.push(Line::from(Span::from(format!("  {:<16}{}", "", h.graph_line(now))).style(label_style)));
+        if let Some(pending) = h.pending_line() {
+            out.push(Line::from(Span::from(format!("  {:<16}{}", "", pending)).style(Style::new().fg(c(ACCENT)).bold())));
+        }
     }
     frame.render_widget(Paragraph::new(out), area);
 }
@@ -2416,6 +2812,55 @@ mod tests {
     }
 
     #[test]
+    fn floor_shows_each_repository_s_image_and_graph_and_what_failed_without_control_characters() {
+        let mut state = floor();
+        state.repos = repos();
+        state.health = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","image":{"inUse":"hardness-runner-alpha:1","base":"python:3.13-slim","builtAt":null,"lastFailure":"step 3\u001b[31m failed\nreally"},
+                 "graph":{"on":true,"commit":"abcdef0123456789","behind":7,"graphify":"0.9.34","builtAt":null,"building":true,"lastFailure":"exit code 1"}},
+                {"repo":"/r/beta","image":{"inUse":"hardness-runner:dev","base":null,"builtAt":null,"lastFailure":null},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        let text = render(160, 40, &state);
+        assert!(text.contains("image: own on python:3.13-slim (hardness-runner-alpha:1)"), "{text}");
+        assert!(text.contains("graph: abcdef0 · 7 behind · graphify 0.9.34 · building · failed: exit code 1"), "{text}");
+        assert!(text.contains("image: machine's") && text.contains("graph: off"), "{text}");
+        assert!(text.contains("build failed: step 3 [31m failed really"), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text}");
+    }
+
+    #[test]
+    fn floor_shows_a_base_waiting_for_approval_on_its_own_line_with_the_key() {
+        let mut state = floor();
+        state.repos = repos();
+        state.health = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","image":{"inUse":"hardness-runner:dev","base":null,"builtAt":null,"lastFailure":null,"pendingBase":"attacker/x:1"},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        let text = render(160, 40, &state);
+        assert!(text.lines().any(|l| l.contains("base waiting for you: attacker/x:1") && l.contains("A approves")), "{text}");
+    }
+
+    #[test]
+    fn floor_shows_the_health_of_a_repository_that_has_no_task_numbers_yet() {
+        let mut state = floor();
+        state.health = serde_json::from_str(
+            r#"[{"repo":"/r/fresh","image":{"inUse":"hardness-runner:dev","base":null,"builtAt":null,"lastFailure":null,"pendingBase":"python:3.13-slim"},
+                 "graph":{"on":true,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":true,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        assert!(state.repos.is_empty());
+        let text = render(160, 40, &state);
+        assert!(text.lines().any(|l| l.contains("fresh") && l.contains("–")), "{text}");
+        assert!(text.contains("base waiting for you: python:3.13-slim"), "{text}");
+        state.cursor = 1;
+        let text = render(160, 40, &state);
+        assert!(text.contains("▌ fresh") && text.contains("Floor · fresh ·"), "{text}");
+    }
+
+    #[test]
     fn floor_lists_every_repo_with_its_own_numbers_and_marks_the_focused_one() {
         let mut state = floor();
         state.repos = repos();
@@ -2494,8 +2939,33 @@ mod tests {
             kind: "stage.note".into(),
             payload: serde_json::json!({"stage": "triage", "note": "waiting for the Codex login"}),
             at: "2026-11-03T10:11:12.000Z".into(),
+            names: vec![],
         };
         assert_eq!(describe(&event), "10:11:12  triage: waiting for the Codex login");
+    }
+
+    #[test]
+    fn a_refused_connection_reads_as_host_port_step_and_how_it_was_asked_with_its_count_and_no_control_characters() {
+        let at = "2026-11-03T10:11:12.000Z".to_string();
+        let one = TaskEvent { task_id: "t1".into(), kind: "sandbox.egress_blocked".into(), payload: serde_json::json!({"step": "check", "host": "evil.example.com", "port": 443, "via": "connect", "reason": "not_listed", "count": 1}), at: at.clone(), names: vec![] };
+        assert_eq!(describe(&one), "10:11:12  blocked: evil.example.com:443 (check, connect)");
+        let many = TaskEvent { payload: serde_json::json!({"step": "stage", "host": "a.b\u{1b}[31m.example", "port": 53, "via": "dns", "reason": "not_listed", "count": 12}), ..one.clone() };
+        let text = describe(&many);
+        assert_eq!(text, "10:11:12  blocked: a.b [31m.example:53 (stage, dns) x12");
+        let more = TaskEvent { payload: serde_json::json!({"step": "stage", "more": 5}), ..one };
+        assert_eq!(describe(&more), "10:11:12  blocked: 5 more (stage)");
+    }
+
+    #[test]
+    fn an_event_with_a_diagram_name_shows_the_first_name_and_one_without_is_unchanged() {
+        let named: TaskEvent = serde_json::from_str(
+            r#"{"id":"1","taskId":"t1","kind":"task.shipped","payload":{},"at":"2026-11-03T10:11:12.000Z","names":["ship.merged","card.closed"]}"#,
+        )
+        .unwrap();
+        assert_eq!(describe(&named), "10:11:12  ship.merged · task.shipped");
+        let old: TaskEvent = serde_json::from_str(r#"{"id":"1","taskId":"t1","kind":"task.created","payload":{},"at":"2026-11-03T10:11:12.000Z"}"#).unwrap();
+        assert!(old.names.is_empty());
+        assert_eq!(describe(&old), "10:11:12  created");
     }
 
     #[test]
@@ -2821,6 +3291,64 @@ mod tests {
     }
 
     #[test]
+    fn the_note_prompt_at_the_ship_gate_shows_the_note_convention() {
+        assert_eq!(reason_placeholder("awaiting_ship"), Some("what to change (t=12.5 scene=<id> el=<id> …)"));
+        assert_eq!(reason_placeholder("awaiting_approval"), None);
+    }
+
+    #[test]
+    fn evidence_lines_render_a_video_pack_in_order() {
+        let v: Value = serde_json::json!({"verdict":"pass","artifactCount":6,"thumbnails":["/a.png"],
+            "format":"video","summary":"Show the cart total. 2 scenarios: 2 passed. Shown as video; risk medium. And a fourth sentence that must not appear because only three lines are kept after wrapping at the width of the pane for sure.",
+            "scenarios":[{"text":"Total shows","result":"pass"},{"text":"Zero on empty","result":"fail"},{"text":"Updates","result":"partial"},{"text":"Odd"}],
+            "media":[{"label":"walkthrough.mp4","url":"https://x/w.mp4"},{"label":"cover.jpg","url":"https://x/c.jpg"}],
+            "video":{"verdict":"ship","scores":{"hook":9,"clarity":8,"truth":7},
+                "defects":[{"priority":"P0","t":12.5,"scene":"cart","symptom":"headline cut off"},{"priority":"P1","t":3.0,"scene":null,"symptom":"voice late"},{"priority":"P2","t":9.0,"scene":"x","symptom":"third"}]}});
+        let lines = evidence_lines(&v);
+        assert_eq!(lines[0], "format: video");
+        let summary: Vec<&String> = lines.iter().skip(1).take_while(|l| !l.starts_with("verdict:")).collect();
+        assert_eq!(summary.len(), 3, "{lines:?}");
+        assert!(summary[0].starts_with("Show the cart total."));
+        assert!(summary.iter().all(|l| l.chars().count() <= 80), "{summary:?}");
+        let rest: Vec<&str> = lines.iter().skip(1 + summary.len()).map(String::as_str).collect();
+        assert_eq!(
+            rest,
+            [
+                "verdict: pass",
+                "6 artifacts",
+                "/a.png",
+                "✓ Total shows",
+                "✗ Zero on empty",
+                "~ Updates",
+                "? Odd",
+                "media: walkthrough.mp4  https://x/w.mp4",
+                "media: cover.jpg  https://x/c.jpg",
+                "critic: ship · 8.0/10 · 3 defects",
+                "P0 @12.5 cart: headline cut off",
+                "P1 @3.0: voice late",
+            ]
+        );
+    }
+
+    #[test]
+    fn evidence_lines_render_a_captures_pack_and_say_why_it_degraded() {
+        let media: Vec<Value> = (1..=8).map(|i| serde_json::json!({"label":format!("m{i}"),"url":format!("/u{i}")})).collect();
+        let v: Value = serde_json::json!({"verdict":"pass","artifactCount":2,"format":"captures","note":"the video image is not built",
+            "summary":"Short.","media":media});
+        let lines = evidence_lines(&v);
+        assert_eq!(lines[0], "format: captures (degraded: the video image is not built)");
+        assert_eq!(lines[1], "Short.");
+        assert_eq!(lines.iter().filter(|l| l.starts_with("media: ")).count(), 6);
+        assert!(!lines.iter().any(|l| l.starts_with("critic:")));
+    }
+
+    #[test]
+    fn evidence_lines_keep_the_legacy_shape_without_a_pack() {
+        let v: Value = serde_json::json!({"verdict":"pass","artifactCount":1,"scenarios":[]});
+        assert_eq!(evidence_lines(&v), ["verdict: pass", "1 artifact"]);
+    }
+
+    #[test]
     fn rules_lines_show_counts_bias_and_truncate_to_twelve() {
         let md: String = (1..=15).map(|i| format!("- rule {i} {}\n", "x".repeat(40))).collect();
         let v: Value = serde_json::json!({"markdown": md, "incidents": 2, "patterns": 1,
@@ -2832,6 +3360,19 @@ mod tests {
         assert_eq!(lines[13], "… +3 more");
         assert!(rules_lines(&Value::Null, 20).is_empty());
         assert!(rules_lines(&serde_json::json!({"markdown": "  \n"}), 20).is_empty());
+    }
+
+    #[test]
+    fn rules_lines_add_the_recalibration_and_prompt_update_counts_when_present() {
+        let v: Value = serde_json::json!({"markdown": "- one\n", "incidents": 1, "patterns": 0,
+            "recalibration": [{"dimension": "size"}, {"dimension": "risk"}], "promptUpdates": [{"pack": "implementing", "change": "x"}]});
+        let lines = rules_lines(&v, 40);
+        assert_eq!(lines[0], "1 incident(s) · 0 pattern(s)");
+        assert_eq!(lines[1], "recalibration: 2 · prompt updates: 1");
+        assert_eq!(lines[2], "- one");
+        // A retro that proposed no rules text but did recalibrate still shows what it learned.
+        let only: Value = serde_json::json!({"markdown": "", "recalibration": [{"dimension": "size"}]});
+        assert_eq!(rules_lines(&only, 40), vec!["0 incident(s) · 0 pattern(s)".to_string(), "recalibration: 1 · prompt updates: 0".to_string()]);
     }
 }
 
@@ -3098,7 +3639,7 @@ mod slack_render_tests {
         assert!(text.contains("n add  e floor  d delete  space on/off  esc"), "{text}");
         app.slack.as_mut().unwrap().watches = None;
 
-        app.mode = Mode::SlackReply { id: "C0123:1730112345.0001".into(), area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]), vim: crate::vim::Vim::new(), nudge: false };
+        app.mode = Mode::SlackReply { id: "C0123:1730112345.0001".into(), area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]), vim: crate::vim::Vim::new(), nudge: false, draft: None };
         let text = render(120, 40, &app);
         assert!(text.contains(" reply · #payments-oncall · thread with @marta "), "{text}");
         assert!(text.contains("ctrl+s send  esc back") && text.contains(" NORMAL "), "{text}");

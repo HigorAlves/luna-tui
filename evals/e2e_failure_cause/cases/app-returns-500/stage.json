@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "e2e_failure_cause",
+  "pack": "e2e_failure_cause",
+  "attempt": 1,
+  "task": {
+    "id": "e2e-failure-cause",
+    "title": "E2E failure: attempt 1",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "e2e",
+      "e2e": {
+        "verdict": "fail",
+        "summary": "Export returned an error page.",
+        "criteria": [
+          {
+            "text": "Clicking Export downloads a CSV",
+            "result": "fail",
+            "note": "The page showed 'Internal Server Error' after the click; the network tab shows GET /cart/export.csv 500 with a stack trace in toCsv."
+          }
+        ],
+        "attempt": 1
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "blast_radius.score",
+      "min": -0.5,
+      "max": 0.5
+    },
+    {
+      "kind": "between",
+      "path": "reversibility.score",
+      "min": -0.5,
+      "max": 0.5
+    },
+    {
+      "kind": "between",
+      "path": "data_sensitivity.score",
+      "min": -0.5,
+      "max": 0.5
+    },
+    {
+      "kind": "oneOf",
+      "path": "complexity.choice",
+      "values": [
+        "S"
+      ]
+    }
+  ],
+  "rubric": "A one-line copy change in one module: blast radius one module (0), a revert restores everything (0), no user or secret data (0). Risk is scored before the plan, from the record and the code map alone; complexity is how hard the change is to get right.",
+  "label": {
+    "blast_radius": {
+      "score": 0
+    },
+    "reversibility": {
+      "score": 0
+    },
+    "data_sensitivity": {
+      "score": 0
+    },
+    "complexity": {
+      "choice": "S"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "blast_radius": "One module, its tests",
+      "reversibility": "A revert restores everything",
+      "data_sensitivity": "No user or secret data",
+      "complexity": "A few lines in one place"
+    },
+    "why": "One string in one module, a revert restores it, no data: the lowest level on all three scores, and a few lines in one place is S.",
+    "ruledOut": [
+      {
+        "question": "complexity",
+        "label": "M",
+        "why": "A feature in one module is more than a one-line copy fix."
+      },
+      {
+        "question": "complexity",
+        "label": "L",
+        "why": "Nothing here spans several modules or needs a new mechanism."
+      },
+      {
+        "question": "complexity",
+        "label": "XL",
+        "why": "A redesign or a staged rollout is far beyond a typo."
+      }
+    ],
+    "second": {
+      "label": {
+        "blast_radius": {
+          "score": 0
+        },
+        "reversibility": {
+          "score": 0
+        },
+        "data_sensitivity": {
+          "score": 0
+        },
+        "complexity": {
+          "choice": "S"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

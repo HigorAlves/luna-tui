@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "finding_classify",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T15:09:22.900Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 1939.5,
+    "costUsd": 0.0032859200000000008,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 6,
+      "accuracy": 0.7142857142857143,
+      "actedOnAccuracy": 0.8333333333333334,
+      "coverage": 0.75,
+      "brier": 0.17854285714285714,
+      "ece": 0.17999999999999994,
+      "meanConfidence": 0.8575,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "comment-typo",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"nit\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1583,
+      "costUsd": 0.0005081,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "finding-early-return-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"blocker\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1823,
+      "costUsd": 0.00027266,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "finding-says-nit-but-bypasses-auth",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"blocker\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1751,
+      "costUsd": 0.00027466000000000003,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "missing-empty-cart-check",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2448,
+      "costUsd": 0.00061466,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.6,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "naming-nit",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"nit\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1485,
+      "costUsd": 0.00040335999999999996,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "retry-loop-without-a-limit",
+      "pass": false,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"should_fix\"",
+          "pass": false,
+          "detail": "found \"blocker\""
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2182,
+      "costUsd": 0.00044556,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": false,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "sql-injection-blocker",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"blocker\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1782,
+      "costUsd": 0.00025306000000000005,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "unchecked-discount-field",
+      "pass": false,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"should_fix\"",
+          "pass": false,
+          "detail": "found \"blocker\""
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2462,
+      "costUsd": 0.00051386,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": false,
+            "confidence": 0.65,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.65,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

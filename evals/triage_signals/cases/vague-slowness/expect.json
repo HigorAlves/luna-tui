@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "kind.confidence",
+      "min": 0,
+      "max": 0.85
+    },
+    {
+      "kind": "between",
+      "path": "size.confidence",
+      "min": 0,
+      "max": 0.8
+    },
+    {
+      "kind": "between",
+      "path": "ready.p",
+      "min": 0,
+      "max": 0.4
+    }
+  ],
+  "rubric": "No steps, no numbers, no acceptance criteria: bug or feature is unclear and the size is a guess; confidence on the kind and the size should be modest and ready low.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "kind": {
+            "choice": "bug"
+          }
+        },
+        "criteria": {
+          "kind": "Something that works, or should work, is broken"
+        },
+        "why": "The export is slower than it should be, which is something that should work and does not."
+      },
+      {
+        "label": {
+          "kind": {
+            "choice": "feature"
+          }
+        },
+        "criteria": {
+          "kind": "New behaviour a user or the pipeline can see"
+        },
+        "why": "With no steps and no numbers, it may be a wish for a faster export, which is new behaviour."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

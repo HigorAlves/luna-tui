@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "evidence_format",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T15:14:13.837Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 451.25,
+    "costUsd": 0.00018152,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 6,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.75,
+      "brier": 0.051257142857142855,
+      "ece": 0.19714285714285723,
+      "meanConfidence": 0.7687499999999999,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "api-only-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"screenshots_or_terminal\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 455,
+      "costUsd": 0.0000226,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.66,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.66,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "ci-workflow-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text_only\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 554,
+      "costUsd": 0.00002272,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.76,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "cli-flag-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"screenshots_or_terminal\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 500,
+      "costUsd": 0.00002318,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "goal-demands-video",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text_only\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 448,
+      "costUsd": 0.00002285,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.72,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "pure-refactor",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text_only\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 401,
+      "costUsd": 0.00002339,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.72,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "rename-constant-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text_only\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 409,
+      "costUsd": 0.00002192,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "steps-but-no-video-image",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 372,
+      "costUsd": 0.00002243,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": null,
+            "confidence": 0.53,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.53,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "web-change-with-recording",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"video\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 471,
+      "costUsd": 0.00002243,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 1,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

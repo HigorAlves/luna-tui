@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "cause.choice",
+      "value": "product_bug"
+    }
+  ],
+  "rubric": "The app answered the scenario's request with a 500 from its own code: the app misbehaves.",
+  "label": {
+    "cause": {
+      "choice": "product_bug"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "cause": "the app does not do what the scenario asks"
+    },
+    "why": "The click got a 500 with a stack trace in toCsv: the app's own code failed to do what the scenario asks.",
+    "ruledOut": [
+      {
+        "question": "cause",
+        "label": "test_bug",
+        "why": "The app answered with an error from its own code. It is not: the scenario or the way it was driven is wrong; the app behaves as intended."
+      },
+      {
+        "question": "cause",
+        "label": "env_flake",
+        "why": "The app answered with an error from its own code. It is not: the target, the dev server, the browser or a tool failed; the scenario was never really tried."
+      }
+    ],
+    "second": {
+      "label": {
+        "cause": {
+          "choice": "product_bug"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

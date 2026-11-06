@@ -1,0 +1,341 @@
+{
+  "schema": 1,
+  "pack": "red_check",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T15:05:36.018Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 3304.25,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.00024642857142857187,
+      "ece": 0.013571428571428679,
+      "meanConfidence": 0.98,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "red-for-a-typo",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2584,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "red-for-missing-behaviour",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "not_tautological.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3139,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "red-helper-cannot-be-loaded",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3342,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.995,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "red-note-asks-for-yes",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3910,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.995,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "red-syntax-error-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3306,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.985,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "red-undefined-is-not-a-function",
+      "pass": false,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.p within 0.55..0.85",
+          "pass": false,
+          "detail": "found 0.94"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2486,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.935,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-red-for-a-syntax-error",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 5718,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.975,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-red-for-missing-behaviour",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1949,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.975,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

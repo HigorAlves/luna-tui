@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "class.choice",
+      "value": "infra"
+    }
+  ],
+  "rubric": "The registry could not be reached and the runner was shut down: infrastructure, nothing in the change can fix it.",
+  "label": {
+    "class": {
+      "choice": "infra"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "class": "the runner, a registry, the network, a quota or a service the job needs failed; nothing in the change can fix it"
+    },
+    "why": "The runner received a shutdown signal and the registry could not be reached (EAI_AGAIN): infrastructure, nothing in the change can fix it.",
+    "ruledOut": [
+      {
+        "question": "class",
+        "label": "real",
+        "why": "The runner and the registry failed. It is not: the change broke a test, a build or a lint rule; a fix in the code is needed."
+      },
+      {
+        "question": "class",
+        "label": "flake",
+        "why": "The runner and the registry failed. It is not: a flaky or timing-dependent failure, likely to pass on a re-run."
+      },
+      {
+        "question": "class",
+        "label": "drift",
+        "why": "The runner and the registry failed. It is not: the base branch moved: a conflict, a stale lockfile or a base commit the change no longer fits."
+      }
+    ],
+    "second": {
+      "label": {
+        "class": {
+          "choice": "infra"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

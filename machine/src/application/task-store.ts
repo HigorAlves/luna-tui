@@ -1,7 +1,7 @@
 // Everything Pipeline needs from storage. Every method here is plain CRUD except
 // `withTaskLock`, whose Postgres implementation takes a row lock inside a transaction —
 // the one seam where the transition engine's correctness depends on the storage layer.
-import type { EngineId, JiraLink, StageEngines, StageRunCase, TaskClassification, TaskRoute, TaskState } from "@hardness/contracts";
+import type { CardFields, EngineId, JiraLink, StageEngines, StageRunCase, TaskClassification, TaskRoute, TaskState, EvidencePack, TriageRecord } from "@hardness/contracts";
 
 import type { ApprovalRow, ArtifactRow, Decision, EventRow, StageRunRow, StageRunStatus, TaskRow } from "../domain/task.ts";
 
@@ -20,8 +20,11 @@ export interface NewTaskRow {
   jira?: JiraLink | null;
   /** The task's own engine per pack (the work order's `stages`). */
   stages?: StageEngines;
-  /** What issue_classify said about the issue, when intake ran it. */
+  /** What triage_signals said about the issue, when intake ran it. */
   classification?: TaskClassification | null;
+  record?: TriageRecord | null;
+  evidence?: EvidencePack | null;
+  card?: CardFields | null;
 }
 
 export interface DecideApprovalInput {
@@ -113,6 +116,8 @@ export interface TaskStore {
   /** Makes the task unless one already holds `key`, which it then answers instead; two calls
    *  racing on one key make one task. `created` says which happened. */
   createTaskOnce(input: NewTaskRow, key: string, requestHash: string): Promise<{ task: TaskRow; created: boolean }>;
+  /** The task made under `key` by `createTaskOnce`, or null. */
+  taskByKey(key: string): Promise<TaskRow | null>;
   listTasks(): Promise<TaskRow[]>;
   getTask(id: string): Promise<TaskRow | null>;
   /** The task made from an issue (`github`) or a PR (`github_pr`) of this repo and number. */
@@ -127,6 +132,8 @@ export interface TaskStore {
   /** The highest sequence number any committed change holds; 0 before the first. */
   lastSeq(): Promise<number>;
   findStuckTasks(running: ReadonlySet<TaskState>): Promise<TaskRow[]>;
+  /** The cards that are not closed or archived and are stacked on this one (`card.base.card`). */
+  findStackedOn(id: string): Promise<TaskRow[]>;
   /** Ends every stage run still `running` as aborted, except the ones a restart re-attached to. */
   markRunningStageRunsAborted(except?: readonly string[]): Promise<void>;
   /** The container's name and the commit it started from, known once the stage is under way. */

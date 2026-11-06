@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "related.confidence",
+      "min": 0.2,
+      "max": 0.8
+    }
+  ],
+  "rubric": "A flaky login could be the early-expiring session cookie or a different fault: both readings are fair, so the confidence must stay in the middle.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "related": {
+            "choice": "slot1"
+          }
+        },
+        "criteria": {
+          "related": "the thread is about the same work as slot 1"
+        },
+        "why": "Logging out after a few minutes is what an early-expiring session cookie does."
+      },
+      {
+        "label": {
+          "related": {
+            "choice": "none"
+          }
+        },
+        "criteria": {
+          "related": "none of the candidates is about the same work"
+        },
+        "why": "\"Flaky\" is vaguer than a cookie lifetime and may be another fault."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

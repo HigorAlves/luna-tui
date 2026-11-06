@@ -20,19 +20,23 @@ export function collectFacts(repoRoot) {
   if (columns === undefined || states === undefined || packs === undefined) throw new Error("facts: could not parse contracts or PACKS")
   const machine = join(repoRoot, "machine")
   const images = readdirSync(machine, { withFileTypes: true }).filter((d) => d.isDirectory() && existsSync(join(machine, d.name, "Dockerfile"))).length
+  // The engine each decision slot runs on by default (written by `pnpm eval defaults --write`), for the site.
+  const defaultsFile = join(repoRoot, "contracts/src/decision-defaults.json")
+  const defaults = existsSync(defaultsFile) ? JSON.parse(readFileSync(defaultsFile, "utf8")) : null
   return {
     states: quoted(states),
     columns: quoted(columns),
     packs: [...packs.matchAll(/^\s{2}(\w+):\s*\{/gm)].length,
     images,
+    ...(defaults ? { decisionDefaults: Object.fromEntries(Object.entries(defaults).sort(([a], [b]) => a.localeCompare(b)).map(([pack, entry]) => [pack, entry.default])) } : {}),
   }
 }
 
 export function diffFacts(committed, disk) {
   return Object.keys(disk)
-    .filter((k) => committed?.[k] !== disk[k])
+    .filter((k) => JSON.stringify(committed?.[k]) !== JSON.stringify(disk[k]))
     .sort()
-    .map((k) => `${k}: ${committed?.[k]} → ${disk[k]}`)
+    .map((k) => `${k}: ${JSON.stringify(committed?.[k])} → ${JSON.stringify(disk[k])}`)
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

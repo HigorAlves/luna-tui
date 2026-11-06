@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "event_class",
+  "pack": "event_class",
+  "attempt": 1,
+  "task": {
+    "id": "event-class",
+    "title": "PR event: ci-bot comment",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "event",
+      "event": {
+        "actor": "ci-bot",
+        "isBot": true,
+        "isMe": false,
+        "kind": "comment",
+        "state": null,
+        "body": "Build #4411 passed on 3 of 3 jobs.",
+        "url": "https://github.com/example/shop/pull/7#issuecomment-1"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

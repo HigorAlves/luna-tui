@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "scope.choice",
+      "value": "in_place"
+    }
+  ],
+  "rubric": "A local change: fix, run the checks, push.",
+  "label": {
+    "scope": {
+      "choice": "in_place"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "scope": "a local change: fix, run the checks, push"
+    },
+    "why": "A misspelt word in an error message is a local fix.",
+    "ruledOut": [
+      {
+        "question": "scope",
+        "label": "re_verify_partial",
+        "why": "A word in a message changes. It is not: the change touches behaviour: fix and have the verifier review the delta."
+      },
+      {
+        "question": "scope",
+        "label": "re_plan",
+        "why": "A word in a message changes. It is not: the plan itself is wrong: back to the planner with the thread."
+      }
+    ],
+    "second": {
+      "label": {
+        "scope": {
+          "choice": "in_place"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, EngineId, JiraLink, RunInfo, StageEngines, StageRunCase, TaskClassification, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
+import type { ArchiveReason, CardFields, ArtifactKind, EngineId, JiraLink, RunInfo, StageEngines, StageRunCase, TaskClassification, TaskRoute, TaskSource, TaskState, EvidencePack, TriageRecord } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -22,6 +22,8 @@ export interface TaskRow {
   resumeTo: TaskState | null;
   /** Why the task is escalated, shown on the board. */
   reason: string | null;
+  /** Why the task was archived; null for any other state. */
+  archiveReason: ArchiveReason | null;
   /** Ready to run but waiting for a free concurrency slot. */
   queued: boolean;
   /** When it joined the queue: claims go in this order, so editing a queued ticket keeps its place. */
@@ -41,8 +43,14 @@ export interface TaskRow {
   requestHash: string | null;
   /** The task's own engine per pack, over luna.yaml's and the pack's default; a pack's entry is fixed once its stage starts. */
   stages: StageEngines;
-  /** What issue_classify said about the issue the task came from; null when intake did not run it. */
+  /** What triage_signals said about the issue the task came from; null when intake did not run it. */
   classification: TaskClassification | null;
+  /** What triage decided about the ticket and why; null before it ran. */
+  record: TriageRecord | null;
+  /** The evidence pack of the task's change; null before verifying made one. */
+  evidence: EvidencePack | null;
+  /** What the card keeps of the entry contract; null on a row from before wave 14 (`cardOf` reads it as one source). */
+  card?: CardFields | null;
   /** The task's place in the change sequence (`task_seq`), bigint as pg returns it. */
   seq: string;
   createdAt: Date;
@@ -63,6 +71,8 @@ export interface StageRunRow {
   turns: number | null;
   containerId: string | null;
   inputCommit: string | null;
+  /** The commit the run first started from, written once; `inputCommit` follows the run's latest container. Null on rows from before. */
+  baseCommit?: string | null;
   outputCommit: string | null;
   transcriptPath: string | null;
   /** Verifying only: one verdict per approved case, when the run reported them. */
@@ -113,7 +123,7 @@ export interface ArtifactRow {
   createdAt: Date;
 }
 
-export type Decision = "approved" | "sent_back" | "answered";
+export type Decision = "approved" | "sent_back" | "rejected" | "answered";
 
 export interface ApprovalRow {
   id: string;
@@ -137,10 +147,34 @@ export class TaskNotFoundError extends Error {
 }
 
 /** The task has a stage running, so it cannot be deleted until you abort it. */
+/** The task is no longer in a state the caller required: a tick decided on a stale row. */
+export class TaskMovedError extends Error {
+  constructor(id: string, state: TaskState, expected: Iterable<TaskState>) {
+    super(`task ${id} is ${state}, not ${[...expected].join(" or ")}`);
+    this.name = "TaskMovedError";
+  }
+}
+
 export class TaskBusyError extends Error {
   constructor(id: string, state: TaskState) {
     super(`task ${id} is ${state}; abort it first`);
     this.name = "TaskBusyError";
+  }
+}
+
+/** A card's clone holds commits no remote has: removing it would drop them. */
+export class WorktreeUnpushedError extends Error {
+  constructor(id: string, public readonly commits: number) {
+    super(`task ${id}'s workspace holds ${commits} unpushed commit(s); push them, or remove it with discard`);
+    this.name = "WorktreeUnpushedError";
+  }
+}
+
+/** Feedback on an Evidence Pack the card does not have. */
+export class NoEvidenceError extends Error {
+  constructor(id: string) {
+    super(`task ${id} has no Evidence Pack to give feedback on`);
+    this.name = "NoEvidenceError";
   }
 }
 
@@ -149,6 +183,30 @@ export class NoPlanToEditError extends Error {
   constructor(id: string) {
     super(`task ${id} has no plan awaiting approval`);
     this.name = "NoPlanToEditError";
+  }
+}
+
+/** No record to correct: the card has none yet, or it is not waiting at a gate (a stage is working on it, or it ended). */
+export class RecordNotEditableError extends Error {
+  constructor(id: string, why: string) {
+    super(`the triage record of task ${id} cannot be corrected: ${why}`);
+    this.name = "RecordNotEditableError";
+  }
+}
+
+/** No questions to post: the card is not waiting for answers, or the open gate holds none. */
+export class NoQuestionsToPostError extends Error {
+  constructor(id: string, why = "the card has no open questions") {
+    super(`task ${id}: ${why}`);
+    this.name = "NoQuestionsToPostError";
+  }
+}
+
+/** The open questions carry a token-shaped string: they are never posted, whoever taps. */
+export class QuestionsCarrySecretError extends Error {
+  constructor(id: string) {
+    super(`task ${id}: a question carries a secret-shaped token and is not posted`);
+    this.name = "QuestionsCarrySecretError";
   }
 }
 
@@ -169,11 +227,90 @@ export class StageStartedError extends Error {
   }
 }
 
+/** A plan of High risk needs two distinct approvers, and this approval named none. */
+export class ApproverRequiredError extends Error {
+  constructor(id: string, gate: "plan" | "ship" = "plan", needed = 2) {
+    super(
+      gate === "ship"
+        ? `task ${id}: a pack of High risk ships only with a ship approver who did not approve the plan; send your name as the approver`
+        : `task ${id}: this plan needs ${needed} named approvers; send your name as the approver`,
+    );
+    this.name = "ApproverRequiredError";
+  }
+}
+
+/** A plan that needs an approver from outside the code map's owners, and the names so far are all owners. */
+export class OutsideApproverRequiredError extends Error {
+  constructor(id: string, approver: string) {
+    super(`task ${id}: ${approver} is among the code map's owners and so are the approvers so far; a High-risk plan needs at least one approver from outside them (an attestation: the names are taken as given)`);
+    this.name = "OutsideApproverRequiredError";
+  }
+}
+
+/** An edit of what Build may touch (steps, risk, code map, rollback) after the plan was approved: a plan that must change goes back through the plan gate. */
+export class PlanApprovedError extends Error {
+  constructor(id: string) {
+    super(`task ${id}: the plan is approved; its steps, risk, code map and rollback change only by sending it back through the plan gate`);
+    this.name = "PlanApprovedError";
+  }
+}
+
+/** A rejection anywhere but the plan gate: only a plan is rejected, and only while it waits. */
+export class RejectNotAllowedError extends Error {
+  constructor(id: string, state: string) {
+    super(`task ${id} is ${state}: a card is rejected only at the plan gate or the release question`);
+    this.name = "RejectNotAllowedError";
+  }
+}
+
+/** A High-risk release approved by someone the gate's release owners do not name. */
+export class FindingNotFoundError extends Error {
+  constructor(readonly findingId: string) {
+    super("the last Verify did not report that finding");
+    this.name = "FindingNotFoundError";
+  }
+}
+
+export class NotReleaseOwnerError extends Error {
+  constructor(id: string, approver: string) {
+    super(`task ${id}: ${approver} is not one of the release owners this question names`);
+    this.name = "NotReleaseOwnerError";
+  }
+}
+
+/** The same approver twice on a plan that needs two. */
+export class SameApproverError extends Error {
+  constructor(id: string, approver: string, gate: "plan" | "ship" = "plan") {
+    super(
+      gate === "ship"
+        ? `task ${id}: ${approver} approved the plan; the ship approver of a High-risk pack must be someone else`
+        : `task ${id}: ${approver} already approved this plan; a second, different approver must`,
+    );
+    this.name = "SameApproverError";
+  }
+}
+
 /** No open `awaiting_test_check` gate, so there are no test cases to edit right now. */
 export class NoCasesToEditError extends Error {
   constructor(id: string) {
     super(`task ${id} has no test cases awaiting your check`);
     this.name = "NoCasesToEditError";
+  }
+}
+
+/** No open escalated gate, so there is no reason to correct (409 `no_escalation`). */
+export class NoEscalationToCorrectError extends Error {
+  constructor(id: string) {
+    super(`task ${id} is not waiting on an escalation`);
+    this.name = "NoEscalationToCorrectError";
+  }
+}
+
+/** The corrected reason is not one of the six (400 `invalid_reason`). */
+export class InvalidEscalationReasonError extends Error {
+  constructor() {
+    super("reason must be one of plan_wrong, env_broken, flaky_tests, too_complex, undeclared_scope, other");
+    this.name = "InvalidEscalationReasonError";
   }
 }
 
@@ -200,7 +337,8 @@ export function sameSource(a: unknown, b: unknown): boolean {
     if (value === null || typeof value !== "object") return value ?? null;
     return Object.fromEntries(
       Object.entries(value)
-        .filter(([, v]) => v !== undefined && v !== null)
+        // `labels` are what intake saw, never part of a source's identity.
+        .filter(([k, v]) => k !== "labels" && v !== undefined && v !== null)
         .sort(([x], [y]) => (x < y ? -1 : 1))
         .map(([k, v]) => [k, canonical(v)]),
     );

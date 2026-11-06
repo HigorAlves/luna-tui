@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "freeze"
+    }
+  ],
+  "rubric": "A freeze window.",
+  "label": {
+    "event": {
+      "choice": "freeze"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "event": "a freeze window holds: nothing may merge now"
+    },
+    "why": "A freeze window holds and nothing may merge now.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "freeze"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

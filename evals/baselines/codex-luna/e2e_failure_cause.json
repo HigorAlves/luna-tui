@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "e2e_failure_cause",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T15:42:05.175Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 2486.125,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.875,
+      "brier": 0.00025714285714285764,
+      "ece": 0.014285714285714235,
+      "meanConfidence": 0.9475,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "app-returns-500",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"product_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2570,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "browser-process-killed",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"env_flake\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1884,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "dev-server-down",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"env_flake\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2357,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "export-500-plain-summary",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"product_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1939,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-expects-the-wrong-total",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"test_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2625,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-uses-the-old-label",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"test_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2393,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "selector-timeout",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.confidence within 0..0.8",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3995,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": null,
+            "confidence": 0.68,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.68,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "summary-blames-the-scenario",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"product_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2126,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

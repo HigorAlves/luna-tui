@@ -164,20 +164,32 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
-  it("issue_classify: renders no prompt, prints the questions and the issue it would send to Jev, and leaves a valid result", () => {
+  it("triage_signals on Jev: renders no prompt, prints the questions and the issue it would send, and leaves a valid result", () => {
     const issue = { title: "Board crashes on resize", description: "It panics.", labels: ["bug"] };
-    const { code, stdout, out, result } = run(stageInput("issue_classify", { plan: null, context: { projectContext: null, issue } }), {}, {}, { emptyWork: true });
+    const { code, stdout, out, result } = run(stageInput("triage_signals", { plan: null, engine: "jev", context: { projectContext: null, issue } }), {}, {}, { emptyWork: true });
     expect(code).toBe(0);
     expect(existsSync(join(out, "prompt.md"))).toBe(false);
-    expect(stdout).toContain("pack issue_classify as a decision");
+    expect(stdout).toContain("pack triage_signals as a decision");
     const request = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
-    expect(request).toMatchObject({ model: resolveEngine("jev").modelId, state: issue, questions: { kind: { type: "choice" }, ready: { type: "noul" }, size: { type: "score" } } });
+    expect(request).toMatchObject({ model: resolveEngine("jev").modelId, state: issue, questions: { kind: { type: "choice" }, ready: { type: "noul" }, size: { type: "choice" }, who: { type: "score" } } });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
-  it("issue_classify without a Jev key: ends the stage with ok false and the reason, without a crash", () => {
-    const { code, result } = run(stageInput("issue_classify"), { LUNA_STAGE_DRY_RUN: "0", TYPESAFE_API_KEY: "", AI_GATEWAY_API_KEY: "" });
+  it("triage_signals on claude:haiku: one answer within three turns, with no agent, no tools and no MCP server", () => {
+    const { code, stdout, out, result } = run(stageInput("triage_signals", { plan: null, engine: "claude:haiku", context: { projectContext: null, issue: { title: "Board crashes", description: "It panics." } } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    expect(stdout).not.toContain("has no agent to run");
+    expect(existsSync(join(out, "prompt.md"))).toBe(false);
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ outputFormat: { type: "json_schema" }, maxTurns: 3, tools: [], allowedTools: [], model: resolveEngine("claude:haiku").modelId });
+    expect(options.agent).toBeUndefined();
+    expect(options.mcpServers).toBeUndefined();
+    expect(result).toMatchObject({ ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("triage_signals on Jev without a key: ends the stage with ok false and the reason, without a crash", () => {
+    const { code, result } = run(stageInput("triage_signals", { engine: "jev" }), { LUNA_STAGE_DRY_RUN: "0", TYPESAFE_API_KEY: "", AI_GATEWAY_API_KEY: "" });
     expect(code).toBe(0);
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ ok: false, outcome: "fail", rateLimited: false, error: expect.stringContaining("neither AI_GATEWAY_API_KEY nor TYPESAFE_API_KEY is set") });
@@ -199,7 +211,7 @@ describe("factory main (dry run)", () => {
     expect(eve).toMatchObject({ runtime: "eve", engine: "codex:sol", sdk: { name: "eve", version: expect.any(String) } });
     expect(eve.fingerprint).not.toBe(first.run.fingerprint);
     expect(run(stageInput("test_design")).result.run.fingerprint).not.toBe(first.run.fingerprint);
-    expect(run(stageInput("issue_classify", { plan: null }), {}, {}, { emptyWork: true }).result.run).toMatchObject({ runtime: "jev", sdk: { name: "@typesafe-ai/sdk" } });
+    expect(run(stageInput("triage_signals", { plan: null, engine: "jev" }), {}, {}, { emptyWork: true }).result.run).toMatchObject({ runtime: "jev", sdk: { name: "@typesafe-ai/sdk" } });
   });
 
   it("runs the engine the input names, by its pinned model ID", () => {
@@ -224,8 +236,8 @@ describe("factory main (dry run)", () => {
       agent: expect.stringMatching(/\.eve-agents\/triage$/),
       model: "chatgpt(gpt-5.6-terra)",
       reasoning: "high",
-      tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get"],
-      guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), roots: { scratch: expect.stringMatching(/luna-scratch-/), read: [expect.stringMatching(/\/in$/)] } },
+      tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search", "delegate"],
+      guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), roots: { scratch: expect.stringMatching(/luna-scratch-/), read: [expect.stringMatching(/\/in$/), "/graph"] } },
     });
     expect(result).toMatchObject({ ok: true, summary: "dry-run" });
   });

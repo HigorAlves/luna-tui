@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "conflict"
+    }
+  ],
+  "rubric": "A conflict with the base.",
+  "label": {
+    "event": {
+      "choice": "conflict"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "event": "the branch conflicts with its base"
+    },
+    "why": "The event says the branch has conflicts with main, which is the conflict label.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "conflict"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "schema": 3,
+  "stage": "plan_check",
+  "pack": "plan_check",
+  "attempt": 1,
+  "task": {
+    "id": "high-risk-with-flag-and-small-steps",
+    "title": "high-risk-with-flag-and-small-steps",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "example-tracker:EX-1",
+        "kind": "feature",
+        "goal": "Move card tokens to the new vault and drop the old column",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "high",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "brief": "",
+      "criteria": [
+        "Every token is readable from the vault"
+      ],
+      "assumptions": [],
+      "slices": [
+        {
+          "title": "Add the vault column and write tokens to both stores behind a flag",
+          "est_loc": 120,
+          "touchpoints": [
+            "db/migrations/0042_vault.sql",
+            "src/payments/vault.ts"
+          ],
+          "acceptance": [
+            "Tokens are written to both stores when the flag is on"
+          ]
+        },
+        {
+          "title": "Backfill tokens in batches, then read from the vault",
+          "est_loc": 140,
+          "touchpoints": [
+            "src/payments/backfill.ts"
+          ],
+          "acceptance": [
+            "Every token is readable from the vault"
+          ]
+        },
+        {
+          "title": "Drop the old column after a full week on the vault",
+          "est_loc": 30,
+          "touchpoints": [
+            "db/migrations/0043_drop_tokens.sql"
+          ],
+          "acceptance": [
+            "The old column is gone"
+          ]
+        }
+      ],
+      "cases": [],
+      "risk": {
+        "level": "high",
+        "product": 18,
+        "scores": {
+          "blast_radius": 0,
+          "reversibility": 0,
+          "data_sensitivity": 0
+        },
+        "complexity": "XL"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "severity.choice",
+      "value": "should_fix"
+    }
+  ],
+  "rubric": "A crash on old carts that is not a security hole.",
+  "label": {
+    "severity": {
+      "choice": "should_fix"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "severity": "wrong or fragile, but mergeable with a follow-up"
+    },
+    "why": "Old carts have no discount, so line 14 throws for them: wrong and fragile, fixable in a follow-up, not a security hole or a certain data bug that blocks the merge.",
+    "ruledOut": [
+      {
+        "question": "severity",
+        "label": "blocker",
+        "why": "It is fragile but mergeable. It is not: a bug or a security hole a reviewer would block the merge on."
+      },
+      {
+        "question": "severity",
+        "label": "nit",
+        "why": "It is fragile but mergeable. It is not: style, naming or a suggestion the author may ignore."
+      }
+    ],
+    "second": {
+      "label": {
+        "severity": {
+          "choice": "should_fix"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

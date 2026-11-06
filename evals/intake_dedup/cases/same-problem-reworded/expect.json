@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "slot1.choice",
+      "value": "same"
+    }
+  ],
+  "rubric": "The same symptom on the same page, reworded: fixing one fixes the other.",
+  "label": {
+    "slot1": {
+      "choice": "same"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "slot1": "the same problem: fixing one fixes the other"
+    },
+    "why": "The same symptom on the same page in other words: the Pay button does nothing. Fixing the dead button fixes both reports.",
+    "ruledOut": [
+      {
+        "question": "slot1",
+        "label": "related",
+        "why": "Related would mean fixing one does not fix the other, but here one fix closes both."
+      },
+      {
+        "question": "slot1",
+        "label": "different",
+        "why": "The symptom, the page and the button are identical, so it is not another problem."
+      }
+    ],
+    "second": {
+      "label": {
+        "slot1": {
+          "choice": "same"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

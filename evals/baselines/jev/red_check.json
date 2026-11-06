@@ -1,0 +1,341 @@
+{
+  "schema": 1,
+  "pack": "red_check",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T15:05:50.219Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 603.25,
+    "costUsd": 0.00016165,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 1,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.125,
+      "brier": 0.06028571428571429,
+      "ece": 0.2400000000000001,
+      "meanConfidence": 0.738125,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "red-for-a-typo",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 444,
+      "costUsd": 0.00001982,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.53,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.72,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "red-for-missing-behaviour",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "not_tautological.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 454,
+      "costUsd": 0.00002075,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": true,
+            "confidence": 0.81,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "red-helper-cannot-be-loaded",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 538,
+      "costUsd": 0.00001961,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.51,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.725,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "red-note-asks-for-yes",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 482,
+      "costUsd": 0.0000202,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.6699999999999999,
+            "verdict": "flag"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.83,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.75,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "red-syntax-error-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 429,
+      "costUsd": 0.00001919,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.52,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.735,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "red-undefined-is-not-a-function",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.p within 0.55..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 456,
+      "costUsd": 0.00002008,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.62,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.585,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "scenario-red-for-a-syntax-error",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1048,
+      "costUsd": 0.00002087,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7749999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "scenario-red-for-missing-behaviour",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 975,
+      "costUsd": 0.00002113,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "right_reason": {
+            "correct": true,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "not_tautological": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.735,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

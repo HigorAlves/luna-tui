@@ -49,6 +49,10 @@ export class PgTaskStore implements TaskStore {
     return { task, created };
   }
 
+  async taskByKey(key: string): Promise<TaskRow | null> {
+    return this.db.getRepository(TaskEntity).findOneBy({ idempotencyKey: key });
+  }
+
   private newRow(input: NewTaskRow): Partial<TaskRow> {
     return {
       title: input.title,
@@ -63,9 +67,13 @@ export class PgTaskStore implements TaskStore {
       retries: { ...NO_RETRIES },
       resumeTo: null,
       reason: null,
+      archiveReason: null,
       jira: input.jira ?? null,
       stages: input.stages ?? {},
       classification: input.classification ?? null,
+      record: input.record ?? null,
+      evidence: input.evidence ?? null,
+      card: input.card ?? null,
       stateSince: new Date(),
     };
   }
@@ -140,6 +148,16 @@ export class PgTaskStore implements TaskStore {
       .find({ where: { state: In([...running]) }, order: { updatedAt: "ASC" } });
   }
 
+  findStackedOn(id: string): Promise<TaskRow[]> {
+    return this.db
+      .getRepository(TaskEntity)
+      .createQueryBuilder("task")
+      .where("task.card->'base'->>'card' = :id", { id })
+      .andWhere("task.state not in ('closed', 'archived')")
+      .orderBy("task.createdAt", "ASC")
+      .getMany();
+  }
+
   async markRunningStageRunsAborted(except: readonly string[] = []): Promise<void> {
     await this.db
       .getRepository(StageRunEntity)
@@ -150,7 +168,10 @@ export class PgTaskStore implements TaskStore {
   }
 
   async markStageRunStarted(id: string, facts: { containerId: string; inputCommit: string | null; engine?: EngineId | null }): Promise<void> {
-    await this.db.getRepository(StageRunEntity).update({ id }, facts);
+    const runs = this.db.getRepository(StageRunEntity);
+    await runs.update({ id }, facts);
+    // The first container's commit stays as the run's base, whatever a later container of the run started from.
+    if (facts.inputCommit) await runs.update({ id, baseCommit: IsNull() }, { baseCommit: facts.inputCommit });
   }
 
   async claimNextQueuedTask(options: ClaimOptions): Promise<TaskRow | null> {

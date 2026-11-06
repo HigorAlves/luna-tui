@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "est_loc.score",
+      "min": 0.5,
+      "max": 1.5
+    },
+    {
+      "kind": "between",
+      "path": "est_files.score",
+      "min": -0.5,
+      "max": 0.5
+    },
+    {
+      "kind": "equals",
+      "path": "reviewable.value",
+      "value": true
+    }
+  ],
+  "rubric": "A small change in two files of the nearest known size.",
+  "label": {
+    "est_loc": {
+      "score": 1
+    },
+    "est_files": {
+      "score": 0
+    },
+    "reviewable": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "est_loc": "about 200 changed lines",
+      "est_files": "1 or 2 files",
+      "reviewable": "Could one reviewer read this as one pull request with one purpose and follow it in one sitting?"
+    },
+    "why": "The nearest closed change added 170 lines, which is about 200 changed lines (small); the text names two files; one purpose.",
+    "second": {
+      "label": {
+        "est_loc": {
+          "score": 1
+        },
+        "est_files": {
+          "score": 0
+        },
+        "reviewable": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

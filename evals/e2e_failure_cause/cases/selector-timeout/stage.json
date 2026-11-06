@@ -1,0 +1,43 @@
+{
+  "schema": 3,
+  "stage": "e2e_failure_cause",
+  "pack": "e2e_failure_cause",
+  "attempt": 1,
+  "task": {
+    "id": "e2e-failure-cause",
+    "title": "E2E failure: attempt 1",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "e2e",
+      "e2e": {
+        "verdict": "fail",
+        "summary": "A step timed out.",
+        "criteria": [
+          {
+            "text": "The Export button is visible",
+            "result": "fail",
+            "note": "Timeout 30000ms waiting for selector 'button[name=Export]'."
+          }
+        ],
+        "attempt": 1
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -271,3 +271,15 @@ describe("fingerprint", () => {
     }
   });
 });
+
+describe("fingerprint of a conversation", () => {
+  const conv = { history: [], participants: [], private: false, repo: null, classification: null, relation: null, redactions: 0, pii: [] };
+  const item = toSlackItem(row(), new Date("2026-10-28T12:00:00Z"), DEFAULT_SLA);
+  it("hears a classification and a relation, and an item without a conversation reads as before", () => {
+    const withConv = { ...item, conversation: conv };
+    const classified = { ...withConv, conversation: { ...conv, classification: { kind: "bug", confidence: 0.9, by: "model" as const, at: "2026-10-28T10:00:00.000Z", records: {} } } };
+    const related = { ...withConv, conversation: { ...conv, relation: { type: "none" as const, target: null, confidence: 0.9, by: "model" as const, at: "2026-10-28T10:00:00.000Z" } } };
+    expect(new Set([fingerprint(item), fingerprint(withConv), fingerprint(classified), fingerprint(related)]).size).toBe(4);
+    expect(fingerprint({ ...item, conversation: null })).toBe(fingerprint(item));
+  });
+});

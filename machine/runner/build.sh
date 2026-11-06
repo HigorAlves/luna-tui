@@ -2,11 +2,23 @@
 # Builds the stage image from this checkout: the factory runner (factory/) and the contracts
 # package, installed with the workspace lockfile. Tags the image hardness-runner:dev and
 # hardness-runner:<key>. With --qa it then builds hardness-runner-qa:dev on top (Playwright,
-# chromium, ffmpeg, agent-browser).
+# chromium, ffmpeg, agent-browser). With --video it builds hardness-runner-video:dev on top of that
+# (kokoro-js, whisper and the video tools; builds the QA image first when it is not current).
 set -euo pipefail
 
 qa=0
-[ "${1:-}" = "--qa" ] && qa=1
+video=0
+for arg in "$@"; do
+  case "$arg" in
+    --qa) qa=1 ;;
+    --video) qa=1; video=1 ;;
+    *) echo "unknown option: $arg (use --qa and/or --video)" >&2; exit 2 ;;
+  esac
+done
+
+# RUNNER_REPO renames the images (default hardness-runner), so a test or a parallel checkout never touches the
+# shared hardness-runner:dev: RUNNER_REPO=hardness-runner-test-x gives hardness-runner-test-x:dev and -qa, -video.
+runner="${RUNNER_REPO:-hardness-runner}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
@@ -20,23 +32,36 @@ tree_files() { (cd "$root" && find "$@" -type f -not -path '*/node_modules/*' -n
 
 ref="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 inputs=()
-while IFS= read -r f; do inputs+=("$f"); done < <(tree_files factory contracts/src contracts/package.json; echo "$root/package.json"; echo "$root/pnpm-lock.yaml"; echo "$root/pnpm-workspace.yaml"; echo "$root/.pnpmfile.cjs"; echo "$here/Dockerfile")
+while IFS= read -r f; do inputs+=("$f"); done < <(tree_files factory contracts/src contracts/package.json machine/runner/graph machine/runner/egress; echo "$root/package.json"; echo "$root/pnpm-lock.yaml"; echo "$root/pnpm-workspace.yaml"; echo "$root/.pnpmfile.cjs"; echo "$here/Dockerfile"; echo "$here/luna-stage"; echo "$here/layer-wrapper")
 key="$(key_of "${inputs[@]}")"
-if [ "${REBUILD:-}" != 1 ] && [ "$(current_key hardness-runner:dev)" = "$key" ]; then
-  echo "hardness-runner:dev is up to date (factory $key)"
+if [ "${REBUILD:-}" != 1 ] && [ "$(current_key "$runner:dev")" = "$key" ]; then
+  echo "$runner:dev is up to date (factory $key)"
 else
-  docker build --build-arg "FACTORY_REF=$ref" --label "dev.hardness.build=$key" \
-    -t hardness-runner:dev -t "hardness-runner:$key" -f "$here/Dockerfile" "$root"
-  echo "built hardness-runner:dev and hardness-runner:$key (factory $key, commit $ref)"
+  docker build --build-arg "FACTORY_REF=$ref" --build-arg "LAYER_REV=$key" --label "dev.hardness.build=$key" \
+    -t "$runner:dev" -t "$runner:$key" -f "$here/Dockerfile" "$root"
+  echo "built $runner:dev and $runner:$key (factory $key, commit $ref)"
 fi
 
 if [ "$qa" = 1 ]; then
   qa_key="$(key_of <(echo "$key") "$here/../runner-qa/Dockerfile")"
-  if [ "${REBUILD:-}" != 1 ] && [ "$(current_key hardness-runner-qa:dev)" = "$qa_key" ]; then
-    echo "hardness-runner-qa:dev is up to date (factory $key)"
+  if [ "${REBUILD:-}" != 1 ] && [ "$(current_key "$runner-qa:dev")" = "$qa_key" ]; then
+    echo "$runner-qa:dev is up to date (factory $key)"
   else
-    docker build --build-arg "BASE=hardness-runner:$key" --label "dev.hardness.build=$qa_key" \
-      -t hardness-runner-qa:dev -t "hardness-runner-qa:$key" "$here/../runner-qa"
-    echo "built hardness-runner-qa:dev and hardness-runner-qa:$key"
+    docker build --build-arg "BASE=$runner:$key" --label "dev.hardness.build=$qa_key" \
+      -t "$runner-qa:dev" -t "$runner-qa:$key" "$here/../runner-qa"
+    echo "built $runner-qa:dev and $runner-qa:$key"
+  fi
+fi
+
+if [ "$video" = 1 ]; then
+  video_inputs=()
+  while IFS= read -r f; do video_inputs+=("$f"); done < <(tree_files machine/runner-video)
+  video_key="$(key_of <(echo "$qa_key") "${video_inputs[@]}")"
+  if [ "${REBUILD:-}" != 1 ] && [ "$(current_key "$runner-video:dev")" = "$video_key" ]; then
+    echo "$runner-video:dev is up to date (factory $key)"
+  else
+    docker build --build-arg "BASE=$runner-qa:$key" --label "dev.hardness.build=$video_key" \
+      -t "$runner-video:dev" -t "$runner-video:$key" -f "$here/../runner-video/Dockerfile" "$root"
+    echo "built $runner-video:dev and $runner-video:$key"
   fi
 fi

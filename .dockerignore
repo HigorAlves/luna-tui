@@ -6,8 +6,13 @@ site
 fixtures
 docs
 design
-machine/runner
+machine/runner/*
+!machine/runner/graph
+!machine/runner/egress
+!machine/runner/luna-stage
+!machine/runner/layer-wrapper
 machine/runner-qa
+!machine/runner-video
 **/.env
 **/.env.*
 **/*.log

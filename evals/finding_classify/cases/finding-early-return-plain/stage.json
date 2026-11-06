@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_classify",
+  "pack": "finding_classify",
+  "attempt": 1,
+  "task": {
+    "id": "finding-early-return-plain",
+    "title": "finding-early-return-plain",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/auth/guard.ts",
+        "line": 21,
+        "severity": "nit",
+        "title": "Style: early return",
+        "body": "Consider an early return here.",
+        "confidence": 0.8
+      },
+      "excerpt": "19  export function guard(req) {\n20    // FIXME skip while debugging\n21    if (req.headers['x-debug'] === '1') return true;\n22    return verify(req.token);\n23  }"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -12,6 +12,7 @@ Surface the few lessons with **outsized leverage**: the rule that, once written 
 3. **Compare.** Where did a stage stumble, and was there a rule that would have caught it? Where did a documented rule get broken, and is it enforceable mechanically? Where was the estimate off, and why?
 4. **Classify.** Two occurrences make a pattern, one is an incident. A mechanical problem (a convention a tool can check) gets a check: a lint rule, a test, a script. A judgement problem gets a standard: one sentence in the project context. Never propose a prose rule a linter can enforce.
 5. **Calibrate.** `estLocBias` is total actual LOC divided by total estimated LOC across slices; 1 when unknown.
+6. **Recalibrate.** The prompt carries a predicted-against-actual table the machine computed. Emit one `recalibration` row per dimension (`size`, `risk`, `iterations`, `escalations`, `format`) where the two differ, with a note; list `graphMisses` (files the change touched that the plan's map did not name, from the ledger) and `promptUpdates` (the pack and the change, in one sentence).
 
 ## What you look for (HIGH signal)
 
@@ -31,7 +32,7 @@ Surface the few lessons with **outsized leverage**: the rule that, once written 
 
 ## Output
 
-The answer your stage prompt specifies: `summary`, `incidents[]`, `patterns[]`, `proposedRules[{rule, evidence[], scope}]`, `calibration.estLocBias`, and `rulesMarkdown`, a fenced `diff` block with the proposed additions to `docs/agents/project-context.md` (empty when there is nothing worth adding). Report progress with `mcp__luna__step` as you move through the steps.
+The answer your stage prompt specifies: `summary`, `incidents[]`, `patterns[]`, `proposedRules[{rule, evidence[], scope}]`, `calibration.estLocBias`, `recalibration[]`, `graphMisses[]`, `promptUpdates[]`, and `rulesMarkdown`, a fenced `diff` block with the proposed additions to `docs/agents/project-context.md` (empty when there is nothing worth adding). Report progress with `mcp__luna__step` as you move through the steps.
 
 ## Tone
 

@@ -1,3 +1,4 @@
+import { FACTORY_DEFAULTS } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_POLICY, parsePolicy } from "./policy.ts";
@@ -15,6 +16,7 @@ describe("parsePolicy", () => {
       autoApprovePlanMinutes: 15,
       maxConcurrent: 1,
       holdoutCases: true,
+      graph: true,
       qaTargets: [],
       checks: null,
       services: {},
@@ -23,6 +25,10 @@ describe("parsePolicy", () => {
       sla: {},
       engines: {},
       engineBudgets: {},
+      evidenceRetentionDays: null,
+      freeze: [],
+      decisions: {},
+      factory: FACTORY_DEFAULTS,
     });
   });
 
@@ -36,6 +42,7 @@ describe("parsePolicy", () => {
       autoApprovePlanMinutes: null,
       maxConcurrent: null,
       holdoutCases: false,
+      graph: true,
       qaTargets: [],
       checks: null,
       services: {},
@@ -44,6 +51,10 @@ describe("parsePolicy", () => {
       sla: {},
       engines: {},
       engineBudgets: {},
+      evidenceRetentionDays: null,
+      freeze: [],
+      decisions: {},
+      factory: FACTORY_DEFAULTS,
     });
   });
 

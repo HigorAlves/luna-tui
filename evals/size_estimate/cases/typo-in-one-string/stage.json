@@ -1,0 +1,51 @@
+{
+  "schema": 3,
+  "stage": "size_estimate",
+  "pack": "size_estimate",
+  "attempt": 1,
+  "task": {
+    "id": "size-estimate",
+    "title": "Fix typo in the empty-state message",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "size": {
+      "title": "Fix typo in the empty-state message",
+      "text": "The empty cart message says 'Your cart is emtpy'. Fix the spelling.",
+      "criteria": [
+        "The message reads 'Your cart is empty'"
+      ],
+      "files": [
+        {
+          "path": "src/cart/messages.ts"
+        }
+      ],
+      "symbols": [
+        "EMPTY_CART"
+      ],
+      "similar": [],
+      "limit": {
+        "target": [
+          1000,
+          2000
+        ],
+        "hard": 2500
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "right_reason.p",
+      "min": 0.55,
+      "max": 0.85
+    }
+  ],
+  "rubric": "'toCsv is not a function' is most likely the missing behaviour (the test comes first, so the helper may not exist yet), but it could be a broken import inside the code under test: the output alone does not say. The answer leans yes without being certain, so p sits above the middle and below certainty.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "right_reason": {
+            "value": true
+          }
+        },
+        "criteria": {
+          "right_reason": "Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture."
+        },
+        "why": "Since the test comes first, toCsv may simply not exist yet, which is the behaviour missing."
+      },
+      {
+        "label": {
+          "right_reason": {
+            "value": false
+          }
+        },
+        "criteria": {
+          "right_reason": "Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture."
+        },
+        "why": "The error is inside exportCart, so it could be a broken import in the code under test rather than the missing behaviour."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    },
+    "note": "The check was between 0.55 and 0.95; its max is now 0.85 so that it bounds the confidence of a borderline case."
+  }
+}

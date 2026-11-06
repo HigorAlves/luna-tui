@@ -1,0 +1,52 @@
+{
+  "schema": 3,
+  "stage": "worth_learning",
+  "pack": "worth_learning",
+  "attempt": 1,
+  "task": {
+    "id": "worth-learning",
+    "title": "Retro: task",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "retro",
+      "retro": {
+        "predicted": {
+          "size": "small",
+          "risk": "low",
+          "estLoc": 100
+        },
+        "actual": {
+          "added": 160,
+          "removed": 20,
+          "retries": {
+            "verify": 1,
+            "e2e": 0,
+            "ci": 0,
+            "total": 1
+          },
+          "escalations": 0,
+          "format": "text",
+          "durationMin": 95
+        },
+        "runs": 9
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

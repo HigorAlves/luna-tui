@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "reason.choice",
+      "value": "flaky_tests"
+    }
+  ],
+  "rubric": "A test that flips on unchanged code: flaky.",
+  "label": {
+    "reason": {
+      "choice": "flaky_tests"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "reason": "a test fails and passes on its own, with no change to the code it covers"
+    },
+    "why": "The same test passed and failed on the same commit: it flips with no change to the code it covers.",
+    "ruledOut": [
+      {
+        "question": "reason",
+        "label": "plan_wrong",
+        "why": "The test flips on unchanged code. It is not: the approved plan cannot be built as written: a step names something that does not exist, or the steps contradict each other or the code."
+      },
+      {
+        "question": "reason",
+        "label": "env_broken",
+        "why": "The test flips on unchanged code. It is not: the environment is at fault: a service, a tool, a credential, the network or the container, not the change."
+      },
+      {
+        "question": "reason",
+        "label": "too_complex",
+        "why": "The test flips on unchanged code. It is not: the change is bigger or harder than the plan allowed for, and the run ran out of room before it finished."
+      },
+      {
+        "question": "reason",
+        "label": "undeclared_scope",
+        "why": "The test flips on unchanged code. It is not: the work needs files or changes the plan does not name."
+      },
+      {
+        "question": "reason",
+        "label": "other",
+        "why": "The test flips on unchanged code. It is not: none of these fits, or the evidence does not say."
+      }
+    ],
+    "second": {
+      "label": {
+        "reason": {
+          "choice": "flaky_tests"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

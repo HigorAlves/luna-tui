@@ -1,6 +1,8 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
-import { type BudgetAlert, Ledger, PrAction, type PullRequest } from "@hardness/contracts";
+import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
+import { hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
+import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -9,14 +11,36 @@ import { StreamWatcher } from "./adapters/http/watch.ts";
 import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 
+import { machineSecrets } from "./bootstrap/machine-secrets.ts";
+import { useTruthSecrets } from "./application/ground-truth.ts";
+import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
+import { AUTO_ARCHIVE_GATES, type SlaRow, applySlaActions } from "./application/sla-actions.ts";
+import { splitDepth } from "./application/split-depth.ts";
+import type { LearningPolicy } from "./application/pack-runs.ts";
+import { openTaskIdsOf, pruneLearning } from "./application/learning-prune.ts";
+import { evidenceRetentionDays, sweepEvidenceStore } from "./application/evidence-store.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
+import { DecisionLog } from "./application/decision-log.ts";
+import { ownCalls } from "./application/pack-runs.ts";
+import { DecisionTruth, tagged } from "./application/decision-truth.ts";
+import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
+import { commitsSince, headCommit } from "./adapters/git/worktree.ts";
+import type { PlanDeps } from "./application/stages/plan.ts";
+import type { Decide } from "./application/stages/check-decide.ts";
+import { loadCursor } from "./application/ship-cursor.ts";
+import { shipViewOf } from "./application/ship-view.ts";
+import { retroFactsOf } from "./application/stages/memory.ts";
+import { shippedStream } from "./application/ship-loop.ts";
+import type { ShipDecide } from "./application/stages/ship-fixes.ts";
+import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
 import { createIssueClassifier } from "./application/classify.ts";
+import { searchCards } from "./domain/card-search.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
 import { SlackInbox } from "./application/slack-inbox.ts";
@@ -40,29 +64,82 @@ import { SlaClocks } from "./application/sla.ts";
 import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
+import { graphifyGraph } from "./adapters/graph/graphify.ts";
+import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
+import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
+import { lockfilesAt } from "./adapters/git/worktree.ts";
+import { GraphWatch } from "./application/graph-watch.ts";
+import { imageSpecOf } from "./domain/image-spec.ts";
+import { repoHealthOf } from "./application/repo-health.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
 import { machineCredentials } from "./adapters/credentials/index.ts";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { uniqueRepoForProject } from "./application/context-setup.ts";
+import { Backlog } from "./application/backlog.ts";
+import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
+import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
+import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
+import { TicketMachine, cardOnce } from "./application/ticket-machine.ts";
+import { TicketEvents } from "./application/ticket-events.ts";
+import { INTAKE_CLIENT } from "./application/classify.ts";
+import type { DedupAnswer } from "./application/intake-dedup.ts";
+import { PgBacklogStore } from "./adapters/persistence/backlog-store.ts";
+import { configureMachineRepos, configureWorkspacesDir } from "./adapters/git/machine-repo.ts";
 import { Pipeline } from "./application/pipeline.ts";
+import { ChannelClaims } from "./application/channel-claims.ts";
+import { ConversationMachine } from "./application/conversation-machine.ts";
+import { enrichConversation } from "./application/conversation-enrich.ts";
+import { SlackSender } from "./application/slack-send.ts";
+import { ConversationDrafter } from "./application/conversation-draft.ts";
+import { ConversationDrafts } from "./application/conversation-drafts.ts";
+import { PgDraftStore } from "./adapters/persistence/slack-drafts.ts";
+import { evidenceView } from "./domain/conversation-evidence.ts";
+import { repoDocs } from "./application/repo-docs.ts";
+import { ConversationActions } from "./application/conversation-actions.ts";
+import { ConversationTruth } from "./application/conversation-truth.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
 import { createGitHub } from "./adapters/github/octokit.ts";
 import { taskDiff } from "./adapters/git/diff.ts";
 import { noTokenGitHub } from "./application/github.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
+import { currentStackFacts } from "./application/stack.ts";
+import { similarCards } from "./application/size-estimate.ts";
 import { shipRunner } from "./application/stages/ship.ts";
 import { StubStages } from "./application/stages/stubs.ts";
 import { verifyRunner } from "./application/stages/verify.ts";
 
 const config = loadConfig();
+// Each card has a git directory of the machine's own here, never mounted into a container.
+configureMachineRepos(join(config.stateDir, "repos"));
+configureWorkspacesDir(config.worktreesDir);
 const db = createDataSource(config.databaseUrl, poolSizeFor(config.maxConcurrentTasks));
 await db.initialize();
 const applied = await db.runMigrations();
 if (applied.length > 0) {
   console.log(`applied migrations: ${applied.map((m) => m.name).join(", ")}`);
+}
+
+/** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
+const policies = new PolicyStore();
+/** Run traces: a local Laminar (`MACHINE_TRACES`, `LMNR_*`); the no-op without a key. Built before
+ *  the pipeline so the first stage run after boot is traced. */
+const telemetry = await buildTelemetry(config.traces, { reachable: (traces) => probeCollector(traces, { timeoutMs: 1500 }) });
+if (config.traces.mode === "off") console.log(process.env.MACHINE_TRACES?.trim() ? "traces off: MACHINE_TRACES=off; decision records and ground truth are still kept" : "traces off: no trace key; decision records and ground truth are still kept");
+/** What each decision pack call leaves (context, answer, verdicts), for evals; off with MACHINE_DECISIONS=off. */
+const decisionLog = new DecisionLog({ stateDir: config.stateDir, enabled: config.decisions.enabled });
+/** What later facts say a decision should have been, written onto its record; each is a `decision.truth` event on the task. */
+// Every ground-truth file passes the machine's secret values and the token shapes before it is written.
+useTruthSecrets(() => machineSecrets(config, process.env));
+const decisionTruth = new DecisionTruth(decisionLog, {
+  // `learning.truth: false` in a card's repository: nothing is learned from that card.
+  allowed: async (fact) => (fact.taskId ? (await learningOf(fact.taskId)).learning.truth : fact.repoPath ? repoKeepsTruth(fact.repoPath) : true), told: async (e) => void (e.taskId && (await pipeline.logDecisionTruth(e.taskId, e))) });
+if (config.traces.mode !== "off") {
+  console.log(`traces ${telemetry.mode === "off" ? "off (backend unavailable)" : telemetry.mode} · Laminar at ${config.traces.laminar.baseUrl}:${config.traces.laminar.httpPort}`);
+  if (config.traces.note) console.log(config.traces.note);
 }
 
 /** The nightly housekeeping: old history pruned, closed tasks' checkouts and merged branches
@@ -93,6 +170,14 @@ async function sweep(): Promise<void> {
     const swept = await sweepWorktrees(db, config.worktreeRetentionDays);
     return swept.worktrees > 0 ? `removed ${swept.worktrees} closed task worktree(s), ${swept.branches} merged branch(es)` : null;
   });
+  await step("workspace leftovers", async () => {
+    const removed = await removeLeftovers(config.worktreesDir);
+    return removed.length > 0 ? `removed ${removed.length} leftover scratch folder(s) and bundle copy(ies)` : null;
+  });
+  await step("kept sandboxes", async () => {
+    const removed = await expireKept({ stateDir: config.stateDir, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours });
+    return removed.length > 0 ? `removed ${removed.length} kept sandbox folder(s) past their keep` : null;
+  });
   await step("run folders", async () => {
     const removed = await sweepRunFolders(db, config.stateDir);
     return removed > 0 ? `removed ${removed} run folder(s) no stage run owns` : null;
@@ -100,6 +185,21 @@ async function sweep(): Promise<void> {
   await step("task state", async () => {
     const removed = await sweepTaskState(db, config.stateDir);
     return removed > 0 ? `removed ${removed} per-task state dir(s) whose task is gone` : null;
+  });
+  await step("evidence store", async () => {
+    // A repo's `evidence.retention_days` over the machine's; a task whose repo is gone takes the machine's.
+    const retention = async (taskId: string): Promise<number> => {
+      const rows: { repo_path: string | null }[] = await db.query("select repo_path from tasks where id::text = $1", [taskId]);
+      const repo = rows[0]?.repo_path ?? null;
+      return evidenceRetentionDays(repo ? await policies.for(repo) : null);
+    };
+    const removed = await sweepEvidenceStore(config.stateDir, retention, new Date());
+    return removed > 0 ? `removed ${removed} evidence pack copy(ies) past retention` : null;
+  });
+  await step("decision records", async () => {
+    const pruned = await pruneLearning({ stateDir: config.stateDir, retentionDays: config.decisions.retentionDays, maxMb: config.decisions.maxMb, openTaskIds: await openTaskIdsOf(db), now: new Date() });
+    if (pruned.warning) console.warn(pruned.warning);
+    return pruned.records > 0 || pruned.truthFiles > 0 || pruned.skippedLinks.length > 0 ? pruned.line : null;
   });
   await step("slack triage runs", async () => {
     const removed = await sweepSlackTriageRuns(config.stateDir, config.retentionDays);
@@ -129,8 +229,13 @@ const watcher = new StreamWatcher(bus);
 // `pipeline` is assigned below, after the real stages are built — `latestE2e` is only
 // ever called once a stage actually runs, by which point `pipeline` is set.
 let pipeline: Pipeline;
-/** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
-const policies = new PolicyStore();
+/** One Graphify code graph per repo, built from its default branch in the runner image. */
+// A graph is built in the repository's own image, so the Graphify that built it is the one that reads it; the resolver is bound
+// once the stages (and with them the repository images) exist.
+let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = async () => config.runnerImage;
+const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
+/** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
+let graphWatch: GraphWatch | null = null;
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
  *  MACHINE_DISABLE_RUNTIMES turned off, or at a monthly cap (MACHINE_ENGINE_BUDGETS, a repo's
  *  luna.yaml `budget.engines`), is unavailable, as if its credential were missing. */
@@ -148,7 +253,43 @@ const credentials = gatedCredentials(machineCredentials(), [
   engineBudgetGate({ budgets: config.engineBudgets, repoBudgets: repoEngineBudgets, spend: engineSpend }),
 ]);
 if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISABLE_RUNTIMES): ${config.disabledRuntimes.join(", ")}`);
-const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
+/** Triage's signals: the classifier is built after the stages (it needs PackRuns), so it is bound below. */
+const triageSignals: TriageSignalDeps = { classify: null, graph, policy: (repoPath) => policies.for(repoPath), save: (id, patch) => engineSpend.updateTask(id, patch) };
+/** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
+const planDecisions: { decide: PlanDeps["decide"]; size: { decide: NonNullable<PlanDeps["size"]>["decide"]; similar?: NonNullable<PlanDeps["size"]>["similar"] }; split: { decompose: NonNullable<PlanDeps["split"]>["decompose"]; check: NonNullable<PlanDeps["split"]>["check"]; depthOf?: NonNullable<PlanDeps["split"]>["depthOf"]; via?: NonNullable<PlanDeps["split"]>["via"] } } = { decide: null, size: { decide: null }, split: { decompose: null, check: null } };
+/** Build's red and scope checks run through PackRuns too: bound once it exists. */
+const buildDecisions: { decide: Decide | null; budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> } = { decide: null };
+/** Verify's finding_classify (and e2e's failure cause) run through PackRuns as the `verify` client: bound once it exists. */
+const verifyDecisions: { decide: Decide | null; lastRed?: (taskId: string) => Promise<{ recordId: string; job: string } | null> } = { decide: null };
+/** Evidence's format decision runs through PackRuns as the `evidence` client: bound once it exists. */
+const evidenceDecisions: { decide: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null } = { decide: null };
+/** The default branch is GitHub's answer for the repository (never the host's clone): unknown is null, and every rule that needs it fails closed. */
+const githubDefaultBranch = async (_repoPath: string, slug?: string): Promise<string | null> => (slug ? await github.defaultBranch(slug).catch(() => null) : null);
+/** A stacked card's parent, read from the pipeline's rows and GitHub's facts; what the workspace, Deliver, the checklist and the merge rule read. */
+const stackDeps = {
+  baseFor: (task: Parameters<typeof pipeline.baseOf>[0]) => pipeline.baseOf(task),
+  clearBase: (id: string) => pipeline.clearBase(id),
+  hasChildren: async (id: string) => (await pipeline.stackedOn(id)).length > 0,
+  facts: (slug: string, task: Parameters<typeof pipeline.baseOf>[0]) =>
+    currentStackFacts(
+      {
+        github,
+        getTask: (id) => pipeline.get(id).catch(() => null),
+        deliveredNumber: async (id) => {
+          const number = (await pipeline.latestStageFinish(id, "delivering"))?.detail?.prNumber;
+          return typeof number === "number" ? number : null;
+        },
+        defaultBranch: githubDefaultBranch,
+        merged: (id) => pipeline.mergeRecorded(id),
+      },
+      slug,
+      task,
+    ),
+  defaultBranch: githubDefaultBranch,
+};
+/** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
+const shipDecisions: { decide: ShipDecide | null } = { decide: null };
+const { real, verifyPack, checksExec, agentDeps, shipGateProbe } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -162,34 +303,83 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
       outcome: run.outcome ?? run.status,
       turns: run.turns,
       costUsd: run.costUsd === null ? null : Number(run.costUsd),
+      engine: run.engine,
+      durationMs: run.startedAt && run.endedAt ? run.endedAt.getTime() - run.startedAt.getTime() : null,
     }));
     return { ledger: ledger.success ? ledger.data : null, runs };
   },
   github,
   credentials,
+  triageSignals,
+  planDecisions,
+  { graph, ensure: (repoPath) => graphWatch?.ensure(repoPath), rebuild: (repoPath) => graphWatch?.requestRebuild(repoPath) },
+  buildDecisions,
+  verifyDecisions,
+  {
+    latestFinish: (taskId, stage) => pipeline.latestStageFinish(taskId, stage),
+    reports: (taskId) => pipeline.reports(taskId),
+    save: (id, patch) => engineSpend.updateTask(id, patch),
+    load: async (id) => (await pipeline.get(id)).evidence,
+    decisions: evidenceDecisions,
+  },
+  shipDecisions,
+  retroFactsFor,
+  decisionTruth,
+  // Triage's card_search: the task's own repository's cards, from the board the pipeline keeps.
+  { search: async ({ repoPath, selfId, selfSource, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, selfSource, now: new Date() }) },
+  // A stacked card's workspace: what it is cut from and the base it drops, read from the pipeline's rows when a run first makes it.
+  stackDeps,
 );
+/** The retro's facts for a task, from the machine's own records. */
+async function retroFactsFor(taskId: string) {
+  const [task, events, runs, finish] = await Promise.all([pipeline.get(taskId), pipeline.events(taskId), pipeline.stageRuns(taskId), pipeline.latestStageFinish(taskId, "implementing")]);
+  const ledger = Ledger.safeParse(finish?.detail?.ledger);
+  const cursor = await loadCursor(config.stateDir, taskId);
+  const usage = await pipeline.taskUsage(taskId);
+  return retroFactsOf({ task, ledger: ledger.success ? ledger.data : null, events, runs: runs.length, cursor, costUsd: usage.spentUsd });
+}
+if (agentDeps) {
+  graphImage = agentDeps.repoImageOf;
+  agentDeps.imageEvents.sink = (event) => { if (event.taskId) void pipeline.recordImageEvent(event.taskId, event).catch(() => undefined); else console.warn(`repository image: ${JSON.stringify(event)}`); };
+}
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
  *  pack joins when agents are on. */
+/** The fresh clone Verify and fixes run on, with a kept folder registered so it ends after sandbox.keep_hours. */
+const keptFresh = { ...hostFreshWorkspace, keep: (path: string, taskId: string, runId: string) => keepFolder({ stateDir: config.stateDir, taskId, runId, path, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours }) };
 const realVerifyRunner = verifyRunner({
-  exec: checksExec ?? exec,
+  exec: checksExec,
   runPack: verifyPack,
+  // Verify runs on a fresh clone at the head commit, never in the folder Build used.
+  fresh: keptFresh,
+  // The environment Build recorded, and the one Verify's fresh clone has.
+  buildEnv: async (taskId) => {
+    const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
+    return env && typeof env.hash === "string" ? env : null;
+  },
+  imageOf: agentDeps ? (repoPath, signal) => agentDeps.repoImageOf(repoPath, signal) : async () => config.runnerImage,
+  // The image Verify chose once (the sandboxes run in it) is the one compared; only a caller that chose none resolves the repository's image here.
+  envOf: async (path, commit, repoPath, image) => envOf({ image: await imageId(image ?? (agentDeps && repoPath ? await agentDeps.repoImageOf(repoPath) : config.runnerImage)), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
+  graph,
   stateDir: config.stateDir,
+  get decide() {
+    return verifyDecisions.decide;
+  },
   policy: async (repoPath) => {
-    const { checks, services } = await policies.for(repoPath);
-    return { checks, services };
+    const { checks, services, decisions, factory } = await policies.for(repoPath);
+    return { checks, services, decisions, verify: factory.verify, size: factory.size };
   },
 });
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
 const runnerFor = buildRunnerFor({
   real,
-  realDeliverRunner: realDeliverRunner(github),
+  realDeliverRunner: realDeliverRunner(github, { facts: stackDeps.facts, clearBase: stackDeps.clearBase }),
   realVerifyRunner,
   shipRunner: shipRunner(github),
   stubRunnerFor: (stage) => stubs.runnerFor(stage),
   pr: {
     // A PR task runs the project's checks before pushing, never the review pack.
-    checksOnlyVerifyRunner: verifyRunner({ exec: checksExec ?? exec, runPack: null, stateDir: config.stateDir }),
+    checksOnlyVerifyRunner: verifyRunner({ exec: checksExec, runPack: null, stateDir: config.stateDir }),
     followUpRunner: prFollowUpRunner({
       github,
       exec,
@@ -232,9 +422,11 @@ let slaClocks: SlaClocks;
 /** Streams each logged event, plus the whole task whenever its state (or its Jira link) may have changed. */
 function publish(event: EventRow): void {
   bus.publish({ type: "task.event", event: toEvent(event) });
+  const shipped = shippedStream(event);
+  if (shipped) bus.publish(shipped);
   void replies.handle(event);
   void jiraSync.handle(event);
-  if (event.kind === "transition" || event.kind === "task.created" || event.kind.startsWith("jira.")) {
+  if (event.kind === "transition" || event.kind === "task.created" || event.kind === "approval.partial" || event.kind.startsWith("jira.")) {
     pipeline.get(event.taskId).then(
       async (task) =>
         bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), await slaClocks.for(task), await pipeline.glance(task.id)), seq: Number(task.seq) }),
@@ -244,22 +436,98 @@ function publish(event: EventRow): void {
   if (event.kind === "transition") scheduleMetrics();
 }
 
+/** The channels each known repository claims in `conversation.channels`: what makes a channel opted in without a board watch. */
+const channelClaims = new ChannelClaims(
+  async () => [...Object.values(config.repoMap), ...(await repoMap.remembered())],
+  async (repoPath) => {
+    const { factory } = await policies.for(repoPath);
+    return { conversation: factory.conversation, scoring: factory.scoring };
+  },
+);
+
 pipeline = new Pipeline(db, runnerFor, {
+  // A card that came from a ticket is split into child tickets, created only after a person approves the split gate (never by a clock or a retry).
+  splitTickets: {
+    knows: (task) => ticketMachine.ticketOfCard(task),
+    create: (task, children, gateId, floor) => ticketMachine.ticketOfCard(task).then(async (origin) => {
+      if (!origin) throw new Error("the card's ticket is not known to the Ticket Machine");
+      return ticketMachine.splitChildren(origin.key, children, { id: gateId, floor });
+    }),
+  },
+  // A resumed or closed card ends its kept sandbox: the extra folders go, the clone and its kept ref stay.
+  releaseKept: async (taskId) => void (await expireKept({ stateDir: config.stateDir, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours, taskId })),
   onEvent: publish,
+  // The outside-approver rule reads CODEOWNERS through the code graph port and nothing a model wrote.
+  owners: (repoPath, paths) => graph.owners(repoPath, paths),
+  // Context setup: by script, through the ports. The history ports and the map are read at call time (they are built below).
+  ...(config.publicUrl ? { publicBoardUrl: config.publicUrl } : {}),
+  knownRepos: async () => [...Object.values(config.repoMap), ...(await repoMap.remembered())],
+  // Intake's duplicate check: one `intake_dedup` call through the packs-on-demand runner, and the backlog as it is at that moment (both read at call time: they are built below).
+  dedup: {
+    decide: async (context) => {
+      if (!packRuns) throw new Error("agents are off: no duplicate check");
+      const { answer, recordId } = await ownCalls(packRuns).run({ pack: "intake_dedup", context: { dedup: context } }, INTAKE_CLIENT);
+      return { answer: answer as DedupAnswer, ...(recordId ? { recordId } : {}) };
+    },
+    backlog: {
+      list: async () => (await backlog.list()).map((e) => ({ id: e.id, title: e.title, text: e.text, repo: e.repo, sources: e.sources })),
+      bump: async (id) => void (await backlog.bump(id)),
+      unbump: async (id) => backlog.unbump(id),
+    },
+  },
+  contextSetup: {
+    resolveRepo: (slug) => repoMap.resolve(slug),
+    channelRepo: (channel) => channelClaims.repoOf(channel),
+    // The project's repository is the one known checkout whose own luna.yaml names it; a channel has no such source and stays unresolved.
+    projectRepo: async (project) => uniqueRepoForProject(project, [...Object.values(config.repoMap), ...(await repoMap.remembered())], async (repoPath) => (await policies.for(repoPath)).jira?.project ?? null),
+    configProject: async (repoPath) => (await policies.for(repoPath)).jira?.project ?? null,
+    owners: async (repoPath, text) => {
+      const located = await graph.locate(repoPath, text);
+      return [...new Set((located?.owners ?? []).flatMap((entry) => entry.owners))];
+    },
+    history: async (source) => {
+      // A private conversation's text goes to no card: nothing is fetched for it.
+      if (source.kind === "slack") {
+        const conversation = await slackStore.item(`${source.channel}:${source.ts}`).catch(() => null);
+        if (conversation?.conversation?.private || (conversation && conversation.channel.kind !== "channel") || (!conversation && /^[DG]/.test(source.channel))) return [];
+        return (await slackApi.replies(source.channel, source.ts, "0")).map((m) => ({ author: m.user, text: m.text, at: m.ts }));
+      }
+      if (source.kind === "jira") return (await jiraApi.issue(source.key)).comments.map((c) => ({ author: c.author, text: c.text, at: c.created }));
+      if (source.kind === "github") return (await github.listPrComments(source.repo, source.number)).map((c) => ({ author: c.author, text: c.body, at: null }));
+      return [];
+    },
+  },
   maxConcurrentTasks: config.maxConcurrentTasks,
   maxPerRepo: config.maxPerRepo,
   maxPerStage: config.maxPerStage,
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
-  closeDeps: { exec, worktreeRemove: false, watcher },
+  closeDeps: { exec, worktreeRemove: false, watcher, github },
+  // A merged card's retro: the truth file, and the graph misses its Build Report also declared (never written into prompts or rules).
+  retroOutputs: {
+    stateDir: config.stateDir,
+    facts: retroFactsFor,
+    graph,
+    declaredFiles: async (taskId) => {
+      const answer = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.answer as { outOfMap?: Array<{ path?: unknown }> } | undefined;
+      return (answer?.outOfMap ?? []).flatMap((o) => (typeof o?.path === "string" ? [o.path] : []));
+    },
+  },
+  priorityTruth: (entry) => priorityTruth(config.stateDir, entry),
+  truthKept: async (task) => !task.repoPath || (await policies.for(task.repoPath)).factory.learning.truth,
+  ...(config.groundTruth ? { evidenceFeedback: evidenceFeedbackWriter(config.stateDir), groundTruth: groundTruthWriter(config.stateDir), escalationTruth: escalationTruthWriter(config.stateDir), commitsSince, headOf: headCommit } : {}),
+  truth: decisionTruth,
+  ...(shipGateProbe ? { shipGateProbe, shipProbeMs: config.shipPoll.intervalMs } : {}),
+  escalationDecide: buildDecisions,
   policies,
   // The queue's usage windows go by the engine each stage really runs on, credential fallback included.
   ...(agentDeps ? { credentials: agentDeps.credentials } : {}),
   jiraSite: config.jira?.site ?? null,
   onAlert: raiseAlert,
   engineBudgets,
+  telemetry,
 });
-replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}) });
+replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}), slackPort: () => (config.slackInbox.userToken ? slackApi : null) });
 /** One Jira client for every call; without the three variables each call says so and nothing syncs. */
 const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 const jiraExpiry = new TokenExpiry(config.jira?.tokenExpiresAt ?? null);
@@ -279,7 +547,7 @@ const pulls = new GitHubPulls({
   findTask: async (repo, number) => {
     const task = await pipeline.findBySource(repo, number, "github_pr");
     const route = task ? PrAction.safeParse(task.route) : null;
-    return task && route?.success && task.state !== "closed" ? { id: task.id, state: task.state, route: route.data } : null;
+    return task && route?.success && !isTerminal(task.state) ? { id: task.id, state: task.state, route: route.data } : null;
   },
   publish: (snapshot) => bus.publish({ type: "github.prs", snapshot }),
 });
@@ -290,9 +558,13 @@ const prTasks = {
  *  container with the same image and credential as the stages, so it is off when they are. */
 const slackApi = config.slackInbox.userToken ? createSlack(config.slackInbox.userToken) : noTokenSlack();
 const slackStore = new PgSlackStore(db);
+const slackSender = new SlackSender(slackApi);
+const conversationDrafts = new ConversationDrafts(new PgDraftStore(db), { expiryHours: (channel) => channelClaims.configOf(channel).conversation.draft_expiry_hours });
 const triager = agentDeps ? createSlackTriager({ ...agentDeps, store: slackStore }) : null;
 const slackInbox = new SlackInbox({
   slack: slackApi,
+  sender: slackSender,
+  digest: config.slackInbox.digestAt !== null,
   triager,
   store: slackStore,
   intervalMs: config.slackInbox.intervalMs,
@@ -310,27 +582,214 @@ const slackInbox = new SlackInbox({
   rulesPath: config.slackInbox.rulesPath,
   socketToken: config.slackInbox.appToken,
   retentionDays: config.retentionDays,
+  scope: config.slackInbox.scope,
+  claims: channelClaims,
+  // The Conversation Machine's chain: only where agents are on (the triager exists); the pack runs through `packRuns`, built below.
+  ...(triager ? { assessor: { assess: (row) => conversationMachine().assess(row) } } : {}),
+  truth: new ConversationTruth(config.stateDir, decisionTruth, () => new Date(), async (thread) => {
+    const repo = channelClaims.repoOf(thread.split(":")[0] ?? "");
+    return !repo || repoKeepsTruth(repo);
+  }),
+  drafts: conversationDrafts,
+  // The one address a draft about a card may hold whole, read where the drafter reads it.
+  cardAddress: (id) => pipeline.prLinkOf(id),
+  // The reply draft: one `conversation_reply` run over the card's state, its evidence and the docs, all as data. Built lazily: `packRuns` is below.
+  drafter: new ConversationDrafter({
+    card: async (id) => {
+      const task = await pipeline.get(id).catch(() => null);
+      if (!task) return null;
+      // The PR address is read where Ship reads it (the last shipping run); the evidence goes through the allowlist.
+      return { state: task.state.replace(/_/g, " "), title: task.title, pr: await pipeline.prLinkOf(id), evidence: evidenceView(task.evidence) };
+    },
+    rank: async (id) => {
+      const list = await backlog.list();
+      const at = list.findIndex((i) => i.id === id);
+      return at < 0 ? null : `it ranks ${at + 1} of ${list.length}`;
+    },
+    docs: (repo, text) => repoDocs(repo, text),
+    tone: (channel, isPrivate) => conversationDrafts.recentEdits(channel, isPrivate),
+    run: async (context) => {
+      if (!packRuns) throw new Error("agents are off: no model to draft the reply");
+      const out = await ownCalls(packRuns).run({ pack: "conversation_reply", context: { conversation: context } }, INTAKE_CLIENT);
+      return out.answer as { reply: string; confidence: number };
+    },
+  }),
+  // The relation's action: attach, bump, add. `backlog` is built below; it is read when a conversation is assessed, never before.
+  actions: new ConversationActions({
+    attachThread: (cardId, thread) => pipeline.attachThread(cardId, thread),
+    bump: async (id) => void (await backlog.bump(id)),
+    unbump: (id) => backlog.unbump(id),
+    addCandidate: async (input) => {
+      const added = await backlog.upsertFromSource(input, { createIfMissing: true });
+      if (!added) throw new Error("the backlog did not take the candidate");
+      return { id: added.id };
+    },
+    linkedTo: (id) => slackStore.itemsLinkedTo(id),
+  }),
 });
+// Outbound updates of a card (status, questions, the shipped summary) wait as drafts on the thread it came from; the machine posts by itself only
+// for a repository whose luna.yaml sets `conversation.auto: on`. Built here, once the store and the drafts exist.
+replies = new ThreadReplies({
+  pipeline,
+  github,
+  enabled: config.threadReplies,
+  ...(config.slack ? { slack: config.slack } : {}),
+  sender: slackSender,
+  slackPort: () => (config.slackInbox.userToken ? slackApi : null),
+  drafts: conversationDrafts,
+  store: slackStore,
+  autoOf: async (task) => (task.repoPath ? (await policies.for(task.repoPath)).factory.conversation.auto === "on" : false),
+  claimedBy: (channel) => channelClaims.repoOf(channel),
+});
+const conversationMachine = (): ConversationMachine => {
+  if (!packRuns) throw new Error("agents are off: the conversation machine has no model to ask");
+  return new ConversationMachine({
+    enrich: (row) =>
+      enrichConversation(
+        row,
+        {
+          userInfo: (id) => slackApi.userInfo(id),
+          isVip: (author) => slackInbox.isVip(author),
+          candidates: (repo, source) => pipeline.ticketCandidates(repo, source),
+          claimedCandidates: (repo) => pipeline.claimedRepoCandidates(repo),
+          claimedBy: (channel) => channelClaims.repoOf(channel),
+        },
+        new Date(),
+      ),
+    decide: async (context) => ownCalls(packRuns!).run({ pack: "conversation_assess", context: { conversation: context } }, INTAKE_CLIENT),
+    decideRelation: async (context) => ownCalls(packRuns!).run({ pack: "conversation_relation", context: { conversation: context } }, INTAKE_CLIENT),
+    config: (channel) => channelClaims.configOf(channel),
+  });
+};
+/** False when a repository's `luna.yaml` says `learning.truth: false`; true when it says nothing or cannot be read. */
+async function repoKeepsTruth(repoPath: string): Promise<boolean> {
+  return (await policies.for(repoPath).catch(() => null))?.factory.learning.truth ?? true;
+}
+/** A card's repository: its folder name and the `learning` section of its `luna.yaml`; the defaults for a call that names no card or a card with no repository. */
+async function learningOf(taskId: string | undefined): Promise<{ repo: string | null; learning: LearningPolicy }> {
+  const repoPath = taskId ? (await pipeline.get(taskId).catch(() => null))?.repoPath ?? null : null;
+  if (!repoPath) return { repo: null, learning: FACTORY_DEFAULTS.learning };
+  return { repo: basename(repoPath), learning: (await policies.for(repoPath)).factory.learning };
+}
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
 const packRuns = buildPackRuns(config, {
+  ...(config.egress.enabled && agentDeps?.egress ? { egress: agentDeps.egress } : {}),
   credentials,
   store: new PgPackRunStore(db),
   budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
   engineBudgets,
+  telemetry,
+  decisions: decisionLog,
+  // The machine's own credential values are redacted from a stored context, beside the token shapes.
+  secrets: () => machineSecrets(config, process.env),
+  // What the call's repository lets the machine keep: its `learning` section, by the card's repository (a call that names no card keeps the defaults).
+  learning: learningOf,
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });
+// The last red the card's CI stage called a real failure: its decision record and the failing job, read from the stage's own finish.
+verifyDecisions.lastRed = async (taskId) => {
+  const detail = (await pipeline.latestStageFinish(taskId, "ci_watch"))?.detail;
+  return detail?.class === "real" && typeof detail.classRecord === "string" && typeof detail.classJob === "string" ? { recordId: detail.classRecord, job: detail.classJob } : null;
+};
 // A run folder a crash left holds a client's context: never kept.
 await packRuns?.clearLeftovers();
-/** Intake's first read of a new issue: issue_classify on Jev through the same PackRuns, recorded
+/** Intake's first read of a new issue: triage_signals on Jev through the same PackRuns, recorded
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
-const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
+const classifier = packRuns ? createIssueClassifier({ runs: ownCalls(packRuns) }) : null;
+if (classifier) triageSignals.classify = (issue, _repoPath, options) => classifier.classify(issue, options);
+if (packRuns) planDecisions.decide = async (pack, plan) => tagged(await ownCalls(packRuns).run({ pack, context: { plan }, stage: "plan" }, "plan"));
+if (packRuns) planDecisions.size.decide = async (size) => tagged(await ownCalls(packRuns).run({ pack: "size_estimate", context: { size }, stage: "plan" }, "plan"));
+// The split exit: the decomposer (an agent pack with no tools) and split_check run through PackRuns as the plan stage's own client; the card's depth is read off its chain of splits.
+if (packRuns) planDecisions.split.decompose = async (split) => (await ownCalls(packRuns).run({ pack: "decompose", context: { split }, stage: "plan" }, "plan")).answer as Record<string, unknown>;
+if (packRuns) planDecisions.split.check = async (split) => tagged(await ownCalls(packRuns).run({ pack: "split_check", context: { split }, stage: "plan" }, "plan"));
+// The size prompt's similar cards: closed cards with a counted diff that the card's own audience may see, nearest first.
+planDecisions.size.similar = async (task, card) => similarCards({ ...card, repo: task.repoPath }, await pipeline.closedSized(task), { now: new Date(), lookbackDays: (await policies.for(task.repoPath)).factory.dedup.lookback_days });
+planDecisions.split.depthOf = (task) => splitDepth((id) => pipeline.get(id).catch(() => null), task, () => ticketMachine.originHops(task));
+planDecisions.split.via = (task) => pipeline.splitVia(task);
+if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await ownCalls(packRuns).run({ pack, context: { check }, stage: "verify" }, "verify"));
+if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await ownCalls(packRuns).run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
+if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await ownCalls(packRuns).run({ pack, context: { ship }, stage: "ship" }, "ship"));
+buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
+if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await ownCalls(packRuns).run({ pack, context: { check }, stage: "build" }, "build"));
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
+/** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
+const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources), stackOf: (sources) => ticketMachine.stackOfSources(sources) });
+/** The Ticket Machine: Jira and GitHub tickets in scope are read, checked, assessed and drafted, then held for a person's tap. Every model call is a pack through `packRuns`; the port's writes are reached only from the tap routes. */
+const ticketPack = async (pack: "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply", context: TicketContext): Promise<unknown> => {
+  if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
+  const { answer, recordId } = await ownCalls(packRuns).run({ pack, context: { ticket: context } }, INTAKE_CLIENT);
+  return pack === "ticket_recommend" && recordId ? { ...(answer as object), recordId } : answer;
+};
+const ticketMachine = new TicketMachine({
+  store: new PgTicketStore(db),
+  port: (tool) => (tool === "jira" ? new JiraTickets(jiraApi) : new GitHubTickets(github)),
+  intakeLabel: config.githubPoll.label,
+  candidates: (ticket, repoPath) => pipeline.ticketCandidates(repoPath, ticket.tool === "github" ? { kind: "github", repo: ticket.key.split("#")[0]!, number: Number(ticket.key.split("#")[1]), url: ticket.permalink } : { kind: "jira", key: ticket.key, url: ticket.permalink, issueType: ticket.type }),
+  config: async (repoPath) => (await policies.for(repoPath)).factory,
+  locate: async (repoPath, text) => (repoPath ? ((await graph.locate(repoPath, text))?.files ?? []).map((f: { path?: string } | string) => (typeof f === "string" ? f : (f.path ?? ""))).filter(Boolean) : []),
+  createCard: (input, key) => cardOnce(pipeline, input, key),
+  validity: { decide: async (c) => (await ticketPack("ticket_validity", c)) as never },
+  assess: { decide: async (c) => (await ticketPack("ticket_assess", c)) as never },
+  recommend: { decide: async (c) => (await ticketPack("ticket_recommend", c)) as never },
+  split: {
+    decompose: async (split) => {
+      if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
+      return (await ownCalls(packRuns).run({ pack: "decompose", context: { split }, stage: "plan" }, INTAKE_CLIENT)).answer as Record<string, unknown>;
+    },
+    check: async (split) => {
+      if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
+      return tagged(await ownCalls(packRuns).run({ pack: "split_check", context: { split } }, INTAKE_CLIENT)) as never;
+    },
+  },
+  size: {
+    decide: async (size) => {
+      if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
+      return tagged(await ownCalls(packRuns).run({ pack: "size_estimate", context: { size } }, INTAKE_CLIENT)) as never;
+    },
+    counted: (ids) => pipeline.countedDiffs(ids),
+  },
+  reply: { write: async (c) => (await ticketPack("ticket_reply", c)) as never },
+  backlog: { upsertFromSource: (input, options) => backlog.upsertFromSource(input, options) },
+  truth: { learned: (fact) => decisionTruth.learned(fact), draft: async (entry) => void (await ticketTruthWriter(config.stateDir, repoKeepsTruth)(entry)) },
+});
+// Ticket clocks: computed and kept on the ticket, drafts only. A clock never posts and never approves.
+setInterval(() => void ticketMachine.sweepClocks().catch((error: unknown) => console.warn("ticket clocks failed", error)), 10 * 60_000).unref();
+const ticketEvents = new TicketEvents({ store: new PgTicketStore(db), machine: ticketMachine, pipeline, config: async (repoPath) => (await policies.for(repoPath)).factory });
+/** Every checkout the machine knows: the repo map, the repos dir's remembered ones, and the repos of live tasks. */
+const knownRepos = async (): Promise<string[]> => {
+  const known = [...Object.values(config.repoMap), ...(await repoMap.remembered())];
+  for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
+  return [...new Set(known)];
+};
+/** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now; any other reference is refused. */
+const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
+  if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
+  if (!(await knownRepos()).includes(repo)) return { ok: false, reason: "the machine does not know that repository" };
+  const spec = imageSpecOf((await policies.for(repo)).factory.sandbox.image);
+  if (spec.kind !== "repo" || spec.base !== base) return { ok: false, reason: "that is not the base in the repository's luna.yaml now" };
+  await agentDeps.approvals.approve(repo, base);
+  agentDeps.repoImages.approved(repo);
+  return { ok: true };
+};
 const app = createApp({
+  approveBase,
+  repoHealth: () =>
+    repoHealthOf({
+      repos: [],
+      knownRepos,
+      policy: (repoPath) => policies.for(repoPath),
+      machineImage: config.runnerImage,
+      images: { status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null },
+      graph,
+      watch: { health: (repoPath) => graphWatch?.health(repoPath) ?? { building: false, lastFailure: null } },
+    }),
   db,
   pipeline,
   bus,
+  backlog,
+  tickets: ticketMachine,
   watcher,
   stubs,
   pulls,
@@ -340,6 +799,7 @@ const app = createApp({
   ...(packRuns ? { runs: packRuns } : {}),
   sla: (task) => slaClocks.for(task),
   slaAll: (tasks) => slaClocks.forAll(tasks),
+  shipView: async (taskId) => shipViewOf(await loadCursor(config.stateDir, taskId)),
   taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file),
   credentials,
   engineBudgets,
@@ -393,7 +853,7 @@ if (config.slackInbox.enabled && config.slackInbox.userToken) {
 let intake: GitHubIntake | undefined;
 if (config.githubPoll.repos.length > 0) {
   const { repos, intervalMs, label } = config.githubPoll;
-  intake = new GitHubIntake({ pipeline, github, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo), classifier });
+  intake = new GitHubIntake({ pipeline, github, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo), classifier, tickets: ticketMachine, ticketsAuto: async (repoPath) => (await policies.for(repoPath)).factory.tickets.auto === "on" });
   console.log(`github intake: polling ${repos.join(", ")} every ${intervalMs / 1000}s for ${label}`);
   intake.start();
 }
@@ -405,6 +865,7 @@ if (config.jira) {
   jiraWatch = new JiraWatch({
     pipeline,
     jira: jiraApi,
+    tickets: ticketEvents,
     intervalMs: 5 * MINUTE_MS,
     expiry: jiraExpiry,
     retryBlocked: (task) => jiraSync.retry(task),
@@ -419,6 +880,7 @@ if (config.jira) {
     policies,
     triager: jiraTriager,
     classifier,
+    tickets: ticketMachine,
     // Every checkout the machine knows: the repo map, the repos dir, and the repos of existing tasks.
     repos: async () => {
       const known = [...Object.values(config.repoMap), ...(await reposUnder(config.reposDir, { readdir, exists: existsSync }))];
@@ -432,6 +894,21 @@ if (config.jira) {
   console.log("jira: off until MACHINE_JIRA_SITE, MACHINE_JIRA_EMAIL and MACHINE_JIRA_TOKEN are set");
 }
 
+/** The graph watch: each repo's graph is rebuilt when its default branch moves, and built when it has none. */
+graphWatch = new GraphWatch({
+  graph,
+  policies,
+  repos: knownRepos,
+});
+const graphTicker = config.agents && config.graphIntervalSecs !== null ? new Ticker(() => void graphWatch?.tick(), config.graphIntervalSecs * 1000) : null;
+if (graphTicker) {
+  graphTicker.start();
+  void graphWatch?.tick();
+  console.log(`graph: each repo's code graph rebuilt when its default branch moves, checked every ${config.graphIntervalSecs}s`);
+} else {
+  console.log("graph: off (MACHINE_GRAPH_INTERVAL=off or agents off); stages run without a code graph");
+}
+
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
 const slaTicker = new Ticker(() => {
   void pipeline
@@ -439,6 +916,39 @@ const slaTicker = new Ticker(() => {
     .then((tasks) => slaClocks.flipped(tasks))
     .then(async (flipped) => {
       for (const { task, sla } of flipped) bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), sla, await pipeline.glance(task.id)), seq: Number(task.seq) });
+    })
+    .then(() => pipeline.list())
+    .then(async (tasks) => {
+      // A gate past its clock reminds once; a ticket left at an intake gate past `sla.archive` is archived.
+      // A card at a state that holds a stage or a gate has a gate clock only while an approval is open.
+      const gated: typeof tasks = [];
+      for (const task of tasks) if (RUN_OR_GATE.has(task.state) ? (await pipeline.approvals(task.id)).some((a) => a.decision === null) : WAITING_ON_USER.has(task.state)) gated.push(task);
+      const clocks = await slaClocks.forAll(gated);
+      const rows: SlaRow[] = [];
+      for (const task of gated) {
+        const sla = clocks.get(task.id) ?? null;
+        const policy = await pipeline.policyFor(task.repoPath);
+        const targets = policy.sla;
+        // The diagram's `triage.sla.archive_days` (five) when the repo's sla block says nothing; 0 turns it off.
+        const defaultArchive = policy.factory.triage.sla.archive_days > 0 ? policy.factory.triage.sla.archive_days * 86_400 : null;
+        const archiving = AUTO_ARCHIVE_GATES.has(task.state) && (targets.archive !== undefined ? typeof targets.archive === "number" : defaultArchive !== null);
+        // The plan gate also escalates to a person after the diagram's `plan.sla.escalate_days` (five); 0 turns it off.
+        const escalateDays = task.state === "awaiting_approval" ? policy.factory.plan.sla.escalate_days : task.state === "awaiting_ship" ? policy.factory.ship.sla.escalate_days : 0;
+        const escalateAfter = escalateDays > 0 ? escalateDays * 86_400 : null;
+        if (!sla?.gate?.overdue && !archiving && escalateAfter === null) continue;
+        const events = await pipeline.events(task.id);
+        const latest = (kind: string) => {
+          const found = events.filter((event) => event.kind === kind);
+          return found.length ? new Date(Math.max(...found.map((event) => event.at.getTime()))) : null;
+        };
+        // Who the escalation names comes from CODEOWNERS (the gate's `ruleOwners`), never from the code map's own `owners`.
+        const open = escalateAfter === null ? undefined : (await pipeline.approvals(task.id)).find((a) => a.decision === null);
+        // The ship approval names the release owners its own request carries (`ship.release_owners`, else CODEOWNERS at the base ref).
+        const ruleOwners = task.state === "awaiting_ship" ? { state: "ok", owners: open?.requested.releaseOwners } : (open?.requested.ruleOwners as { state?: unknown; owners?: unknown } | undefined);
+        const owners = ruleOwners?.state === "ok" ? ruleOwners.owners : [];
+        rows.push({ task, sla, targets, defaultArchive, escalateAfter, lastReminderAt: latest("sla.reminder"), lastEscalationAt: latest("sla.escalated"), escalateTo: Array.isArray(owners) ? owners.map(String) : [] });
+      }
+      await applySlaActions(rows, new Date(), { record: (id, kind, payload) => pipeline.record(id, kind, payload), archive: (id, reason) => pipeline.archive(id, reason, { onlyFrom: AUTO_ARCHIVE_GATES }) });
     })
     .catch((error: unknown) => console.warn("sla tick failed", error));
 }, MINUTE_MS);
@@ -449,6 +959,7 @@ async function shutdown(): Promise<void> {
   jiraWatch?.stop();
   jiraIntake?.stop();
   slaTicker.stop();
+  graphTicker?.stop();
   pulls.stop();
   slackInbox.stop();
   socket?.stop();
@@ -456,6 +967,7 @@ async function shutdown(): Promise<void> {
   pipeline.stopSupervisor();
   server.close();
   await pipeline.shutdown();
+  await telemetry.flush();
   await db.destroy();
   process.exit(0);
 }

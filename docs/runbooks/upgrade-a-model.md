@@ -8,7 +8,7 @@ Everything here runs on your machine: evals and live runs need a model credentia
 
 Add the model to `contracts/src/models.ts`, the only source file that holds a model ID: a new key (`anthropic/opus-5.6`) with its `runtime`, the exact `id` the vendor SDK takes (never an alias), `status: "preview"` and its `caps` (tools, structured output, the efforts it supports). Then add a candidate engine for it in `contracts/src/engines.ts` (`"claude:opus-next": { model: "anthropic/opus-5.6" }`; a `codex:*` or `openai:*` engine also names its `auth`). No pack names the candidate yet.
 
-For a `codex:*` engine, check the model is served on a ChatGPT login at all: `gpt-6-sol` is API-only there, which is why `codex:sol` runs `gpt-5.6-terra`. Jev's entry is `jev-latest`, TypeSafe's own alias: it can change under the harness, and the only check is the `issue_classify` cases (step 4).
+For a `codex:*` engine, check the model is served on a ChatGPT login at all: `gpt-6-sol` is API-only there, which is why `codex:sol` runs `gpt-5.6-terra`. Jev's entry is `jev-latest`, TypeSafe's own alias: it can change under the harness, and the only check is the `triage_signals` cases (step 4).
 
 ## 2. Contract test
 
@@ -41,7 +41,7 @@ pnpm eval --pack triage --engine claude:opus-next --against claude:opus
 
 An engine outside a pack's `allowed` runs as a candidate, so the pack needs no change for this. The scorecard (pass rate, judge score, turns, duration, cost) goes in the PR description. Keep a laptop awake for the run (`caffeinate -s` on macOS).
 
-Only `triage`, `slack_triage` and `issue_classify` have cases (`evals/<pack>/cases/`). For any other pack the alias touches, either add cases first ([evals/README.md](../../evals/README.md), "Add a case") or run the golden tickets on a branch that already points the alias at the new entry (step 6) and compare with the same run on `main`:
+Only `triage`, `slack_triage` and `triage_signals` have cases (`evals/<pack>/cases/`). For any other pack the alias touches, either add cases first ([evals/README.md](../../evals/README.md), "Add a case") or run the golden tickets on a branch that already points the alias at the new entry (step 6) and compare with the same run on `main`:
 
 ```sh
 pnpm golden --matrix       # needs a running machine from that branch, a credential and docker
@@ -68,3 +68,5 @@ Rollback is reverting the alias line; a stage already running keeps its engine, 
 ## 7. Retire
 
 Mark the old entry `status: "deprecated"` with `retireAfter: "YYYY-MM-DD"`. From the day after, the contract test fails while any pack's engines still reach it. Once nothing does, delete the entry.
+
+A decision pack's engine default is measured, not assumed: after the upgrade, re-run the baselines of the packs on that model and re-take the defaults ([calibrate-decisions](calibrate-decisions.md)).

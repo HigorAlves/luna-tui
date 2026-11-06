@@ -63,6 +63,12 @@ export class RepoMap {
       .catch((error) => console.warn(`repo links: could not save ${file}: ${error instanceof Error ? error.message : error}`));
   }
 
+  /** Every checkout the saved links and the ones remembered since point at. */
+  async remembered(): Promise<string[]> {
+    await this.load();
+    return [...new Set(this.found.values())];
+  }
+
   /** Resolves once the links written so far are on disk. */
   saved(): Promise<void> {
     return this.writing;

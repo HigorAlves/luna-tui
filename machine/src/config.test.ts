@@ -10,6 +10,7 @@ import {
   DEFAULT_PORT,
   DEFAULT_RETENTION_DAYS,
   loadConfig,
+  tracesConfig,
 } from "./config.ts";
 
 describe("loadConfig", () => {
@@ -20,30 +21,38 @@ describe("loadConfig", () => {
       host: "127.0.0.1",
       apiToken: null,
       agents: true,
+      egress: { enabled: true, engineHosts: [] },
       maxConcurrentTasks: DEFAULT_MAX_CONCURRENT_TASKS,
       runnerImage: "hardness-runner:dev",
       runnerQaImage: "hardness-runner-qa:dev",
+      runnerVideoImage: "hardness-runner-video:dev",
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
       githubPrs: { enabled: true, intervalMs: 60_000 },
+      shipPoll: { intervalMs: null },
       githubToken: null,
+      graphIntervalSecs: 600,
       retentionDays: DEFAULT_RETENTION_DAYS,
       taskBudgetUsd: null,
       dailyBudgetUsd: null,
       disabledRuntimes: [],
       engineBudgets: {},
       restartPolicy: "requeue",
+      traces: { mode: "off" },
       worktreeRetentionDays: 7,
       maxPerRepo: null,
       maxPerStage: {},
       repoMap: {},
       reposDir: "/home/me/Developer",
       threadReplies: true,
+      publicUrl: null,
+      groundTruth: true,
+      decisions: { enabled: true, retentionDays: 365, maxMb: 4096 },
       slack: null,
-      slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null },
+      slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
       jira: null,
-      sla: { gateSecs: 3600, cycleSecs: null },
+      sla: { gateSecs: 172_800, cycleSecs: null },
     });
   });
 
@@ -58,7 +67,10 @@ describe("loadConfig", () => {
       MACHINE_SLACK_RULES: "/state/slack-triage.md",
       MACHINE_SLACK_DIGEST_AT: "08:30",
     }).slackInbox;
-    expect(inbox).toEqual({ enabled: false, userToken: "xoxp-1", appToken: "xapp-1", intervalMs: 30_000, markRead: true, rulesPath: "/state/slack-triage.md", digestAt: { hour: 8, minute: 30 } });
+    expect(inbox).toEqual({ enabled: false, userToken: "xoxp-1", appToken: "xapp-1", intervalMs: 30_000, markRead: true, rulesPath: "/state/slack-triage.md", digestAt: { hour: 8, minute: 30 }, scope: "opted_in" });
+    expect(loadConfig({ HOME: "/h", MACHINE_SLACK_SCOPE: "all" }).slackInbox.scope).toBe("all");
+    expect(loadConfig({ HOME: "/h", MACHINE_SLACK_SCOPE: "opted_in" }).slackInbox.scope).toBe("opted_in");
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_SCOPE: "everything" })).toThrow(/MACHINE_SLACK_SCOPE/);
     expect(loadConfig({ HOME: "/h", MACHINE_SLACK_USER_TOKEN: "" }).slackInbox.userToken).toBeNull();
     // The default follows the state dir; a relative path is taken from the repo root.
     expect(loadConfig({ HOME: "/h", MACHINE_STATE_DIR: "/var/hardness" }).slackInbox.rulesPath).toBe("/var/hardness/slack-triage.md");
@@ -69,8 +81,29 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "25:00" })).toThrow(/MACHINE_SLACK_DIGEST_AT/);
   });
 
+  it("resolves the state dir by one rule the evals' harvest shares", async () => {
+    const { stateDirFrom } = await import("./config.ts");
+    expect(stateDirFrom({}, "/h")).toBe("/h/.local/state/hardness");
+    expect(stateDirFrom({ MACHINE_STATE_DIR: "/s" }, "/h")).toBe("/s");
+    expect(loadConfig({ HOME: "/h", MACHINE_STATE_DIR: "/s" }).stateDir).toBe("/s");
+  });
+
   it("reads the thread-reply switch and the Slack pair, which go together", () => {
     expect(loadConfig({ HOME: "/h", MACHINE_THREAD_REPLIES: "off" }).threadReplies).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_PUBLIC_URL: "https://board.example/" }).publicUrl).toBe("https://board.example");
+    for (const bad of ["ftp://x", "javascript:alert(1)", "https://x y", "http://127.0.0.1:4317 ", "not a url", ""]) expect(loadConfig({ HOME: "/h", MACHINE_PUBLIC_URL: bad }).publicUrl, bad).toBeNull();
+    expect(loadConfig({ HOME: "/h" }).groundTruth).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_GROUND_TRUTH: "off" }).groundTruth).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS: "off" }).decisions.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS_RETENTION_DAYS: "7" }).decisions.retentionDays).toBe(7);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DECISIONS_RETENTION_DAYS: "-1" })).toThrow(/MACHINE_DECISIONS_RETENTION_DAYS/);
+    // A year by default (it was 90 days), and a size cap of 4 GB; 0 is no limit.
+    expect(loadConfig({ HOME: "/h" }).decisions).toEqual({ enabled: true, retentionDays: 365, maxMb: 4096 });
+    expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS_RETENTION_DAYS: "0" }).decisions.retentionDays).toBe(0);
+    expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS_MAX_MB: "0" }).decisions.maxMb).toBe(0);
+    expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS_MAX_MB: "512" }).decisions.maxMb).toBe(512);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DECISIONS_MAX_MB: "-1" })).toThrow(/MACHINE_DECISIONS_MAX_MB must be a non-negative integer/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DECISIONS_MAX_MB: "big" })).toThrow(/MACHINE_DECISIONS_MAX_MB/);
     expect(loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb", MACHINE_SLACK_CHANNEL: "C1" }).slack).toEqual({ token: "xoxb", channel: "C1" });
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb" })).toThrow(/MACHINE_SLACK_CHANNEL/);
   });
@@ -109,9 +142,20 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ MACHINE_GITHUB_POLL_INTERVAL: "x" })).toThrow(/MACHINE_GITHUB_POLL_INTERVAL/);
     expect(() => loadConfig({ MACHINE_GITHUB_POLL: "nope" })).toThrow(/MACHINE_GITHUB_POLL/);
     expect(loadConfig({ HOME: "/h", MACHINE_GITHUB_PRS: "off", MACHINE_GITHUB_PRS_INTERVAL: "120" }).githubPrs).toEqual({ enabled: false, intervalMs: 120_000 });
+    expect(loadConfig({ HOME: "/h", MACHINE_SHIP_POLL_INTERVAL: "5", MACHINE_SHIP_MAX_WAIT_DAYS: "3" }).shipPoll).toEqual({ intervalMs: 5_000 });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SHIP_POLL_INTERVAL: "0" })).toThrow(/MACHINE_SHIP_POLL_INTERVAL/);
+    // The five-day clock (`ship.sla.escalate_days`) names the release owners; no second, total-time cap exists, so the old variable is ignored.
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SHIP_MAX_WAIT_DAYS: "x" })).not.toThrow();
     expect(() => loadConfig({ MACHINE_GITHUB_PRS_INTERVAL: "0" })).toThrow(/MACHINE_GITHUB_PRS_INTERVAL/);
     expect(loadConfig({ HOME: "/h", GITHUB_TOKEN: "ghp_a", GH_TOKEN: "ghp_b" }).githubToken).toBe("ghp_a");
     expect(loadConfig({ HOME: "/h", GH_TOKEN: " ghp_b " }).githubToken).toBe("ghp_b");
+  });
+
+  it("reads the graph watch's interval: seconds, off to disable, anything else is refused", () => {
+    expect(loadConfig({ HOME: "/h", MACHINE_GRAPH_INTERVAL: "30" }).graphIntervalSecs).toBe(30);
+    expect(loadConfig({ HOME: "/h", MACHINE_GRAPH_INTERVAL: "off" }).graphIntervalSecs).toBeNull();
+    expect(() => loadConfig({ HOME: "/h", MACHINE_GRAPH_INTERVAL: "soon" })).toThrow(/MACHINE_GRAPH_INTERVAL/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_GRAPH_INTERVAL: "0" })).toThrow(/MACHINE_GRAPH_INTERVAL/);
   });
 
   it("binds to the host in MACHINE_HOST, so a container can listen on every interface", () => {
@@ -191,6 +235,62 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ HOME: "/home/me", MACHINE_ENGINE_BUDGETS: "openai=-1" })).toThrow(/MACHINE_ENGINE_BUDGETS must list/);
   });
 
+  it("keeps everything on the host by default with a key, and names the four modes in the error", () => {
+    expect(tracesConfig({ LMNR_PROJECT_API_KEY: "k" }, "/home/nobody")).toMatchObject({ mode: "host" });
+    expect(tracesConfig({ LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "host" }, "/home/nobody")).toMatchObject({ mode: "host" });
+    expect(tracesConfig({ LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "metadata" }, "/home/nobody")).toMatchObject({ mode: "metadata" });
+    expect(tracesConfig({}, "/home/nobody")).toEqual({ mode: "off" });
+    expect(() => tracesConfig({ MACHINE_TRACES: "all" }, "/home/nobody")).toThrow("MACHINE_TRACES must be off, metadata, host or full");
+  });
+
+  it("turns traces off without a Laminar key, and on (host) with one", () => {
+    expect(loadConfig({ HOME: "/home/me" }).traces).toEqual({ mode: "off" });
+    expect(loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: " key-1 " }).traces).toEqual({
+      mode: "host",
+      laminar: { projectApiKey: "key-1", baseUrl: "http://localhost", stageBaseUrl: "http://host.docker.internal", httpPort: 8000, grpcPort: 8001 },
+    });
+  });
+
+  it("defaults to host only for a collector on this computer; any other address gets metadata, and says why", () => {
+    const key = { LMNR_PROJECT_API_KEY: "k" };
+    for (const local of ["http://localhost", "http://127.0.0.1", "http://127.1.2.3", "https://LOCALHOST", "http://lmnr-app"]) {
+      const found = tracesConfig({ ...key, LMNR_BASE_URL: local }, "/home/nobody");
+      expect(found, local).toMatchObject({ mode: "host" });
+      expect(found).not.toHaveProperty("note");
+    }
+    for (const remote of ["https://laminar.example.com", "http://10.0.0.5", "http://192.168.1.9", "http://lmnr-app.evil.example", "http://localhost.evil.example", "http://127.0.0.1.evil.example"]) {
+      const found = tracesConfig({ ...key, LMNR_BASE_URL: remote }, "/home/nobody");
+      expect(found, remote).toMatchObject({ mode: "metadata", note: expect.stringContaining(remote) });
+      expect((found as { note: string }).note).toContain("not on this computer");
+    }
+    // The owner's own word wins, a remote collector included, and no note is needed then.
+    const asked = tracesConfig({ ...key, LMNR_BASE_URL: "https://laminar.example.com", MACHINE_TRACES: "host" }, "/home/nobody");
+    expect(asked).toMatchObject({ mode: "host" });
+    expect(asked).not.toHaveProperty("note");
+    expect(tracesConfig({ ...key, LMNR_BASE_URL: "https://laminar.example.com", MACHINE_TRACES: "off" }, "/home/nobody")).toEqual({ mode: "off" });
+  });
+
+  it("reads MACHINE_TRACES and the LMNR_* address, and refuses a mode without a key or a bad value", () => {
+    expect(loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "full", LMNR_BASE_URL: "http://lmnr-app/", LMNR_STAGE_BASE_URL: "http://lmnr-app", LMNR_HTTP_PORT: "8100", LMNR_GRPC_PORT: "8101" }).traces).toEqual({
+      mode: "full",
+      laminar: { projectApiKey: "k", baseUrl: "http://lmnr-app", stageBaseUrl: "http://lmnr-app", httpPort: 8100, grpcPort: 8101 },
+    });
+    expect(loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "off" }).traces).toEqual({ mode: "off" });
+    expect(() => loadConfig({ HOME: "/home/me", MACHINE_TRACES: "full" })).toThrow(/^MACHINE_TRACES=full needs a Laminar project key: set LMNR_PROJECT_API_KEY/);
+    expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "loud" })).toThrow(/^MACHINE_TRACES must be off, metadata, host or full, got "loud"/);
+    expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", LMNR_HTTP_PORT: "x" })).toThrow(/^LMNR_HTTP_PORT must be a port number, got "x"/);
+    expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", LMNR_BASE_URL: "localhost:8000" })).toThrow(/^LMNR_BASE_URL must be a scheme and host without a port, like http:\/\/localhost, got "localhost:8000"/);
+    expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", LMNR_STAGE_BASE_URL: "host.docker.internal:8001" })).toThrow(/^LMNR_STAGE_BASE_URL must be a scheme and host without a port/);
+  });
+
+  it("reads the Laminar key from ~/.config/hardness/lmnr-project-api-key when the variable is unset", () => {
+    const home = mkdtempSync(join(tmpdir(), "config-home-"));
+    mkdirSync(join(home, ".config", "hardness"), { recursive: true });
+    writeFileSync(join(home, ".config", "hardness", "lmnr-project-api-key"), "from-file\n");
+    expect(tracesConfig({}, home)).toEqual({ mode: "host", laminar: { projectApiKey: "from-file", baseUrl: "http://localhost", stageBaseUrl: "http://host.docker.internal", httpPort: 8000, grpcPort: 8001 } });
+    expect(tracesConfig({ LMNR_PROJECT_API_KEY: "from-env" }, home)).toMatchObject({ laminar: { projectApiKey: "from-env" } });
+  });
+
   it("reads a custom retention window, including 0 to disable pruning", () => {
     expect(loadConfig({ HOME: "/home/me", MACHINE_RETENTION_DAYS: "30" }).retentionDays).toBe(30);
     expect(loadConfig({ HOME: "/home/me", MACHINE_RETENTION_DAYS: "0" }).retentionDays).toBe(0);
@@ -214,9 +314,24 @@ describe("loadConfig", () => {
   });
 
   it("reads the SLA defaults: a one-hour gate unless told otherwise, no cycle unless told, off for none", () => {
-    expect(loadConfig({}).sla).toEqual({ gateSecs: 3600, cycleSecs: null });
+    expect(loadConfig({}).sla).toEqual({ gateSecs: 172_800, cycleSecs: null });
     expect(loadConfig({ MACHINE_SLA_GATE: "30m", MACHINE_SLA_CYCLE: "3d" }).sla).toEqual({ gateSecs: 1800, cycleSecs: 259_200 });
     expect(loadConfig({ MACHINE_SLA_GATE: "off" }).sla.gateSecs).toBeNull();
     expect(() => loadConfig({ MACHINE_SLA_GATE: "soon" })).toThrow(/MACHINE_SLA_GATE must be a duration/);
+  });
+});
+
+describe("MACHINE_EGRESS and MACHINE_EGRESS_ENGINE_HOSTS", () => {
+  it("are on and empty by default; off is the owner's switch", () => {
+    expect(loadConfig({ HOME: "/h" }).egress).toEqual({ enabled: true, engineHosts: [] });
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "off" }).egress.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "on" }).egress.enabled).toBe(true);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS: "maybe" })).toThrow(/MACHINE_EGRESS/);
+  });
+
+  it("takes a comma list of host patterns, lowercased, and refuses one that is not", () => {
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: " Gateway.Example.net , *.llm.example.com:8443 " }).egress.engineHosts).toEqual(["gateway.example.net", "*.llm.example.com:8443"]);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: "ok.example.com,10.0.0.1" })).toThrow(/MACHINE_EGRESS_ENGINE_HOSTS.*10\.0\.0\.1/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: "*" })).toThrow(/MACHINE_EGRESS_ENGINE_HOSTS/);
   });
 });

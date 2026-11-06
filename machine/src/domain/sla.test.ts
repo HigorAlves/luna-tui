@@ -7,8 +7,8 @@ import { computeSla, endOfDay, gateFactor, parseDuration, slaFlags } from "./sla
 const NOW = new Date("2026-10-28T12:00:00Z");
 const task = (over: Partial<TaskRow> = {}): TaskRow => ({
   id: "t1", title: "x", description: "", criteria: [], repoPath: null, source: null, route: "feature", branch: null, worktreePath: null,
-  state: "awaiting_approval", retries: { ...NO_RETRIES }, resumeTo: null, reason: null, queued: false, queuedAt: null, stateSince: null, idempotencyKey: null, requestHash: null, stages: {}, seq: "1",
-  diffAdded: null, diffRemoved: null, testsPassed: null, testsTotal: null, jira: null, classification: null,
+  state: "awaiting_approval", retries: { ...NO_RETRIES }, resumeTo: null, reason: null, archiveReason: null, queued: false, queuedAt: null, stateSince: null, idempotencyKey: null, requestHash: null, stages: {}, seq: "1",
+  diffAdded: null, diffRemoved: null, testsPassed: null, testsTotal: null, jira: null, classification: null, record: null, evidence: null,
   createdAt: new Date("2026-10-27T12:00:00Z"), updatedAt: NOW, ...over,
 });
 const defaults = { gate: 3600, cycle: null };
@@ -22,6 +22,18 @@ describe("parseDuration", () => {
     expect(parseDuration("off")).toBeNull();
     expect(() => parseDuration("soon", "MACHINE_SLA_GATE")).toThrow(/MACHINE_SLA_GATE must be a duration/);
     expect(() => parseDuration("0h")).toThrow(/positive/);
+  });
+});
+
+describe("computeSla at a state that holds a stage or a gate", () => {
+  const since = new Date("2026-10-28T11:30:00Z");
+  it("has a gate clock for awaiting_ship only with an open gate", () => {
+    const watched = computeSla({ task: task({ state: "awaiting_ship" }), stateSince: since, stageStartedAt: null, targets: null, defaults, gateOpen: false }, NOW);
+    expect(watched).toBeNull();
+    expect(computeSla({ task: task({ state: "awaiting_ship" }), stateSince: since, stageStartedAt: null, targets: null, defaults }, NOW)).toBeNull();
+    const gated = computeSla({ task: task({ state: "awaiting_ship" }), stateSince: since, stageStartedAt: null, targets: null, defaults, gateOpen: true }, NOW);
+    expect(gated?.gate).toMatchObject({ state: "awaiting_ship", targetSecs: 3600 });
+    expect(computeSla({ task: task({ state: "awaiting_approval" }), stateSince: since, stageStartedAt: null, targets: null, defaults, gateOpen: false }, NOW)?.gate).not.toBeNull();
   });
 });
 

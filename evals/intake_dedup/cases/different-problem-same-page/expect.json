@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "slot1.choice",
+      "value": "different"
+    }
+  ],
+  "rubric": "Same page, another defect: a wrong currency is not a dead button.",
+  "label": {
+    "slot1": {
+      "choice": "different"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "slot1": "another problem"
+    },
+    "why": "Same page, but a wrong currency and a dead button have different causes and different fixes: fixing one leaves the other.",
+    "ruledOut": [
+      {
+        "question": "slot1",
+        "label": "same",
+        "why": "Repairing the Pay button leaves the currency wrong, so fixing one does not fix the other."
+      },
+      {
+        "question": "slot1",
+        "label": "related",
+        "why": "They share only the page; the criterion for related asks for a shared area or cause, and the causes are unrelated."
+      }
+    ],
+    "second": {
+      "label": {
+        "slot1": {
+          "choice": "different"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

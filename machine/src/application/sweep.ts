@@ -6,7 +6,8 @@ import { join } from "node:path";
 
 import type { DataSource } from "typeorm";
 
-import { HOST_GIT } from "../adapters/git/worktree.ts";
+import { isClone } from "../adapters/git/clone.ts";
+import { HOST_GIT, removeWorktree } from "../adapters/git/worktree.ts";
 import { TaskEntity } from "../adapters/persistence/schemas.ts";
 import { type ExecResult, exec } from "../adapters/process/exec.ts";
 import { JIRA_INTAKE_DIR } from "./stages/jira-intake-runner.ts";
@@ -25,13 +26,16 @@ export async function sweepWorktrees(db: DataSource, days: number): Promise<Work
   if (days <= 0) return result;
   const rows: { id: string; repo_path: string; worktree_path: string; branch: string | null }[] = await db.query(
     `select id, repo_path, worktree_path, branch from tasks
-      where state = 'closed' and worktree_path is not null and repo_path is not null
+      where state in ('closed', 'archived') and worktree_path is not null and repo_path is not null
         and updated_at < now() - make_interval(days => $1)`,
     [days],
   );
   const repos = new Set<string>();
   for (const row of rows) {
-    const removed = await exec("git", [...HOST_GIT, "-C", row.repo_path, "worktree", "remove", "--force", row.worktree_path]);
+    // A card's clone is a folder of its own; only a linked worktree is registered with the repository.
+    const clone = isClone(row.worktree_path);
+    if (clone) await removeWorktree(row.repo_path, row.worktree_path);
+    const removed = clone ? { code: 0 } : await exec("git", [...HOST_GIT, "-C", row.repo_path, "worktree", "remove", "--force", row.worktree_path]);
     // Already gone from disk: prune the registration, the row still needs clearing.
     if (removed.code !== 0) await exec("git", [...HOST_GIT, "-C", row.repo_path, "worktree", "prune"]);
     await db.getRepository(TaskEntity).update({ id: row.id }, { worktreePath: null });
@@ -46,7 +50,8 @@ export async function sweepWorktrees(db: DataSource, days: number): Promise<Work
 }
 
 /** Removes `<stateDir>/runs/<id>` folders with no stage_runs row: a deleted task orphans its
- *  runs' folders, and prune only removes the folders of the rows it deletes. */
+ *  runs' folders, and prune only removes the folders of the rows it deletes. A folder named
+ *  `<id>-<suffix>` belongs to that row: the plan stage runs its packs as sub-runs under such ids. */
 export async function sweepRunFolders(db: DataSource, stateDir: string): Promise<number> {
   const runsDir = join(stateDir, "runs");
   let names: string[];
@@ -57,7 +62,12 @@ export async function sweepRunFolders(db: DataSource, stateDir: string): Promise
   }
   if (names.length === 0) return 0;
   const owned = new Set(((await db.query("select id from stage_runs")) as { id: string }[]).map((r) => r.id));
-  const orphans = names.filter((name) => !owned.has(name));
+  const ownedBy = (name: string): boolean => {
+    if (owned.has(name)) return true;
+    for (let i = name.indexOf("-"); i !== -1; i = name.indexOf("-", i + 1)) if (owned.has(name.slice(0, i))) return true;
+    return false;
+  };
+  const orphans = names.filter((name) => !ownedBy(name));
   await Promise.all(orphans.map((name) => rm(join(runsDir, name), { recursive: true, force: true })));
   return orphans.length;
 }
@@ -119,7 +129,7 @@ export async function sweepTaskState(db: DataSource, stateDir: string): Promise<
 }
 
 type ExecFn = (command: string, args: string[]) => Promise<ExecResult>;
-const RUNNER_REPOS = ["hardness-runner", "hardness-runner-qa"];
+const RUNNER_REPOS = ["hardness-runner", "hardness-runner-qa", "hardness-runner-video"];
 
 /** Untags `hardness-runner*:<sha>` images whose id differs from what that repository's `:dev`
  *  tag points at: every build leaves one behind, and they were 17 GB at last count. Returns

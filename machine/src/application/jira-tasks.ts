@@ -2,7 +2,7 @@
 // link a ticket to an issue (checking it exists), unlink it, create an issue from the ticket,
 // search issues to pick from, and say whether Jira is reachable. JiraSync, JiraIntake and
 // JiraWatch do the automatic part; this is the `J` key.
-import type { JiraCreateInput, JiraIssueHit, JiraLink, JiraStatus } from "@hardness/contracts";
+import { JiraCreateInput, JiraIssueHit, JiraLink, JiraStatus, isTerminal } from "@hardness/contracts";
 
 import { bareLink, fromNotch, jiraOf } from "../domain/jira-link.ts";
 import type { TaskRow } from "../domain/task.ts";
@@ -164,7 +164,7 @@ export class JiraTasks implements JiraTasksPort {
     // A ticket already on its branch keeps the issue the branch was named from; the same key again only refreshes.
     if (before.worktreePath && before.branch && current && current.key !== key) throw new HasWorktreeError(taskId, before.branch, current.key);
     const holder = await this.options.pipeline.findByJiraKey(key);
-    if (holder && holder.id !== taskId && holder.state !== "closed") throw new AlreadyLinkedElsewhereError(key, holder.id);
+    if (holder && holder.id !== taskId && !isTerminal(holder.state)) throw new AlreadyLinkedElsewhereError(key, holder.id);
     let issue: JiraIssue;
     try {
       issue = await this.options.jira.issue(key);

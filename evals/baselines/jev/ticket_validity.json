@@ -1,0 +1,526 @@
+{
+  "schema": 1,
+  "pack": "ticket_validity",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T15:33:49.806Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 441.125,
+    "costUsd": 0.000231,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 1,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.125,
+      "brier": 0.023036904761904762,
+      "ece": 0.15023809523809528,
+      "meanConfidence": 0.8385416666666666,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "adversarial-ticket-text",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 472,
+      "costUsd": 0.0000294,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.74,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.52,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8216666666666667,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "anonymous-and-no-project",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "project.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reporter.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 403,
+      "costUsd": 0.0000286,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.54,
+            "verdict": "flag"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.77,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8683333333333333,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "borderline-scope",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.p within 0.2..0.8",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 360,
+      "costUsd": 0.00002856,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.57,
+            "verdict": "flag"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.7599999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "duplicate-of-a-card",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"slot1\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 405,
+      "costUsd": 0.00002961,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.77,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.54,
+            "verdict": "flag"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.89,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8250000000000001,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "fix-login-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 473,
+      "costUsd": 0.00002776,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.73,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.67,
+            "verdict": "flag"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.74,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8416666666666667,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "open-ended-theme",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 457,
+      "costUsd": 0.00002919,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.68,
+            "verdict": "flag"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.79,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8583333333333333,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "vague-wish",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "goal.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 447,
+      "costUsd": 0.00002814,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": true,
+            "confidence": 0.73,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 1,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8866666666666666,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "workable-bug",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "goal.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 512,
+      "costUsd": 0.00002974,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.62,
+            "verdict": "flag"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.77,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8466666666666667,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

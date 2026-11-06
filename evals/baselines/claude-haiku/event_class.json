@@ -1,0 +1,494 @@
+{
+  "schema": 1,
+  "pack": "event_class",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T15:23:43.683Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 14,
+    "passed": 14,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 1834.4285714285713,
+    "costUsd": 0.00483715,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 14,
+      "labelled": 13,
+      "acted": 13,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.9285714285714286,
+      "brier": 0.014853846153846152,
+      "ece": 0.09461538461538474,
+      "meanConfidence": 0.8835714285714286,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "base-is-ahead-of-the-branch",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"base_moved\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1766,
+      "costUsd": 0.0003882,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "bot-claims-to-be-a-person",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"noise\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2296,
+      "costUsd": 0.00066125,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "bot-comment-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"noise\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2281,
+      "costUsd": 0.00034015,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "branch-conflicts-with-main",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"conflict\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1721,
+      "costUsd": 0.00026615000000000005,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ci-assertion-in-the-changed-test",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"ci_real\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1686,
+      "costUsd": 0.00028545,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.85,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ci-bot-notice",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"noise\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1654,
+      "costUsd": 0.00027735,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ci-timeout-in-an-unrelated-job",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"ci_flaky\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1797,
+      "costUsd": 0.00028074999999999997,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "comment-says-rerun-ci",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"review_comment\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1814,
+      "costUsd": 0.00028965,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "freeze-window-holds",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"freeze\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1492,
+      "costUsd": 0.00024875,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "lgtm-with-a-maybe",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2569,
+      "costUsd": 0.0007021500000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.6,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "parent-pr-has-new-commits",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"parent_changed\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1419,
+      "costUsd": 0.00027015000000000003,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "parent-pr-merged",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"parent_merged\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1418,
+      "costUsd": 0.00026595,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "reviewer-asks-for-a-rename",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"review_comment\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1332,
+      "costUsd": 0.00025445000000000003,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "waits-on-another-pr",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"blocked_by_other_pr\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2437,
+      "costUsd": 0.00030675,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "event": {
+            "correct": true,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "noise"
+    }
+  ],
+  "rubric": "A bot's CI notice: nothing to do.",
+  "label": {
+    "event": {
+      "choice": "noise"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "event": "a bot, a CI notice, an approval with nothing to answer, a reaction, an edit of ours: nothing to do"
+    },
+    "why": "A bot reports that a build passed: a CI notice with nothing to do.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "noise"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

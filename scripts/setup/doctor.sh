@@ -35,6 +35,7 @@ if [ -n "${OPENAI_API_KEY:-}" ] || cred_present openai-api-key; then ok "openai:
 if [ -n "${AI_GATEWAY_API_KEY:-}${TYPESAFE_API_KEY:-}" ] || cred_present ai-gateway-api-key || cred_present typesafe-api-key; then
   ok "jev" "Gateway or TypeSafe key"
 else off "jev" "no key: intake classification is off"; fi
+if [ -n "${LMNR_PROJECT_API_KEY:-}" ] || cred_present lmnr-project-api-key; then ok "laminar" "project key (traces ${MACHINE_TRACES:-metadata})"; else off "laminar" "no key: traces off (optional; make integrations)"; fi
 if [ -n "${MACHINE_API_TOKEN:-}" ] || cred_present machine-api-token; then ok "machine API token"; else bad "machine API token" "make credentials"; fi
 
 section "Integrations ($ENV_FILE)"
@@ -49,7 +50,7 @@ else off "Slack inbox" "not set: make integrations"; fi
 
 section "Running"
 if docker_running; then
-  for image in hardness-runner:dev hardness-runner-qa:dev; do
+  for image in hardness-runner:dev hardness-runner-qa:dev hardness-runner-video:dev; do
     if docker image inspect "$image" &>/dev/null; then ok "$image"; else off "$image" "not built: pnpm images"; fi
   done
 fi

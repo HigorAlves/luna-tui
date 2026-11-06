@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "reviewable.p",
+      "min": 0.3,
+      "max": 0.7
+    }
+  ],
+  "rubric": "Two small features on one page: one reviewer can read both in one sitting (about 400 lines), yet they have two purposes and could be two pull requests. Confidence stays moderate.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "reviewable": {
+            "value": true
+          }
+        },
+        "criteria": {
+          "reviewable": "Could one reviewer read this as one pull request with one purpose and follow it in one sitting?"
+        },
+        "why": "Both features together are about 400 lines on one page, which one reviewer can read in one sitting."
+      },
+      {
+        "label": {
+          "reviewable": {
+            "value": false
+          }
+        },
+        "criteria": {
+          "reviewable": "Could one reviewer read this as one pull request with one purpose and follow it in one sitting?"
+        },
+        "why": "They are two purposes that share only a page, so they would be two pull requests; one purpose is the criterion."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

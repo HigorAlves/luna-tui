@@ -37,3 +37,56 @@ function answerOf(name: string, question: Question): z.ZodObject {
 export function answerSchema(questions: QuestionSet): z.ZodObject {
   return z.object(Object.fromEntries(Object.entries(questions).map(([name, question]) => [name, answerOf(name, question)])));
 }
+
+/** Where an answer's confidence lands: acted on, acted on and shown as flagged, or a person decides. */
+export type Verdict = "proceed" | "flag" | "ask";
+export interface ConfidencePolicy {
+  proceed: number;
+  flag: number;
+}
+/** One bar per question, by the question's name. */
+export type DecisionPolicy = Record<string, ConfidencePolicy>;
+/** A repo's own bars, question by question; a bar left out keeps the pack's. */
+export type DecisionOverrides = Record<string, Partial<ConfidencePolicy>>;
+
+export const ConfidencePolicySchema = z.object({ proceed: z.number().min(0).max(1), flag: z.number().min(0).max(1) }).partial();
+
+/** How sure an answer is: a yes/no's confidence is its distance from a coin toss. */
+export function confidenceOf(question: Question, answer: unknown): number {
+  const a = answer as Record<string, number>;
+  return question.type === "yesno" ? Math.max(a.p!, 1 - a.p!) : a.confidence!;
+}
+
+export function verdictOf(confidence: number, policy: ConfidencePolicy): Verdict {
+  if (confidence >= policy.proceed) return "proceed";
+  if (confidence >= policy.flag) return "flag";
+  return "ask";
+}
+
+const WORST: Record<Verdict, number> = { proceed: 0, flag: 1, ask: 2 };
+
+/** Each question's verdict against its bar (the pack's, then the repo's override), the worst of them
+ *  as `overall`, and the names of the questions short of `proceed`. */
+export function applyPolicy(
+  pack: { questions: QuestionSet; policy: DecisionPolicy },
+  answer: Record<string, unknown>,
+  overrides: DecisionOverrides = {},
+): { verdicts: Record<string, Verdict>; overall: Verdict; below: string[] } {
+  const verdicts: Record<string, Verdict> = {};
+  const below: string[] = [];
+  let overall: Verdict = "proceed";
+  for (const [name, question] of Object.entries(pack.questions)) {
+    const policy = { ...pack.policy[name], ...overrides[name] } as ConfidencePolicy;
+    const v = verdictOf(confidenceOf(question, answer[name]), policy);
+    verdicts[name] = v;
+    if (v !== "proceed") below.push(name);
+    if (WORST[v] > WORST[overall]) overall = v;
+  }
+  return { verdicts, overall, below };
+}
+
+/** The same bar for every question: what a pack declares when it has no reason to differ. */
+export const samePolicy = (questions: QuestionSet, policy: ConfidencePolicy): DecisionPolicy => Object.fromEntries(Object.keys(questions).map((name) => [name, policy]));
+
+/** The lowest `proceed` bar of a policy: what a one-line summary calls "below". */
+export const lowestBar = (policy: DecisionPolicy): number => Math.min(...Object.values(policy).map((p) => p.proceed));

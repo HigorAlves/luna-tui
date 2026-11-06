@@ -1,7 +1,7 @@
 // Bounds event/stage-run growth for a long-lived machine: closed tasks keep their row
 // (so Done stays visible), but their verbose history is trimmed once it's old enough
 // that nobody's going to scroll back to it.
-import { rm } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { DataSource } from "typeorm";
@@ -11,14 +11,14 @@ export interface PruneResult {
   stageRuns: number;
 }
 
-/** Also removes `<stateDir>/runs/<runId>/` (ingested artifacts, transcripts) for each pruned stage run. */
+/** Also removes `<stateDir>/runs/<runId>/` (ingested artifacts, transcripts) for each pruned stage run, and the sub-run folders named `<runId>-*`. */
 export async function pruneOldRuns(db: DataSource, retentionDays: number, stateDir?: string): Promise<PruneResult> {
   if (retentionDays <= 0) return { events: 0, stageRuns: 0 };
 
   const prunedRunIds: string[] = [];
   const result = await db.transaction(async (tx) => {
     const cutoffCondition = `task_id in (
-      select id from tasks where state = 'closed' and updated_at < now() - make_interval(days => $1)
+      select id from tasks where state in ('closed', 'archived') and updated_at < now() - make_interval(days => $1)
     )`;
     // TypeORM's query() for a Postgres DELETE ... RETURNING resolves to a [rows, rowCount]
     // tuple, not just the rows array — destructure, don't just read .length on the result.
@@ -32,7 +32,12 @@ export async function pruneOldRuns(db: DataSource, retentionDays: number, stateD
     return { events: eventCount, stageRuns: stageRunCount };
   });
   if (stateDir) {
-    await Promise.all(prunedRunIds.map((id) => rm(join(stateDir, "runs", id), { recursive: true, force: true })));
+    // A run's own folder, and the sub-run folders derived from its id (`<id>-plan`, `<id>-tests-1`).
+    const runsDir = join(stateDir, "runs");
+    const names = prunedRunIds.length > 0 ? await readdir(runsDir).catch(() => [] as string[]) : [];
+    const doomed = new Set(prunedRunIds);
+    const derived = names.filter((name) => prunedRunIds.some((id) => name.startsWith(`${id}-`)));
+    await Promise.all([...doomed, ...derived].map((name) => rm(join(runsDir, name), { recursive: true, force: true })));
     if (prunedRunIds.length > 0) console.log(`pruned ${prunedRunIds.length} run folder(s)`);
   }
   return result;

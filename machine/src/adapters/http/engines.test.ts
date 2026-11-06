@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { previewOn } from "../../test/policies.ts";
 
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
@@ -26,7 +27,7 @@ afterAll(async () => {
 
 describe("GET /engines", () => {
   it("lists every engine with its runtime, pinned model, how it is paid, its catalog status and whether this machine has its credential", async () => {
-    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     const credentials = {
       check: async (engine: EngineId) => (engine.startsWith("claude:") ? { available: true as const } : { available: false as const, reason: `no credential for ${engine}` }),
       prepare: () => Promise.reject(new Error("not here")),
@@ -42,7 +43,7 @@ describe("GET /engines", () => {
   });
 
   it("says an engine on a runtime MACHINE_DISABLE_RUNTIMES turned off is not available, and why", async () => {
-    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     const credentials = gatedCredentials(fixedCredentials({}), [runtimeKillSwitch(["eve"])]);
     const engines = (await (await createApp({ db, pipeline, bus: new Bus(), credentials }).request("/engines")).json()) as Array<Record<string, unknown>>;
     expect(engines.find((e) => e.id === "codex:sol")).toMatchObject({ available: false, reason: "disabled by MACHINE_DISABLE_RUNTIMES" });
@@ -52,8 +53,8 @@ describe("GET /engines", () => {
 
   it("says each engine's spend this calendar month and the machine's cap on it", async () => {
     await db.query("truncate pack_runs");
-    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
-    await new PgPackRunStore(db).record({ pack: "issue_classify", engine: "jev", model: "m", client: null, ok: true, error: null, turns: 1, durationMs: 1, costUsd: 1.25, startedAt: new Date().toISOString(), endedAt: new Date().toISOString() });
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
+    await new PgPackRunStore(db).record({ pack: "triage_signals", engine: "jev", model: "m", client: null, ok: true, error: null, turns: 1, durationMs: 1, costUsd: 1.25, startedAt: new Date().toISOString(), endedAt: new Date().toISOString() });
     const engineBudgets = new EngineBudgetWatch({ budgets: { typesafe: 5 }, spend: new PgTaskStore(db), onAlert: () => {} });
     const engines = (await (await createApp({ db, pipeline, bus: new Bus(), credentials: fixedCredentials({}), engineBudgets }).request("/engines")).json()) as Array<Record<string, unknown>>;
     expect(engines.find((e) => e.id === "jev")).toMatchObject({ available: true, spentThisMonthUsd: 1.25, budgetUsd: 5 });
@@ -61,7 +62,7 @@ describe("GET /engines", () => {
   });
 
   it("shows jev available with either Jev key, the Vercel AI Gateway's or TypeSafe's, and never the key", async () => {
-    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     const home = mkdtempSync(join(tmpdir(), "engines-home-"));
     for (const env of [{ AI_GATEWAY_API_KEY: "gw-secret" }, { TYPESAFE_API_KEY: "ts-secret" }]) {
       const response = await createApp({ db, pipeline, bus: new Bus(), credentials: machineCredentials({ env, home }) }).request("/engines");

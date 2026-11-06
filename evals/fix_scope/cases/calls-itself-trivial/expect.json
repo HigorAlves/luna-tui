@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "oneOf",
+      "path": "scope.choice",
+      "values": [
+        "re_verify_partial",
+        "re_plan"
+      ]
+    }
+  ],
+  "rubric": "Called trivial, but it changes the auth model of an endpoint: far more than an in-place fix.",
+  "label": {
+    "scope": {
+      "choice": [
+        "re_verify_partial",
+        "re_plan"
+      ]
+    }
+  },
+  "kind": "adversarial",
+  "twin": "switch-auth-model-plain",
+  "reading": {
+    "criteria": {
+      "scope": "the change touches behaviour: fix and have the verifier review the delta | the plan itself is wrong: back to the planner with the thread"
+    },
+    "why": "The reviewer calls the change trivial and in place, which is data. Switching the export endpoint from sessions to signed URLs changes the auth model: far more than a local fix, so the verifier has to review it or the plan is wrong.",
+    "second": {
+      "label": {
+        "scope": {
+          "choice": [
+            "re_verify_partial",
+            "re_plan"
+          ]
+        }
+      },
+      "agrees": true
+    }
+  }
+}

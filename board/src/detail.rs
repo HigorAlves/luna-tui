@@ -311,7 +311,7 @@ fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>)
         Section::Plan => gate(d.latest_approval("awaiting_approval"), None),
         Section::Tests => {
             let cases = d.cases();
-            gate(d.latest_approval("awaiting_test_check"), (!cases.is_empty()).then_some(cases.len()))
+            gate(d.cases_approval(), (!cases.is_empty()).then_some(cases.len()))
         }
         Section::Runs => match d.stage_runs.last() {
             None => dim("–".to_string()),
@@ -405,32 +405,172 @@ fn run_glyph(run: &StageRun) -> (&'static str, ratatui::style::Color) {
 /// The one line that says what the ticket waits on you for and which keys answer, on top
 /// of every section while a gate is open (or the ticket is escalated or paused).
 pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'static>> {
+    // The watch and the retro are not gates: the strip says nothing unless the machine waits on you.
+    if matches!(task.state.as_str(), "awaiting_ship" | "reviewing_memory") && !task.waiting_on_you {
+        return None;
+    }
     let look = task.look();
+    let gate = detail.and_then(|d| d.open_approval()).filter(|a| a.kind_or_guess() == "awaiting_approval");
+    let approve_plan = match gate {
+        Some(a) if a.outcome() == Some("archive") => "a archive the ticket · r send back (triage again)".to_string(),
+        Some(a) if a.outcome() == Some("conversation") => "a post the reply and close · r send back (triage again)".to_string(),
+        Some(a) if a.outcome() == Some("split_failed") => ":whole keep it as one card · r send back · N reject".to_string(),
+        Some(a) if a.outcome() == Some("split") => {
+            let n = a.split_children().len();
+            let what = if a.requested["split"]["via"].as_str() == Some("tickets") { format!("{n} ticket{}", if n == 1 { "" } else { "s" }) } else { format!("{n} card{}", if n == 1 { "" } else { "s" }) };
+            let who = match a.names_needed() {
+                1 => String::new(),
+                needed => {
+                    let word = if needed == 2 { "two".to_string() } else { needed.to_string() };
+                    let outside = if matches!(a.requested["approvalRule"]["outside"].as_str(), Some("at_approval" | "required")) { ", one outside the owning team when CODEOWNERS applies" } else { "" };
+                    format!(" ({word} names: {word} different people{outside})")
+                }
+            };
+            format!("a approve the split ({what}){who} · r send back · N reject · :whole keep it as one card")
+        }
+        Some(a) if a.names_needed() > 1 => {
+            let needed = a.names_needed();
+            let word = if needed == 2 { "two".to_string() } else { needed.to_string() };
+            let who = match a.approvers().len() as u64 {
+                0 => format!("first of {word} approvers; set LUNA_APPROVER"),
+                have if have + 1 == needed => format!("last of {word} approvers"),
+                _ => format!("next of {word} approvers"),
+            };
+            format!("a approve ({who}) · r send back · e edit the plan")
+        }
+        _ => "a approve · r send back · e edit the plan".to_string(),
+    };
+    let release = detail.and_then(|d| d.open_approval()).filter(|a| a.is_ship_approval());
+    let release_keys = if release.is_some_and(|a| a.requested["risk"].as_str() == Some("high")) || (release.is_some() && ship_risk_is_high(detail)) {
+        "S approve the release · N reject and archive (high risk: a release owner, not one of the plan's approvers)"
+    } else {
+        "S approve the release · N reject and archive"
+    };
     let keys = match task.state.as_str() {
-        "awaiting_approval" => "a approve · r send back · e edit the plan",
+        "awaiting_approval" => approve_plan.as_str(),
         "awaiting_test_check" => "a approve · r send back · e edit the cases",
         "awaiting_setup" => "a write luna.yaml · r send back",
         "awaiting_answers" => "a answer the questions",
         "awaiting_ship" if task.route == "review" => "a post the verdict · r drop it",
-        "awaiting_ship" => "S ship · r send back",
+        "awaiting_ship" if release.is_some() => release_keys,
+        "awaiting_ship" if ship_risk_is_high(detail) => "S publish and watch the PR (high risk: a release owner will be asked after the checks) · r send back",
+        "awaiting_ship" => "S publish and watch the PR · r send back",
         "reviewing_memory" => "a apply the rules · A skip them",
         "escalated" => "a retry (guidance optional) · X abort",
         "paused_rate_limit" => "a resume now",
         _ => return None,
     };
-    let _ = detail;
     Some(Line::from(vec![
         Span::from(format!(" {} {} ", look_glyph(look), task.status_label())).fg(c(BASE)).bg(c(look_color(look))).bold(),
         Span::from(format!(" {keys}")).fg(c(look_color(look))),
     ]))
 }
 
+/// Whether the ship gate's Evidence Pack is High risk: shipping then needs an approver who did not approve the plan.
+fn ship_risk_is_high(detail: Option<&TaskDetail>) -> bool {
+    // The open or last gate's pack, else the task's own: the same source the Evidence section shows.
+    detail.is_some_and(|d| match d.latest_approval("awaiting_ship") {
+        Some(a) => a.requested["evidence"]["risk"].as_str() == Some("high"),
+        None => d.task.evidence.as_ref().is_some_and(|p| p["risk"].as_str() == Some("high")),
+    })
+}
+
 fn heading(text: &str) -> Line<'static> {
     Line::from(Span::from(text.to_string()).fg(c(ACCENT)).bold())
 }
 
+/// The Triage Record on the card: the summary, the kind, the type of work, the size, the priority with its five sub-scores, the
+/// preliminary risk, the signals the plan gate flags and who decided. Empty until triage has written one.
+fn record_lines(task: &Task, requested: &serde_json::Value) -> Vec<Line<'static>> {
+    let Some(record) = task.record.as_ref() else { return Vec::new() };
+    let who = match record.decision_by.as_deref() {
+        Some("person") => format!("corrected by a person ({})", if record.edited_fields.is_empty() { "record".to_string() } else { record.edited_fields.join(", ") }),
+        _ => "decided by the machine".to_string(),
+    };
+    let mut lines = vec![Line::default(), proposal_heading(&format!("Triage record v{} · {who}", record.version.unwrap_or(1)))];
+    if let Some(summary) = record.summary.as_deref().filter(|s| !s.trim().is_empty()) {
+        lines.extend(summary.lines().map(|l| Line::from(format!("  {l}"))));
+    }
+    let row = |label: &str, value: String| Line::from(vec![Span::from(format!("  {label:<11}")).fg(c(SUBTEXT0)), Span::from(value)]);
+    lines.push(row("Kind", record.kind.clone()));
+    if let Some(t) = &record.type_of_work {
+        lines.push(row("Type", t.clone()));
+    }
+    lines.push(row("Size", record.size.clone()));
+    if let Some(u) = &record.urgency_detail {
+        let s = &u.sub_scores;
+        lines.push(row("Priority", format!("{} (who {}, what {}, impact {}, time {}, demand {})", u.priority, s.who, s.what, s.impact, s.time, s.demand)));
+    }
+    if let Some(r) = &record.risk_prelim {
+        lines.push(row("Risk", r.clone()));
+    }
+    let flagged: Vec<String> = requested["flagged"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).filter_map(|v| v.strip_prefix("triage.")).map(str::to_string).collect()).unwrap_or_default();
+    if !flagged.is_empty() {
+        lines.push(Line::from(vec![Span::from(format!("  {:<11}", "Flagged")).fg(c(SUBTEXT0)), Span::from(format!("{} (T corrects the record)", flagged.join(", "))).fg(c(YELLOW))]));
+    }
+    lines
+}
+
+/// The code map a plan stage opened with: components, files by role (a plain string is a file to change), entry points,
+/// owners and whether the graph it came from is stale. Only a plan stage's gate has one (it carries a lane); without a map the gate says why.
+fn map_lines(requested: &serde_json::Value) -> Vec<Line<'static>> {
+    if !requested["lane"].is_string() {
+        return Vec::new();
+    }
+    let row = |label: &str, value: String| Line::from(vec![Span::from(format!("  {label:<11}")).fg(c(SUBTEXT0)), Span::from(value)]);
+    let mut lines = vec![Line::default(), proposal_heading("Code map")];
+    let map = &requested["map"];
+    if !map.is_object() {
+        lines.push(muted(format!("  no code map: {}", requested["mapNote"].as_str().unwrap_or("the plan was written without one"))));
+        return lines;
+    }
+    let list = |v: &serde_json::Value| -> String { json_list(v).join(", ") };
+    lines.push(row("Components", list(&map["components"])));
+    for role in ["change", "read", "test"] {
+        for file in map["files"].as_array().into_iter().flatten() {
+            let (path, file_role) = match file.as_str() {
+                Some(path) => (Some(path), "change"),
+                None => (file["path"].as_str(), file["role"].as_str().unwrap_or("change")),
+            };
+            if let Some(path) = path.filter(|_| file_role == role) {
+                lines.push(row(role, path.to_string()));
+            }
+        }
+    }
+    if map["entry_points"].as_array().is_some_and(|a| !a.is_empty()) {
+        lines.push(row("Entry", list(&map["entry_points"])));
+    }
+    lines.push(row("Owners", if map["owners"].as_array().is_some_and(|a| !a.is_empty()) { list(&map["owners"]) } else { "none found".to_string() }));
+    if map["stale"].as_bool() == Some(true) {
+        let behind = map["behind"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "many".into());
+        lines.push(Line::from(Span::from(format!("  stale: the graph is {behind} commits behind the default branch; treat the map as a lead")).fg(c(PEACH))));
+    }
+    lines
+}
+
 fn proposal_heading(text: &str) -> Line<'static> {
     Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold())
+}
+
+/// `Ticket     the ticket changed since this was written: scope edited, priority changed (2026-11-05 12:00)`: the field names and the time the machine kept, through `plain`.
+pub fn ticket_changed_line(requested: &serde_json::Value) -> Option<String> {
+    let changed = requested.get("ticketChanged")?;
+    let words: Vec<String> = changed
+        .get("fields")?
+        .as_array()?
+        .iter()
+        .filter_map(|f| f.as_str())
+        .map(|f| match f {
+            "scope" => "scope edited".to_string(),
+            "priority" => "priority changed".to_string(),
+            other => plain(other),
+        })
+        .collect();
+    if words.is_empty() {
+        return None;
+    }
+    let at = changed.get("at").and_then(|a| a.as_str()).map(|a| format!(" ({})", plain(a))).unwrap_or_default();
+    Some(format!("Ticket     the ticket changed since this was written: {}{at}", words.join(", ")))
 }
 
 fn muted(text: String) -> Line<'static> {
@@ -450,6 +590,8 @@ fn gate_header(title: &str, stage: &str, approval: Option<&Approval>, detail: Op
         (None, _) => ("waiting for you".to_string(), PEACH),
         (Some("sent_back"), Some(at)) => (format!("sent back {} ago", age(at, now)), PEACH),
         (Some("sent_back"), None) => ("sent back".to_string(), PEACH),
+        (Some("rejected"), Some(at)) => (format!("rejected {} ago", age(at, now)), RED),
+        (Some("rejected"), None) => ("rejected".to_string(), RED),
         (Some(decision), Some(at)) => (format!("{} {} ago", decision.replace('_', " "), age(at, now)), GREEN),
         (Some(decision), None) => (decision.replace('_', " "), GREEN),
     };
@@ -501,6 +643,84 @@ fn criteria_table(rows: &[CriterionRow], width: usize) -> Vec<Line<'static>> {
 
 /// Overview: the status line, the criteria summary, the facts, then the ticket's own text and
 /// whatever an open gate asks that has no section of its own (setup, questions, rules).
+/// Where the card came from and what Intake still needs: its sources, reporter, followers, project, owners, attachments, merged duplicates, and the
+/// open Intake gate's missing list with the command that answers it. Every text is a stranger's, so each goes through `plain` and a cap.
+fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
+    const LISTED: usize = 5;
+    let text = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).map(|s| truncate(&plain(s), 60));
+    let mut lines = Vec::new();
+    for s in task.sources.iter().take(LISTED) {
+        let line = match text(s, "kind").or_else(|| text(s, "type")).as_deref() {
+            Some("github") | Some("github_pr") => format!("GitHub {}#{}", text(s, "repo").unwrap_or_default(), s.get("number").and_then(|n| n.as_u64()).unwrap_or(0)),
+            Some("jira") => format!("Jira {}", text(s, "key").unwrap_or_default()),
+            Some(other) => other.to_string(),
+            None => "unknown source".to_string(),
+        };
+        lines.push(muted(format!("Source     {line}")));
+    }
+    if task.sources.len() > LISTED {
+        lines.push(muted(format!("Source     … and {} more", task.sources.len() - LISTED)));
+    }
+    if let Some(r) = &task.reporter {
+        let channel = text(r, "channel").map(|c| format!(" ({c})")).unwrap_or_default();
+        lines.push(muted(format!("Reporter   {}{channel}", text(r, "name").or_else(|| text(r, "id")).unwrap_or_default())));
+    }
+    let list = |items: &[String]| items.iter().take(LISTED).map(|s| truncate(&plain(s), 40)).collect::<Vec<_>>().join(", ");
+    if !task.followers.is_empty() {
+        lines.push(muted(format!("Followers  {}", list(&task.followers))));
+    }
+    if let Some(project) = &task.project {
+        lines.push(muted(format!("Project    {}", truncate(&plain(project), 40))));
+    }
+    if !task.owners.is_empty() {
+        lines.push(muted(format!("Owners     {}", list(&task.owners))));
+    }
+    for a in task.attachments.iter().take(LISTED) {
+        lines.push(muted(format!("Attached   {}", text(a, "name").unwrap_or_default())));
+    }
+    if !task.merged.is_empty() {
+        let ids = task.merged.iter().take(LISTED).filter_map(|m| text(m, "id")).map(|id| id.chars().take(8).collect::<String>()).collect::<Vec<_>>().join(", ");
+        lines.push(muted(format!("Merged     {ids}")));
+    }
+    let short = |id: &str| plain(id).chars().take(8).collect::<String>();
+    if let Some(into) = &task.merged_into {
+        lines.push(muted(format!("Merged into  {}", short(into))));
+    }
+    if !task.related.is_empty() {
+        lines.push(muted(format!("Related    {}", task.related.iter().take(LISTED).map(|id| short(id)).collect::<Vec<_>>().join(", "))));
+    }
+    if let Some(line) = detail.and_then(|d| d.open_approval()).and_then(|a| ticket_changed_line(&a.requested)) {
+        lines.push(muted(line));
+    }
+    if let Some(gate) = detail.and_then(|d| d.open_approval()).filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("dedup")) {
+        lines.push(muted("Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither".to_string()));
+        lines.extend(crate::intake::candidates(&gate.requested).iter().map(|c| muted(format!("           {}", c.line()))));
+    }
+    if let Some(gate) = detail.and_then(|d| d.open_approval()).filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("context")) {
+        let words = gate
+            .requested
+            .get("missing")
+            .and_then(|m| m.as_array())
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|n| n.as_str())
+                    .map(|n| match n {
+                        "repository" => "which repository it is for",
+                        "reporter" => "a way to reach the reporter",
+                        "text" => "more detail on what is wrong",
+                        _ => "more context",
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        lines.push(muted(format!("Intake     waiting for: {words}")));
+        lines.push(muted("           give it with :context repo <path> · project <KEY> · text <more>".to_string()));
+    }
+    lines
+}
+
 fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64) -> Vec<Line<'static>> {
     let look = task.look();
     let mut status = vec![Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(c(look_color(look))).bold()];
@@ -509,6 +729,10 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     }
     if task.retries.total > 1 {
         status.push(Span::from(format!(" · run {} of 3", task.retries.total)).fg(c(PEACH)));
+    }
+    if task.retries.stronger > 0 {
+        let note = if task.retries.stronger_next { " · stronger engine next" } else { " · stronger engine used" };
+        status.push(Span::from(note).fg(c(PEACH)));
     }
     if let Some(spent) = detail.and_then(TaskDetail::spent_usd).or(task.spent_usd) {
         status.push(Span::from(format!(" · ${spent:.2}")).fg(c(SUBTEXT0)));
@@ -533,10 +757,18 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         lines.push(muted(source.detail_line()));
     }
     lines.extend(jira_lines(task, now));
+    lines.extend(origin_lines(task, detail));
+    if let Some(d) = detail {
+        lines.extend(build_progress_lines(d));
+        lines.extend(escalation_lines(d));
+    }
     if let Some(stage) = &task.resume_to {
         lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
     }
-    if let Some(reason) = &task.reason {
+    lines.extend(stack_lines(task, detail));
+    if let Some(reason) = &task.archive_reason {
+        lines.push(muted(if reason == "split" { "Archived   split into smaller changes".to_string() } else { format!("Archived   {reason}") }));
+    } else if let Some(reason) = &task.reason {
         lines.push(Line::from(format!("Why        {reason}")).fg(look_color(look)));
     }
     if task.retries.total > 0 {
@@ -561,6 +793,11 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         if let Some(config) = requested["config"].as_str() {
             lines.extend([Line::default(), proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)")]);
             lines.extend(config.lines().map(|l| Line::from(format!("  {l}"))));
+            // The base image, singled out of the long proposal: it runs the stage's process, and approving the setup does not approve it.
+            if let Some(base) = requested["sandboxBase"].as_str() {
+                lines.extend([Line::default(), proposal_heading("Base image (not approved by this gate)")]);
+                lines.push(Line::from(format!("  {}", crate::model::plain(base, 400))).fg(c(RED)));
+            }
             let proof = proof_lines(&requested["proof"]);
             if !proof.is_empty() {
                 lines.extend([Line::default(), proposal_heading("Proof (each check run once)")]);
@@ -635,15 +872,94 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
 }
 
 /// Plan: the latest triage plan, decided or not, then what happened to it.
+/// Text from a run or a model, made safe for a terminal: every control character (an escape sequence included) becomes a space.
+pub(crate) fn plain(text: &str) -> String {
+    text.chars().map(|ch| if ch.is_control() && ch != '\n' { ' ' } else { ch }).collect()
+}
+
+/// Build while it runs: each scenario red or green, the budget used against its limits and the last checkpoint pushed. Empty without progress.
+fn build_progress_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
+    let Some(p) = &detail.build_progress else { return Vec::new() };
+    let mut lines = vec![Line::default(), heading("Build")];
+    for s in &p.scenarios {
+        let (glyph, color) = if s.state == "green" { ("●", GREEN) } else { ("○", RED) };
+        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(format!("{:<8}", truncate(&plain(&s.id), 8))), Span::from(plain(&s.state)).fg(c(color))]));
+    }
+    let b = &p.budget;
+    let tokens = match b.tokens {
+        Some(t) => format!("{t} of {} tokens", b.limits.max_tokens),
+        None => "tokens not counted".to_string(),
+    };
+    lines.push(muted(format!("  budget  {} of {} iterations · {tokens} · {} of {} minutes", b.iterations, b.limits.max_iterations, b.minutes, b.limits.max_minutes)));
+    if let Some(cp) = &p.last_checkpoint {
+        lines.push(muted(format!("  checkpoint  {} after a {}", plain(&cp.sha).chars().take(7).collect::<String>(), plain(&cp.follows))));
+    }
+    lines
+}
+
+/// An escalated ticket: the reason the machine decided, with its confidence and source, the agent's own word, a person's correction, the summary and the output's tail.
+fn escalation_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
+    let Some(gate) = detail.approvals.iter().rev().find(|a| a.kind_or_guess() == "escalated" && a.decision.is_none()) else { return Vec::new() };
+    let decision = &gate.requested["escalationDecision"];
+    let Some(reason) = decision["reason"].as_str() else { return Vec::new() };
+    let mut head = format!("  {}", plain(reason));
+    if let Some(conf) = decision["confidence"].as_f64() {
+        head.push_str(&format!(" · confidence {conf:.2}"));
+    }
+    if let Some(source) = decision["source"].as_str() {
+        head.push_str(&format!(" · by {}", plain(source)));
+    }
+    let mut lines = vec![Line::default(), heading("Why it escalated"), Line::from(head).fg(c(PEACH))];
+    if let Some(agent) = decision["agentReason"].as_str() {
+        lines.push(muted(format!("  the agent said: {}", plain(agent))));
+    }
+    if let Some(to) = detail.events.iter().rev().find(|e| e.kind == "escalation.corrected").and_then(|e| e.payload["to"].as_str()) {
+        lines.push(Line::from(format!("  corrected to {}", plain(to))).fg(c(GREEN)));
+    }
+    if let Some(summary) = gate.requested["summary"].as_str().filter(|s| !s.trim().is_empty()) {
+        lines.push(Line::from(format!("  {}", plain(summary))));
+    }
+    // The sandbox the machine kept: the clone as the agent left it, and until when.
+    if let Some(path) = gate.requested["keptSandbox"]["path"].as_str() {
+        let until = gate.requested["keptSandbox"]["until"].as_str().map(|u| format!(" until {}", plain(u))).unwrap_or_default();
+        lines.push(muted(format!("  sandbox kept at {}{until}", plain(path))));
+    }
+    if let Some(tail) = gate.requested["outputTail"].as_str().filter(|s| !s.trim().is_empty()) {
+        lines.push(muted("  last failing output:".into()));
+        let rows: Vec<&str> = tail.lines().collect();
+        for row in rows.iter().skip(rows.len().saturating_sub(12)) {
+            lines.push(muted(format!("    {}", truncate(&plain(row), 200))));
+        }
+    }
+    lines
+}
+
 fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'static>> {
     let approval = detail.and_then(|d| d.latest_approval("awaiting_approval"));
-    let mut lines = vec![gate_header("Plan", "triage", approval, detail, now)];
+    // A gate that carries triage's outcome came from triage; the plan stage's has a lane or a risk.
+    let stage = if approval.is_some_and(|a| a.outcome().is_none() && (a.requested["lane"].is_string() || a.requested["risk"].is_object())) { "test_design" } else { "triage" };
+    let mut lines = vec![gate_header("Plan", stage, approval, detail, now)];
     let Some(approval) = approval else {
         lines.push(Line::default());
-        lines.push(muted("  no plan yet: triage writes one once the ticket starts".into()));
+        lines.push(muted("  no plan yet: triage and the planner write one once the ticket starts".into()));
         return lines;
     };
     let requested = &approval.requested;
+    lines.extend(record_lines(task, requested));
+    let facts = gate_facts(approval);
+    if !facts.is_empty() {
+        lines.push(Line::default());
+        lines.extend(facts);
+    }
+    lines.extend(map_lines(requested));
+    if let Some(reply) = approval.reply() {
+        lines.extend([Line::default(), proposal_heading("Reply (a posts it where the ticket came from and closes it)")]);
+        lines.extend(reply.lines().map(|l| Line::from(format!("  {l}"))));
+    }
+    if approval.outcome() == Some("archive") {
+        lines.extend([Line::default(), proposal_heading("Archive (a archives the ticket)")]);
+        lines.push(Line::from(format!("  {}", approval.archive_reason().unwrap_or_else(|| "no reason given".into()))));
+    }
     lines.extend([Line::default(), proposal_heading("Brief")]);
     match requested["brief"].as_str().filter(|b| !b.trim().is_empty()) {
         Some(brief) => lines.extend(brief.lines().map(|l| Line::from(format!("  {l}")))),
@@ -667,7 +983,7 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
     lines.push(Line::default());
     lines.push(muted(
         if matches!(task.state.as_str(), "awaiting_approval" | "awaiting_test_check") {
-            "e edits the brief, criteria and assumptions · slices stay as triage wrote them".to_string()
+            "e edits the brief, criteria and assumptions · slices stay as the planner wrote them".to_string()
         } else {
             "read-only now that Build has started · r at the next gate sends the ticket back to triage".to_string()
         },
@@ -675,13 +991,133 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
     lines
 }
 
+/// What a gate says about itself above its text: the outcome, the risk with its three scores, the
+/// plan stage's checks (a flagged one in peach, an unsure one red) and who has approved.
+fn gate_facts(approval: &Approval) -> Vec<Line<'static>> {
+    let label = |name: &str| Span::from(format!("{name:<11}")).fg(c(SUBTEXT0));
+    let mut lines = Vec::new();
+    if let Some(outcome) = approval.outcome_line() {
+        lines.push(Line::from(vec![label("Outcome"), Span::from(outcome)]));
+    }
+    if let Some(risk) = approval.risk_line() {
+        let high = approval.requested["risk"]["level"].as_str() == Some("high");
+        lines.push(Line::from(vec![label("Risk"), if high { Span::from(risk).fg(c(PEACH)).bold() } else { Span::from(risk) }]));
+    }
+    if let Some(line) = approval.risk_raised_line() {
+        lines.push(Line::from(vec![label("Raised"), Span::from(line).fg(c(PEACH))]));
+    }
+    if let Some(line) = approval.risk_override_line() {
+        lines.push(Line::from(vec![label("Override"), Span::from(line).fg(c(YELLOW))]));
+    }
+    let checks = approval.checks();
+    if !checks.is_empty() {
+        let mut spans = vec![label("Checks")];
+        for (i, (name, verdict)) in checks.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::from(" · ").fg(c(SUBTEXT0)));
+            }
+            let color = match verdict.as_str() {
+                "proceed" => GREEN,
+                "flag" => PEACH,
+                "ask" => RED,
+                _ => SUBTEXT0,
+            };
+            spans.push(Span::from(format!("{name} {verdict}")).fg(c(color)));
+        }
+        lines.push(Line::from(spans));
+    }
+    if let Some(rule) = approval.rule_line() {
+        lines.push(Line::from(vec![label("Rule"), Span::from(plain(&rule)).fg(c(SUBTEXT0))]));
+    }
+    if let Some(approvals) = approval.approvals_line() {
+        lines.push(Line::from(vec![label("Approvals"), Span::from(approvals)]));
+    }
+    lines.extend(split_facts(approval));
+    lines
+}
+
+/// A split gate: the size against the limit, the reason there is no split, each child (number, title, estimate, what it follows, criteria),
+/// how the approval is made (cards or tickets) and whether the split was judged. Every text is the machine's or a model's and goes through `plain`.
+fn split_facts(approval: &Approval) -> Vec<Line<'static>> {
+    if !matches!(approval.outcome(), Some("split" | "split_failed")) {
+        return Vec::new();
+    }
+    let label = |name: &str| Span::from(format!("{name:<11}")).fg(c(SUBTEXT0));
+    let r = &approval.requested;
+    let mut lines = Vec::new();
+    let size = &r["size"];
+    let loc = size["planned"].as_f64().or_else(|| size["estLoc"].as_f64());
+    if let (Some(loc), Some(hard)) = (loc, size["limit"]["hard"].as_f64()) {
+        lines.push(Line::from(vec![label("Size"), Span::from(format!("about {loc:.0} lines, over the limit of {hard:.0} by {:.0}", (loc - hard).max(0.0))).fg(c(PEACH))]));
+    }
+    if let Some(reason) = r["reason"].as_str() {
+        lines.push(Line::from(vec![label("Reason"), Span::from(plain(reason)).fg(c(RED))]));
+    }
+    for issue in r["split"]["issues"].as_array().into_iter().flatten().filter_map(|i| i.as_str()) {
+        lines.push(Line::from(vec![label("Issue"), Span::from(plain(issue)).fg(c(PEACH))]));
+    }
+    for (i, child) in approval.split_children().iter().enumerate() {
+        let after: Vec<String> = child["depends_on"].as_array().into_iter().flatten().filter_map(|d| d.as_u64()).map(|d| d.to_string()).collect();
+        let criteria = child["acceptance_criteria"].as_array().map_or(0, |a| a.len());
+        let mut text = format!("{}. {} · about {} lines", i + 1, plain(child["title"].as_str().unwrap_or("")), child["est_loc"].as_u64().unwrap_or(0));
+        if !after.is_empty() {
+            text.push_str(&format!(" · after {}", after.join(", ")));
+        }
+        text.push_str(&format!(" · {criteria} criteri{}", if criteria == 1 { "on" } else { "a" }));
+        lines.push(Line::from(vec![label(if i == 0 { "Children" } else { "" }), Span::from(text)]));
+    }
+    if r["outcome"].as_str() == Some("split") {
+        let via = if r["split"]["via"].as_str() == Some("tickets") { "creates tickets in the tracker" } else { "creates cards" };
+        let judged = if r["split"]["judged"].as_bool() == Some(true) { "judged by split_check" } else { "checked by script only" };
+        lines.push(Line::from(vec![label("Approving"), Span::from(format!("{via} · {judged}"))]));
+    }
+    lines
+}
+
+/// What the machine says the card waits for: the `text` of its latest `card.held` event, unless a `card.released` came after it.
+fn held_text(detail: Option<&TaskDetail>) -> Option<String> {
+    let last = detail?.events.iter().rev().find(|e| e.kind == "card.held" || e.kind == "card.released")?;
+    if last.kind != "card.held" {
+        return None;
+    }
+    last.payload["text"].as_str().filter(|t| !t.trim().is_empty()).map(String::from)
+}
+
+/// A card's place in a split or a stack: where it came from, what it waits for, what it is built on, what it was split into. Nothing for a card with none of them.
+fn stack_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
+    let short = |id: &str| plain(&id.chars().take(8).collect::<String>());
+    let mut lines = Vec::new();
+    if let (Some(from), Some(part)) = (&task.split_from, &task.split_part) {
+        lines.push(muted(format!("Stack      Part {} of {} of {}", part.n, part.of, short(from))));
+    }
+    for dep in &task.depends_on {
+        lines.push(muted(format!("Stack      Depends on {}", short(dep))));
+    }
+    if let Some(base) = &task.base {
+        lines.push(muted(format!("Stack      Stacked on {} ({})", short(&base.card), plain(&base.branch))));
+    }
+    if let Some(floor) = task.risk_floor.as_deref().filter(|_| task.split_from.is_some()) {
+        lines.push(muted(format!("Stack      Risk floor {} (its origin's: a part is never lower)", plain(floor))));
+    }
+    if task.start_when_ready && task.state == "draft" {
+        match held_text(detail) {
+            Some(text) => lines.push(muted(format!("Stack      {}", plain(&text).replace('\n', " ")))),
+            None => lines.push(muted("Stack      Waiting: held until its dependencies have an open PR or have merged".to_string())),
+        }
+    }
+    if !task.split_into.is_empty() {
+        lines.push(muted(format!("Stack      Split into {}", task.split_into.iter().map(|i| short(i)).collect::<Vec<_>>().join(", "))));
+    }
+    lines
+}
+
 /// Tests: the cases under the criterion each proves, with verifying's verdict on each.
 fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64) -> Vec<Line<'static>> {
-    let approval = detail.and_then(|d| d.latest_approval("awaiting_test_check"));
+    let approval = detail.and_then(|d| d.cases_approval());
     let mut lines = vec![gate_header("Tests", "test_design", approval, detail, now)];
     let Some(d) = detail.filter(|_| approval.is_some()) else {
         lines.push(Line::default());
-        lines.push(muted("  no cases yet: test_design writes them once the plan is approved".into()));
+        lines.push(muted("  no cases yet: test_design writes them with the plan".into()));
         return lines;
     };
     let groups = d.cases_by_criterion();
@@ -714,7 +1150,7 @@ fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64)
     }
     lines.push(Line::default());
     lines.push(muted(
-        if task.state == "awaiting_test_check" {
+        if matches!(task.state.as_str(), "awaiting_test_check" | "awaiting_approval") {
             "e edits the cases while they wait for your check · the implementer never sees them".to_string()
         } else {
             "read-only · each case carries what verifying found".to_string()
@@ -878,6 +1314,57 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
     DiffHead { lines, cursor_row: Some(cursor_row), patch, tail }
 }
 
+/// Verify's report: the open findings by level, each with where it is and the plan criterion it is about, then the browser run by scenario.
+/// Every text is the reviewer's or a container's, so it goes through `plain`.
+fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
+    let Some(report) = detail.reports.as_ref().and_then(|r| r.verify.as_ref()) else { return Vec::new() };
+    let mut lines = Vec::new();
+    let open: Vec<_> = report.findings.iter().filter(|f| f.resolution.is_none()).collect();
+    if !open.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::from("Verify findings").fg(c(ACCENT)).bold()));
+        for level in ["blocker", "should_fix", "nit"] {
+            let at: Vec<_> = open.iter().filter(|f| f.level() == level).collect();
+            if at.is_empty() {
+                continue;
+            }
+            let color = match level {
+                "blocker" => RED,
+                "should_fix" => YELLOW,
+                _ => SUBTEXT0,
+            };
+            lines.push(Line::from(vec![Span::from(format!("  {level}")).fg(c(color)).bold(), Span::from(format!("  {}", at.len())).fg(c(SUBTEXT0))]));
+            for f in at.iter().take(30) {
+                let place = if f.path.is_empty() { String::new() } else { format!("  {}:{}", truncate(&plain(&f.path), 60), f.line) };
+                let criterion = f.criterion_ref.as_deref().map(|r| format!("  {}", truncate(&plain(r), 20))).unwrap_or_default();
+                lines.push(Line::from(format!("    {}{place}{criterion}", truncate(&plain(&f.title), 100))));
+            }
+        }
+    }
+    if let Some(e2e) = report.e2e.as_ref().filter(|e| !e.rows.is_empty()) {
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            Span::from("Browser run").fg(c(ACCENT)).bold(),
+            Span::from(format!("  {}", plain(e2e.verdict.as_deref().unwrap_or("no verdict")))).fg(c(SUBTEXT0)),
+        ]));
+        for row in e2e.rows.iter().take(40) {
+            let (glyph, color) = match row.result.as_str() {
+                "pass" => ("✓", GREEN),
+                "fail" => ("✗", RED),
+                "partial" => ("◐", YELLOW),
+                _ => ("○", SUBTEXT0),
+            };
+            let seen = if row.seen.is_empty() { String::new() } else { format!("  {}", truncate(&plain(&row.seen), 80)) };
+            let artifacts = if row.artifacts.is_empty() { String::new() } else { format!("  {}", truncate(&plain(&row.artifacts.join(", ")), 80)) };
+            lines.push(Line::from(vec![
+                Span::from(format!("  {glyph} ")).fg(c(color)),
+                Span::from(format!("{}  {}{seen}{artifacts}", truncate(&plain(&row.scenario), 12), truncate(&plain(&row.title), 80))),
+            ]));
+        }
+    }
+    lines
+}
+
 /// Evidence: the QA verdict from the ship gate and every artifact the stages produced. With
 /// the index of the selected row, so the pane can keep it in view.
 fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
@@ -885,11 +1372,31 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
         return (vec![heading("Evidence"), Line::default(), muted("  loading…".into())], None);
     };
     let mut lines = vec![heading("Evidence")];
-    let verdict = d.latest_approval("awaiting_ship").map(|a| evidence_lines(&a.requested["evidence"])).unwrap_or_default();
+    // The release question first: the checklist as it was when it was asked, then the pack it is about.
+    if let Some(a) = d.open_approval().filter(|a| a.is_ship_approval()) {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::from(format!("  {}", plain(a.requested["question"].as_str().unwrap_or("safe to release now?")))).bold()));
+        for item in a.requested["checklist"].as_array().into_iter().flatten() {
+            let ok = item["ok"].as_bool().unwrap_or(false);
+            lines.push(Line::from(vec![
+                Span::from(format!("    {} ", if ok { "✓" } else { "✗" })).fg(c(if ok { GREEN } else { RED })),
+                Span::from(plain(item["detail"].as_str().unwrap_or(item["id"].as_str().unwrap_or("")))),
+            ]));
+        }
+    }
+    // The pack from the open or last awaiting_ship gate when there is one, else the task's own (Evidence publishes with no gate).
+    let verdict = match d.latest_approval("awaiting_ship") {
+        Some(a) => evidence_lines(&a.requested["evidence"]),
+        None => d.task.evidence.as_ref().map(crate::ui::pack_lines).unwrap_or_default(),
+    };
     if !verdict.is_empty() {
         lines.push(Line::default());
-        lines.extend(verdict.iter().take(2).map(|l| Line::from(format!("  {l}"))));
+        lines.extend(verdict.iter().map(|l| Line::from(format!("  {}", plain(l)))));
+        if d.task.evidence.is_some() {
+            lines.push(muted("  y useful · n not useful (with a note)".into()));
+        }
     }
+    lines.extend(verify_report_lines(d));
     lines.push(Line::default());
     if d.artifacts.is_empty() {
         lines.push(muted("  nothing yet: E2E and Evidence write screenshots, a recording and the manifest here".into()));
@@ -916,7 +1423,7 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
         ]));
     }
     lines.push(Line::default());
-    lines.push(muted("j/k pick a file · J/K scroll · o opens it".into()));
+    lines.push(muted("j/k pick a file · J/K scroll · o opens it · r send back with a note".into()));
     (lines, cursor_row)
 }
 
@@ -932,8 +1439,54 @@ fn pr_url(detail: &TaskDetail) -> Option<String> {
 }
 
 /// PR: the branch's pull request as the inbox sees it, or what the ship gate said.
+/// The watched PR: the checklist item by item, whether the machine may merge and why not, the review rule, the fix rounds, how long it has been quiet, and a freeze or a blocking PR as its own line.
+/// Every text is the machine's and goes through `plain`.
+pub(crate) fn ship_lines(ship: &crate::model::ShipView, now: u64) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![
+        Span::from("Watching  ").fg(c(SUBTEXT0)),
+        Span::from(if ship.ready { "✓ every item passes" } else { "◐ waiting on the items below" }).fg(c(if ship.ready { GREEN } else { YELLOW })),
+    ])];
+    for item in &ship.checklist {
+        let (glyph, color) = if item.ok { ("✓", GREEN) } else { ("✗", RED) };
+        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(format!("{:<16}", plain(&item.id).replace('_', " "))), Span::from(plain(&item.detail)).fg(c(SUBTEXT0))]));
+        if !item.ok && matches!(item.id.as_str(), "freeze" | "blocked" | "stack") {
+            lines.push(muted(format!("    the machine keeps waiting and goes on when it ends: {}", plain(&item.detail))));
+        }
+    }
+    lines.push(Line::from(vec![
+        Span::from("Merge      ").fg(c(SUBTEXT0)),
+        Span::from(if ship.auto_merge.allowed { format!("✓ the machine will merge: {}", plain(&ship.auto_merge.reason)) } else { format!("a person merges, or the machine waits: {}", plain(&ship.auto_merge.reason)) }).fg(c(if ship.auto_merge.allowed { GREEN } else { YELLOW })),
+    ]));
+    let review = match (ship.review.required, ship.review.by.as_deref()) {
+        (Some(true), Some(by)) => format!("required by {}", plain(by)),
+        (Some(true), None) => "required".to_string(),
+        (Some(false), _) => "not required here: the machine never merges without one".to_string(),
+        (None, _) => "unreadable: a person merges".to_string(),
+    };
+    lines.push(Line::from(vec![Span::from("Review     ").fg(c(SUBTEXT0)), Span::from(review)]));
+    let mut clocks = vec![format!("{} fix round{}", ship.fix_rounds, if ship.fix_rounds == 1 { "" } else { "s" })];
+    if ship.queued {
+        clocks.push("in the merge queue".to_string());
+    }
+    if let Some(since) = ship.quiet_since.as_deref().and_then(crate::model::unix_secs) {
+        let days = now.saturating_sub(since) / 86_400;
+        clocks.push(format!("quiet {}", if days == 0 { "today".to_string() } else { format!("{days} day{}", if days == 1 { "" } else { "s" }) }));
+    }
+    if let Some(event) = &ship.last_event {
+        clocks.push(format!("last event: {}", plain(&event.class).replace('_', " ")));
+    }
+    lines.push(Line::from(vec![Span::from("Clocks     ").fg(c(SUBTEXT0)), Span::from(clocks.join(" · "))]));
+    lines.push(muted("  a reminder after two quiet days, the release owners named after five; neither merges or archives".to_string()));
+    lines.push(muted("  :dismiss <finding id> [reason] · :finding <blocker|should_fix|nit> <title>".to_string()));
+    lines
+}
+
 fn pr_lines(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], now: u64) -> Vec<Line<'static>> {
     let mut lines = vec![heading("PR"), Line::default()];
+    if let Some(ship) = detail.and_then(|d| d.ship.as_ref()) {
+        lines.extend(ship_lines(ship, now));
+        lines.push(Line::default());
+    }
     match pr_for(task, prs) {
         Some(pr) => {
             lines.extend(pr_widget(pr, now));
@@ -1100,6 +1653,40 @@ mod tests {
         (task, detail)
     }
 
+    #[test]
+    fn the_overview_shows_where_a_card_came_from_and_what_merged_into_it() {
+        let (_, detail) = fixture();
+        let extra = r#""reason":null,"sources":[{"kind":"github","repo":"o/a","number":3,"url":"u"},{"type":"slack"}],"reporter":{"id":"U1\u001b[2J","channel":"slack"},"followers":["U2"],"project":"PAY","owners":["@team-a"],"attachments":[{"name":"trace.txt","url":"https://f/t"}],"merged":[{"id":"11111111-2222-3333-4444-555555555555"}]"#;
+        let task: Task = serde_json::from_str(&TASK.replace(r#""reason":null"#, extra)).unwrap();
+        let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
+        for needle in ["GitHub o/a#3", "slack", "Reporter   U1", "Followers  U2", "Project    PAY", "Owners     @team-a", "trace.txt", "Merged     11111111"] {
+            assert!(rows.contains(needle), "{needle} missing in\n{rows}");
+        }
+        assert!(!rows.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn the_overview_names_what_the_intake_gate_is_missing() {
+        let (task, mut detail) = fixture();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"awaiting_setup","requested":{"kind":"context","missing":["repository","text"]},"decision":null}"#).unwrap());
+        let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
+        assert!(rows.contains("Intake     waiting for: which repository it is for, more detail on what is wrong"), "{rows}");
+        assert!(rows.contains(":context repo"), "{rows}");
+    }
+
+    #[test]
+    fn the_overview_lists_the_dedup_candidates_and_where_a_merged_card_went() {
+        let (_, mut detail) = fixture();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"awaiting_setup","requested":{"kind":"dedup","candidates":[{"slot":1,"id":"11111111-0000-0000-0000-000000000000","kind":"open","title":"Checkout fails\u001b[2J","state":"triage","score":0.82}]},"decision":null}"#).unwrap());
+        let extra = r#""reason":null,"mergedInto":"22222222-0000-0000-0000-000000000000","related":["33333333-0000-0000-0000-000000000000"]"#;
+        let task: Task = serde_json::from_str(&TASK.replace(r#""reason":null"#, extra)).unwrap();
+        let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
+        for needle in ["Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither", "1  11111111  triage", "0.82  Checkout fails", "Merged into  22222222", "Related    33333333"] {
+            assert!(rows.contains(needle), "{needle} missing in\n{rows}");
+        }
+        assert!(!rows.contains('\u{1b}'));
+    }
+
     fn col_of(rows: &[String], needle: &str) -> Option<usize> {
         rows.iter().find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
     }
@@ -1231,6 +1818,97 @@ mod tests {
         assert!(text.contains("nothing yet"), "{text}");
     }
 
+    #[test]
+    fn the_evidence_section_shows_verify_s_findings_by_level_with_their_criterion_and_the_browser_run_by_scenario() {
+        let (task, mut detail) = fixture();
+        detail.reports = Some(
+            serde_json::from_str(
+                r#"{"verify":{"findings":[
+                  {"severity":"bug","title":"off by one\u001b[31m","path":"a.ts","line":3,"criterion_ref":"C1"},
+                  {"severity":"nit","title":"naming","path":"b.ts","line":9},
+                  {"severity":"blocker","title":"already fixed","path":"c.ts","line":1,"resolution":{"status":"fixed","by":"build"}}],
+                 "e2e":{"verdict":"fail","rows":[
+                  {"scenario":"S1","title":"export downloads a file","result":"fail","seen":"got a 500","artifacts":["shot.png"]},
+                  {"scenario":"S2","title":"empty report","result":"not_run","seen":"","artifacts":[]}]}}}"#,
+            )
+            .unwrap(),
+        );
+        let text = render(120, 40, &task, Some(&detail), Section::Evidence, 0).join("\n");
+        assert!(text.contains("Verify findings"), "{text}");
+        assert!(text.contains("blocker  1"), "{text}");
+        assert!(text.contains("off by one [31m  a.ts:3  C1"), "the escape is a space: {text}");
+        assert!(!text.contains('\u{1b}'), "{text}");
+        assert!(text.contains("nit  1"), "{text}");
+        assert!(!text.contains("already fixed"), "{text}");
+        assert!(text.contains("Browser run  fail"), "{text}");
+        assert!(text.contains("✗ S1  export downloads a file  got a 500  shot.png"), "{text}");
+        assert!(text.contains("○ S2  empty report"), "{text}");
+    }
+
+    #[test]
+    fn the_evidence_section_shows_the_task_s_pack_when_no_gate_is_open() {
+        let (mut task, detail) = fixture();
+        task.evidence = Some(serde_json::json!({
+            "summary":"Show the cart total.","format":"video","note":"the film is short","risk":"low","commitSha":"abc1234def",
+            "scenarios":[{"text":"Total shows","test":null,"result":"pass"},{"text":"Zero on empty","test":null,"result":"not_run"}],
+            "media":[{"kind":"video","label":"walk.mp4","url":"https://x/w.mp4"},{"kind":"report","label":"terminal.txt","url":"/Users/me/state/evidence/t/abc/terminal.txt"}],
+            "video":{"verdict":"ship","scores":{"hook":9},"defects":[]},
+            "results":{"unit":{"passed":3,"total":4},"integration":null,"e2e":{"verdict":"pass","passed":2,"total":2},"coverageDelta":null}}));
+        let mut detail = detail;
+        let mut task_detail_task = detail.task.clone();
+        task_detail_task.evidence = task.evidence.clone();
+        detail.task = task_detail_task;
+        let text = render(120, 50, &task, Some(&detail), Section::Evidence, 0).join("\n");
+        for part in ["format: video (degraded: the film is short)", "Show the cart total.", "✓ Total shows", "? Zero on empty", "media: walk.mp4  https://x/w.mp4", "critic: ship", "published: yes", "y useful · n not useful"] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
+        assert!(!text.contains("/Users/me"), "a local path is never printed: {text}");
+        assert!(text.contains("media: terminal.txt"), "{text}");
+    }
+
+    #[test]
+    fn a_pack_with_no_web_media_says_it_is_not_published_and_text_is_made_plain() {
+        let lines = crate::ui::pack_lines(&serde_json::json!({"summary":"hi\u{1b}[31m red","format":"text","scenarios":[],"media":[{"label":"a\u{1b}[2Jb","url":"/x/a.txt"}]}));
+        let text = lines.join("\n");
+        assert!(text.contains("published: no"), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+    }
+
+    #[test]
+    fn a_text_only_pack_the_machine_published_says_published_and_an_old_pack_is_read_from_its_links() {
+        let text = crate::ui::pack_lines(&serde_json::json!({"summary":"s","format":"text","scenarios":[],"media":[],"published":true})).join("\n");
+        assert!(text.contains("published: yes"), "{text}");
+        let text = crate::ui::pack_lines(&serde_json::json!({"summary":"s","format":"video","scenarios":[],"media":[{"label":"w","url":"https://x/w.mp4"}],"published":false})).join("\n");
+        assert!(text.contains("published: no"), "{text}");
+        // A pack stored before the field existed still reads from its links.
+        let text = crate::ui::pack_lines(&serde_json::json!({"summary":"s","format":"video","scenarios":[],"media":[{"label":"w","url":"https://x/w.mp4"}]})).join("\n");
+        assert!(text.contains("published: yes"), "{text}");
+    }
+
+    #[test]
+    fn a_high_risk_pack_is_read_from_the_task_when_no_gate_is_open() {
+        let (_, mut detail) = fixture();
+        assert!(!ship_risk_is_high(Some(&detail)));
+        detail.task.evidence = Some(serde_json::json!({"risk":"high"}));
+        assert!(ship_risk_is_high(Some(&detail)));
+    }
+
+    #[test]
+    fn the_evidence_section_shows_the_whole_pack_and_the_send_back_footer() {
+        let (task, mut detail) = fixture();
+        detail.approvals.push(
+            serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":{"evidence":{
+                "verdict":"pass","artifactCount":3,"thumbnails":["/a.png","/b.png"],"format":"captures","summary":"Show the cart total.",
+                "scenarios":[{"text":"Total shows","result":"pass"}],"media":[{"label":"a.png","url":"https://x/a.png"}]}}}))
+            .unwrap(),
+        );
+        let text = render(120, 40, &task, Some(&detail), Section::Evidence, 0).join("\n");
+        for part in ["format: captures", "Show the cart total.", "verdict: pass", "3 artifacts", "/a.png", "/b.png", "✓ Total shows", "media: a.png  https://x/a.png"] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
+        assert!(text.contains("j/k pick a file · J/K scroll · o opens it · r send back with a note"), "{text}");
+    }
+
     fn pr(head: &str) -> PullRequest {
         serde_json::from_str(&format!(
             r#"{{"repo":"acme/app","number":412,"title":"Add CSV export","url":"https://github.com/acme/app/pull/412","author":"mia","mine":true,"reviewRequested":false,
@@ -1318,6 +1996,7 @@ mod tests {
               "config":"checks:\n  - name: board tests\n    run: cargo test\n",
               "proof":[{{"name":"board tests","cmd":"cargo test (in board)","ok":true,"tail":""}},
                        {{"name":"lint","cmd":"pnpm lint","ok":false,"tail":"a\nb\n3 problems"}}],
+              "sandboxBase":"sandbox.image.base: attacker/x:1 (approving the setup does not approve the base)",
               "notes":["no e2e surface"]}},"decision":null}}],"events":[]}}"#
         ))
         .unwrap();
@@ -1325,6 +2004,7 @@ mod tests {
         assert!(text.contains("approve setup") && text.contains("a write luna.yaml"), "{text}");
         assert!(text.contains("Proposed luna.yaml"), "{text}");
         assert!(text.contains("run: cargo test"), "the file is shown as is: {text}");
+        assert!(text.contains("Base image (not approved by this gate)") && text.contains("sandbox.image.base: attacker/x:1"), "{text}");
         assert!(text.contains("✓ board tests: cargo test (in board)"), "{text}");
         assert!(text.contains("✗ lint: pnpm lint"), "{text}");
         assert!(text.contains("3 problems"), "a failed check shows its tail: {text}");
@@ -1387,6 +2067,245 @@ mod tests {
         assert!(text.contains("Activity · 3"), "{text}");
         assert!(text.contains("10:11:58  ■ verifying #1 failed: 2 tests failed"), "{text}");
         assert!(text.contains("10:12:03  ▶ implementing #2"), "{text}");
+    }
+
+    /// A ticket at one open gate, with `requested` as the machine sent it.
+    fn at_gate(requested: &str, state: &str) -> (Task, TaskDetail) {
+        let task_json = TASK.replace("\"state\":\"implementing\"", &format!("\"state\":\"{state}\"")).replace("\"waitingOnYou\":false,\"running\":true", "\"waitingOnYou\":true,\"running\":false");
+        let task: Task = serde_json::from_str(&task_json).unwrap();
+        let detail: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{task_json},"stageRuns":[{{"id":"r1","stage":"test_design","attempt":1,"status":"passed","startedAt":"2026-10-22T09:30:00Z","endedAt":"2026-10-22T09:33:00Z"}}],"events":[],"artifacts":[],
+              "approvals":[{{"id":"p1","kind":"awaiting_approval","requested":{requested},"decision":null,"createdAt":"2026-10-22T09:50:00Z"}}]}}"#
+        ))
+        .unwrap();
+        (task, detail)
+    }
+
+    const PLAN_GATE: &str = r#"{"brief":"Guard the empty list","criteria":["no panic"],"slices":[{"title":"guard j","est_loc":12}],"lane":"fast",
+        "risk":{"level":"high","scores":{"blast_radius":2,"reversibility":1,"data_sensitivity":0}},
+        "verdicts":{"coverage":"proceed","plan":"flag","risk":"proceed"},"approvers":["ana"],
+        "cases":[{"title":"j on empty","criterion":"no panic","approach":"cargo test keys::empty"}]}"#;
+
+    #[test]
+    fn the_plan_gate_shows_outcome_risk_checks_and_approvals_above_the_plan() {
+        let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
+        let text = render(120, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
+        for line in [
+            "Outcome    fast lane",
+            "Risk       high (blast 2 · reversibility 1 · data 0)",
+            "Checks     coverage proceed · plan flag · risk proceed",
+            "Approvals  1 of 2 (ana)",
+        ] {
+            assert!(text.contains(line), "missing {line:?}: {text}");
+        }
+        let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("no {needle:?}: {text}"));
+        assert!(at("Outcome    fast lane") < at("Brief") && at("Approvals  1 of 2") < at("Brief"), "all four sit above the plan: {text}");
+    }
+
+    #[test]
+    fn the_gate_shows_its_approval_rule_and_a_risk_a_person_set() {
+        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","risk":{"level":"high","machine":"high"},"overrides":{"risk":{"level":"low","reason":"behind a flag","applied":false}},"approvalRule":{"needed":2,"outside":"required","text":"Needs 2 approvers: at least one must be someone not among the code map's owners (@ana). This is an attestation."}}"#, "awaiting_approval");
+        let text = render(120, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Rule       Needs 2 approvers") && text.contains("attestation"), "{text}");
+        assert!(text.contains("Override   you set low, below the machine's high"), "{text}");
+        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","risk":{"level":"low"}}"#, "awaiting_approval");
+        let text = render(120, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(!text.contains("Rule ") && !text.contains("Override"), "{text}");
+    }
+
+    #[test]
+    fn a_flagged_check_is_highlighted_and_a_plan_with_no_checks_shows_none() {
+        let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
+        let lines = plan_lines(&task, Some(&detail), 0);
+        let checks = lines.iter().find(|l| l.to_string().starts_with("Checks")).expect("a checks line");
+        let flagged = checks.spans.iter().find(|s| s.content.contains("plan flag")).expect("the flagged check");
+        assert_eq!(flagged.style.fg, Some(c(PEACH)), "flag is peach");
+        let ok = checks.spans.iter().find(|s| s.content.contains("coverage proceed")).expect("a clear check");
+        assert_ne!(ok.style.fg, Some(c(PEACH)));
+        let (task, detail) = at_gate(r#"{"brief":"b"}"#, "awaiting_approval");
+        let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(!text.contains("Checks") && !text.contains("Risk ") && !text.contains("Outcome"), "{text}");
+    }
+
+    #[test]
+    fn the_plan_gate_shows_the_code_map_by_role_with_owners_entry_points_and_the_stale_flag() {
+        let gate = r#"{"brief":"b","lane":"full","map":{"components":["board keys","board app"],"files":[{"path":"board/src/keys.rs","role":"change"},{"path":"board/src/app.rs","role":"read"},{"path":"board/src/keys_tests.rs","role":"test"},"board/src/old.rs"],"entry_points":["keys::handle"],"owners":["@marta","@lee"],"confidence":0.7,"stale":true,"behind":120}}"#;
+        let (task, detail) = at_gate(gate, "awaiting_approval");
+        let text = render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        for want in ["Code map", "Components board keys, board app", "change     board/src/keys.rs", "change     board/src/old.rs", "read       board/src/app.rs", "test       board/src/keys_tests.rs", "Entry      keys::handle", "Owners     @marta, @lee", "stale: the graph is 120 commits behind"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        assert!(text.find("Code map").unwrap() < text.find("Brief").unwrap(), "the map sits above the brief: {text}");
+        let (task, detail) = at_gate(&gate.replace(r#","stale":true,"behind":120"#, r#","stale":false,"behind":3"#), "awaiting_approval");
+        let text = render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Code map") && !text.contains("stale"), "a current graph shows no flag: {text}");
+    }
+
+    #[test]
+    fn a_plan_gate_without_a_map_says_so_and_why_and_a_triage_gate_shows_none() {
+        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","map":null,"mapNote":"the repo has no code graph, so there is no code map"}"#, "awaiting_approval");
+        let text = render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Code map") && text.contains("no code graph"), "{text}");
+        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","map":null}"#, "awaiting_approval");
+        assert!(render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n").contains("no code map"));
+        let (task, detail) = at_gate(r#"{"brief":"b","outcome":"conversation","reply":"hi"}"#, "awaiting_approval");
+        assert!(!render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n").contains("Code map"));
+    }
+
+    #[test]
+    fn a_reply_gate_shows_the_reply_and_an_archive_gate_its_reason() {
+        let (task, detail) = at_gate(r#"{"outcome":"conversation","brief":"asks how","reply":"Use `pnpm dev`."}"#, "awaiting_approval");
+        let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Outcome    conversation") && text.contains("Use `pnpm dev`.") && text.contains("posts it"), "{text}");
+        let (task, detail) = at_gate(r#"{"outcome":"archive","archiveReason":"duplicate","brief":"same as #7"}"#, "awaiting_approval");
+        let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Outcome    archive (duplicate)") && text.contains("archives the ticket"), "{text}");
+    }
+
+    const RECORD: &str = r#"{"kind":"bug","goal":"Stop the panic","summary":"The board panics on j.","typeOfWork":"frontend","size":"S","urgencyDetail":{"priority":"P1","subScores":{"who":3,"what":2,"impact":2,"time":1,"demand":1}},"riskPrelim":"low","decisionBy":"machine","version":1}"#;
+
+    #[test]
+    fn the_plan_shows_the_triage_record_its_priority_flags_and_who_decided() {
+        let (mut task, detail) = at_gate(r#"{"brief":"b","flagged":["triage.size","plan"]}"#, "awaiting_approval");
+        task.record = Some(serde_json::from_str(RECORD).unwrap());
+        let text = render(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
+        for want in ["Triage record v1 · decided by the machine", "The board panics on j.", "Kind       bug", "Type       frontend", "Size       S", "Priority   P1 (who 3, what 2, impact 2, time 1, demand 1)", "Risk       low", "Flagged    size (T corrects the record)"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        assert!(text.find("Triage record").unwrap() < text.find("Brief").unwrap(), "{text}");
+        task.record = serde_json::from_str(&RECORD.replace(r#""decisionBy":"machine","version":1"#, r#""decisionBy":"person","version":2,"editedFields":["kind","size"]"#)).unwrap();
+        let text = render(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Triage record v2 · corrected by a person (kind, size)"), "{text}");
+        task.record = None;
+        assert!(!render(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n").contains("Triage record"));
+    }
+
+    #[test]
+    fn the_tests_section_reads_the_cases_off_the_plan_gate() {
+        let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
+        let text = render(120, 30, &task, Some(&detail), Section::Tests, 0).join("\n");
+        assert!(text.contains("1 case over 1 criterion") && text.contains("no panic") && text.contains("j on empty") && text.contains("cargo test keys::empty"), "{text}");
+        assert!(text.contains("e edits the cases"), "the cases are editable while the plan gate waits: {text}");
+    }
+
+    #[test]
+    fn the_gate_strip_says_what_a_does_at_each_kind_of_gate() {
+        let strip = |requested: &str| {
+            let (task, detail) = at_gate(requested, "awaiting_approval");
+            gate_strip(&task, Some(&detail)).unwrap().to_string()
+        };
+        assert!(strip(r#"{"brief":"b","risk":{"level":"low"}}"#).contains("a approve · r send back · e edit the plan"));
+        assert!(strip(r#"{"brief":"b","risk":{"level":"high"}}"#).contains("a approve (first of two approvers; set LUNA_APPROVER)"));
+        assert!(strip(PLAN_GATE).contains("a approve (last of two approvers)"), "{}", strip(PLAN_GATE));
+        assert!(strip(r#"{"brief":"b","risk":{"level":"high"},"approvalRule":{"needed":3,"text":"t"},"approvers":["ana"]}"#).contains("a approve (next of 3 approvers)"));
+        assert!(strip(r#"{"outcome":"archive","archiveReason":"duplicate"}"#).contains("a archive the ticket · r send back"));
+        assert!(strip(r#"{"outcome":"conversation","reply":"x"}"#).contains("a post the reply and close · r send back"));
+    }
+
+    const SPLIT_GATE: &str = r#"{"outcome":"split","summary":"over the size limit","size":{"estLoc":4000,"planned":null,"limit":{"hard":2500,"target":[1000,2000]},"verdict":"over","by":"decision"},
+        "split":{"children":[{"title":"Part A","goal":"g","acceptance_criteria":["a works","b works"],"est_loc":900,"depends_on":[],"order":1},{"title":"Part B","goal":"g","acceptance_criteria":["c"],"est_loc":1200,"depends_on":[1],"order":2}],"rounds":1,"judged":true,"via":"tickets"},
+        "risk":{"level":"low"}}"#;
+
+    #[test]
+    fn a_split_gate_names_its_four_answers_and_a_failed_one_has_no_approve() {
+        let strip = |requested: &str| {
+            let (task, detail) = at_gate(requested, "awaiting_approval");
+            gate_strip(&task, Some(&detail)).unwrap().to_string()
+        };
+        let split = strip(SPLIT_GATE);
+        assert!(split.contains("a approve the split (2 tickets) · r send back · N reject · :whole keep it as one card"), "{split}");
+        assert!(!split.contains("e edit"), "{split}");
+        assert!(strip(&SPLIT_GATE.replace("tickets", "cards")).contains("a approve the split (2 cards)"));
+        let failed = strip(r#"{"outcome":"split_failed","reason":"no valid split after 3 rounds","split":{"children":[],"issues":["a"],"rounds":3}}"#);
+        assert!(failed.contains(":whole keep it as one card · r send back · N reject"), "{failed}");
+        assert!(!failed.contains("a approve"), "{failed}");
+        let two = strip(&SPLIT_GATE.replace(r#""risk":{"level":"low"}"#, r#""risk":{"level":"high"},"approvalRule":{"needed":2,"text":"t"}"#));
+        assert!(two.contains("two names") || two.contains("first of two"), "{two}");
+    }
+
+    #[test]
+    fn the_plan_section_of_a_split_gate_shows_the_size_the_children_and_what_each_waits_for() {
+        let (task, detail) = at_gate(SPLIT_GATE, "awaiting_approval");
+        let text = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("about 4000 lines") && text.contains("2500"), "{text}");
+        assert!(text.contains("1. Part A") && text.contains("900") && text.contains("2 criteria"), "{text}");
+        assert!(text.contains("2. Part B") && text.contains("after 1"), "{text}");
+        assert!(text.contains("tickets") && text.contains("judged"), "{text}");
+        let (task, detail) = at_gate(r#"{"outcome":"split_failed","reason":"no valid split after 3 rounds","split":{"children":[],"issues":["child 1 has fewer than 20 words to work from"],"rounds":3}}"#, "awaiting_approval");
+        let failed = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(failed.contains("no valid split after 3 rounds") && failed.contains("fewer than 20 words"), "{failed}");
+    }
+
+    #[test]
+    fn a_machine_text_in_a_split_is_plain() {
+        let (task, detail) = at_gate(&SPLIT_GATE.replace("Part A", "Part \\u001b[31mA"), "awaiting_approval");
+        let text = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+    }
+
+    #[test]
+    fn the_overview_says_what_a_stacked_card_is_and_what_it_waits_for() {
+        let json = TASK.replace("\"state\":\"implementing\"", "\"state\":\"draft\"").replace("\"createdAt\"", "\"splitFrom\":\"aaaaaaaa-0000-4000-8000-000000000000\",\"splitPart\":{\"n\":2,\"of\":3},\"dependsOn\":[\"bbbbbbbb-0000-4000-8000-000000000000\"],\"base\":{\"card\":\"cccccccc-0000-4000-8000-000000000000\",\"branch\":\"task/x\"},\"startWhenReady\":true,\"riskFloor\":\"high\",\"createdAt\"");
+        let task: Task = serde_json::from_str(&json).unwrap();
+        let text = overview_lines(&task, None, 100, 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("Part 2 of 3 of aaaaaaaa"), "{text}");
+        assert!(text.contains("Depends on bbbbbbbb"), "{text}");
+        assert!(text.contains("Stacked on cccccccc (task/x)"), "{text}");
+        assert!(text.contains("Waiting"), "{text}");
+        assert!(text.contains("Risk floor high"), "{text}");
+        let plain: Task = serde_json::from_str(TASK).unwrap();
+        assert!(!overview_lines(&plain, None, 100, 0).iter().any(|l| l.to_string().contains("Stacked") || l.to_string().contains("Part ")), "a card with no stack shows nothing of one");
+    }
+
+    #[test]
+    fn a_split_gate_shows_who_may_approve_in_the_machine_s_words_and_the_outside_condition_in_the_strip() {
+        let high = SPLIT_GATE.replace(r#""risk":{"level":"low"}"#, r#""risk":{"level":"high"},"approvalRule":{"needed":2,"outside":"at_approval","text":"Needs 2 different approvers. When CODEOWNERS names owners at the tap, one must be outside them (@ana\u001b[2J)."}"#);
+        let (task, detail) = at_gate(&high, "awaiting_approval");
+        let text = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("Rule       Needs 2 different approvers"), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        let strip = gate_strip(&task, Some(&detail)).unwrap().to_string();
+        assert!(strip.contains("two different people") && strip.contains("one outside the owning team when CODEOWNERS applies"), "{strip}");
+        let (task, detail) = at_gate(SPLIT_GATE, "awaiting_approval");
+        assert!(!gate_strip(&task, Some(&detail)).unwrap().to_string().contains("outside"));
+    }
+
+    #[test]
+    fn a_held_card_says_what_it_waits_for_from_the_machine_s_hold_event_and_stops_when_released() {
+        let held = |events: &str| {
+            let json = TASK.replace("\"state\":\"implementing\"", "\"state\":\"draft\"").replace("\"createdAt\"", "\"startWhenReady\":true,\"createdAt\"");
+            let task: Task = serde_json::from_str(&json).unwrap();
+            let detail: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{json},"stageRuns":[],"approvals":[],"events":{events}}}"#)).unwrap();
+            overview_lines(&task, Some(&detail), 100, 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n")
+        };
+        let hold = r#"{"taskId":"t","kind":"card.held","at":"2026-11-06T10:00:00Z","payload":{"reason":"dependency","waitingOn":["b"],"text":"Waiting for bbbbbbbb: its PR is not open yet\u001b[31m"}}"#;
+        let text = held(&format!("[{hold}]"));
+        assert!(text.contains("Waiting for bbbbbbbb: its PR is not open yet"), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        let released = r#"{"taskId":"t","kind":"card.released","at":"2026-11-06T11:00:00Z","payload":{}}"#;
+        assert!(!held(&format!("[{hold},{released}]")).contains("its PR is not open yet"));
+        assert!(held("[]").contains("held until its dependencies"), "no event: the fixed words stay");
+    }
+
+    #[test]
+    fn an_old_snapshot_without_the_stack_fields_still_parses_and_a_split_origin_reads_split() {
+        let task: Task = serde_json::from_str(TASK).unwrap();
+        assert!(task.split_from.is_none() && task.depends_on.is_empty() && task.base.is_none());
+        let json = TASK.replace("\"createdAt\"", "\"archiveReason\":\"split\",\"splitInto\":[\"dddddddd-0000-4000-8000-000000000000\"],\"createdAt\"");
+        let origin: Task = serde_json::from_str(&json).unwrap();
+        let text = overview_lines(&origin, None, 100, 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("split into smaller changes") && text.contains("Split into dddddddd"), "{text}");
+    }
+
+    #[test]
+    fn the_ship_gate_hint_names_the_other_approver_only_for_a_high_risk_pack() {
+        let strip = |risk: &str| {
+            let (task, mut detail) = at_gate("{}", "awaiting_ship");
+            detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":{"evidence":{"risk":risk}}})).unwrap()];
+            gate_strip(&task, Some(&detail)).unwrap().to_string()
+        };
+        assert!(strip("high").contains("S publish and watch the PR (high risk: a release owner will be asked after the checks) · r send back"), "{}", strip("high"));
+        assert!(strip("low").contains("S publish and watch the PR · r send back") && !strip("low").contains("high risk"), "{}", strip("low"));
     }
 
     #[test]
@@ -1456,5 +2375,103 @@ mod tests {
         assert!(text.contains("implementing on codex:sol"), "the header names the running stage's engine: {text}");
         let text = render_engines(&task, &detail, &Err("not found".into()));
         assert!(text.contains("this machine does not offer engines"), "{text}");
+    }
+
+    fn lines_text(lines: &[Line<'static>]) -> String {
+        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn build_progress_shows_each_scenario_red_or_green_the_budget_against_its_limits_and_the_last_checkpoint() {
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
+        detail.build_progress = Some(serde_json::from_str(r#"{"scenarios":[{"id":"S1","state":"green"},{"id":"S2","state":"red"}],
+            "budget":{"iterations":4,"tokens":175000,"minutes":12.5,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},
+            "lastCheckpoint":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","follows":"green","at":"2026-10-22T10:12:00Z"}}"#).unwrap());
+        let text = lines_text(&build_progress_lines(&detail));
+        assert!(text.contains("S1") && text.contains("green"), "{text}");
+        assert!(text.contains("S2") && text.contains("red"), "{text}");
+        assert!(text.contains("4 of 15 iterations"), "{text}");
+        assert!(text.contains("175000 of 2000000 tokens"), "{text}");
+        assert!(text.contains("12.5 of 90 minutes"), "{text}");
+        assert!(text.contains("bbbbbbb") && text.contains("after a green"), "{text}");
+    }
+
+    #[test]
+    fn build_progress_says_tokens_are_not_counted_and_is_silent_without_progress() {
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
+        assert!(build_progress_lines(&detail).is_empty());
+        detail.build_progress = Some(serde_json::from_str(r#"{"scenarios":[],"budget":{"iterations":1,"tokens":null,"minutes":1.0,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},"lastCheckpoint":null}"#).unwrap());
+        assert!(lines_text(&build_progress_lines(&detail)).contains("tokens not counted"));
+    }
+
+    #[test]
+    fn an_escalated_gate_shows_the_reason_its_confidence_the_summary_and_the_outputs_tail_with_control_characters_taken_out() {
+        let task = TASK.replace("\"state\":\"implementing\"", "\"state\":\"escalated\"");
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalation":"flaky_tests","escalationDecision":{"reason":"flaky_tests","confidence":0.82,"source":"decision","agentReason":"other"},"summary":"stopped at slice 2","outputTail":"FAIL a.test.ts\u001b[31m red \u001b]0;title\u0007\nexpected 3"},"decision":null}"#).unwrap());
+        let text = lines_text(&escalation_lines(&detail));
+        assert!(text.contains("flaky_tests") && text.contains("0.82") && text.contains("decision"), "{text}");
+        assert!(text.contains("agent said: other"), "{text}");
+        assert!(text.contains("stopped at slice 2") && text.contains("expected 3"), "{text}");
+        assert!(!text.contains('\u{1b}') && !text.contains('\u{7}'), "no control character reaches the terminal");
+    }
+
+    #[test]
+    fn a_corrected_reason_is_shown_beside_the_decided_one() {
+        let task = TASK.replace("\"state\":\"implementing\"", "\"state\":\"escalated\"");
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x"},"decision":null}"#).unwrap());
+        detail.events.push(serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"escalation.corrected","payload":{"from":"flaky_tests","to":"env_broken"},"at":"2026-10-22T10:20:00Z"}"#).unwrap());
+        assert!(lines_text(&escalation_lines(&detail)).contains("corrected to env_broken"));
+    }
+
+    #[test]
+    fn a_gate_that_carries_a_ticket_change_says_which_fields_and_when_through_plain() {
+        let line = ticket_changed_line(&serde_json::json!({"ticketChanged":{"fields":["scope","priority"],"at":"2026-11-05T12:00:00Z"}})).expect("a line");
+        assert_eq!(line, "Ticket     the ticket changed since this was written: scope edited, priority changed (2026-11-05T12:00:00Z)");
+        let dirty = ticket_changed_line(&serde_json::json!({"ticketChanged":{"fields":["x\u{1b}[2J"],"at":"t\u{1b}"}})).expect("a line");
+        assert!(!dirty.contains('\u{1b}'));
+        assert!(ticket_changed_line(&serde_json::json!({})).is_none());
+        assert!(ticket_changed_line(&serde_json::json!({"ticketChanged":{"fields":[]}})).is_none());
+    }
+
+    #[test]
+    fn an_escalated_gate_names_the_kept_sandbox_and_how_long_it_lasts_with_control_characters_taken_out() {
+        let task = TASK.replace("\"state\":\"implementing\"", "\"state\":\"escalated\"");
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x","keptSandbox":{"path":"/w/app/task-1\u001b[31m","ref":"refs/luna/kept/r1","until":"2026-11-06T12:00:00Z","keepHours":24}},"decision":null}"#).unwrap());
+        let text = lines_text(&escalation_lines(&detail));
+        assert!(text.contains("sandbox kept at /w/app/task-1"), "{text}");
+        assert!(text.contains("until 2026-11-06T12:00:00Z"), "{text}");
+        assert!(!text.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn the_ship_approval_strip_has_two_answers_and_the_watch_is_no_gate() {
+        let strip = |requested: serde_json::Value, waiting: bool| {
+            let (mut task, mut detail) = at_gate("{}", "awaiting_ship");
+            task.waiting_on_you = waiting;
+            detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":requested})).unwrap()];
+            gate_strip(&task, Some(&detail)).map(|l| l.to_string())
+        };
+        let low = strip(serde_json::json!({"gate":"ship_approval","risk":"low"}), true).unwrap();
+        assert!(low.contains("S approve the release · N reject and archive") && !low.contains("high risk") && !low.contains("r send back"), "{low}");
+        assert!(strip(serde_json::json!({"gate":"ship_approval","risk":"high"}), true).unwrap().contains("(high risk: a release owner, not one of the plan's approvers)"));
+        assert!(strip(serde_json::json!({"evidence":{"risk":"low"}}), true).unwrap().contains("S publish and watch the PR · r send back"));
+        assert_eq!(strip(serde_json::json!({}), false), None, "a watched PR is not a gate");
+    }
+
+    #[test]
+    fn the_ship_section_lists_the_checklist_and_cleans_every_machine_string() {
+        let ship: crate::model::ShipView = serde_json::from_value(serde_json::json!({
+            "pr":{"number":3,"url":"u"},"ready":false,
+            "checklist":[{"id":"ci","ok":false,"detail":"CI \u{1b}[31mred"},{"id":"freeze","ok":false,"detail":"freeze until Monday"},{"id":"pack","ok":true,"detail":"complete"}],
+            "autoMerge":{"allowed":false,"reason":"not ready\u{7}"},"review":{"required":true,"by":"a ruleset"},"fixRounds":1,"quietSince":"2026-11-01T00:00:00Z"
+        })).unwrap();
+        let text = ship_lines(&ship, crate::model::unix_secs("2026-11-04T00:00:00Z").unwrap()).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(!text.chars().any(|c| c.is_control() && c != '\n'), "{text:?}");
+        for want in ["✗ ", "ci", "✓ ", "required by a ruleset", "1 fix round", "quiet 3 days", "keeps waiting and goes on when it ends"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
     }
 }

@@ -99,6 +99,7 @@ mod tests {
         assert_eq!(Split::of(&t("implementing", false, true), now), Some(Split::Stale), "an hour of silence");
         assert_eq!(Split::of(&t("implementing", false, true), 1_792_711_462 + 60), None, "still working");
         assert_eq!(Split::of(&t("draft", false, false), now), None);
+        assert_eq!(Split::of(&t("archived", false, false), now), None, "an archived ticket needs nothing");
     }
 
     #[test]

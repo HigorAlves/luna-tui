@@ -3,8 +3,9 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { type EngineBudgets, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem } from "@hardness/contracts";
+import { type EngineBudgets, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem, hostPatternProblem, normalizeHostPattern } from "@hardness/contracts";
 
+import type { TracesMode } from "./application/telemetry.ts";
 import { isLoopback } from "./adapters/http/access.ts";
 import { DEFAULT_GATE_SECS, parseDuration } from "./domain/sla.ts";
 
@@ -18,6 +19,8 @@ export interface Config {
   apiToken: string | null;
   /** Run Triage and Implementer as real agents. Off: every stage is a stub. */
   agents: boolean;
+  /** The sandbox's network (`MACHINE_EGRESS`, on by default): off, every run joins an ordinary bridge as before the allow-list. `engineHosts` (`MACHINE_EGRESS_ENGINE_HOSTS`) are host patterns added to every agent's engine hosts. The owner's switches: never read from `luna.yaml`. */
+  egress: { enabled: boolean; engineHosts: string[] };
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
   maxConcurrentTasks: number;
   /** Running tasks one repo may hold at once, so it cannot take every slot; null means no cap. */
@@ -28,6 +31,7 @@ export interface Config {
   runnerImage: string;
   /** Docker image for the e2e stage, with a browser. Used by the QA slices. */
   runnerQaImage: string;
+  runnerVideoImage: string;
   /** Task worktrees go in `<worktreesDir>/<repo>/<branch>`, like `herdr worktree`. */
   worktreesDir: string;
   /** Run inputs, outputs and transcripts. */
@@ -36,14 +40,25 @@ export interface Config {
   githubPoll: { repos: string[]; intervalMs: number; label: string };
   /** The token every GitHub call uses (`GITHUB_TOKEN`, else `GH_TOKEN`); null means GitHub is off. */
   githubToken: string | null;
+  /** Seconds between checks of each repo's default branch for a graph rebuild; null (`MACHINE_GRAPH_INTERVAL=off`) turns the watch off. */
+  graphIntervalSecs: number | null;
   /** The PR inbox: poll every open PR involving you. `MACHINE_GITHUB_PRS=off` turns it off. */
   githubPrs: { enabled: boolean; intervalMs: number };
+  /** The ship monitor: how often it reads the shipped PR, and how many days it waits for a merge before asking a person. */
+  /** `intervalMs` is null when `MACHINE_SHIP_POLL_INTERVAL` is unset: each repository's `ship.poll_minutes` (five) applies. */
+  shipPoll: { intervalMs: number | null };
   /** `owner/name` to the checkout's path, for issues GitHub intake imports. */
   repoMap: Record<string, string>;
   /** Checkouts one level under here are matched to `owner/name` by their origin remote. */
   reposDir: string;
   /** Reply in the thread a task came from (its GitHub issue; Slack when set). `MACHINE_THREAD_REPLIES=off` stops it. */
   threadReplies: boolean;
+  /** The board's public address (`MACHINE_PUBLIC_URL`), the only address the machine ever puts in a line it posts outward; null when unset or not an http(s) URL. */
+  publicUrl: string | null;
+  /** Keep what the person changed or approved in the plan, under the state dir, for evals. `MACHINE_GROUND_TRUTH=off` stops it. */
+  groundTruth: boolean;
+  /** Keep each decision pack call's context, answer and verdicts under the state dir, for evals (`MACHINE_DECISIONS=off` stops it) and for how many days (`MACHINE_DECISIONS_RETENTION_DAYS`, 365; 0 keeps them) and up to how many megabytes (`MACHINE_DECISIONS_MAX_MB`, 4096; 0 for no cap). */
+  decisions: { enabled: boolean; retentionDays: number; maxMb: number };
   /** A Slack bot token and channel: one thread per task is opened there. Both or neither. */
   slack: { token: string; channel: string } | null;
   /** The Slack inbox: your user token, the optional app-level token for Socket Mode, and its knobs. */
@@ -69,6 +84,8 @@ export interface Config {
   /** What happens to a task mid-stage when the machine stops: back to the queue (its stage re-runs
    *  on boot, no approval needed) or escalated for you to resume, as before. */
   restartPolicy: RestartPolicy;
+  /** Run traces to a local Laminar (`MACHINE_TRACES`, `LMNR_*`); `{ mode: "off" }` without a key. */
+  traces: TracesConfig;
 }
 
 export interface SlackInboxConfig {
@@ -83,6 +100,8 @@ export interface SlackInboxConfig {
   markRead: boolean;
   /** The rules file (`<stateDir>/slack-triage.md` unless `MACHINE_SLACK_RULES` says otherwise); created from the template when missing. */
   rulesPath: string;
+  /** `MACHINE_SLACK_SCOPE`: `opted_in` (default) reads only the channels and DMs a person opted in; `all` reads what the poll read before wave 17. A machine variable on purpose: a repository's file cannot widen it. */
+  scope: "opted_in" | "all";
   /** `HH:MM` local time for the morning digest DM; null means none. */
   digestAt: { hour: number; minute: number } | null;
 }
@@ -101,11 +120,43 @@ export interface JiraConfig {
 export type RestartPolicy = "requeue" | "escalate";
 const RESTART_POLICIES: readonly RestartPolicy[] = ["requeue", "escalate"];
 
+/** Where the machine sends run traces (`MACHINE_TRACES`, the `LMNR_*` variables); off without a key. */
+export type TracesConfig =
+  | { mode: "off" }
+  | {
+      mode: Exclude<TracesMode, "off">;
+      laminar: {
+        projectApiKey: string;
+        /** Laminar as the machine reaches it: scheme and host, no port. */
+        baseUrl: string;
+        /** Laminar as a stage container reaches it (`LMNR_STAGE_BASE_URL`): the host's gateway by default. */
+        stageBaseUrl: string;
+        httpPort: number;
+        grpcPort: number;
+      };
+      /** Said at boot: why the mode is not the default `host` (the collector is not on this computer). Absent otherwise. */
+      note?: string;
+    };
+
+const TRACES_MODES: readonly TracesMode[] = ["off", "metadata", "host", "full"];
+/** The Laminar key's file in `~/.config/hardness`, read when `LMNR_PROJECT_API_KEY` is unset. */
+export const LMNR_KEY_FILE = "lmnr-project-api-key";
+
 function optionalPositiveInt(env: NodeJS.ProcessEnv, key: string): number | null {
   const raw = env[key];
   if (raw === undefined || raw === "") return null;
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${key} must be a positive integer, got "${raw}"`);
+  return value;
+}
+
+/** `MACHINE_GRAPH_INTERVAL`: seconds between graph rebuild checks (default 600), or `off`. */
+function graphIntervalSecs(env: NodeJS.ProcessEnv): number | null {
+  const raw = env.MACHINE_GRAPH_INTERVAL;
+  if (raw === undefined || raw === "") return 600;
+  if (raw === "off") return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) throw new Error(`MACHINE_GRAPH_INTERVAL must be a positive integer (seconds) or off, got "${raw}"`);
   return value;
 }
 
@@ -164,6 +215,72 @@ function secretFileSync(path: string): string | null {
   }
 }
 
+function portFrom(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
+  const raw = env[key];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 65_535) throw new Error(`${key} must be a port number, got "${raw}"`);
+  return value;
+}
+
+/** The machine's state dir: `MACHINE_STATE_DIR`, else `~/.local/state/hardness`. The evals' harvest reads decision records from it by the same rule. */
+export const stateDirFrom = (env: NodeJS.ProcessEnv, home: string): string => env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness");
+
+/** `MACHINE_TRACES` and the Laminar address and key. Exported for the evals runner, which has no
+ *  machine config of its own: `tracesConfig(process.env, homedir())`. */
+export function tracesConfig(env: NodeJS.ProcessEnv, home: string): TracesConfig {
+  const key = env.LMNR_PROJECT_API_KEY?.trim() || secretFileSync(join(home, ".config", "hardness", LMNR_KEY_FILE));
+  const raw = env.MACHINE_TRACES?.trim();
+  if (raw !== undefined && raw !== "" && !TRACES_MODES.includes(raw as TracesMode)) throw new Error(`MACHINE_TRACES must be off, metadata, host or full, got "${raw}"`);
+  if (raw === "off") return { mode: "off" };
+  // `host` keeps contexts, answers and transcripts: it is the default only where the collector is on this computer. A hosted one
+  // gets `metadata` until the owner asks for more with MACHINE_TRACES.
+  const baseUrl = key ? hostUrlOf(env, "LMNR_BASE_URL", "http://localhost") : "http://localhost";
+  const local = isLocalCollector(baseUrl);
+  const mode = (raw || (key ? (local ? "host" : "metadata") : "off")) as TracesMode;
+  if (mode === "off") return { mode };
+  if (!key) throw new Error(`MACHINE_TRACES=${mode} needs a Laminar project key: set LMNR_PROJECT_API_KEY or put one in ~/.config/hardness/${LMNR_KEY_FILE}`);
+  const note = !raw && !local ? `traces default to metadata, not host: the collector at ${baseUrl} is not on this computer (set MACHINE_TRACES=host to send contexts, answers and transcripts there)` : undefined;
+  return {
+    mode,
+    laminar: {
+      projectApiKey: key,
+      baseUrl,
+      stageBaseUrl: hostUrlOf(env, "LMNR_STAGE_BASE_URL", "http://host.docker.internal"),
+      httpPort: portFrom(env, "LMNR_HTTP_PORT", 8000),
+      grpcPort: portFrom(env, "LMNR_GRPC_PORT", 8001),
+    },
+    ...(note ? { note } : {}),
+  };
+}
+
+function hostUrlOf(env: NodeJS.ProcessEnv, name: string, fallback: string): string {
+  const value = (env[name]?.trim() || fallback).replace(/\/+$/, "");
+  if (!/^https?:\/\/[^/:\s]+$/.test(value)) throw new Error(`${name} must be a scheme and host without a port, like ${fallback}, got "${env[name]}"`);
+  return value;
+}
+
+/** The compose service that runs the collector next to the machine. */
+export const COMPOSE_COLLECTOR_HOST = "lmnr-app";
+
+/** Whether the collector's address is this computer: loopback, `localhost`, or the compose service name the configuration documents. */
+export function isLocalCollector(baseUrl: string): boolean {
+  const host = baseUrl.replace(/^https?:\/\//, "").toLowerCase();
+  return host === "localhost" || host === COMPOSE_COLLECTOR_HOST || /^127(\.\d{1,3}){3}$/.test(host);
+}
+
+/** `MACHINE_EGRESS` (on, off) and `MACHINE_EGRESS_ENGINE_HOSTS` (a comma list of host patterns, each checked). */
+function egressFrom(env: NodeJS.ProcessEnv): Config["egress"] {
+  const raw = env.MACHINE_EGRESS?.trim();
+  if (raw !== undefined && raw !== "" && raw !== "on" && raw !== "off") throw new Error(`MACHINE_EGRESS must be on or off, got "${raw}"`);
+  const engineHosts = (env.MACHINE_EGRESS_ENGINE_HOSTS ?? "").split(",").map(normalizeHostPattern).filter((entry) => entry !== "");
+  for (const entry of engineHosts) {
+    const problem = hostPatternProblem(entry);
+    if (problem) throw new Error(`MACHINE_EGRESS_ENGINE_HOSTS: ${problem}`);
+  }
+  return { enabled: raw !== "off", engineHosts };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const port = env.MACHINE_PORT === undefined ? DEFAULT_PORT : Number(env.MACHINE_PORT);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
@@ -197,10 +314,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `MACHINE_GITHUB_PRS_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_PRS_INTERVAL}"`,
     );
   }
+  const shipSeconds = env.MACHINE_SHIP_POLL_INTERVAL === undefined ? null : Number(env.MACHINE_SHIP_POLL_INTERVAL);
+  if (shipSeconds !== null && (!Number.isInteger(shipSeconds) || shipSeconds < 1)) {
+    throw new Error(`MACHINE_SHIP_POLL_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_SHIP_POLL_INTERVAL}"`);
+  }
   const retentionDays =
     env.MACHINE_RETENTION_DAYS === undefined ? DEFAULT_RETENTION_DAYS : Number(env.MACHINE_RETENTION_DAYS);
   if (!Number.isInteger(retentionDays) || retentionDays < 0) {
     throw new Error(`MACHINE_RETENTION_DAYS must be a non-negative integer, got "${env.MACHINE_RETENTION_DAYS}"`);
+  }
+  const decisionRetentionDays = env.MACHINE_DECISIONS_RETENTION_DAYS === undefined || env.MACHINE_DECISIONS_RETENTION_DAYS === "" ? 365 : Number(env.MACHINE_DECISIONS_RETENTION_DAYS);
+  if (!Number.isInteger(decisionRetentionDays) || decisionRetentionDays < 0) {
+    throw new Error(`MACHINE_DECISIONS_RETENTION_DAYS must be a non-negative integer, got "${env.MACHINE_DECISIONS_RETENTION_DAYS}"`);
+  }
+  const decisionMaxMb = env.MACHINE_DECISIONS_MAX_MB === undefined || env.MACHINE_DECISIONS_MAX_MB === "" ? 4096 : Number(env.MACHINE_DECISIONS_MAX_MB);
+  if (!Number.isInteger(decisionMaxMb) || decisionMaxMb < 0) {
+    throw new Error(`MACHINE_DECISIONS_MAX_MB must be a non-negative integer (megabytes), got "${env.MACHINE_DECISIONS_MAX_MB}"`);
   }
   const worktreeRetentionDays =
     env.MACHINE_WORKTREE_RETENTION_DAYS === undefined ? DEFAULT_WORKTREE_RETENTION_DAYS : Number(env.MACHINE_WORKTREE_RETENTION_DAYS);
@@ -227,6 +356,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (!match) throw new Error(`MACHINE_REPO_MAP must list owner/name=/absolute/path pairs, got "${pair}"`);
     repoMap[match[1]!] = match[2]!;
   }
+  const slackScope = env.MACHINE_SLACK_SCOPE === undefined || env.MACHINE_SLACK_SCOPE === "" ? "opted_in" : env.MACHINE_SLACK_SCOPE;
+  if (slackScope !== "opted_in" && slackScope !== "all") throw new Error(`MACHINE_SLACK_SCOPE must be opted_in or all, got "${slackScope}"`);
   const slackToken = env.MACHINE_SLACK_TOKEN ?? "";
   const slackChannel = env.MACHINE_SLACK_CHANNEL ?? "";
   if ((slackToken === "") !== (slackChannel === "")) {
@@ -263,7 +394,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cycleSecs: env.MACHINE_SLA_CYCLE === undefined || env.MACHINE_SLA_CYCLE === "" ? null : parseDuration(env.MACHINE_SLA_CYCLE, "MACHINE_SLA_CYCLE"),
   };
   const home = env.HOME ?? homedir();
-  const stateDir = env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness");
+  const stateDir = stateDirFrom(env, home);
   const rules = env.MACHINE_SLACK_RULES?.trim();
   const host = env.MACHINE_HOST ?? "127.0.0.1";
   const apiToken = env.MACHINE_API_TOKEN?.replace(/\s+/g, "") || secretFileSync(join(home, ".config", "hardness", API_TOKEN_FILE));
@@ -278,17 +409,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host,
     apiToken,
     agents: env.MACHINE_AGENTS !== "off",
+    egress: egressFrom(env),
     maxConcurrentTasks,
     runnerImage: env.RUNNER_IMAGE ?? "hardness-runner:dev",
     runnerQaImage: env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev",
+    runnerVideoImage: env.RUNNER_VIDEO_IMAGE ?? "hardness-runner-video:dev",
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir,
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000 },
+    shipPoll: { intervalMs: shipSeconds === null ? null : shipSeconds * 1000 },
+    graphIntervalSecs: graphIntervalSecs(env),
     githubToken: env.GITHUB_TOKEN?.trim() || env.GH_TOKEN?.trim() || null,
     repoMap,
     reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),
     threadReplies: env.MACHINE_THREAD_REPLIES !== "off",
+    publicUrl: publicUrlOf(env.MACHINE_PUBLIC_URL),
+    groundTruth: env.MACHINE_GROUND_TRUTH !== "off",
+    decisions: { enabled: env.MACHINE_DECISIONS !== "off", retentionDays: decisionRetentionDays, maxMb: decisionMaxMb },
     slack: slackToken === "" ? null : { token: slackToken, channel: slackChannel },
     slackInbox: {
       enabled: env.MACHINE_SLACK_INBOX !== "off",
@@ -298,6 +436,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       markRead: env.MACHINE_SLACK_MARK_READ === "on",
       rulesPath: rules ? resolve(REPO_ROOT, rules) : join(stateDir, "slack-triage.md"),
       digestAt,
+      scope: slackScope,
     },
     jira,
     sla,
@@ -310,5 +449,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     disabledRuntimes: disabledRuntimes(env),
     engineBudgets: engineBudgets(env),
     restartPolicy,
+    traces: tracesConfig(env, home),
   };
+}
+
+/** An http(s) URL with no whitespace, angle bracket or quote, without its trailing slash; null for anything else. */
+function publicUrlOf(value: string | undefined): string | null {
+  if (!value || !/^https?:\/\/[^\s<>"']+$/i.test(value)) return null;
+  return value.replace(/\/+$/, "");
 }

@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "class.choice",
+      "value": "flake"
+    }
+  ],
+  "rubric": "A timing-dependent test times out, and it does so now and then on the base too: a flake, a re-run is the right move. A failed network or runner would be infra, not this.",
+  "label": {
+    "class": {
+      "choice": "flake"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "class": "a flaky or timing-dependent failure, likely to pass on a re-run"
+    },
+    "why": "A timing test timed out and the log says it failed 3 of the last 40 runs on main with the same timeout: flaky, a re-run is the move.",
+    "ruledOut": [
+      {
+        "question": "class",
+        "label": "real",
+        "why": "A timing test fails now and then on the base. It is not: the change broke a test, a build or a lint rule; a fix in the code is needed."
+      },
+      {
+        "question": "class",
+        "label": "infra",
+        "why": "A timing test fails now and then on the base. It is not: the runner, a registry, the network, a quota or a service the job needs failed; nothing in the change can fix it."
+      },
+      {
+        "question": "class",
+        "label": "drift",
+        "why": "A timing test fails now and then on the base. It is not: the base branch moved: a conflict, a stale lockfile or a base commit the change no longer fits."
+      }
+    ],
+    "second": {
+      "label": {
+        "class": {
+          "choice": "flake"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

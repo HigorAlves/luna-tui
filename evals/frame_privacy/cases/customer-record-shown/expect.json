@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "exposure.choice",
+      "value": "personal_data"
+    }
+  ],
+  "rubric": "A real-looking name with address, identity number and payment details: personal_data.",
+  "label": {
+    "exposure": {
+      "choice": "personal_data"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "exposure": "a real person's name together with contact, address, identity or payment details; synthetic or placeholder data is none"
+    },
+    "why": "A name with a street address, a CPF identity number and card details reads as a real person's personal data.",
+    "ruledOut": [
+      {
+        "question": "exposure",
+        "label": "none",
+        "why": "A real-looking person with address, identity and payment details. It is not: nothing sensitive: ordinary interface text, and synthetic or placeholder data (names like Jane Doe, addresses at example.com, obviously fake numbers)."
+      },
+      {
+        "question": "exposure",
+        "label": "credential",
+        "why": "A real-looking person with address, identity and payment details. It is not: a password, an API key, a token or a connection string shown in full."
+      }
+    ],
+    "second": {
+      "label": {
+        "exposure": {
+          "choice": "personal_data"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

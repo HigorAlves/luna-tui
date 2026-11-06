@@ -1,0 +1,64 @@
+{
+  "schema": 3,
+  "stage": "size_estimate",
+  "pack": "size_estimate",
+  "attempt": 1,
+  "task": {
+    "id": "billing-engine-rewrite",
+    "title": "billing-engine-rewrite",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "size": {
+      "title": "Replace the billing engine with the new ledger service",
+      "text": "Replace the billing engine in about 150 files: every module, its models, its migrations and its tests are rewritten against the new ledger service, and the old engine is deleted.",
+      "criteria": [
+        "Invoices come from the ledger service",
+        "The old engine is gone"
+      ],
+      "files": [
+        {
+          "path": "src/billing/engine.ts"
+        },
+        {
+          "path": "src/billing/models.ts"
+        },
+        {
+          "path": "src/billing/migrations/0001.sql"
+        }
+      ],
+      "symbols": [
+        "BillingEngine"
+      ],
+      "similar": [
+        {
+          "title": "Move payments to the new gateway",
+          "added": 5200,
+          "removed": 3900
+        }
+      ],
+      "limit": {
+        "target": [
+          1000,
+          2000
+        ],
+        "hard": 2500
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

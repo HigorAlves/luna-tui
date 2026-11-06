@@ -1,5 +1,6 @@
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { PREVIEW_ON, previewOn } from "../test/policies.ts";
 
 import { DEFAULT_POLICY, type JiraPolicy } from "../domain/policy.ts";
 import { freshTestDatabase } from "../test/database.ts";
@@ -41,7 +42,7 @@ function wire(policy: JiraPolicy | null = jiraPolicy(), issue: Partial<Parameter
     inline: true,
     hasConfig: () => true,
     jiraSite: SITE,
-    policies: { for: async () => ({ ...DEFAULT_POLICY, jira: policy }) },
+    policies: { for: async () => ({ ...PREVIEW_ON, jira: policy }) },
     onEvent: (event) => void sync.handle(event),
   });
   sync = new JiraSync({ pipeline, jira, enabled: true, boardUrl: "http://board.local", now: () => new Date("2026-10-28T12:00:00Z") });
@@ -62,15 +63,13 @@ describe("JiraSync", () => {
     expect(jira.issues.get("PLAT-123")!.status).toBe("To Do");
 
     stubs.plan("delivering", { outcome: "pass", detail: { prUrl: "https://github.com/o/a/pull/7", prNumber: 7 } });
-    await pipeline.decide(task.id, "approved"); // plan → test_design → awaiting_test_check
-    await pipeline.decide(task.id, "approved"); // → implementing → … → awaiting_ship
+    await pipeline.decide(task.id, "approved"); // the plan → implementing → … → awaiting_ship
     await sync.idle();
     expect(jira.issues.get("PLAT-123")!.status).toBe("In Review");
     expect(jira.writes.filter((w) => w[0] === "transition").map((w) => w[2])).toEqual(["11", "21"]);
     expect(jira.comments["PLAT-123"]).toContain("PR opened: https://github.com/o/a/pull/7");
 
-    await pipeline.decide(task.id, "approved"); // ship → reviewing_memory
-    await pipeline.decide(task.id, "approved"); // → closed
+    await pipeline.decide(task.id, "approved"); // ship → merge → the retro has nothing to propose → closed
     await sync.idle();
     expect(jira.issues.get("PLAT-123")!.status).toBe("Done");
     const closing = jira.comments["PLAT-123"]!.at(-1)!;
@@ -96,7 +95,6 @@ describe("JiraSync", () => {
     const task = await pipeline.createTask({ title: "Fix PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
     await sync.idle();
     // implementing wanted In Progress: already there, no write. awaiting_ship wanted Done: In Progress cannot reach Done.
     expect(jira.writes.filter((w) => w[0] === "transition")).toEqual([]);
@@ -116,7 +114,6 @@ describe("JiraSync", () => {
     jira.transition = refuse;
     const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved"); // implementing: the move is refused; the task goes on to awaiting_ship
     await sync.idle();
     const mid = await pipeline.get(task.id);
@@ -125,7 +122,6 @@ describe("JiraSync", () => {
     // Someone fixed the workflow and moved the issue along in Jira: the next declared move succeeds and the mark goes.
     jira.transition = perform;
     jira.issues.get("PLAT-123")!.status = "In Review";
-    await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved");
     await sync.idle();
     expect((await pipeline.get(task.id)).jira).toMatchObject({ status: "Done", blocked: null });
@@ -139,7 +135,6 @@ describe("JiraSync", () => {
     const task = await pipeline.createTask({ title: "PLAT-123 x", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
     await sync.idle();
     const write = jira.writes.find((w) => w[0] === "transition")!;
     expect(write[3]).toEqual({ customfield_10045: "https://github.com/o/a/pull/9", customfield_10046: `task ${task.id} on  via http://board.local` });
@@ -147,6 +142,39 @@ describe("JiraSync", () => {
       ["jira.commented", { url: "https://github.com/o/a/pull/9" }],
       ["jira.transitioned", { from: "In Progress", to: "In Review", fields: ["customfield_10045", "customfield_10046"] }],
     ]);
+  });
+
+  it("comments a reminder with `gates` only, and says when the task is archived", async () => {
+    const gates = wire(jiraPolicy({ comments: "gates", on: {} }));
+    const t1 = await gates.pipeline.createTask({ title: "PLAT-123 a", repoPath: "/r/a" });
+    await gates.pipeline.start(t1.id);
+    await gates.pipeline.record(t1.id, "sla.reminder", { gate: "awaiting_approval", dueAt: "2026-10-28T13:00:00.000Z" });
+    await gates.sync.idle();
+    expect(gates.jira.comments["PLAT-123"]!.at(-1)).toMatch(/^Reminder: waiting at awaiting_approval since /);
+    await gates.pipeline.archive(t1.id, "duplicate");
+    await gates.sync.idle();
+    expect(gates.jira.comments["PLAT-123"]!.at(-1)).toBe("Archived: duplicate.");
+    const quiet = wire(jiraPolicy({ comments: "milestones", on: {} }));
+    const t2 = await quiet.pipeline.createTask({ title: "PLAT-123 b", repoPath: "/r/a" });
+    await quiet.pipeline.start(t2.id);
+    const before = quiet.jira.comments["PLAT-123"]?.length ?? 0;
+    await quiet.pipeline.record(t2.id, "sla.reminder", { gate: "awaiting_approval", dueAt: "2026-10-28T13:00:00.000Z" });
+    await quiet.sync.idle();
+    expect(quiet.jira.comments["PLAT-123"]?.length ?? 0).toBe(before);
+  });
+
+  it("comments Needs you at awaiting_ship only when the transition opened a gate", async () => {
+    const gates = wire(jiraPolicy({ comments: "gates", on: {} }));
+    const t1 = await gates.pipeline.createTask({ title: "PLAT-123 a", repoPath: "/r/a" });
+    await gates.pipeline.start(t1.id);
+    await gates.sync.idle();
+    const before = gates.jira.comments["PLAT-123"]!.length;
+    await gates.pipeline.record(t1.id, "transition", { event: "stage_done", from: "evidence", to: "awaiting_ship" });
+    await gates.sync.idle();
+    expect(gates.jira.comments["PLAT-123"]!.length).toBe(before);
+    await gates.pipeline.record(t1.id, "transition", { event: "stage_done", from: "evidence", to: "awaiting_ship", gate: true });
+    await gates.sync.idle();
+    expect(gates.jira.comments["PLAT-123"]!.at(-1)).toBe("Needs you: choose how to ship.");
   });
 
   it("comments every gate with `gates`, nothing with `none`, and ignores tasks with no link or repos with no jira block", async () => {
@@ -159,7 +187,6 @@ describe("JiraSync", () => {
     const none = wire(jiraPolicy({ comments: "none" }));
     const t2 = await none.pipeline.createTask({ title: "PLAT-123 b", repoPath: "/r/a" });
     await none.pipeline.start(t2.id);
-    await none.pipeline.decide(t2.id, "approved");
     await none.pipeline.decide(t2.id, "approved");
     await none.sync.idle();
     expect(none.jira.comments["PLAT-123"]).toBeUndefined();
@@ -184,7 +211,6 @@ describe("JiraSync", () => {
     const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
     await sync.idle();
     expect((await pipeline.get(task.id)).state).toBe("escalated");
     expect(jira.issues.get("PLAT-123")!.status).toBe("Blocked");
@@ -207,7 +233,6 @@ describe("JiraSync", () => {
     const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
     await sync.idle();
     expect(jira.issues.get("PLAT-123")!.status).toBe("In Review");
     expect(jira.writes.filter((w) => w[0] === "transition").map((w) => w[2])).toEqual(["11", "21"]);
@@ -229,7 +254,6 @@ describe("JiraSync", () => {
     const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
     release();
     await sync.idle();
     expect(jira.issues.get("PLAT-123")!.status).toBe("In Review");
@@ -241,7 +265,6 @@ describe("JiraSync", () => {
     stubs.plan("delivering", { outcome: "pass", detail: { prUrl: "https://github.com/o/a/pull/7", prNumber: 7 } });
     const task = await pipeline.createTask({ title: "Login", repoPath: "/r/a", source: { kind: "jira", key: "PLAT-123", url: `${SITE}/browse/PLAT-123`, issueType: "Bug" } });
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved");
     await sync.idle();
     expect(jira.comments["PLAT-123"]).toEqual(["PR opened: https://github.com/o/a/pull/7"]);
@@ -258,7 +281,6 @@ describe("JiraSync", () => {
     jira.issues.get("PLAT-123")!.status = "In Progress";
     const task = await pipeline.createTask({ title: "Fix PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved");
     await sync.idle();
     expect((await pipeline.get(task.id)).jira?.blocked).toMatchObject({ wanted: "Done", current: "In Progress" });
@@ -289,5 +311,78 @@ describe("JiraSync", () => {
     expect((await pipeline.createTask({ title: "x", description: "see plat-1 and PLAT-42 and PLAT-43" })).jira?.key).toBe("PLAT-42");
     expect(await pipeline.findByJiraKey("PLAT-42")).not.toBeNull();
     expect(await pipeline.findByJiraKey("PLAT-999")).toBeNull();
+  });
+});
+
+describe("JiraSync: a task merged under ship.merged", () => {
+  it("comments the shipped summary for the new kind, once", async () => {
+    const { pipeline, jira, sync } = wire();
+    const task = await pipeline.createTask({ title: "PLAT-123 Login page", repoPath: "/r/a" });
+    await pipeline.record(task.id, "ship.merged", { title: "Login page", prUrl: "https://github.com/o/a/pull/7", number: 7, mergedSha: "9c1f0e2a7b3d4e5f", by: "machine", method: "squash", format: "text", howToVerify: "Log in.", media: [] });
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["Shipped: Login page — https://github.com/o/a/pull/7 (9c1f0e2). How to verify: Log in. Evidence: text."]);
+  });
+});
+
+describe("JiraSync: a merged task", () => {
+  const shipped = { title: "Login page", prUrl: "https://github.com/o/a/pull/7", number: 7, mergedSha: "9c1f0e2a7b3d4e5f", by: "person", format: "text", howToVerify: "Log in with a bad password.", media: [] };
+
+  it("comments the shipped summary once, whatever replays the event, and not under comments: none", async () => {
+    const { pipeline, jira, sync } = wire();
+    const task = await pipeline.createTask({ title: "PLAT-123 Login page", repoPath: "/r/a" });
+    await pipeline.record(task.id, "task.shipped", shipped);
+    await sync.idle();
+    const events = (await pipeline.events(task.id)).filter((e) => e.kind === "task.shipped");
+    sync.handle(events[0]!);
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["Shipped: Login page — https://github.com/o/a/pull/7 (9c1f0e2). How to verify: Log in with a bad password. Evidence: text."]);
+    expect((await kinds(pipeline, task.id)).filter(([k]) => k === "jira.commented")).toEqual([["jira.commented", { kind: "shipped", number: 7 }]]);
+
+    const quiet = wire(jiraPolicy({ comments: "none" }));
+    const other = await quiet.pipeline.createTask({ title: "PLAT-123 Login page", repoPath: "/r/a" });
+    await quiet.pipeline.record(other.id, "task.shipped", shipped);
+    await quiet.sync.idle();
+    expect(quiet.jira.comments["PLAT-123"] ?? []).toEqual([]);
+  });
+});
+
+describe("JiraSync: an escalation's reason", () => {
+  it("is flattened before it goes to the ticket", async () => {
+    const token = "gh" + "p_" + "f".repeat(24);
+    const { pipeline, jira, sync } = wire(jiraPolicy({ comments: "gates" }));
+    const task = await pipeline.createTask({ title: "PLAT-123 Login page", repoPath: "/r/a" });
+    await pipeline.record(task.id, "transition", { from: "shipping", to: "escalated", event: "stage_done", reason: `<!channel> @team see #12 ${token}` });
+    await sync.idle();
+    const body = jira.comments["PLAT-123"]!.find((c) => c.startsWith("Escalated"))!;
+    expect(body).not.toMatch(/<!channel>|@team|#12|ghp_/);
+    expect(body).toContain("[redacted]");
+  });
+});
+
+describe("JiraSync: a reply and the questions go to the card's own issue", () => {
+  const source = { kind: "jira" as const, key: "PLAT-123", url: `${SITE}/browse/PLAT-123`, issueType: "Bug" };
+
+  it("comments on the source's key, never on a manual link that names another issue", async () => {
+    const { pipeline, jira, sync } = wire(jiraPolicy({ on: {} }), { issues: [{ key: "PLAT-123", status: "To Do", statusCategory: "new", issueType: "Bug" }, { key: "OTHER-9", status: "To Do", statusCategory: "new", issueType: "Bug" }] });
+    const task = await pipeline.createTask({ title: "Login page", repoPath: "/r/a", source });
+    await pipeline.setJira(task.id, { key: "OTHER-9", url: `${SITE}/browse/OTHER-9`, issueType: null, status: null } as never);
+    await pipeline.record(task.id, "task.reply", { body: "Use pnpm dev." });
+    await pipeline.record(task.id, "task.questions", { body: "Luna needs your answers to go on: 1) Which one?", secret: false, hash: "h" });
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["Use pnpm dev.", "Luna needs your answers to go on: 1) Which one?"]);
+    expect(jira.comments["OTHER-9"] ?? []).toEqual([]);
+  });
+
+  it("refuses questions flagged secret, flattens links, and says nothing for a card that did not come from Jira", async () => {
+    const { pipeline, jira, sync } = wire(jiraPolicy({ on: {} }));
+    const task = await pipeline.createTask({ title: "Login page", repoPath: "/r/a", source });
+    await pipeline.record(task.id, "task.questions", { body: "1) Which?", secret: true, hash: "s" });
+    await pipeline.record(task.id, "task.reply", { body: "See [the docs](https://evil.example/x)." });
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["See the docs (https\u200b://evil.example/x)."]);
+    const linked = await pipeline.createTask({ title: "PLAT-123 other", repoPath: "/r/a" });
+    await pipeline.record(linked.id, "task.reply", { body: "never posted: no source" });
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["See the docs (https\u200b://evil.example/x)."]);
   });
 });

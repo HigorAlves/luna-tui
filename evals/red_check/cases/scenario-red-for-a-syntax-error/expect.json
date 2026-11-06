@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "right_reason.value",
+      "value": false
+    }
+  ],
+  "rubric": "The file does not parse: the scenario's behaviour was never exercised.",
+  "label": {
+    "right_reason": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "right_reason": "Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture."
+    },
+    "why": "The file does not parse, so the scenario's behaviour was never exercised: a syntax error is a no.",
+    "second": {
+      "label": {
+        "right_reason": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

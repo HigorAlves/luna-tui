@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "format.choice",
+      "value": "text_only"
+    }
+  ],
+  "rubric": "A pure refactor: the existing checks pass and nothing is different to look at, text_only.",
+  "label": {
+    "format": {
+      "choice": "text_only"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "format": "CI/CD, config, infrastructure or a pure refactor: nothing a person could watch or run to see it"
+    },
+    "why": "A refactor with no behaviour change leaves nothing different to look at.",
+    "ruledOut": [
+      {
+        "question": "format",
+        "label": "video",
+        "why": "A pure refactor. It is not: a UI or flow change a person should watch happen, and the browser run ran on a running system: scenarios the browser drove, a recording or replayable steps, and the video image is there."
+      },
+      {
+        "question": "format",
+        "label": "screenshots_or_terminal",
+        "why": "A pure refactor. It is not: an API or CLI change: screenshots when there is something to see, else a terminal capture of the commands and the scenarios' tests."
+      }
+    ],
+    "second": {
+      "label": {
+        "format": {
+          "choice": "text_only"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

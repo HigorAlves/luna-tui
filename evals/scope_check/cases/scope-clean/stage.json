@@ -1,0 +1,46 @@
+{
+  "schema": 3,
+  "stage": "scope_check",
+  "pack": "scope_check",
+  "attempt": 1,
+  "task": {
+    "id": "scope-check",
+    "title": "Scope check",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "scope",
+      "planned": [
+        "src/cart/export.ts",
+        "src/cart/export.test.ts"
+      ],
+      "changed": [
+        "src/cart/export.ts",
+        "src/cart/export.test.ts"
+      ],
+      "declared": [],
+      "undeclared": [],
+      "removedTests": [],
+      "newDependencies": [],
+      "todos": [],
+      "secrets": [],
+      "diffSummary": "Adds the CSV export endpoint and its test."
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

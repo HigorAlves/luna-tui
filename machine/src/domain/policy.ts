@@ -1,7 +1,7 @@
 // A repo's own say over the pipeline. The policy shape is shared by `luna.yaml`
 // (luna-config.ts, the current file) and `PIPELINE.md` (parsed here, deprecated: its front
 // matter only ever set the knobs below). Pure: parsing only.
-import type { CheckSpec, EngineBudgets, ServiceSpec, StageEngines } from "@hardness/contracts";
+import { type CheckSpec, type DecisionOverrides, type EngineBudgets, FACTORY_DEFAULTS, type FactoryConfig, type ServiceSpec, type StageEngines } from "@hardness/contracts";
 
 import type { SlaTargets } from "./sla.ts";
 
@@ -34,6 +34,8 @@ export interface Policy {
   maxConcurrent: number | null;
   /** Keep test_design's cases away from the implementer, so it cannot overfit to them. */
   holdoutCases: boolean;
+  /** Keep a Graphify code graph of this repo for its stages (luna.yaml `policy.graph`, default on). */
+  graph: boolean;
   /** Where the e2e stage may drive the app, besides the dev server it boots itself. */
   qaTargets: QaTarget[];
   /** The repo's own checks (luna.yaml); null means detect them from the tree. */
@@ -50,6 +52,21 @@ export interface Policy {
   engines: StageEngines;
   /** Monthly caps on this repo's stage runs by engine or credential (luna.yaml `budget.engines`). */
   engineBudgets: EngineBudgets;
+  /** The repo's own confidence bars per decision pack, per question (luna.yaml `policy.decisions`), over the pack's. */
+  decisions: Record<string, DecisionOverrides>;
+  /** Days the local Evidence Pack store keeps a task's media (luna.yaml `evidence.retention_days`); 0 keeps it for good, null defers to the machine's retention. */
+  evidenceRetentionDays: number | null;
+  /** Windows in which the machine merges nothing (luna.yaml `freeze`). */
+  freeze: Freeze[];
+  /** The v2.2 diagram's sections over its defaults (luna.yaml `dedup`, `triage`, ... `ship`). Keys wave 8 reads are named in CONSUMED_FROM; the others are defined for the wave that reads them. */
+  factory: FactoryConfig;
+}
+
+/** A window in which nothing merges: ISO instants and why. */
+export interface Freeze {
+  from: string;
+  to: string;
+  reason: string;
 }
 
 /** `qa_target: <name> <base url> [credential ref]`, one line per target; the ref is `env:NAME`. */
@@ -57,6 +74,8 @@ export interface QaTarget {
   name: string;
   baseUrl: string;
   credential: string | null;
+  /** False when the target must not be driven twice (luna.yaml `reentrant`); absent means it may be. */
+  reentrant?: boolean;
 }
 
 export const DEFAULT_POLICY: Policy = {
@@ -65,6 +84,7 @@ export const DEFAULT_POLICY: Policy = {
   autoApprovePlanMinutes: null,
   maxConcurrent: null,
   holdoutCases: false,
+  graph: true,
   qaTargets: [],
   checks: null,
   services: {},
@@ -73,6 +93,10 @@ export const DEFAULT_POLICY: Policy = {
   sla: {},
   engines: {},
   engineBudgets: {},
+  decisions: {},
+  evidenceRetentionDays: null,
+  freeze: [],
+  factory: FACTORY_DEFAULTS,
 };
 
 export class PolicyParseError extends Error {
@@ -127,7 +151,7 @@ const qaTarget = (key: string, raw: string): QaTarget => {
 
 /** The policy a PIPELINE.md declares; unknown keys are ignored, a bad value throws. */
 export function parsePolicy(text: string): Policy {
-  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {} };
+  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {}, freeze: [], factory: structuredClone(FACTORY_DEFAULTS) };
   for (const { key, value } of frontMatter(text)) {
     switch (key) {
       case "qa":

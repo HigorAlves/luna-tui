@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Board columns, named after the pipeline stages. Same order as the machine's contracts.
+/// Board columns: the diagram's seven stages, then Done. Same order as the machine's contracts (`COLUMNS`; a task's column is `COLUMN_OF[state]` there).
 pub const COLUMNS: [&str; 8] =
-    ["Intake", "Triage", "Approved", "Build", "Verify", "Evidence", "Ship", "Done"];
+    ["Intake", "Triage", "Plan", "Build", "Verify", "Evidence", "Ship", "Done"];
 
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Diff {
@@ -34,6 +34,12 @@ pub struct Retries {
     pub e2e: u32,
     pub ci: u32,
     pub total: u32,
+    /// Runs taken on a stronger engine after a `too_complex` escalation; absent from older machines.
+    #[serde(default)]
+    pub stronger: u32,
+    /// The next implementing run is that one shot.
+    #[serde(default)]
+    pub stronger_next: bool,
 }
 
 /// Where a task came from, when it was created from an outside issue, a Slack message or a
@@ -101,6 +107,74 @@ impl TaskSource {
     }
 }
 
+/// The urgency sub-scores of a record, 1 to 3.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct SubScores {
+    pub who: f64,
+    pub what: f64,
+    pub impact: f64,
+    pub time: f64,
+    pub demand: f64,
+}
+
+/// The priority and what it came from.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UrgencyDetail {
+    pub priority: String,
+    pub sub_scores: SubScores,
+}
+
+/// The Triage Record on a card (the machine's `TriageRecord`): what triage understood, composed by the machine.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TriageRecord {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub goal: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub type_of_work: Option<String>,
+    #[serde(default)]
+    pub size: String,
+    #[serde(default)]
+    pub urgency_detail: Option<UrgencyDetail>,
+    #[serde(default)]
+    pub risk_prelim: Option<String>,
+    /// `machine` or `person`.
+    #[serde(default)]
+    pub decision_by: Option<String>,
+    #[serde(default)]
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub edited_fields: Vec<String>,
+}
+
+/// What `E` corrects, in the order its picker lists them: the machine's key, a label and the values it accepts.
+pub const RECORD_FIELDS: [(&str, &str, &[&str]); 5] = [
+    ("kind", "kind", &["bug", "feature", "task", "chore", "question", "incident"]),
+    ("typeOfWork", "type of work", &["frontend", "backend", "infra", "data", "docs", "mixed"]),
+    ("size", "size", &["XS", "S", "M", "L", "XL"]),
+    ("riskPrelim", "risk", &["low", "medium", "high"]),
+    ("priority", "priority", &["P0", "P1", "P2", "P3"]),
+];
+
+impl TriageRecord {
+    /// The record's value for one of `RECORD_FIELDS` by key.
+    pub fn value_of(&self, key: &str) -> Option<&str> {
+        match key {
+            "kind" => Some(self.kind.as_str()),
+            "typeOfWork" => self.type_of_work.as_deref(),
+            "size" => Some(self.size.as_str()),
+            "riskPrelim" => self.risk_prelim.as_deref(),
+            "priority" => self.urgency_detail.as_ref().map(|u| u.priority.as_str()),
+            _ => None,
+        }
+    }
+}
+
 fn feature_route() -> String {
     "feature".to_string()
 }
@@ -128,6 +202,15 @@ pub struct Task {
     pub retries: Retries,
     pub resume_to: Option<String>,
     pub reason: Option<String>,
+    /// Why the ticket was archived (`duplicate`, `sla_expired`, `rejected`, `not_for_agent`, `pr_closed`, `no_setup`, `no_answer`); absent otherwise and from machines that predate archiving.
+    #[serde(default)]
+    pub archive_reason: Option<String>,
+    /// The Triage Record, once triage wrote one; absent before and from machines that predate it.
+    #[serde(default)]
+    pub record: Option<TriageRecord>,
+    /// The Evidence Pack the machine kept on the task (what `GET /tasks/:id` serialises); absent before Evidence and from machines that predate it.
+    #[serde(default)]
+    pub evidence: Option<Value>,
     /// What every stage run of this ticket has cost so far; None when unknown.
     #[serde(default)]
     pub spent_usd: Option<f64>,
@@ -154,6 +237,57 @@ pub struct Task {
     /// luna.yaml's, else its default. Empty from machines that predate engines.
     #[serde(default)]
     pub stages: BTreeMap<String, String>,
+    /// What the card keeps of where it came from (the machine's `CardFields`): every report of it, who filed it,
+    /// who follows it, its project and owners, its attachments (references) and the duplicates merged into it.
+    /// All empty from machines that predate them. Every text in them is a stranger's: print through `detail::plain`.
+    #[serde(default)]
+    pub sources: Vec<Value>,
+    #[serde(default)]
+    pub reporter: Option<Value>,
+    #[serde(default)]
+    pub followers: Vec<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub owners: Vec<String>,
+    #[serde(default)]
+    pub attachments: Vec<Value>,
+    #[serde(default)]
+    pub merged: Vec<Value>,
+    /// The card (or backlog item) this one was merged into, and the cards linked as related.
+    #[serde(default)]
+    pub merged_into: Option<String>,
+    #[serde(default)]
+    pub related: Vec<String>,
+    /// A split and a stack (wave 15): the card this one was split from and its place, what it was split into, what it waits for, the parent it is built on.
+    #[serde(default)]
+    pub split_from: Option<String>,
+    #[serde(default)]
+    pub split_part: Option<SplitPart>,
+    #[serde(default)]
+    pub split_into: Vec<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub base: Option<StackBase>,
+    #[serde(default)]
+    pub risk_floor: Option<String>,
+    #[serde(default)]
+    pub start_when_ready: bool,
+}
+
+/// Part `n` of `of` of a split.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct SplitPart {
+    pub n: u32,
+    pub of: u32,
+}
+
+/// The card a stacked card is built on, and its branch.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct StackBase {
+    pub card: String,
+    pub branch: String,
 }
 
 /// The last declared transition Jira refused, until the next one succeeds.
@@ -434,9 +568,146 @@ pub struct Approval {
     pub reason: Option<String>,
     #[serde(default)]
     pub decided_at: Option<String>,
+    /// What came with the decision: who approved (`approver`, and `approvers` once two did).
+    #[serde(default)]
+    pub response: Option<Value>,
+}
+
+/// A score as the board prints it: `2`, `1.5`.
+fn score_text(v: &Value) -> Option<String> {
+    let n = v.as_f64()?;
+    Some(if n.fract() == 0.0 { format!("{n:.0}") } else { format!("{n:.1}") })
 }
 
 impl Approval {
+    /// What triage chose at a gate that waits on its own (`conversation`, `archive`); None at the plan's.
+    pub fn outcome(&self) -> Option<&str> {
+        self.requested["outcome"].as_str()
+    }
+
+    /// `plan`, `fast lane` (with why it moved lanes), `conversation`, `archive (duplicate)`; None on a plan from before the lanes.
+    pub fn outcome_line(&self) -> Option<String> {
+        let r = &self.requested;
+        match self.outcome() {
+            Some("archive") => Some(match self.archive_reason() {
+                Some(reason) => format!("archive ({reason})"),
+                None => "archive".to_string(),
+            }),
+            Some(other) => Some(other.replace('_', " ")),
+            None => {
+                let lane = match r["lane"].as_str() {
+                    Some("fast") => "fast lane",
+                    Some(_) => "plan",
+                    None if r["risk"].is_object() => "plan",
+                    None => return None,
+                };
+                Some(match r["laneNote"].as_str().filter(|n| !n.is_empty()) {
+                    Some(note) => format!("{lane} · {note}"),
+                    None => lane.to_string(),
+                })
+            }
+        }
+    }
+
+    /// `high (blast 2 · reversibility 1.5 · data 0)`: the plan's risk and the three scores behind it.
+    pub fn risk_line(&self) -> Option<String> {
+        let risk = &self.requested["risk"];
+        let level = risk["level"].as_str()?;
+        let scores: Vec<String> = [("blast", "blast_radius"), ("reversibility", "reversibility"), ("data", "data_sensitivity")]
+            .iter()
+            .filter_map(|(label, key)| Some(format!("{label} {}", score_text(&risk["scores"][*key])?)))
+            .collect();
+        let mut head = level.to_string();
+        if let Some(product) = risk["product"].as_f64() {
+            head.push_str(&format!(" · product {}", product.round() as i64));
+        }
+        if let Some(complexity) = risk["complexity"].as_str() {
+            head.push_str(&format!(" · complexity {complexity}"));
+        }
+        Some(if scores.is_empty() { head } else { format!("{head} ({})", scores.join(" · ")) })
+    }
+
+    /// What a person set the risk to at the gate, with the reason and whether it applied (a lower level is kept, not applied).
+    pub fn risk_override_line(&self) -> Option<String> {
+        let o = &self.requested["overrides"]["risk"];
+        let level = o["level"].as_str()?;
+        let reason = o["reason"].as_str().unwrap_or("no reason");
+        if o["applied"].as_bool() == Some(true) {
+            return Some(format!("you set {level}: applied ({reason})"));
+        }
+        let machine = self.requested["risk"]["machine"].as_str().or_else(|| self.requested["risk"]["level"].as_str()).unwrap_or("its");
+        Some(format!("you set {level}, below the machine's {machine}: kept as ground truth ({reason}); approvers and Ship read {machine}"))
+    }
+
+    /// Why the machine raised the plan's risk after the plan was written (a step reaches the control plane); absent otherwise.
+    pub fn risk_raised_line(&self) -> Option<String> {
+        self.requested["riskRaised"].as_str().filter(|t| !t.trim().is_empty()).map(String::from)
+    }
+
+    /// How many names the plan needs and who may be among them, in the gate's words (an attestation); absent on a gate from before the rule.
+    pub fn rule_line(&self) -> Option<String> {
+        self.requested["approvalRule"]["text"].as_str().filter(|t| !t.trim().is_empty()).map(String::from)
+    }
+
+    /// Names the plan needs: its rule's, else two for a High-risk plan and one otherwise.
+    pub(crate) fn names_needed(&self) -> u64 {
+        self.requested["approvalRule"]["needed"].as_u64().unwrap_or(if self.requested["risk"]["level"].as_str() == Some("high") { 2 } else { 1 })
+    }
+
+    /// The plan stage's checks in the order they ran: coverage, plan, risk, each `proceed`, `flag`, `ask` or `skipped`.
+    pub fn checks(&self) -> Vec<(String, String)> {
+        ["coverage", "plan", "risk"]
+            .iter()
+            .filter_map(|name| Some((name.to_string(), self.requested["verdicts"][*name].as_str()?.to_string())))
+            .collect()
+    }
+
+    /// Who approved: the names kept on the open gate, else the ones the decision carried.
+    pub fn approvers(&self) -> Vec<String> {
+        let names = |v: &Value| -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|n| n.as_str().map(String::from)).collect()).unwrap_or_default() };
+        let open = names(&self.requested["approvers"]);
+        if !open.is_empty() {
+            return open;
+        }
+        match &self.response {
+            Some(r) if r["approvers"].is_array() => names(&r["approvers"]),
+            Some(r) => r["approver"].as_str().map(|n| vec![n.to_string()]).unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    /// `1 of 2 (ana)` on a High-risk plan that has a name and needs another; `approved by ana` once decided on one name.
+    pub fn approvals_line(&self) -> Option<String> {
+        let names = self.approvers();
+        if names.is_empty() {
+            return None;
+        }
+        let needed = self.names_needed();
+        if needed > 1 {
+            return Some(format!("{} of {needed} ({})", names.len(), names.join(", ")));
+        }
+        Some(format!("approved by {}", names.join(", ")))
+    }
+
+    /// The reply a conversation gate would post on the ticket.
+    pub fn reply(&self) -> Option<String> {
+        self.requested["reply"].as_str().filter(|r| !r.trim().is_empty()).map(String::from)
+    }
+
+    /// The children a split gate proposes (empty at any other gate).
+    pub fn split_children(&self) -> Vec<&Value> {
+        self.requested["split"]["children"].as_array().map(|a| a.iter().collect()).unwrap_or_default()
+    }
+
+    pub fn archive_reason(&self) -> Option<String> {
+        self.requested["archiveReason"].as_str().map(String::from)
+    }
+
+    /// The release question the machine asks after readiness ("safe to release now?"), as against the preview gate that comes first.
+    pub fn is_ship_approval(&self) -> bool {
+        self.requested["gate"].as_str() == Some("ship_approval")
+    }
+
     /// The gate's state name, guessed from what was requested when the machine did not say.
     pub fn kind_or_guess(&self) -> &str {
         if let Some(kind) = &self.kind {
@@ -500,6 +771,9 @@ pub struct TaskEvent {
     pub kind: String,
     pub payload: Value,
     pub at: String,
+    /// The v2.2 diagram's name(s) for the fact this row records; empty for a row it has no name for.
+    #[serde(default)]
+    pub names: Vec<String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -511,6 +785,85 @@ pub struct TaskDetail {
     pub events: Vec<TaskEvent>,
     #[serde(default)]
     pub artifacts: Vec<Artifact>,
+    /// Build's progress, live; absent from a machine that predates it and for a card that has not begun to build.
+    #[serde(default)]
+    pub build_progress: Option<BuildProgress>,
+    /// The reports of the stages that have passed; absent from a machine that predates them.
+    #[serde(default)]
+    pub reports: Option<TaskReportsView>,
+    /// The watched PR's checklist and clocks; absent from a machine that predates it, and null for a card with no ship cursor.
+    #[serde(default)]
+    pub ship: Option<ShipView>,
+}
+
+/// One checklist item of a watched PR: the machine's fixed id, whether it holds, and a flattened detail.
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipItem {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// What the machine says of the PR it is watching (`GET /tasks/:id`'s `ship`). Every field has a default, so a snapshot from an older machine still parses.
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShipView {
+    #[serde(default)]
+    pub pr: ShipPr,
+    #[serde(default)]
+    pub head: Option<String>,
+    #[serde(default)]
+    pub ready: bool,
+    #[serde(default)]
+    pub checklist: Vec<ShipItem>,
+    #[serde(default)]
+    pub auto_merge: ShipAutoMerge,
+    #[serde(default)]
+    pub review: ShipReview,
+    #[serde(default)]
+    pub fix_rounds: u64,
+    #[serde(default)]
+    pub queued: bool,
+    #[serde(default)]
+    pub quiet_since: Option<String>,
+    #[serde(default)]
+    pub last_event: Option<ShipEvent>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipPr {
+    #[serde(default)]
+    pub number: u64,
+    #[serde(default)]
+    pub url: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipAutoMerge {
+    #[serde(default)]
+    pub allowed: bool,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipReview {
+    /// Null: the machine could not read the rule, so a person merges.
+    #[serde(default)]
+    pub required: Option<bool>,
+    #[serde(default)]
+    pub by: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipEvent {
+    #[serde(default)]
+    pub class: String,
+    #[serde(default)]
+    pub at: String,
 }
 
 impl TaskDetail {
@@ -551,7 +904,7 @@ impl TaskDetail {
 
     /// test_design's cases with verifying's verdict on each, in the order they were written.
     pub fn cases(&self) -> Vec<TestCase> {
-        let requested = match self.latest_approval("awaiting_test_check") {
+        let requested = match self.cases_approval() {
             Some(a) => &a.requested,
             None => return Vec::new(),
         };
@@ -563,6 +916,12 @@ impl TaskDetail {
                 c
             })
             .collect()
+    }
+
+    /// The gate that carries the cases: a legacy test check, else the plan gate that holds them.
+    pub fn cases_approval(&self) -> Option<&Approval> {
+        self.latest_approval("awaiting_test_check")
+            .or_else(|| self.latest_approval("awaiting_approval").filter(|a| a.requested["cases"].is_array()))
     }
 
     /// The cases grouped under the criterion each proves, criteria in first-seen order; cases
@@ -750,6 +1109,7 @@ pub fn plan_history(detail: &TaskDetail) -> Vec<String> {
             let what = match (decision.as_str(), &approval.reason) {
                 ("sent_back", Some(reason)) => format!("sent back · {reason}"),
                 ("sent_back", None) => "sent back".to_string(),
+                ("rejected", Some(reason)) => format!("rejected · {reason}"),
                 (other, _) => other.replace('_', " "),
             };
             lines.push(format!("{}  {what}", clock(at)));
@@ -1059,6 +1419,117 @@ pub struct SlackItem {
     pub split: String,
     #[serde(default)]
     pub linked: SlackLinked,
+    /// The thread as the conversation machine holds it; absent from a machine older than wave 17.
+    #[serde(default)]
+    pub conversation: Option<SlackConversation>,
+    /// The draft that waits for your tap on this thread; absent when none waits.
+    #[serde(default)]
+    pub draft: Option<SlackDraft>,
+}
+
+/// A draft waiting for a tap: what it is and when it expires.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackDraft {
+    /// The draft's id and the hash of its text: sent back with the reply, so a tap settles only the draft you saw.
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub hash: String,
+    #[serde(default)]
+    pub kind: String,
+    /// The text a tap on this draft sends (the machine's current outbound draft: a reply, questions, a status, the shipped summary). Absent in a snapshot from before it was sent.
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub expires_at: String,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackSubScore {
+    #[serde(default)]
+    pub score: f64,
+    #[serde(default)]
+    pub confidence: f64,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackClassification {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub confidence: f64,
+    /// `model` or `person`.
+    #[serde(default)]
+    pub by: String,
+    /// `ask`: the machine is not sure and waits for you.
+    #[serde(default)]
+    pub verdict: Option<String>,
+    #[serde(default)]
+    pub total: Option<f64>,
+    #[serde(default)]
+    pub knock_out: Option<String>,
+    #[serde(default)]
+    pub scores: BTreeMap<String, SlackSubScore>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackSource {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub key: String,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackRelation {
+    /// `related_to_in_progress`, `related_to_backlog`, `new_candidate`, `none` or `ask`.
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub confidence: f64,
+    #[serde(default)]
+    pub by: String,
+    #[serde(default)]
+    pub other_source: Option<SlackSource>,
+}
+
+/// One candidate the relation decision saw; a target you set must be one of these.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackShortlistEntry {
+    #[serde(default)]
+    pub slot: u64,
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub other_source: Option<SlackSource>,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// What the board reads of the machine's conversation object: no history, only what it shows.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackConversation {
+    #[serde(default)]
+    pub private: bool,
+    #[serde(default)]
+    pub classification: Option<SlackClassification>,
+    #[serde(default)]
+    pub relation: Option<SlackRelation>,
+    #[serde(default)]
+    pub shortlist: Vec<SlackShortlistEntry>,
+    /// How many secrets were cut from this thread's messages.
+    #[serde(default)]
+    pub redactions: u64,
 }
 
 /// The priorities in order; `priority_step` walks them.
@@ -1190,6 +1661,12 @@ pub struct SlackSnapshot {
     /// Now is inside the rules file's quiet hours: only a P0 raises a notice.
     #[serde(default)]
     pub quiet: bool,
+    /// `opted_in` or `all` (the machine's `MACHINE_SLACK_SCOPE`); absent from a machine older than wave 17.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// How many conversations are opted in, so an empty view can say why.
+    #[serde(default)]
+    pub opted_in: Option<u64>,
 }
 
 impl SlackSnapshot {
@@ -1304,6 +1781,27 @@ pub enum StreamMessage {
     /// The Slack inbox changed; the whole snapshot rides along, watches included.
     #[serde(rename = "slack.items")]
     Slack { snapshot: SlackSnapshot },
+    /// The task's PR merged: what shipped and where.
+    #[serde(rename = "task.shipped")]
+    TaskShipped { shipped: TaskShipped },
+}
+
+/// `task.shipped`: the merged PR and the evidence behind it (web urls only).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskShipped {
+    pub id: String,
+    pub title: String,
+    pub pr_url: String,
+    pub number: u64,
+    #[serde(default)]
+    pub merged_sha: Option<String>,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub how_to_verify: Option<String>,
+    #[serde(default)]
+    pub at: String,
 }
 
 /// `budget.alert`: a task's, a repo's month's, the day's or an engine's monthly spend passing a threshold.
@@ -1453,6 +1951,102 @@ impl RepoMetrics {
     }
 }
 
+/// One repository's sandbox image and code graph, a row of `GET /repos`. The base's name and the failures are text from outside: they are
+/// shown through `plain`, never as markup or with control characters.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoHealth {
+    pub repo: String,
+    pub image: ImageHealth,
+    pub graph: GraphHealth,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageHealth {
+    pub in_use: String,
+    pub base: Option<String>,
+    pub built_at: Option<String>,
+    pub last_failure: Option<String>,
+    /// A base the repository names that nobody approved yet; it runs on the machine's image until you approve it.
+    #[serde(default)]
+    pub pending_base: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphHealth {
+    pub on: bool,
+    pub commit: Option<String>,
+    pub behind: Option<u64>,
+    pub graphify: Option<String>,
+    pub built_at: Option<String>,
+    pub building: bool,
+    pub last_failure: Option<String>,
+}
+
+/// Text from outside on one line: control characters become spaces, at most `max` characters.
+pub fn plain(text: &str, max: usize) -> String {
+    let flat: String = text.chars().map(|ch| if ch.is_control() { ' ' } else { ch }).collect();
+    let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max { flat } else { format!("{}…", flat.chars().take(max.saturating_sub(1)).collect::<String>()) }
+}
+
+impl RepoHealth {
+    pub fn name(&self) -> &str {
+        self.repo.trim_end_matches('/').rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("(none)")
+    }
+
+    /// The image in one line: the machine's, or its own with its base, when it was built and the last failure.
+    pub fn image_line(&self, now: u64) -> String {
+        let i = &self.image;
+        let mut line = match &i.base {
+            Some(base) => format!("image: own on {} ({})", plain(base, 40), plain(&i.in_use, 40)),
+            None => "image: machine's".to_string(),
+        };
+        if let Some(at) = &i.built_at {
+            line.push_str(&format!(" · built {} ago", age(at, now)));
+        }
+        if let Some(why) = &i.last_failure {
+            line.push_str(&format!(" · build failed: {}", plain(why, 60)));
+        }
+        line
+    }
+
+    /// The base waiting for approval, on its own line, with the key: approving trusts that image with the stage's credential.
+    pub fn pending_line(&self) -> Option<String> {
+        self.image.pending_base.as_ref().map(|base| format!("base waiting for you: {} (A approves; it will run with the stage's credential)", plain(base, 80)))
+    }
+
+    /// The graph in one line: off, building, or its commit, distance, Graphify, age and last failure.
+    pub fn graph_line(&self, now: u64) -> String {
+        let g = &self.graph;
+        if !g.on {
+            return "graph: off".to_string();
+        }
+        let mut line = match &g.commit {
+            Some(commit) => format!("graph: {}", plain(&commit.chars().take(7).collect::<String>(), 7)),
+            None => "graph: none yet".to_string(),
+        };
+        if let Some(behind) = g.behind {
+            line.push_str(&format!(" · {behind} behind"));
+        }
+        if let Some(v) = &g.graphify {
+            line.push_str(&format!(" · graphify {}", plain(v, 16)));
+        }
+        if let Some(at) = &g.built_at {
+            line.push_str(&format!(" · built {} ago", age(at, now)));
+        }
+        if g.building {
+            line.push_str(" · building");
+        }
+        if let Some(why) = &g.last_failure {
+            line.push_str(&format!(" · failed: {}", plain(why, 60)));
+        }
+        line
+    }
+}
+
 /// One engine's row of `GET /metrics?groupBy=engine`. Unknown keys (`meanDurationMs`) are ignored.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -1511,6 +2105,43 @@ pub struct Metrics {
     /// Absent from machines that predate the gate SLA.
     #[serde(default)]
     pub gates: GateMetrics,
+    /// The v2.2 diagram's flow numbers; absent from machines that predate wave 8. Parsed, not shown yet.
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; no view yet
+    pub flow: Option<FlowMetrics>,
+}
+
+/// A number and the count it rests on.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[allow(dead_code)]
+pub struct FlowCount {
+    pub value: Option<f64>,
+    pub n: u64,
+    /// Why the value is null, when the machine says (a failed change is not recorded yet).
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `Stats` and the count it rests on.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[allow(dead_code)]
+pub struct FlowStats {
+    pub median: Option<f64>,
+    pub p90: Option<f64>,
+    pub n: u64,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct FlowMetrics {
+    pub plan_cycle_ms: FlowStats,
+    pub coverage_rounds: FlowCount,
+    pub build_runs: FlowCount,
+    pub lead_time_ms: FlowStats,
+    pub merges_per_week: FlowCount,
+    pub change_failure_rate: FlowCount,
+    pub time_to_restore_ms: FlowCount,
 }
 
 const NONE: &str = "–";
@@ -1574,6 +2205,69 @@ pub enum Look {
     Paused,
     Draft,
     Done,
+    /// Ended without shipping or closing: dimmed in Done.
+    Archived,
+}
+
+/// Why a ticket may be archived, in the order the picker lists them: the machine's `ArchiveReason`.
+pub const ARCHIVE_REASONS: [(&str, &str); 7] = [
+    ("duplicate", "duplicate of another ticket"),
+    ("sla_expired", "nobody answered in time"),
+    ("rejected", "decided against"),
+    ("not_for_agent", "not work for an agent"),
+    ("pr_closed", "its PR was closed"),
+    ("no_setup", "nobody set the repository up in time"),
+    ("no_answer", "nobody answered the questions in time"),
+];
+
+/// The reasons a Build escalation is decided with, in the order the correction picker lists them: the machine's six.
+pub const ESCALATION_REASONS: [(&str, &str); 6] = [
+    ("plan_wrong", "the plan cannot be built as written"),
+    ("env_broken", "a service, tool or the container is at fault"),
+    ("flaky_tests", "a test flips on unchanged code"),
+    ("too_complex", "bigger than the plan allowed for"),
+    ("undeclared_scope", "needs files the plan does not name"),
+    ("other", "none of these, or it does not say"),
+];
+
+/// One scenario's state while Build runs.
+#[derive(Deserialize, Clone, Debug)]
+pub struct ScenarioState {
+    pub id: String,
+    pub state: String,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct BuildLimits {
+    pub max_iterations: u64,
+    pub max_tokens: u64,
+    pub max_minutes: f64,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct BuildBudget {
+    pub iterations: u64,
+    #[serde(default)]
+    pub tokens: Option<u64>,
+    pub minutes: f64,
+    pub limits: BuildLimits,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct BuildCheckpoint {
+    pub sha: String,
+    pub follows: String,
+}
+
+/// What Build shows while it runs: each scenario red or green, the budget against its limits, the last checkpoint.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildProgress {
+    #[serde(default)]
+    pub scenarios: Vec<ScenarioState>,
+    pub budget: BuildBudget,
+    #[serde(default)]
+    pub last_checkpoint: Option<BuildCheckpoint>,
 }
 
 /// The first 8 characters of a task id: what cards and watch-tab labels show.
@@ -1658,6 +2352,7 @@ impl Task {
             "paused_rate_limit" => Look::Paused,
             "draft" => Look::Draft,
             "closed" => Look::Done,
+            "archived" => Look::Archived,
             _ if self.waiting_on_you => Look::NeedsYou,
             _ if self.queued => Look::Queued,
             _ if self.running && unix_secs(&self.updated_at).is_some_and(|t| now.saturating_sub(t) > STALE_SECS) => Look::Stale,
@@ -1688,12 +2383,16 @@ impl Task {
             "awaiting_approval" => "approve plan".to_string(),
             "awaiting_test_check" => "check tests".to_string(),
             "awaiting_ship" if self.route == "review" => "post the verdict".to_string(),
+            // Not a gate unless the machine says it waits on you: otherwise it is watching the PR.
+            "awaiting_ship" if !self.waiting_on_you => "watching the PR".to_string(),
             "awaiting_ship" => "choose ship".to_string(),
             "shipping" => "opening PR".to_string(),
+            "reviewing_memory" if !self.waiting_on_you => "retro".to_string(),
             "reviewing_memory" => "review memory".to_string(),
             "escalated" => "escalated".to_string(),
             "paused_rate_limit" => "paused: usage limit".to_string(),
             "closed" => "closed".to_string(),
+            "archived" => "archived".to_string(),
             "ci_watch" => "ci".to_string(),
             "test_design" => "test design".to_string(),
             other => other.to_string(),
@@ -2028,6 +2727,74 @@ pub fn age_secs(secs: u64) -> String {
     }
 }
 
+/// The reports as the board reads them: only what the detail shows of Verify.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct TaskReportsView {
+    #[serde(default)]
+    pub verify: Option<VerifyReportView>,
+}
+
+/// Verify's report: its findings (by level when shown) and the browser run by scenario.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct VerifyReportView {
+    #[serde(default)]
+    pub findings: Vec<ReportFinding>,
+    #[serde(default)]
+    pub e2e: Option<ReportE2e>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ReportFinding {
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub line: i64,
+    /// The plan criterion the finding is about, when the reviewer named one.
+    #[serde(default)]
+    pub criterion_ref: Option<String>,
+    /// How it ended (fixed, kept, dismissed); open when absent.
+    #[serde(default)]
+    pub resolution: Option<serde_json::Value>,
+}
+
+impl ReportFinding {
+    /// The level of the finding: the machine's own table (`bug` and `security` block, `test`, `perf` and `question` should be fixed, `nit` and its kin are nits), an unknown word reads as should_fix.
+    pub fn level(&self) -> &'static str {
+        match self.severity.trim().to_lowercase().as_str() {
+            "bug" | "security" | "blocker" | "critical" | "high" | "major" | "error" => "blocker",
+            "nit" | "low" | "minor" | "style" | "info" | "nitpick" | "suggestion" => "nit",
+            _ => "should_fix",
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ReportE2e {
+    #[serde(default)]
+    pub verdict: Option<String>,
+    #[serde(default)]
+    pub rows: Vec<ReportRow>,
+}
+
+/// One approved scenario in the browser run: how it went, what was seen, which artifacts.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ReportRow {
+    #[serde(default)]
+    pub scenario: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub result: String,
+    #[serde(default)]
+    pub seen: String,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2071,11 +2838,23 @@ pub(crate) mod tests {
     #[test]
     fn there_is_no_backlog_column_and_a_new_ticket_sits_in_intake() {
         assert_eq!(COLUMNS.len(), 8);
+        assert_eq!(COLUMNS, ["Intake", "Triage", "Plan", "Build", "Verify", "Evidence", "Ship", "Done"], "the diagram's seven stages, then Done");
         assert_eq!(COLUMNS[0], "Intake");
         let task: Task = serde_json::from_str(&task_json("")).unwrap();
         assert_eq!(task.column_index(), 0);
         assert!(matches!(task.look(), Look::Draft));
         assert_eq!(task.status_label(), "intake");
+    }
+
+    #[test]
+    fn an_archived_ticket_looks_archived_says_so_and_carries_its_reason() {
+        let json = task_json("").replace(r#""state":"draft""#, r#""state":"archived""#).replace(r#""reason":null"#, r#""reason":"duplicate","archiveReason":"duplicate""#);
+        let task: Task = serde_json::from_str(&json).unwrap();
+        assert!(matches!(task.look(), Look::Archived));
+        assert_eq!(task.status_label(), "archived");
+        assert_eq!(task.archive_reason.as_deref(), Some("duplicate"));
+        let plain: Task = serde_json::from_str(&task_json("")).unwrap();
+        assert_eq!(plain.archive_reason, None, "a machine from before archiving sends none");
     }
 
     #[test]
@@ -2487,6 +3266,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn flow_metrics_parse_with_their_counts_and_a_machine_without_them_still_loads() {
+        let with_flow = METRICS_JSON.replacen(
+            r#"{"#,
+            r#"{"flow":{"planCycleMs":{"median":1200000,"p90":1680000,"n":2},"coverageRounds":{"value":1.5,"n":2},"buildRuns":{"value":null,"n":0},"leadTimeMs":{"median":null,"p90":null,"n":0},"mergesPerWeek":{"value":2,"n":2},"changeFailureRate":{"value":null,"n":0,"reason":"nothing records a failed change yet"},"timeToRestoreMs":{"value":null,"n":0,"reason":"nothing records a failed change yet"}},"#,
+            1,
+        );
+        let m: Metrics = serde_json::from_str(&with_flow).unwrap();
+        let flow = m.flow.expect("flow");
+        assert_eq!(flow.plan_cycle_ms.median, Some(1_200_000.0));
+        assert_eq!(flow.plan_cycle_ms.n, 2);
+        assert_eq!(flow.coverage_rounds.value, Some(1.5));
+        assert_eq!(flow.build_runs.value, None);
+        assert_eq!(flow.change_failure_rate.reason.as_deref(), Some("nothing records a failed change yet"));
+        let old: Metrics = serde_json::from_str(METRICS_JSON).unwrap();
+        assert!(old.flow.is_none());
+    }
+
+    #[test]
     fn engine_rows_and_month_caps_deserialise_and_a_machine_without_them_still_loads() {
         let m: Metrics = serde_json::from_str(&super::engine_tests::metrics_json(true)).unwrap();
         let rows = m.by_engine.unwrap();
@@ -2578,6 +3375,15 @@ mod detail_tests {
         "retries":{"verify":1,"e2e":0,"ci":0,"total":2},"resumeTo":null,"reason":null,
         "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
 
+    #[test]
+    fn a_task_detail_reads_the_build_progress_and_an_older_machine_has_none() {
+        let with: TaskDetail = serde_json::from_str(&r#"{"task":TASKJSON,"stageRuns":[],"approvals":[],"events":[],"buildProgress":{"scenarios":[{"id":"S1","state":"red"}],"budget":{"iterations":1,"tokens":null,"minutes":2.0,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},"lastCheckpoint":null}}"#.replace("TASKJSON", TASK)).unwrap();
+        assert_eq!(with.build_progress.unwrap().scenarios[0].id, "S1");
+        let without: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{TASK},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        assert!(without.build_progress.is_none());
+    }
+
+
     fn detail() -> TaskDetail {
         serde_json::from_str(&format!(
             r#"{{"task":{TASK},
@@ -2637,6 +3443,104 @@ mod detail_tests {
                 "09:58  approved",
             ]
         );
+    }
+
+    fn gate(json: &str) -> Approval {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_plan_gate_says_its_lane_risk_checks_and_who_approved() {
+        let g = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"brief":"b","lane":"fast","laneNote":"the plan check was unsure; planned in full",
+              "risk":{"level":"high","scores":{"blast_radius":2,"reversibility":1.5,"data_sensitivity":0}},
+              "verdicts":{"coverage":"proceed","plan":"flag","risk":"proceed"},"flagged":["plan"],"approvers":["ana"]}}"#,
+        );
+        assert_eq!(g.outcome(), None);
+        assert_eq!(g.outcome_line().as_deref(), Some("fast lane · the plan check was unsure; planned in full"));
+        assert_eq!(g.risk_line().as_deref(), Some("high (blast 2 · reversibility 1.5 · data 0)"));
+        assert_eq!(g.checks(), [("coverage".to_string(), "proceed".to_string()), ("plan".to_string(), "flag".to_string()), ("risk".to_string(), "proceed".to_string())]);
+        assert_eq!(g.approvals_line().as_deref(), Some("1 of 2 (ana)"));
+        let full = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"brief":"b","lane":"full","risk":{"level":"low","scores":{}}}}"#);
+        assert_eq!(full.outcome_line().as_deref(), Some("plan"));
+        assert_eq!(full.risk_line().as_deref(), Some("low"));
+        assert_eq!(full.approvals_line(), None, "no one has approved a low-risk plan yet, and it needs one name only");
+    }
+
+    #[test]
+    fn the_gate_says_how_many_names_it_needs_from_its_rule_and_the_rule_in_its_own_words() {
+        let g = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high"},"approvers":["ana"],
+              "approvalRule":{"needed":3,"outside":"required","text":"Needs 3 approvers: at least one must be someone not among the code map's owners (@ana). This is an attestation: the machine takes the names as given and does not check them."}}}"#,
+        );
+        assert_eq!(g.approvals_line().as_deref(), Some("1 of 3 (ana)"));
+        assert!(g.rule_line().unwrap().contains("attestation"));
+        // A gate from before the rule: high needs two, anything else one, and there is no rule text.
+        let old = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high"},"approvers":["ana"]}}"#);
+        assert_eq!((old.approvals_line().as_deref(), old.rule_line()), (Some("1 of 2 (ana)"), None));
+        let medium = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"medium"},"approvalRule":{"needed":1,"outside":"off","text":"Needs 1 approver."},"approvers":["ana"]}}"#);
+        assert_eq!(medium.approvals_line().as_deref(), Some("approved by ana"));
+    }
+
+    #[test]
+    fn the_gate_says_why_the_machine_raised_the_risk_after_the_plan() {
+        let g = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"high"},"riskRaised":"a step touches a control-plane file: CODEOWNERS"}}"#);
+        assert_eq!(g.risk_raised_line().as_deref(), Some("a step touches a control-plane file: CODEOWNERS"));
+        assert_eq!(gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"low"}}}"#).risk_raised_line(), None);
+    }
+
+    #[test]
+    fn a_risk_a_person_set_is_shown_with_its_reason_and_whether_it_applied() {
+        let raised = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"medium"},"overrides":{"risk":{"level":"high","reason":"touches billing","applied":true}}}}"#);
+        assert_eq!(raised.risk_override_line().as_deref(), Some("you set high: applied (touches billing)"));
+        let lowered = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"high"},"overrides":{"risk":{"level":"low","reason":"behind a flag","applied":false}}}}"#);
+        assert_eq!(lowered.risk_override_line().as_deref(), Some("you set low, below the machine's high: kept as ground truth (behind a flag); approvers and Ship read high"));
+        assert_eq!(gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"low"}}}"#).risk_override_line(), None);
+    }
+
+    #[test]
+    fn the_risk_line_adds_the_product_and_the_complexity_when_the_plan_stage_gave_them() {
+        let g = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"medium","product":9,"complexity":"L","scores":{"blast_radius":2,"reversibility":2,"data_sensitivity":0}}}}"#);
+        assert_eq!(g.risk_line().as_deref(), Some("medium · product 9 · complexity L (blast 2 · reversibility 2 · data 0)"));
+    }
+
+    #[test]
+    fn a_decided_gate_reads_its_approvers_off_the_response() {
+        let g = gate(r#"{"kind":"awaiting_approval","decision":"approved","requested":{"risk":{"level":"high"}},"response":{"approvers":["ana","bo"],"approver":"bo"}}"#);
+        assert_eq!(g.approvers(), ["ana", "bo"]);
+        assert_eq!(g.approvals_line().as_deref(), Some("2 of 2 (ana, bo)"));
+        let one = gate(r#"{"kind":"awaiting_approval","decision":"approved","requested":{"risk":{"level":"low"}},"response":{"approver":"ana"}}"#);
+        assert_eq!(one.approvals_line().as_deref(), Some("approved by ana"));
+    }
+
+    #[test]
+    fn a_triage_gate_is_a_reply_or_an_archive_with_its_text_and_reason() {
+        let reply = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"outcome":"conversation","reply":"Use `pnpm dev`.","brief":"asks how"}}"#);
+        assert_eq!(reply.outcome(), Some("conversation"));
+        assert_eq!(reply.outcome_line().as_deref(), Some("conversation"));
+        assert_eq!(reply.reply().as_deref(), Some("Use `pnpm dev`."));
+        let archive = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"outcome":"archive","archiveReason":"duplicate"}}"#);
+        assert_eq!(archive.outcome_line().as_deref(), Some("archive (duplicate)"));
+        assert_eq!(archive.archive_reason().as_deref(), Some("duplicate"));
+        let legacy = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"brief":"b"}}"#);
+        assert_eq!((legacy.outcome_line(), legacy.risk_line(), legacy.approvals_line()), (None, None, None));
+        assert!(legacy.checks().is_empty());
+    }
+
+    #[test]
+    fn the_scenarios_come_from_the_plan_gate_that_carries_them_and_a_legacy_test_check_still_wins() {
+        let plan_only: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{TASK},"stageRuns":[],"events":[],"approvals":[{{"id":"p","kind":"awaiting_approval","decision":null,
+              "requested":{{"brief":"b","cases":[{{"title":"t","criterion":"c1","approach":"run it"}}]}}}}]}}"#
+        ))
+        .unwrap();
+        assert_eq!(plan_only.cases().len(), 1);
+        assert_eq!(plan_only.cases_approval().map(|a| a.kind_or_guess()), Some("awaiting_approval"));
+        let legacy = detail();
+        assert_eq!(legacy.cases_approval().map(|a| a.kind_or_guess()), Some("awaiting_test_check"));
+        assert_eq!(legacy.cases().len(), 3);
+        let none: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{TASK},"stageRuns":[],"events":[],"approvals":[{{"id":"p","kind":"awaiting_approval","decision":null,"requested":{{"brief":"b"}}}}]}}"#)).unwrap();
+        assert!(none.cases_approval().is_none() && none.cases().is_empty());
     }
 
     #[test]
@@ -2734,5 +3638,39 @@ pub(crate) mod engine_tests {
         assert_eq!(choices[1].off, None);
         assert_eq!(choices[2].engine.as_deref(), Some("codex:sol"));
         assert_eq!(choices[2].off.as_deref(), Some("no ~/.codex/auth.json"));
+    }
+
+    #[test]
+    fn a_detail_from_before_the_ship_view_parses_and_a_new_one_carries_it() {
+        let task = tests::task_json("");
+        let old: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        assert_eq!(old.ship, None);
+        let null: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[],"ship":null}}"#)).unwrap();
+        assert_eq!(null.ship, None);
+        let new: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[],"ship":{{"pr":{{"slug":"o/a","number":3,"url":"https://github.com/o/a/pull/3"}},"head":"abc","ready":false,
+            "checklist":[{{"id":"ci","ok":false,"detail":"CI is running"}}],"autoMerge":{{"allowed":false,"reason":"not ready"}},"review":{{"required":null,"by":null}},
+            "fixRounds":2,"queued":false,"quietSince":"2026-11-04T10:00:00.000Z","lastEvent":{{"class":"noise","at":"t"}},"at":"t"}}}}"#
+        ))
+        .unwrap();
+        let ship = new.ship.unwrap();
+        assert_eq!((ship.pr.number, ship.fix_rounds, ship.review.required), (3, 2, None));
+        assert_eq!(ship.checklist, vec![ShipItem { id: "ci".into(), ok: false, detail: "CI is running".into() }]);
+        let sparse: ShipView = serde_json::from_str("{}").unwrap();
+        assert!(!sparse.ready && sparse.checklist.is_empty());
+    }
+
+    #[test]
+    fn awaiting_ship_and_reviewing_memory_are_watching_and_retro_until_the_machine_waits_on_you() {
+        let mut task: Task = serde_json::from_str(&tests::task_json("")).unwrap();
+        task.state = "awaiting_ship".into();
+        assert_eq!(task.status_label(), "watching the PR");
+        task.waiting_on_you = true;
+        assert_eq!(task.status_label(), "choose ship");
+        task.state = "reviewing_memory".into();
+        assert_eq!(task.status_label(), "review memory");
+        task.waiting_on_you = false;
+        assert_eq!(task.status_label(), "retro");
+        assert_eq!(task.look(), Look::Working);
     }
 }

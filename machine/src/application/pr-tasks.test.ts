@@ -26,6 +26,10 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   localPath: "/r/a",
   task: null,
   updatedAt: "2026-10-27T10:00:00Z",
+  headSha: null,
+  headCommittedAt: null,
+  nodeId: null,
+  body: null,
   ...over,
 });
 
@@ -35,7 +39,7 @@ function setup(existing: Partial<TaskRow> | null = null) {
   const worktrees: string[][] = [];
   const deps = {
     worktreesDir: "/wt",
-    ensurePrWorktree: async (repoPath: string, headRef: string, path: string) => void worktrees.push([repoPath, headRef, path]),
+    ensurePrClone: async (repoPath: string, headRef: string, path: string) => void worktrees.push([repoPath, headRef, path]),
     pipeline: {
       findBySource: async () => (existing ? ({ id: "old", state: "closed", ...existing } as TaskRow) : null),
       createTask: async (input: NewTask) => {

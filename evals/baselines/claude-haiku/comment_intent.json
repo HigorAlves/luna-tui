@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "comment_intent",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T15:25:44.982Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 2142,
+    "costUsd": 0.0036521300000000004,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 6,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.875,
+      "brier": 0.04570000000000001,
+      "ece": 0.18142857142857152,
+      "meanConfidence": 0.8287500000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "asks-for-a-behaviour-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"change_request\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1866,
+      "costUsd": 0.0003511,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "asks-how-it-works",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"question\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2103,
+      "costUsd": 0.00046329,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.85,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "claims-to-be-a-question",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"change_request\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2333,
+      "costUsd": 0.00062549,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "disputes-the-approach",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"disagreement\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1729,
+      "costUsd": 0.00023869,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.85,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "might-want-to-rename",
+      "pass": false,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.confidence within 0..0.85",
+          "pass": false,
+          "detail": "found 0.9"
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2870,
+      "costUsd": 0.00042779000000000005,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "reading-says-question-thread-asks-for-a-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"change_request\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2163,
+      "costUsd": 0.00061209,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "replace-format-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"change_request\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1624,
+      "costUsd": 0.00042499,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "trailing-whitespace-nit",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"nit\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2448,
+      "costUsd": 0.00050869,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "intent": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.6,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_classify",
+  "pack": "finding_classify",
+  "attempt": 1,
+  "task": {
+    "id": "unchecked-discount-field",
+    "title": "unchecked-discount-field",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/export.ts",
+        "line": 14,
+        "severity": "nit",
+        "title": "Missing null check on the discount",
+        "body": "lines[0].discount can be undefined for old carts; the next line reads it.",
+        "confidence": 0.8
+      },
+      "excerpt": "12  const first = lines[0];\n13  // old carts have no discount field\n14  return first.price - first.discount.amount;"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,301 @@
+{
+  "schema": 1,
+  "pack": "ticket_recommend",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T15:40:04.251Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 2340.125,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.008942857142857143,
+      "ece": 0.07999999999999996,
+      "meanConfidence": 0.8925000000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "borderline-p2",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.confidence within 0.3..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2454,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.7,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "checkout-down-for-eu-cards",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"do_now\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1997,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "costs-more-than-it-is-worth",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"decline\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1855,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.89,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.89,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ticket-tries-to-pick-the-action",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.confidence within 0..1",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "action.choice = \"decline\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2250,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "tooltip-rename-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"decline\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1848,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "turns-on-something-unseen",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"needs_decision\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2382,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.91,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "two-teams-disagree-on-the-vendor",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"needs_decision\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2584,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "worth-doing-later",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"schedule\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3351,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "action": {
+            "correct": true,
+            "confidence": 0.83,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.83,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

@@ -35,10 +35,11 @@ export function higher(a: SlackPriority | null, b: SlackPriority | null): SlackP
 }
 
 /** Where the item sits for you, from its triage and your state. */
-export function splitOf(item: Pick<SlackItemRow, "doneAt" | "snoozedUntil" | "triage" | "youReplied" | "ts" | "kind">, now: Date): SlackSplit {
+export function splitOf(item: Pick<SlackItemRow, "doneAt" | "snoozedUntil" | "triage" | "youReplied" | "ts" | "kind"> & { draft?: SlackItemRow["draft"] }, now: Date): SlackSplit {
   if (item.doneAt) return "done";
   if (item.snoozedUntil && new Date(item.snoozedUntil).getTime() > now.getTime()) return "snoozed";
   const age = now.getTime() - new Date(item.ts).getTime();
+  if (item.draft && !item.youReplied) return "needs_reply";
   if (item.triage?.expectsReply && !item.youReplied) return "needs_reply";
   if (item.youReplied && age >= WAITING_AFTER_MS) return "waiting_on_them";
   if (!item.youReplied && item.triage && (item.triage.category === "blocker" || item.triage.category === "decision")) return "decide";
@@ -231,6 +232,7 @@ export function toSlackItem(row: SlackItemRow, now: Date, sla: SlaTargets): Slac
  */
 export function fingerprint(item: SlackItem): string {
   const t = item.triage;
+  const c = item.conversation;
   return [
     item.id,
     item.split,
@@ -247,6 +249,8 @@ export function fingerprint(item: SlackItem): string {
     item.youReplied ? 1 : 0,
     item.ts,
     item.linked.taskId,
+    item.draft ? `${item.draft.id}/${item.draft.text.length}` : "",
+    c ? `${c.classification?.kind ?? ""}@${c.classification?.at ?? ""}/${c.relation?.type ?? ""}@${c.relation?.at ?? ""}/${c.history.length}` : "",
     item.linked.pr ? `${item.linked.pr.repo}#${item.linked.pr.number}/${item.linked.pr.split}` : "",
   ].join("|");
 }

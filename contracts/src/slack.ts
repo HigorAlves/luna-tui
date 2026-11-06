@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import type { Stats } from "./api.ts";
+import { type Conversation, ConversationKind } from "./conversation.ts";
 import type { EngineId } from "./engines.ts";
 
 /** Where an item sits for you. One split per item, picked by the machine's `splitOf`. */
@@ -94,6 +95,16 @@ export interface SlackMessage {
 }
 
 /** One thing in your inbox: a message, or a thread's worth of them collapsed into one. */
+/** A draft waiting for a person: what it is, the text a tap sends, and when it expires. */
+export interface SlackDraft {
+  id: string;
+  kind: "reply" | "questions" | "shipped" | "status";
+  text: string;
+  /** The sha256 of `text`: the board sends it back with `id` when the reply is the draft's tap. */
+  hash?: string;
+  expiresAt: string;
+}
+
 export interface SlackItem {
   /** `<channel id>:<message ts>`; for a collapsed thread, the parent's. */
   id: string;
@@ -129,6 +140,10 @@ export interface SlackItem {
   triage: SlackTriage | null;
   split: SlackSplit;
   linked: { pr: { repo: string; number: number; split: string } | null; taskId: string | null };
+  /** The draft that waits for a tap on this thread (a reply, a status, questions, the shipped summary); absent when none waits. */
+  draft?: SlackDraft | null;
+  /** The thread as the conversation machine holds it; absent or null on an item stored before wave 17. */
+  conversation?: Conversation | null;
 }
 
 /** `GET /slack/items` and the `slack.items` stream event. */
@@ -144,6 +159,10 @@ export interface SlackSnapshot {
   sla: Record<SlackPriority, number>;
   /** Now is inside the rules file's `## Quiet hours`: the board raises notices for P0 only. */
   quiet: boolean;
+  /** What the machine reads: `opted_in` or `all` (`MACHINE_SLACK_SCOPE`). Absent from a machine before wave 17. */
+  scope?: "opted_in" | "all";
+  /** How many conversations are opted in, so the board can say why the view is empty. */
+  optedIn?: number;
 }
 
 export const SlackItemPatch = z.object({
@@ -154,11 +173,22 @@ export const SlackItemPatch = z.object({
   seen: z.boolean().optional(),
   /** A hand override of triage's priority. */
   priority: SlackPriority.optional(),
+  /** A hand-set kind of the conversation: settles an `ask` and is ground truth for the decision. */
+  kind: ConversationKind.optional(),
+  /** With `done: true` on an item that has a waiting draft: why it was dismissed (`no_reply_needed`: nobody should reply; `bad_draft`: a reply was needed, this one was not it). Absent: no reason. */
+  reason: z.enum(["no_reply_needed", "bad_draft"]).optional(),
 });
 export type SlackItemPatch = z.infer<typeof SlackItemPatch>;
 
+/** `POST /slack/items/:id/relation`: what a person says a thread is about. `target` is an id of the stored shortlist, absent for a new candidate or none. */
+export const SlackRelationInput = z.object({
+  relation: z.enum(["related_to_in_progress", "related_to_backlog", "new_candidate", "none"]),
+  target: z.string().min(1).optional(),
+});
+export type SlackRelationInput = z.infer<typeof SlackRelationInput>;
+
 /** `POST /slack/items/:id/reply`: `nudge` prefixes a mention of the item's author (`<@id> `), built on the machine. */
-export const SlackReplyInput = z.object({ text: z.string().min(1), nudge: z.boolean().optional() });
+export const SlackReplyInput = z.object({ text: z.string().min(1), nudge: z.boolean().optional(), draftId: z.string().optional(), draftHash: z.string().optional() });
 export type SlackReplyInput = z.infer<typeof SlackReplyInput>;
 
 /** `POST /slack/items/:id/task`: a Backlog ticket from the item. */

@@ -1,0 +1,36 @@
+{
+  "schema": 3,
+  "stage": "triage_signals",
+  "pack": "triage_signals",
+  "attempt": 1,
+  "task": {
+    "id": "eval-board-key-panic",
+    "title": "Classify issue",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "issue": {
+      "title": "Checkout returns 500 for every customer since the 14:05 deploy",
+      "description": "Since today's 14:05 deploy every POST /api/checkout answers 500. No order has gone through for 25 minutes and support has 40 open chats.\n\nLogs: `TypeError: Cannot read properties of undefined (reading 'currency')` in api/src/checkout/price.ts.\n\nRolling back the deploy is the fastest fix; the root cause still needs a patch and a test.",
+      "labels": [
+        "incident"
+      ],
+      "source": "https://github.com/example-org/luna-example/issues/9100"
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

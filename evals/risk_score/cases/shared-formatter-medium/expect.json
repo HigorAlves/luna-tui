@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "blast_radius.confidence",
+      "min": 0,
+      "max": 0.85
+    },
+    {
+      "kind": "oneOf",
+      "path": "complexity.choice",
+      "values": [
+        "S",
+        "M"
+      ]
+    }
+  ],
+  "rubric": "A shared helper with a small diff: how far it reaches is a judgement call (one module or several), so the model should not be near-certain about the blast radius. Risk is scored before the plan, from the record and the code map alone; complexity is how hard the change is to get right.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "blast_radius": {
+            "score": 0
+          }
+        },
+        "criteria": {
+          "blast_radius": "One module, its tests"
+        },
+        "why": "The diff is one function in one module, so the reach could be read as one module."
+      },
+      {
+        "label": {
+          "blast_radius": {
+            "score": 1
+          }
+        },
+        "criteria": {
+          "blast_radius": "Several modules or a shared one"
+        },
+        "why": "The goal names three consumers (cart, invoice PDF, emails), so a shared module reaching several others is several modules."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

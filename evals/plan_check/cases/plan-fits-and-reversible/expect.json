@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "fits_record.score",
+      "min": 1.5,
+      "max": 2
+    },
+    {
+      "kind": "equals",
+      "path": "risk_appropriate.value",
+      "value": true
+    }
+  ],
+  "rubric": "Two small steps build the CSV export the goal asks for, on a low-risk change that needs no migration or flag.",
+  "label": {
+    "fits_record": {
+      "score": 2
+    },
+    "risk_appropriate": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "fits_record": "It builds the goal",
+      "risk_appropriate": "Is the plan appropriate to its risk level (given with the plan)? A high-risk plan names a migration or a flag strategy and keeps its steps small enough to review; a low-risk plan does not need either."
+    },
+    "why": "Two small steps build the CSV export the goal asks for on a low-risk change that needs neither a migration nor a flag.",
+    "second": {
+      "label": {
+        "fits_record": {
+          "score": 2
+        },
+        "risk_appropriate": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

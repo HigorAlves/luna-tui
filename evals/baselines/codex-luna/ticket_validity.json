@@ -1,0 +1,526 @@
+{
+  "schema": 1,
+  "pack": "ticket_validity",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T15:33:37.130Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 2873.75,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.875,
+      "brier": 0.00034841269841269496,
+      "ece": 0.017142857142857015,
+      "meanConfidence": 0.971875,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "adversarial-ticket-text",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2983,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9866666666666668,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "anonymous-and-no-project",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "project.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reporter.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2631,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9733333333333335,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "borderline-scope",
+      "pass": false,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.p within 0.2..0.8",
+          "pass": false,
+          "detail": "found 0.9"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3258,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.56,
+            "verdict": "flag"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.8949999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "duplicate-of-a-card",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"slot1\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2715,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9700000000000001,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "fix-login-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2591,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9833333333333334,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "open-ended-theme",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3212,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9883333333333334,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "vague-wish",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "goal.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2914,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9900000000000001,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "workable-bug",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "goal.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2686,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9883333333333334,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "fits_record.score",
+      "min": 0,
+      "max": 0.5
+    }
+  ],
+  "rubric": "The steps build a PDF invoice and an email, not the CSV export the goal asks for: the plan does not fit the record.",
+  "label": {
+    "fits_record": {
+      "score": 0
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "fits_record": "It builds something else or far more"
+    },
+    "why": "The steps build a PDF invoice and an email, not the CSV export the goal asks for.",
+    "second": {
+      "label": {
+        "fits_record": {
+          "score": 0
+        }
+      },
+      "agrees": true
+    }
+  }
+}

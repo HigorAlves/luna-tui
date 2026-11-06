@@ -1,0 +1,64 @@
+{
+  "schema": 3,
+  "stage": "size_estimate",
+  "pack": "size_estimate",
+  "attempt": 1,
+  "task": {
+    "id": "size-estimate",
+    "title": "Add a dark-mode toggle and a CSV export button",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "size": {
+      "title": "Add a dark-mode toggle and a CSV export button",
+      "text": "Two small things the team wants in the settings page: a dark-mode toggle that remembers its choice, and a button that exports the user's saved items as CSV. They share a page and nothing else.",
+      "criteria": [
+        "The toggle persists across reloads",
+        "The button downloads a CSV"
+      ],
+      "files": [
+        {
+          "path": "src/settings/page.tsx"
+        },
+        {
+          "path": "src/settings/theme.ts"
+        },
+        {
+          "path": "src/settings/export.ts"
+        }
+      ],
+      "symbols": [
+        "SettingsPage"
+      ],
+      "similar": [
+        {
+          "title": "Add a language picker",
+          "added": 180,
+          "removed": 20
+        }
+      ],
+      "limit": {
+        "target": [
+          1000,
+          2000
+        ],
+        "hard": 2500
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "ci_flaky"
+    }
+  ],
+  "rubric": "A timeout in a job this change does not touch.",
+  "label": {
+    "event": {
+      "choice": "ci_flaky"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "event": "a red CI run whose failure has nothing to do with this change: a timeout, a network error, a runner that died"
+    },
+    "why": "ETIMEDOUT while pulling a fixture image and a runner that lost contact: a failure with nothing to do with the change.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "ci_flaky"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

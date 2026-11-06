@@ -12,6 +12,9 @@ const DEVICES = new Set(["/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"
 
 /** The deepest existing ancestor of `path`, resolved, with the rest appended. `path` is absolute
  *  and not normalized first, so `link/..` is resolved by the kernel the way open() would. */
+/** Where the machine mounts the repo's code graph, read-only, in a stage container. */
+export const GRAPH_ROOT = "/graph";
+
 export function realPath(path: string): string {
   // One component at a time, so a link is followed even when what it points at does not exist
   // yet (realpath fails there, and resolving the parent instead would keep the link's own name

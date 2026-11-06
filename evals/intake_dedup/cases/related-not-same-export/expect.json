@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "slot1.choice",
+      "value": "related"
+    }
+  ],
+  "rubric": "The same export feature, two different defects: the fix for the separator does not bring the header back.",
+  "label": {
+    "slot1": {
+      "choice": "related"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "slot1": "touches the same area or cause, but fixing one does not fix the other"
+    },
+    "why": "Both are about the CSV export, so they touch the same area, but a missing header and a wrong separator are separate defects and fixing one does not fix the other.",
+    "ruledOut": [
+      {
+        "question": "slot1",
+        "label": "same",
+        "why": "Changing the separator would not restore the missing header row."
+      },
+      {
+        "question": "slot1",
+        "label": "different",
+        "why": "They share the CSV export feature, which is more than another problem would."
+      }
+    ],
+    "second": {
+      "label": {
+        "slot1": {
+          "choice": "related"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

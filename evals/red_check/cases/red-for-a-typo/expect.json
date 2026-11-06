@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "right_reason.value",
+      "value": false
+    }
+  ],
+  "rubric": "A misspelt import: the test never reached the behaviour.",
+  "label": {
+    "right_reason": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "right_reason": "Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture."
+    },
+    "why": "A misspelt import stops the test before it reaches the behaviour: a typo in the test itself is a no.",
+    "second": {
+      "label": {
+        "right_reason": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

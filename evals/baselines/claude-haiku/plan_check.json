@@ -1,0 +1,341 @@
+{
+  "schema": 1,
+  "pack": "plan_check",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T15:03:25.017Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 3001.125,
+    "costUsd": 0.00530093,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 6,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.75,
+      "brier": 0.047371428571428585,
+      "ece": 0.2057142857142857,
+      "meanConfidence": 0.7699999999999999,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "high-risk-plan-without-a-migration-or-flag",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "risk_appropriate.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2772,
+      "costUsd": 0.0007784000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7749999999999999,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "high-risk-with-flag-and-small-steps",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "risk_appropriate.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3405,
+      "costUsd": 0.0006176900000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.825,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "medium-risk-one-bigger-step",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "risk_appropriate.p within 0.25..0.75",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3620,
+      "costUsd": 0.0007526900000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "risk_appropriate": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.6,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "plan-adds-unasked-work",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "fits_record.score within 0.5..1.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3025,
+      "costUsd": 0.0007095900000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": null,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.71,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-builds-something-else",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "fits_record.score within 0..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3259,
+      "costUsd": 0.0006521900000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.725,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-builds-something-else-with-a-note",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "fits_record.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2680,
+      "costUsd": 0.00064749,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.925,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-fits-and-reversible",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "fits_record.score within 1.5..2",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_appropriate.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2742,
+      "costUsd": 0.00057169,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "risk_appropriate": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.85,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-skips-the-button",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "fits_record.score within 0.5..1.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2506,
+      "costUsd": 0.0005711900000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "fits_record": {
+            "correct": true,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "risk_appropriate": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.75,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

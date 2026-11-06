@@ -1,6 +1,7 @@
 // The GitHub port on Octokit (REST, GraphQL and pagination). One client, one token, no CLI.
 // The client is injected so a test can hand in a stub shaped like Octokit; `createGitHub`
 // builds the real one from a token.
+import type { ReviewRule } from "../../domain/review-rule.ts";
 import { Octokit } from "octokit";
 
 import { PR_QUERY, type PrNode } from "../../domain/pull-request.ts";
@@ -10,7 +11,9 @@ import {
   GitHubError,
   type GitHub,
   type NewPr,
+  type PrActivity,
   type PrRef,
+  type PrReview,
   type PrSearchHit,
   type ReviewPost,
   repoRef,
@@ -20,7 +23,7 @@ import {
 export interface OctokitLike {
   rest: {
     users: { getAuthenticated(): Promise<{ data: { login: string } }> };
-    teams: { listForAuthenticatedUser: unknown };
+    teams: { listForAuthenticatedUser: unknown; listMembersInOrg: unknown };
     search: { issuesAndPullRequests(params: { q: string; per_page?: number }): Promise<{ data: { items: Array<{ number: number; repository_url: string; updated_at: string }> } }> };
     pulls: {
       get(params: Record<string, unknown>): Promise<{ data: unknown }>;
@@ -31,16 +34,25 @@ export interface OctokitLike {
       createReview(params: Record<string, unknown>): Promise<unknown>;
       listFiles: unknown;
       listReviewComments: unknown;
+      listReviews: unknown;
     };
     repos: {
       get(params: Record<string, unknown>): Promise<{ data: { default_branch: string } }>;
       getCombinedStatusForRef(params: Record<string, unknown>): Promise<{ data: { statuses: Array<{ context: string; state: string; target_url: string | null }> } }>;
+      listReleases(params: Record<string, unknown>): Promise<{ data: Array<{ id: number; tag_name: string; html_url: string; draft?: boolean }> }>;
+      createRelease(params: Record<string, unknown>): Promise<{ data: { id: number; html_url: string } }>;
+      listReleaseAssets: unknown;
+      getContent(params: Record<string, unknown>): Promise<{ data: unknown }>;
+      uploadReleaseAsset(params: Record<string, unknown>): Promise<{ data: { browser_download_url: string } }>;
     };
     git: { deleteRef(params: Record<string, unknown>): Promise<unknown> };
     checks: { listForRef(params: Record<string, unknown>): Promise<{ data: { check_runs: Array<{ name: string; status: string; conclusion: string | null; html_url: string | null }> } }> };
     issues: {
       listForRepo: unknown;
       createComment(params: Record<string, unknown>): Promise<unknown>;
+      create(params: Record<string, unknown>): Promise<{ data: { number: number; html_url: string } }>;
+      listComments: unknown;
+      updateComment(params: Record<string, unknown>): Promise<unknown>;
     };
     actions: {
       listJobsForWorkflowRun(params: Record<string, unknown>): Promise<{ data: { jobs: Array<{ id: number; name: string; conclusion: string | null }> } }>;
@@ -48,6 +60,7 @@ export interface OctokitLike {
       reRunWorkflowFailedJobs(params: Record<string, unknown>): Promise<unknown>;
     };
   };
+  request(route: string, params: Record<string, unknown>): Promise<{ data: unknown }>;
   graphql<T = unknown>(query: string, variables?: Record<string, unknown>): Promise<T>;
   paginate<T = unknown>(method: unknown, params?: Record<string, unknown>): Promise<T[]>;
 }
@@ -58,9 +71,12 @@ export const DIFF_TAIL_CHARS = 200_000;
 const THREADS_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
     reviewThreads(first:100){nodes{ id isResolved path line
-      comments(first:50){nodes{author{login} body createdAt}} }} } } }`;
+      comments(first:50){nodes{author{login} authorAssociation body createdAt}} }} } } }`;
 const REPLY_MUTATION = `mutation($threadId:ID!,$body:String!){
   addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId,body:$body}){comment{id}} }`;
+const ENQUEUE_MUTATION = `mutation($id:ID!,$sha:GitObjectID){ enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha}){ mergeQueueEntry{id} } }`;
+/** A file bigger than this is not read through the contents API (CODEOWNERS is small). */
+export const FILE_AT_REF_MAX_BYTES = 256 * 1024;
 const RESOLVE_MUTATION = `mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){thread{isResolved}} }`;
 const RESOLVED_QUERY = `query($threadId:ID!){ node(id:$threadId){ ... on PullRequestReviewThread{isResolved} } }`;
 const READY_MUTATION = `mutation($id:ID!){ markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}} }`;
@@ -137,9 +153,10 @@ export class OctokitGitHub implements GitHub {
   async prFiles(slug: string, number: number) {
     const { owner, repo } = repoRef(slug);
     const files = await call(`listing the files of ${slug}#${number}`, () =>
-      this.octokit.paginate<{ filename: string; additions: number; deletions: number }>(this.octokit.rest.pulls.listFiles, { owner, repo, pull_number: number, per_page: 100 }),
+      this.octokit.paginate<{ filename: string; previous_filename?: string; additions: number; deletions: number }>(this.octokit.rest.pulls.listFiles, { owner, repo, pull_number: number, per_page: 100 }),
     );
-    return files.map((f) => ({ path: f.filename, additions: f.additions, deletions: f.deletions }));
+    // A renamed file lists its previous name too: both names are the PR's own, and both are checked against the control plane.
+    return files.map((f) => ({ path: f.filename, additions: f.additions, deletions: f.deletions, ...(f.previous_filename ? { previousPath: f.previous_filename } : {}) }));
   }
 
   async prComments(slug: string, number: number) {
@@ -165,7 +182,7 @@ export class OctokitGitHub implements GitHub {
                 isResolved: boolean;
                 path: string | null;
                 line: number | null;
-                comments: { nodes: Array<{ author: { login: string } | null; body: string; createdAt: string }> };
+                comments: { nodes: Array<{ author: { login: string } | null; authorAssociation?: string | null; body: string; createdAt: string }> };
               }>;
             };
           } | null;
@@ -179,7 +196,7 @@ export class OctokitGitHub implements GitHub {
         id: t.id,
         path: t.path ?? null,
         line: t.line ?? null,
-        comments: t.comments.nodes.map((c) => ({ author: c.author?.login ?? "ghost", body: c.body, at: c.createdAt })),
+        comments: t.comments.nodes.map((c) => ({ author: c.author?.login ?? "ghost", body: c.body, at: c.createdAt, association: c.authorAssociation ?? null })),
       }));
   }
 
@@ -188,31 +205,161 @@ export class OctokitGitHub implements GitHub {
     await call(`closing ${slug}#${number}`, () => this.octokit.rest.pulls.update({ owner, repo, pull_number: number, state: "closed" }));
   }
 
-  /** Each repo allows its own merge methods: squash when it does, else a merge commit, else a rebase. */
-  private async mergeMethod(owner: string, repo: string): Promise<"squash" | "merge" | "rebase"> {
+  /** Each repo allows its own merge methods: the configured one when it does, else squash, then a merge commit, then a rebase. */
+  private async mergeMethod(owner: string, repo: string, wanted?: "squash" | "merge" | "rebase"): Promise<"squash" | "merge" | "rebase"> {
     try {
       const { data } = await this.octokit.rest.repos.get({ owner, repo });
       const allowed = data as { allow_squash_merge?: boolean; allow_merge_commit?: boolean; allow_rebase_merge?: boolean } | undefined;
+      const ok = { squash: allowed?.allow_squash_merge !== false, merge: allowed?.allow_merge_commit !== false, rebase: allowed?.allow_rebase_merge !== false };
+      if (wanted && ok[wanted]) return wanted;
       if (allowed?.allow_squash_merge === false) {
         if (allowed.allow_merge_commit !== false) return "merge";
         if (allowed.allow_rebase_merge !== false) return "rebase";
       }
+      return "squash";
     } catch {
       // The settings are a hint; GitHub's own answer to the merge is the authority.
     }
-    return "squash";
+    return wanted ?? "squash";
   }
 
-  async mergePr(slug: string, number: number): Promise<void> {
+  async mergePr(slug: string, number: number, options: { sha?: string; method?: "squash" | "merge" | "rebase"; queue?: boolean; deleteBranch?: boolean; title?: string; message?: string } = {}): Promise<{ merged: true; sha: string | null } | { queued: true }> {
     const { owner, repo } = repoRef(slug);
     const { data } = await call(`reading ${slug}#${number}`, () => this.octokit.rest.pulls.get({ owner, repo, pull_number: number }));
-    const head = (data as { head: { ref: string; repo: { full_name: string } | null } }).head;
-    const merge_method = await this.mergeMethod(owner, repo);
-    await call(`merging ${slug}#${number}`, () => this.octokit.rest.pulls.merge({ owner, repo, pull_number: number, merge_method }));
+    const pr = data as { head: { ref: string; repo: { full_name: string } | null }; node_id?: string };
+    const head = pr.head;
+    const merge_method = await this.mergeMethod(owner, repo, options.method);
+    let sha: string | null = null;
+    try {
+      const merged = await this.octokit.rest.pulls.merge({
+        owner,
+        repo,
+        pull_number: number,
+        merge_method,
+        ...(options.sha ? { sha: options.sha } : {}),
+        ...(options.title ? { commit_title: options.title } : {}),
+        ...(options.message ? { commit_message: options.message } : {}),
+      });
+      const reported = ((merged as { data?: { sha?: unknown } } | undefined)?.data)?.sha;
+      sha = typeof reported === "string" && reported ? reported : null;
+    } catch (error) {
+      const { status, message = "" } = error as { status?: number; message?: string };
+      // A repo with a merge queue refuses a direct merge; the queue merges it, and its branch is not ours to delete yet. With `queue: false` the refusal is the answer.
+      if (status === 405 && /merge queue/i.test(message) && pr.node_id && options.queue !== false) return this.enqueuePr(pr.node_id, options.sha);
+      throw new GitHubError(`merging ${slug}#${number} failed${status ? ` (${status})` : ""}: ${message || String(error)}`);
+    }
     // The branch goes with it, as `gh pr merge --delete-branch` did; a fork's branch is not ours to delete.
-    if (head.repo?.full_name.toLowerCase() === slug.toLowerCase()) {
+    if (options.deleteBranch !== false && head.repo?.full_name.toLowerCase() === slug.toLowerCase()) {
       await call(`deleting ${head.ref}`, () => this.octokit.rest.git.deleteRef({ owner, repo, ref: `heads/${head.ref}` }));
     }
+    return { merged: true, sha };
+  }
+
+  async deleteBranch(slug: string, ref: string): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    try {
+      await this.octokit.rest.git.deleteRef({ owner, repo, ref: `heads/${ref}` });
+    } catch (error) {
+      const { status } = error as { status?: number };
+      if (status === 404 || status === 422) return;
+      throw new GitHubError(`deleting ${ref} of ${slug} failed${status ? ` (${status})` : ""}: ${(error as { message?: string }).message ?? String(error)}`);
+    }
+  }
+
+  async enqueuePr(nodeId: string, sha?: string): Promise<{ queued: true }> {
+    await call(`enqueuing ${nodeId}`, () => this.octokit.graphql(ENQUEUE_MUTATION, { id: nodeId, sha: sha ?? null }));
+    return { queued: true };
+  }
+
+  async fileAtRef(slug: string, ref: string, path: string): Promise<string | null> {
+    const { owner, repo } = repoRef(slug);
+    let data: unknown;
+    try {
+      ({ data } = await this.octokit.rest.repos.getContent({ owner, repo, path, ref }));
+    } catch (error) {
+      if ((error as { status?: number }).status === 404) return null;
+      throw new GitHubError(`reading ${path} at ${ref} of ${slug} failed: ${(error as { message?: string }).message ?? String(error)}`);
+    }
+    const file = data as { type?: string; size?: number; content?: string; encoding?: string } | undefined;
+    if (!file || Array.isArray(file) || file.type !== "file" || typeof file.content !== "string" || file.encoding !== "base64") return null;
+    if ((file.size ?? 0) > FILE_AT_REF_MAX_BYTES) return null;
+    return Buffer.from(file.content, "base64").toString("utf8");
+  }
+
+  async prActivity(slug: string, number: number, since: string | null): Promise<PrActivity[]> {
+    const { owner, repo } = repoRef(slug);
+    type Row = { id: number; user: { login: string; type?: string } | null; author_association?: string | null; body?: string | null; created_at?: string; html_url?: string | null };
+    type ReviewRow = { id: number; user: { login: string; type?: string } | null; author_association?: string | null; body?: string | null; state: string; submitted_at?: string | null; html_url?: string | null };
+    const sinceParam = since ? { since } : {};
+    const [comments, reviewComments, reviews] = await call(`listing the activity of ${slug}#${number}`, () =>
+      Promise.all([
+        this.octokit.paginate<Row>(this.octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100, ...sinceParam }),
+        this.octokit.paginate<Row>(this.octokit.rest.pulls.listReviewComments, { owner, repo, pull_number: number, per_page: 100, ...sinceParam }),
+        this.octokit.paginate<ReviewRow>(this.octokit.rest.pulls.listReviews, { owner, repo, pull_number: number, per_page: 100 }),
+      ]),
+    );
+    const isBot = (u: { login: string; type?: string } | null) => u !== null && (u.type === "Bot" || u.login.endsWith("[bot]"));
+    const out: PrActivity[] = [
+      ...comments.map((c): PrActivity => ({ id: `comment:${c.id}`, kind: "comment", actor: c.user?.login ?? null, isBot: isBot(c.user), association: c.author_association ?? null, body: c.body ?? "", state: null, at: c.created_at ?? "", url: c.html_url ?? null })),
+      ...reviewComments.map((c): PrActivity => ({ id: `review_comment:${c.id}`, kind: "review_comment", actor: c.user?.login ?? null, isBot: isBot(c.user), association: c.author_association ?? null, body: c.body ?? "", state: null, at: c.created_at ?? "", url: c.html_url ?? null })),
+      ...reviews
+        .filter((r) => r.submitted_at && (!since || r.submitted_at > since))
+        .map((r): PrActivity => ({ id: `review:${r.id}`, kind: "review", actor: r.user?.login ?? null, isBot: isBot(r.user), association: r.author_association ?? null, body: r.body ?? "", state: r.state, at: r.submitted_at ?? "", url: r.html_url ?? null })),
+    ];
+    return out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id.localeCompare(b.id)));
+  }
+
+  async prReviews(slug: string, number: number): Promise<PrReview[]> {
+    const { owner, repo } = repoRef(slug);
+    const rows = await call(`listing the reviews of ${slug}#${number}`, () =>
+      this.octokit.paginate<{ user: { login: string } | null; state: string; commit_id?: string | null; submitted_at?: string | null; author_association?: string | null }>(this.octokit.rest.pulls.listReviews, { owner, repo, pull_number: number, per_page: 100 }),
+    );
+    return rows.map((r) => ({ author: r.user?.login ?? null, state: r.state, commitId: r.commit_id ?? null, at: r.submitted_at ?? "", association: r.author_association ?? null }));
+  }
+
+  async reviewRule(slug: string, baseRef: string): Promise<ReviewRule> {
+    const { owner, repo } = repoRef(slug);
+    const branch = baseRef;
+    const read = async (route: string): Promise<{ ok: true; data: unknown } | { ok: false; why: string }> => {
+      try {
+        return { ok: true, data: (await this.octokit.request(route, { owner, repo, branch })).data };
+      } catch (error) {
+        const { status, message } = error as { status?: number; message?: string };
+        return { ok: false, why: `${route.replace(/^GET \/repos\/\{owner\}\/\{repo\}\//, "")} could not be read${status ? ` (${status})` : ""}: ${message ?? "unknown"}` };
+      }
+    };
+    // The rulesets that apply to the branch (by name or pattern, evaluated by GitHub).
+    const rules = await read("GET /repos/{owner}/{repo}/rules/branches/{branch}");
+    if (rules.ok && Array.isArray(rules.data)) {
+      const pulls = (rules.data as Array<{ type?: string; parameters?: { required_approving_review_count?: number; require_code_owner_review?: boolean } }>).filter((r) => r.type === "pull_request");
+      if (pulls.length > 0) return { source: "ruleset", approvals: Math.max(...pulls.map((r) => r.parameters?.required_approving_review_count ?? 0)), codeOwners: pulls.some((r) => r.parameters?.require_code_owner_review === true) };
+    }
+    const info = await read("GET /repos/{owner}/{repo}/branches/{branch}");
+    if (!info.ok) return { source: "unreadable", why: info.why };
+    if ((info.data as { protected?: boolean } | null)?.protected === true) {
+      // A protection the token cannot read (403, 404) says nothing: never "none".
+      const protection = await read("GET /repos/{owner}/{repo}/branches/{branch}/protection");
+      if (!protection.ok) return { source: "unreadable", why: protection.why };
+      const reviews = (protection.data as { required_pull_request_reviews?: { required_approving_review_count?: number; require_code_owner_reviews?: boolean } } | null)?.required_pull_request_reviews;
+      if (reviews) return { source: "branch_protection", approvals: reviews.required_approving_review_count ?? 0, codeOwners: reviews.require_code_owner_reviews === true };
+    }
+    // Nothing found, but a ruleset list that could not be read may have held a rule.
+    return rules.ok ? { source: "none" } : { source: "unreadable", why: rules.why };
+  }
+
+  async teamMembers(org: string, teamSlug: string): Promise<string[]> {
+    const rows = await call(`listing the members of ${org}/${teamSlug}`, () =>
+      this.octokit.paginate<{ login: string }>(this.octokit.rest.teams.listMembersInOrg, { org, team_slug: teamSlug, per_page: 100 }),
+    );
+    return rows.map((m) => m.login);
+  }
+
+  async prMerged(slug: string, number: number): Promise<{ merged: boolean; mergedSha: string | null; state: "open" | "closed"; mergedAt: string | null }> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`reading ${slug}#${number}`, () => this.octokit.rest.pulls.get({ owner, repo, pull_number: number }));
+    const pr = data as { merged?: boolean; merge_commit_sha?: string | null; state?: string; merged_at?: string | null };
+    const merged = pr.merged === true;
+    return { merged, mergedSha: merged ? (pr.merge_commit_sha ?? null) : null, state: pr.state === "open" ? "open" : "closed", mergedAt: merged ? (pr.merged_at ?? null) : null };
   }
 
   async postReview(slug: string, number: number, review: ReviewPost): Promise<void> {
@@ -242,7 +389,7 @@ export class OctokitGitHub implements GitHub {
   async listReadyIssues(slug: string, label: string): Promise<GhIssue[]> {
     const { owner, repo } = repoRef(slug);
     const rows = await call(`listing ${slug} issues labelled ${label}`, () =>
-      this.octokit.paginate<{ number: number; title: string; body: string | null; html_url: string; labels?: Array<string | { name?: string }>; pull_request?: unknown }>(
+      this.octokit.paginate<{ number: number; title: string; body: string | null; html_url: string; labels?: Array<string | { name?: string }>; user?: { login?: string } | null; pull_request?: unknown }>(
         this.octokit.rest.issues.listForRepo,
         { owner, repo, labels: label, state: "open", per_page: 50 },
       ),
@@ -250,12 +397,24 @@ export class OctokitGitHub implements GitHub {
     // The issues API lists PRs too; intake wants issues.
     return rows
       .filter((i) => !i.pull_request)
-      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, url: i.html_url, labels: (i.labels ?? []).map((l) => (typeof l === "string" ? l : (l.name ?? ""))).filter(Boolean) }));
+      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, url: i.html_url, labels: (i.labels ?? []).map((l) => (typeof l === "string" ? l : (l.name ?? ""))).filter(Boolean), ...(i.user?.login ? { author: i.user.login } : {}) }));
   }
 
   async commentOnIssue(slug: string, number: number, body: string): Promise<void> {
     const { owner, repo } = repoRef(slug);
     await call(`commenting on ${slug}#${number}`, () => this.octokit.rest.issues.createComment({ owner, repo, issue_number: number, body }));
+  }
+
+  async defaultBranch(slug: string): Promise<string | null> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`reading the default branch of ${slug}`, () => this.octokit.rest.repos.get({ owner, repo }));
+    return typeof data.default_branch === "string" && data.default_branch.length > 0 ? data.default_branch : null;
+  }
+
+  async createIssue(slug: string, issue: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`creating an issue in ${slug}`, () => this.octokit.rest.issues.create({ owner, repo, title: issue.title, body: issue.body, ...(issue.labels && issue.labels.length > 0 ? { labels: issue.labels } : {}) }));
+    return { number: data.number, url: data.html_url };
   }
 
   async findPr(slug: string, branch: string): Promise<PrRef | null> {
@@ -269,11 +428,16 @@ export class OctokitGitHub implements GitHub {
 
   async openPr(slug: string, pr: NewPr): Promise<PrRef> {
     const { owner, repo } = repoRef(slug);
-    const base = (await call(`reading ${slug}`, () => this.octokit.rest.repos.get({ owner, repo }))).data.default_branch;
+    const base = pr.base ?? (await call(`reading ${slug}`, () => this.octokit.rest.repos.get({ owner, repo }))).data.default_branch;
     const { data } = await call(`opening a PR for ${pr.head}`, () =>
       this.octokit.rest.pulls.create({ owner, repo, title: pr.title, body: pr.body, head: pr.head, base, draft: pr.draft }),
     );
     return { url: data.html_url, number: data.number, isDraft: data.draft === true };
+  }
+
+  async retargetPr(slug: string, number: number, base: string): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    await call(`retargeting ${slug}#${number} to ${base}`, () => this.octokit.rest.pulls.update({ owner, repo, pull_number: number, base }));
   }
 
   async markPrReady(slug: string, number: number): Promise<void> {
@@ -307,6 +471,59 @@ export class OctokitGitHub implements GitHub {
       logs.push(`== ${job.name} ==\n${String(log.data)}`);
     }
     return logs.join("\n");
+  }
+
+  async updatePrBody(slug: string, number: number, body: string): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    await call(`updating the body of ${slug}#${number}`, () => this.octokit.rest.pulls.update({ owner, repo, pull_number: number, body }));
+  }
+
+  async listPrComments(slug: string, number: number): Promise<Array<{ id: number; body: string; url: string; author: string | null }>> {
+    const { owner, repo } = repoRef(slug);
+    const rows = await call(`listing the comments of ${slug}#${number}`, () =>
+      this.octokit.paginate<{ id: number; body?: string | null; html_url: string; user?: { login?: string } | null }>(this.octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }),
+    );
+    return rows.map((c) => ({ id: c.id, body: c.body ?? "", url: c.html_url, author: c.user?.login ?? null }));
+  }
+
+  async updateComment(slug: string, commentId: number, body: string): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    await call(`updating comment ${commentId} on ${slug}`, () => this.octokit.rest.issues.updateComment({ owner, repo, comment_id: commentId, body }));
+  }
+
+  async prHeadSha(slug: string, number: number): Promise<string | null> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`reading ${slug}#${number}`, () => this.octokit.rest.pulls.get({ owner, repo, pull_number: number }));
+    return (data as { head?: { sha?: string } } | undefined)?.head?.sha ?? null;
+  }
+
+  async ensureRelease(slug: string, tag: string, release: { name: string; prerelease: boolean }): Promise<{ id: number; url: string }> {
+    const { owner, repo } = repoRef(slug);
+    // A draft has no tag to look up by: the first page of releases (drafts included for a token with push) is where it is.
+    const { data: releases } = await call(`listing the releases of ${slug}`, () => this.octokit.rest.repos.listReleases({ owner, repo, per_page: 100 }));
+    const found = releases.find((r) => r.tag_name === tag);
+    if (found) return { id: found.id, url: found.html_url };
+    // A draft: no tag is created and no `release` event fires, so the repo's publish or deploy workflows stay out of it.
+    const { data } = await call(`creating the ${tag} release of ${slug}`, () =>
+      this.octokit.rest.repos.createRelease({ owner, repo, tag_name: tag, name: release.name, prerelease: release.prerelease, draft: true }),
+    );
+    return { id: data.id, url: data.html_url };
+  }
+
+  async releaseAssets(slug: string, releaseId: number): Promise<Array<{ id: number; name: string; url: string }>> {
+    const { owner, repo } = repoRef(slug);
+    const rows = await call(`listing the assets of release ${releaseId}`, () =>
+      this.octokit.paginate<{ id: number; name: string; browser_download_url: string }>(this.octokit.rest.repos.listReleaseAssets, { owner, repo, release_id: releaseId, per_page: 100 }),
+    );
+    return rows.map((a) => ({ id: a.id, name: a.name, url: a.browser_download_url }));
+  }
+
+  async uploadReleaseAsset(slug: string, releaseId: number, name: string, data: Buffer, contentType: string): Promise<{ url: string }> {
+    const { owner, repo } = repoRef(slug);
+    const { data: asset } = await call(`uploading ${name} to release ${releaseId}`, () =>
+      this.octokit.rest.repos.uploadReleaseAsset({ owner, repo, release_id: releaseId, name, data, headers: { "content-type": contentType, "content-length": data.length } }),
+    );
+    return { url: asset.browser_download_url };
   }
 
   async rerunFailedJobs(slug: string, runId: string): Promise<void> {

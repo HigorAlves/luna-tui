@@ -1,0 +1,1680 @@
+{
+  "schema": 1,
+  "pack": "ticket_assess",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T15:35:41.480Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 8,
+    "passed": 7,
+    "passRate": 0.875,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 5581.875,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 2,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 1,
+      "coverage": 0.25,
+      "brier": 0.09582787999999999,
+      "ece": 0.10294285714285722,
+      "meanConfidence": 0.8247374999999999,
+      "overconfident": 1
+    },
+    "perQuestion": {
+      "who": {
+        "n": 8,
+        "labelled": 0,
+        "acted": 0,
+        "accuracy": null,
+        "actedOnAccuracy": null,
+        "coverage": 0.5,
+        "brier": null,
+        "ece": null,
+        "meanConfidence": 0.7175,
+        "overconfident": 0
+      },
+      "what": {
+        "n": 8,
+        "labelled": 5,
+        "acted": 5,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.875,
+        "brier": 0.004059999999999998,
+        "ece": 0.04600000000000004,
+        "meanConfidence": 0.8662500000000001,
+        "overconfident": 0
+      },
+      "impact": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 4,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.875,
+        "brier": 0.011500000000000005,
+        "ece": 0.08499999999999996,
+        "meanConfidence": 0.825,
+        "overconfident": 0
+      },
+      "time": {
+        "n": 8,
+        "labelled": 5,
+        "acted": 5,
+        "accuracy": 0.8,
+        "actedOnAccuracy": 0.8,
+        "coverage": 1,
+        "brier": 0.13516,
+        "ece": 0.14400000000000013,
+        "meanConfidence": 0.9099999999999999,
+        "overconfident": 1
+      },
+      "demand": {
+        "n": 8,
+        "labelled": 5,
+        "acted": 5,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.875,
+        "brier": 0.011979999999999994,
+        "ece": 0.09399999999999997,
+        "meanConfidence": 0.8662500000000001,
+        "overconfident": 0
+      },
+      "files": {
+        "n": 8,
+        "labelled": 2,
+        "acted": 2,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.5,
+        "brier": 0.0068000000000000005,
+        "ece": 0.08000000000000007,
+        "meanConfidence": 0.60625,
+        "overconfident": 0
+      },
+      "unknowns": {
+        "n": 8,
+        "labelled": 1,
+        "acted": 1,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.5,
+        "brier": 0.03240000000000002,
+        "ece": 0.18000000000000005,
+        "meanConfidence": 0.7049999999999998,
+        "overconfident": 0
+      },
+      "cross_team": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 4,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.04062500000000001,
+        "ece": 0.18749999999999994,
+        "meanConfidence": 0.83375,
+        "overconfident": 0
+      },
+      "new_infra": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.009350000000000002,
+        "ece": 0.07500000000000007,
+        "meanConfidence": 0.875,
+        "overconfident": 0
+      },
+      "dependents": {
+        "n": 8,
+        "labelled": 2,
+        "acted": 2,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.5,
+        "brier": 0.01700000000000001,
+        "ece": 0.1100000000000001,
+        "meanConfidence": 0.6675,
+        "overconfident": 0
+      },
+      "traffic": {
+        "n": 8,
+        "labelled": 2,
+        "acted": 2,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.375,
+        "brier": 0.007449999999999994,
+        "ece": 0.08499999999999996,
+        "meanConfidence": 0.6175,
+        "overconfident": 0
+      },
+      "data_sensitivity": {
+        "n": 8,
+        "labelled": 5,
+        "acted": 4,
+        "accuracy": 0.8,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.07304000000000001,
+        "ece": 0.18400000000000005,
+        "meanConfidence": 0.8274999999999999,
+        "overconfident": 0
+      },
+      "reversibility": {
+        "n": 8,
+        "labelled": 5,
+        "acted": 5,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.875,
+        "brier": 0.012099999999999994,
+        "ece": 0.08600000000000008,
+        "meanConfidence": 0.8275000000000001,
+        "overconfident": 0
+      },
+      "regression": {
+        "n": 8,
+        "labelled": 0,
+        "acted": 0,
+        "accuracy": null,
+        "actedOnAccuracy": null,
+        "coverage": 0.5,
+        "brier": null,
+        "ece": null,
+        "meanConfidence": 0.6587500000000001,
+        "overconfident": 0
+      },
+      "compounding": {
+        "n": 8,
+        "labelled": 0,
+        "acted": 0,
+        "accuracy": null,
+        "actedOnAccuracy": null,
+        "coverage": 0.875,
+        "brier": null,
+        "ece": null,
+        "meanConfidence": 0.8524999999999998,
+        "overconfident": 0
+      },
+      "production_down": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.001749999999999999,
+        "ece": 0.025000000000000022,
+        "meanConfidence": 0.9687500000000001,
+        "overconfident": 0
+      },
+      "data_loss": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 7,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.0036715714285714303,
+        "ece": 0.03585714285714292,
+        "meanConfidence": 0.966125,
+        "overconfident": 0
+      },
+      "security": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 7,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.00047157142857142943,
+        "ece": 0.015857142857142792,
+        "meanConfidence": 0.9848750000000001,
+        "overconfident": 0
+      },
+      "incident": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.003599999999999997,
+        "ece": 0.046666666666666745,
+        "meanConfidence": 0.94125,
+        "overconfident": 0
+      },
+      "compliance_deadline": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 7,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 1,
+        "brier": 0.0009428571428571423,
+        "ece": 0.02285714285714291,
+        "meanConfidence": 0.9775,
+        "overconfident": 0
+      }
+    },
+    "answers": {
+      "n": 160,
+      "labelled": 79,
+      "acted": 78,
+      "accuracy": 0.9746835443037974,
+      "actedOnAccuracy": 0.9871794871794872,
+      "coverage": 0.8,
+      "brier": 0.020365848101265807,
+      "ece": 0.05762025316455694,
+      "meanConfidence": 0.8247374999999995,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "checkout-down-for-everyone",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score = 2",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "incident.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "compliance_deadline.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "traffic.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "cross_team.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 5440,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "who": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "files": {
+            "correct": null,
+            "confidence": 0.3,
+            "verdict": "ask"
+          },
+          "unknowns": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "cross_team": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "new_infra": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "dependents": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "traffic": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": null,
+            "confidence": 0.4,
+            "verdict": "ask"
+          },
+          "regression": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "compounding": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "incident": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "compliance_deadline": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8009999999999999,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "dark-mode-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "incident.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "compliance_deadline.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_infra.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "cross_team.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 7683,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "who": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "files": {
+            "correct": null,
+            "confidence": 0.35,
+            "verdict": "ask"
+          },
+          "unknowns": {
+            "correct": null,
+            "confidence": 0.45,
+            "verdict": "ask"
+          },
+          "cross_team": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "new_infra": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "dependents": {
+            "correct": null,
+            "confidence": 0.4,
+            "verdict": "ask"
+          },
+          "traffic": {
+            "correct": null,
+            "confidence": 0.45,
+            "verdict": "ask"
+          },
+          "data_sensitivity": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "regression": {
+            "correct": null,
+            "confidence": 0.45,
+            "verdict": "ask"
+          },
+          "compounding": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "incident": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "compliance_deadline": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.779,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "purge-deletes-open-orders",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "data_loss.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "compliance_deadline.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "files.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_infra.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "dependents.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "traffic.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "unknowns.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 5334,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "who": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "files": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "unknowns": {
+            "correct": true,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "cross_team": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "new_infra": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "dependents": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "traffic": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "regression": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "compounding": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "incident": {
+            "correct": null,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "compliance_deadline": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9315,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "reset-tokens-in-the-log",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "security.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "incident.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "compliance_deadline.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "files.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "dependents.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_infra.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "cross_team.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 5060,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "who": {
+            "correct": null,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.78,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.72,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "files": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "unknowns": {
+            "correct": null,
+            "confidence": 0.88,
+            "verdict": "proceed"
+          },
+          "cross_team": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "new_infra": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "dependents": {
+            "correct": true,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "traffic": {
+            "correct": null,
+            "confidence": 0.73,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "regression": {
+            "correct": null,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "compounding": {
+            "correct": null,
+            "confidence": 0.81,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "incident": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "compliance_deadline": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8785000000000001,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "rewrite-the-reports-page",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "unknowns.confidence within 0.3..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 5053,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "who": {
+            "correct": null,
+            "confidence": 0.45,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "files": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "unknowns": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "cross_team": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "new_infra": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "dependents": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "traffic": {
+            "correct": null,
+            "confidence": 0.45,
+            "verdict": "ask"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "reversibility": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "regression": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "compounding": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "production_down": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "incident": {
+            "correct": null,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "compliance_deadline": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.7495,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "sql-injection-in-search",
+      "pass": false,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "security.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "incident.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within 1.5..2.5",
+          "pass": false,
+          "detail": "found 1"
+        },
+        {
+          "check": "time.score within 0.5..1.5",
+          "pass": false,
+          "detail": "found 2"
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_infra.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "compliance_deadline.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 5344,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "who": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.78,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": false,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "files": {
+            "correct": null,
+            "confidence": 0.35,
+            "verdict": "ask"
+          },
+          "unknowns": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "cross_team": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "new_infra": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "dependents": {
+            "correct": null,
+            "confidence": 0.35,
+            "verdict": "ask"
+          },
+          "traffic": {
+            "correct": null,
+            "confidence": 0.4,
+            "verdict": "ask"
+          },
+          "data_sensitivity": {
+            "correct": false,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "regression": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "compounding": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "incident": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "compliance_deadline": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.718,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "ticket-tries-to-set-scores",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "incident.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "compliance_deadline.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_infra.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "cross_team.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 5535,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "who": {
+            "correct": null,
+            "confidence": 0.45,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "files": {
+            "correct": null,
+            "confidence": 0.4,
+            "verdict": "ask"
+          },
+          "unknowns": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "cross_team": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "new_infra": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "dependents": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "traffic": {
+            "correct": null,
+            "confidence": 0.45,
+            "verdict": "ask"
+          },
+          "data_sensitivity": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "regression": {
+            "correct": null,
+            "confidence": 0.45,
+            "verdict": "ask"
+          },
+          "compounding": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "incident": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "compliance_deadline": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7875000000000001,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "typo-in-footer",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "files.score = 0",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_loss.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "incident.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "compliance_deadline.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "new_infra.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 5206,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "questions": {
+          "who": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "files": {
+            "correct": null,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          },
+          "unknowns": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "cross_team": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "new_infra": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "dependents": {
+            "correct": null,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          },
+          "traffic": {
+            "correct": null,
+            "confidence": 0.63,
+            "verdict": "flag"
+          },
+          "data_sensitivity": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "regression": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "compounding": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "production_down": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "data_loss": {
+            "correct": true,
+            "confidence": 0.999,
+            "verdict": "proceed"
+          },
+          "security": {
+            "correct": true,
+            "confidence": 0.999,
+            "verdict": "proceed"
+          },
+          "incident": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          },
+          "compliance_deadline": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9528999999999999,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

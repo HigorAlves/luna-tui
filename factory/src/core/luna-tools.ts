@@ -3,7 +3,8 @@
 // The state lives in the factory process, because finish() reads it; each runtime serves the
 // handlers its own way (Claude as an in-process MCP server, eve over a loopback call).
 import type { Ledger, LedgerSlice, LunaTool, RunEvent, StageInput } from "@hardness/contracts";
-import { writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 
 import type { Emit } from "./events.ts";
@@ -28,7 +29,8 @@ export const LUNA_TOOLS = {
     input: { slices: z.array(z.object({ id: z.number().int(), title: z.string(), estLoc: z.number().int().nullable().optional() })).min(1) },
   },
   slice_set: {
-    description: "Set a slice's status (pending | red | green | committed | escalated), with the commit sha once committed, the actual LOC, or a note.",
+    description:
+      "Set a slice's status (pending | red | green | committed | escalated), with the commit sha once committed, the actual LOC, or a note. A red needs a note: the failing output's last lines. The machine judges that red and the answer comes back as `check` ({ verdict, problems }); on flag or ask, rewrite the test before going green.",
     input: {
       id: z.number().int(),
       status: STATUS,
@@ -36,6 +38,21 @@ export const LUNA_TOOLS = {
       actualLoc: z.number().int().nullable().optional(),
       note: z.string().nullable().optional(),
     },
+  },
+  scope_check: {
+    description:
+      "Ask the machine to judge the scope of your change before you answer done: a summary of the diff and every file you changed outside the plan's touchpoints, each with its reason. Waits for the verdict; fix what it flags (one pass). A verdict of skipped means no one answered; go on.",
+    input: { diffSummary: z.string(), outOfMap: z.array(z.object({ path: z.string(), reason: z.string() })) },
+  },
+  card_search: {
+    description:
+      "Search the titles of this repository's cards (open ones and those closed in the last 90 days) for a topic, so you can say \"related to card X\". Read-only: returns at most 10 of { id, title, state }, only cards that came from the same source as this one (a GitHub card sees GitHub cards), and nothing from another repository; never a summary or a description. An empty list or a verdict of skipped means nothing matched or no one answered; go on.",
+    input: { query: z.string().min(1).max(300) },
+  },
+  scenario_red: {
+    description:
+      "Report that the test you wrote for one scenario fails, with the failing output's last lines: { scenario: 'S1', output: '...' }. Call it once per scenario after running its test. The machine judges each report; a scenario with no report, or whose test fails for the wrong reason, comes back to you.",
+    input: { scenario: z.string().min(1).max(40), output: z.string() },
   },
   slice_list: { description: "The slice ledger as it stands.", input: {} },
   decision_get: {
@@ -54,6 +71,34 @@ export interface LunaToolsOptions {
   decisions: StageInput["decisions"];
   /** Where every call's event goes: the run's event stream (a step is also a transcript line). */
   emit: Emit;
+  /** The mailbox the machine answers the build checks in (`/out/checks`); absent, a check is skipped at once. */
+  checksDir?: string;
+  /** How long a check waits for its answer, in ms; 0 asks and does not wait. */
+  checkWaitMs?: number;
+  /** Called once a slice is recorded as committed: the run hands its commits to the machine here (core/bundles.ts). */
+  onSliceCommitted?: () => void;
+}
+
+const POLL_MS = 25;
+const MIN_RED_NOTE = 20;
+type CheckAnswer = { verdict: string; problems: string[]; [key: string]: unknown };
+const SKIPPED: CheckAnswer = { verdict: "skipped", problems: [] };
+
+/** Polls for a JSON answer file until `waitMs` has passed; a half-written file is retried. */
+async function awaitAnswer(path: string, waitMs: number): Promise<CheckAnswer> {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    if (existsSync(path)) {
+      try {
+        const parsed = JSON.parse(readFileSync(path, "utf8")) as CheckAnswer;
+        if (parsed && typeof parsed === "object" && typeof parsed.verdict === "string") return { ...parsed, problems: Array.isArray(parsed.problems) ? parsed.problems : [] };
+      } catch {
+        // half-written: look again
+      }
+    }
+    if (Date.now() >= until) return SKIPPED;
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+  }
 }
 
 /** The handlers, by tool, and the state the runner reads at the end. `call` validates the input
@@ -62,6 +107,16 @@ export function lunaHandlers(options: LunaToolsOptions) {
   const state: { ledger: Ledger } = { ledger: options.ledger ?? { schema: 1, slices: [] } };
   const persist = () => writeFileSync(options.ledgerPath, JSON.stringify(state.ledger, null, 2) + "\n");
   const note = (event: RunEvent) => options.emit(event);
+
+  /** Waits for the machine's answer file in the mailbox. */
+  const answerOf = async (file: string): Promise<CheckAnswer> => {
+    if (!options.checksDir) return SKIPPED;
+    const path = join(options.checksDir, file);
+    return awaitAnswer(path, options.checkWaitMs ?? 0);
+  };
+  const clear = (file: string) => {
+    if (options.checksDir) rmSync(join(options.checksDir, file), { force: true });
+  };
 
   const handlers: { [T in LunaTool]: (args: Args<T>) => unknown } = {
     step: ({ label, n = 0, of = 0 }) => {
@@ -78,17 +133,58 @@ export function lunaHandlers(options: LunaToolsOptions) {
       note({ kind: "ledger.init", payload: { total: state.ledger.slices.length } });
       return state.ledger;
     },
-    slice_set: ({ id, status, commit, actualLoc, note: sliceNote }) => {
+    slice_set: async ({ id, status, commit, actualLoc, note: sliceNote }) => {
       const slice = state.ledger.slices.find((s) => s.id === id);
       if (!slice) return { error: `no slice ${id}; call slice_list` };
+      if (status === "red" && (sliceNote ?? "").trim().length < MIN_RED_NOTE) {
+        return { error: `a red slice needs a note of at least ${MIN_RED_NOTE} characters: the failing output's last lines` };
+      }
       slice.status = status;
       if (commit !== undefined) slice.commit = commit;
       if (actualLoc !== undefined) slice.actualLoc = actualLoc;
       if (sliceNote !== undefined) slice.note = sliceNote;
+      // An answer left by an earlier red of this slice is cleared before the machine can see the new one.
+      if (status === "red") clear(`red-${id}.json`);
+      // The commits leave before the ledger says so: the machine reads the bundle once it sees the slice committed.
+      if (status === "committed") options.onSliceCommitted?.();
       persist();
       const kind = SLICE_EVENT[status];
       if (kind) note({ kind, payload: { id: slice.id, title: slice.title, commit: slice.commit } });
-      return slice;
+      if (status !== "red") return slice;
+      // The machine judges the red from the ledger it just read; the answer is a file in the mailbox.
+      return { ...slice, check: await answerOf(`red-${id}.json`) };
+    },
+    scope_check: async ({ diffSummary, outOfMap }) => {
+      if (options.checksDir) {
+        mkdirSync(options.checksDir, { recursive: true });
+        clear("scope.json");
+        writeFileSync(join(options.checksDir, "scope-request.json"), JSON.stringify({ diffSummary, outOfMap }, null, 2) + "\n");
+      }
+      return answerOf("scope.json");
+    },
+    card_search: async ({ query }) => {
+      if (!options.checksDir) return SKIPPED;
+      mkdirSync(options.checksDir, { recursive: true });
+      clear("card-search.json");
+      writeFileSync(join(options.checksDir, "card-search-request.json"), JSON.stringify({ query }) + "\n");
+      return answerOf("card-search.json");
+    },
+    scenario_red: ({ scenario, output }) => {
+      if (!options.checksDir) return { recorded: false };
+      mkdirSync(options.checksDir, { recursive: true });
+      const file = join(options.checksDir, "scenario-reds.json");
+      let reds: Record<string, string> = {};
+      try {
+        reds = JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
+      } catch {
+        // the first report, or a half-written file: start again
+      }
+      // The machine reads this file bounded (64 KB): an output is kept by its tail, and a report that would pass the bound is refused.
+      const next = { ...reds, [scenario]: output.slice(-2000) };
+      const text = JSON.stringify(next, null, 2) + "\n";
+      if (Buffer.byteLength(text) > 60_000) return { recorded: false, error: "too many reports: the file would be too big for the machine to read" };
+      writeFileSync(file, text);
+      return { recorded: true };
     },
     slice_list: () => state.ledger,
     decision_get: ({ key }) => {

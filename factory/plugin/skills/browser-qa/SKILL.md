@@ -20,9 +20,9 @@ Skip for remote targets. A local target with a `baseUrl` that already answers `c
 
 In factory mode there is no driver gate. Use **Playwright (Driver P)** when `node` and `npx` are available and the repo has, or can host, a Playwright project; otherwise **agent-browser (Driver A)**. A live-browser driver that needs a person's own Chrome is unavailable in factory mode (see [DRIVER-B.md](references/DRIVER-B.md) for what it would have produced; never select it here).
 
-## Step 2 — Load the acceptance criteria (all drivers)
+## Step 2 — Load the approved scenarios (all drivers)
 
-Before driving anything, collect the plan criteria from the stage prompt (`mcp__luna__slice_list` gives the slice ledger when per-slice acceptance is needed). These are the scoring rubric — the walk exists to prove them, not to tour the app. Every criterion ends the run as `pass`, `fail`, or `partial` **with a stated reason**, each carrying the artifact that proves it. A criterion that cannot be reached (guarded target, missing fixture, unreachable route) is `partial` with a `note`, never dropped.
+Before driving anything, collect the approved scenarios (Given/When/Then, each with its criterion) from the stage prompt; the plan criteria are context. Everything below says "criterion" for what is scored: it is the scenario, identified by its title verbatim, which keys its `acceptance[]` row (`text`), its `video.chapters[]` entry (`title`) and its `steps.jsonl` rows (`scenario`). Collect the plan criteria from the stage prompt (`mcp__luna__slice_list` gives the slice ledger when per-slice acceptance is needed). These are the scoring rubric — the walk exists to prove them, not to tour the app. Every criterion ends the run as `pass`, `fail`, or `partial` **with a stated reason**, each carrying the artifact that proves it. A criterion that cannot be reached (guarded target, missing fixture, unreachable route) is `partial` with a `note`, never dropped.
 
 ## Driver P — Playwright (delegate)
 
@@ -34,4 +34,4 @@ Drive the walk yourself with the `agent-browser` CLI and write `qa-manifest.json
 
 ## Iron rule
 
-No "QA passed" claim without the evidence packet on disk — whichever driver ran. Every acceptance criterion from step 2 appears in `qa-manifest.json` with a result; `partial` requires a stated reason. The stage verdict is computed mechanically from the manifest rows (any `fail` ⇒ `fail`; else any `partial` ⇒ `partial`; else `pass`); this protocol's browser verdict is that computation's only input.
+No "QA passed" claim without the evidence packet on disk — whichever driver ran. Every scenario from step 2 appears in `qa-manifest.json` as an `acceptance[]` row (`text` = the scenario title) with a result, has a `video.chapters[]` entry when there is a recording, and has its actions in `steps.jsonl` (one JSON object per line: `{ scenario, step, action, selector?, value?, url?, screenshot? }`) beside `steps.md`; `partial` requires a stated reason. The stage verdict is computed mechanically from the manifest rows (any `fail` ⇒ `fail`; else any `partial` ⇒ `partial`; else `pass`); this protocol's browser verdict is that computation's only input.

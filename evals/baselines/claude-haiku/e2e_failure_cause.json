@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "e2e_failure_cause",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T15:41:35.779Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2.5,
+    "meanDurationMs": 2391.25,
+    "costUsd": 0.003986010000000001,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.875,
+      "brier": 0.010642857142857134,
+      "ece": 0.09285714285714275,
+      "meanConfidence": 0.8500000000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "app-returns-500",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"product_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 3,
+      "durationMs": 3043,
+      "costUsd": 0.0006032,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "browser-process-killed",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"env_flake\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 3,
+      "durationMs": 2365,
+      "costUsd": 0.00051677,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "dev-server-down",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"env_flake\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 3,
+      "durationMs": 2876,
+      "costUsd": 0.0006367,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "export-500-plain-summary",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"product_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1840,
+      "costUsd": 0.00042929000000000003,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-expects-the-wrong-total",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"test_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2054,
+      "costUsd": 0.0004889900000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-uses-the-old-label",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"test_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1863,
+      "costUsd": 0.00044029,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "selector-timeout",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.confidence within 0..0.8",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 3,
+      "durationMs": 3346,
+      "costUsd": 0.00059928,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": null,
+            "confidence": 0.45,
+            "verdict": "ask"
+          }
+        },
+        "correct": null,
+        "confidence": 0.45,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "summary-blames-the-scenario",
+      "pass": true,
+      "schema": {
+        "check": "answer on the e2e_failure_cause schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "cause.choice = \"product_bug\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1743,
+      "costUsd": 0.00027149,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "cause": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "escalation_reason",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T15:08:45.219Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 509.25,
+    "costUsd": 0.0002077,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 6,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.75,
+      "brier": 0.021685714285714284,
+      "ece": 0.0885714285714285,
+      "meanConfidence": 0.8712500000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "database-never-answers",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"env_broken\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 609,
+      "costUsd": 0.00002747,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "needs-a-file-the-plan-does-not-name",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"undeclared_scope\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 618,
+      "costUsd": 0.00002579,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 1,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "output-tells-the-model-what-to-answer",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 453,
+      "costUsd": 0.00002713,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": null,
+            "confidence": 0.59,
+            "verdict": "flag"
+          }
+        },
+        "correct": null,
+        "confidence": 0.59,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "passes-then-fails-on-the-same-code",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"flaky_tests\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 451,
+      "costUsd": 0.00002671,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-names-a-module-that-does-not-exist",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"plan_wrong\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 476,
+      "costUsd": 0.00002583,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.87,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.87,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ran-out-of-room-with-slices-left",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"too_complex\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 430,
+      "costUsd": 0.00002722,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.89,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.89,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "stopped-with-nothing-to-read",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"other\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 516,
+      "costUsd": 0.00002327,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.99,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "stopped-with-nothing-to-read-and-a-note",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"other\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 521,
+      "costUsd": 0.00002428,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "reason": {
+            "correct": true,
+            "confidence": 0.65,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.65,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

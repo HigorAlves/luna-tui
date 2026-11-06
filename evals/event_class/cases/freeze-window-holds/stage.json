@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "event_class",
+  "pack": "event_class",
+  "attempt": 1,
+  "task": {
+    "id": "freeze-window-holds",
+    "title": "freeze-window-holds",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "event",
+      "event": {
+        "actor": "github",
+        "isBot": true,
+        "isMe": false,
+        "kind": "comment",
+        "state": null,
+        "body": "Merge freeze until Monday 09:00 UTC for the release cut. Nothing may merge now.",
+        "url": null
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

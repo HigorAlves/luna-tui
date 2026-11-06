@@ -1,0 +1,41 @@
+{
+  "schema": 3,
+  "stage": "escalation_reason",
+  "pack": "escalation_reason",
+  "attempt": 1,
+  "task": {
+    "id": "escalation-reason",
+    "title": "Escalation reason",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "escalation",
+      "escalation": {
+        "stage": "implementing",
+        "summary": "Every test that touches the database times out.",
+        "agentReason": "flaky_tests",
+        "output": "Error: connect ECONNREFUSED 127.0.0.1:5432\n  at TCPConnectWrap.afterConnect\nError: connect ECONNREFUSED 127.0.0.1:5432",
+        "facts": [
+          "the budget is spent: 91 of 90 minutes (minutes)",
+          "0 consecutive reds at the end of the ledger"
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "right_reason.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "not_tautological.value",
+      "value": true
+    }
+  ],
+  "rubric": "The test asks for the route and gets a 404: it fails because the behaviour is missing.",
+  "label": {
+    "right_reason": {
+      "value": true
+    },
+    "not_tautological": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "right_reason": "Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture.",
+      "not_tautological": "Would this test still fail if the behaviour were absent: it asserts the behaviour, not its own setup?"
+    },
+    "why": "The test asks for the route and gets a 404 because the route is not registered: the behaviour is missing, so yes, and the assertion would fail without it.",
+    "second": {
+      "label": {
+        "right_reason": {
+          "value": true
+        },
+        "not_tautological": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

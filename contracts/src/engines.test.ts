@@ -1,11 +1,12 @@
 // The catalog and the engines checked against the packs: every engine a pack may run on exists,
 // names a catalog model that can serve the pack and the pack's effort, and is not retired; and
 // no source file outside the catalog names a provider's model ID.
+import { decisionEngines } from "./decision-defaults.ts";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, StageInput, credentialOwner, engineBudgetKeyProblem, helperPack, readOnly, resolveEngine, retired } from "./index.ts";
+import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, STRONGER, StageInput, credentialOwner, engineBudgetKeyProblem, helperPack, readOnly, resolveEngine, retired, stronger } from "./index.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -97,6 +98,7 @@ describe("the engines each pack may run on", () => {
   it("keeps today's subagents on their engines, and gives the verifier a second opinion on Codex", () => {
     expect(PACKS.reviewing.helpers).toEqual([{ role: "security-reviewer", engine: "claude:opus" }]);
     expect(PACKS.addressing.helpers).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
+    expect(PACKS.triage.helpers).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
     expect(PACKS.verifying.helpers).toEqual([{ role: "second-opinion", engine: "codex:sol" }]);
   });
 
@@ -121,15 +123,36 @@ describe("the engines each pack may run on", () => {
     expect(new Set(fallback).size).toBe(fallback.length);
   });
 
+  it("gives every decision pack an engine besides Jev to fall back to", () => {
+    for (const pack of Object.values(PACKS).filter((p) => p.kind === "decision")) {
+      expect(pack.engines.allowed.filter((e) => e !== "jev").length, pack.id).toBeGreaterThan(0);
+      expect(pack.engines.fallback?.some((e) => e !== "jev"), pack.id).toBe(true);
+    }
+  });
+
   it("gives a Claude-only pack no fallback", () => {
     const claudeOnly = Object.values(PACKS).filter((p) => p.engines.allowed.every((id) => id.startsWith("claude:")));
     expect(claudeOnly.length).toBeGreaterThan(0);
     for (const pack of claudeOnly) expect(pack.engines.fallback, pack.id).toBeUndefined();
   });
 
+  it("names a stronger engine for a default that has one among the pack's allowed engines, and none otherwise", () => {
+    expect(STRONGER).toEqual({ "claude:haiku": "claude:sonnet", "claude:sonnet": "claude:opus", "codex:luna": "codex:sol" });
+    expect(stronger(PACKS.implementing)).toBe("claude:opus");
+    // Opus is the top of the Claude ladder; Haiku's step up (Sonnet) is not allowed on the Slack inbox.
+    expect(stronger(PACKS.verifying)).toBeNull();
+    expect(stronger(PACKS.slack_triage)).toBeNull();
+  });
+
+  it("lets implementing run on Opus for the one shot after too_complex, and still has no fallback", () => {
+    expect(PACKS.implementing.engines).toEqual({ default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] });
+  });
+
   it("keeps today's models as the defaults", () => {
     const defaults = Object.fromEntries(Object.values(PACKS).map((p) => [p.id, p.engines.default]));
-    expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet", issue_classify: "jev" });
+    // A decision pack's default is measured (contracts/src/decision-defaults.json, written by `pnpm eval defaults`), not pinned here.
+    const measured = Object.fromEntries(["triage_signals", "risk_score", "coverage_check", "plan_check", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning"].map((id) => [id, decisionEngines(id).default]));
+    expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet", ...measured, pr_reply: "claude:haiku", code_map: "claude:haiku" });
   });
 });
 

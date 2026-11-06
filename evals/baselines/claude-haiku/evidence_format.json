@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "evidence_format",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T15:13:34.580Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 1916.75,
+    "costUsd": 0.0037736300000000005,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 7,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.007328571428571427,
+      "ece": 0.07857142857142851,
+      "meanConfidence": 0.89375,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "api-only-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"screenshots_or_terminal\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2311,
+      "costUsd": 0.0005423000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.85,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ci-workflow-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text_only\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1579,
+      "costUsd": 0.00042579,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "cli-flag-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"screenshots_or_terminal\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1754,
+      "costUsd": 0.00047219000000000004,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "goal-demands-video",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text_only\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2092,
+      "costUsd": 0.00047809,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "pure-refactor",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text_only\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1720,
+      "costUsd": 0.00044589000000000006,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "rename-constant-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text_only\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2018,
+      "costUsd": 0.00045449000000000005,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "steps-but-no-video-image",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2206,
+      "costUsd": 0.00051009,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.7,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "web-change-with-recording",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"video\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1654,
+      "costUsd": 0.00044479000000000003,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "format": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.95,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

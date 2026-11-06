@@ -5,7 +5,12 @@
   "exports": {
     "./run-once": "./src/application/stages/run-once.ts",
     "./credentials": "./src/adapters/credentials/index.ts",
-    "./docker": "./src/adapters/docker/docker.ts"
+    "./docker": "./src/adapters/docker/docker.ts",
+    "./telemetry": "./src/bootstrap/telemetry.ts",
+    "./egress": "./src/bootstrap/egress.ts",
+    "./config": "./src/config.ts",
+    "./policy": "./src/application/policy.ts",
+    "./decisions": "./src/bootstrap/decisions.ts"
   },
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
@@ -17,6 +22,8 @@
     "db:generate": "tsx node_modules/typeorm/cli.js migration:generate -d src/adapters/persistence/data-source.ts",
     "runner:build": "bash runner/build.sh",
     "runner-qa:build": "bash runner/build.sh --qa",
+    "runner-video:build": "bash runner/build.sh --video",
+    "runner-video:smoke": "bash runner-video/smoke.sh",
     "smoke:sandbox": "tsx scripts/smoke-sandbox.mjs",
     "golden": "node scripts/golden-task.mjs",
     "gates": "tsx scripts/github-gates.mjs",
@@ -37,6 +44,7 @@
   "dependencies": {
     "@hardness/contracts": "workspace:*",
     "@hono/node-server": "^2.1.5",
+    "@lmnr-ai/lmnr": "^0.8.58",
     "hono": "^4.13.13",
     "octokit": "^5.0.5",
     "pg": "^8.23.1",

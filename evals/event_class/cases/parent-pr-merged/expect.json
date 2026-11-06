@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "parent_merged"
+    }
+  ],
+  "rubric": "The parent merged.",
+  "label": {
+    "event": {
+      "choice": "parent_merged"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "event": "the PR this one is stacked on merged"
+    },
+    "why": "The PR this one is stacked on has merged.",
+    "second": {
+      "label": {
+        "event": {
+          "choice": "parent_merged"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

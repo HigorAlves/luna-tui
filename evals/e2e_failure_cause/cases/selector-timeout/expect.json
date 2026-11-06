@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "cause.confidence",
+      "min": 0,
+      "max": 0.8
+    }
+  ],
+  "rubric": "A timeout on a selector could be a missing button (app), a renamed one (scenario) or a slow page (environment): the rows do not decide it, so the model should hedge.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "cause": {
+            "choice": "product_bug"
+          }
+        },
+        "criteria": {
+          "cause": "the app does not do what the scenario asks"
+        },
+        "why": "A timeout on button[name=Export] can mean the button is not there, so the app does not do what the scenario asks."
+      },
+      {
+        "label": {
+          "cause": {
+            "choice": "test_bug"
+          }
+        },
+        "criteria": {
+          "cause": "the scenario or the way it was driven is wrong; the app behaves as intended"
+        },
+        "why": "The button may have been renamed, so the scenario's selector is wrong while the app behaves as intended."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

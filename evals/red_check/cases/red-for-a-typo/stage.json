@@ -1,0 +1,39 @@
+{
+  "schema": 3,
+  "stage": "red_check",
+  "pack": "red_check",
+  "attempt": 1,
+  "task": {
+    "id": "red-check",
+    "title": "Red check",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "red",
+      "slice": {
+        "id": 1,
+        "title": "Export endpoint",
+        "acceptance": [
+          "GET /cart/export.csv returns one row per line"
+        ]
+      },
+      "output": "FAIL src/cart/export.test.ts\nError: Cannot find module './exprot' imported from src/cart/export.test.ts\n  at resolve (node:internal/modules)"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

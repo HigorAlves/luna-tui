@@ -1,0 +1,34 @@
+{
+  "schema": 3,
+  "stage": "triage_signals",
+  "pack": "triage_signals",
+  "attempt": 1,
+  "task": {
+    "id": "eval-judge-engine-question",
+    "title": "Classify issue",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "issue": {
+      "title": "Should the eval judge run on a cheaper model?",
+      "description": "Judging every case on the strongest model costs more than the runs it grades. Would a mid-size model be good enough, or does that bias the scores? Looking for a decision before we add more cases; no code change asked for yet.",
+      "labels": [],
+      "source": "jira:EVAL-13"
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

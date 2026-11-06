@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "intent.choice",
+      "value": "question"
+    }
+  ],
+  "rubric": "A question the pack's scenarios or the diff can answer.",
+  "label": {
+    "intent": {
+      "choice": "question"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "intent": "asks something the pack or the diff can answer"
+    },
+    "why": "\"Does this handle an empty cart? What does the file contain then?\" asks something the pack or the diff can answer.",
+    "ruledOut": [
+      {
+        "question": "intent",
+        "label": "nit",
+        "why": "It asks something the diff answers. It is not: a small change nobody would block on."
+      },
+      {
+        "question": "intent",
+        "label": "change_request",
+        "why": "It asks something the diff answers. It is not: asks for a change in behaviour or code."
+      },
+      {
+        "question": "intent",
+        "label": "disagreement",
+        "why": "It asks something the diff answers. It is not: disputes the approach or the plan."
+      }
+    ],
+    "second": {
+      "label": {
+        "intent": {
+          "choice": "question"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

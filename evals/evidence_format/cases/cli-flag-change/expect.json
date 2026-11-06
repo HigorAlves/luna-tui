@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "format.choice",
+      "value": "screenshots_or_terminal"
+    }
+  ],
+  "rubric": "A command line change with no web surface: screenshots_or_terminal (the commands and their output).",
+  "label": {
+    "format": {
+      "choice": "screenshots_or_terminal"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "format": "an API or CLI change: screenshots when there is something to see, else a terminal capture of the commands and the scenarios' tests"
+    },
+    "why": "A command-line flag with no web surface: the commands and their output show it.",
+    "ruledOut": [
+      {
+        "question": "format",
+        "label": "video",
+        "why": "A command line change. It is not: a UI or flow change a person should watch happen, and the browser run ran on a running system: scenarios the browser drove, a recording or replayable steps, and the video image is there."
+      },
+      {
+        "question": "format",
+        "label": "text_only",
+        "why": "A command line change. It is not: CI/CD, config, infrastructure or a pure refactor: nothing a person could watch or run to see it."
+      }
+    ],
+    "second": {
+      "label": {
+        "format": {
+          "choice": "screenshots_or_terminal"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

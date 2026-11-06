@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "slot1.choice",
+      "value": "different"
+    },
+    {
+      "kind": "equals",
+      "path": "slot2.choice",
+      "value": "same"
+    }
+  ],
+  "rubric": "Two candidates: the first is another problem, the second is this problem already fixed.",
+  "label": {
+    "slot1": {
+      "choice": "different"
+    },
+    "slot2": {
+      "choice": "same"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "slot1": "another problem",
+      "slot2": "the same problem: fixing one fixes the other"
+    },
+    "why": "Slot 1 is a photo upload and has nothing to do with email. Slot 2 describes the same missing reset email, so fixing it fixes this report.",
+    "ruledOut": [
+      {
+        "question": "slot1",
+        "label": "same",
+        "why": "A photo upload error does not explain a missing email."
+      },
+      {
+        "question": "slot1",
+        "label": "related",
+        "why": "Upload and email share no area or cause."
+      },
+      {
+        "question": "slot2",
+        "label": "related",
+        "why": "The same symptom with the same cause is the same problem, not a neighbour."
+      },
+      {
+        "question": "slot2",
+        "label": "different",
+        "why": "It names the missing reset email, which is this report."
+      }
+    ],
+    "second": {
+      "label": {
+        "slot1": {
+          "choice": "different"
+        },
+        "slot2": {
+          "choice": "same"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

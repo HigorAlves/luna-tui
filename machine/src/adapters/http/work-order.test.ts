@@ -1,6 +1,7 @@
 // `POST /tasks` as a work order: an Idempotency-Key makes a retry answer the task already made,
 // and `start: true` starts the pipeline in the same call.
 import { createHash } from "node:crypto";
+import { previewOn } from "../../test/policies.ts";
 
 import { NewTaskInput } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
@@ -25,7 +26,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
 });
 
 const order = {
@@ -94,7 +95,7 @@ describe("POST /tasks with an Idempotency-Key", () => {
 
   it("keeps the key across a restart: a new machine over the same database answers the same task", async () => {
     const first = await post(order, "ticket-3:1");
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     expect(await post(order, "ticket-3:1")).toMatchObject({ status: 200, body: { id: first.body.id } });
   });
 
@@ -108,14 +109,14 @@ describe("POST /tasks with start: true", () => {
   it("starts the pipeline at once, as POST /tasks/:id/start would", async () => {
     const made = await post({ ...order, start: true });
     expect(made).toMatchObject({ status: 201, body: { state: "awaiting_approval" } });
-    expect((await pipeline.stageRuns(String(made.body.id))).map((r) => r.stage)).toEqual(["triage"]);
+    expect((await pipeline.stageRuns(String(made.body.id))).map((r) => r.stage)).toEqual(["triage", "test_design"]);
   });
 
   it("starts once: a retry answers the running task, and starts a task the first call left in Intake", async () => {
     const made = await post({ ...order, start: true }, "ticket-4:1");
     const again = await post({ ...order, start: true }, "ticket-4:1");
     expect(again).toMatchObject({ status: 200, body: { id: made.body.id, state: "awaiting_approval" } });
-    expect(await pipeline.stageRuns(String(made.body.id))).toHaveLength(1);
+    expect(await pipeline.stageRuns(String(made.body.id))).toHaveLength(2);
 
     // The first call made the task and died before starting it: the retry starts it.
     const draft = await pipeline.createTaskOnce({ ...order, source: order.source as never, start: true }, "ticket-5:1");

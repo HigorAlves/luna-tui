@@ -4,13 +4,16 @@ import {
   type Artifact,
   COLUMN_OF,
   RUNNING,
+  RUN_OR_GATE,
   type StageRun,
   type Task,
   type TaskEvent,
   type TaskSla,
-  WAITING_ON_USER,
+  waitsOnPerson,
 } from "@hardness/contracts";
 
+import { cardOf } from "../../domain/card-fields.ts";
+import { namesOf } from "../../domain/card-events.ts";
 import { jiraOf } from "../../domain/jira-link.ts";
 import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from "../../domain/task.ts";
 
@@ -34,12 +37,14 @@ export const toTask = (
   worktreePath: row.worktreePath,
   state: row.state,
   column: COLUMN_OF[row.state],
-  waitingOnYou: WAITING_ON_USER.has(row.state),
-  running: RUNNING.has(row.state) && !row.queued,
+  // A state that holds a stage or a gate waits on a person only while an approval is open.
+  waitingOnYou: waitsOnPerson(row.state, (glance?.gate ?? null) !== null),
+  running: (RUNNING.has(row.state) || (RUN_OR_GATE.has(row.state) && (glance?.gate ?? null) === null)) && !row.queued,
   queued: row.queued,
   retries: row.retries,
   resumeTo: row.resumeTo,
   reason: row.reason,
+  archiveReason: row.archiveReason ?? null,
   spentUsd: usage?.spentUsd ?? null,
   workedMs: usage?.workedMs ?? null,
   diff: row.diffAdded !== null && row.diffRemoved !== null ? { added: row.diffAdded, removed: row.diffRemoved } : null,
@@ -48,6 +53,9 @@ export const toTask = (
   sla,
   stages: row.stages ?? {},
   classification: row.classification ?? null,
+  record: row.record ?? null,
+  evidence: row.evidence ?? null,
+  ...cardOf(row),
   seq: Number(row.seq),
   lastRun: glance?.lastRun ?? null,
   gate: glance?.gate ?? null,
@@ -85,13 +93,18 @@ export const toApproval = (row: ApprovalRow): Approval => ({
   decidedAt: iso(row.decidedAt),
 });
 
-export const toEvent = (row: EventRow): TaskEvent => ({
-  id: String(row.id),
-  taskId: row.taskId,
-  kind: row.kind,
-  payload: row.payload,
-  at: row.at.toISOString(),
-});
+/** A logged row as a stream event, with the diagram's name(s) for the fact it records when it has one. */
+export const toEvent = (row: EventRow): TaskEvent => {
+  const names = namesOf(row);
+  return {
+    id: String(row.id),
+    taskId: row.taskId,
+    kind: row.kind,
+    payload: row.payload,
+    at: row.at.toISOString(),
+    ...(names.length > 0 ? { names } : {}),
+  };
+};
 
 export const toArtifact = (row: ArtifactRow): Artifact => ({
   id: row.id,

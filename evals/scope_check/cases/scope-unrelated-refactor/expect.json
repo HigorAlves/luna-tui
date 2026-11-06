@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "unrelated_refactors.value",
+      "value": false
+    }
+  ],
+  "rubric": "The summary admits a rename and a reflow of code the export does not touch.",
+  "label": {
+    "unrelated_refactors": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "unrelated_refactors": "Is every change in service of the plan: no renames, reformatting, moves or clean-ups of code the plan's steps do not touch? Read the summary and the changed files; a change that only tidies code beside the work is a no."
+    },
+    "why": "The summary admits renaming formatPrice and reflowing totals.ts, which the export does not use: a clean-up beside the work.",
+    "second": {
+      "label": {
+        "unrelated_refactors": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

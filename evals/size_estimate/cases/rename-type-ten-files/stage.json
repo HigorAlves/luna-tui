@@ -1,0 +1,63 @@
+{
+  "schema": 3,
+  "stage": "size_estimate",
+  "pack": "size_estimate",
+  "attempt": 1,
+  "task": {
+    "id": "rename-type-ten-files",
+    "title": "rename-type-ten-files",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "size": {
+      "title": "Rename the Cart type to Basket everywhere",
+      "text": "Rename the Cart type and its helpers to Basket in the ten files that use them; no behaviour changes and the tests are only renamed.",
+      "criteria": [
+        "No file mentions Cart"
+      ],
+      "files": [
+        {
+          "path": "src/cart/f1.ts"
+        },
+        {
+          "path": "src/cart/f2.ts"
+        },
+        {
+          "path": "src/cart/f3.ts"
+        }
+      ],
+      "symbols": [
+        "Cart"
+      ],
+      "similar": [
+        {
+          "title": "Rename Order to Purchase",
+          "added": 85,
+          "removed": 80
+        }
+      ],
+      "limit": {
+        "target": [
+          1000,
+          2000
+        ],
+        "hard": 2500
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

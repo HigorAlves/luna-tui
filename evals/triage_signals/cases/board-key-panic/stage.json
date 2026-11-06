@@ -1,0 +1,36 @@
+{
+  "schema": 3,
+  "stage": "triage_signals",
+  "pack": "triage_signals",
+  "attempt": 1,
+  "task": {
+    "id": "eval-board-key-panic",
+    "title": "Classify issue",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "issue": {
+      "title": "Board panics on `g g` in the PR view",
+      "description": "Steps: open the board, press `P` for the PR view with no open PRs, press `g` twice.\n\nActual: the board crashes with `index out of bounds: the len is 0 but the index is 0` from board/src/pr_view.rs.\n\nExpected: `g g` jumps to the first PR, and does nothing when the list is empty. No panic.",
+      "labels": [
+        "board"
+      ],
+      "source": "https://github.com/example-org/luna-example/issues/9001"
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

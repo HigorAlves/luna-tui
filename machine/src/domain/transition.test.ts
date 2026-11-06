@@ -1,4 +1,4 @@
-import { type TaskRoute, TaskState } from "@hardness/contracts";
+import { TERMINAL, type TaskRoute, TaskState } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -18,6 +18,88 @@ const at = (state: TaskState, overrides: Partial<Snapshot> = {}): Snapshot => ({
   resumeTo: null,
   route: "feature",
   ...overrides,
+});
+
+describe("archive", () => {
+  const nonTerminal = TaskState.options.filter((s) => !TERMINAL.has(s));
+  it.each(nonTerminal)("%s can be archived with a reason", (state) => {
+    expect(transition(at(state, { route: routeOf(state) }), { type: "archive", reason: "duplicate" })).toMatchObject({ state: "archived", effect: { kind: "done" }, archiveReason: "duplicate" });
+  });
+  it.each([...TERMINAL])("%s cannot be archived again", (state) => {
+    expect(() => transition(at(state), { type: "archive", reason: "rejected" })).toThrow(TransitionError);
+  });
+});
+
+describe("evidence without the preview gate", () => {
+  it("goes straight to shipping on a pass unless the repository keeps the preview", () => {
+    const step = transition(at("evidence"), { type: "stage_done", outcome: "pass" });
+    expect(step).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("evidence"), { type: "stage_done", outcome: "pass", preview: false })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("evidence"), { type: "stage_done", outcome: "pass", preview: true })).toMatchObject({ state: "awaiting_ship", effect: { kind: "wait", gate: "awaiting_ship" } });
+  });
+
+  it("a card already at awaiting_ship is approved or sent back as before", () => {
+    expect(transition(at("awaiting_ship"), { type: "sent_back" })).toMatchObject({ state: "evidence" });
+  });
+});
+
+describe("evidence at the ship gate", () => {
+  it("a feature task sent back at awaiting_ship re-runs evidence", () => {
+    expect(transition(at("awaiting_ship", { retries: { ...NO_RETRIES, total: 2 } }), { type: "sent_back" })).toMatchObject({ state: "evidence", effect: { kind: "run", stage: "evidence" }, retries: { total: 2 } });
+  });
+  it("a review verdict sent back at awaiting_ship is still dropped", () => {
+    expect(transition(at("awaiting_ship", { route: "review" }), { type: "sent_back" })).toMatchObject({ state: "closed" });
+  });
+  it("head_moved from shipping re-runs evidence with retries and the reason kept", () => {
+    const retries = { ...NO_RETRIES, total: 2, e2e: 1 };
+    const step = transition(at("shipping", { retries }), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "the PR head moved (abc1234 to def5678)" });
+    expect(step).toMatchObject({ state: "evidence", effect: { kind: "run", stage: "evidence" }, retries: { total: 2, e2e: 1 }, reason: "the PR head moved (abc1234 to def5678)" });
+  });
+  it("head_moved from any other stage waits for a person", () => {
+    for (const state of ["verifying", "delivering", "evidence"] as const) {
+      expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r" })).toMatchObject({ state: "escalated", resumeTo: state, escalation: "head_moved" });
+    }
+  });
+  it("head_moved from shipping on a review route waits for a person", () => {
+    expect(transition(at("shipping", { route: "review" }), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r" }).state).toBe("escalated");
+  });
+});
+
+describe("typed escalations", () => {
+  it.each(["implementing", "verifying", "shipping"] as const)("plan_wrong from %s sends a feature task back to the planner (the plan stage), not to triage, with its retries kept", (state) => {
+    const step = transition(at(state, { retries: { ...NO_RETRIES, total: 2 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "the plan names a module that does not exist" });
+    expect(step).toMatchObject({ state: "test_design", effect: { kind: "run", stage: "test_design" }, retries: { total: 2, planWrong: 1 }, escalation: "plan_wrong", reason: "the plan names a module that does not exist" });
+  });
+  it("a second plan_wrong on the same card waits for a person", () => {
+    const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, planWrong: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "still wrong" });
+    expect(step).toMatchObject({ state: "escalated", resumeTo: "implementing", escalation: "plan_wrong" });
+  });
+  it.each(["env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"] as const)("%s waits for a person", (escalation) => {
+    const step = transition(at("verifying"), { type: "stage_done", outcome: "escalated", escalation, reason: "r" });
+    expect(step).toMatchObject({ state: "escalated", resumeTo: "verifying", escalation });
+  });
+  it("too_complex from implementing runs it once more, flagged for a stronger engine, with the reason", () => {
+    const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "too_complex", reason: "the refactor spans six modules" });
+    expect(step).toMatchObject({ state: "implementing", effect: { kind: "run", stage: "implementing" }, retries: { total: 2, stronger: 1, strongerNext: true }, reason: "the refactor spans six modules" });
+  });
+  it("a second too_complex, or one past the implementer's cap, waits for a person", () => {
+    const again = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, stronger: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "too_complex", reason: "r" });
+    expect(again).toMatchObject({ state: "escalated", resumeTo: "implementing", escalation: "too_complex" });
+    const capped = transition(at("implementing", { retries: { ...NO_RETRIES, total: IMPLEMENTER_CAP } }), { type: "stage_done", outcome: "escalated", escalation: "too_complex", reason: "r" });
+    expect(capped.state).toBe("escalated");
+  });
+  it("the stronger run's own end clears the flag, so the next attempt runs on the default engine", () => {
+    const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, stronger: 1, strongerNext: true } }), { type: "stage_done", outcome: "pass" });
+    expect(step.state).toBe("verifying");
+    expect(step.retries).not.toHaveProperty("strongerNext");
+    expect(step.retries.stronger).toBe(1);
+  });
+  it("plan_wrong on a PR route still escalates: there is no plan to redo", () => {
+    expect(transition(at("addressing", { route: "address" }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" }).state).toBe("escalated");
+  });
+  it("plan_wrong from triage itself waits for a person: re-running it would loop", () => {
+    expect(transition(at("triage"), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" }).state).toBe("escalated");
+  });
 });
 
 /** The route a state is only reachable on; everything else walks the feature pipeline. */
@@ -50,32 +132,32 @@ describe("happy path", () => {
   it("goes from draft to closed through every stage and gate", () => {
     const steps = play(at("draft"), [
       { type: "start" },
-      pass, // triage
-      approved, // plan
-      pass, // test design
-      approved, // test names
+      { type: "stage_done", outcome: "pass", triage: "plan" }, // triage
+      pass, // plan stage: planner, test design, checks
+      approved, // the one approval, after the scenarios
       pass, // implementing
       pass, // verifying
       pass, // e2e
       pass, // delivering
       pass, // ci_watch
-      pass, // evidence
-      approved, // ship targets
-      pass, // shipping
+      { ...pass, preview: true }, // evidence, the repository keeps the preview gate
+      approved, // the preview gate: publishes and starts the watch
+      pass, // the watch at awaiting_ship: a merge to make
+      pass, // shipping: the merge
       approved, // memory proposals
     ]);
 
     expect(steps.map((s) => s.state)).toEqual([
       "triage",
-      "awaiting_approval",
       "test_design",
-      "awaiting_test_check",
+      "awaiting_approval",
       "implementing",
       "verifying",
       "e2e",
       "delivering",
       "ci_watch",
       "evidence",
+      "awaiting_ship",
       "awaiting_ship",
       "shipping",
       "reviewing_memory",
@@ -86,9 +168,16 @@ describe("happy path", () => {
   });
 
   it("asks to run each stage and to wait at each gate", () => {
-    const [started, triaged] = play(at("draft"), [{ type: "start" }, pass]);
+    const [started, triaged, planned] = play(at("draft"), [{ type: "start" }, pass, pass]);
     expect(started?.effect).toEqual({ kind: "run", stage: "triage" });
-    expect(triaged?.effect).toEqual({ kind: "wait", gate: "awaiting_approval" });
+    expect(triaged?.effect).toEqual({ kind: "run", stage: "test_design" });
+    expect(planned?.effect).toEqual({ kind: "wait", gate: "awaiting_approval" });
+  });
+
+  it("never reaches awaiting_test_check on the feature route (the state stays valid)", () => {
+    const steps = play(at("draft"), [{ type: "start" }, pass, pass, approved]);
+    expect(steps.map((s) => s.state)).not.toContain("awaiting_test_check");
+    expect(TaskState.options).toContain("awaiting_test_check");
   });
 });
 
@@ -101,8 +190,41 @@ describe("gates", () => {
     expect(steps.map((s) => s.state)).toEqual(["awaiting_answers", "triage"]);
   });
 
-  it("re-runs triage when the plan is sent back", () => {
-    expect(transition(at("awaiting_approval"), sentBack).state).toBe("triage");
+  it("runs the plan stage after triage, in the fast lane too, and waits for a person on a reply or an archive", () => {
+    for (const triage of ["plan", "fast_lane"] as const) {
+      expect(transition(at("triage"), { type: "stage_done", outcome: "pass", triage })).toMatchObject({ state: "test_design", effect: { kind: "run", stage: "test_design" } });
+    }
+    for (const triage of ["conversation", "archive"] as const) {
+      expect(transition(at("triage"), { type: "stage_done", outcome: "pass", triage })).toMatchObject({ state: "awaiting_approval", effect: { kind: "wait", gate: "awaiting_approval" } });
+    }
+  });
+
+  it("ends a conversation closed once its reply is approved, and nowhere else", () => {
+    expect(transition(at("awaiting_approval"), { type: "replied" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+    expect(() => transition(at("triage"), { type: "replied" })).toThrow();
+    expect(() => transition(at("awaiting_ship"), { type: "replied" })).toThrow();
+  });
+
+  it("re-runs triage when a triage gate is sent back, and the plan stage when the plan is", () => {
+    expect(transition(at("awaiting_approval"), { type: "sent_back", from: "triage" }).state).toBe("triage");
+    expect(transition(at("awaiting_approval"), { type: "sent_back", from: "plan" }).state).toBe("test_design");
+    expect(transition(at("awaiting_approval"), sentBack).state).toBe("test_design");
+  });
+
+  it("asks the plan stage's questions at awaiting_answers and returns to that stage when they are answered", () => {
+    const steps = play(at("test_design"), [{ type: "stage_done", outcome: "needs_input" }, { type: "answered" }]);
+    expect(steps[0]).toMatchObject({ state: "awaiting_answers", resumeTo: "test_design" });
+    expect(steps[1]).toMatchObject({ state: "test_design", effect: { kind: "run", stage: "test_design" }, resumeTo: null });
+  });
+
+  it("approves the plan into the implementer", () => {
+    expect(transition(at("awaiting_approval"), approved)).toMatchObject({ state: "implementing", retries: { total: 1 } });
+  });
+
+  it("keeps awaiting_test_check's legacy edges", () => {
+    expect(transition(at("awaiting_test_check"), approved).state).toBe("implementing");
+    expect(transition(at("awaiting_test_check"), sentBack).state).toBe("test_design");
+    expect(transition(at("test_design"), { type: "stage_done", outcome: "pass" }).state).toBe("awaiting_approval");
   });
 
   it("re-runs the test designer when test names are sent back", () => {
@@ -124,11 +246,13 @@ describe("retry loops", () => {
     expect(last?.retries.total).toBe(2);
   });
 
-  it("counts evidence failures against the e2e loop", () => {
+  it("never sends a card back to Build from Evidence: a failure asks a person and resumes at Evidence", () => {
     const start = at("implementing", { retries: { ...NO_RETRIES, total: 1 } });
     const last = play(start, [...toEvidence, fail]).at(-1);
-    expect(last?.state).toBe("implementing");
-    expect(last?.retries.e2e).toBe(1);
+    expect(last?.state).toBe("escalated");
+    expect(last?.effect).toEqual({ kind: "wait", gate: "escalated" });
+    expect(last?.resumeTo).toBe("evidence");
+    expect(last?.retries.e2e).toBe(0);
   });
 
   it(`escalates after ${LOOP_CAP} failures in one loop`, () => {
@@ -138,6 +262,42 @@ describe("retry loops", () => {
     expect(step.effect).toEqual({ kind: "wait", gate: "escalated" });
     expect(step.reason).toMatch(/verify failed 3 times/);
     expect(step.resumeTo).toBe("implementing");
+  });
+
+  it("takes the browser run's and CI's caps from the event, three when it has none", () => {
+    const e2e = (loopCap?: number): PipelineEvent => ({ type: "stage_done", outcome: "fail", ...(loopCap ? { loopCap } : {}) });
+    const two = at("e2e", { retries: { ...NO_RETRIES, e2e: 1, total: 2 } });
+    expect(transition(two, e2e()).state).toBe("implementing");
+    expect(transition(two, e2e(2))).toMatchObject({ state: "escalated", reason: "e2e failed 2 times" });
+    const ci = at("ci_watch", { route: "ci_fix", retries: { ...NO_RETRIES, ci: 3, total: 2 } });
+    expect(transition(ci, e2e(5)).state).not.toBe("escalated");
+  });
+
+  describe("one Build round per set of blocker findings", () => {
+    const failing = (findingSet: string, buildRounds?: number): PipelineEvent => ({ type: "stage_done", outcome: "fail", findingSet, ...(buildRounds ? { buildRounds } : {}) });
+
+    it("sends a first set to Build and remembers it", () => {
+      const step = transition(at("verifying"), failing("k1"));
+      expect(step.state).toBe("implementing");
+      expect(step.retries.findingSet).toEqual({ key: "k1", rounds: 1 });
+    });
+
+    it("asks a person when the same set comes back after its rounds, with the findings named in the reason", () => {
+      const step = transition(at("verifying", { retries: { ...NO_RETRIES, verify: 1, total: 2, findingSet: { key: "k1", rounds: 1 } } }), failing("k1"));
+      expect(step.state).toBe("escalated");
+      expect(step.reason).toMatch(/same findings came back after 1 round/);
+      expect(step.resumeTo).toBe("implementing");
+    });
+
+    it("lets Build have more rounds when the config says so, and starts a new count for a new set", () => {
+      const again = at("verifying", { retries: { ...NO_RETRIES, verify: 1, total: 2, findingSet: { key: "k1", rounds: 1 } } });
+      expect(transition(again, failing("k1", 2)).state).toBe("implementing");
+      expect(transition(again, failing("k2")).retries.findingSet).toEqual({ key: "k2", rounds: 1 });
+    });
+
+    it("keeps the loop cap for a failure with no blocker set", () => {
+      expect(transition(at("verifying"), fail).retries.verify).toBe(1);
+    });
   });
 
   it(`escalates when the implementer has used all ${IMPLEMENTER_CAP} runs`, () => {
@@ -203,7 +363,7 @@ describe("a task over its budget", () => {
   });
 
   it("is rejected outside a running state", () => {
-    expect(() => transition(at("awaiting_ship"), { type: "over_budget", reason: "x" })).toThrow(TransitionError);
+    expect(() => transition(at("awaiting_approval"), { type: "over_budget", reason: "x" })).toThrow(TransitionError);
   });
 });
 
@@ -291,7 +451,7 @@ describe("stop at a gate (a Luna Notch Stop)", () => {
   it.each<[TaskState, TaskState]>([
     ["awaiting_setup", "setup"],
     ["awaiting_answers", "triage"],
-    ["awaiting_approval", "triage"],
+    ["awaiting_approval", "test_design"],
     ["awaiting_test_check", "test_design"],
     ["awaiting_ship", "evidence"],
   ])("escalates a task at %s as stopped; a retry re-runs %s, the stage that opened the gate", (gate, stage) => {
@@ -339,8 +499,8 @@ describe("graph coverage", () => {
     { type: "window_reset" },
   ];
 
-  it("lets every state except closed move forward", () => {
-    for (const state of TaskState.options.filter((s) => s !== "closed")) {
+  it("lets every state but the terminal ones move forward", () => {
+    for (const state of TaskState.options.filter((s) => !TERMINAL.has(s))) {
       const task = at(state, { resumeTo: state === "paused_rate_limit" ? "triage" : null, route: routeOf(state) });
       const moves = candidates.filter((event) => {
         try {
@@ -421,5 +581,88 @@ describe("PR task routes", () => {
     expect(() => transition(at("reviewing"), pass)).toThrow(TransitionError);
     expect(transition(at("draft", { route: "review" }), { type: "start" }).state).toBe("reviewing");
     expect(() => transition(at("awaiting_approval", { route: "ci_fix" }), approved)).toThrow(TransitionError);
+  });
+});
+
+describe("the Intake context gate", () => {
+  it("a draft that lacks context waits at awaiting_setup, running nothing", () => {
+    expect(transition(at("draft"), { type: "needs_context" })).toMatchObject({ state: "awaiting_setup", effect: { kind: "wait", gate: "awaiting_setup" } });
+    expect(() => transition(at("triage"), { type: "needs_context" })).toThrow(TransitionError);
+  });
+  it("context given goes through the entry, or through setup when the repo has no config", () => {
+    expect(transition(at("awaiting_setup"), { type: "context_given" })).toMatchObject({ effect: { kind: "run", stage: "triage" } });
+    expect(transition(at("awaiting_setup"), { type: "context_given", setup: true })).toMatchObject({ effect: { kind: "run", stage: "setup" } });
+    expect(() => transition(at("triage"), { type: "context_given" })).toThrow(TransitionError);
+  });
+});
+
+describe("a card merged into another", () => {
+  const nonTerminal = TaskState.options.filter((s) => !TERMINAL.has(s));
+  it.each(nonTerminal)("%s closes as merged, with nothing left to run", (state) => {
+    expect(transition(at(state, { route: routeOf(state) }), { type: "merged" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+  });
+  it.each([...TERMINAL])("%s cannot be merged", (state) => {
+    expect(() => transition(at(state), { type: "merged" })).toThrow(TransitionError);
+  });
+});
+
+describe("awaiting_ship and reviewing_memory hold a running stage or an open gate (feature route)", () => {
+  it.each(["crash", "over_budget", "abort"] as const)("%s at awaiting_ship escalates with resumeTo awaiting_ship", (type) => {
+    const event: PipelineEvent = type === "crash" ? { type, error: "x" } : type === "over_budget" ? { type, reason: "r" } : { type };
+    expect(transition(at("awaiting_ship"), event)).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship" });
+    expect(transition(at("reviewing_memory"), event)).toMatchObject({ state: "escalated", resumeTo: "reviewing_memory" });
+  });
+  it("rate_limited at awaiting_ship pauses and the window reset resumes there", () => {
+    const paused = transition(at("awaiting_ship"), { type: "rate_limited" });
+    expect(paused).toMatchObject({ state: "paused_rate_limit", resumeTo: "awaiting_ship", effect: { kind: "pause" } });
+    expect(transition(at("paused_rate_limit", { resumeTo: "awaiting_ship" }), { type: "window_reset" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+  });
+  it("the review route's verdict gate is untouched", () => {
+    expect(() => transition(at("awaiting_ship", { route: "review" }), { type: "crash", error: "x" })).toThrow(TransitionError);
+  });
+  it("stage_done at awaiting_ship: pass runs shipping, needs_input waits, fail escalates", () => {
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "shipping", effect: { kind: "run", stage: "shipping" } });
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "needs_input" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "wait", gate: "awaiting_ship" } });
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "fail" })).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship", reason: "the ship watch failed" });
+  });
+  it("shipping passes to the retro stage; the retro closes the card, or waits when it has proposals; a failed retro closes it with the reason kept", () => {
+    expect(transition(at("shipping"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "reviewing_memory", effect: { kind: "run", stage: "reviewing_memory" } });
+    expect(transition(at("reviewing_memory"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+    expect(transition(at("reviewing_memory"), { type: "stage_done", outcome: "pass", proposals: true })).toMatchObject({ state: "reviewing_memory", effect: { kind: "wait", gate: "reviewing_memory" } });
+    expect(transition(at("reviewing_memory"), { type: "stage_done", outcome: "fail", reason: "the retro broke" })).toMatchObject({ state: "closed", effect: { kind: "done" }, reason: "the retro broke" });
+  });
+  it("a usage limit during the retro pauses there and resumes there", () => {
+    expect(transition(at("reviewing_memory"), { type: "rate_limited" })).toMatchObject({ state: "paused_rate_limit", resumeTo: "reviewing_memory" });
+    expect(transition(at("paused_rate_limit", { resumeTo: "reviewing_memory" }), { type: "window_reset" })).toMatchObject({ state: "reviewing_memory", effect: { kind: "run", stage: "reviewing_memory" } });
+  });
+  it("approved at the retro gate closes, as before", () => {
+    expect(transition(at("reviewing_memory"), { type: "approved" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+  });
+  it("plan_wrong from awaiting_ship runs the plan stage once per card", () => {
+    const step = transition(at("awaiting_ship"), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" });
+    expect(step).toMatchObject({ state: "test_design", retries: { planWrong: 1 }, escalation: "plan_wrong" });
+    const again = transition(at("awaiting_ship", { retries: { ...NO_RETRIES, planWrong: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" });
+    expect(again).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship" });
+  });
+  it("head_moved from awaiting_ship or shipping runs evidence, or e2e when media are to be refreshed", () => {
+    for (const state of ["awaiting_ship", "shipping"] as const) {
+      expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r" })).toMatchObject({ state: "evidence" });
+      expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r", refresh: "media" })).toMatchObject({ state: "e2e", effect: { kind: "run", stage: "e2e" } });
+      expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r", refresh: "verify" })).toMatchObject({ state: "verifying", effect: { kind: "run", stage: "verifying" } });
+    }
+  });
+  it("another escalation at awaiting_ship asks a person and resumes there", () => {
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "escalated", reason: "stuck" })).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship", reason: "stuck" });
+  });
+  it("shipping that is not ready hands the card back to the watch", () => {
+    expect(transition(at("shipping"), { type: "stage_done", outcome: "fail", notReady: true })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("shipping"), { type: "stage_done", outcome: "fail" })).toMatchObject({ state: "escalated", resumeTo: "shipping" });
+  });
+  it("the ship approval's answers: approved runs shipping, sent_back runs the watch again; without the gate both are as before", () => {
+    expect(transition(at("awaiting_ship"), { type: "approved", gate: "ship_approval" })).toMatchObject({ state: "shipping" });
+    expect(transition(at("awaiting_ship"), { type: "sent_back", gate: "ship_approval" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    // The preview gate (no `gate`, and any gate stored before this wave): approving publishes and starts the watch.
+    expect(transition(at("awaiting_ship"), { type: "approved" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("awaiting_ship"), { type: "sent_back" })).toMatchObject({ state: "evidence" });
   });
 });

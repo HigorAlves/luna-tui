@@ -2,13 +2,15 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { type EngineId, StageInput, type StageOutput, resolveEngine } from "@hardness/contracts";
+import { type DecisionRecord, type EngineId, PACKS, StageInput, type StageOutput, resolveEngine } from "@hardness/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
 import { type Credentials, NoCredentialError } from "../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
-import { EngineNotAllowedError, NotOnDemandError, PACK_RUNS_DIR, type PackRunRecord, PackRuns, QueueFullError, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "./pack-runs.ts";
+import { withTask } from "./task-scope.ts";
+import { type RunEnd, type RunStart, type Telemetry, noTelemetry } from "./telemetry.ts";
+import { EngineNotAllowedError, NotOnDemandError, PACK_RUNS_DIR, type PackRunRecord, PackRuns, QueueFullError, ownCalls, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "./pack-runs.ts";
 
 const NOW = new Date("2026-11-02T12:00:00.000Z");
 const chat = {
@@ -51,6 +53,21 @@ const credentials = (missing: EngineId[] = []): Credentials => ({
 const runs = (sandbox: (run: SandboxRun) => Promise<SandboxResult>, over: Partial<ConstructorParameters<typeof PackRuns>[0]> = {}) =>
   new PackRuns({ image: "hardness-runner:dev", credentials: credentials(), stateDir, store: { record: async (r) => void records.push(r) }, sandbox, now: () => NOW, log: () => {}, ...over });
 
+/** A telemetry that keeps each span's start, events and end. */
+function recordingTelemetry() {
+  const spans: Array<{ start: RunStart; events: Array<{ name: string; payload?: Record<string, unknown> }>; end: RunEnd | null }> = [];
+  const telemetry: Telemetry = {
+    ...noTelemetry(),
+    mode: "full",
+    run: (start) => {
+      const span = { start, events: [] as Array<{ name: string; payload?: Record<string, unknown> }>, end: null as RunEnd | null };
+      spans.push(span);
+      return { event: (name, payload) => void span.events.push({ name, payload }), traceId: () => "t", childEnv: () => ({ LMNR_SPAN_CONTEXT: "ctx-1" }), end: async (end) => void (span.end = end) };
+    },
+  };
+  return { telemetry, spans };
+}
+
 beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), "pack-runs-"));
   seen = [];
@@ -59,6 +76,59 @@ beforeEach(() => {
 });
 
 describe("PackRuns", () => {
+  it("reports each call as one span: pack, engine and client at the start, the usage at the end, never the context nor the answer", async () => {
+    const { telemetry, spans } = recordingTelemetry();
+    const r = runs(fakeSandbox(output()), { telemetry });
+    await r.run({ pack: "chat_triage", context: { chat } }, "notch", undefined, { own: true });
+    expect(spans).toHaveLength(1);
+    expect(spans[0]!.start).toEqual({ kind: "pack", pack: "chat_triage", engine: "claude:haiku", client: "notch" });
+    expect(spans[0]!.end).toMatchObject({ outcome: "pass", engine: "claude:haiku", model: "gpt-6-luna", turns: 1, costUsd: 0.0031, durationMs: 4200, error: null });
+    expect(spans[0]!.end!.transcriptPath).toMatch(/pack-runs[\\/]chat_triage-.*[\\/]transcript\.log$/);
+    expect(seen[0]!.extraEnv).toEqual({ LMNR_SPAN_CONTEXT: "ctx-1" });
+    const flat = JSON.stringify([spans[0]!.start, spans[0]!.events, spans[0]!.end]);
+    expect(flat).not.toContain("approve the rollout");
+    expect(flat).not.toContain('"priority"');
+  });
+
+  it("runs the duplicate check in a container that joins its run's network with the engine's hosts only, in an empty work folder", async () => {
+    const asked: Array<{ repoPath: string | null; kind: string; owners: string[] }> = [];
+    const spec = { allow: ["api.anthropic.com"], allowPrivate: [], proxyImage: "img" };
+    const slot = { choice: "different", confidence: 0.9 };
+    const answer = { slot1: slot, slot2: slot, slot3: slot, slot4: slot, slot5: slot };
+    const dedup = { title: "t", text: "x", candidates: [{ slot: 1, kind: "open" as const, title: "a", summary: "b" }] };
+    const work: string[][] = [];
+    const inner = fakeSandbox(output({ answer }));
+    await runs(async (run) => (work.push(readdirSync(run.worktree)), inner(run)), { egress: { for: async (r) => (asked.push({ repoPath: r.repoPath, kind: r.kind, owners: [...(r.owners ?? [])] }), spec) } }).run({ pack: "intake_dedup", context: { dedup } }, "intake");
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ repoPath: null, kind: "pack" });
+    expect(seen[0]!.egress).toEqual(spec);
+    expect(work).toEqual([[]]);
+  });
+
+  it("ends the span before the run folder goes, so the transcript can still be read", async () => {
+    const seenAtEnd: boolean[] = [];
+    const telemetry: Telemetry = {
+      ...noTelemetry(),
+      mode: "host",
+      run: () => ({ event: () => {}, traceId: () => null, childEnv: () => ({}), end: async (end) => void seenAtEnd.push(existsSync(end.transcriptPath!.replace(/transcript\.log$/, ""))) }),
+    };
+    await runs(fakeSandbox(output()), { telemetry }).run({ pack: "chat_triage", context: { chat } }, null, undefined, { own: true });
+    expect(seenAtEnd).toEqual([true]);
+  });
+
+  it("puts a usage limit on the call's span and the fallback's reason on the next", async () => {
+    const { telemetry, spans } = recordingTelemetry();
+    let calls = 0;
+    const sandbox = fakeSandbox(output());
+    const limited = fakeSandbox(output({ ok: false, rateLimited: true, resetsAt: 1_800_000_000, error: "usage limit" }));
+    const r = runs((run) => (calls++ === 0 ? limited(run) : sandbox(run)), { telemetry });
+    await r.run({ pack: "chat_triage", context: { chat } }, null);
+    expect(spans.map((s) => s.start.engine)).toEqual(["claude:haiku", PACKS.chat_triage.engines.fallback![0]]);
+    expect(spans[0]!.events).toEqual([{ name: "rate_limited", payload: { resetsAt: new Date(1_800_000_000 * 1000).toISOString() } }]);
+    expect(spans[0]!.end).toMatchObject({ outcome: "rate_limited" });
+    expect(spans[1]!.events[0]).toMatchObject({ name: "engine", payload: { reason: "fallback after claude:haiku rate limit" } });
+  });
+
   it("runs chat_triage on the engine asked for over an empty /work, answers the validated answer and the usage, and keeps nothing on disk", async () => {
     const result = await runs(fakeSandbox(output())).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, "notch");
     expect(result).toEqual({ answer: { items: [verdict("chat:19:a"), verdict("post:t:c:m")] }, usage: { model: "gpt-6-luna", engine: "codex:luna", turns: 1, durationMs: 4200, costUsd: 0.0031 } });
@@ -85,13 +155,33 @@ describe("PackRuns", () => {
     expect(records[1]).toMatchObject({ runtime: "eve", modelId: "gpt-6-luna-fast", sdkVersion: "1.0.0-rc.1", fingerprint: run.fingerprint });
   });
 
-  it("runs the pack's default engine when none is asked for, and issue_classify and jira_intake with their own contexts", async () => {
+  // The measured default of a decision pack moves when it is measured again: these tests read it instead of naming an engine.
+  const DEFAULT = PACKS.triage_signals.engines.default;
+  const FALLBACK = PACKS.triage_signals.engines.fallback![0]!;
+
+  it("runs a decision pack on its fallback when the default engine has no credential", async () => {
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
+    const issue = { title: "Board crashes on resize", description: "It panics." };
+    const result = await runs(fakeSandbox(output({ answer: labels })), { credentials: credentials([DEFAULT]) }).run({ pack: "triage_signals", context: { issue } }, "intake");
+    expect(result.usage.engine).toBe(FALLBACK);
+    expect(StageInput.parse(seen[0]!.input).engine).toBe(FALLBACK);
+    expect(records.at(-1)).toMatchObject({ pack: "triage_signals", engine: FALLBACK });
+  });
+
+  it("names every engine it tried when none has a credential, and never swaps an engine the caller named", async () => {
+    const issue = { title: "t", description: "d" };
+    await expect(runs(fakeSandbox(output()), { credentials: credentials([DEFAULT, FALLBACK]) }).run({ pack: "triage_signals", context: { issue } }, null)).rejects.toThrow(new RegExp(`${DEFAULT}.*${FALLBACK}`, "s"));
+    await expect(runs(fakeSandbox(output()), { credentials: credentials([DEFAULT]) }).run({ pack: "triage_signals", engine: DEFAULT, context: { issue } }, null)).rejects.toBeInstanceOf(RunNoCredentialError);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("runs the pack's default engine when none is asked for, and triage_signals and jira_intake with their own contexts", async () => {
     await runs(fakeSandbox(output())).run({ pack: "chat_triage", context: { chat } }, null);
     expect(StageInput.parse(seen[0]!.input).engine).toBe("claude:haiku");
-    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 } };
-    const classified = await runs(fakeSandbox(output({ answer: labels }))).run({ pack: "issue_classify", context: { issue: { title: "Board crashes on resize", description: "It panics." } } }, "notch");
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
+    const classified = await runs(fakeSandbox(output({ answer: labels }))).run({ pack: "triage_signals", context: { issue: { title: "Board crashes on resize", description: "It panics." } } }, "notch");
     expect(classified.answer).toEqual(labels);
-    expect(StageInput.parse(seen[1]!.input)).toMatchObject({ pack: "issue_classify", engine: "jev", context: { issue: { title: "Board crashes on resize" } } });
+    expect(StageInput.parse(seen[1]!.input)).toMatchObject({ pack: "triage_signals", engine: DEFAULT, context: { issue: { title: "Board crashes on resize" } } });
     const jira = { key: "PLAT-1", url: "https://a.atlassian.net/browse/PLAT-1", summary: "Login", description: "Sign in.", issueType: "Story", priority: null, labels: [], dueAt: null, comments: [], repoPath: null };
     const verdictOf = { verdict: "ready", reason: "clear", title: "Login", description: "d", criteria: ["c"] };
     expect((await runs(fakeSandbox(output({ answer: verdictOf }))).run({ pack: "jira_intake", context: { jira } }, null)).answer).toEqual(verdictOf);
@@ -172,7 +262,7 @@ describe("PackRuns", () => {
     });
 
     it("never falls back on a pack with no fallback", async () => {
-      await expect(runs(limitedOn(["jev"])).run({ pack: "issue_classify", context: { issue: { title: "t", description: "d" } } }, null)).rejects.toBeInstanceOf(RunRateLimitedError);
+      await expect(runs(limitedOn(["claude:sonnet"])).run({ pack: "jira_intake", context: { jira: { key: "PLAT-1", url: "https://a.atlassian.net/browse/PLAT-1", summary: "Login", description: "Sign in.", issueType: "Story", priority: null, labels: [], dueAt: null, comments: [], repoPath: null } } }, null)).rejects.toBeInstanceOf(RunRateLimitedError);
       expect(seen).toHaveLength(1);
     });
   });
@@ -285,3 +375,287 @@ describe("PackRuns", () => {
     expect(seen).toHaveLength(2);
   });
 });
+
+describe("decision records", () => {
+  const retro = { kind: "retro", retro: { predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 640, removed: 90, retries: { verify: 2, e2e: 1, ci: 1, total: 5 }, escalations: 1, format: "captures", durationMin: 310 }, runs: 14 } };
+  const answered = output({ answer: { worth: { value: true, p: 0.93 } } });
+
+  it("appends one record per decision pack call: the context, the validated answer, its verdicts, the engine, the model and the span's trace id", async () => {
+    const appended: DecisionRecord[] = [];
+    const { telemetry } = recordingTelemetry();
+    const r = runs(fakeSandbox(answered), { telemetry, decisions: { append: async (record) => void appended.push(record) } });
+    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship", undefined, { own: true });
+    expect(appended).toHaveLength(1);
+    expect(appended[0]).toMatchObject({
+      schema: 1,
+      pack: "worth_learning",
+      engine: "claude:haiku",
+      model: "gpt-6-luna",
+      client: "ship",
+      at: NOW.toISOString(),
+      context: { ship: retro },
+      answer: { worth: { value: true, p: 0.93 } },
+      verdicts: { worth: "proceed" },
+      overall: "proceed",
+      traceId: "t",
+    });
+    expect(typeof appended[0]!.id).toBe("string");
+  });
+
+  it("appends nothing for an agent pack, and nothing for a decision run that gave no valid answer", async () => {
+    const appended: unknown[] = [];
+    const decisions = { append: async (record: DecisionRecord) => void appended.push(record) };
+    await runs(fakeSandbox(output()), { decisions }).run({ pack: "chat_triage", context: { chat } }, "notch");
+    await expect(runs(fakeSandbox(output({ answer: { worth: { value: "yes" } } })), { decisions }).run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship")).rejects.toThrow(RunFailedError);
+    expect(appended).toEqual([]);
+  });
+  it("carries the task and stage a pipeline call names, and answers the record's id", async () => {
+    const appended: DecisionRecord[] = [];
+    const r = runs(fakeSandbox(answered), { decisions: { append: async (record) => void appended.push(record) } });
+    const result = await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro }, taskId: "task-9", stage: "ship" }, "ship");
+    expect(appended[0]).toMatchObject({ taskId: "task-9", stage: "ship" });
+    expect(result.recordId).toBe(appended[0]!.id);
+  });
+
+  it("puts the context and answer on the span for the machine's own call only, never for a client's, whatever it names", async () => {
+    const { telemetry, spans } = recordingTelemetry();
+    const r = runs(fakeSandbox(answered), { telemetry });
+    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "intake", undefined, { own: true });
+    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro }, stage: "ship" }, "someone-else");
+    expect(spans[0]!.end).toMatchObject({ input: { context: { ship: retro } }, output: { answer: { worth: { value: true, p: 0.93 } }, verdicts: { worth: "proceed" }, overall: "proceed" } });
+    expect(spans[1]!.end).not.toHaveProperty("input");
+    expect(spans[1]!.end).not.toHaveProperty("output");
+  });
+
+  it("gives the span the stored context: secrets redacted, email and phone masked, and a private conversation as a mark only", async () => {
+    const token = ["gh", "p_"].join("") + "c".repeat(36);
+    const { telemetry, spans } = recordingTelemetry();
+    const slots = Object.fromEntries(Object.keys(PACKS.intake_dedup.questions).map((slot) => [slot, { choice: "different", confidence: 0.9 }]));
+    const r = runs(fakeSandbox(output({ answer: slots })), { telemetry });
+    await r.run({ pack: "intake_dedup", context: { dedup: { title: "Login fails", text: `${token} mail bob@example.com`, candidates: [] } } }, "intake", undefined, { own: true });
+    const flat = JSON.stringify(spans[0]!.end!.input);
+    expect(flat).not.toContain(token);
+    expect(flat).not.toContain("bob@example.com");
+    expect(flat).toContain("[email]");
+    const answers = { related: { choice: "none", confidence: 0.9 }, new_work: { value: true, p: 0.9 } };
+    const priv = recordingTelemetry();
+    const conversation = { channel: "leadership", private: true, thread: ["marta: fire Bob on friday"], latest: "fire Bob", author: { profile: "member", title: null }, candidates: [] };
+    await runs(fakeSandbox(output({ answer: answers })), { telemetry: priv.telemetry }).run({ pack: "conversation_relation", context: { conversation } }, "intake", undefined, { own: true });
+    expect(priv.spans[0]!.end!.input).toEqual({ private: true });
+    expect(priv.spans[0]!.end).toMatchObject({ output: { answer: answers } });
+    expect(JSON.stringify(priv.spans[0]!.end)).not.toContain("Bob");
+  });
+
+  describe("what a span may carry from the transcript", () => {
+    const conversation = { channel: "leadership", private: true, thread: ["marta: fire Bob on friday"], latest: "fire Bob on friday", author: { profile: "member", title: null }, candidates: [] };
+    const relation = { related: { choice: "none", confidence: 0.9 }, new_work: { value: true, p: 0.9 } };
+    const host = (): { telemetry: Telemetry; ends: RunEnd[] } => {
+      const ends: RunEnd[] = [];
+      const telemetry: Telemetry = { ...noTelemetry(), mode: "host", run: () => ({ event: () => {}, traceId: () => null, childEnv: () => ({}), end: async (end) => void ends.push(end) }) };
+      return { telemetry, ends };
+    };
+
+    it("attaches no transcript for a private conversation's call, in host mode", async () => {
+      const { telemetry, ends } = host();
+      await runs(fakeSandbox(output({ answer: relation })), { telemetry }).run({ pack: "conversation_relation", context: { conversation } }, "intake", undefined, { own: true });
+      expect(ends[0]).not.toHaveProperty("transcriptPath");
+    });
+
+    it("attaches no transcript for a client's call, whatever the mode", async () => {
+      const { telemetry, ends } = host();
+      await runs(fakeSandbox(output()), { telemetry }).run({ pack: "chat_triage", context: { chat } }, "notch");
+      expect(ends[0]).not.toHaveProperty("transcriptPath");
+    });
+
+    it("hands the adapter a scrubber that removes the machine's own secret values, and masks the span's output", async () => {
+      const secret = ["sec", "ret-value-", "9f8e7d6c"].join("");
+      const { telemetry, ends } = host();
+      const answers = { worth: { value: true, p: 0.93 } };
+      await runs(fakeSandbox(output({ answer: answers })), { telemetry, secrets: () => ({ SOME_KEY: secret }) }).run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship", undefined, { own: true });
+      expect(ends[0]!.scrub!(`the log says ${secret} and mail a@b.example`)).toBe("the log says [secret:SOME_KEY] and mail [email]");
+      expect(ends[0]).toHaveProperty("transcriptPath");
+    });
+
+    it("still ends the span and removes the run folder when the span's input cannot be prepared", async () => {
+      const { telemetry, ends } = host();
+      let calls = 0;
+      const dedup = { title: "Login fails", text: "the log", candidates: [] };
+      const slots = Object.fromEntries(Object.keys(PACKS.intake_dedup.questions).map((slot) => [slot, { choice: "different", confidence: 0.9 }]));
+      // The secrets are read for the stored copy too: fail only on the span's read, the second.
+      const secrets = () => {
+        if (++calls >= 1 && calls !== 2) return {};
+        throw new Error("secrets unreadable");
+      };
+      const result = await runs(fakeSandbox(output({ answer: slots })), { telemetry, secrets }).run({ pack: "intake_dedup", context: { dedup } }, "intake", undefined, { own: true });
+      expect(result.answer).toEqual(slots);
+      expect(ends).toHaveLength(1);
+      expect(ends[0]).not.toHaveProperty("input");
+      expect(existsSync(join(stateDir, PACK_RUNS_DIR)) ? readdirSync(join(stateDir, PACK_RUNS_DIR)) : []).toEqual([]);
+    });
+
+    it("redacts a secret value in the span's input and output", async () => {
+      const secret = ["sec", "ret-value-", "9f8e7d6c"].join("");
+      const { telemetry, ends } = host();
+      const dedup = { title: "Login fails", text: `the log says ${secret}`, candidates: [] };
+      const slots = Object.fromEntries(Object.keys(PACKS.intake_dedup.questions).map((slot) => [slot, { choice: "different", confidence: 0.9 }]));
+      await runs(fakeSandbox(output({ answer: slots })), { telemetry, secrets: () => ({ SOME_KEY: secret }) }).run({ pack: "intake_dedup", context: { dedup } }, "intake", undefined, { own: true });
+      expect(JSON.stringify(ends[0]!.input)).not.toContain(secret);
+      expect(JSON.stringify(ends[0]!.input)).toContain("[secret:SOME_KEY]");
+    });
+  });
+
+  describe("whose a record is, and what it keeps", () => {
+    const keep = async (call: (r: PackRuns) => Promise<unknown>, over: Partial<ConstructorParameters<typeof PackRuns>[0]> = {}) => {
+      const appended: DecisionRecord[] = [];
+      await call(runs(fakeSandbox(answered), { decisions: { append: async (record) => void appended.push(record) }, ...over }));
+      return appended[0]!;
+    };
+    const ask = { pack: "worth_learning" as const, engine: "claude:haiku" as const, context: { ship: retro } };
+
+    it("is the machine's when an in-process caller says so, and a client's otherwise, whatever the client header or the stage says", async () => {
+      expect((await keep((r) => r.run(ask, "intake", undefined, { own: true }))).origin).toBe("machine");
+      expect((await keep((r) => r.run(ask, "intake"))).origin).toBe("client");
+      expect((await keep((r) => r.run({ ...ask, stage: "ship" }, "ship"))).origin).toBe("client");
+    });
+
+    it("keeps a client's answer and not its context, while the machine's own call keeps both", async () => {
+      const client = await keep((r) => r.run(ask, "notch"));
+      expect(client).toMatchObject({ origin: "client", context: {}, redacted: 0, answer: { worth: { value: true, p: 0.93 } } });
+      expect(JSON.stringify(client)).not.toContain("retro");
+      const own = await keep((r) => r.run(ask, "intake", undefined, { own: true }));
+      expect(own.context).toMatchObject({ ship: { kind: "retro" } });
+    });
+
+    it("is the machine's through ownCalls, the wrapper every in-process caller of the machine uses", async () => {
+      expect((await keep((r) => ownCalls(r).run(ask, "intake"))).origin).toBe("machine");
+    });
+
+    it("stores the context with secrets redacted and counts them, while the model is given the real one", async () => {
+      const token = ["gh", "p_"].join("") + "b".repeat(36);
+      const answers = Object.fromEntries(Object.keys(PACKS.intake_dedup.questions).map((slot) => [slot, { choice: "different", confidence: 0.9 }]));
+      const appended: DecisionRecord[] = [];
+      const dedup = { title: "Login fails", text: `the log says ${token} and then ${token}`, candidates: [] };
+      await runs(fakeSandbox(output({ answer: answers })), { decisions: { append: async (record) => void appended.push(record) } }).run({ pack: "intake_dedup", context: { dedup } }, "intake", undefined, { own: true });
+      expect(JSON.stringify(appended[0]!.context)).not.toContain(token);
+      expect(appended[0]!.context).toEqual({ dedup: { title: "Login fails", text: "the log says [redacted] and then [redacted]", candidates: [] } });
+      expect(appended[0]!.redacted).toBe(1);
+      expect(JSON.stringify(seen[0]!.input)).toContain(token);
+    });
+
+    it("keeps no text of a private conversation, and says so on the record", async () => {
+      const conversation = { channel: "leadership", private: true, thread: ["marta: fire Bob on friday"], latest: "fire Bob on friday", author: { profile: "member", title: null }, candidates: [] };
+      const answers = { related: { choice: "none", confidence: 0.9 }, new_work: { value: true, p: 0.9 } };
+      const appended: DecisionRecord[] = [];
+      await runs(fakeSandbox(output({ answer: answers })), { decisions: { append: async (record) => void appended.push(record) } }).run({ pack: "conversation_relation", context: { conversation } }, "intake", undefined, { own: true });
+      expect(appended[0]).toMatchObject({ private: true, origin: "machine", context: { conversation: { channel: "[private]", private: true, thread: ["[private]"], latest: "[private]" } } });
+      expect(JSON.stringify(appended[0]!.context)).not.toContain("Bob");
+    });
+
+    describe("a repository's learning section", () => {
+      const learning = (over: Record<string, unknown>) => async () => ({ repo: "shop", learning: { records: true, context: "full" as const, truth: true, traces: "host" as const, ...over } });
+      const dedup = { title: "Login fails", text: "the log", candidates: [] };
+      const slots = Object.fromEntries(Object.keys(PACKS.intake_dedup.questions).map((slot) => [slot, { choice: "different", confidence: 0.9 }]));
+      const ask2 = { pack: "intake_dedup" as const, context: { dedup }, taskId: "task-1" };
+      const keep2 = async (over: Record<string, unknown>, machine: Partial<ConstructorParameters<typeof PackRuns>[0]> = {}) => {
+        const appended: DecisionRecord[] = [];
+        const { telemetry, spans } = recordingTelemetry();
+        await runs(fakeSandbox(output({ answer: slots })), { telemetry, decisions: { append: async (record) => void appended.push(record) }, learning: learning(over), ...machine }).run(ask2, "intake", undefined, { own: true });
+        return { appended, spans };
+      };
+
+      it("writes the repository's folder name on the record, never its path", async () => {
+        const { appended } = await keep2({});
+        expect(appended[0]!.repo).toBe("shop");
+        expect(appended[0]!.context).toEqual({ dedup });
+      });
+
+      it("reaches a stage call through the card's scope: the record names the card, and each switch acts on it", async () => {
+        const seenTasks: Array<string | undefined> = [];
+        const policy = (over: Record<string, unknown>) => async (taskId: string | undefined) => (seenTasks.push(taskId), (await learning(over)()));
+        const call = async (over: Record<string, unknown>) => {
+          const appended: DecisionRecord[] = [];
+          const { telemetry, spans } = recordingTelemetry();
+          const own = ownCalls(runs(fakeSandbox(output({ answer: slots })), { telemetry, decisions: { append: async (record) => void appended.push(record) }, learning: policy(over) }));
+          await withTask("card-7", () => own.run({ pack: "intake_dedup", context: { dedup }, stage: "plan" }, "plan"));
+          return { appended, spans };
+        };
+        const full = await call({});
+        expect(full.appended[0]).toMatchObject({ taskId: "card-7", repo: "shop" });
+        expect(seenTasks).toEqual(["card-7"]);
+        expect((await call({ records: false })).appended).toEqual([]);
+        expect((await call({ context: "answers" })).appended[0]!.context).toEqual({});
+        const meta = await call({ traces: "metadata" });
+        expect(meta.spans[0]!.end).not.toHaveProperty("transcriptPath");
+        expect(meta.spans[0]!.end).not.toHaveProperty("input");
+        expect(meta.spans[0]!.end).not.toHaveProperty("output");
+      });
+
+      it("names no card for a call made outside any scope, and keeps a card the call already names", async () => {
+        const appended: DecisionRecord[] = [];
+        const own = ownCalls(runs(fakeSandbox(output({ answer: slots })), { decisions: { append: async (record) => void appended.push(record) } }));
+        await own.run({ pack: "intake_dedup", context: { dedup } }, "intake");
+        await withTask("card-7", () => own.run({ pack: "intake_dedup", context: { dedup }, taskId: "card-9" }, "intake"));
+        expect(appended[0]!.taskId).toBeUndefined();
+        expect(appended[1]!.taskId).toBe("card-9");
+      });
+
+      it("writes no record for a repository that asks for none", async () => {
+        expect((await keep2({ records: false })).appended).toEqual([]);
+      });
+
+      it("keeps the answer and no context when the repository asks for answers only", async () => {
+        const { appended } = await keep2({ context: "answers" });
+        expect(appended[0]).toMatchObject({ context: {}, answer: slots, repo: "shop" });
+      });
+
+      it("caps the span's mode at the repository's: metadata carries no input, off makes no span at all", async () => {
+        const meta = await keep2({ traces: "metadata" });
+        expect(meta.spans[0]!.end).not.toHaveProperty("input");
+        expect(meta.spans[0]!.end!.transcriptPath).toBeUndefined();
+        const off = await keep2({ traces: "off" });
+        expect(off.spans).toHaveLength(0);
+        const host = await keep2({ traces: "host" });
+        expect(host.spans[0]!.end).toHaveProperty("input");
+      });
+
+      it("never raises what the machine allows: a repository's host cannot turn on a machine that has traces off", async () => {
+        const { telemetry, spans } = recordingTelemetry();
+        const off: Telemetry = { ...telemetry, mode: "metadata" };
+        await runs(fakeSandbox(output({ answer: slots })), { telemetry: off, learning: learning({ traces: "host" }) }).run(ask2, "intake", undefined, { own: true });
+        expect(spans[0]!.end).not.toHaveProperty("input");
+      });
+
+      it("hands no container the key when the repository caps the mode below full", async () => {
+        const { telemetry } = recordingTelemetry();
+        const full: Telemetry = { ...telemetry, mode: "full" };
+        await keep2({ traces: "metadata" }, { telemetry: full });
+        expect(seen.at(-1)!.extraEnv).toEqual({});
+      });
+
+      it("does not let MACHINE_DECISIONS=off be raised: a machine with no log writes nothing whatever the repository says", async () => {
+        const { appended } = await keep2({ records: true }, { decisions: undefined });
+        expect(appended).toEqual([]);
+      });
+
+      it("uses the defaults for a call that names no card", async () => {
+        const appended: DecisionRecord[] = [];
+        await runs(fakeSandbox(output({ answer: slots })), { decisions: { append: async (record) => void appended.push(record) }, learning: async () => ({ repo: null, learning: { records: true, context: "full", truth: true, traces: "host" } }) }).run({ pack: "intake_dedup", context: { dedup } }, "intake", undefined, { own: true });
+        expect(appended[0]!.repo).toBeUndefined();
+      });
+    });
+
+    it("records the verdict under the repository's own bars, what the call cost, and the engine it moved from", async () => {
+      const record = await keep((r) => r.run(ask, "ship", undefined, { own: true }));
+      expect(record.acted).toEqual({ overall: "proceed", below: [], overrides: false });
+      expect(record.usage).toEqual({ costUsd: 0.0031, durationMs: 4200 });
+    });
+  });
+
+  it("answers anyway when the log cannot write", async () => {
+    const decisions = { append: async () => Promise.reject(new Error("disk full")) };
+    const result = await runs(fakeSandbox(answered), { decisions }).run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship");
+    expect(result.answer).toEqual({ worth: { value: true, p: 0.93 } });
+    expect(result.recordId).toBeUndefined();
+  });
+});
+

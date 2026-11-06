@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "intake_dedup",
+  "pack": "intake_dedup",
+  "attempt": 1,
+  "task": {
+    "id": "intake-dedup",
+    "title": "Checkout is slow to load",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "dedup": {
+      "title": "Checkout is slow to load",
+      "text": "The checkout page takes eight seconds to load on mobile.",
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "closed",
+          "title": "Checkout page times out under load",
+          "summary": "Under load the checkout page times out; a cache was added."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

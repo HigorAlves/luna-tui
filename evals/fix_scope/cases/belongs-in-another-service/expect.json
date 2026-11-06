@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "scope.choice",
+      "value": "re_plan"
+    }
+  ],
+  "rubric": "The reviewer says the feature is in the wrong service.",
+  "label": {
+    "scope": {
+      "choice": "re_plan"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "scope": "the plan itself is wrong: back to the planner with the thread"
+    },
+    "why": "The reviewer says the work belongs in another service with different dependencies and that the plan has to be redone: the plan itself is wrong.",
+    "ruledOut": [
+      {
+        "question": "scope",
+        "label": "in_place",
+        "why": "The plan itself is wrong. It is not: a local change: fix, run the checks, push."
+      },
+      {
+        "question": "scope",
+        "label": "re_verify_partial",
+        "why": "The plan itself is wrong. It is not: the change touches behaviour: fix and have the verifier review the delta."
+      }
+    ],
+    "second": {
+      "label": {
+        "scope": {
+          "choice": "re_plan"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

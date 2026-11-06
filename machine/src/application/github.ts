@@ -50,8 +50,10 @@ export interface GhIssue {
   title: string;
   body: string | null;
   url: string;
-  /** Its labels' names, for issue_classify; absent when the adapter did not read them. */
+  /** Its labels' names, for triage_signals; absent when the adapter did not read them. */
   labels?: string[];
+  /** The login that opened it; absent when the adapter did not read it. */
+  author?: string;
 }
 
 export interface ReviewPost {
@@ -65,6 +67,37 @@ export interface NewPr {
   body: string;
   head: string;
   draft: boolean;
+  /** The branch the PR targets; absent, the repository's default branch. A stacked card's PR targets its parent's branch. */
+  base?: string;
+}
+
+/** One thing someone did on a PR: a conversation comment, a review comment or a review. */
+export interface PrActivity {
+  /** `comment:<id>`, `review_comment:<id>` or `review:<id>`: stable across polls. */
+  id: string;
+  kind: "comment" | "review" | "review_comment";
+  /** The login, or null for a deleted user. */
+  actor: string | null;
+  isBot: boolean;
+  body: string;
+  /** GitHub's `author_association` of whoever did it (`OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, `NONE`, …); null when GitHub does not say. */
+  association: string | null;
+  /** A review's state (`APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`); null for a comment. */
+  state: string | null;
+  at: string;
+  url: string | null;
+}
+
+/** A submitted review: who, its state, the commit it was given on (when GitHub says) and when. */
+import type { ReviewRule } from "../domain/review-rule.ts";
+
+export interface PrReview {
+  author: string | null;
+  state: string;
+  commitId: string | null;
+  at: string;
+  /** GitHub's `author_association` of the reviewer to the repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...); null when GitHub gave none. */
+  association: string | null;
 }
 
 export interface GitHub {
@@ -80,8 +113,27 @@ export interface GitHub {
   prComments(slug: string, number: number): Promise<ReviewContext["existingComments"]>;
   /** The unresolved review threads, with the ids replies and resolutions address. */
   prThreads(slug: string, number: number): Promise<ThreadsContext["threads"]>;
-  /** Merges the way the repo allows (squash, else merge, else rebase) and deletes the head branch. */
-  mergePr(slug: string, number: number): Promise<void>;
+  /** Merges. `method` is used when the repository allows it, else squash, merge, rebase in that order. With `sha`, GitHub refuses (409) when the head is no
+   *  longer that commit. `title` and `message` are the commit's, when given. The head branch goes only with `deleteBranch` (default true: what a merge did before
+   *  `ship.merge`). A repo with a merge queue gets the PR enqueued instead (the branch stays) unless `queue` is false, where the refusal is an error.
+   *  `sha` of the answer is the merge commit GitHub reports, null when it names none. */
+  mergePr(slug: string, number: number, options?: { sha?: string; method?: "squash" | "merge" | "rebase"; queue?: boolean; deleteBranch?: boolean; title?: string; message?: string }): Promise<{ merged: true; sha: string | null } | { queued: true }>;
+  /** Deletes a branch of the repository; one that is already gone is not an error. */
+  deleteBranch(slug: string, ref: string): Promise<void>;
+  /** Puts the PR (by its GraphQL node id) in the repo's merge queue; with `sha`, GitHub refuses when the head is no longer that commit. */
+  enqueuePr(nodeId: string, sha?: string): Promise<{ queued: true }>;
+  /** A file's text at `ref` (a branch or a commit), or null when it is not there, is not a regular file, or is over 256 KB. */
+  fileAtRef(slug: string, ref: string, path: string): Promise<string | null>;
+  /** Comments, review comments and reviews on the PR since `since` (null: all), oldest first. */
+  prActivity(slug: string, number: number, since: string | null): Promise<PrActivity[]>;
+  /** Every submitted review, oldest first. */
+  prReviews(slug: string, number: number): Promise<PrReview[]>;
+  /** What the repository's own rules ask of a PR into `baseRef`: a ruleset's or the branch protection's required reviews, none, or unreadable (a protected branch whose protection the token cannot read is never `none`). */
+  reviewRule(slug: string, baseRef: string): Promise<ReviewRule>;
+  /** The logins in `org/<teamSlug>`; throws a GitHubError when the token cannot read the team. */
+  teamMembers(org: string, teamSlug: string): Promise<string[]>;
+  /** Whether the PR is merged, and its state. */
+  prMerged(slug: string, number: number): Promise<{ merged: boolean; mergedSha: string | null; state: "open" | "closed"; mergedAt: string | null }>;
   /** Closes the PR without merging; its branch stays. */
   closePr(slug: string, number: number): Promise<void>;
   postReview(slug: string, number: number, review: ReviewPost): Promise<void>;
@@ -92,15 +144,34 @@ export interface GitHub {
   /** Open issues (not PRs) carrying `label`. */
   listReadyIssues(slug: string, label: string): Promise<GhIssue[]>;
   commentOnIssue(slug: string, number: number, body: string): Promise<void>;
+  /** Opens a new issue in `slug` (a split's child ticket). A write: only on a person's tap. */
+  /** The repository's default branch as GitHub says it, or null when it cannot be read. */
+  defaultBranch(slug: string): Promise<string | null>;
+  createIssue(slug: string, issue: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }>;
   /** The open PR whose head is `branch`, or null. */
   findPr(slug: string, branch: string): Promise<PrRef | null>;
   openPr(slug: string, pr: NewPr): Promise<PrRef>;
+  /** Changes the branch an open PR targets (a stacked card's PR, once its parent merged). */
+  retargetPr(slug: string, number: number, base: string): Promise<void>;
   markPrReady(slug: string, number: number): Promise<void>;
   /** Every check run and commit status on `ref`. */
   prChecks(slug: string, ref: string): Promise<Check[]>;
   /** The failed jobs' logs of a workflow run, joined. */
   failedRunLog(slug: string, runId: string): Promise<string>;
   rerunFailedJobs(slug: string, runId: string): Promise<void>;
+  /** Replaces a PR's body. */
+  updatePrBody(slug: string, number: number, body: string): Promise<void>;
+  /** A PR's conversation comments (not its review comments), every page, with each author's login (null for a deleted user). */
+  listPrComments(slug: string, number: number): Promise<Array<{ id: number; body: string; url: string; author: string | null }>>;
+  updateComment(slug: string, commentId: number, body: string): Promise<void>;
+  /** The head commit of the PR as GitHub sees it, or null when it says none. */
+  prHeadSha(slug: string, number: number): Promise<string | null>;
+  /** The release named `tag` among the repo's releases, drafts included; created as a draft pre-release when there is none.
+   *  A draft has no tag and fires no release event, so no workflow of the repo runs because evidence was published. */
+  ensureRelease(slug: string, tag: string, release: { name: string; prerelease: boolean }): Promise<{ id: number; url: string }>;
+  releaseAssets(slug: string, releaseId: number): Promise<Array<{ id: number; name: string; url: string }>>;
+  /** Uploads a file to a release; `url` is the asset's download url. */
+  uploadReleaseAsset(slug: string, releaseId: number, name: string, data: Buffer, contentType: string): Promise<{ url: string }>;
 }
 
 const NO_TOKEN = "no GitHub token: set GITHUB_TOKEN (or GH_TOKEN) for the machine";
@@ -117,6 +188,14 @@ export function noTokenGitHub(): GitHub {
     prComments: refuse,
     prThreads: refuse,
     mergePr: refuse,
+    deleteBranch: refuse,
+    enqueuePr: refuse,
+    fileAtRef: refuse,
+    prActivity: refuse,
+    prReviews: refuse,
+    reviewRule: refuse,
+    teamMembers: refuse,
+    prMerged: refuse,
     closePr: refuse,
     postReview: refuse,
     replyToThread: refuse,
@@ -124,12 +203,22 @@ export function noTokenGitHub(): GitHub {
     threadResolved: () => Promise.resolve(false),
     listReadyIssues: refuse,
     commentOnIssue: refuse,
+    defaultBranch: async () => null,
+    createIssue: refuse,
     findPr: refuse,
     openPr: refuse,
+    retargetPr: refuse,
     markPrReady: refuse,
     prChecks: refuse,
     failedRunLog: refuse,
     rerunFailedJobs: refuse,
+    updatePrBody: refuse,
+    listPrComments: refuse,
+    updateComment: refuse,
+    prHeadSha: refuse,
+    ensureRelease: refuse,
+    releaseAssets: refuse,
+    uploadReleaseAsset: refuse,
   };
 }
 

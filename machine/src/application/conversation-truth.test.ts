@@ -1,0 +1,73 @@
+import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+import { ConversationTruth } from "./conversation-truth.ts";
+
+const classification = { kind: "bug", confidence: 0.9, by: "model" as const, at: "2026-10-28T00:00:00.000Z", records: { assess: "rec-1" }, verdict: "ok" as const, priority: "P0", knockOut: "production_down", total: 22, scores: { who: { score: 3, confidence: 0.9 } } };
+
+describe("ConversationTruth", () => {
+  const setup = async () => {
+    const dir = await mkdtemp(join(tmpdir(), "truth-"));
+    const learned: unknown[] = [];
+    const truth = new ConversationTruth(dir, { learned: async (f) => (learned.push(f), true) }, () => new Date("2026-10-28T12:00:00Z"));
+    return { dir, learned, truth };
+  };
+  it("a hand-set kind writes the file (mode 0600) and labels the kind on the assess record", async () => {
+    const { dir, learned, truth } = await setup();
+    await truth.override({ thread: "C1:1700000000.000000", classification, kind: "question" });
+    const files = (await import("node:fs/promises")).readdir(join(dir, "ground-truth", "conversation"));
+    const [name] = await files;
+    expect(name).toMatch(/^C1_1700000000\.000000-/);
+    const path = join(dir, "ground-truth", "conversation", name!);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ record: "rec-1", machine: { kind: "bug", priority: "P0" }, person: { kind: "question" } });
+    expect(learned).toEqual([{ pack: "conversation_assess", recordId: "rec-1", label: { kind: { choice: "question" } }, source: "person", kind: "person" }]);
+  });
+  it("a knock-out P0 lowered by hand labels that flag false; any other priority change labels nothing", async () => {
+    const { learned, truth } = await setup();
+    await truth.override({ thread: "C1:1.0", classification, priority: "P2" });
+    expect(learned).toEqual([{ pack: "conversation_assess", recordId: "rec-1", label: { production_down: { value: false } }, source: "person", kind: "person" }]);
+    learned.length = 0;
+    await truth.override({ thread: "C1:1.0", classification: { ...classification, knockOut: null, priority: "P1" }, priority: "P3" });
+    expect(learned).toEqual([]);
+  });
+  it("writes no file and teaches nothing when the claiming repository keeps no truth (learning.truth: false); a repository that keeps it, or none known, is as before", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "truth-off-"));
+    const learned: unknown[] = [];
+    const sink = { learned: async (f: unknown) => (learned.push(f), true) };
+    const off = new ConversationTruth(dir, sink as never, () => new Date("2026-10-28T12:00:00Z"), async () => false);
+    await off.override({ thread: "C1:1.0", classification, kind: "question" });
+    await off.outcome({ private: false, thread: "C1:1.0", draft: "d1", outcome: "edited", machine: "a", person: "b", records: { assess: "rec-1" } });
+    await off.relation({ thread: "C1:1.0", record: "rec-2", relation: "new_candidate", slot: null });
+    expect(learned).toEqual([]);
+    await expect(import("node:fs/promises").then((fs) => fs.readdir(join(dir, "ground-truth", "conversation")))).rejects.toThrow();
+    const asked: string[] = [];
+    const on = new ConversationTruth(dir, sink as never, () => new Date("2026-10-28T12:00:00Z"), async (thread) => (asked.push(thread), true));
+    await on.override({ thread: "C1:1.0", classification, kind: "question" });
+    expect(asked).toEqual(["C1:1.0"]);
+    expect(learned).toHaveLength(1);
+  });
+  it("a dismissed draft says why: no_reply_needed labels needs_reply false, bad_draft labels it true, no reason labels nothing; the reason is in the file; an expired draft labels nothing", async () => {
+    const { dir, learned, truth } = await setup();
+    const base = { thread: "C1:1.0", draft: "d1", machine: "a", records: { assess: "rec-1" }, private: false };
+    await truth.outcome({ ...base, outcome: "ignored", reason: "no_reply_needed" });
+    await truth.outcome({ ...base, draft: "d2", outcome: "ignored", reason: "bad_draft" });
+    await truth.outcome({ ...base, draft: "d3", outcome: "ignored" });
+    await truth.outcome({ ...base, draft: "d4", outcome: "expired" });
+    expect(learned).toEqual([
+      { pack: "conversation_assess", recordId: "rec-1", label: { needs_reply: { value: false } }, source: "draft_dismissed", kind: "person" },
+      { pack: "conversation_assess", recordId: "rec-1", label: { needs_reply: { value: true } }, source: "draft_dismissed", kind: "person" },
+    ]);
+    expect(JSON.parse(await readFile(join(dir, "ground-truth", "conversation", "C1_1.0-d2.json"), "utf8"))).toMatchObject({ outcome: "ignored", reason: "bad_draft" });
+  });
+  it("a hand-set priority also lands in ground-truth/priority with both levels and the scores, and no thread text", async () => {
+    const { dir, truth } = await setup();
+    await truth.override({ thread: "C1:1.0", classification, priority: "P2" });
+    const [name] = await (await import("node:fs/promises")).readdir(join(dir, "ground-truth", "priority"));
+    const doc = JSON.parse(await readFile(join(dir, "ground-truth", "priority", name!), "utf8"));
+    expect(doc).toMatchObject({ machine: "conversation", id: "C1:1.0", recordId: "rec-1", machineLevel: "P0", personLevel: "P2", knockOut: "production_down", total: 22 });
+    expect(Object.keys(doc)).not.toContain("text");
+  });
+});

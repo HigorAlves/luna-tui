@@ -3,6 +3,7 @@
 import type { Task } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../../test/policies.ts";
 
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
@@ -23,7 +24,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
 });
 
 const app = () => createApp({ db, pipeline, bus: new Bus() });
@@ -38,25 +39,26 @@ describe("a task snapshot's lastRun and gate", () => {
   });
 
   it("carry the stage's summary and the plan the gate asks you to approve, in one task and in the list", async () => {
-    stubs.plan("triage", { outcome: "pass", detail: { summary: "Adds an error to the login form", brief: "b", confidence: "high" } });
+    stubs.plan("test_design", { outcome: "pass", detail: { summary: "Adds an error to the login form", brief: "b", confidence: "high" } });
     const task = await pipeline.createTask({ title: "Login" });
     await pipeline.start(task.id);
     const snapshot = await one(task.id);
-    expect(snapshot.lastRun).toEqual({ stage: "triage", engine: null, outcome: "pass", summary: "Adds an error to the login form", at: expect.any(String) });
+    expect(snapshot.lastRun).toEqual({ stage: "test_design", engine: null, outcome: "pass", summary: "Adds an error to the login form", at: expect.any(String) });
     expect(snapshot.gate).toEqual({ state: "awaiting_approval", requested: expect.objectContaining({ summary: "Adds an error to the login form", brief: "b" }) });
     expect((await all())[0]).toMatchObject({ lastRun: snapshot.lastRun, gate: snapshot.gate });
   });
 
   it("cut a long summary to 2000 characters, and drop the gate once it is answered", async () => {
-    stubs.plan("triage", { outcome: "pass", detail: { summary: "x".repeat(5000) } });
+    stubs.plan("test_design", { outcome: "pass", detail: { summary: "x".repeat(5000) } });
     const task = await pipeline.createTask({ title: "Login" });
     await pipeline.start(task.id);
     expect((await one(task.id)).lastRun?.summary).toHaveLength(2000);
     await pipeline.decide(task.id, "approved");
     const after = await one(task.id);
-    expect(after.state).toBe("awaiting_test_check");
-    expect(after.lastRun?.stage).toBe("test_design");
-    expect(after.gate?.state).toBe("awaiting_test_check");
+    // The stubs carry the approved plan through to the shipping gate.
+    expect(after.state).toBe("awaiting_ship");
+    expect(after.lastRun?.stage).toBe("evidence");
+    expect(after.gate?.state).toBe("awaiting_ship");
   });
 
   it("show a failed stage's error when it said nothing else", async () => {
@@ -67,7 +69,7 @@ describe("a task snapshot's lastRun and gate", () => {
   });
 
   it("ride on the replayed task.updated too", async () => {
-    stubs.plan("triage", { outcome: "pass", detail: { summary: "s" } });
+    stubs.plan("test_design", { outcome: "pass", detail: { summary: "s" } });
     const task = await pipeline.createTask({ title: "Login" });
     await pipeline.start(task.id);
     const response = await app().request("/events?since=0");
@@ -76,17 +78,38 @@ describe("a task snapshot's lastRun and gate", () => {
     while (!text.includes("event: ready")) text += new TextDecoder().decode((await reader.read()).value);
     await reader.cancel();
     const updated = JSON.parse(/event: task.updated\ndata: (.*)/.exec(text)![1]!) as { task: Task };
-    expect(updated.task).toMatchObject({ lastRun: { stage: "triage", summary: "s" }, gate: { state: "awaiting_approval" } });
+    expect(updated.task).toMatchObject({ lastRun: { stage: "test_design", summary: "s" }, gate: { state: "awaiting_approval" } });
   });
 });
 
 describe("a task snapshot's classification", () => {
-  it("is what intake stored from issue_classify, in one task and in the list; null on a task intake did not classify", async () => {
+  it("is what intake stored from triage_signals, in one task and in the list; null on a task intake did not classify", async () => {
     const classification = { kind: "bug", area: "board", ready: true, size: 1, confidence: 0.85, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" };
     const classified = await pipeline.createTask({ title: "Board crashes", classification });
     const plain = await pipeline.createTask({ title: "Login" });
     expect((await one(classified.id)).classification).toEqual(classification);
     expect((await one(plain.id)).classification).toBeNull();
     expect((await all()).map((t) => t.classification)).toEqual([classification, null]);
+  });
+});
+
+describe("GET /tasks/:id carries the ship view", () => {
+  const detail = async (id: string, shipView?: (taskId: string) => Promise<unknown>) => {
+    const res = await createApp({ db, pipeline, bus: new Bus(), ...(shipView ? { shipView: shipView as never } : {}) }).request(`/tasks/${id}`);
+    return (await res.json()) as { ship?: unknown };
+  };
+
+  it("is null with no ship reader, and null for a card the reader knows nothing about", async () => {
+    const task = await pipeline.createTask({ title: "Login" });
+    expect((await detail(task.id)).ship).toBeNull();
+    expect((await detail(task.id, async () => null)).ship).toBeNull();
+  });
+
+  it("is what the reader gives for the card's id", async () => {
+    const task = await pipeline.createTask({ title: "Login" });
+    const seen: string[] = [];
+    const out = await detail(task.id, async (id) => (seen.push(id), { pr: { slug: "o/a", number: 3, url: "https://github.com/o/a/pull/3" }, ready: true }));
+    expect(seen).toEqual([task.id]);
+    expect(out.ship).toMatchObject({ ready: true, pr: { number: 3 } });
   });
 });

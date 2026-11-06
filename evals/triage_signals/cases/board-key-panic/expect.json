@@ -1,0 +1,208 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "kind.choice",
+      "value": "bug"
+    },
+    {
+      "kind": "equals",
+      "path": "type_of_work.choice",
+      "value": "frontend"
+    },
+    {
+      "kind": "equals",
+      "path": "ready.value",
+      "value": true
+    },
+    {
+      "kind": "oneOf",
+      "path": "size.choice",
+      "values": [
+        "XS",
+        "S"
+      ]
+    },
+    {
+      "kind": "between",
+      "path": "time.score",
+      "min": 0.5,
+      "max": 1.5
+    },
+    {
+      "kind": "equals",
+      "path": "risk_prelim.choice",
+      "value": "low"
+    },
+    {
+      "kind": "equals",
+      "path": "archive.value",
+      "value": false
+    },
+    {
+      "kind": "equals",
+      "path": "archive_reason.choice",
+      "value": "none"
+    }
+  ],
+  "rubric": "A bug in the board (a panic in the Rust TUI's PR view), with steps, actual and expected behaviour: ready for an agent. Frontend work (the TUI), extra small or small: one function and its test. Urgency this cycle: a crash someone hits, not whenever and not now. Isolated Rust with a test: low risk. It is real work or a real question: not a duplicate, not stale, so the archive suggestion is no.",
+  "label": {
+    "kind": {
+      "choice": "bug"
+    },
+    "type_of_work": {
+      "choice": "frontend"
+    },
+    "ready": {
+      "value": true
+    },
+    "size": {
+      "choice": [
+        "XS",
+        "S"
+      ]
+    },
+    "time": {
+      "score": 1
+    },
+    "risk_prelim": {
+      "choice": "low"
+    },
+    "archive": {
+      "value": false
+    },
+    "archive_reason": {
+      "choice": "none"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "kind": "Something that works, or should work, is broken",
+      "type_of_work": "Screens, views, keys, rendering, styling",
+      "ready": "Does the issue have testable acceptance criteria an agent could verify without asking anyone?",
+      "size": "A line or two: a typo, a constant, a copy change | One function or one file, with its test",
+      "time": "This cycle",
+      "risk_prelim": "Isolated code with tests, docs or copy",
+      "archive": "Should this be archived instead of worked: a duplicate, out of scope, stale, or nothing an agent can act on?",
+      "archive_reason": "It should be worked"
+    },
+    "why": "A crash with steps, actual and expected behaviour in the Rust TUI: a bug in frontend code, one function and its test, a crash someone hits this cycle, isolated code with a test, real work to do.",
+    "ruledOut": [
+      {
+        "question": "kind",
+        "label": "feature",
+        "why": "The issue is a crash of something that should work. It is not: New behaviour a user or the pipeline can see."
+      },
+      {
+        "question": "kind",
+        "label": "task",
+        "why": "The issue is a crash of something that should work. It is not: A defined piece of work with no new behaviour to design: a migration, a rename, a config change."
+      },
+      {
+        "question": "kind",
+        "label": "chore",
+        "why": "The issue is a crash of something that should work. It is not: Upkeep with no new behaviour: a refactor, dependencies, docs, CI."
+      },
+      {
+        "question": "kind",
+        "label": "question",
+        "why": "The issue is a crash of something that should work. It is not: It asks for an answer or a decision, not a change."
+      },
+      {
+        "question": "kind",
+        "label": "incident",
+        "why": "The issue is a crash of something that should work. It is not: Production is down or wrong right now, data is lost, or a secret is exposed."
+      },
+      {
+        "question": "type_of_work",
+        "label": "backend",
+        "why": "It is the terminal UI. It is not: Services, APIs, stages, persistence, adapters."
+      },
+      {
+        "question": "type_of_work",
+        "label": "infra",
+        "why": "It is the terminal UI. It is not: Deploys, CI, containers, cloud or runtime configuration."
+      },
+      {
+        "question": "type_of_work",
+        "label": "data",
+        "why": "It is the terminal UI. It is not: Schemas, migrations, backfills, pipelines, analytics."
+      },
+      {
+        "question": "type_of_work",
+        "label": "docs",
+        "why": "It is the terminal UI. It is not: Documentation or copy only."
+      },
+      {
+        "question": "type_of_work",
+        "label": "mixed",
+        "why": "It is the terminal UI. It is not: Two or more of the above in one change."
+      },
+      {
+        "question": "risk_prelim",
+        "label": "medium",
+        "why": "It is isolated Rust with a test. It is not: Shared code other features depend on."
+      },
+      {
+        "question": "risk_prelim",
+        "label": "high",
+        "why": "It is isolated Rust with a test. It is not: Auth, payments, data migrations, deletion, CI or infrastructure."
+      },
+      {
+        "question": "archive_reason",
+        "label": "duplicate",
+        "why": "The ticket is real work. It is not: Another open ticket asks for the same."
+      },
+      {
+        "question": "archive_reason",
+        "label": "out_of_scope",
+        "why": "The ticket is real work. It is not: Not this repository's or team's to do."
+      },
+      {
+        "question": "archive_reason",
+        "label": "stale",
+        "why": "The ticket is real work. It is not: Overtaken by events; nobody needs it now."
+      },
+      {
+        "question": "archive_reason",
+        "label": "not_actionable",
+        "why": "The ticket is real work. It is not: No change an agent could make or verify."
+      }
+    ],
+    "second": {
+      "label": {
+        "kind": {
+          "choice": "bug"
+        },
+        "type_of_work": {
+          "choice": "frontend"
+        },
+        "ready": {
+          "value": true
+        },
+        "size": {
+          "choice": [
+            "XS",
+            "S"
+          ]
+        },
+        "time": {
+          "score": 1
+        },
+        "risk_prelim": {
+          "choice": "low"
+        },
+        "archive": {
+          "value": false
+        },
+        "archive_reason": {
+          "choice": "none"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

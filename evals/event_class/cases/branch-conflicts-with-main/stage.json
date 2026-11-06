@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "event_class",
+  "pack": "event_class",
+  "attempt": 1,
+  "task": {
+    "id": "branch-conflicts-with-main",
+    "title": "branch-conflicts-with-main",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "event",
+      "event": {
+        "actor": "github",
+        "isBot": true,
+        "isMe": false,
+        "kind": "push",
+        "state": null,
+        "body": "This branch has conflicts that must be resolved: src/cart/export.ts and pnpm-lock.yaml conflict with main.",
+        "url": null
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

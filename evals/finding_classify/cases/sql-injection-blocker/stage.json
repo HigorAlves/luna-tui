@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_classify",
+  "pack": "finding_classify",
+  "attempt": 1,
+  "task": {
+    "id": "finding-classify",
+    "title": "Finding: Query built by concatenation",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/export.ts",
+        "line": 12,
+        "severity": "should_fix",
+        "title": "Query built by concatenation",
+        "body": "The id comes from the request and is concatenated into the SQL.",
+        "confidence": 0.8
+      },
+      "excerpt": "10  export async function lineItems(req) {\n11    const id = req.query.cartId;\n12    return db.query(\"select * from lines where cart_id = '\" + id + \"'\");\n13  }"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

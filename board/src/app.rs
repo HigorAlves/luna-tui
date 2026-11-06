@@ -23,6 +23,8 @@ use crate::inbox::{self, InboxState, Split};
 use crate::keys::{self, Scope};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
+use crate::backlog::{BacklogEntry, BacklogState};
+use crate::tickets::{TicketEntry, TicketsState};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
 use crate::{
@@ -30,7 +32,7 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
+        ARCHIVE_REASONS, COLUMNS, RECORD_FIELDS, TriageRecord, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
         StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of,
         plan_markdown, priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
@@ -42,6 +44,14 @@ const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
 /// How long a prefix key (`g`, `z`) waits before the footer lists its second keys.
 pub const WHICH_KEY_DELAY: Duration = Duration::from_millis(400);
 /// The platform's "open this URL" program and its arguments.
+/// The PATCH body of a done tap: `done: true`, and the reason a draft was dismissed when there is one.
+fn dismiss_patch(reason: Option<&str>) -> serde_json::Value {
+    match reason {
+        Some(reason) => serde_json::json!({ "done": true, "reason": reason }),
+        None => serde_json::json!({ "done": true }),
+    }
+}
+
 fn opener_command(url: &str) -> (&'static str, Vec<String>) {
     let program = if cfg!(target_os = "macos") {
         "open"
@@ -95,6 +105,8 @@ pub struct FloorState {
     pub d30: Option<Metrics>,
     /// One row per repo over 7d; the table under the numbers.
     pub repos: Vec<RepoMetrics>,
+    /// Each repository's image and graph (`GET /repos`); empty from a machine without it.
+    pub health: Vec<crate::model::RepoHealth>,
     /// 0 is every repo; `i` is `repos[i - 1]`, and the numbers above are that repo's.
     pub cursor: usize,
     /// How fast you answer on Slack, 7d and 30d; None until both fetches succeed.
@@ -106,13 +118,32 @@ pub struct FloorState {
 }
 
 impl FloorState {
-    /// `None` for every repo; `Some(repo)` for one, where the repo may itself be `None`
-    /// (the tasks with no repo).
-    pub fn focused(&self) -> Option<Option<&str>> {
+    /// The repositories the machine knows (`GET /repos`) that have no task-metrics row yet: a repository just configured. They
+    /// follow the metrics rows in the focus order, so tab reaches them and `A` can approve their base.
+    pub fn health_only(&self) -> Vec<&crate::model::RepoHealth> {
+        self.health.iter().filter(|h| !self.repos.iter().any(|r| r.repo.as_deref() == Some(h.repo.as_str()))).collect()
+    }
+
+    /// How many repositories tab can focus: the metrics rows, then the health-only ones.
+    pub fn focusable(&self) -> usize {
+        self.repos.len() + self.health_only().len()
+    }
+
+    /// The focused repository's path; `None` for every repo, `Some(None)` for the tasks with no repo.
+    fn focused_repo(&self) -> Option<Option<&str>> {
         if self.cursor == 0 {
             return None;
         }
-        self.repos.get(self.cursor - 1).map(|r| r.repo.as_deref())
+        match self.repos.get(self.cursor - 1) {
+            Some(r) => Some(r.repo.as_deref()),
+            None => self.health_only().get(self.cursor - 1 - self.repos.len()).map(|h| Some(h.repo.as_str())),
+        }
+    }
+
+    /// `None` for every repo; `Some(repo)` for one, where the repo may itself be `None`
+    /// (the tasks with no repo).
+    pub fn focused(&self) -> Option<Option<&str>> {
+        self.focused_repo()
     }
 
     /// The focused repo's name for the header; `None` when every repo is in.
@@ -120,11 +151,14 @@ impl FloorState {
         if self.cursor == 0 {
             return None;
         }
-        self.repos.get(self.cursor - 1).map(RepoMetrics::name)
+        match self.repos.get(self.cursor - 1) {
+            Some(r) => Some(r.name()),
+            None => self.health_only().get(self.cursor - 1 - self.repos.len()).map(|h| h.name()),
+        }
     }
 
     fn cycle(&mut self, by: isize) {
-        let n = self.repos.len() + 1;
+        let n = self.focusable() + 1;
         self.cursor = (self.cursor as isize + by).rem_euclid(n as isize) as usize;
     }
 }
@@ -265,6 +299,16 @@ pub enum Mode {
         approve: bool,
         text: String,
     },
+    /// `N` at the plan gate: the comment a rejection carries (required: the card ends, archived as rejected).
+    Reject { id: String, text: String },
+    /// `n` on a card with an Evidence Pack: why it was not useful (a note is optional).
+    EvidenceNote { id: String, text: String },
+    /// `Z` on a ticket: pick why it is archived; enter archives it.
+    ArchiveReason { id: String, cursor: usize },
+    /// `E` on an escalated ticket: pick the reason the escalation really had; enter sends the correction.
+    EscalationReason { id: String, cursor: usize },
+    /// `T`: correct the Triage Record. `field` is the row, `picks` the value index of each `RECORD_FIELDS` row.
+    RecordEdit { id: String, field: usize, picks: [usize; 5] },
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
@@ -300,6 +344,10 @@ pub enum Mode {
     PrActions { cursor: usize },
     /// `s` on a Slack item: pick how long it sleeps.
     SlackSnooze { id: String, cursor: usize },
+    /// `d` on an item with a waiting draft: why it is dismissed (n: no reply needed, b: bad draft, s or enter: no reason).
+    SlackDismiss { id: String },
+    /// `c` (the kind) or `L` (the relation) on a Slack thread: a picker over the machine's own list.
+    SlackPick { id: String, relation: bool, cursor: usize },
     /// `r` (or `n`) on a Slack item: the reply, pre-filled with triage's draft (or a nudge);
     /// ctrl+s posts it as you. `nudge`: the machine prefixes a mention of the author.
     SlackReply {
@@ -307,6 +355,8 @@ pub enum Mode {
         area: TextArea<'static>,
         vim: Vim,
         nudge: bool,
+        /// The id and hash of the draft the editor was opened on; a typed reply or a nudge has none.
+        draft: Option<(String, String)>,
     },
     /// `t` on a Slack item: one yes, then a Backlog ticket with `title`, in `repo` when guessed.
     SlackTask { id: String, title: String, repo: Option<String> },
@@ -347,19 +397,21 @@ pub enum PlanPane {
 /// Whether `task` is at the plan gate with its plan already fetched into `detail`, so `e`
 /// opens the two-pane plan editor instead of the plain ticket editor.
 fn has_open_plan(task: &Task, detail: Option<&TaskDetail>) -> bool {
-    task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some())
+    task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some_and(|a| !matches!(a.outcome(), Some("split" | "split_failed"))))
 }
 
 /// Whether the plan may still be edited: at its own gate, or at the test check, before anything
 /// is built. The machine refuses the edit after that.
 fn plan_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
     matches!(task.state.as_str(), "awaiting_approval" | "awaiting_test_check")
-        && detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some())
+        && detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some_and(|a| !(a.decision.is_none() && matches!(a.outcome(), Some("split" | "split_failed")))))
 }
 
-/// Whether the cases may be edited: only while they wait for your check.
+/// Whether the cases may be edited: only while they wait for your check, on the plan gate that
+/// carries them or a legacy test check.
 fn cases_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
-    task.state == "awaiting_test_check" && detail.is_some_and(|d| d.task.id == task.id && !d.cases().is_empty())
+    matches!(task.state.as_str(), "awaiting_test_check" | "awaiting_approval")
+        && detail.is_some_and(|d| d.task.id == task.id && d.cases_approval().is_some_and(|a| a.decision.is_none()) && !d.cases().is_empty())
 }
 
 /// What the event loop must do after a key press.
@@ -415,6 +467,12 @@ pub struct App {
     pub slack_polling: bool,
     /// The PR view, open while this is `Some`.
     pub pulls: Option<PullsState>,
+    /// The Backlog view, open while this is `Some`, and the ranked items it fetched when it opened.
+    pub backlog: Option<BacklogState>,
+    pub backlog_items: Vec<BacklogEntry>,
+    /// The Tickets view, open while this is `Some`, and the tickets it fetched when it opened.
+    pub tickets: Option<TicketsState>,
+    pub ticket_items: Vec<TicketEntry>,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
     pending_dispatch: Option<(String, PrAction)>,
     /// The Slack inbox as the machine last sent it; empty until the first `slack.items` event.
@@ -520,6 +578,10 @@ impl App {
             prs_polling: false,
             slack_polling: false,
             pulls: None,
+            backlog: None,
+            backlog_items: Vec::new(),
+            tickets: None,
+            ticket_items: Vec::new(),
             pending_dispatch: None,
             slack_snapshot: SlackSnapshot::default(),
             slack: None,
@@ -756,6 +818,11 @@ impl App {
                     let line = alert.line();
                     self.notices.push(Notice { title: "Budget".to_string(), body: line.clone() });
                     self.notify(format!("budget: {line}"), alert.pct >= 100);
+                }
+                Incoming::Message(StreamMessage::TaskShipped { shipped }) => {
+                    let line = format!("Shipped: {} → PR #{}", shipped.title, shipped.number);
+                    self.notices.push(Notice { title: "Shipped".to_string(), body: line.clone() });
+                    self.notify(line, false);
                 }
                 Incoming::Message(StreamMessage::Prs { snapshot }) => self.take_prs(snapshot),
                 Incoming::Message(StreamMessage::Slack { snapshot }) => self.take_slack(snapshot),
@@ -1598,6 +1665,7 @@ impl App {
             }
             "paused_rate_limit" => self.act(|m| m.resume(id), "resumed"),
             "closed" => self.notify("this ticket is closed", false),
+            "archived" => self.notify("this ticket is archived", false),
             _ if task.waiting_on_you => self.act(|m| m.decide(id, true, None), "approved"),
             _ => self.notify(format!("{} is running; X aborts it", task.status_label()), false),
         }
@@ -1619,10 +1687,10 @@ impl App {
                 }
             }
             'S' => {
-                if task.state == "awaiting_ship" {
+                if task.state == "awaiting_ship" && task.waiting_on_you {
                     return self.advance(id);
                 }
-                self.notify("nothing waiting to ship on this ticket", false);
+                self.notify(if task.state == "awaiting_ship" { "the machine is watching the PR; nothing to ship yet" } else { "nothing waiting to ship on this ticket" }, false);
             }
             'e' => {
                 let in_popup = matches!(&self.mode, Mode::Detail(open) if open == id);
@@ -1635,9 +1703,25 @@ impl App {
                     self.open_ticket_editor(id);
                 }
             }
+            'y' | 'n' => {
+                if task.evidence.is_none() {
+                    self.notify("this ticket has no Evidence Pack yet", false);
+                } else if key == 'y' {
+                    self.act(|m| m.evidence_feedback(id, true, None), "noted: the pack was useful");
+                } else {
+                    self.mode = Mode::EvidenceNote { id: id.to_string(), text: String::new() };
+                }
+            }
             'R' => self.open_repo_picker(id),
+            'N' => {
+                if crate::keys::rejectable(self, &task) {
+                    self.mode = Mode::Reject { id: id.to_string(), text: String::new() };
+                } else {
+                    self.notify("only the plan gate and the release question reject", false);
+                }
+            }
             'r' => {
-                if matches!(task.state.as_str(), "awaiting_setup" | "awaiting_approval" | "awaiting_test_check") {
+                if crate::keys::sendable_back_now(self, &task) {
                     self.mode = Mode::Reason {
                         id: id.to_string(),
                         approve: false,
@@ -1663,6 +1747,31 @@ impl App {
                     self.mode = Mode::ConfirmWorktree(id.to_string());
                 }
             }
+            'Z' => {
+                if matches!(task.state.as_str(), "closed" | "archived") {
+                    self.notify(format!("this ticket is already {}", task.state), false);
+                } else {
+                    self.mode = Mode::ArchiveReason { id: id.to_string(), cursor: 0 };
+                }
+            }
+            'C' => {
+                if task.state == "escalated" {
+                    self.mode = Mode::EscalationReason { id: id.to_string(), cursor: 0 };
+                } else {
+                    self.notify("this ticket is not escalated", false);
+                }
+            }
+            'p' => {
+                if task.state == "awaiting_answers" {
+                    self.act(|m| m.post_questions(id), "questions posted where the ticket came from");
+                } else {
+                    self.notify("no questions are waiting on this ticket", false);
+                }
+            }
+            'T' => match record_edit_mode(&task) {
+                Ok(mode) => self.mode = mode,
+                Err(why) => self.notify(why, false),
+            },
             'd' => self.mode = Mode::ConfirmDelete(id.to_string()),
             'f' => self.watch(&task),
             'o' => match task.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| task.jira.as_ref().map(|j| j.url.clone())) {
@@ -1833,6 +1942,12 @@ impl App {
         if self.pulls.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_pulls(key);
         }
+        if self.backlog.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_backlog(key);
+        }
+        if self.tickets.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_tickets(key);
+        }
         if self.slack.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_slack(key);
         }
@@ -1850,10 +1965,15 @@ impl App {
             Mode::Filter => self.handle_filter(key),
             Mode::Command { .. } => self.handle_command(key),
             Mode::Reason { .. } => self.handle_reason(key),
+            Mode::Reject { .. } => self.handle_reject(key),
+            Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
                 self.handle_confirm(key, &id)
             }
+            Mode::ArchiveReason { .. } => self.handle_archive_reason(key),
+            Mode::EscalationReason { .. } => self.handle_escalation_reason(key),
+            Mode::RecordEdit { .. } => self.handle_record_edit(key),
             Mode::ConfirmApproveAll(_) => self.handle_confirm_approve_all(key),
             Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
             Mode::Actions { .. } => self.handle_actions(key),
@@ -1863,6 +1983,8 @@ impl App {
             Mode::ClonePrompt { .. } => self.handle_clone_prompt(key),
             Mode::PrActions { .. } => self.handle_pr_actions(key),
             Mode::SlackSnooze { .. } => self.handle_slack_snooze(key),
+            Mode::SlackDismiss { .. } => self.handle_slack_dismiss(key),
+            Mode::SlackPick { .. } => self.handle_slack_pick(key),
             Mode::SlackReply { .. } => self.handle_slack_reply(key),
             Mode::SlackTask { .. } => self.handle_slack_task(key),
             Mode::SlackWatchAdd { .. } => self.handle_slack_watch_add(key),
@@ -1889,6 +2011,7 @@ impl App {
         let rows = if focused { Some(self.machine.metrics_for("7d", None, Some("repo"))) } else { None };
         // Engines are a bonus too: a machine from before them answers groupBy=engine with a 400.
         let by_engine = self.machine.metrics_for("7d", repo.as_ref().map(|r| r.as_deref()), Some("engine")).ok().and_then(|m| m.by_engine);
+        let health = self.machine.repo_health().unwrap_or_default();
         let engines = self.machine.engines().ok().filter(|e| e.iter().any(|e| e.spent_this_month_usd.is_some()));
         // The Slack block is a bonus: a machine without the inbox leaves it out, nothing else changes.
         let slack = self.machine.slack_metrics("7d").and_then(|d7| self.machine.slack_metrics("30d").map(|d30| (d7, d30))).ok();
@@ -1897,6 +2020,7 @@ impl App {
         };
         floor.slack = slack;
         floor.by_engine = by_engine;
+        floor.health = health;
         floor.engines = engines.unwrap_or_default();
         match d7 {
             Ok(m) => {
@@ -1916,7 +2040,7 @@ impl App {
             Some(Err(e)) => errors.push(e),
             None => {}
         }
-        if floor.cursor > floor.repos.len() {
+        if floor.cursor > floor.focusable() {
             floor.cursor = 0;
         }
         if let Some(error) = errors.into_iter().next() {
@@ -1926,13 +2050,14 @@ impl App {
 
     /// The keys `handle_floor` matches; the registry's Floor scope must list exactly these.
     #[cfg(test)]
-    pub(crate) const HANDLED_FLOOR: &[&str] = &["esc", "F", "q", "?", "R", "tab", "shift+tab"];
+    pub(crate) const HANDLED_FLOOR: &[&str] = &["esc", "F", "q", "?", "R", "A", "tab", "shift+tab"];
 
     fn handle_floor(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Esc | KeyCode::Char('F') | KeyCode::Char('q') => self.floor = None,
             KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('R') => self.refresh_floor(),
+            KeyCode::Char('A') => self.approve_pending_base(),
             KeyCode::Tab | KeyCode::BackTab => {
                 if let Some(floor) = self.floor.as_mut() {
                     floor.cycle(if key.code == KeyCode::Tab { 1 } else { -1 });
@@ -1944,6 +2069,26 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// A: approves the base the focused repository is waiting on (the machine checks it is the one in its luna.yaml).
+    fn approve_pending_base(&mut self) {
+        let Some(floor) = self.floor.as_ref() else { return };
+        let Some(repo) = floor.focused_repo().flatten().map(str::to_string) else {
+            self.notify("focus a repository (tab) to approve its base".to_string(), true);
+            return;
+        };
+        let Some(base) = floor.health.iter().find(|h| h.repo == repo).and_then(|h| h.image.pending_base.clone()) else {
+            self.notify("that repository has no base waiting".to_string(), false);
+            return;
+        };
+        match self.machine.approve_base(&repo, &base) {
+            Ok(()) => {
+                self.notify(format!("approved base {}", crate::model::plain(&base, 60)), false);
+                self.refresh_floor();
+            }
+            Err(e) => self.notify(format!("approve base: {e}"), true),
+        }
     }
 
     /// The second key of `z…` (fold) and `g…` (group): `zc`/`zo` fold/unfold the focused
@@ -2071,7 +2216,7 @@ impl App {
     /// own: the split's approval, not the memory review).
     #[cfg(test)]
     pub(crate) const HANDLED_INBOX: &[&str] =
-        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "X", "w", "d", "f", "o", "J"];
+        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p"];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
     fn handle_inbox(&mut self, key: KeyEvent) -> Outcome {
@@ -2217,6 +2362,233 @@ impl App {
         }
         self.pulls = Some(next);
         Outcome::Continue
+    }
+
+    /// The item under the Backlog cursor.
+    pub fn backlog_under_cursor(&self) -> Option<BacklogEntry> {
+        let state = self.backlog.as_ref()?;
+        self.backlog_items.get(state.cursor.min(self.backlog_items.len().saturating_sub(1))).cloned()
+    }
+
+    /// Fetches the ranked backlog; a failure is a toast and the list stays as it was.
+    fn refresh_backlog(&mut self) {
+        match self.machine.backlog() {
+            Ok(items) => {
+                self.backlog_items = items;
+                if let Some(state) = self.backlog.as_mut() {
+                    state.cursor = state.cursor.min(self.backlog_items.len().saturating_sub(1));
+                }
+            }
+            Err(error) => self.notify(format!("backlog: {error}"), true),
+        }
+    }
+
+    fn open_backlog(&mut self) {
+        self.backlog = Some(BacklogState::default());
+        self.refresh_backlog();
+    }
+
+    /// The keys `handle_backlog` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_BACKLOG: &[&str] = &["esc", "B", "q", "?", "j", "k", "R", "p", "b", "d"];
+
+    /// The Backlog view's keys: move, promote, bump, decline, refetch.
+    fn handle_backlog(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.backlog.clone() else {
+            return Outcome::Continue;
+        };
+        let count = self.backlog_items.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('B') | KeyCode::Char('q') => self.backlog = None,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('j') | KeyCode::Down => self.backlog = Some(BacklogState { cursor: (state.cursor + 1).min(count.saturating_sub(1)) }),
+            KeyCode::Char('k') | KeyCode::Up => self.backlog = Some(BacklogState { cursor: state.cursor.saturating_sub(1) }),
+            KeyCode::Char('R') => self.refresh_backlog(),
+            KeyCode::Char(c @ ('p' | 'b' | 'd')) => {
+                let Some(item) = self.backlog_under_cursor() else {
+                    self.notify("no item selected", true);
+                    return Outcome::Continue;
+                };
+                let (action, done) = match c {
+                    'p' => ("promote", "promoted to a ticket"),
+                    'b' => ("bump", "bumped"),
+                    _ => ("decline", "declined"),
+                };
+                match self.machine.backlog_act(&item.id, action) {
+                    Ok(()) => {
+                        self.notify(done, false);
+                        self.refresh_backlog();
+                    }
+                    Err(error) => self.notify(format!("backlog: {error}"), true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The ticket under the Tickets cursor.
+    pub fn ticket_under_cursor(&self) -> Option<TicketEntry> {
+        let state = self.tickets.as_ref()?;
+        self.ticket_items.get(state.cursor.min(self.ticket_items.len().saturating_sub(1))).cloned()
+    }
+
+    /// Fetches the tickets the machine holds; a failure is a toast and the list stays as it was.
+    fn refresh_tickets(&mut self) {
+        match self.machine.tickets() {
+            Ok(items) => {
+                self.ticket_items = items;
+                if let Some(state) = self.tickets.as_mut() {
+                    state.cursor = state.cursor.min(self.ticket_items.len().saturating_sub(1));
+                }
+            }
+            Err(error) => self.notify(format!("tickets: {error}"), true),
+        }
+    }
+
+    fn open_tickets(&mut self) {
+        self.tickets = Some(TicketsState::default());
+        self.refresh_tickets();
+    }
+
+    /// The keys `handle_tickets` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_TICKETS: &[&str] = &["esc", "K", "q", "?", "j", "k", "R", "a", "e", "x", "c", "s"];
+
+    /// `:ticket-edit <text>`: the person's own text is posted in place of the selected ticket's waiting draft. The machine flattens it and refuses a token.
+    fn ticket_edit(&mut self, rest: &str) {
+        let (Some(t), text) = (self.ticket_under_cursor(), rest.trim()) else {
+            self.notify("open the Tickets view and select a ticket first", true);
+            return;
+        };
+        let Some(d) = t.waiting().first().map(|d| (*d).clone()) else {
+            self.notify("no draft waiting on it", true);
+            return;
+        };
+        if text.is_empty() {
+            self.notify("say what to post: :ticket-edit <text>", true);
+            return;
+        }
+        match self.machine.ticket_act(&t.key, "edit", serde_json::json!({"draft": d.id, "hash": d.hash, "text": text})) {
+            Ok(()) => {
+                self.notify("posted your text", false);
+                self.refresh_tickets();
+            }
+            Err(error) => self.notify(format!("tickets: {error}"), true),
+        }
+    }
+
+    /// The Tickets view's keys: move, approve, edit (prefills the command line), ignore, card, schedule, refetch. Each tap sends the draft's hash.
+    fn handle_tickets(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.tickets.clone() else {
+            return Outcome::Continue;
+        };
+        let count = self.ticket_items.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('K') | KeyCode::Char('q') => self.tickets = None,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('j') | KeyCode::Down => self.tickets = Some(TicketsState { cursor: (state.cursor + 1).min(count.saturating_sub(1)) }),
+            KeyCode::Char('k') | KeyCode::Up => self.tickets = Some(TicketsState { cursor: state.cursor.saturating_sub(1) }),
+            KeyCode::Char('R') => self.refresh_tickets(),
+            KeyCode::Char(c @ ('a' | 'e' | 'x' | 'c' | 's')) => {
+                let Some(t) = self.ticket_under_cursor() else {
+                    self.notify("no ticket selected", true);
+                    return Outcome::Continue;
+                };
+                let draft = t.waiting().first().map(|d| (*d).clone());
+                let (action, body, done) = match (c, draft) {
+                    ('c', _) => ("card", serde_json::json!({}), "made a ticket on the board"),
+                    ('s', _) => ("backlog", serde_json::json!({}), "sent to the backlog"),
+                    ('e', Some(_)) => {
+                        self.mode = Mode::Command { text: "ticket-edit ".to_string(), pick: None };
+                        return Outcome::Continue;
+                    }
+                    ('a', Some(d)) => ("approve", serde_json::json!({"draft": d.id, "hash": d.hash}), "posted"),
+                    ('x', Some(d)) => ("ignore", serde_json::json!({"draft": d.id}), "ignored: kept, not posted"),
+                    _ => {
+                        self.notify("no draft waiting on it", true);
+                        return Outcome::Continue;
+                    }
+                };
+                match self.machine.ticket_act(&t.key, action, body) {
+                    Ok(()) => {
+                        self.notify(done, false);
+                        self.refresh_tickets();
+                    }
+                    Err(error) => self.notify(format!("tickets: {error}"), true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `:dedup duplicate <slot> | related <slots> | neither` on the selected ticket: the answer to Intake's dedup gate.
+    fn answer_dedup(&mut self, rest: &str) {
+        let Some(id) = self.selected_id() else {
+            self.notify("select a ticket first", true);
+            return;
+        };
+        let listed = self.detail.as_ref().filter(|d| d.task.id == id).and_then(|d| d.open_approval()).map(|a| crate::intake::candidates(&a.requested)).unwrap_or_default();
+        if listed.is_empty() {
+            self.notify("this ticket is not waiting on a duplicate question (open its detail first)", true);
+            return;
+        }
+        match crate::intake::parse_answer(rest, &listed) {
+            Ok((choice, of)) => self.act(|m| m.answer_dedup(&id, &choice, &of), "answered"),
+            Err(why) => self.notify(why, true),
+        }
+    }
+
+    /// `:dup <id prefix>`: the selected ticket is a duplicate of that one.
+    fn merge_selected(&mut self, rest: &str) {
+        let Some(id) = self.selected_id() else {
+            self.notify("select a ticket first", true);
+            return;
+        };
+        match crate::intake::resolve_prefix(rest, self.tasks.iter().map(|t| t.id.as_str()).filter(|t| *t != id)) {
+            Ok(into) => self.act(|m| m.merge_into(&id, &into), "merged: it closes as a duplicate"),
+            Err(why) => self.notify(why, true),
+        }
+    }
+
+    /// `:undup`: the selected, merged ticket comes back as a new card.
+    fn unmerge_selected(&mut self) {
+        let Some(id) = self.selected_id() else {
+            self.notify("select a ticket first", true);
+            return;
+        };
+        if self.task(&id).is_some_and(|t| t.merged_into.is_none()) {
+            self.notify("this ticket was not merged into another", true);
+            return;
+        }
+        self.act(|m| m.unmerge(&id), "unmerged: it is a new card");
+    }
+
+    /// `:context repo|project|text <value>` on the selected ticket: what Intake's gate asked for.
+    fn give_context(&mut self, rest: &str) {
+        let Some(id) = self.selected_id() else {
+            self.notify("select a ticket first", true);
+            return;
+        };
+        let (field, value) = rest.split_once(char::is_whitespace).map_or((rest, ""), |(f, v)| (f, v.trim()));
+        let key = match field {
+            "repo" => "repoPath",
+            "project" => "project",
+            "text" => "text",
+            _ => {
+                self.notify("use :context repo|project|text <value>", true);
+                return;
+            }
+        };
+        if value.is_empty() {
+            self.notify(format!("{field}: give a value"), true);
+            return;
+        }
+        match self.machine.give_context(&id, serde_json::json!({ key: value })) {
+            Ok(_) => self.notify("Intake checked the ticket again", false),
+            Err(error) => self.notify(format!("context: {error}"), true),
+        }
     }
 
     /// Opens a URL in the browser, detached; says so when it cannot.
@@ -2382,7 +2754,7 @@ impl App {
 
     /// The keys `handle_slack` matches, `SlackKey::ALL` included.
     #[cfg(test)]
-    pub(crate) const HANDLED_SLACK: &[&str] = &["esc", "S", "q", "?", "j", "k", "l", "h", "1-6", "R", "W", "enter", "x", "r", "t", "d", "s", "o", "N", "!", "-"];
+    pub(crate) const HANDLED_SLACK: &[&str] = &["esc", "S", "q", "?", "j", "k", "l", "h", "1-6", "R", "W", "enter", "x", "r", "t", "d", "s", "o", "N", "!", "-", "c", "L"];
 
     /// The Slack view's keys: move, switch split, open, act on the item, Watches, refresh.
     fn handle_slack(&mut self, key: KeyEvent) -> Outcome {
@@ -2470,22 +2842,25 @@ impl App {
         let id = item.id.clone();
         match key {
             SlackKey::Open => self.open_url(&item.permalink),
-            SlackKey::Reply => self.open_slack_reply(item, item.triage.as_ref().and_then(|t| t.draft.clone()).unwrap_or_default(), false),
+            SlackKey::Reply => {
+                let seen = item.draft.as_ref().filter(|d| !d.id.is_empty() && !d.hash.is_empty()).map(|d| (d.id.clone(), d.hash.clone()));
+                // The waiting draft's own text is what its id and hash stand for; the classifier's reply (`triage.draft`) is the fallback when no draft waits or the snapshot predates the text.
+                let text = item.draft.as_ref().map(|d| d.text.clone()).filter(|t| !t.is_empty()).or_else(|| item.triage.as_ref().and_then(|t| t.draft.clone())).unwrap_or_default();
+                self.open_slack_reply(item, text, false, seen)
+            }
             // The mention itself is built on the machine, by id; the editor shows the words only.
-            SlackKey::Nudge => self.open_slack_reply(item, "gentle nudge on this one: any news?".to_string(), true),
+            SlackKey::Nudge => self.open_slack_reply(item, "gentle nudge on this one: any news?".to_string(), true, None),
             SlackKey::Snooze => self.mode = Mode::SlackSnooze { id, cursor: 0 },
+            SlackKey::Kind => self.mode = Mode::SlackPick { id, relation: false, cursor: 0 },
+            SlackKey::Relation => self.mode = Mode::SlackPick { id, relation: true, cursor: 0 },
             SlackKey::Task => {
                 let title = item.summary().to_string();
                 let repo = self.guess_repo(&item.channel.name);
                 self.mode = Mode::SlackTask { id, title, repo };
             }
-            SlackKey::Done => {
-                let now = iso_of(now_secs());
-                self.patch_slack(&id, serde_json::json!({ "done": true }), "done", move |item| {
-                    item.split = SlackSplit::Done.wire().to_string();
-                    item.done_at = Some(now);
-                });
-            }
+            // A waiting draft is dismissed with a reason (one more key, or skip); an item with none is just done.
+            SlackKey::Done if item.draft.is_some() => self.mode = Mode::SlackDismiss { id },
+            SlackKey::Done => self.slack_done(&id, None),
             SlackKey::Bump | SlackKey::Lower => {
                 let Some(next) = item.priority().and_then(|p| priority_step(p, key == SlackKey::Bump)) else {
                     return;
@@ -2534,15 +2909,15 @@ impl App {
 
     /// The reply editor over `item`, pre-filled with `text`; the same vim keys as every editor.
     /// `nudge` asks the machine to open the message with a mention of the author.
-    fn open_slack_reply(&mut self, item: &SlackItem, text: String, nudge: bool) {
+    fn open_slack_reply(&mut self, item: &SlackItem, text: String, nudge: bool, draft: Option<(String, String)>) {
         let lines: Vec<String> = if text.is_empty() { vec![String::new()] } else { text.lines().map(str::to_string).collect() };
         let mut area = TextArea::new(lines);
         area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
-        self.mode = Mode::SlackReply { id: item.id.clone(), area, vim: Vim::new(), nudge };
+        self.mode = Mode::SlackReply { id: item.id.clone(), area, vim: Vim::new(), nudge, draft };
     }
 
     fn handle_slack_reply(&mut self, key: KeyEvent) -> Outcome {
-        let Mode::SlackReply { id, area, vim, nudge } = &mut self.mode else {
+        let Mode::SlackReply { id, area, vim, nudge, draft } = &mut self.mode else {
             return Outcome::Continue;
         };
         match vim.handle(area, key) {
@@ -2551,13 +2926,14 @@ impl App {
             crate::vim::Outcome::Save => {
                 let id = id.clone();
                 let nudge = *nudge;
+                let draft = draft.clone();
                 let text = area.lines().join("\n").trim().to_string();
                 if text.is_empty() {
                     self.notify("nothing to send", true);
                     return Outcome::Continue;
                 }
                 self.mode = Mode::Normal;
-                match self.machine.slack_reply(&id, &text, nudge) {
+                match self.machine.slack_reply(&id, &text, nudge, draft.as_ref().map(|(i, h)| (i.as_str(), h.as_str()))) {
                     Ok(()) => {
                         let now = iso_of(now_secs());
                         if let Some(item) = self.slack_item_mut(&id) {
@@ -2571,6 +2947,82 @@ impl App {
                     Err(error) => self.notify(error, true),
                 }
             }
+        }
+        Outcome::Continue
+    }
+
+    /// The `c` and `L` pickers: j/k move, enter stores the answer on the machine (a stored answer and a truth record, never a post), esc leaves it.
+    fn handle_slack_pick(&mut self, key: KeyEvent) -> Outcome {
+        let (id, relation, mut cursor) = match &self.mode {
+            Mode::SlackPick { id, relation, cursor } => (id.clone(), *relation, *cursor),
+            _ => return Outcome::Continue,
+        };
+        let Some(item) = self.slack_item(&id).cloned() else {
+            self.mode = Mode::Normal;
+            return Outcome::Continue;
+        };
+        let choices = if relation { slack::relation_choices(&item) } else { Vec::new() };
+        let len = if relation { choices.len() } else { slack::KINDS.len() };
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => cursor = (cursor + 1).min(len - 1),
+            KeyCode::Up | KeyCode::Char('k') => cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(cursor),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        if let Mode::SlackPick { cursor: shown, .. } = &mut self.mode {
+            *shown = cursor;
+        }
+        if let Some(at) = chosen {
+            self.mode = Mode::Normal;
+            if relation {
+                let choice = &choices[at];
+                match self.machine.slack_relation(&id, choice.relation, choice.target.as_deref()) {
+                    Ok(updated) => {
+                        if let Some(slot) = self.slack_item_mut(&id) {
+                            *slot = updated;
+                        }
+                        self.notify("relation saved", false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            } else {
+                let kind = slack::KINDS[at];
+                self.patch_slack(&id, serde_json::json!({ "kind": kind }), &format!("kind: {kind}"), |_| {});
+            }
+        }
+        Outcome::Continue
+    }
+
+    /// Marks an item done, with the reason a draft was dismissed when one was given.
+    fn slack_done(&mut self, id: &str, reason: Option<&str>) {
+        let now = iso_of(now_secs());
+        self.patch_slack(id, dismiss_patch(reason), "done", move |item| {
+            item.split = SlackSplit::Done.wire().to_string();
+            item.done_at = Some(now);
+        });
+    }
+
+    /// The dismiss prompt: n (no reply needed), b (bad draft), s or enter (no reason); esc leaves the item as it is.
+    fn handle_slack_dismiss(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::SlackDismiss { id } = &self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let reason = match key.code {
+            KeyCode::Char('n') => Some(Some("no_reply_needed")),
+            KeyCode::Char('b') => Some(Some("bad_draft")),
+            KeyCode::Char('s') | KeyCode::Enter => Some(None),
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = Mode::Normal;
+                None
+            }
+            _ => None,
+        };
+        if let Some(reason) = reason {
+            self.mode = Mode::Normal;
+            self.slack_done(&id, reason);
         }
         Outcome::Continue
     }
@@ -2835,8 +3287,8 @@ impl App {
     /// everything `ticket_key` takes (`S` opens Slack here, so it is not ship).
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
-        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "v", "V", "?", ":",
-        "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "d", "f", "o", "J",
+        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "B", "S", "v", "V", "?", ":",
+        "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "K",
     ];
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -2895,6 +3347,8 @@ impl App {
             KeyCode::Char('I') => self.inbox = Some(InboxState::default()),
             KeyCode::Char('D') => self.digest = Some(DigestState::default()),
             KeyCode::Char('P') => self.open_pulls(),
+            KeyCode::Char('B') => self.open_backlog(),
+            KeyCode::Char('K') => self.open_tickets(),
             KeyCode::Char('S') => self.open_slack(),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
@@ -3055,7 +3509,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "X", "w", "d", "f"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3093,6 +3547,8 @@ impl App {
                 None => return self.ticket_key('o', id),
             },
             KeyCode::Char('E') => self.open_engine_picker(id),
+            KeyCode::Char('M') => self.mode = Mode::Command { text: "dup ".into(), pick: None },
+            KeyCode::Char('U') => self.unmerge_selected(),
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
@@ -3442,7 +3898,7 @@ impl App {
     /// The names `run_command` knows, aliases left out.
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
-        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "slack", "jira",
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "whole", "dismiss", "finding", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
         "help",
     ];
 
@@ -3500,6 +3956,20 @@ impl App {
                 }
                 Err(error) => self.notify(error, true),
             },
+            "whole" => match self.selected_id() {
+                None => self.notify("no ticket selected", true),
+                Some(id) => self.act(|m| m.keep_whole(&id), "kept as one card: recorded, and flagged at every later gate"),
+            },
+            "dismiss" => match (self.selected_id(), parse_dismiss(rest)) {
+                (None, _) => self.notify("no ticket selected", true),
+                (_, Err(error)) => self.notify(error, true),
+                (Some(id), Ok((finding, reason))) => self.act(|m| m.dismiss_finding(&id, &finding, reason.as_deref()), "finding dismissed"),
+            },
+            "finding" => match (self.selected_id(), parse_finding(rest)) {
+                (None, _) => self.notify("no ticket selected", true),
+                (_, Err(error)) => self.notify(error, true),
+                (Some(id), Ok((severity, title))) => self.act(|m| m.add_finding(&id, &severity, &title), "finding added"),
+            },
             "slots" => match rest.parse::<u64>() {
                 Ok(n) if n >= 1 => match self.machine.set_slots(n) {
                     Ok(slots) => {
@@ -3525,6 +3995,13 @@ impl App {
             "inbox" => self.inbox = Some(InboxState::default()),
             "digest" => self.digest = Some(DigestState::default()),
             "prs" | "pulls" => self.open_pulls(),
+            "backlog" => self.open_backlog(),
+            "tickets" => self.open_tickets(),
+            "ticket-edit" => self.ticket_edit(rest),
+            "context" => self.give_context(rest),
+            "dedup" => self.answer_dedup(rest),
+            "dup" => self.merge_selected(rest),
+            "undup" => self.unmerge_selected(),
             "slack" => self.open_slack(),
             "jira" => match self.selected_id() {
                 Some(id) if rest.is_empty() => return self.ticket_key('J', &id),
@@ -3560,6 +4037,131 @@ impl App {
                 self.act(|m| m.decide(&id, approve, reason.as_deref()), done);
             }
             _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `N`'s prompt: the comment is required; enter rejects the plan (the card is archived as rejected), esc cancels.
+    /// The note for a thumbs-down: enter sends it (empty is fine), esc cancels.
+    fn handle_evidence_note(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EvidenceNote { id, text } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => text.push(c),
+            KeyCode::Backspace => {
+                text.pop();
+            }
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let (id, note) = (id.clone(), text.trim().to_string());
+                self.mode = Mode::Normal;
+                self.act(|m| m.evidence_feedback(&id, false, Some(&note)), "noted: the pack was not useful");
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    fn handle_reject(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::Reject { id, text } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => text.push(c),
+            KeyCode::Backspace => {
+                text.pop();
+            }
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let (id, comment) = (id.clone(), text.trim().to_string());
+                if comment.is_empty() {
+                    self.notify("say why the plan is rejected; the card ends and the comment is kept", true);
+                    return Outcome::Continue;
+                }
+                self.mode = Mode::Normal;
+                self.act(|m| m.reject(&id, &comment), "rejected");
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `T`'s picker: j/k pick the field, h/l (or the arrows) change its value, enter sends what changed, esc cancels.
+    fn handle_record_edit(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::RecordEdit { id, field, picks } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let mut send = false;
+        let mut cancel = false;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *field = (*field + 1).min(RECORD_FIELDS.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *field = field.saturating_sub(1),
+            KeyCode::Right | KeyCode::Char('l') => picks[*field] = (picks[*field] + 1) % RECORD_FIELDS[*field].2.len(),
+            KeyCode::Left | KeyCode::Char('h') => picks[*field] = (picks[*field] + RECORD_FIELDS[*field].2.len() - 1) % RECORD_FIELDS[*field].2.len(),
+            KeyCode::Enter => send = true,
+            KeyCode::Esc | KeyCode::Char('q') => cancel = true,
+            _ => {}
+        }
+        if cancel {
+            self.mode = Mode::Normal;
+        } else if send {
+            let picks = *picks;
+            self.mode = Mode::Normal;
+            let changes = self.task(&id).and_then(|t| t.record.as_ref()).map(|r| record_changes(r, &picks)).unwrap_or_default();
+            if changes.is_empty() {
+                self.notify("nothing changed in the record", false);
+            } else {
+                let done = format!("record corrected: {}", changes.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", "));
+                self.act(|m| m.edit_record(&id, &changes), &done);
+            }
+        }
+        Outcome::Continue
+    }
+
+    /// `Z`'s picker: j/k or 1-5 move, enter archives with the highlighted reason, esc cancels.
+    fn handle_archive_reason(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::ArchiveReason { id, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(ARCHIVE_REASONS.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(*cursor),
+            KeyCode::Char(d @ '1'..='5') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        if let Some(pick) = chosen {
+            self.mode = Mode::Normal;
+            let reason = ARCHIVE_REASONS[pick].0;
+            self.act(|m| m.archive(&id, reason), &format!("archived: {reason}"));
+        }
+        Outcome::Continue
+    }
+
+    /// `E`'s picker: j/k or 1-6 move, enter sends the highlighted reason, esc cancels. Only the six reasons can be sent.
+    fn handle_escalation_reason(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EscalationReason { id, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(crate::model::ESCALATION_REASONS.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(*cursor),
+            KeyCode::Char(d @ '1'..='6') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        if let Some(pick) = chosen {
+            self.mode = Mode::Normal;
+            let reason = crate::model::ESCALATION_REASONS[pick].0;
+            self.act(|m| m.correct_escalation_reason(&id, reason), &format!("reason corrected: {reason}"));
         }
         Outcome::Continue
     }
@@ -3684,7 +4286,7 @@ impl App {
 
     /// The chars the `x` menu runs: the pool keys, then every ticket key `ticket_key` takes.
     #[cfg(test)]
-    pub(crate) const HANDLED_ACTIONS: &[&str] = &["P", "D", "+", "-", "S", "a", "A", "r", "e", "R", "f", "o", "J", "X", "w", "d"];
+    pub(crate) const HANDLED_ACTIONS: &[&str] = &["P", "D", "+", "-", "S", "a", "A", "r", "e", "R", "f", "o", "J", "X", "w", "Z", "d"];
 
     /// Opens triage's questions in place, each with its recommended answer ready to edit.
     /// The questions come from the ticket's detail: the one already shown, or fetched now.
@@ -3747,6 +4349,8 @@ pub(crate) mod handled {
     pub(crate) const DETAIL: &[&str] = App::HANDLED_DETAIL;
     pub(crate) const INBOX: &[&str] = App::HANDLED_INBOX;
     pub(crate) const PULLS: &[&str] = App::HANDLED_PULLS;
+    pub(crate) const BACKLOG: &[&str] = App::HANDLED_BACKLOG;
+    pub(crate) const TICKETS: &[&str] = App::HANDLED_TICKETS;
     pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
     pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
     pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;
@@ -3770,6 +4374,29 @@ pub fn looks_like_jira_key(text: &str) -> bool {
         && project[1..].chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
         && !number.is_empty()
         && number.chars().all(|c| c.is_ascii_digit())
+}
+
+/// `:dismiss <finding id> [reason]`: the id the Verify report shows, and an optional reason that stays out of the stream.
+pub(crate) fn parse_dismiss(arg: &str) -> Result<(String, Option<String>), String> {
+    let arg = arg.trim();
+    let (id, reason) = arg.split_once(char::is_whitespace).map_or((arg, ""), |(i, r)| (i, r.trim()));
+    if id.is_empty() {
+        return Err("dismiss takes a finding id, e.g. :dismiss f3 not a bug".to_string());
+    }
+    Ok((id.to_string(), if reason.is_empty() { None } else { Some(reason.chars().take(500).collect()) }))
+}
+
+/// `:finding <blocker|should_fix|nit> <title>`.
+pub(crate) fn parse_finding(arg: &str) -> Result<(String, String), String> {
+    let arg = arg.trim();
+    let (severity, title) = arg.split_once(char::is_whitespace).map_or((arg, ""), |(s, t)| (s, t.trim()));
+    if !matches!(severity, "blocker" | "should_fix" | "nit") {
+        return Err("finding takes blocker, should_fix or nit, then a title, e.g. :finding nit rename x".to_string());
+    }
+    if title.is_empty() {
+        return Err("say what the finding is: :finding nit rename x".to_string());
+    }
+    Ok((severity.to_string(), title.chars().take(200).collect()))
 }
 
 fn setup_repo_path(arg: &str, root: Option<std::path::PathBuf>) -> Result<std::path::PathBuf, String> {
@@ -3999,6 +4626,37 @@ mod tests {
     }
 
     #[test]
+    fn the_record_picker_starts_on_the_record_and_sends_only_what_moved() {
+        let mut task = ticket("a1", "awaiting_approval", false, false);
+        task.waiting_on_you = true;
+        task.record = Some(serde_json::from_str(r#"{"kind":"bug","size":"S","typeOfWork":"backend","riskPrelim":"low","urgencyDetail":{"priority":"P2","subScores":{"who":2,"what":2,"impact":2,"time":1,"demand":1}}}"#).unwrap());
+        let Ok(Mode::RecordEdit { picks, field: 0, .. }) = record_edit_mode(&task) else { panic!("expected the picker") };
+        assert_eq!(picks, [0, 1, 1, 0, 2], "bug, backend, S, low, P2");
+        assert!(record_changes(task.record.as_ref().unwrap(), &picks).is_empty());
+        let moved = [1, 1, 3, 2, 0];
+        assert_eq!(
+            record_changes(task.record.as_ref().unwrap(), &moved),
+            vec![("kind".to_string(), "feature".to_string()), ("size".to_string(), "L".to_string()), ("riskPrelim".to_string(), "high".to_string()), ("priority".to_string(), "P0".to_string())]
+        );
+    }
+
+    #[test]
+    fn the_record_picker_says_why_it_will_not_open() {
+        let mut task = ticket("a1", "awaiting_approval", false, false);
+        task.waiting_on_you = true;
+        assert!(record_edit_mode(&task).is_err(), "no record yet");
+        task.record = Some(TriageRecord::default());
+        for state in ["escalated", "reviewing_memory", "awaiting_ship", "implementing"] {
+            task.state = state.to_string();
+            assert!(record_edit_mode(&task).is_err(), "{state}: only triage's questions and the plan gate");
+        }
+        task.state = "awaiting_answers".to_string();
+        assert!(record_edit_mode(&task).is_ok());
+        task.state = "awaiting_approval".to_string();
+        assert!(record_edit_mode(&task).is_ok());
+    }
+
+    #[test]
     fn setup_resolves_a_name_under_the_repos_root_and_a_path_as_given_and_refuses_what_is_not_a_checkout() {
         let root = std::env::temp_dir().join(format!("luna-setup-{}", std::process::id()));
         let repo = root.join("app");
@@ -4046,6 +4704,48 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Esc);
         assert!(app.marked.is_empty(), "esc clears the marks");
+    }
+
+    #[test]
+    fn c_opens_the_escalation_reason_picker_on_an_escalated_ticket_moves_and_esc_cancels_and_any_other_refuses() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "escalated", true, false));
+        app.tasks.push(ticket("bbbbbbbb0000", "implementing", false, true));
+        app.focus = app.tasks[0].column_index();
+        let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
+        press(&mut app, KeyCode::Char('C'));
+        assert!(matches!(&app.mode, Mode::EscalationReason { id, cursor: 0 } if id == "aaaaaaaa0000"));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(matches!(app.mode, Mode::EscalationReason { cursor: 2, .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(crate::model::ESCALATION_REASONS.map(|(name, _)| name), ["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"]);
+        app.focus = app.tasks[1].column_index();
+        app.select("bbbbbbbb0000", true);
+        press(&mut app, KeyCode::Char('C'));
+        assert!(matches!(app.mode, Mode::Normal), "a ticket that is not escalated has no reason to correct");
+    }
+
+    #[test]
+    fn z_opens_the_archive_reason_picker_on_a_live_ticket_moves_and_esc_cancels_and_an_ended_one_refuses() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "awaiting_approval", true, false));
+        app.tasks.push(ticket("bbbbbbbb0000", "archived", false, false));
+        app.focus = app.tasks[0].column_index();
+        let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
+        press(&mut app, KeyCode::Char('Z'));
+        assert!(matches!(&app.mode, Mode::ArchiveReason { id, cursor: 0 } if id == "aaaaaaaa0000"));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(matches!(app.mode, Mode::ArchiveReason { cursor: 2, .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(ARCHIVE_REASONS.map(|(name, _)| name), ["duplicate", "sla_expired", "rejected", "not_for_agent", "pr_closed", "no_setup", "no_answer"]);
+        app.focus = app.tasks[1].column_index();
+        app.select("bbbbbbbb0000", true);
+        press(&mut app, KeyCode::Char('Z'));
+        assert!(matches!(app.mode, Mode::Normal), "an archived ticket has nothing to archive");
     }
 
     #[test]
@@ -4197,6 +4897,33 @@ mod tests {
         assert_eq!(app.floor.as_ref().unwrap().focused(), None, "back to all");
         app.handle_key(KeyEvent::from(KeyCode::BackTab));
         assert_eq!(app.floor.as_ref().unwrap().focused(), Some(None));
+    }
+
+    #[test]
+    fn tab_reaches_a_repository_with_no_task_numbers_and_a_approves_its_base() {
+        let mut app = App::new(Machine::from_env());
+        app.floor = Some(FloorState::default());
+        let floor = app.floor.as_mut().unwrap();
+        floor.repos = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","tasks":{"created":1,"closed":0,"open":1,"waitingOnYou":0,"running":0,"queued":0},
+                 "escalationRate":null,"firstPassVerifying":null,"costUsd":0}]"#,
+        )
+        .unwrap();
+        floor.health = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","image":{"inUse":"m","base":null,"builtAt":null,"lastFailure":null},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}},
+                {"repo":"/r/fresh","image":{"inUse":"m","base":null,"builtAt":null,"lastFailure":null,"pendingBase":"python:3.13-slim"},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        assert_eq!(floor.focusable(), 2);
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        let floor = app.floor.as_ref().unwrap();
+        assert_eq!(floor.focused(), Some(Some("/r/fresh")));
+        assert_eq!(floor.focused_name(), Some("fresh"));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.floor.as_ref().unwrap().focused(), None, "back to all");
     }
 
     #[test]
@@ -4376,6 +5103,22 @@ mod tests {
         app.tx.send(Incoming::Message(alert(100))).unwrap();
         app.pump();
         assert!(app.toast.as_ref().unwrap().error, "the ceiling itself reads as an error");
+    }
+
+    #[test]
+    fn a_shipped_task_becomes_a_notice_and_a_toast() {
+        let mut app = App::new(Machine::from_env());
+        let shipped = serde_json::from_str::<StreamMessage>(
+            r##"{"type":"task.shipped","shipped":{"id":"aaaaaaaa0000","title":"Export CSV","prUrl":"https://github.com/o/a/pull/7","number":7,"mergedSha":null,"format":null,"howToVerify":null,"media":[],"at":"t"}}"##,
+        )
+        .unwrap();
+        app.tx.send(Incoming::Message(shipped)).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].title, "Shipped");
+        assert_eq!(notices[0].body, "Shipped: Export CSV → PR #7");
+        assert!(!app.toast.as_ref().expect("a toast").error);
     }
 
     #[test]
@@ -5115,8 +5858,42 @@ mod slack_tests {
     }
 
     #[test]
+    fn a_done_tap_names_why_a_draft_was_dismissed_and_asks_only_when_a_draft_waits() {
+        assert_eq!(dismiss_patch(None), serde_json::json!({ "done": true }));
+        assert_eq!(dismiss_patch(Some("bad_draft")), serde_json::json!({ "done": true, "reason": "bad_draft" }));
+        assert_eq!(dismiss_patch(Some("no_reply_needed")), serde_json::json!({ "done": true, "reason": "no_reply_needed" }));
+        let mut app = app_with(snapshot());
+        app.slack_item_mut("C0123:1730112345.0001").unwrap().draft = Some(crate::model::SlackDraft { id: "d1".into(), hash: "h1".into(), kind: "reply".into(), text: String::new(), expires_at: "2026-11-07T00:00:00Z".into() });
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('d'));
+        assert!(matches!(&app.mode, Mode::SlackDismiss { id } if id == "C0123:1730112345.0001"));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.slack_item("C0123:1730112345.0001").unwrap().split, "needs_reply", "esc leaves it as it is");
+    }
+
+    #[test]
+    fn r_opens_the_waiting_drafts_own_text_not_the_classifiers_old_reply() {
+        let mut app = app_with(snapshot());
+        let id = "C0123:1730112345.0001";
+        app.slack_item_mut(id).unwrap().draft = Some(crate::model::SlackDraft { id: "d2".into(), hash: "h2".into(), kind: "questions".into(), text: "Which export?".into(), expires_at: "2026-11-07T00:00:00Z".into() });
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('r'));
+        let Mode::SlackReply { area, draft, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        assert_eq!(draft, &Some(("d2".to_string(), "h2".to_string())));
+        assert_eq!(area.lines().join("\n"), "Which export?", "the draft the id and hash stand for, not triage.draft");
+    }
+
+    #[test]
+    fn a_slack_draft_from_before_its_text_was_sent_still_parses() {
+        let old: crate::model::SlackDraft = serde_json::from_str(r#"{"id":"d1","hash":"h1","kind":"reply","expiresAt":"2026-11-07T00:00:00Z"}"#).unwrap();
+        assert_eq!(old.text, "");
+    }
+
+    #[test]
     fn s_picks_a_snooze_and_r_sends_the_edited_draft() {
         let mut app = app_with(snapshot());
+        app.slack_item_mut("C0123:1730112345.0001").unwrap().draft = Some(crate::model::SlackDraft { id: "d1".into(), hash: "h1".into(), kind: "reply".into(), text: String::new(), expires_at: "2026-11-07T00:00:00Z".into() });
         press(&mut app, KeyCode::Char('S'));
         press(&mut app, KeyCode::Char('s'));
         assert!(matches!(&app.mode, Mode::SlackSnooze { id, cursor: 0 } if id == "C0123:1730112345.0001"));
@@ -5135,7 +5912,8 @@ mod slack_tests {
 
         press(&mut app, KeyCode::Char('5'));
         press(&mut app, KeyCode::Char('r'));
-        let Mode::SlackReply { id, area, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        let Mode::SlackReply { id, area, draft, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        assert_eq!(draft, &Some(("d1".to_string(), "h1".to_string())), "the editor remembers which draft it was opened on");
         assert_eq!(id, "C0123:1730112345.0001");
         assert_eq!(area.lines().join("\n"), "Approve the rollback, I'm on it.", "pre-filled with the draft");
         press(&mut app, KeyCode::Esc);
@@ -5170,8 +5948,14 @@ mod slack_tests {
         press(&mut app, KeyCode::Char('S'));
         assert!(app.slack_catalog_pending, "the fetch started when the view opened");
         assert!(app.slack_catalog_loading(), "and has not landed yet");
-        let landed = app.stream.recv_timeout(std::time::Duration::from_secs(5)).expect("the catalogue arrives on the stream");
-        assert!(matches!(landed, Incoming::SlackCatalog { .. }));
+        // The fake machine's own event stream shares this channel: on a slow runner one of its messages can land first, so wait for the catalogue itself.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let landed = loop {
+            let message = app.stream.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).expect("the catalogue arrives on the stream");
+            if matches!(message, Incoming::SlackCatalog { .. }) {
+                break message;
+            }
+        };
         app.tx.send(landed).unwrap();
         app.pump();
         assert!(!app.slack_catalog_loading() && !app.slack_catalog_pending);
@@ -5447,6 +6231,75 @@ mod workspace_key_tests {
         assert_eq!(app.detail_scroll.get(), 0);
         press(&mut app, KeyCode::Char('='));
         assert!(!app.detail_full, "= is the board's density key, not the popup's size");
+    }
+
+    #[test]
+    fn n_at_the_plan_gate_asks_why_before_rejecting_and_refuses_an_empty_comment() {
+        let mut app = open("awaiting_approval");
+        press(&mut app, KeyCode::Char('N'));
+        assert!(matches!(&app.mode, Mode::Reject { text, .. } if text.is_empty()));
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(&app.mode, Mode::Reject { .. }), "an empty comment keeps the prompt open");
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("say why")), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
+        for c in "no".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        assert!(matches!(&app.mode, Mode::Reject { text, .. } if text == "no"));
+        press(&mut app, KeyCode::Backspace);
+        assert!(matches!(&app.mode, Mode::Reject { text, .. } if text == "n"));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Detail(_)) || matches!(app.mode, Mode::Normal), "esc cancels");
+    }
+
+    fn with_pack(state: &str) -> App {
+        let mut app = open(state);
+        app.tasks[0].evidence = Some(serde_json::json!({"summary":"s","format":"text","commitSha":"abc1234","risk":"low","scenarios":[],"media":[]}));
+        app
+    }
+
+    #[test]
+    fn lowercase_n_on_a_card_with_a_pack_asks_for_a_note_and_esc_cancels() {
+        let mut app = with_pack("implementing");
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(&app.mode, Mode::EvidenceNote { text, .. } if text.is_empty()));
+        for c in "too long".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        assert!(matches!(&app.mode, Mode::EvidenceNote { text, .. } if text == "too long"));
+        press(&mut app, KeyCode::Esc);
+        assert!(!matches!(app.mode, Mode::EvidenceNote { .. }));
+    }
+
+    #[test]
+    fn y_and_n_on_a_card_with_no_pack_say_so_and_send_nothing() {
+        for key in ['y', 'n'] {
+            let mut app = open("implementing");
+            press(&mut app, KeyCode::Char(key));
+            assert!(!matches!(app.mode, Mode::EvidenceNote { .. }), "{key}");
+            assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("no Evidence Pack")), "{key}: {:?}", app.toast.as_ref().map(|t| t.text.clone()));
+        }
+    }
+
+    #[test]
+    fn n_elsewhere_rejects_nothing() {
+        for state in ["awaiting_ship", "awaiting_answers", "implementing"] {
+            let mut app = open(state);
+            press(&mut app, KeyCode::Char('N'));
+            assert!(!matches!(app.mode, Mode::Reject { .. }), "{state}");
+        }
+    }
+
+    #[test]
+    fn r_at_the_ship_gate_opens_the_note_prompt_for_a_feature_task_and_not_for_a_review() {
+        let mut app = open("awaiting_ship");
+        app.tasks[0].waiting_on_you = true;
+        press(&mut app, KeyCode::Char('r'));
+        assert!(matches!(&app.mode, Mode::Reason { approve: false, text, .. } if text.is_empty()), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
+        let mut review = open("awaiting_ship");
+        review.tasks[0].waiting_on_you = true;
+        review.tasks[0].route = "review".to_string();
+        press(&mut review, KeyCode::Char('r'));
+        assert!(!matches!(review.mode, Mode::Reason { .. }), "a review verdict is not sent back");
     }
 
     #[test]
@@ -5856,4 +6709,29 @@ mod engine_tests {
         press(&mut app, KeyCode::Esc);
         assert!(matches!(app.mode, Mode::Detail(_)), "esc goes back to the popup");
     }
+}
+
+/// `T` on a ticket: the picker over its record, starting from what the record says; why not when there is none or it is not at a gate.
+pub fn record_edit_mode(task: &Task) -> Result<Mode, &'static str> {
+    let Some(record) = task.record.as_ref() else { return Err("triage has not written a record for this ticket yet") };
+    if !matches!(task.state.as_str(), "awaiting_answers" | "awaiting_approval") {
+        return Err("the record is corrected at triage's questions or the plan gate");
+    }
+    let mut picks = [0usize; 5];
+    for (i, (key, _, values)) in RECORD_FIELDS.iter().enumerate() {
+        picks[i] = record.value_of(key).and_then(|v| values.iter().position(|x| *x == v)).unwrap_or(0);
+    }
+    Ok(Mode::RecordEdit { id: task.id.clone(), field: 0, picks })
+}
+
+/// The fields the picker moved off the record's own value, as `(key, value)` pairs.
+pub fn record_changes(record: &TriageRecord, picks: &[usize; 5]) -> Vec<(String, String)> {
+    RECORD_FIELDS
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (key, _, values))| {
+            let value = values[picks[i]];
+            (record.value_of(key) != Some(value)).then(|| (key.to_string(), value.to_string()))
+        })
+        .collect()
 }

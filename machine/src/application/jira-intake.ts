@@ -2,7 +2,7 @@
 // new one into a ticket in Intake, after the jira_intake pack has read it: `ready` makes the
 // ticket with the pack's title, description and criteria; `needs_brief` asks the questions back
 // on the issue and waits for it to change; `not_for_agent` says why once and moves on. With a
-// Jev credential, issue_classify reads the issue first: a question Jev is sure of on every answer
+// Jev credential, triage_signals reads the issue first: a question Jev is sure of on every answer
 // is declined like `not_for_agent` without running jira_intake; anything else goes to jira_intake
 // as before, the classification passed as a hint and kept on the ticket. An
 // issue already behind a ticket (by its key) is never imported twice; one the machine spoke
@@ -10,11 +10,14 @@
 import { type IssueContext, type JiraIntakeAnswer, type TaskClassification, classificationLine } from "@hardness/contracts";
 
 import type { Policy } from "../domain/policy.ts";
+import { canonicalTicketOf } from "../domain/ticket.ts";
+import { inScope, scopeConfigured, settled } from "../domain/ticket-scope.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { type IssueClassifier, confidentQuestion } from "./classify.ts";
 import { parseChecklist } from "./intake.ts";
 import { type Jira, JiraAuthError, type JiraIssue, type JiraMe, messageOf } from "./jira.ts";
 import type { NewTask } from "./pipeline.ts";
+import type { TicketIntake } from "./ticket-machine.ts";
 import type { JiraTriager } from "./stages/jira-intake-runner.ts";
 
 export interface JiraIntakeOptions {
@@ -30,12 +33,20 @@ export interface JiraIntakeOptions {
   repos: () => Promise<string[]>;
   /** The jira_intake pack; null (agents off) imports every issue as it reads in Jira. */
   triager: JiraTriager | null;
-  /** issue_classify on Jev, before jira_intake; absent or answering null, intake runs as without it. */
+  /** triage_signals on Jev, before jira_intake; absent or answering null, intake runs as without it. */
   classifier?: IssueClassifier | null;
+  /** The ticket machine. With it, and `tickets.auto` off (the default), an issue is read and held as a ticket with drafts: nothing is posted and no card is made until a person taps. */
+  tickets?: TicketIntake | null;
   /** How often repos are checked for a due poll; each repo polls at its own `every`. */
   tickMs?: number;
   now?: () => Date;
   log?: (line: string) => void;
+}
+
+/** The ticket machine's scope for one repo's pass, set when `tickets.assignees` or `tickets.teams` is configured. */
+export interface ScopeRule {
+  tickets: Policy["factory"]["tickets"];
+  now: Date;
 }
 
 /** The most issues one pass reads per repo. */
@@ -89,10 +100,16 @@ export class JiraIntake {
     for (const repoPath of repos) {
       let intake: NonNullable<Policy["jira"]>["intake"];
       let comments: NonNullable<Policy["jira"]>["comments"] = "milestones";
+      let scope: ScopeRule | null = null;
+      let route = false;
       try {
-        const policy = (await this.options.policies.for(repoPath)).jira;
+        const whole = await this.options.policies.for(repoPath);
+        const policy = whole.jira;
         intake = policy?.intake ?? null;
         comments = policy?.comments ?? "milestones";
+        const tickets = whole.factory?.tickets;
+        route = Boolean(this.options.tickets) && tickets?.auto !== "on";
+        if (tickets && scopeConfigured(tickets)) scope = { tickets, now: this.now() };
       } catch {
         continue;
       }
@@ -102,7 +119,7 @@ export class JiraIntake {
       if (last !== undefined && now - last < intake.everySecs * 1000) continue;
       this.lastPoll.set(repoPath, now);
       try {
-        await this.pollRepo(repoPath, intake.jql, comments);
+        await this.pollRepo(repoPath, intake.jql, comments, scope, route);
       } catch (error) {
         if (error instanceof JiraAuthError) {
           if (!this.warnedAuth) console.warn(`jira intake: ${error.message}`);
@@ -115,10 +132,13 @@ export class JiraIntake {
   }
 
   /** Polls one repo's JQL now, whatever its schedule says (tests, and a refresh). */
-  async pollRepo(repoPath: string, jql: string, comments: "none" | "milestones" | "gates" = "milestones"): Promise<void> {
+  async pollRepo(repoPath: string, jql: string, comments: "none" | "milestones" | "gates" = "milestones", scope: ScopeRule | null = null, route = false): Promise<void> {
     const page = await this.options.jira.search(jql, { maxResults: INTAKE_PAGE });
     this.warnedAuth = false;
     for (const issue of page.issues) {
+      // The ticket machine's scope narrows the repo's JQL: an issue that is not assigned to me or my team is ignored, silently.
+      if (scope && !inScope(canonicalTicketOf({ tool: "jira", issue }), scope.tickets)) continue;
+      if (scope && !settled(issue.updated, scope.now, scope.tickets.debounce_seconds)) continue;
       if (await this.options.pipeline.findByJiraKey(issue.key)) continue;
       if (this.answered.has(issue.key) && this.answered.get(issue.key) === issue.updated) continue;
       if (await this.spokeLast(issue)) {
@@ -126,6 +146,10 @@ export class JiraIntake {
         continue;
       }
       try {
+        if (route && this.options.tickets) {
+          await this.hold(issue, repoPath);
+          continue;
+        }
         await this.consider(issue, repoPath, comments);
       } catch (error) {
         if (error instanceof JiraAuthError) throw error;
@@ -148,9 +172,18 @@ export class JiraIntake {
     return updated <= commented + COMMENT_STAMP_SLACK_MS;
   }
 
+  /** The ticket machine's path: the issue becomes a ticket object with its drafts. Nothing is written to Jira and no card is made. */
+  private async hold(issue: JiraIssue, repoPath: string): Promise<void> {
+    const classification = (await this.options.classifier?.classify(issueContext(issue)).catch(() => null)) ?? null;
+    const overrides = (await this.options.policies.for(repoPath)).decisions.triage_signals ?? {};
+    await this.options.tickets!.ingest(canonicalTicketOf({ tool: "jira", issue }), { repoPath, question: confidentQuestion(classification, overrides) });
+    this.answered.set(issue.key, issue.updated);
+  }
+
   private async consider(issue: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {
     const classification = (await this.options.classifier?.classify(issueContext(issue))) ?? null;
-    if (confidentQuestion(classification)) {
+    const overrides = (await this.options.policies.for(repoPath)).decisions.triage_signals ?? {};
+    if (confidentQuestion(classification, overrides)) {
       this.answered.set(issue.key, issue.updated);
       await this.comment(issue, `Not for an agent: it reads as a question, not a change (${classificationLine(classification)}).`);
       this.log(`jira intake: ${issue.key} not for an agent: classified as a question (${classificationLine(classification)})`);
@@ -163,8 +196,9 @@ export class JiraIntake {
         description: answer.description?.trim() || issue.description,
         criteria: answer.criteria?.length ? answer.criteria : parseChecklist(issue.description),
         repoPath,
-        source: { kind: "jira", key: issue.key, url: issue.url, issueType: issue.issueType },
-        classification,
+        source: { kind: "jira", key: issue.key, url: issue.url, issueType: issue.issueType, ...(issue.labels.length > 0 ? { labels: issue.labels.slice(0, 50).map((l) => l.slice(0, 100)) } : {}) },
+        ...(issue.reporter ? { reporter: { ...issue.reporter, channel: "jira" } } : {}),
+        // The card's classification is triage's: intake's reading only routed a report (and rode into jira_intake as a hint).
       });
       await this.options.pipeline.record(task.id, "jira.intake", { key: issue.key, verdict: "ready", reason: answer.reason });
       if (comments !== "none") await this.comment(issue, `Picked up as task #${task.id.slice(0, 8)} on the Luna board. ${answer.reason}`.trim());
@@ -190,7 +224,7 @@ export class JiraIntake {
   }
 }
 
-/** What issue_classify reads of a Jira issue. */
+/** What triage_signals reads of a Jira issue. */
 export function issueContext(issue: JiraIssue): IssueContext {
   return { title: issue.summary, description: issue.description, labels: issue.labels, source: `jira:${issue.key}` };
 }

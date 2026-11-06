@@ -40,9 +40,10 @@ describe("luna tools", () => {
     const { dir, server, state, events } = setup();
     expect(await call(server, "slice_init", { slices: [{ id: 1, title: "a", estLoc: 10 }, { id: 2, title: "b" }] })).toMatchObject({ schema: 1, slices: [{ id: 1, status: "pending", estLoc: 10 }, { id: 2, status: "pending", estLoc: null }] });
     expect(await call(server, "slice_init", { slices: [{ id: 9, title: "z" }] })).toMatchObject({ error: expect.stringContaining("already exists") });
-    expect(await call(server, "slice_set", { id: 1, status: "red" })).toMatchObject({ id: 1, status: "red" });
+    expect(await call(server, "slice_set", { id: 1, status: "red" })).toMatchObject({ error: expect.stringContaining("note") });
+    expect(await call(server, "slice_set", { id: 1, status: "red", note: "AssertionError: expected 1 to be 2" })).toMatchObject({ id: 1, status: "red", check: { verdict: "skipped" } });
     expect(await call(server, "slice_set", { id: 1, status: "committed", commit: "abc", actualLoc: 12 })).toMatchObject({ status: "committed", commit: "abc", actualLoc: 12 });
-    expect(await call(server, "slice_set", { id: 3, status: "red" })).toMatchObject({ error: expect.stringContaining("no slice 3") });
+    expect(await call(server, "slice_set", { id: 3, status: "green" })).toMatchObject({ error: expect.stringContaining("no slice 3") });
     expect(await call(server, "slice_list", {})).toEqual(state.ledger);
     expect(JSON.parse(readFileSync(join(dir, "ledger.json"), "utf8"))).toEqual(state.ledger);
     expect(events.map((e) => e.kind)).toEqual(["ledger.init", "slice.red", "slice.committed"]);

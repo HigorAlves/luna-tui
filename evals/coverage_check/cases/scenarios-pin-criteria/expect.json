@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "pins.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "untestable.value",
+      "value": false
+    }
+  ],
+  "rubric": "Each scenario names its criterion and says what would make it fail: they pin.",
+  "label": {
+    "pins": {
+      "value": true
+    },
+    "untestable": {
+      "value": false
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "pins": "Does each scenario pin the criterion it names: would it fail if that criterion were not met?",
+      "untestable": "Is any criterion written so that no scenario could ever prove it?"
+    },
+    "why": "Each scenario names its criterion and says what would make it fail (the button absent, a row count and prices), so each would fail if its criterion were unmet; both criteria can be proved.",
+    "second": {
+      "label": {
+        "pins": {
+          "value": true
+        },
+        "untestable": {
+          "value": false
+        }
+      },
+      "agrees": true
+    }
+  }
+}

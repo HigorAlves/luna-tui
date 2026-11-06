@@ -10,6 +10,11 @@ You are `{{agent}}`, attempt {{attempt}}. The repository checkout is mounted rea
 
 A `sent_back` decision above carries the note the person wrote on your last proposal: treat it as binding and change the proposal accordingly.
 
+## Code graph
+{{context.graph}}
+
+When it is fresh, follow the `code-discovery` skill: query it with `graphify <verb> … --graph <the path above>` before grepping.
+
 ## Project context
 {{context.projectContext}}
 

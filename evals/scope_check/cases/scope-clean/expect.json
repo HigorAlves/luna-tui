@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "planned_or_declared.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "no_new_dependency.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "no_secret_or_pii.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "no_test_removed.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "no_todo.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "unrelated_refactors.value",
+      "value": true
+    }
+  ],
+  "rubric": "Every changed file is planned and nothing risky was added.",
+  "label": {
+    "planned_or_declared": {
+      "value": true
+    },
+    "no_new_dependency": {
+      "value": true
+    },
+    "no_secret_or_pii": {
+      "value": true
+    },
+    "no_test_removed": {
+      "value": true
+    },
+    "no_todo": {
+      "value": true
+    },
+    "unrelated_refactors": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "planned_or_declared": "Is every changed file either planned (in the planned files) or declared with a reason that justifies it? The undeclared files are listed; any of them is a no.",
+      "no_new_dependency": "Does the change add no dependency, or only ones the plan or a declared reason calls for? The new dependencies are listed.",
+      "no_secret_or_pii": "Do the secret-looking additions contain no real secret or personal data? Answer yes when the list is empty or holds only obvious placeholders.",
+      "no_test_removed": "Does the change remove no test? The removed tests are listed; a test removed with the code it covered still counts as removed unless a declared reason explains it.",
+      "no_todo": "Does the change leave no TODO, FIXME or XXX that stands in for work the slice should have done? The added ones are listed.",
+      "unrelated_refactors": "Is every change in service of the plan: no renames, reformatting, moves or clean-ups of code the plan's steps do not touch? Read the summary and the changed files; a change that only tidies code beside the work is a no."
+    },
+    "why": "Every changed file is planned, nothing was declared, removed, added or left standing, and the summary names only the endpoint and its test.",
+    "second": {
+      "label": {
+        "planned_or_declared": {
+          "value": true
+        },
+        "no_new_dependency": {
+          "value": true
+        },
+        "no_secret_or_pii": {
+          "value": true
+        },
+        "no_test_removed": {
+          "value": true
+        },
+        "no_todo": {
+          "value": true
+        },
+        "unrelated_refactors": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

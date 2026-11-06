@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "validity.choice",
+      "value": "valid"
+    }
+  ],
+  "rubric": "Nothing a scenario shows changed.",
+  "label": {
+    "validity": {
+      "choice": "valid"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "validity": "nothing a scenario shows changed"
+    },
+    "why": "Only a code comment was reworded; nothing a scenario shows changed.",
+    "ruledOut": [
+      {
+        "question": "validity",
+        "label": "refresh_text",
+        "why": "Nothing the scenarios show changed. It is not: the summary, the findings or how to verify changed."
+      },
+      {
+        "question": "validity",
+        "label": "refresh_media",
+        "why": "Nothing the scenarios show changed. It is not: a scenario's outcome or what is on screen changed."
+      }
+    ],
+    "second": {
+      "label": {
+        "validity": {
+          "choice": "valid"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

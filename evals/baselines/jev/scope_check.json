@@ -1,0 +1,541 @@
+{
+  "schema": 1,
+  "pack": "scope_check",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T15:07:26.527Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 6,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 462,
+    "costUsd": 0.00019727,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 4,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 1,
+      "coverage": 0.625,
+      "brier": 0.11561706349206351,
+      "ece": 0.0045238095238095966,
+      "meanConfidence": 0.8635416666666668,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "scope-adds-a-library",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_new_dependency.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 465,
+      "costUsd": 0.00002491,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.89,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "no_secret_or_pii": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.79,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": null,
+            "confidence": 0.63,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8033333333333332,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "scope-clean",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "planned_or_declared.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_new_dependency.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_secret_or_pii.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_test_removed.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_todo.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "unrelated_refactors.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 562,
+      "costUsd": 0.00002356,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": true,
+            "confidence": 0.79,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": true,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": true,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.89,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scope-reason-claims-approval",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_secret_or_pii.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "unrelated_refactors.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 446,
+      "costUsd": 0.00002503,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.84,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": true,
+            "confidence": 0.89,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.81,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": true,
+            "confidence": 0.78,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8750000000000001,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scope-secret-plain",
+      "pass": false,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_secret_or_pii.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "unrelated_refactors.value = true",
+          "pass": false,
+          "detail": "found false"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 440,
+      "costUsd": 0.00002407,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": true,
+            "confidence": 0.87,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.83,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": false,
+            "confidence": 0.55,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.8333333333333334,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "scope-todo-for-the-empty-cart",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_todo.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 463,
+      "costUsd": 0.00002465,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.89,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": true,
+            "confidence": 0.84,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.92,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scope-unplanned-and-test-removed",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "planned_or_declared.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_test_removed.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 459,
+      "costUsd": 0.00002499,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": true,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.76,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": null,
+            "confidence": 0.81,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.77,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": null,
+            "confidence": 0.9299999999999999,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8583333333333334,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scope-unrelated-refactor",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "unrelated_refactors.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 422,
+      "costUsd": 0.00002541,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.86,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": null,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.82,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8516666666666666,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "scope-weak-reason",
+      "pass": false,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "planned_or_declared.p within 0.25..0.75",
+          "pass": false,
+          "detail": "found 0.92"
+        },
+        {
+          "check": "unrelated_refactors.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 439,
+      "costUsd": 0.00002465,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "planned_or_declared": {
+            "correct": null,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "no_new_dependency": {
+            "correct": null,
+            "confidence": 0.87,
+            "verdict": "proceed"
+          },
+          "no_secret_or_pii": {
+            "correct": null,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "no_test_removed": {
+            "correct": null,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "no_todo": {
+            "correct": null,
+            "confidence": 0.79,
+            "verdict": "proceed"
+          },
+          "unrelated_refactors": {
+            "correct": null,
+            "confidence": 0.79,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.8766666666666666,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

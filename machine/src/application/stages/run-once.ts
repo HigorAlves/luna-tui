@@ -2,12 +2,13 @@
 // prepared under the run folder and released once the container is gone; the input written to
 // /in, the container run by the docker sandbox like every stage, /out/result.json read back and
 // validated. The Slack triage runner, Jira intake and the replay evals (evals/run.ts) run a pack this way.
-import { type EngineId, type StageInput, StageOutput } from "@hardness/contracts";
+import { type EngineId, type StageInput, StageOutput, credentialOwner } from "@hardness/contracts";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CredentialWaitError, type Credentials } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
+import type { EgressPolicy } from "../egress-policy.ts";
 
 const MINUTE = 60_000;
 
@@ -23,6 +24,10 @@ export interface OneRun {
   /** The engine whose credential the run gets; the input names the same one. */
   engine: EngineId;
   labels: Record<string, string>;
+  /** Extra container env: the run's trace context (RunSpan.childEnv()). */
+  extraEnv?: Record<string, string>;
+  /** Which list the run gets: the pack list (default, no repository) or the list a real run of an agent pack gets (an eval measures what runs). */
+  egressKind?: "pack" | "agent";
   signal?: AbortSignal;
 }
 
@@ -30,6 +35,8 @@ export interface OneRunDeps {
   credentials: Pick<Credentials, "prepare">;
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
+  /** The list a pack run with no repository may reach (its engine's hosts); absent, the run joins an ordinary bridge as before. */
+  egress?: EgressPolicy;
 }
 
 /** The run's result when the container left a readable one; `error` says why when it did not. */
@@ -45,7 +52,9 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     if (error instanceof CredentialWaitError) return { output: null, error: error.message };
     throw error;
   }
+  const egress = deps.egress ? await deps.egress.for({ repoPath: null, kind: run.egressKind ?? "pack", owners: [credentialOwner(run.engine)] }).catch((error) => credential.release().then(() => Promise.reject(error))) : undefined;
   const result = await (deps.sandbox ?? runSandbox)({
+    ...(egress ? { egress } : {}),
     name: run.name,
     image: run.image,
     runDir: run.runDir,
@@ -56,6 +65,7 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     timeoutMs: run.input.limits.timeoutMs,
     credential: { env: credential.env, mounts: credential.mounts },
     labels: run.labels,
+    extraEnv: run.extraEnv ?? {},
     signal: run.signal,
   }).finally(() => credential.release());
   if (result.aborted) return { output: null, error: "aborted" };

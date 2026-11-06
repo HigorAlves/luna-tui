@@ -1,5 +1,6 @@
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../test/policies.ts";
 
 import { Pipeline } from "./pipeline.ts";
 import { StubStages } from "./stages/stubs.ts";
@@ -18,7 +19,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
-  pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
+  pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
 });
 
 const issues = [
@@ -95,11 +96,11 @@ describe("Pipeline.findBySource", () => {
   });
 });
 
-describe("GitHubIntake with issue_classify", () => {
+describe("GitHubIntake with triage_signals", () => {
   const classified = (kind: string, confidence = 0.9) => ({ kind, area: "machine", ready: kind !== "question", size: 1, confidence, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" });
   const labelled = [{ ...issues[0]!, labels: ["enhancement"] }, { ...issues[1]!, title: "How do I turn on dark mode?", labels: [] }];
 
-  it("reads each new issue first; a question Jev is sure of becomes no task and hears why once, the rest become tasks with their classification", async () => {
+  it("reads each new issue first; a question Jev is sure of becomes no task and hears why once, the rest become tasks with no classification of intake's (triage reads its own)", async () => {
     const github = fakeGitHub({ listReadyIssues: async () => labelled });
     const read: unknown[] = [];
     const classifier = { classify: async (issue: { title: string }) => (read.push(issue), classified(issue.title.startsWith("How") ? "question" : "feature")) };
@@ -110,7 +111,9 @@ describe("GitHubIntake with issue_classify", () => {
       { title: "How do I turn on dark mode?", description: "", labels: [], source: issues[1]!.url },
     ]);
     const tasks = await pipeline.list();
-    expect(tasks.map((t) => [t.title, t.classification])).toEqual([["Export CSV", classified("feature")]]);
+    expect(tasks.map((t) => [t.title, t.classification])).toEqual([["Export CSV", null]]);
+    // The card keeps the issue's labels: triage reads the signals again from the card, and a security label must survive that.
+    expect(tasks[0]!.source).toMatchObject({ kind: "github", labels: ["enhancement"] });
     expect(github.commentOnIssue).toHaveBeenCalledTimes(1);
     expect(github.commentOnIssue).toHaveBeenCalledWith("o/a", 8, "Not for an agent: it reads as a question, not a change (question · machine · not ready · size small · lowest confidence 0.90 (typesafe-ai/jev)).");
     await intake.pollOnce();
@@ -122,7 +125,7 @@ describe("GitHubIntake with issue_classify", () => {
     const github = fakeGitHub({ listReadyIssues: async () => labelled });
     const unsure = new GitHubIntake({ pipeline, github, repos: ["o/a"], label: "x", intervalMs: 1000, classifier: { classify: async () => classified("question", 0.6) } });
     await unsure.pollOnce();
-    expect((await pipeline.list()).map((t) => t.classification?.kind)).toEqual(["question", "question"]);
+    expect((await pipeline.list()).map((t) => [t.title, t.classification])).toEqual([["Export CSV", null], ["How do I turn on dark mode?", null]]);
     await db.query("truncate tasks cascade");
     const none = new GitHubIntake({ pipeline, github, repos: ["o/a"], label: "x", intervalMs: 1000, classifier: { classify: async () => null } });
     await none.pollOnce();

@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "pack": "finding_classify",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T15:10:03.818Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 8,
+    "passed": 4,
+    "passRate": 0.5,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 446.5,
+    "costUsd": 0.00016217,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 4,
+      "accuracy": 0.42857142857142855,
+      "actedOnAccuracy": 0.75,
+      "coverage": 0.5,
+      "brier": 0.2758571428571429,
+      "ece": 0.3771428571428571,
+      "meanConfidence": 0.7575000000000001,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "comment-typo",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"nit\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 508,
+      "costUsd": 0.00001945,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.94,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.94,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "finding-early-return-plain",
+      "pass": false,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"blocker\"",
+          "pass": false,
+          "detail": "found \"nit\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 418,
+      "costUsd": 0.00002029,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": false,
+            "confidence": 0.67,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.67,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "finding-says-nit-but-bypasses-auth",
+      "pass": false,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"blocker\"",
+          "pass": false,
+          "detail": "found \"nit\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 421,
+      "costUsd": 0.00002079,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": false,
+            "confidence": 0.56,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.56,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "missing-empty-cart-check",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 454,
+      "costUsd": 0.00002033,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": null,
+            "confidence": 0.42,
+            "verdict": "ask"
+          }
+        },
+        "correct": null,
+        "confidence": 0.42,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "naming-nit",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"nit\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 509,
+      "costUsd": 0.00001991,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 1,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 1,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "retry-loop-without-a-limit",
+      "pass": false,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"should_fix\"",
+          "pass": false,
+          "detail": "found \"blocker\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 391,
+      "costUsd": 0.00002041,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": false,
+            "confidence": 0.91,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.91,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "sql-injection-blocker",
+      "pass": true,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"blocker\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 411,
+      "costUsd": 0.00002079,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.98,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "unchecked-discount-field",
+      "pass": false,
+      "schema": {
+        "check": "answer on the finding_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "severity.choice = \"should_fix\"",
+          "pass": false,
+          "detail": "found \"blocker\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 460,
+      "costUsd": 0.0000202,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "questions": {
+          "severity": {
+            "correct": false,
+            "confidence": 0.58,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.58,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

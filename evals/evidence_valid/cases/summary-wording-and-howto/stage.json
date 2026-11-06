@@ -1,0 +1,49 @@
+{
+  "schema": 3,
+  "stage": "evidence_valid",
+  "pack": "evidence_valid",
+  "attempt": 1,
+  "task": {
+    "id": "evidence-valid",
+    "title": "Fix: Reviewer asked for a delimiter option.",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "fix",
+      "fix": {
+        "changed": [
+          "src/cart/export.ts",
+          "README.md"
+        ],
+        "diffSummary": "The endpoint now accepts ?delimiter=; default unchanged. README documents it.",
+        "scenarios": [
+          {
+            "text": "CSV has a row per line",
+            "result": "pass"
+          },
+          {
+            "text": "The button is visible on the cart page",
+            "result": "pass"
+          }
+        ],
+        "threadSummary": "Reviewer asked for a delimiter option."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

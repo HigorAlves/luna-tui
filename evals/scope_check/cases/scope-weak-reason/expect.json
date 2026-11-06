@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "planned_or_declared.p",
+      "min": 0.25,
+      "max": 0.75
+    },
+    {
+      "kind": "equals",
+      "path": "unrelated_refactors.value",
+      "value": true
+    }
+  ],
+  "rubric": "A declared file with the thin reason 'needed a helper': whether that justifies it is a judgement call, so p should be mid-range.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "planned_or_declared": {
+            "value": true
+          }
+        },
+        "criteria": {
+          "planned_or_declared": "Is every changed file either planned (in the planned files) or declared with a reason that justifies it? The undeclared files are listed; any of them is a no."
+        },
+        "why": "The file is declared with a reason, and a small shared csv helper is a plausible need of an export."
+      },
+      {
+        "label": {
+          "planned_or_declared": {
+            "value": false
+          }
+        },
+        "criteria": {
+          "planned_or_declared": "Is every changed file either planned (in the planned files) or declared with a reason that justifies it? The undeclared files are listed; any of them is a no."
+        },
+        "why": "\"needed a helper\" is thin: it says nothing about why the helper belongs to this slice."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

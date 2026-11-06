@@ -1,0 +1,1199 @@
+{
+  "schema": 1,
+  "pack": "triage_signals",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T14:58:13.203Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 2,
+    "passRate": 0.25,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 3728.875,
+    "costUsd": 0.00915457,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 0,
+      "accuracy": 0.14285714285714285,
+      "actedOnAccuracy": null,
+      "coverage": 0,
+      "brier": 0.4644869047619048,
+      "ece": 0.5909523809523809,
+      "meanConfidence": 0.711875,
+      "overconfident": 6
+    },
+    "perQuestion": {
+      "kind": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 4,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.5,
+        "brier": 0.033900000000000007,
+        "ece": 0.14666666666666672,
+        "meanConfidence": 0.8025000000000001,
+        "overconfident": 0
+      },
+      "type_of_work": {
+        "n": 8,
+        "labelled": 5,
+        "acted": 3,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.375,
+        "brier": 0.12450000000000001,
+        "ece": 0.32999999999999996,
+        "meanConfidence": 0.61875,
+        "overconfident": 0
+      },
+      "ready": {
+        "n": 8,
+        "labelled": 5,
+        "acted": 4,
+        "accuracy": 0.8,
+        "actedOnAccuracy": 1,
+        "coverage": 0.875,
+        "brier": 0.087,
+        "ece": 0.21999999999999992,
+        "meanConfidence": 0.8,
+        "overconfident": 0
+      },
+      "size": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 2,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.625,
+        "brier": 0.13874999999999998,
+        "ece": 0.35,
+        "meanConfidence": 0.6375000000000001,
+        "overconfident": 0
+      },
+      "who": {
+        "n": 8,
+        "labelled": 6,
+        "acted": 3,
+        "accuracy": 0.3333333333333333,
+        "actedOnAccuracy": 0.6666666666666666,
+        "coverage": 0.375,
+        "brier": 0.25166666666666665,
+        "ece": 0.44999999999999996,
+        "meanConfidence": 0.6375,
+        "overconfident": 1
+      },
+      "what": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 3,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.5,
+        "brier": 0.05625000000000001,
+        "ece": 0.19999999999999998,
+        "meanConfidence": 0.66875,
+        "overconfident": 0
+      },
+      "impact": {
+        "n": 8,
+        "labelled": 2,
+        "acted": 1,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.25,
+        "brier": 0.13,
+        "ece": 0.3,
+        "meanConfidence": 0.6,
+        "overconfident": 0
+      },
+      "time": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 3,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.375,
+        "brier": 0.05625000000000001,
+        "ece": 0.20000000000000007,
+        "meanConfidence": 0.6749999999999999,
+        "overconfident": 0
+      },
+      "demand": {
+        "n": 8,
+        "labelled": 4,
+        "acted": 4,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.07750000000000001,
+        "ece": 0.27500000000000013,
+        "meanConfidence": 0.6937500000000001,
+        "overconfident": 0
+      },
+      "risk_prelim": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 3,
+        "accuracy": 0.7142857142857143,
+        "actedOnAccuracy": 1,
+        "coverage": 0.375,
+        "brier": 0.16642857142857143,
+        "ece": 0.21428571428571427,
+        "meanConfidence": 0.75,
+        "overconfident": 0
+      },
+      "archive": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 6,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.75,
+        "brier": 0.027985714285714287,
+        "ece": 0.11857142857142855,
+        "meanConfidence": 0.85875,
+        "overconfident": 0
+      },
+      "archive_reason": {
+        "n": 8,
+        "labelled": 7,
+        "acted": 3,
+        "accuracy": 1,
+        "actedOnAccuracy": 1,
+        "coverage": 0.375,
+        "brier": 0.039642857142857146,
+        "ece": 0.16428571428571428,
+        "meanConfidence": 0.7999999999999999,
+        "overconfident": 0
+      }
+    },
+    "answers": {
+      "n": 96,
+      "labelled": 61,
+      "acted": 39,
+      "accuracy": 0.8852459016393442,
+      "actedOnAccuracy": 0.9743589743589743,
+      "coverage": 0.5104166666666666,
+      "brier": 0.09810327868852457,
+      "ece": 0.108360655737705,
+      "meanConfidence": 0.7118750000000001,
+      "overconfident": 6
+    }
+  },
+  "cases": [
+    {
+      "id": "board-key-panic",
+      "pass": true,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"bug\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "type_of_work.choice = \"frontend\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.choice in [\"XS\",\"S\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within 0.5..1.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice = \"low\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2747,
+      "costUsd": 0.0010424000000000002,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "type_of_work": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "ready": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "flag"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7766666666666664,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "checkout-down-incident",
+      "pass": false,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"incident\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "type_of_work.choice in [\"backend\",\"mixed\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within 1.5..2",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within 1.5..2",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice in [\"medium\",\"high\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.value = false",
+          "pass": false,
+          "detail": "found true"
+        },
+        {
+          "check": "who.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2708,
+      "costUsd": 0.00102201,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "type_of_work": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "ready": {
+            "correct": false,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "size": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "ask"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.835,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "issue-orders-the-labels",
+      "pass": false,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice = \"high\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "type_of_work.choice in [\"infra\",\"data\",\"mixed\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice in [\"task\",\"chore\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 1"
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 5310,
+      "costUsd": 0.00114031,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "flag"
+          },
+          "type_of_work": {
+            "correct": true,
+            "confidence": 0.5,
+            "verdict": "ask"
+          },
+          "ready": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": true,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "who": {
+            "correct": false,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "ask"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "ask"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.6625000000000001,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "judge-engine-question",
+      "pass": false,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"question\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..1.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice = \"low\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 1"
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3689,
+      "costUsd": 0.00127241,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "type_of_work": {
+            "correct": null,
+            "confidence": 0.4,
+            "verdict": "ask"
+          },
+          "ready": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": false,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.7374999999999999,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "premium-feel-wish",
+      "pass": false,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "ready.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"not_actionable\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice = \"low\"",
+          "pass": false,
+          "detail": "found \"medium\""
+        },
+        {
+          "check": "who.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 1"
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3665,
+      "costUsd": 0.00132431,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "ask"
+          },
+          "type_of_work": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "ready": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": false,
+            "confidence": 0.5,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "impact": {
+            "correct": true,
+            "confidence": 0.5,
+            "verdict": "ask"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": false,
+            "confidence": 0.6,
+            "verdict": "ask"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "ask"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.6,
+            "verdict": "ask"
+          }
+        },
+        "correct": false,
+        "confidence": 0.6583333333333332,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "rotate-credentials-plain",
+      "pass": false,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice = \"high\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "type_of_work.choice in [\"infra\",\"data\",\"mixed\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice in [\"task\",\"chore\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 1"
+        },
+        {
+          "check": "demand.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3576,
+      "costUsd": 0.00118801,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "flag"
+          },
+          "type_of_work": {
+            "correct": true,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "ready": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": true,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "who": {
+            "correct": false,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "ask"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "ask"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "ask"
+          },
+          "demand": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.6541666666666668,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "vague-slowness",
+      "pass": true,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.confidence within 0..0.8",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.p within 0..0.4",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 4838,
+      "costUsd": 0.00114261,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "flag"
+          },
+          "type_of_work": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "ready": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": null,
+            "confidence": 0.4,
+            "verdict": "ask"
+          },
+          "who": {
+            "correct": null,
+            "confidence": 0.4,
+            "verdict": "ask"
+          },
+          "what": {
+            "correct": null,
+            "confidence": 0.4,
+            "verdict": "ask"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.35,
+            "verdict": "ask"
+          },
+          "time": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "ask"
+          },
+          "risk_prelim": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "ask"
+          },
+          "archive": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "ask"
+          },
+          "archive_reason": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "ask"
+          }
+        },
+        "correct": null,
+        "confidence": 0.5583333333333332,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "zod-upgrade-contracts",
+      "pass": false,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"chore\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "type_of_work.choice = \"backend\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice = \"medium\"",
+          "pass": false,
+          "detail": "found \"low\""
+        },
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive_reason.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "what.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3298,
+      "costUsd": 0.00102251,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "kind": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "type_of_work": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "ready": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "size": {
+            "correct": true,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "who": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "what": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "impact": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "time": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "demand": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "risk_prelim": {
+            "correct": false,
+            "confidence": 0.75,
+            "verdict": "flag"
+          },
+          "archive": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "archive_reason": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": false,
+        "confidence": 0.8125,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

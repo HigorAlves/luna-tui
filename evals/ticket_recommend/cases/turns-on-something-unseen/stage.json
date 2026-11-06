@@ -1,0 +1,54 @@
+{
+  "schema": 3,
+  "stage": "ticket_recommend",
+  "pack": "ticket_recommend",
+  "attempt": 1,
+  "task": {
+    "id": "ticket-recommend",
+    "title": "Move billing to the new provider",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": "Ana",
+      "reachable": true,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [],
+      "candidates": [],
+      "title": "Move billing to the new provider",
+      "description": "Finance wants billing on the new provider before the quarter ends; the contract is unsigned and the date may move.",
+      "assessment": {
+        "priority": "P2",
+        "size": "M",
+        "blastRadius": "low",
+        "costOfDelay": 4,
+        "costOfDoing": 6,
+        "score": 0.67
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

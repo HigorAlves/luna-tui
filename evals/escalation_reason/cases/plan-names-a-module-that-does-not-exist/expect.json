@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "reason.choice",
+      "value": "plan_wrong"
+    }
+  ],
+  "rubric": "The plan's step names a module that does not exist: the plan is wrong.",
+  "label": {
+    "reason": {
+      "choice": "plan_wrong"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "reason": "the approved plan cannot be built as written: a step names something that does not exist, or the steps contradict each other or the code"
+    },
+    "why": "The plan calls for ./payments/v2, which is not in the repository: a step names something that does not exist.",
+    "ruledOut": [
+      {
+        "question": "reason",
+        "label": "env_broken",
+        "why": "A plan step names a module that is not there. It is not: the environment is at fault: a service, a tool, a credential, the network or the container, not the change."
+      },
+      {
+        "question": "reason",
+        "label": "flaky_tests",
+        "why": "A plan step names a module that is not there. It is not: a test fails and passes on its own, with no change to the code it covers."
+      },
+      {
+        "question": "reason",
+        "label": "too_complex",
+        "why": "A plan step names a module that is not there. It is not: the change is bigger or harder than the plan allowed for, and the run ran out of room before it finished."
+      },
+      {
+        "question": "reason",
+        "label": "undeclared_scope",
+        "why": "A plan step names a module that is not there. It is not: the work needs files or changes the plan does not name."
+      },
+      {
+        "question": "reason",
+        "label": "other",
+        "why": "A plan step names a module that is not there. It is not: none of these fits, or the evidence does not say."
+      }
+    ],
+    "second": {
+      "label": {
+        "reason": {
+          "choice": "plan_wrong"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

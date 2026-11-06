@@ -16,12 +16,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { makeBundler } from "./core/bundles.ts";
 import { delegationFor, withChildren, withDelegate } from "./core/delegate.ts";
 import type { Emit } from "./core/events.ts";
 import { runInfo } from "./core/fingerprint.ts";
 import { lunaHandlers } from "./core/luna-tools.ts";
 import { EMPTY_RUN, type RunOutcome, finish, settle } from "./core/output.ts";
 import { renderPrompt } from "./core/render.ts";
+import { factoryTelemetry } from "./core/telemetry.ts";
 import { readJson, readStageInput } from "./core/stage-io.ts";
 import { transcript } from "./core/transcript.ts";
 import { RUNTIMES } from "./runtimes/index.ts";
@@ -49,7 +51,15 @@ const emit: Emit = (event) => {
 };
 
 // The luna tools' state lives here, whatever runtime serves them: the result reads it.
-const luna = lunaHandlers({ ledgerPath: join(OUT, "ledger.json"), ledger: input.context.ledger ?? null, decisions: input.decisions, emit });
+// The machine answers the build checks through files under /out/checks; a dry run never waits for one.
+const checkWaitMs = DRY ? 0 : Number(env.LUNA_CHECK_WAIT_MS ?? 90_000);
+// The agent commits in its own repository in /work/.git; its commits leave as bundles, at each slice and when the run ends.
+const bundler = makeBundler({ work: WORK, out: OUT });
+const luna = lunaHandlers({ onSliceCommitted: () => void bundler.bundle(), ledgerPath: join(OUT, "ledger.json"), ledger: input.context.ledger ?? null, decisions: input.decisions, emit, checksDir: join(OUT, "checks"), checkWaitMs: Number.isFinite(checkWaitMs) ? checkWaitMs : 90_000 });
+
+// Laminar, when the machine's traces are on: this run's spans nest under the machine's span for it.
+const telemetry = await factoryTelemetry(env);
+if (telemetry.on) out("luna factory · traces on (Laminar)");
 
 out(`luna factory · pack ${pack.id} as ${pack.kind === "decision" ? "a decision" : (pack.agent ?? "script")} (attempt ${input.attempt})`);
 
@@ -77,12 +87,17 @@ try {
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
+// What the run committed leaves as a last bundle.
+if (!DRY) bundler.bundle();
+// The spans must leave before the process exits.
+await telemetry.flush();
 // A rate limit, however the runtime learned of it, is one event.
 if (run.rateLimited) emit({ kind: "rate_limit", payload: { resetsAt: run.resetsAt } });
 finish(OUT, pack, run, { ledger: luna.state.ledger, events, run: info });
 
 async function runStage(): Promise<RunOutcome> {
-  // A decision pack has no prompt: its runtime sends the pack's questions and the input as data.
+  // A decision pack has no prompt template: its runtime renders the questions and the input itself
+  // (core/decide.ts for Claude and eve, Jev's own wire for Jev).
   let prompt = "";
   let template = JSON.stringify(pack.kind === "decision" ? pack.questions : null);
   if (pack.kind !== "decision") {
@@ -103,7 +118,7 @@ async function runStage(): Promise<RunOutcome> {
   // so far are its calls so far, which is never fewer.
   const turnsUsed = () => events.filter((e) => e.kind === "tool_call").length;
   const delegating = delegationFor(runtime.id, { pack, input: input!, paths, runtimes: RUNTIMES, emit, print: out, startedAt, turnsUsed });
-  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna: withDelegate(luna, delegating), dry: DRY, emit, delegate: delegating?.tool ?? null });
+  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna: withDelegate(luna, delegating), dry: DRY, emit, delegate: delegating?.tool ?? null, telemetry });
   // A dry run answers nothing unless the test seam gave it an answer; that one is settled.
   return withChildren(DRY && run.structured === null ? run : settle(run, pack), delegating);
 }

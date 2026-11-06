@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "severity.choice",
+      "value": "should_fix"
+    }
+  ],
+  "rubric": "A retry loop with no limit: wrong, not a security hole.",
+  "label": {
+    "severity": {
+      "choice": "should_fix"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "severity": "wrong or fragile, but mergeable with a follow-up"
+    },
+    "why": "The loop never stops on a failing service: wrong and fragile, but mergeable with a follow-up; the reviewer's blocker label is not the criterion.",
+    "ruledOut": [
+      {
+        "question": "severity",
+        "label": "blocker",
+        "why": "It is fragile but mergeable. It is not: a bug or a security hole a reviewer would block the merge on."
+      },
+      {
+        "question": "severity",
+        "label": "nit",
+        "why": "It is fragile but mergeable. It is not: style, naming or a suggestion the author may ignore."
+      }
+    ],
+    "second": {
+      "label": {
+        "severity": {
+          "choice": "should_fix"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

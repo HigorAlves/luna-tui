@@ -4,9 +4,12 @@
 // with its guard's decision, usage); only the facts for the task's log are taken from it, the
 // rest stays in the file.
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { lstat, mkdir, readFile } from "node:fs/promises";
+
+import { copyRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
 import { dirname, join } from "node:path";
 
+import { isReservedKind } from "../../domain/reserved-kinds.ts";
 import { type ArtifactKind, StageOutput, isStreamEvent } from "@hardness/contracts";
 
 import type { StageResult } from "../ports.ts";
@@ -33,13 +36,17 @@ export interface Ingested {
 
 const exists = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.code !== "ENOENT";
 
+/** What the host reads of a container's result and events: a regular file within these caps, never a link or a FIFO. */
+const RESULT_CAP = 8 * 1024 * 1024;
+const EVENTS_CAP = 32 * 1024 * 1024;
+
 export async function ingestStageOutput(opts: {
   outDir: string;
   runId: string;
   stateDir: string;
 }): Promise<Ingested> {
   const { outDir, runId, stateDir } = opts;
-  const raw = await readFile(join(outDir, "result.json"), "utf8");
+  const raw = await readRegularFile(join(outDir, "result.json"), RESULT_CAP);
   const parsed = StageOutput.safeParse(JSON.parse(raw));
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);
@@ -50,16 +57,22 @@ export async function ingestStageOutput(opts: {
   const events: IngestedEvent[] = [];
   let lines = "";
   try {
-    lines = await readFile(join(outDir, "events.jsonl"), "utf8");
+    lines = await readRegularFile(join(outDir, "events.jsonl"), EVENTS_CAP);
   } catch (error) {
     if (exists(error)) throw error;
   }
+  let dropped = 0;
   for (const line of lines.split("\n")) {
     if (line.trim() === "") continue;
     try {
       const item = JSON.parse(line) as Partial<IngestedEvent>;
       if (typeof item.kind !== "string") throw new Error("no kind");
       if (isStreamEvent({ kind: item.kind })) continue;
+      // A container can write any line: one whose stored kind is a row only the machine writes is not taken.
+      if (isReservedKind(item.kind)) {
+        dropped += 1;
+        continue;
+      }
       events.push({
         at: typeof item.at === "string" ? item.at : new Date().toISOString(),
         kind: item.kind,
@@ -70,6 +83,8 @@ export async function ingestStageOutput(opts: {
     }
   }
 
+  if (dropped > 0) events.push({ at: new Date().toISOString(), kind: "note", payload: { note: `${dropped} container event${dropped === 1 ? "" : "s"} of a kind only the machine writes ${dropped === 1 ? "was" : "were"} dropped` } });
+
   const artifacts: IngestedArtifact[] = [];
   const base = join(stateDir, "runs", runId, "files");
   for (const artifact of output.artifacts) {
@@ -77,9 +92,16 @@ export async function ingestStageOutput(opts: {
     // mirror them under runs/<id>/files/ without doubling that prefix, which is where the
     // evidence stage (runs/<id>/files/qa/) and the board expect them.
     const dest = join(base, artifact.path.replace(/^files\//, ""));
+    const src = join(outDir, artifact.path);
+    // The container wrote /out: a link there would make the copy read whatever host file it points at.
+    const info = await lstat(src).catch(() => null);
+    if (info && !info.isFile()) {
+      events.push({ at: new Date().toISOString(), kind: "note", payload: { skipped: true, path: artifact.path, label: artifact.label, reason: "not a regular file" } });
+      continue;
+    }
     try {
       await mkdir(dirname(dest), { recursive: true });
-      await copyFile(join(outDir, artifact.path), dest);
+      await copyRegularFile(src, dest);
     } catch (error) {
       if (exists(error)) throw error;
       events.push({
@@ -114,7 +136,7 @@ export function toStageResult({ output, events, artifacts }: Ingested): StageRes
       ...(output.ledger ? { ledger: output.ledger } : {}),
       ...(output.sessionId ? { sessionId: output.sessionId } : {}),
     },
-    usage: { turns: output.usage.turns, costUsd: output.usage.costUsd },
+    usage: { turns: output.usage.turns, costUsd: output.usage.costUsd, tokens: output.usage.tokens ?? null },
     needsInput: output.needsInput ?? undefined,
     requested: output.requested,
     findings: output.findings,

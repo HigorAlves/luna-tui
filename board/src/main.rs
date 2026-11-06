@@ -6,12 +6,15 @@
 //! wires them to the terminal, and answers `--keys-md` (the README's key tables) without one.
 
 mod app;
+mod backlog;
+mod tickets;
 mod client;
 mod detail;
 mod digest;
 mod discover;
 mod herdr;
 mod inbox;
+mod intake;
 mod keys;
 mod model;
 mod notify;

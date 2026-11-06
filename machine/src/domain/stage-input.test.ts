@@ -14,6 +14,48 @@ const task = {
   source: { kind: "github", repo: "o/n", number: 7, url: "https://github.com/o/n/issues/7" },
 } as unknown as TaskRow;
 
+describe("buildStageInput's task", () => {
+  it("carries the ticket's classification, null when it has none", () => {
+    const classification = { kind: "bug", area: "board", ready: true, size: 1, confidence: 0.8, at: "2026-11-04T00:00:00.000Z", model: "m" };
+    const build = (t: unknown) => buildStageInput({ task: t as TaskRow, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
+    expect(build({ ...task, classification }).task.classification).toEqual(classification);
+    expect(StageInput.parse(build({ ...task, classification })).task.classification).toEqual(classification);
+    expect(build({ ...task, classification: null }).task.classification).toBeNull();
+  });
+});
+
+describe("what triage receives of what Intake gathered", () => {
+  const card = {
+    sources: [],
+    reporter: { id: "alice", channel: "slack", name: "Alice <b>" },
+    hints: { urgency: "high" },
+    originMachine: null,
+    attachments: [{ name: "trace.txt", url: "https://f.example/t.txt", mediaType: "text/plain", size: 9 }],
+    project: "PAY",
+    owners: ["@team-a"],
+    followers: ["bob"],
+    links: {},
+    history: [{ author: "carol", text: "it fails\nevery time", at: null }],
+  };
+  const build = (stage: "triage" | "test_design", t: unknown = { ...task, card }) => buildStageInput({ task: t as TaskRow, stage, attempt: 1, approvals: [], priorFindings: [] });
+
+  it("carries the project, owners, reporter, history, attachment references and hints to triage", () => {
+    const input = build("triage");
+    expect(StageInput.parse(input).context.intake).toEqual({
+      project: "PAY",
+      owners: ["@team-a"],
+      reporter: { id: "alice", channel: "slack", name: "Alice &lt;b&gt;" },
+      history: [{ author: "carol", text: "it fails every time" }],
+      attachments: [{ name: "trace.txt", url: "https://f.example/t.txt", mediaType: "text/plain", size: 9 }],
+      hints: { urgency: "high" },
+    });
+  });
+  it("gives it to no other pack, and a card from before has empty lists", () => {
+    expect(build("test_design").context.intake).toBeUndefined();
+    expect(build("triage", task).context.intake).toEqual({ project: null, owners: [], reporter: null, history: [], attachments: [], hints: null });
+  });
+});
+
 const approval = (over: Partial<ApprovalRow>): ApprovalRow =>
   ({
     id: "a",
@@ -39,6 +81,93 @@ const finding = (confidence: number, title: string) => ({
   confidence,
 });
 
+describe("buildStageInput's pack and plan", () => {
+  const slices = [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }];
+  const planContext = { record: null, brief: "the plan", criteria: ["c1"], assumptions: ["a1"], slices, rollback: "revert", gaps: ["c1"], round: 2 };
+
+  it("runs a pack other than the state's own when asked: the planner in test_design, with that pack's limits", () => {
+    const input = buildStageInput({ task, stage: "test_design", pack: "plan", attempt: 1, approvals: [], priorFindings: [] });
+    expect(input).toMatchObject({ stage: "test_design", pack: "plan", limits: { maxTurns: PACK_LIMITS.plan.maxTurns, timeoutMs: PACK_LIMITS.plan.timeoutMs } });
+    expect(buildStageInput({ task, stage: "test_design", attempt: 1, approvals: [], priorFindings: [] }).pack).toBe("test_design");
+  });
+
+  it("hands a plan under review to the stage: context.plan as given, and the plan every stage reads rebuilt from it before any approval", () => {
+    const input = buildStageInput({ task, stage: "test_design", pack: "plan", attempt: 1, approvals: [], priorFindings: [], plan: planContext });
+    expect(input.context.plan).toEqual(planContext);
+    expect(input.plan).toEqual({ brief: "the plan", criteria: ["c1"], assumptions: ["a1"], slices, rollback: "revert" });
+    expect(StageInput.safeParse(input).success).toBe(true);
+  });
+
+  it("keeps the coverage notes in the designer's filtered context, the reason its second run must revise", () => {
+    const notes = ["C1 has no scenario: it does not pin the criterion"];
+    for (const pack of ["test_design", "test_design_fast"] as const) {
+      const input = buildStageInput({ task, stage: "test_design", pack, attempt: 1, approvals: [], priorFindings: [], plan: { ...planContext, coverage_notes: notes } });
+      expect(input.context.plan).toMatchObject({ brief: "", slices: [], coverage_notes: notes });
+    }
+  });
+
+  it("hands the test designer the criteria and the goal and no step, brief or assumption, in context.plan and in the plan it reads", () => {
+    const withPlan = { ...planContext, risk: { level: "high" as const }, map: { components: [], files: [], entry_points: [], owners: [], confidence: 0.5 } };
+    for (const pack of ["test_design", "test_design_fast"] as const) {
+      const input = buildStageInput({ task, stage: "test_design", pack, attempt: 1, approvals: [], priorFindings: [], plan: withPlan });
+      expect(input.plan).toEqual({ brief: "", criteria: ["c1"], assumptions: [] });
+      expect(input.context.plan).toEqual({ record: null, brief: "", criteria: ["c1"], assumptions: [], slices: [], gaps: ["c1"], round: 2 });
+      expect(StageInput.safeParse(input).success).toBe(true);
+    }
+    // The planner still reads its whole context.
+    expect(buildStageInput({ task, stage: "test_design", pack: "plan", attempt: 1, approvals: [], priorFindings: [], plan: planContext }).context.plan).toEqual(planContext);
+  });
+
+  it("hands the test writer the scenarios with ids (a v1 gate's cases by position), and the implementer the tests the writer made", () => {
+    const cases = [{ title: "t", criterion: "c1", approach: "run a.test.ts" }, { title: "u", criterion: "c1", approach: "run b.test.ts" }];
+    const approvals = [approval({ requested: { brief: "b", criteria: ["c1"], assumptions: [], slices, cases } })];
+    const writer = buildStageInput({ task, stage: "implementing", pack: "build_tests", attempt: 1, approvals, priorFindings: [] });
+    expect(writer.context.testCases).toMatchObject([{ id: "S1", criterion_ref: "C1" }, { id: "S2", criterion_ref: "C1" }]);
+    const scenarioTests = [{ scenario: "S1", file: "a.test.ts" }];
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [], scenarioTests }).context.scenarioTests).toEqual(scenarioTests);
+  });
+
+  it("hands the implementer a failed sweep's check names and output tails: flattened of control characters and capped at 2000, at most five checks", () => {
+    const long = `${"x".repeat(5000)}THE TAIL`;
+    const sweepFailures = Array.from({ length: 7 }, (_, i) => ({ name: `check-${i}`, tail: i === 0 ? long : "boom" }));
+    const input = buildStageInput({ task, stage: "implementing", attempt: 1, approvals: [], priorFindings: [], sweepFailures });
+    expect(input.context.sweepFailures).toHaveLength(5);
+    expect(input.context.sweepFailures![0]!.tail.length).toBeLessThanOrEqual(2000);
+    expect(input.context.sweepFailures![0]!.tail.endsWith("THE TAIL")).toBe(true);
+    expect(buildStageInput({ task, stage: "verifying", attempt: 1, approvals: [], priorFindings: [], sweepFailures }).context.sweepFailures).toBeUndefined();
+  });
+
+  it("reads rollback and the cases from the approved plan, and the cases reach implementing without a test check", () => {
+    const cases = [{ title: "t", criterion: "c1", approach: "run a.test.ts" }];
+    const approvals = [approval({ requested: { brief: "b", criteria: ["c1"], assumptions: [], slices, rollback: "revert it", cases } })];
+    const input = buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [] });
+    expect(input.plan).toMatchObject({ brief: "b", rollback: "revert it", slices });
+    expect(input.context.testCases).toEqual(cases);
+    // The code map the plan stage opened with rides along; a malformed one is dropped.
+    const map = { components: ["export"], files: [{ path: "src/a.ts", role: "change" }, { path: "src/a.test.ts", role: "test" }], entry_points: ["export::run"], owners: ["@marta"], confidence: 0.8, stale: true, behind: 80 };
+    const mapped = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, map } })];
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: mapped, priorFindings: [] }).plan).toMatchObject({ map });
+    // A gate written before roles (files as plain strings) still approves: each file reads as one to change.
+    const v1 = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, map: { components: ["export"], files: ["src/a.ts"], owners: ["@marta"], confidence: 0.8 } } })];
+    const old = buildStageInput({ task, stage: "implementing", attempt: 1, approvals: v1, priorFindings: [] });
+    expect(old.plan).toMatchObject({ map: { files: [{ path: "src/a.ts", role: "change" }], entry_points: [] } });
+    expect(StageInput.safeParse(old).success).toBe(true);
+    const broken = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, map: { files: 3 } } })];
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: broken, priorFindings: [] }).plan).not.toHaveProperty("map");
+    // The risk the plan was approved at rides along to Build; a malformed one is dropped.
+    const risk = { level: "high", product: 12, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 1 }, complexity: "L" };
+    const scored = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, risk } })];
+    const built = buildStageInput({ task, stage: "implementing", attempt: 1, approvals: scored, priorFindings: [] });
+    expect(built.plan).toMatchObject({ risk });
+    expect(StageInput.safeParse(built).success).toBe(true);
+    const odd = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, risk: { level: "huge" } } })];
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: odd, priorFindings: [] }).plan).not.toHaveProperty("risk");
+    // A legacy test check, when one exists, still wins.
+    const legacy = [...approvals, approval({ kind: "awaiting_test_check", requested: { cases: [{ title: "legacy", criterion: null, approach: "x" }] } })];
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: legacy, priorFindings: [] }).context.testCases).toEqual([{ title: "legacy", criterion: null, approach: "x" }]);
+  });
+});
+
 describe("buildStageInput", () => {
   const slices = [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }];
   const approvals = [
@@ -53,6 +182,14 @@ describe("buildStageInput", () => {
       reason: "go",
     }),
   ];
+
+  it("carries the task's triage record and evidence pack into the input", () => {
+    const record = { source: "github", kind: "bug", goal: "g", size: "small", urgency: "normal", risk: "low" as const, signals: {}, qa: [], decision: "plan" as const, reason: "r", at: "2026-11-03T12:00:00.000Z", model: "m" };
+    const input = buildStageInput({ task: { ...task, record, evidence: null }, stage: "implementing", attempt: 1, approvals: [], priorFindings: [] });
+    expect(StageInput.safeParse(input).success).toBe(true);
+    expect(input.task.record).toEqual(record);
+    expect(input.task.evidence).toBeNull();
+  });
 
   it("builds an input that passes the contract", () => {
     const input = buildStageInput({
@@ -74,9 +211,32 @@ describe("buildStageInput", () => {
       { at: "awaiting_approval", decision: "approved", reason: "go", answers: {} },
     ]);
     expect(input.priorFindings.map((f) => f.title)).toEqual(["keep", "edge"]);
-    expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: "9c1f0e2a", ci: null });
+    expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: "9c1f0e2a", ci: null, graph: null });
     expect(input.limits).toEqual({ maxTurns: 80, timeoutMs: 1_800_000 });
     expect(input.env).toEqual({ LUNA_FACTORY: "1" });
+  });
+
+  it("carries the coverage summary to verifying only", () => {
+    const coverage = { files: [{ path: "src/a.ts", added: 4, covered: 3, uncovered: [12] }], total: { added: 4, covered: 3 }, report: "coverage/lcov.info" };
+    const build = (stage: "verifying" | "implementing") => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], coverage });
+    expect(build("verifying").context.coverage).toEqual(coverage);
+    expect(build("implementing").context).not.toHaveProperty("coverage");
+  });
+
+  it("carries the blast radius to verifying only, and nothing when there is none", () => {
+    const build = (stage: "verifying" | "implementing", blastRadius?: string[]) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], ...(blastRadius ? { blastRadius } : {}) });
+    expect(build("verifying", ["src/b.ts"]).context.blastRadius).toEqual(["src/b.ts"]);
+    expect(build("implementing", ["src/b.ts"]).context).not.toHaveProperty("blastRadius");
+    expect(build("verifying", []).context).not.toHaveProperty("blastRadius");
+  });
+
+  it("carries the repo's code graph when the machine has one, null when it has none", () => {
+    const graph = { path: "/graph/graphify-out/graph.json", commit: "9c1f0e2a", builtAt: "2026-11-04T10:00:00Z", fresh: true };
+    const build = (g?: typeof graph | null) => buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [], ...(g !== undefined ? { graph: g } : {}) });
+    expect(build(graph).context.graph).toEqual(graph);
+    expect(StageInput.safeParse(build(graph)).success).toBe(true);
+    expect(build().context.graph).toBeNull();
+    expect(build(null).context.graph).toBeNull();
   });
 
   it("sizes implementing's budget to the plan: turns and time scale with the slice count, up to four times", () => {
@@ -114,13 +274,13 @@ describe("buildStageInput", () => {
     }
   });
 
-  it("has no plan before one is approved, and covers all eleven stage packs plus slack_triage, jira_intake, issue_classify, eval_judge and chat_triage", () => {
+  it("has no plan before one is approved, and covers all eleven stage packs plus the on-demand ones", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "chat_triage", "ci_watch", "e2e", "eval_judge", "evidence", "implementing", "issue_classify", "jira_intake", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "verifying"],
+      ["addressing", "build_tests", "chat_triage", "ci_failure_class", "ci_watch", "code_map", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "size_estimate", "split_check", "decompose", "finding_classify", "frame_privacy", "implementing", "jira_intake", "plan", "plan_check", "plan_fast", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply"].sort(),
     );
-    expect(Object.keys(PACK_LIMITS)).toHaveLength(16);
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(53);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
@@ -160,6 +320,14 @@ describe("buildStageInput", () => {
     expect(buildJiraIntakeInput({ ...jira, repoPath: null }).task.repoPath).toBe("");
   });
 
+  it("carries a ship context to pr_reply and the retro, and to no other pack", () => {
+    const ship = { kind: "comment" as const, comment: { thread: { id: "T1", path: "a.ts", line: 3, comments: [{ author: "bo", body: "why?", at: "t" }] }, pack: { summary: "s", scenarios: [], howToVerify: "h" }, myReplies: 1 } };
+    const reply = buildStageInput({ task, stage: "shipping", pack: "pr_reply", attempt: 1, approvals: [], priorFindings: [], ship });
+    expect(reply.context.ship).toEqual(ship);
+    expect(StageInput.safeParse(reply).success).toBe(true);
+    expect(buildStageInput({ task, stage: "shipping", pack: "ci_watch", attempt: 1, approvals: [], priorFindings: [], ship }).context.ship).toBeUndefined();
+  });
+
   it("carries what the host fetched for ci_watch, and nothing test_design never wrote", () => {
     const ci = {
       pr: { number: 42, url: "https://x/pull/42" },
@@ -167,7 +335,7 @@ describe("buildStageInput", () => {
       logs: "FAIL src/a.test.ts > boom",
     };
     const input = buildStageInput({ task, stage: "ci_watch", attempt: 1, approvals: [], priorFindings: [], ci });
-    expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: null, ci });
+    expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: null, ci, graph: null });
     expect(StageInput.safeParse(input).success).toBe(true);
     expect("tests" in input.context).toBe(false);
   });
@@ -187,17 +355,33 @@ describe("buildStageInput", () => {
     cases.push({ title: "older", criterion: null, approach: "run c.test.ts" });
     expect(at("implementing").context.testCases).toEqual(cases);
     expect(at("verifying").context.testCases).toEqual(cases);
-    expect(at("e2e").context.testCases).toEqual([]);
+    // e2e drives the approved scenarios, as verifying does.
+    expect(at("e2e").context.testCases).toEqual(cases);
     expect(StageInput.safeParse(at("verifying")).success).toBe(true);
   });
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "slack_triage" | "jira_intake" | "issue_classify" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "escalation_reason" | "build_tests" | "plan" | "code_map" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy" | "evidence_format" | "size_estimate" | "split_check" | "decompose" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "intake_dedup" | "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage" | "conversation_assess" | "conversation_relation" | "conversation_reply">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();
     expect(StageInput.safeParse(build("implementing")).success).toBe(true);
+  });
+
+  it("hands the video packs the approved scenarios and their VideoContext, and recording the QA targets", () => {
+    const cases = [{ title: "A coupon counts once", criterion: "c1", approach: "apply twice" }];
+    const approvals = [approval({ kind: "awaiting_test_check", requested: { cases } })];
+    const qaTargets = [{ name: "local", baseUrl: "http://127.0.0.1:3000", credential: null }];
+    const video = { scenarios: cases, record: null, pack: { summary: "s", howToVerify: "h", risk: "low" as const }, steps: [], chapters: [], target: qaTargets[0]!, narration: null, timeline: null, report: null, transcript: null, sheets: [], fixCards: [] };
+    for (const pack of ["video_script", "video_fix", "recording", "video_qa"] as const) {
+      const input = buildStageInput({ task, stage: "evidence", pack, attempt: 1, approvals, priorFindings: [], qaTargets, video });
+      expect(StageInput.safeParse(input).success, pack).toBe(true);
+      expect(input.context.video).toEqual(video);
+      expect(input.context.testCases).toEqual(pack === "video_qa" ? [] : cases);
+      expect(input.context.qaTargets).toEqual(pack === "recording" ? qaTargets : undefined);
+    }
+    expect(buildStageInput({ task, stage: "e2e", attempt: 1, approvals, priorFindings: [], video }).context.video).toBeUndefined();
   });
 
   it("holds the cases out of implementing's input when the repo's policy says so; verifying still sees them", () => {
@@ -207,5 +391,24 @@ describe("buildStageInput", () => {
       buildStageInput({ task, stage, attempt: 1, approvals, priorFindings: [], holdoutCases: true });
     expect(at("implementing").context.testCases).toEqual([]);
     expect(at("verifying").context.testCases).toEqual(cases);
+  });
+});
+
+describe("buildContextPackInput: every context a pack is given reaches its input", () => {
+  it("puts the context under its key for every on-demand pack, so no pack runs blind", async () => {
+    const { CONTEXT_OF } = await import("./context-packs.ts");
+    const { buildContextPackInput } = await import("./stage-input.ts");
+    for (const [pack, { key }] of Object.entries(CONTEXT_OF)) {
+      if (key === "slack" || key === "jira") continue; // these two have their own builders, tested above
+      const marker = { marker: `ctx-${pack}`, title: "t", key: "K-1", description: "d", brief: "b", origin: { title: "o" }, thread: [], channel: { id: "C1", kind: "channel" } };
+      const input = buildContextPackInput(pack as never, { [key]: marker } as never);
+      expect((input.context as Record<string, unknown>)[key], `${pack}: context.${key}`).toEqual(marker);
+    }
+  });
+
+  it("names the ticket or the thread in the synthetic task's title", async () => {
+    const { buildContextPackInput } = await import("./stage-input.ts");
+    expect(buildContextPackInput("ticket_validity" as never, { ticket: { key: "PAY-12", title: "Refund twice" } } as never).task.title).toBe("PAY-12: Refund twice");
+    expect(buildContextPackInput("conversation_assess" as never, { conversation: { channel: { id: "C1" } } } as never).task.title).toBe("Conversation");
   });
 });

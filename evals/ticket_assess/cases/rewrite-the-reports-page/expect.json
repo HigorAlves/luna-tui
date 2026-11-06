@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "unknowns.confidence",
+      "min": 0.3,
+      "max": 0.85
+    }
+  ],
+  "rubric": "Several things bundled with open questions: the unknowns answer should not be extreme in confidence.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "unknowns": {
+            "score": 1
+          }
+        },
+        "criteria": {
+          "unknowns": "A few things to find out"
+        },
+        "why": "The goal names the module and the shared table component, so only a few things are left to find out."
+      },
+      {
+        "label": {
+          "unknowns": {
+            "score": 2
+          }
+        },
+        "criteria": {
+          "unknowns": "A spike would come first"
+        },
+        "why": "Faster, clearer and maybe an export are three undefined goals; a spike would come first."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    },
+    "note": "The check was between 0.3 and 0.9; its max is now 0.85 so that it bounds the confidence of a borderline case."
+  }
+}

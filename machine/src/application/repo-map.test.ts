@@ -87,6 +87,17 @@ describe("RepoMap links that outlive a restart", () => {
     expect(await second.resolve("O/Workbench")).toBe(checkout);
   });
 
+  it("lists the checkouts it remembers, for the graph watch", async () => {
+    const root = reposDir();
+    const checkout = join(root, "workbench");
+    mkdirSync(checkout);
+    const file = join(root, "links.json");
+    const first = new RepoMap({ map: {}, reposDir: join(root, "nowhere"), file });
+    first.remember("o/workbench", checkout);
+    await first.saved();
+    expect(await new RepoMap({ map: {}, reposDir: join(root, "nowhere"), file }).remembered()).toEqual([checkout]);
+  });
+
   it("drops a saved link whose folder is gone, and survives a damaged file", async () => {
     const root = reposDir();
     const file = join(root, "links.json");

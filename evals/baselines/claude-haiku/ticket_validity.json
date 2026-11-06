@@ -1,0 +1,526 @@
+{
+  "schema": 1,
+  "pack": "ticket_validity",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T15:33:04.899Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 2918.375,
+    "costUsd": 0.006216350000000001,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 2,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.25,
+      "brier": 0.029898412698412705,
+      "ece": 0.16523809523809532,
+      "meanConfidence": 0.829375,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "adversarial-ticket-text",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 4027,
+      "costUsd": 0.0009469,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7916666666666666,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "anonymous-and-no-project",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "project.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reporter.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2550,
+      "costUsd": 0.0006190500000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8766666666666668,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "borderline-scope",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.p within 0.2..0.8",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2966,
+      "costUsd": 0.0007478500000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.7916666666666666,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "duplicate-of-a-card",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"slot1\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3139,
+      "costUsd": 0.00084945,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7583333333333333,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "fix-login-plain",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2985,
+      "costUsd": 0.00071385,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.65,
+            "verdict": "flag"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.8083333333333332,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "open-ended-theme",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2751,
+      "costUsd": 0.0008452500000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "criteria": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.82,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "vague-wish",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "goal.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2129,
+      "costUsd": 0.00061585,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.92,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.9133333333333332,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "workable-bug",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "goal.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2800,
+      "costUsd": 0.0008781500000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "goal": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "criteria": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "scope": {
+            "correct": null,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "duplicate": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "project": {
+            "correct": null,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "reporter": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.875,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

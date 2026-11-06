@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -32,6 +33,16 @@ beforeEach(async () => {
   stateDir = await mkdtemp(join(tmpdir(), "ingest-state-"));
 });
 
+describe("tokens", () => {
+  it("carry from the result's usage to the stage result, null where the runtime could not count", async () => {
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output({ usage: { turns: 1, costUsd: null, durationMs: 1, model: "m", tokens: { input: 10, output: 5 } } })));
+    const counted = toStageResult(await ingestStageOutput({ outDir, stateDir, runId: "run1" } as never));
+    expect(counted.usage).toMatchObject({ tokens: { input: 10, output: 5 } });
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output()));
+    expect(toStageResult(await ingestStageOutput({ outDir, stateDir, runId: "run1" } as never)).usage).toMatchObject({ tokens: null });
+  });
+});
+
 describe("ingestStageOutput", () => {
   it("lands an e2e manifest where the evidence stage reads it", async () => {
     await mkdir(join(outDir, "files", "qa"), { recursive: true });
@@ -49,6 +60,21 @@ describe("ingestStageOutput", () => {
     const result = await runner({ task: { id: "t1" }, stage: "evidence", attempt: 1, runId: "ev", approvals: [] } as never);
     expect(result.outcome).toBe("pass");
     expect(result.detail).toMatchObject({ verdict: "pass" });
+  });
+
+  it("skips an artifact that is a symlink: a container can point one at a host file, and the copy would follow it", async () => {
+    const secret = join(outDir, "..", `ingest-secret-${process.pid}`);
+    await writeFile(secret, "private key material");
+    await mkdir(join(outDir, "files", "qa"), { recursive: true });
+    await symlink(secret, join(outDir, "files", "qa", "leak.png"));
+    await writeFile(join(outDir, "files", "qa", "ok.png"), "png");
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output({ artifacts: [{ kind: "screenshot", path: "files/qa/leak.png", label: "leak", sha256: "" }, { kind: "screenshot", path: "files/qa/ok.png", label: "ok", sha256: "" }] })));
+    await writeFile(join(outDir, "events.jsonl"), "");
+    const { artifacts, events } = await ingestStageOutput({ outDir, runId: "r-link", stateDir });
+    expect(artifacts.map((a) => a.label)).toEqual(["ok"]);
+    expect(existsSync(join(stateDir, "runs", "r-link", "files", "qa", "leak.png"))).toBe(false);
+    expect(events.some((e) => e.kind === "note" && (e.payload as { skipped?: boolean }).skipped === true)).toBe(true);
+    await rm(secret);
   });
 
   it("parses the result, events and copies artifacts with a computed sha256", async () => {
@@ -89,6 +115,22 @@ describe("ingestStageOutput", () => {
       usage: { turns: 3, costUsd: 0.5 },
       run: { outputCommit: "abc123" },
     });
+  });
+
+  it("drops a container's line that would be stored as a row only the machine writes, with one note, and keeps the agent's ledger rows", async () => {
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output()));
+    const lines = [
+      { kind: "stage.finished", payload: { stage: "implementing", status: "failed", detail: { testsStep: { commit: "abc1234" } }, tokens: { input: -1000000, output: 0 } } },
+      { kind: "finished", payload: { stage: "implementing" } },
+      { kind: "stage.started", payload: { stage: "implementing" } },
+      { kind: "build.checkpoint", payload: { sha: "a".repeat(40), follows: "green" } },
+      { kind: "slice.red", payload: { id: 1 } },
+      { kind: "stage.slice.green", payload: { id: 1 } },
+    ];
+    await writeFile(join(outDir, "events.jsonl"), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    const ingested = await ingestStageOutput({ outDir, runId: "r", stateDir });
+    expect(ingested.events.map((e) => e.kind)).toEqual(["slice.red", "stage.slice.green", "note"]);
+    expect(ingested.events.at(-1)!.payload).toMatchObject({ note: expect.stringMatching(/4 .*dropped/) });
   });
 
   it("keeps the run's stream in events.jsonl and off the task's log, and a kind it does not know on it", async () => {
@@ -143,4 +185,18 @@ describe("ingestStageOutput", () => {
     const result = toStageResult(await ingestStageOutput({ outDir, runId: "r", stateDir }));
     expect(result.detail?.answer).toEqual(answer);
   });
+});
+
+describe("a FIFO where the result should be", () => {
+  it("is refused at once instead of blocking the machine", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const out = mkdtempSync(join(tmpdir(), "ingest-fifo-"));
+    execFileSync("mkfifo", [join(out, "result.json")]);
+    const started = Date.now();
+    await expect(ingestStageOutput({ outDir: out, runId: "r", stateDir: out })).rejects.toThrow(/regular file/);
+    expect(Date.now() - started).toBeLessThan(3000);
+  }, 10_000);
 });

@@ -2,7 +2,7 @@
 // created to closed, and the Jira due date (the end of that day where the Jira site lives). Pure: the clocks are computed from the task row,
 // when its wait began, when its stage started and the targets in force; nothing is stored.
 // The same `30m`/`4h`/`3d`/`off` durations luna.yaml and the env use are parsed here.
-import { RUNNING, WAITING_ON_USER, type SlaClock, type TaskSla, type TaskState } from "@hardness/contracts";
+import { RUNNING, RUN_OR_GATE, type SlaClock, type TaskSla, type TaskState, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 
 import type { TaskRow } from "./task.ts";
 
@@ -25,6 +25,8 @@ export interface SlaTargets {
   /** Keyed by running stage. */
   stage: Record<string, number>;
   cycle: number | null;
+  /** How long a ticket may sit at an intake gate before it is archived; null means `off`, absent means the diagram's five days (`triage.sla.archive_days`). */
+  archive: number | null;
 }
 
 /** The machine-wide fallbacks from the env. */
@@ -33,7 +35,8 @@ export interface SlaDefaults {
   cycle: number | null;
 }
 
-export const DEFAULT_GATE_SECS = 3600;
+/** A gate reminds after two days, as the diagram draws every gate's SLA (it was an hour before wave 9). */
+export const DEFAULT_GATE_SECS = 2 * 86_400;
 
 export interface SlaInput {
   task: Pick<TaskRow, "state" | "createdAt" | "jira">;
@@ -44,6 +47,8 @@ export interface SlaInput {
   /** The repo's own targets; `null` fields fall back to `defaults`. */
   targets: Partial<SlaTargets> | null;
   defaults: SlaDefaults;
+  /** An approval is open: a state that holds a stage or a gate has a gate clock only then. */
+  gateOpen?: boolean;
 }
 
 /** Jira priority moves the gate target: Highest/High halve it, Lowest doubles it. */
@@ -71,7 +76,7 @@ export function computeSla(input: SlaInput, now: Date): TaskSla | null {
   const gateSecs = gateTarget === null ? null : Math.round(gateTarget * gateFactor(task.jira?.priority));
 
   let gate: TaskSla["gate"] = null;
-  if (WAITING_ON_USER.has(state) && gateSecs !== null) {
+  if ((RUN_OR_GATE.has(state) ? input.gateOpen === true : WAITING_ON_USER.has(state)) && gateSecs !== null) {
     const since = input.stateSince ?? task.createdAt;
     gate = { ...clock(since, gateSecs, now), since: since.toISOString(), state };
   }
@@ -87,11 +92,11 @@ export function computeSla(input: SlaInput, now: Date): TaskSla | null {
     }
   }
 
-  const cycle: TaskSla["cycle"] = cycleTarget !== null && state !== "closed" ? clock(task.createdAt, cycleTarget, now) : null;
+  const cycle: TaskSla["cycle"] = cycleTarget !== null && !isTerminal(state) ? clock(task.createdAt, cycleTarget, now) : null;
 
   let jiraDue: TaskSla["jiraDue"] = null;
   const due = task.jira?.dueAt;
-  if (due && state !== "closed") {
+  if (due && !isTerminal(state)) {
     // Jira stores a date: the day ends at 23:59:59 in the site's timezone (UTC until JiraWatch
     // has read it). The clock counts from the ticket's creation or its link time, whichever is later.
     const end = endOfDay(due, task.jira?.timeZone ?? null);

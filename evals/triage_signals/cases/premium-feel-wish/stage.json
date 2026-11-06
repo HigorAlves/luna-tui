@@ -1,0 +1,34 @@
+{
+  "schema": 3,
+  "stage": "triage_signals",
+  "pack": "triage_signals",
+  "attempt": 1,
+  "task": {
+    "id": "premium-feel-wish",
+    "title": "premium-feel-wish",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "issue": {
+      "title": "Make the whole product feel more premium",
+      "description": "I would like the product to feel more premium. You know what I mean.",
+      "labels": [],
+      "source": "example-tracker:EX-31"
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

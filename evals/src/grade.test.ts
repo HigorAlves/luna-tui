@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { Expect } from "./expect.ts";
 import { formatDiff, formatScorecard } from "./format.ts";
-import { type CaseResult, type CaseRun, caseResult, diffScorecards, gradeAnswer, scorecard, summarize } from "./grade.ts";
+import { type CaseResult, type CaseRun, caseResult, diffScorecards, gradeAnswer, gradeDecision, scorecard, summarize } from "./grade.ts";
 
 const verdict = (id: string, priority: string) => ({ id, priority, category: "question", expectsReply: true, summary: "s", why: "w", draft: "d", refs: [], deadline: null });
 
@@ -142,5 +142,65 @@ describe("diffScorecards", () => {
     expect(text).toContain("pass 1/2 (50%) · judge 0.55 · 2.0 turns · 1.0s mean · $0.0300 (judge $0.2000)");
     const diff = diffScorecards(scorecard(meta("claude:haiku", "t0"), [result("a", true, { costUsd: 0.01 }), result("b", true, { costUsd: 0.01 })]), card);
     expect(formatDiff(diff)).toBe("codex:luna vs claude:haiku over 2 case(s): pass rate -50 pts · judge n/a · turns +0.0 · duration +0.0s · cost +$0.0100\n  flipped: b (pass -> fail)");
+  });
+});
+
+describe("a decision pack's grades", () => {
+  const worth = (value: boolean, p: number) => run("c1", output({ worth: { value, p } }));
+  const labelled = Expect.parse({ schema: 1, rubric: "r", label: { worth: { value: true } }, checks: [{ kind: "equals", path: "worth.value", value: true }] });
+  const unlabelled = Expect.parse({ schema: 1, rubric: "r", review: true });
+
+  it("grades correct, confidence and the verdict under the pack's own bars (a yes/no's confidence is its distance from a coin toss)", () => {
+    expect(caseResult("worth_learning", labelled, worth(true, 0.9), null).decision).toMatchObject({ correct: true, confidence: 0.9, verdict: "proceed" });
+    // p 0.1 says no with 0.9 confidence: wrong against a yes label, still proceed.
+    expect(caseResult("worth_learning", labelled, worth(false, 0.1), null).decision).toMatchObject({ correct: false, confidence: 0.9, verdict: "proceed" });
+    expect(caseResult("worth_learning", labelled, worth(true, 0.6), null).decision).toMatchObject({ correct: true, verdict: "flag" });
+  });
+
+  it("leaves correct null for a labelled case still marked for review: an outcome's label counts once a person confirms it", () => {
+    const outcome = Expect.parse({ schema: 1, rubric: "r", label: { worth: { value: true } }, review: true, checks: [] });
+    expect(caseResult("worth_learning", outcome, worth(true, 0.9), null).decision).toMatchObject({ correct: null });
+  });
+
+  it("leaves correct null for a case with no label, and grades nothing for an agent pack or a missing answer", () => {
+    expect(caseResult("worth_learning", unlabelled, worth(true, 0.9), null).decision).toMatchObject({ correct: null });
+    expect(caseResult("slack_triage", expectation, run("c1", output({ items: [verdict("m1", "P0")] })), null).decision).toBeUndefined();
+    expect(caseResult("worth_learning", labelled, run("c2", null, "no result"), null).decision).toBeUndefined();
+  });
+
+  it("summarizes calibration for a decision pack and diffs it over the cases both ran", () => {
+    const grade = (correct: boolean | null, confidence: number, verdict: "proceed" | "flag" | "ask") => ({ decision: { correct, confidence, verdict } });
+    const base = scorecard({ pack: "worth_learning", engine: "claude:haiku", judge: null, at: "t0" }, [result("a", true, grade(true, 0.9, "proceed")), result("b", false, grade(false, 0.8, "proceed"))]);
+    const next = scorecard({ pack: "worth_learning", engine: "codex:luna", judge: null, at: "t1", trials: 2 }, [result("a", true, grade(true, 0.9, "proceed")), result("b", true, grade(true, 0.9, "proceed")), result("b", true, { ...grade(true, 0.9, "proceed"), trial: 2 })]);
+    expect(base.summary.calibration).toMatchObject({ n: 2, labelled: 2, accuracy: 0.5, actedOnAccuracy: 0.5, coverage: 1, overconfident: 1 });
+    expect(next.summary.calibration).toMatchObject({ n: 3, accuracy: 1 });
+    const diff = diffScorecards(base, next);
+    expect(diff.common).toBe(2);
+    expect(diff.calibration).toMatchObject({ accuracy: 0.5, actedOnAccuracy: 0.5, coverage: 0 });
+    expect(diff.onlyNext).toEqual(["b#2"]);
+    expect(summarize([result("a", true)]).calibration).toBeUndefined();
+  });
+
+  it("prints the calibration line and each case's label grade", () => {
+    const card = scorecard({ pack: "worth_learning", engine: "claude:haiku", judge: null, at: "t", trials: 3 }, [result("a", true, { decision: { correct: true, confidence: 0.9, verdict: "proceed" } }), result("b", false, { decision: { correct: false, confidence: 0.4, verdict: "ask" }, trial: 2 })]);
+    // Brier (0.1^2 + 0.4^2)/2 = 0.085; ECE: bin [0.8,1] gap 0.1 x 1/2 + bin [0.4,0.6) gap 0.4 x 1/2 = 0.25.
+    const text = formatScorecard(card);
+    expect(text).toContain("label right · conf 0.90 proceed");
+    expect(text).toMatch(/b#2 .*label wrong · conf 0\.40 ask/);
+    expect(text).toContain("accuracy 50% (2 labelled of 2) · acted-on 100% · coverage 50% · Brier 0.085 · ECE 0.250 · mean confidence 0.65 · overconfident 0 · 3 trials");
+  });
+});
+
+describe("per-question grades", () => {
+  it("grades each question against the case's label for it: right or wrong, its own confidence, its own bar; null where the label is silent", () => {
+    const answer = { blast_radius: { score: 1, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.4 }, data_sensitivity: { score: 0, confidence: 0.9 }, complexity: { choice: "M", confidence: 0.9 } };
+    const expectation = { schema: 1, checks: [], label: { blast_radius: { score: 1 }, reversibility: { score: 2 } } } as never;
+    const grade = gradeDecision("risk_score", expectation, answer)!;
+    expect(grade.questions).toEqual({
+      blast_radius: { correct: true, confidence: 0.9, verdict: "proceed" },
+      reversibility: { correct: false, confidence: 0.4, verdict: "ask" },
+      data_sensitivity: { correct: null, confidence: 0.9, verdict: "proceed" },
+      complexity: { correct: null, confidence: 0.9, verdict: "proceed" },
+    });
   });
 });

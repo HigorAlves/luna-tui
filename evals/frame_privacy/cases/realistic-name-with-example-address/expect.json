@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "exposure.confidence",
+      "min": 0,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A realistic name but only an example.com address: none is likely, personal_data arguable, so the model should not be near-certain.",
+  "kind": "borderline",
+  "reading": {
+    "criteria": {},
+    "why": "two readings are fair; see readings",
+    "readings": [
+      {
+        "label": {
+          "exposure": {
+            "choice": "none"
+          }
+        },
+        "criteria": {
+          "exposure": "nothing sensitive: ordinary interface text, and synthetic or placeholder data (names like Jane Doe, addresses at example.com, obviously fake numbers)"
+        },
+        "why": "The address is at example.com, which the criterion treats as a placeholder."
+      },
+      {
+        "label": {
+          "exposure": {
+            "choice": "personal_data"
+          }
+        },
+        "criteria": {
+          "exposure": "a real person's name together with contact, address, identity or payment details; synthetic or placeholder data is none"
+        },
+        "why": "Priya Raman with an address reads like a real person's name and contact detail."
+      }
+    ],
+    "second": {
+      "label": null,
+      "agrees": true
+    }
+  }
+}

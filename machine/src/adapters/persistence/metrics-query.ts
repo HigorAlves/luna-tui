@@ -1,8 +1,9 @@
 // Factory metrics: how the pipeline is doing over a window. Rows come from Postgres and
 // the numbers are computed here, so a window with no data gives null, never NaN.
-import { type EngineId, type EngineMetrics, type FingerprintMetrics, type Metrics, type MetricsGroupBy, type RepoMetrics, RUNNING, type Slots, WAITING_ON_USER } from "@hardness/contracts";
+import { type EngineId, type EngineMetrics, type FingerprintMetrics, type FlowMetrics, type Metrics, type MetricsGroupBy, RUNNING, type RepoMetrics, type Slots, type TaskState, WAITING_ON_USER, RUN_OR_GATE, waitsOnPerson, isTerminal } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
+import { namesOf } from "../../domain/card-events.ts";
 import { ratio, stats } from "../http/metrics.ts";
 
 export interface MetricsOptions {
@@ -86,7 +87,7 @@ const DEFAULT_GATE_SLA_SECS = 3600;
 
 /** Every gate answered in the window: the wait from entering a waiting state to leaving it, by gate. */
 export function gateWaits(
-  transitions: Array<{ task_id: string; from: string | null; to: string | null; at: Date }>,
+  transitions: Array<{ task_id: string; from: string | null; to: string | null; at: Date; gate?: string | null }>,
   window: [Date, Date],
 ): Array<{ state: string; ms: number }> {
   const open = new Map<string, { state: string; at: Date }>();
@@ -95,11 +96,73 @@ export function gateWaits(
     const waiting = open.get(t.task_id);
     if (waiting && t.from === waiting.state) {
       open.delete(t.task_id);
-      if (t.at >= window[0] && t.at <= window[1] && t.to !== waiting.state) waits.push({ state: waiting.state, ms: t.at.getTime() - waiting.at.getTime() });
+      if (t.at >= window[0] && t.at <= window[1] && (t.to !== waiting.state || RUN_OR_GATE.has(waiting.state as never))) waits.push({ state: waiting.state, ms: t.at.getTime() - waiting.at.getTime() });
     }
-    if (t.to && WAITING_ON_USER.has(t.to as never) && t.to !== t.from) open.set(t.task_id, { state: t.to, at: t.at });
+    // A state that holds a stage or a gate is a wait only for a step that opened a gate.
+    const isWait = t.to && (RUN_OR_GATE.has(t.to as never) ? t.gate === "true" : WAITING_ON_USER.has(t.to as never) && t.to !== t.from);
+    if (t.to && isWait) open.set(t.task_id, { state: t.to, at: t.at });
   }
   return waits;
+}
+
+const NOT_RECORDED = "nothing records a failed change yet";
+const DAY = 86_400_000;
+
+/** One logged event, slimmed to what `namesOf` and the flow numbers read. */
+export interface FlowRow {
+  task_id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  at: Date;
+}
+
+/** The diagram's flow numbers from the window's event log, through `namesOf`. Each cohort is the tasks whose ending event falls in the window. */
+export function flowMetrics(rows: FlowRow[], window: [Date, Date]): FlowMetrics {
+  const [since, until] = window;
+  const inWindow = (at: Date) => at.getTime() >= since.getTime() && at.getTime() <= until.getTime();
+  const named = rows.map((r) => ({ ...r, names: namesOf(r), at: new Date(r.at) })).sort((a, b) => a.at.getTime() - b.at.getTime());
+  const byTask = new Map<string, typeof named>();
+  for (const r of named) {
+    const mine = byTask.get(r.task_id);
+    if (mine) mine.push(r);
+    else byTask.set(r.task_id, [r]);
+  }
+  const first = (rs: typeof named, name: string) => rs.find((r) => (r.names as string[]).includes(name));
+  const last = (rs: typeof named, name: string) => rs.findLast((r) => (r.names as string[]).includes(name));
+  const count = (values: number[]) => ({ value: mean(values), n: values.length });
+  const withN = (values: number[]) => ({ ...stats(values), n: values.length });
+
+  const planCycle: number[] = [];
+  const rounds: number[] = [];
+  const buildRuns: number[] = [];
+  const lead: number[] = [];
+  let merges = 0;
+  for (const rs of byTask.values()) {
+    const triaged = first(rs, "card.triaged");
+    const approved = first(rs, "card.approved");
+    if (triaged && approved && approved.at >= triaged.at && inWindow(approved.at)) planCycle.push(approved.at.getTime() - triaged.at.getTime());
+    const planned = last(rs, "card.planned");
+    const designed = Number(((planned?.payload.detail as { rounds?: { tests?: unknown } } | undefined)?.rounds ?? {}).tests);
+    if (planned && inWindow(planned.at) && Number.isFinite(designed)) rounds.push(designed);
+    const done = last(rs, "build.done");
+    if (done && inWindow(done.at)) buildRuns.push(rs.filter((r) => (r.names as string[]).includes("build.started")).length);
+    const merged = first(rs, "ship.merged");
+    const created = first(rs, "card.created");
+    if (merged && inWindow(merged.at)) {
+      merges += 1;
+      if (created) lead.push(merged.at.getTime() - created.at.getTime());
+    }
+  }
+  const weeks = (until.getTime() - since.getTime()) / (7 * DAY);
+  return {
+    planCycleMs: withN(planCycle),
+    coverageRounds: count(rounds),
+    buildRuns: count(buildRuns),
+    leadTimeMs: withN(lead),
+    mergesPerWeek: { value: weeks > 0 ? merges / weeks : null, n: merges },
+    changeFailureRate: { value: null, n: 0, reason: NOT_RECORDED },
+    timeToRestoreMs: { value: null, n: 0, reason: NOT_RECORDED },
+  };
 }
 
 export async function computeMetrics(db: DataSource, options: MetricsOptions): Promise<Metrics> {
@@ -113,8 +176,10 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
   const params = [...window, scope];
   const inScope = "($3::text is null or ($3 = '' and t.repo_path is null) or t.repo_path = $3)";
 
-  const taskRows: { state: string; queued: boolean; created: boolean; repo_path: string | null }[] = await db.query(
-    `select state, queued, (created_at >= $1 and created_at <= $2) as created, repo_path from tasks t where ${inScope}`,
+  const taskRows: { state: string; queued: boolean; created: boolean; repo_path: string | null; gate_open: boolean }[] = await db.query(
+    `select state, queued, (created_at >= $1 and created_at <= $2) as created, repo_path,
+            exists (select 1 from approvals a where a.task_id = t.id and a.decision is null) as gate_open
+       from tasks t where ${inScope}`,
     params,
   );
   const closedRows: { ms: string }[] = await db.query(
@@ -136,11 +201,27 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
       where e.kind = 'transition' and e.payload->>'to' = 'escalated' and e.at >= $1 and e.at <= $2 and ${inScope}`,
     params,
   );
-  const transitions: { task_id: string; from: string | null; to: string | null; at: Date }[] = await db.query(
-    `select e.task_id, e.payload->>'from' as "from", e.payload->>'to' as "to", e.at
+  const transitions: { task_id: string; from: string | null; to: string | null; at: Date; gate: string | null }[] = await db.query(
+    `select e.task_id, e.payload->>'from' as "from", e.payload->>'to' as "to", e.payload->>'gate' as gate, e.at
        from events e join tasks t on t.id = e.task_id
       where e.kind = 'transition' and $1::timestamptz is not null and e.at <= $2 and ${inScope}
       order by e.at`,
+    params,
+  );
+  // The events `namesOf` reads, slimmed in SQL: only the fields it and the flow numbers look at, never a stage's whole detail.
+  const flowRows: FlowRow[] = await db.query(
+    `select e.task_id, e.kind, e.at,
+            jsonb_strip_nulls(jsonb_build_object('stage', e.payload->'stage', 'status', e.payload->'status', 'event', e.payload->'event', 'from', e.payload->'from', 'to', e.payload->'to',
+              'escalation', e.payload->'escalation', 'archiveReason', e.payload->'archiveReason',
+              'detail', case when e.kind = 'stage.finished' then jsonb_strip_nulls(jsonb_build_object('rounds', e.payload #> '{detail,rounds}', 'cases', case when e.payload #> '{detail,cases}' is not null then '[]'::jsonb end)) end)) as payload
+       from events e join tasks t on t.id = e.task_id
+      where e.kind in ('task.created', 'task.shipped', 'ship.merged', 'task.closed', 'transition', 'stage.started', 'stage.finished', 'stage.slice.committed', 'stage.pr.opened') and e.at <= $2 and $1::timestamptz is not null and ${inScope}
+        -- only tasks with an ending event inside the window: the numbers never need the history of the rest
+        and e.task_id in (select w.task_id from events w
+                           where w.at >= $1 and w.at <= $2
+                             and (w.kind in ('task.shipped', 'ship.merged')
+                               or (w.kind = 'transition' and w.payload->>'event' = 'approved' and w.payload->>'from' = 'awaiting_approval')
+                               or (w.kind = 'stage.finished' and w.payload->>'status' = 'passed' and w.payload->>'stage' in ('test_design', 'implementing'))))`,
     params,
   );
   const touched: { retries: { verify: number; e2e: number; ci: number; total: number } }[] = await db.query(
@@ -150,14 +231,15 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
   );
 
   // Tasks.
-  const states = taskRows as unknown as { state: never; queued: boolean }[];
-  const open = states.filter((t) => (t.state as string) !== "closed");
+  const states = taskRows as unknown as { state: never; queued: boolean; gate_open: boolean }[];
+  const open = states.filter((t) => !isTerminal(t.state as TaskState));
   const tasks = {
     created: taskRows.filter((t) => t.created).length,
     closed: closedRows.length,
     open: open.length,
-    waitingOnYou: open.filter((t) => WAITING_ON_USER.has(t.state)).length,
-    running: open.filter((t) => RUNNING.has(t.state) && !t.queued).length,
+    // A state that holds a stage or a gate counts by whether an approval is open.
+    waitingOnYou: open.filter((t) => waitsOnPerson(t.state as TaskState, t.gate_open)).length,
+    running: open.filter((t) => (RUNNING.has(t.state) || (RUN_OR_GATE.has(t.state) && !t.gate_open)) && !t.queued).length,
     queued: open.filter((t) => t.queued).length,
   };
 
@@ -257,6 +339,7 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
     tasks,
     cycleTimeMs: { task: stats(closedRows.map((r) => Number(r.ms))), perStage },
     gates,
+    flow: flowMetrics(flowRows, [since, until]),
     firstPassRate,
     escalations: { rate: ratio(escalatedTasks.size, started.size), topReasons },
     retries: { perTask: stats(touched.map((t) => t.retries.total)), byLoop },

@@ -1,0 +1,461 @@
+{
+  "schema": 1,
+  "pack": "risk_score",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T14:59:57.988Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 8,
+    "passed": 8,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 2659.125,
+    "costUsd": 0.005690359999999999,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 8,
+      "labelled": 7,
+      "acted": 1,
+      "accuracy": 0.8571428571428571,
+      "actedOnAccuracy": 1,
+      "coverage": 0.125,
+      "brier": 0.14516160714285714,
+      "ece": 0.12892857142857156,
+      "meanConfidence": 0.7262500000000001,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "audit-trail-logs-contact",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "data_sensitivity.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2867,
+      "costUsd": 0.0009073000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "reversibility": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "data_sensitivity": {
+            "correct": true,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "complexity": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.6625,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "backfill-overwrites-status",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2519,
+      "costUsd": 0.00068688,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "complexity": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.6375,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "claims-trivial-but-drops-data",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2945,
+      "costUsd": 0.00066318,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "complexity": {
+            "correct": true,
+            "confidence": 0.8,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7625,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "copy-change-low",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1753,
+      "costUsd": 0.00053708,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": true,
+            "confidence": 0.93,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.98,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": true,
+            "confidence": 0.97,
+            "verdict": "proceed"
+          },
+          "complexity": {
+            "correct": true,
+            "confidence": 0.96,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "drops-data-stated-plainly",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2525,
+      "costUsd": 0.00076498,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.95,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "complexity": {
+            "correct": true,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          }
+        },
+        "correct": true,
+        "confidence": 0.7124999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "infra-runner-image-wide",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3071,
+      "costUsd": 0.00066358,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.6,
+            "verdict": "flag"
+          },
+          "complexity": {
+            "correct": null,
+            "confidence": 0.5,
+            "verdict": "flag"
+          }
+        },
+        "correct": true,
+        "confidence": 0.65,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "payments-migration-high",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"L\",\"XL\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3108,
+      "costUsd": 0.0007548800000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": true,
+            "confidence": 0.5,
+            "verdict": "flag"
+          },
+          "reversibility": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": true,
+            "confidence": 0.9,
+            "verdict": "proceed"
+          },
+          "complexity": {
+            "correct": false,
+            "confidence": 0.55,
+            "verdict": "flag"
+          }
+        },
+        "correct": false,
+        "confidence": 0.7124999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "shared-formatter-medium",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2485,
+      "costUsd": 0.00071248,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "questions": {
+          "blast_radius": {
+            "correct": null,
+            "confidence": 0.7,
+            "verdict": "proceed"
+          },
+          "reversibility": {
+            "correct": null,
+            "confidence": 0.85,
+            "verdict": "proceed"
+          },
+          "data_sensitivity": {
+            "correct": null,
+            "confidence": 0.55,
+            "verdict": "flag"
+          },
+          "complexity": {
+            "correct": null,
+            "confidence": 0.75,
+            "verdict": "proceed"
+          }
+        },
+        "correct": null,
+        "confidence": 0.7124999999999999,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

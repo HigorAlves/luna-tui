@@ -1,0 +1,42 @@
+{
+  "schema": 3,
+  "stage": "conversation_assess",
+  "pack": "conversation_assess",
+  "attempt": 1,
+  "task": {
+    "id": "conversation-assess",
+    "title": "Checkout is down",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "conversation": {
+      "channel": "eng",
+      "private": false,
+      "thread": [
+        "marta: checkout is returning 500 errors for every customer since 10:40",
+        "ana: confirmed, payments are failing and we are losing orders"
+      ],
+      "latest": "confirmed, payments are failing and we are losing orders",
+      "author": {
+        "profile": "member",
+        "title": null
+      },
+      "candidates": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

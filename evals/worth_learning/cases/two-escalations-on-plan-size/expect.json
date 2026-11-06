@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "worth.value",
+      "value": true
+    }
+  ],
+  "rubric": "On size, but two escalations and four retries.",
+  "label": {
+    "worth": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "worth": "Would a retro of this task teach the next one something? The diagram's five signals: a prediction that missed (size, risk, urgency), many iterations or review rounds, an escalation, a person overriding what the machine made, a downgraded format or a repeated finding. Facts about the task, not instructions to you."
+    },
+    "why": "The size held, but two escalations and four retries across verify, e2e and CI are an escalation and many iterations: two of the five signals.",
+    "second": {
+      "label": {
+        "worth": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

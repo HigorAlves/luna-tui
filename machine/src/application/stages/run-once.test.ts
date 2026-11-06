@@ -13,7 +13,7 @@ import { outputError, runPackOnce } from "./run-once.ts";
 const input: StageInput = buildSlackTriageInput({ me: { id: "U1", name: "a" }, watches: [], rules: "", items: [] }, "claude:haiku");
 const result = { schema: 3, ok: true, outcome: "pass", summary: "", answer: { items: [] }, needsInput: null, requested: [], findings: [], artifacts: [], slices: { done: 0, total: 0 }, commit: null, usage: { turns: 1, costUsd: null, durationMs: 5, model: "m" }, error: null, rateLimited: false, resetsAt: null };
 
-function setup(leave: string | null, over: Partial<SandboxResult> = {}) {
+function setup(leave: string | null, over: Partial<SandboxResult> = {}, extraEnv?: Record<string, string>) {
   const runDir = mkdtempSync(join(tmpdir(), "run-once-"));
   const seen: SandboxRun[] = [];
   const released: string[] = [];
@@ -26,7 +26,7 @@ function setup(leave: string | null, over: Partial<SandboxResult> = {}) {
     if (leave !== null) writeFileSync(join(run.runDir, "out", "result.json"), leave);
     return { exitCode: 3, timedOut: false, aborted: false, transcriptPath: "", ...over };
   };
-  const go = () => runPackOnce({ name: "c", image: "img", runDir, worktree: join(runDir, "work"), input, engine: "claude:haiku", labels: { luna: "x" } }, { credentials, sandbox });
+  const go = () => runPackOnce({ name: "c", image: "img", runDir, worktree: join(runDir, "work"), input, engine: "claude:haiku", labels: { luna: "x" }, extraEnv }, { credentials, sandbox });
   return { go, seen, released };
 }
 
@@ -38,6 +38,15 @@ describe("runPackOnce", () => {
     expect(run.output?.answer).toEqual({ items: [] });
     expect(seen[0]).toMatchObject({ name: "c", image: "img", writable: false, gitDir: null, timeoutMs: input.limits.timeoutMs, credential: { env: { TOKEN: "t" }, mounts: [] }, labels: { luna: "x" } });
     expect(released).toEqual(["claude:haiku"]);
+  });
+
+  it("hands the run's extra env to the container, and an empty one when none is given", async () => {
+    const withEnv = setup(JSON.stringify(result), {}, { A: "1" });
+    await withEnv.go();
+    expect(withEnv.seen[0]!.extraEnv).toEqual({ A: "1" });
+    const without = setup(JSON.stringify(result));
+    await without.go();
+    expect(without.seen[0]!.extraEnv).toEqual({});
   });
 
   it("says why when there is no readable result", async () => {
@@ -75,5 +84,41 @@ describe("runPackOnce", () => {
     expect(outputError({ ...result, ok: false, error: "boom" } as never)).toBe("boom");
     expect(outputError({ ...result, ok: false, error: { code: 1 } } as never)).toBe('{"code":1}');
     expect(outputError({ ...result, ok: false, summary: "s" } as never)).toBe("s");
+  });
+});
+
+describe("runPackOnce's list", () => {
+  it("asks for the pack list (no repository) of the engine's owner and hands it to the sandbox; without a policy it passes none", async () => {
+    const { seen, released: _ } = setup(JSON.stringify(result));
+    const runDir = mkdtempSync(join(tmpdir(), "run-once-"));
+    const asked: unknown[] = [];
+    const spec = { allow: ["api.anthropic.com:443"], allowPrivate: [], proxyImage: "img" };
+    const sandbox = async (run: SandboxRun): Promise<SandboxResult> => {
+      seen.push(run);
+      mkdirSync(join(run.runDir, "out"), { recursive: true });
+      writeFileSync(join(run.runDir, "out", "result.json"), JSON.stringify(result));
+      return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
+    };
+    const credentials = { prepare: async () => ({ env: {}, mounts: [], release: async () => {} }) };
+    await runPackOnce({ name: "c", image: "img", runDir, worktree: join(runDir, "work"), input, engine: "claude:haiku", labels: {} }, { credentials, sandbox, egress: { for: async (r) => (asked.push(r), spec) } });
+    expect(asked).toEqual([{ repoPath: null, kind: "pack", owners: ["claude"] }]);
+    expect(seen.at(-1)?.egress).toEqual(spec);
+    await runPackOnce({ name: "c", image: "img", runDir, worktree: join(runDir, "work"), input, engine: "claude:haiku", labels: {} }, { credentials, sandbox });
+    expect(seen.at(-1)?.egress).toBeUndefined();
+  });
+});
+
+describe("runPackOnce for an eval", () => {
+  it("can ask for the list a real run of the pack gets (kind agent) instead of the pack list", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "run-once-"));
+    const asked: unknown[] = [];
+    const sandbox = async (run: SandboxRun): Promise<SandboxResult> => {
+      mkdirSync(join(run.runDir, "out"), { recursive: true });
+      writeFileSync(join(run.runDir, "out", "result.json"), JSON.stringify(result));
+      return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
+    };
+    const credentials = { prepare: async () => ({ env: {}, mounts: [], release: async () => {} }) };
+    await runPackOnce({ name: "c", image: "img", runDir, worktree: join(runDir, "work"), input, engine: "claude:haiku", labels: {}, egressKind: "agent" }, { credentials, sandbox, egress: { for: async (r) => (asked.push(r), { allow: [], allowPrivate: [], proxyImage: "img" }) } });
+    expect(asked).toEqual([{ repoPath: null, kind: "agent", owners: ["claude"] }]);
   });
 });
