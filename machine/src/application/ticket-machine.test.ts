@@ -297,6 +297,15 @@ describe("what a tap says about the decisions behind it", () => {
     expect(rule.learned).toEqual([]);
   });
 
+  it("names the ticket's repository on what it keeps and on what it teaches, so the repository's learning.truth can apply", async () => {
+    const x = await held({ recommend: "decline" });
+    await x.machine.schedule("PAY-12");
+    expect(x.learned).toEqual([expect.objectContaining({ recordId: "rec-1", repoPath: "/r/a" })]);
+    const [d] = (await x.machine.view("PAY-12")).drafts;
+    await x.machine.edit("PAY-12", { draft: d!.id, hash: d!.hash, text: "Later, please." }).catch(() => {});
+    expect(x.kept.every((k) => k.repoPath === "/r/a")).toBe(true);
+  });
+
   it("keeps an approved draft as sent, an edited one with its difference, and an ignored one, with the draft", async () => {
     const x = await held();
     const [d] = (await x.machine.view("PAY-12")).drafts;

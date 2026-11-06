@@ -89,8 +89,8 @@ export interface TicketMachineDeps {
   /** The shared backlog, for `schedule` and for keeping an item's rank in step with a re-assessment. */
   /** Ground truth: what a tap says about the decision `ticket_recommend` made (the decision log's `learned`), and what was done to a draft (a file beside a gate's). Absent: nothing is kept. */
   truth?: {
-    learned(fact: { pack: "ticket_recommend"; recordId: string; label: Record<string, Record<string, unknown>>; source: string; kind: "person" | "fact" | "outcome" }): Promise<boolean>;
-    draft(entry: { key: string; draft: string; kind: string; did: "sent" | "edited" | "ignored"; original: string; final: string | null; at: string }): Promise<void>;
+    learned(fact: { pack: "ticket_recommend"; recordId: string; label: Record<string, Record<string, unknown>>; source: string; kind: "person" | "fact" | "outcome"; repoPath?: string | null }): Promise<boolean>;
+    draft(entry: { key: string; draft: string; kind: string; did: "sent" | "edited" | "ignored"; original: string; final: string | null; at: string; repoPath?: string | null }): Promise<void>;
   };
   /** The label the GitHub intake watches for: a child ticket made on GitHub carries it, so the intake sees it. */
   intakeLabel?: string;
@@ -110,6 +110,9 @@ const sourceOf = (t: CanonicalTicket): TaskSource => {
   if (t.tool === "github" && gh) return { kind: "github", repo: `${gh[1]}/${gh[2]}`, number: Number(gh[3]), url: t.permalink };
   return { kind: "jira", key: t.key, url: t.permalink, issueType: t.type };
 };
+
+/** The repository a ticket is linked to, when one is. */
+const repoOf = (row: Pick<TicketRow, "machineLinks">): string | null => row.machineLinks.find((l) => l.kind === "repo")?.target ?? null;
 
 export class TicketMachine implements TicketIntake {
   private readonly now: () => Date;
@@ -499,7 +502,7 @@ export class TicketMachine implements TicketIntake {
   /** What was done to a draft is kept with it (sent as drafted, edited with the text before and after, ignored), and a person's taking or leaving a recommendation is ground truth. Never throws: a truth is a bonus. */
   private async keep(row: TicketRow, draft: Draft, did: "sent" | "edited" | "ignored", final: string | null): Promise<void> {
     try {
-      await this.deps.truth?.draft({ key: row.key, draft: draft.id, kind: draft.kind, did, original: draft.original ?? draft.text, final, at: this.now().toISOString() });
+      await this.deps.truth?.draft({ key: row.key, draft: draft.id, kind: draft.kind, did, original: draft.original ?? draft.text, final, at: this.now().toISOString(), repoPath: repoOf(row) });
       if (did === "ignored") return;
       const chosen = draft.kind === "decline" ? "decline" : draft.kind === "park" ? "needs_decision" : null;
       if (chosen) await this.learn(row, chosen);
@@ -514,7 +517,7 @@ export class TicketMachine implements TicketIntake {
       const last = [...row.assessments].reverse().find((a) => a.outcome === "workable") as { recommendation?: { action?: string; recordId?: string } } | undefined;
       const recordId = last?.recommendation?.recordId;
       if (!recordId || !this.deps.truth) return;
-      await this.deps.truth.learned({ pack: "ticket_recommend", recordId, label: { action: { choice: chosen } }, kind: "person", source: last?.recommendation?.action === chosen ? "ticket_confirmed" : "ticket_override" });
+      await this.deps.truth.learned({ pack: "ticket_recommend", recordId, label: { action: { choice: chosen } }, kind: "person", source: last?.recommendation?.action === chosen ? "ticket_confirmed" : "ticket_override", repoPath: repoOf(row) });
     } catch (error) {
       console.warn(`ticket truth: ${error instanceof Error ? error.message : String(error)}`);
     }

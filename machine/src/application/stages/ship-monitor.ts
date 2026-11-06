@@ -399,6 +399,10 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         // An in-place fix whose checks failed was wider than judged: a fact about the scope answer.
         const derived = out.checksFailed && round.scopeRecord ? fixScopeTruth(round.scope, { checksFailed: true }) : null;
         if (derived && deps.truth) await deps.truth.learned({ pack: "fix_scope", recordId: round.scopeRecord!, label: derived.label, kind: derived.kind, source: derived.source, taskId: task.id }).catch(() => {});
+        if (out.validity) {
+          cursor.validity = out.validity;
+          await saveCursor(deps.stateDir, task.id, cursor);
+        }
         return { result: out.result };
       }
       // The round ended as answered: the PR's merge, with no reopened thread, is what confirms it.

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { COMMENT_MARKER, SECTION_END, SECTION_START } from "../domain/evidence-markdown.ts";
 import { fakeGitHub } from "../test/github.ts";
@@ -356,6 +356,36 @@ describe("publishAndReady", () => {
     expect(await loadCursor(stateDir, base.taskId)).toMatchObject({ pr: { slug: "o/a", number: 3 }, published: { sha: "abc1234def5678" } });
     expect(gh.markPrReady).toHaveBeenCalledWith("o/a", 3);
     expect((gh.markPrReady as unknown as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0]!).toBeGreaterThan((gh.updatePrBody as unknown as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0]!);
+  });
+
+  describe("what the repeated browser run says about evidence_valid", () => {
+    const withValidity = async (before: Record<string, string> | null, scenarioResult: "pass" | "fail", truth: { learned: ReturnType<typeof vi.fn> & ((fact: never) => Promise<boolean>) } | null = { learned: vi.fn(async () => true) }) => {
+      const { saveCursor, emptyCursor } = await import("./ship-cursor.ts");
+      const stateDir = mkdtempSync(join(tmpdir(), "ready-valid-"));
+      await saveCursor(stateDir, base.taskId, { ...emptyCursor({ slug: "o/a", number: 3 }), ...(before ? { validity: { recordId: "rec-valid", before } } : {}) });
+      const gh = github({ markPrReady: async () => {} });
+      const deps = { github: gh, publish: publishEvidence, save: async () => {}, stateDir, localDir: () => localDir, ...(truth ? { truth } : {}) };
+      const made = { ...pack([{ kind: "screenshot", label: "a.png", url: put("a.png"), scanned: true }]), scenarios: [{ text: "Total shows", test: null, result: scenarioResult }] };
+      await publishAndReady(deps, { task: { id: base.taskId, repoPath: "/repo" }, slug: "o/a", number: 3, headSha: HEAD, draft: false, pack: made, approved: false });
+      return { truth, stateDir };
+    };
+
+    it("teaches refresh_media when a scenario's result changed between the pack and the repeated run, once", async () => {
+      const { truth, stateDir } = await withValidity({ s1: "pass" }, "fail");
+      expect(truth!.learned).toHaveBeenCalledTimes(1);
+      expect(truth!.learned).toHaveBeenCalledWith({ pack: "evidence_valid", recordId: "rec-valid", label: { validity: { choice: "refresh_media" } }, kind: "fact", source: "e2e_compare", taskId: base.taskId });
+      expect((await loadCursor(stateDir, base.taskId))!.validity).toBeUndefined();
+    });
+
+    it("teaches valid-or-refresh_text when nothing changed", async () => {
+      const { truth } = await withValidity({ s1: "pass" }, "pass");
+      expect(truth!.learned).toHaveBeenCalledWith(expect.objectContaining({ label: { validity: { choice: ["valid", "refresh_text"] } } }));
+    });
+
+    it("teaches nothing when no browser run was repeated (no results kept) or there is no truth sink", async () => {
+      expect((await withValidity(null, "fail")).truth!.learned).not.toHaveBeenCalled();
+      await expect(withValidity({ s1: "pass" }, "fail", null)).resolves.toBeDefined();
+    });
   });
 
   describe("a person's edit of the section", () => {

@@ -138,8 +138,13 @@ export function escalationTruthWriter(stateDir: string): (task: TaskRow, approva
 }
 
 /** Writes `<stateDir>/ground-truth/ticket/<key>-<draft>-<at>.json`: what a person did to a ticket's draft (sent as drafted, edited with the text before and after, ignored). Answers its path. */
-export function ticketTruthWriter(stateDir: string): (entry: { key: string; draft: string; kind: string; did: string; original: string; final: string | null; at: string }) => Promise<string> {
-  return async (entry) => {
+export function ticketTruthWriter(
+  stateDir: string,
+  /** False when the ticket's repository keeps no truth (`learning.truth: false`); asked only for a ticket that has a repository. A question that fails keeps it. */
+  keeps: (repoPath: string) => Promise<boolean> = async () => true,
+): (entry: { key: string; draft: string; kind: string; did: string; original: string; final: string | null; at: string; repoPath?: string | null }) => Promise<string> {
+  return async ({ repoPath, ...entry }) => {
+    if (repoPath && !(await keeps(repoPath).catch(() => true))) return "";
     const safeName = truthName(`${entry.key}-${entry.draft}-${entry.at}`).slice(0, 160);
     return writeTruthFile(stateDir, "ticket", `${safeName}.json`, `${JSON.stringify({ schema: 1, ...entry }, null, 2)}\n`);
   };

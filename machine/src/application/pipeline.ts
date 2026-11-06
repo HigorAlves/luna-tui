@@ -28,7 +28,7 @@ import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } 
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
 import { type RunSpan, type Telemetry, noTelemetry } from "./telemetry.ts";
-import { type DecisionTruth, escalationResumedTruth, findingTruth, planTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
+import { type DecisionTruth, escalationResumedTruth, findingTruth, planTruth, sizeTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
 import { fallbackCandidates } from "../domain/engine-choice.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
@@ -826,7 +826,7 @@ export class Pipeline {
   async addFinding(id: string, finding: { title: string; severity: "blocker" | "should_fix" | "nit"; path?: string | undefined; line?: number | undefined }): Promise<void> {
     const task = await this.get(id);
     if (task.state !== "awaiting_ship") throw new TransitionError(task, { type: "approved" });
-    if (this.retroOutputs) await appendAddedFinding(this.retroOutputs.stateDir, id, finding);
+    if (this.retroOutputs && (await this.truthKept(task))) await appendAddedFinding(this.retroOutputs.stateDir, id, finding);
     await this.log(id, "finding.added", { severity: finding.severity });
   }
 
@@ -2389,8 +2389,17 @@ export class Pipeline {
       if (!facts) return 0;
       const detail = (await this.latestStageFinish(id, "reviewing_memory"))?.detail;
       const rules = detail?.rules && typeof detail.rules === "object" ? (detail.rules as { recalibration?: unknown; graphMisses?: unknown }) : null;
-      await writeRetroTruth(out.stateDir, retroTruthOf({ taskId: id, facts, retro: rules, adopted }));
-      await this.log(id, "ground_truth.written", { kind: "retro" });
+      if (await this.truthKept(await this.get(id))) {
+        await writeRetroTruth(out.stateDir, retroTruthOf({ taskId: id, facts, retro: rules, adopted }));
+        await this.log(id, "ground_truth.written", { kind: "retro" });
+      }
+      // The plan's size_estimate said how big the card would be; the merge counted it (lines only: the retro facts hold no file count).
+      const sizeRecord = (await this.latestStageFinish(id, "test_design"))?.detail?.decisions;
+      const sizeId = sizeRecord && typeof sizeRecord === "object" ? (sizeRecord as Record<string, unknown>).size_estimate : undefined;
+      if (this.truth && typeof sizeId === "string") {
+        const derived = sizeTruth({ lines: facts.actual.added + facts.actual.removed });
+        await this.truth.learned({ pack: "size_estimate", recordId: sizeId, label: derived.label, kind: derived.kind, source: derived.source, taskId: id }).catch(() => false);
+      }
       const accepted = acceptedMisses(rules?.graphMisses, (await out.declaredFiles?.(id)) ?? []);
       if (accepted.length > 0 && repoPath && out.graph) {
         await out.graph.recordMisses(repoPath, { task: id, at: new Date().toISOString(), files: accepted });

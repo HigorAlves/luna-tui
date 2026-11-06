@@ -133,7 +133,7 @@ const decisionLog = new DecisionLog({ stateDir: config.stateDir, enabled: config
 /** What later facts say a decision should have been, written onto its record; each is a `decision.truth` event on the task. */
 const decisionTruth = new DecisionTruth(decisionLog, {
   // `learning.truth: false` in a card's repository: nothing is learned from that card.
-  allowed: async (fact) => !fact.taskId || (await learningOf(fact.taskId)).learning.truth, told: async (e) => void (e.taskId && (await pipeline.logDecisionTruth(e.taskId, e))) });
+  allowed: async (fact) => (fact.taskId ? (await learningOf(fact.taskId)).learning.truth : fact.repoPath ? repoKeepsTruth(fact.repoPath) : true), told: async (e) => void (e.taskId && (await pipeline.logDecisionTruth(e.taskId, e))) });
 if (config.traces.mode !== "off") {
   console.log(`traces ${telemetry.mode === "off" ? "off (backend unavailable)" : telemetry.mode} · Laminar at ${config.traces.laminar.baseUrl}:${config.traces.laminar.httpPort}`);
 }
@@ -578,7 +578,10 @@ const slackInbox = new SlackInbox({
   claims: channelClaims,
   // The Conversation Machine's chain: only where agents are on (the triager exists); the pack runs through `packRuns`, built below.
   ...(triager ? { assessor: { assess: (row) => conversationMachine().assess(row) } } : {}),
-  truth: new ConversationTruth(config.stateDir, decisionTruth),
+  truth: new ConversationTruth(config.stateDir, decisionTruth, () => new Date(), async (thread) => {
+    const repo = channelClaims.repoOf(thread.split(":")[0] ?? "");
+    return !repo || repoKeepsTruth(repo);
+  }),
   drafts: conversationDrafts,
   // The reply draft: one `conversation_reply` run over the card's state, its evidence and the docs, all as data. Built lazily: `packRuns` is below.
   drafter: new ConversationDrafter({
@@ -648,6 +651,10 @@ const conversationMachine = (): ConversationMachine => {
     config: (channel) => channelClaims.configOf(channel),
   });
 };
+/** False when a repository's `luna.yaml` says `learning.truth: false`; true when it says nothing or cannot be read. */
+async function repoKeepsTruth(repoPath: string): Promise<boolean> {
+  return (await policies.for(repoPath).catch(() => null))?.factory.learning.truth ?? true;
+}
 /** A card's repository: its folder name and the `learning` section of its `luna.yaml`; the defaults for a call that names no card or a card with no repository. */
 async function learningOf(taskId: string | undefined): Promise<{ repo: string | null; learning: LearningPolicy }> {
   const repoPath = taskId ? (await pipeline.get(taskId).catch(() => null))?.repoPath ?? null : null;
@@ -735,7 +742,7 @@ const ticketMachine = new TicketMachine({
   },
   reply: { write: async (c) => (await ticketPack("ticket_reply", c)) as never },
   backlog: { upsertFromSource: (input, options) => backlog.upsertFromSource(input, options) },
-  truth: { learned: (fact) => decisionTruth.learned(fact), draft: async (entry) => void (await ticketTruthWriter(config.stateDir)(entry)) },
+  truth: { learned: (fact) => decisionTruth.learned(fact), draft: async (entry) => void (await ticketTruthWriter(config.stateDir, repoKeepsTruth)(entry)) },
 });
 // Ticket clocks: computed and kept on the ticket, drafts only. A clock never posts and never approves.
 setInterval(() => void ticketMachine.sweepClocks().catch((error: unknown) => console.warn("ticket clocks failed", error)), 10 * 60_000).unref();

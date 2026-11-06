@@ -93,8 +93,12 @@ const nearest = (count: number, anchors: readonly number[]): number => {
 };
 const SIZE_LOC_ANCHORS = [50, 200, 500, 1000, 2000, 4000, 8000] as const;
 const SIZE_FILE_ANCHORS = [2, 5, 10, 25, 50] as const;
-/** What a merged card counted (added plus removed lines, files), as the levels of `est_loc` and `est_files`; `reviewable` gets none. */
-export const sizeTruth = (counted: { lines: number; files: number }): Derived => ({ label: { est_loc: { score: nearest(counted.lines, SIZE_LOC_ANCHORS) }, est_files: { score: nearest(counted.files, SIZE_FILE_ANCHORS) } }, source: "merged_size", kind: "fact" });
+/** What a merged card counted (added plus removed lines, files when they were counted), as the levels of `est_loc` and `est_files`; `reviewable` gets none. */
+export const sizeTruth = (counted: { lines: number; files?: number }): Derived => ({
+  label: { est_loc: { score: nearest(counted.lines, SIZE_LOC_ANCHORS) }, ...(counted.files !== undefined ? { est_files: { score: nearest(counted.files, SIZE_FILE_ANCHORS) } } : {}) },
+  source: "merged_size",
+  kind: "fact",
+});
 
 /** A finding a person shipped with was not a blocker, whatever the model said. */
 export const findingTruth = (): Label => ({ severity: { choice: ["should_fix", "nit"] } });
@@ -121,6 +125,8 @@ export interface Learned {
   /** Whose word it is: a person, a fact that settled it, or an outcome that is consistent with the answer but partly caused by it. */
   kind: TruthKind;
   taskId?: string;
+  /** The repository the fact is about, for one that names no card (a ticket's repository link, a conversation's claiming repository): the same `learning.truth` switch applies. */
+  repoPath?: string | null;
 }
 
 export interface TruthSink {

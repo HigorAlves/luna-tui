@@ -1,5 +1,5 @@
 // Every ground-truth writer leaves owner-only files in owner-only folders, whatever the process's umask.
-import { mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -91,5 +91,19 @@ describe("every writer leaves owner-only files", () => {
     const files = readdirSync(folder);
     expect(files).toHaveLength(2);
     for (const file of files) check(stateDir, "conversation", join(folder, file));
+  });
+});
+
+describe("learning.truth: false for the ticket file", () => {
+  it("writes nothing for a ticket whose repository keeps no truth, and writes for one that does or for none known", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "ticket-keeps-"));
+    const entry = { key: "ABC-9", draft: "d1", kind: "reply", did: "sent", original: "o", final: null, at: "2026-11-06T10:00:00Z" };
+    const asked: string[] = [];
+    const write = ticketTruthWriter(stateDir, async (repo) => (asked.push(repo), repo !== "/r/off"));
+    expect(await write({ ...entry, repoPath: "/r/off" })).toBe("");
+    expect(existsSync(join(stateDir, "ground-truth", "ticket"))).toBe(false);
+    expect(await write({ ...entry, repoPath: "/r/on" })).toMatch(/ABC-9/);
+    expect(await write(entry)).toMatch(/ABC-9/);
+    expect(asked).toEqual(["/r/off", "/r/on"]);
   });
 });

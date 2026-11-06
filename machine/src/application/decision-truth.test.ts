@@ -104,6 +104,7 @@ describe("what the wave 18 facts say about the answer", () => {
     expect(sizeTruth({ lines: 640, files: 6 })).toEqual({ label: { est_loc: { score: 2 }, est_files: { score: 1 } }, source: "merged_size", kind: "fact" });
     expect(sizeTruth({ lines: 20_000, files: 400 })).toEqual({ label: { est_loc: { score: 6 }, est_files: { score: 4 } }, source: "merged_size", kind: "fact" });
     expect(Object.keys(sizeTruth({ lines: 1, files: 1 }).label)).not.toContain("reviewable");
+    expect(sizeTruth({ lines: 640 }).label).toEqual({ est_loc: { score: 2 } });
   });
 });
 
@@ -171,5 +172,17 @@ describe("the triage_signals truths", () => {
     expect(triageOutcomeTruth("conversation", "sent_back")).toEqual({ kind: { choice: ["bug", "feature", "task", "chore", "incident"] } });
     expect(triageOutcomeTruth("archive", "approved")).toEqual({ archive: { value: true } });
     expect(triageOutcomeTruth("archive", "sent_back")).toEqual({ archive: { value: false } });
+  });
+});
+
+describe("a fact that names a repository rather than a card", () => {
+  it("is asked of the same switch, so a repository that keeps no truth learns nothing from its tickets or conversations", async () => {
+    const calls: unknown[] = [];
+    const sink = { setTruth: async (...a: unknown[]) => (calls.push(a), true) } as never;
+    const asked: Array<string | null | undefined> = [];
+    const log = new DecisionTruth(sink, { allowed: async (f) => (asked.push(f.repoPath), f.repoPath !== "/r/off") });
+    expect(await log.learned({ pack: "ticket_recommend", recordId: "r1", label: { action: { choice: "decline" } }, kind: "person", source: "ticket_override", repoPath: "/r/off" })).toBe(false);
+    expect(asked).toEqual(["/r/off"]);
+    expect(calls).toEqual([]);
   });
 });

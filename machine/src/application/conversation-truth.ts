@@ -12,10 +12,17 @@ export class ConversationTruth {
     private readonly stateDir: string,
     private readonly truth: TruthSink | null,
     private readonly now: () => Date = () => new Date(),
+    /** False when the repository that claims the thread's channel keeps no truth (`learning.truth: false`); absent, or no repository known, every thread keeps it. A question that fails keeps it. */
+    private readonly keeps: (thread: string) => Promise<boolean> = async () => true,
   ) {}
+
+  private async kept(thread: string): Promise<boolean> {
+    return this.keeps(thread).catch(() => true);
+  }
 
   /** What a person did with a draft: a file per draft (`<thread>-<draft>.json`, mode 0600) with the record ids; sent or edited also labels `needs_reply` true on the assess record. Ignored and expired label nothing: either can mean "no reply was needed" or "the draft was bad". */
   async outcome(input: { thread: string; draft: string; outcome: "sent_as_drafted" | "edited" | "ignored" | "expired"; machine: string; person?: string; records: Record<string, string> }): Promise<void> {
+    if (!(await this.kept(input.thread))) return;
     try {
       const safeName = truthName;
       const lines = (t: string): number => t.split("\n").length;
@@ -30,7 +37,7 @@ export class ConversationTruth {
 
   /** A hand-set relation: labels `related` (the slot, or none) and, for a new candidate or none, `new_work`, on the `conversation_relation` record. */
   async relation(input: { thread: string; record: string | null; relation: string; slot: number | null }): Promise<void> {
-    if (!input.record || !this.truth) return;
+    if (!input.record || !this.truth || !(await this.kept(input.thread))) return;
     const label: Record<string, { choice: string } | { value: boolean }> = { related: { choice: input.slot ? `slot${input.slot}` : "none" } };
     if (input.slot === null) label.new_work = { value: input.relation === "new_candidate" };
     await this.truth.learned({ pack: "conversation_relation", recordId: input.record, label, kind: "person", source: "person" });
@@ -39,7 +46,7 @@ export class ConversationTruth {
   /** A hand-set kind or priority on a thread the machine classified. Never throws: ground truth must not block a tap. */
   async override(input: { thread: string; classification: ConversationClassification | null; kind?: ConversationKind; priority?: SlackPriority }): Promise<void> {
     const c = input.classification;
-    if (!c) return;
+    if (!c || !(await this.kept(input.thread))) return;
     const recordId = c.records.assess ?? null;
     try {
       const stamp = this.now().toISOString().replace(/[:.]/g, "-");

@@ -586,7 +586,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
             if (head !== pack.commitSha) shipped = { published: false, why: `the PR head on GitHub is not the pack's commit (${(head ?? "unknown").slice(0, 7)}, not ${pack.commitSha.slice(0, 7)})` };
             else {
               const done = await publishAndReady(
-                { github: deps.publishing.github, publish: deps.publishing.publish, save: (id, p) => deps.save(id, { evidence: p }), stateDir: deps.stateDir, localDir: (id, sha) => store.dirFor(id, sha) },
+                { github: deps.publishing.github, publish: deps.publishing.publish, save: (id, p) => deps.save(id, { evidence: p }), stateDir: deps.stateDir, localDir: (id, sha) => store.dirFor(id, sha), truth: deps.truth },
                 { task: { id: task.id, repoPath: task.repoPath ?? null }, slug, number: found.number, headSha: head, draft: found.isDraft, pack, approved: false },
               );
               if (done.published) {

@@ -14,6 +14,7 @@ import { releaseAssetStorage, EVIDENCE_TAG as TAG } from "../adapters/evidence-s
 import { BODY_CAP, COMMENT_MARKER, mergeSection, redact, renderEvidenceComment, renderEvidenceSection, sectionOf, stripSection } from "../domain/evidence-markdown.ts";
 import { type EvidenceStorage, localStorage } from "./evidence-storage.ts";
 import { truthName, writeTruthFile } from "./ground-truth.ts";
+import { type TruthSink, e2eCompareTruth } from "./decision-truth.ts";
 import { emptyCursor, loadCursor, saveCursor } from "./ship-cursor.ts";
 import { packComplete, repairPack } from "../domain/evidence-pack.ts";
 import { MAX_MEDIA_BYTES } from "./evidence-store.ts";
@@ -195,6 +196,8 @@ export interface ReadyDeps {
   /** The pack's own local dir for a commit. */
   localDir: (taskId: string, sha: string) => string;
   exists?: (path: string) => boolean;
+  /** Where a fact about an earlier decision is taught (the evidence_valid compare); absent, nothing is taught. */
+  truth?: TruthSink | null;
 }
 
 export type Ready =
@@ -231,7 +234,13 @@ export async function publishAndReady(deps: ReadyDeps, input: { task: { id: stri
   if (deps.stateDir) {
     const cursor = (await loadCursor(deps.stateDir, task.id)) ?? emptyCursor({ slug, number });
     const section = sectionOf((await deps.github.prFacts(slug, number).catch(() => null))?.body ?? "");
-    await saveCursor(deps.stateDir, task.id, { ...cursor, pr: { slug, number }, published: { sha: pack.commitSha }, ...(section !== null ? { publishedSection: sha256(section) } : {}) });
+    const { validity, ...rest } = cursor;
+    await saveCursor(deps.stateDir, task.id, { ...rest, pr: { slug, number }, published: { sha: pack.commitSha }, ...(section !== null ? { publishedSection: sha256(section) } : {}) });
+    // The browser run was repeated after a fix: did a scenario's result change? Taught once, then forgotten.
+    if (validity && deps.truth) {
+      const derived = e2eCompareTruth(validity.before, Object.fromEntries(done.pack.scenarios.map((s, i) => [`s${i + 1}`, s.result])));
+      if (derived) await deps.truth.learned({ pack: "evidence_valid", recordId: validity.recordId, label: derived.label, kind: derived.kind, source: derived.source, taskId: task.id }).catch(() => {});
+    }
   }
   if (draft) await deps.github.markPrReady(slug, number);
   return { published: true, pack: done.pack, comment: done.comment, assets: done.assets, readied: draft, notes: done.notes ?? [], ...(edited ? { edited } : {}) };

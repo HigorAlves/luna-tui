@@ -1,3 +1,4 @@
+import { tagged } from "../decision-truth.ts";
 import type { EvidencePack } from "@hardness/contracts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -64,7 +65,7 @@ function setup(over: { addressed?: StageResult; commit?: boolean; checks?: Stage
   });
   const decide = vi.fn(async () => {
     if (over.valid instanceof Error) throw over.valid;
-    return { validity: { choice: over.valid ?? "refresh_text", confidence: 0.9 } };
+    return tagged({ answer: { validity: { choice: over.valid ?? "refresh_text", confidence: 0.9 } }, recordId: "rec-valid" });
   });
   const github = fakeGitHub({
     prFiles: async () => [{ path: "src/export.ts" }, { path: "src/other.ts" }] as never,
@@ -231,6 +232,12 @@ describe("a fix round on the shipped PR", () => {
     const out = await fixRound(s.deps, s.context, s.input());
     expect(out).toMatchObject({ ok: true, textNote: expect.stringContaining("refresh_text") });
     expect(s.saved[0]).toMatchObject({ commitSha: N });
+  });
+
+  it("hands the evidence_valid record and the pack's scenario results back with a refresh_media, for the repeated run to be compared with", async () => {
+    const s = setup({ valid: "refresh_media", names: "src/export.ts\nsrc/App.tsx\n" });
+    s.github.prFiles.mockImplementation((async () => [{ path: "src/export.ts" }, { path: "src/App.tsx" }]) as never);
+    expect(await fixRound(s.deps, s.context, s.input())).toMatchObject({ ok: false, validity: { recordId: "rec-valid", before: { s1: "pass" } } });
   });
 
   it("honours refresh_media when a rendered surface changed: head_moved with refresh: media", async () => {

@@ -33,4 +33,20 @@ describe("ConversationTruth", () => {
     await truth.override({ thread: "C1:1.0", classification: { ...classification, knockOut: null, priority: "P1" }, priority: "P3" });
     expect(learned).toEqual([]);
   });
+  it("writes no file and teaches nothing when the claiming repository keeps no truth (learning.truth: false); a repository that keeps it, or none known, is as before", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "truth-off-"));
+    const learned: unknown[] = [];
+    const sink = { learned: async (f: unknown) => (learned.push(f), true) };
+    const off = new ConversationTruth(dir, sink as never, () => new Date("2026-10-28T12:00:00Z"), async () => false);
+    await off.override({ thread: "C1:1.0", classification, kind: "question" });
+    await off.outcome({ thread: "C1:1.0", draft: "d1", outcome: "edited", machine: "a", person: "b", records: { assess: "rec-1" } });
+    await off.relation({ thread: "C1:1.0", record: "rec-2", relation: "new_candidate", slot: null });
+    expect(learned).toEqual([]);
+    await expect(import("node:fs/promises").then((fs) => fs.readdir(join(dir, "ground-truth", "conversation")))).rejects.toThrow();
+    const asked: string[] = [];
+    const on = new ConversationTruth(dir, sink as never, () => new Date("2026-10-28T12:00:00Z"), async (thread) => (asked.push(thread), true));
+    await on.override({ thread: "C1:1.0", classification, kind: "question" });
+    expect(asked).toEqual(["C1:1.0"]);
+    expect(learned).toHaveLength(1);
+  });
 });

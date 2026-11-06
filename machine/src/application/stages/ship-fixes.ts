@@ -203,7 +203,7 @@ export interface FixInput {
 
 export type FixOutcome =
   | { ok: true; head: string; changed: boolean; textNote?: string; affected?: Array<{ id: string; text: string; result: string }>; replied: number; resolved: number; repliedTo: string[]; resolvedTo: string[]; summary: string; note?: string }
-  | { ok: false; result: StageResult; checksFailed?: boolean };
+  | { ok: false; result: StageResult; checksFailed?: boolean; /** The evidence_valid record and the pack's scenario results, when the answer sent Evidence to run again. */ validity?: { recordId: string; before: Record<string, string> } };
 
 const reasonOf = (result: StageResult): string => {
   const d = result.detail ?? {};
@@ -339,7 +339,7 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   let textNote: string | undefined;
   if (choice === "refresh_media") {
     // Honoured only when a scenario may have changed or a rendered surface did; otherwise it is read as refresh_text, and the note says so.
-    if (affected.length > 0 || touchesRenderedSurface(changedNames)) return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}) and changes what the scenarios show: the browser runs again at the new head and Evidence re-makes the media`, "head_moved", { refresh: "media" }) };
+    if (affected.length > 0 || touchesRenderedSurface(changedNames)) return { ok: false, ...(valid.recordId ? { validity: { recordId: valid.recordId, before: Object.fromEntries(knownScenarios.map((k) => [k.id, k.result])) } } : {}), result: escalated(`the fix is pushed (${after.slice(0, 7)}) and changes what the scenarios show: the browser runs again at the new head and Evidence re-makes the media`, "head_moved", { refresh: "media" }) };
     choice = "refresh_text";
     textNote = "refresh_media was read as refresh_text: no scenario is affected and no rendered surface changed";
   }
