@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { redactDeep, secretRedactor } from "./redact-secrets.ts";
+import { hostRedactor, redactDeep, secretRedactor } from "./redact-secrets.ts";
 
 // Secrets are built at runtime, never written as literals.
 const v1 = ["pw", "one", "A".repeat(6), "+/="].join("");
@@ -42,5 +42,16 @@ describe("redactDeep", () => {
     const out = redactDeep({ a: `x ${v1}`, [`k-${v1}`]: [1, null, `y ${v1}`], n: 3 }, redact) as Record<string, unknown>;
     expect(JSON.stringify(out)).not.toContain(v1);
     expect(out.n).toBe(3);
+  });
+});
+
+describe("hostRedactor", () => {
+  const value = ["Sec", "Val", "Xy9"].join("-");
+  it("matches a value in a host name without regard to case, because the proxy lowercases the hosts it logs", () => {
+    const redact = hostRedactor({ ONE: value });
+    expect(redact(`${value.toLowerCase()}.example.com`)).toBe("[secret:ONE].example.com");
+    expect(redact(`${value.toUpperCase()}.example.com`)).toBe("[secret:ONE].example.com");
+    expect(redact("plain.example.com")).toBe("plain.example.com");
+    expect(hostRedactor({})("a.example.com")).toBe("a.example.com");
   });
 });

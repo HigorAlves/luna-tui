@@ -18,7 +18,8 @@ function dockerFake(answers: Array<(args: string[]) => ExecResult | undefined> =
     }
     const key = args.slice(0, 2).join(" ");
     if (key === "network inspect" && args.includes("hardness-egress")) return ok("[]");
-    if (key === "network inspect") return ok("true|isolated");
+    if (args[0] === "version") return ok("29.9.2\n");
+    if (key === "network inspect") return ok("true|isolated|invalid IP");
     if (args[0] === "inspect" && args.join(" ").includes("IPAddress")) return ok("172.30.0.2\n");
     if (args[0] === "inspect") return ok("true");
     if (args[0] === "logs") return ok(logs);
@@ -87,10 +88,10 @@ describe("openCardNetwork", () => {
     const { calls, exec } = dockerFake();
     const net = await openCardNetwork("r1", spec, { exec, proxyImage: IMAGE, pollMs: 0 });
     // the card network first (a daemon that cannot make it fails before anything else is made), then its check, then the bridge
-    expect(verbs(calls)).toEqual(["network create", "network inspect", "network inspect", "run -d", "network connect", "inspect -f", "logs --tail"]);
-    expect(calls[0]).toEqual(["docker", ...cardNetworkArgs("hardness-card-r1")]);
-    expect(calls[3]!.slice(1, 5)).toEqual(["run", "-d", "--name", "hardness-egress-r1"]);
-    expect(calls[4]).toEqual(["docker", "network", "connect", "hardness-card-r1", "hardness-egress-r1"]);
+    expect(verbs(calls)).toEqual(["version --format", "network create", "network inspect", "network inspect", "run -d", "network connect", "inspect -f", "logs --tail"]);
+    expect(calls[1]).toEqual(["docker", ...cardNetworkArgs("hardness-card-r1")]);
+    expect(calls[4]!.slice(1, 5)).toEqual(["run", "-d", "--name", "hardness-egress-r1"]);
+    expect(calls[5]).toEqual(["docker", "network", "connect", "hardness-card-r1", "hardness-egress-r1"]);
     expect(net.name).toBe("hardness-card-r1");
   });
 
@@ -123,6 +124,26 @@ describe("openCardNetwork", () => {
     expect((error as Error).message).toMatch(/Docker Engine 28/);
     expect(calls.filter((c) => c[1] === "network" && c[2] === "create" && c.includes("hardness-card-r1"))).toHaveLength(1);
     expect(calls.some((c) => c[1] === "run")).toBe(false);
+  });
+
+  it("refuses before making anything when the daemon's own version is older than 28.0, whatever it would echo back", async () => {
+    const { calls, exec } = dockerFake([(a) => (a[0] === "version" ? ok("27.5.1\n") : undefined)]);
+    const error = await openCardNetwork("r1", spec, { exec, proxyImage: IMAGE, pollMs: 0 }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(EgressUnsupportedError);
+    expect((error as Error).message).toContain("27.5.1");
+    expect(calls.some((c) => c[1] === "network")).toBe(false);
+    const unreadable = dockerFake([(a) => (a[0] === "version" ? fail("daemon down") : undefined)]);
+    await expect(openCardNetwork("r1", spec, { exec: unreadable.exec, proxyImage: IMAGE, pollMs: 0 })).rejects.toBeInstanceOf(EgressUnsupportedError);
+    for (const ok28 of ["28.0.0", "28.3.1", "29.9.2", "30.0.0"]) {
+      const f = dockerFake([(a) => (a[0] === "version" ? ok(`${ok28}\n`) : undefined)]);
+      await expect(openCardNetwork("r1", { allow: [], allowPrivate: [] }, { exec: f.exec, proxyImage: IMAGE, pollMs: 0 })).resolves.toBeDefined();
+    }
+  });
+
+  it("removes the network again, and refuses, when it has a gateway address on the host, even though the option was echoed back", async () => {
+    const { calls, exec } = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" && a.includes("hardness-card-r1") ? ok("true|isolated|172.20.0.1") : undefined)]);
+    await expect(openCardNetwork("r1", spec, { exec, proxyImage: IMAGE, pollMs: 0 })).rejects.toBeInstanceOf(EgressUnsupportedError);
+    expect(calls.at(-1)).toEqual(["docker", "network", "rm", "hardness-card-r1"]);
   });
 
   it("removes the network again, and refuses, when the network it made is not internal and isolated", async () => {

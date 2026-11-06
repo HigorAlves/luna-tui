@@ -8,7 +8,7 @@ import type { BlockedRow, CardNetwork, openCardNetwork } from "../adapters/docke
 import type { startServices } from "../adapters/docker/services.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { safe } from "../domain/evidence-markdown.ts";
-import { secretRedactor } from "../domain/redact-secrets.ts";
+import { hostRedactor, secretRedactor } from "../domain/redact-secrets.ts";
 import type { Policy } from "../domain/policy.ts";
 import type { EgressPolicy } from "./egress-policy.ts";
 import type { InstallInput, InstallOutcome } from "./install.ts";
@@ -57,6 +57,8 @@ export interface OpenedApp {
   network: string;
   /** Names the browser run reaches directly (not through its proxy). */
   aliases: string[];
+  /** The values of the app's and the seed's secrets, for the browser run's redactor only: they never enter its container or its environment. */
+  redactValues: Record<string, string>;
   close(): Promise<void>;
 }
 export type OpenAppResult = OpenedApp | { ok: false; detail: Record<string, unknown> };
@@ -83,6 +85,7 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
   }
   const pick = (list: readonly string[]): Record<string, string> => Object.fromEntries(list.map((n) => [n, values[n]!]));
   const redact = secretRedactor(values);
+  const redactHost = hostRedactor(values);
   const text = (raw: string): string => safe(redact(raw)).slice(0, REASON_CAP);
 
   const installed = await deps.install({ taskId: input.taskId, repoPath: input.repoPath, workspace: input.workspace, commit: input.commit, ...(input.signal ? { signal: input.signal } : {}) });
@@ -96,7 +99,8 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
   const report = async (step: "seed" | "app"): Promise<void> => {
     const fresh = (await card.blocked()).filter((row) => !seen.has(`${row.via}|${row.host}|${row.port}`));
     for (const row of fresh) seen.add(`${row.via}|${row.host}|${row.port}`);
-    if (fresh.length > 0) input.onBlocked(step, fresh);
+    // The host is text the app chose, lowercased by the proxy: a secret in it is replaced whatever its case.
+    if (fresh.length > 0) input.onBlocked(step, fresh.map((row) => ({ ...row, host: redactHost(row.host) })));
   };
   let closed = false;
   const close = async (): Promise<void> => {
@@ -139,12 +143,14 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
     await close();
     throw error;
   }
-  return { ok: true, target: { name: "app", baseUrl: `http://${APP_ALIAS}:${start.port}` }, network: card.name, aliases: [APP_ALIAS, ...Object.keys(policy.services)], close };
+  return { ok: true, target: { name: "app", baseUrl: `http://${APP_ALIAS}:${start.port}` }, network: card.name, aliases: [APP_ALIAS, ...Object.keys(policy.services)], redactValues: values, close };
 }
 
 export interface OpenedPreview {
   ok: true;
   target: { name: "preview"; baseUrl: string };
+  /** The deploy's secret values, for the browser run's redactor only. */
+  redactValues: Record<string, string>;
   close(): Promise<void>;
 }
 export type OpenPreviewResult = OpenedPreview | { ok: false; detail: Record<string, unknown> };
@@ -173,6 +179,7 @@ export async function openPreview(deps: AppDeps, input: OpenAppInput & { branch:
     values = loaded.values;
   }
   const redact = secretRedactor(values);
+  const redactHost = hostRedactor(values);
   const installed = await deps.install({ taskId: input.taskId, repoPath: input.repoPath, workspace: input.workspace, commit: input.commit, ...(input.signal ? { signal: input.signal } : {}) });
   if (!installed.ok) return { ok: false, detail: installed.detail };
   const image = await deps.imageFor(input.repoPath, input.taskId);
@@ -184,7 +191,7 @@ export async function openPreview(deps: AppDeps, input: OpenAppInput & { branch:
   const report = async (): Promise<void> => {
     const fresh = (await card.blocked()).filter((row) => !seen.has(`${row.via}|${row.host}|${row.port}`));
     for (const row of fresh) seen.add(`${row.via}|${row.host}|${row.port}`);
-    if (fresh.length > 0) input.onBlocked("deploy", fresh);
+    if (fresh.length > 0) input.onBlocked("deploy", fresh.map((row) => ({ ...row, host: redactHost(row.host) })));
   };
   let closed = false;
   const close = async (): Promise<void> => {
@@ -217,5 +224,5 @@ export async function openPreview(deps: AppDeps, input: OpenAppInput & { branch:
     await close();
     throw error;
   }
-  return { ok: true, target: { name: "preview", baseUrl: filled.url }, close };
+  return { ok: true, target: { name: "preview", baseUrl: filled.url }, redactValues: values, close };
 }

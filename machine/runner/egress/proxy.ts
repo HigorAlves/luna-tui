@@ -8,7 +8,8 @@
 // plain HTTP request for a listed name on port 80, answers every DNS query with REFUSED, and says on stdout, one JSON
 // line each, what it refused. It reads no response, so it follows no redirect. Every name here comes from hostile code.
 import { createSocket } from "node:dgram";
-import { Resolver } from "node:dns";
+import { Resolver, promises as dnsPromises } from "node:dns";
+const dnsLookup = dnsPromises.lookup;
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import { connect as netConnect, createServer as createNetServer, isIP } from "node:net";
@@ -151,6 +152,8 @@ export interface ProxyOptions {
   allowPrivate: readonly string[];
   /** The A records of a name. */
   resolve: (name: string) => Promise<string[]>;
+  /** For an exact `allowPrivate` name only: the addresses the container's own name service gives it, the hosts file included (`--add-host` entries). Default: `resolve`. */
+  resolvePrivate?: (name: string) => Promise<string[]>;
   /** A socket to an address and port the proxy has already checked. */
   connect: (port: number, address: string) => Socket;
   log: (line: string) => void;
@@ -208,7 +211,7 @@ export function createEgressProxy(options: ProxyOptions): EgressProxy {
     if (!privateOk && !matchHost(options.allow, name, port)) return refuse("not_listed");
     let addresses: string[];
     try {
-      addresses = await withTimeout(options.resolve(name), RESOLVE_TIMEOUT_MS);
+      addresses = await withTimeout((privateOk ? (options.resolvePrivate ?? options.resolve) : options.resolve)(name), RESOLVE_TIMEOUT_MS);
     } catch {
       return refuse("unresolved");
     }
@@ -443,6 +446,11 @@ export function systemResolve(): (name: string) => Promise<string[]> {
   return (name) => new Promise((resolve, reject) => resolver.resolve4(name, (error, addresses) => (error ? reject(error) : resolve(addresses))));
 }
 
+/** IPv4 addresses of a name through getaddrinfo, which reads the hosts file: used only for the machine's own private entries. */
+export function systemLookup(): (name: string) => Promise<string[]> {
+  return async (name) => (await dnsLookup(name, { family: 4, all: true })).map((entry) => entry.address);
+}
+
 function listOf(value: string | undefined): string[] {
   return (value ?? "").split(",").map((entry) => entry.trim().toLowerCase()).filter((entry) => entry.length > 0);
 }
@@ -474,6 +482,7 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
     allow: listOf(value("--allow")),
     allowPrivate: listOf(value("--allow-private")),
     resolve: systemResolve(),
+    resolvePrivate: systemLookup(),
     connect: (p, address) => netConnect(p, address),
     log: (line) => process.stdout.write(`${line}\n`),
   });

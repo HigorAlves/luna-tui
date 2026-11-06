@@ -170,6 +170,7 @@ describe("sandboxExecArgs", () => {
       "TMPDIR=/tmp",
       "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
       "COREPACK_DEFAULT_TO_LATEST=0",
+      "COREPACK_HOME=/tmp/corepack",
       ...["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"].map((n) => `${n}=`),
       "GIT_CONFIG_COUNT=2",
       "GIT_CONFIG_KEY_0=safe.directory",
@@ -414,15 +415,15 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
 });
 
 describe("corepack in every container", () => {
-  it("keeps its downloads in the repository's cache volume and never prompts or takes the latest, for a stage and a check", () => {
-    expect(CACHE_ENV).toContain("COREPACK_HOME=/cache/corepack");
+  it("keeps its downloads on the container's own tmpfs, never on the repository's shared cache volume, and never prompts or takes the latest", () => {
+    expect(CACHE_ENV.join(" ")).not.toContain("COREPACK");
     const stage = sandboxArgs(run({ cacheVolume: "vol" }), "/in", "/out");
     const check = sandboxExecArgs({ name: "c", image: "img", worktree: "/wt", argv: ["true"], cacheVolume: "vol" } as never);
-    for (const args of [stage, check]) for (const env of ["COREPACK_HOME=/cache/corepack", "COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_DEFAULT_TO_LATEST=0"]) expect(args).toContain(env);
-    // with no cache volume the two flags are still set
     const bare = sandboxArgs(run(), "/in", "/out");
-    expect(bare).toContain("COREPACK_ENABLE_DOWNLOAD_PROMPT=0");
-    expect(bare).not.toContain("COREPACK_HOME=/cache/corepack");
+    for (const args of [stage, check, bare]) {
+      for (const env of ["COREPACK_HOME=/tmp/corepack", "COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_DEFAULT_TO_LATEST=0"]) expect(args).toContain(env);
+      expect(args.join(" ")).not.toContain("/cache/corepack");
+    }
   });
 });
 
@@ -491,6 +492,29 @@ describe("a secret's value in what a run returns", () => {
     const result = await runSandbox(run({ runDir: dir, secrets: { QA_PASSWORD: secret }, egress: { allow: ["a.example.com:443"], allowPrivate: [], proxyImage: "m" } }), deps);
     expect(readFileSync(result.transcriptPath, "utf8")).toBe("the agent printed [secret:QA_PASSWORD]");
     expect(result.blocked![0]!.host).toBe("[secret:QA_PASSWORD].example.com");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("values kept only to be redacted", () => {
+  const secret = ["rdv", "val", "m".repeat(10)].join("-");
+  it("never reach the container: not an argument, not the docker client's environment; and the transcript and the refused hosts are cleaned of them, in any case", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "docker-redact-values-"));
+    const envs: Array<NodeJS.ProcessEnv | undefined> = [];
+    const mixed = `${secret.toUpperCase()}.example.com`.toLowerCase();
+    const deps = {
+      exec: async (_c: string, args: string[]) => (args[0] === "logs" ? { code: 0, stdout: `printed ${secret}`, stderr: "" } : args[0] === "wait" ? { code: 0, stdout: "0", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
+      execOrThrow: async (_c: string, _a: string[], options?: { env?: NodeJS.ProcessEnv }) => (envs.push(options?.env), ""),
+      startServices: async () => ({ network: null, env: {}, teardown: async () => {} }),
+      openCardNetwork: async () => ({ name: "n", dns: "1.1.1.1", containerArgs: () => [], blocked: async () => [{ host: mixed, port: 53, via: "dns" as const, reason: "not_listed", count: 1 }], teardown: async () => {} }),
+    } as unknown as Partial<RunDeps>;
+    const r = run({ runDir: dir, redactValues: { APP_KEY: secret }, egress: { allow: ["a.example.com:443"], allowPrivate: [], proxyImage: "m" } });
+    expect(sandboxArgs(r, "/in", "/out").join(" ")).not.toContain("APP_KEY");
+    const result = await runSandbox(r, deps);
+    expect(JSON.stringify(envs)).not.toContain(secret);
+    expect(envs[0]?.APP_KEY).toBeUndefined();
+    expect(readFileSync(result.transcriptPath, "utf8")).toBe("printed [secret:APP_KEY]");
+    expect(result.blocked![0]!.host).toBe("[secret:APP_KEY].example.com");
     rmSync(dir, { recursive: true, force: true });
   });
 });

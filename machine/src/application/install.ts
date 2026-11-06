@@ -29,6 +29,8 @@ export interface InstallDeps {
   /** Whether the USER's checkout has a `.yarnrc.yml`. */
   yarnBerry?(repoPath: string): Promise<boolean>;
   hasNodeModules?(workspace: string): Promise<boolean>;
+  /** The package-manager configuration files (`.yarnrc.yml`, `.yarnrc`, `.npmrc`) the card changed from the user's checkout at the card's base: any makes the install refused. */
+  configChanged(input: { workspace: string; repoPath: string; commit: string }): Promise<string[]>;
   removeNested(path: string): string[];
   dirtyFiles(path: string): Promise<string[]>;
   restoreFiles(path: string, ref: string, files: string[]): Promise<void>;
@@ -45,6 +47,21 @@ export interface InstallInput {
 export type InstallOutcome =
   | { ok: true; ran: string[]; notes: string[]; blocked: BlockedRow[] }
   | { ok: false; detail: Record<string, unknown>; blocked: BlockedRow[] };
+
+/** The files a package manager reads for code or hooks. */
+export const PACKAGE_MANAGER_CONFIG = [".yarnrc.yml", ".yarnrc", ".npmrc"] as const;
+
+/** The configuration files whose blob in the card's repository at `commit` differs from the user's checkout at the card's base (compared by blob id through git, never by reading the card's folder); with no base known, any the card has. */
+export async function configFilesChanged(
+  git: { cardBlobs(workspace: string, commit: string): Promise<Record<string, string>>; userBlobs(repoPath: string, base: string): Promise<Record<string, string>>; baseOf(workspace: string, repoPath: string): Promise<string | null> },
+  input: { workspace: string; repoPath: string; commit: string },
+): Promise<string[]> {
+  const card = await git.cardBlobs(input.workspace, input.commit);
+  const base = await git.baseOf(input.workspace, input.repoPath);
+  const user = base ? await git.userBlobs(input.repoPath, base) : {};
+  if (!base) return PACKAGE_MANAGER_CONFIG.filter((name) => name in card);
+  return PACKAGE_MANAGER_CONFIG.filter((name) => card[name] !== user[name]);
+}
 
 /** Thrown by a checks executor when the install before a check failed: the stage that ran the check escalates with `detail`. */
 export class InstallFailedError extends Error {
@@ -76,6 +93,14 @@ export async function ensureInstalled(deps: InstallDeps, input: InstallInput): P
   const needsModules = plan.steps.some((s) => s.node);
   if (stamped === key && (!needsModules || (await (deps.hasNodeModules ?? ((w: string) => exists(join(w, "node_modules"))))(input.workspace)))) return { ...none, notes };
 
+  const changedConfig = await deps.configChanged({ workspace: input.workspace, repoPath: input.repoPath, commit: input.commit });
+  if (changedConfig.length > 0) {
+    return {
+      ok: false,
+      blocked: [],
+      detail: { escalation: "env_broken", envBroken: true, step: "install", reason: `the card changes ${changedConfig.join(", ")}, which differs from the repository's own: the machine installs only with the repository's own package-manager configuration, because that configuration can run code`, options: ["land the configuration change in the repository itself, or take it out of the card, then resume"] },
+    };
+  }
   const spec = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "install" }) : undefined;
   const blocked: BlockedRow[] = [];
   const ran: string[] = [];

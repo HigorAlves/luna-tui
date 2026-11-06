@@ -37,7 +37,7 @@ describe("secretNameProblem", () => {
   });
 
   it("refuses the engines' and the machine's own names, the proxy variables and the reserved prefixes", () => {
-    for (const bad of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AI_GATEWAY_API_KEY", "TYPESAFE_API_KEY", "LMNR_PROJECT_API_KEY", "PATH", "HOME", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "YARN_HTTP_PROXY", "YARN_HTTPS_PROXY", "HARDNESS_X", "LUNA_X", "MACHINE_X", "GIT_DIR", "NODE_OPTIONS", "LD_PRELOAD", "CLAUDE_X", "CODEX_X"]) {
+    for (const bad of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AI_GATEWAY_API_KEY", "TYPESAFE_API_KEY", "LMNR_PROJECT_API_KEY", "PATH", "HOME", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "YARN_HTTP_PROXY", "YARN_HTTPS_PROXY", "HARDNESS_X", "LUNA_X", "MACHINE_X", "GIT_DIR", "NODE_OPTIONS", "LD_PRELOAD", "CLAUDE_X", "CODEX_X", "DOCKER_HOST", "DOCKER_CONFIG", "BUILDKIT_HOST"]) {
       expect(secretNameProblem(bad), bad).toContain(bad);
     }
   });

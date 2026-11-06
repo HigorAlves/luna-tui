@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { ServiceSpec } from "@hardness/contracts";
 
 import type { CredentialMount, RunCredential } from "../credentials/index.ts";
-import { redactDeep, secretRedactor } from "../../domain/redact-secrets.ts";
+import { hostRedactor, secretRedactor } from "../../domain/redact-secrets.ts";
 import type { SecretStore } from "../../application/secrets.ts";
 import { type BlockedRow, type CardNetwork, findCardNetwork, openCardNetwork } from "./egress.ts";
 import { serviceName, startServices } from "./services.ts";
@@ -44,11 +44,9 @@ export const CACHE_ENV = [
   `CARGO_TARGET_DIR=${CACHE_DIR}/cargo-target`,
   `PIP_CACHE_DIR=${CACHE_DIR}/pip`,
   `UV_CACHE_DIR=${CACHE_DIR}/uv`,
-  // The package manager an install fetched is here for an agent whose registries are closed.
-  `COREPACK_HOME=${CACHE_DIR}/corepack`,
 ];
-/** Corepack never prompts and never takes the latest version of a package manager, in any container. */
-const COREPACK_ENV = ["COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_DEFAULT_TO_LATEST=0"];
+/** Corepack never prompts and never takes the latest version of a package manager, in any container, and keeps what it downloads on the container's own tmpfs: corepack checks a package manager's hash only when it downloads, so a copy on the shared cache volume could be replaced by one container and run by a later agent stage that holds a credential. */
+const COREPACK_ENV = ["COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_DEFAULT_TO_LATEST=0", "COREPACK_HOME=/tmp/corepack"];
 
 /** Variables a repository's image must not set for the process the machine starts in it (`ENV NODE_OPTIONS=--require=...` would run its code in the factory before the guards load): every container the machine starts passes them empty. */
 export const BLANKED_ENV = ["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"];
@@ -112,6 +110,8 @@ export interface SandboxRun {
   egress?: { allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string };
   /** Secret values by name, for this run only: passed as `-e NAME`, the values in the docker client's environment alone. */
   secrets?: Record<string, string>;
+  /** Values the container never holds but its output may carry (the app's, the seed's and the deploy's secrets seen by the browser run): replaced in the transcript and the refused hosts only. */
+  redactValues?: Record<string, string>;
   /** The run's card network (egress.ts): joined in place of the plain network, with the proxy as the only way out. */
   cardNetwork?: CardNetwork;
   /** More networks to join, by name (the browser run joins the app's). */
@@ -242,9 +242,11 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
           env: { ...process.env, ...run.credential.env, ...(run.secrets ?? {}) },
         });
       }
-      const redact = secretRedactor(run.secrets ?? {});
+      const known = { ...(run.redactValues ?? {}), ...(run.secrets ?? {}) };
+      const redact = secretRedactor(known);
+      const redactHost = hostRedactor(known);
       const result = await waitSandbox(run, deps.exec, redact);
-      return own ? { ...result, blocked: ((await own.blocked()) as BlockedRow[]).map((row) => ({ ...row, host: redact(row.host) })) } : result;
+      return own ? { ...result, blocked: ((await own.blocked()) as BlockedRow[]).map((row) => ({ ...row, host: redactHost(row.host) })) } : result;
     } finally {
       await services.teardown();
     }
@@ -397,8 +399,9 @@ export async function execInSandbox(
       const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }), { ...options, ...(run.secrets ? { env: { ...process.env, ...run.secrets } } : {}) });
       await deps.exec("docker", ["rm", "-f", run.name]);
       const redact = secretRedactor(run.secrets ?? {});
+      const redactHost = hostRedactor(run.secrets ?? {});
       const clean = run.secrets ? { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) } : result;
-      return own ? { ...clean, blocked: ((await own.blocked()) as BlockedRow[]).map((row) => ({ ...row, host: redact(row.host) })) } : clean;
+      return own ? { ...clean, blocked: ((await own.blocked()) as BlockedRow[]).map((row) => ({ ...row, host: redactHost(row.host) })) } : clean;
     } finally {
       await services.teardown();
     }

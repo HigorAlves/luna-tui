@@ -16,7 +16,7 @@ import { type Decide, judgeCheck } from "./check-decide.ts";
 
 export interface E2eDeps {
   /** Runs the e2e pack; `extra` names the one target the machine chose (the app it started), the network to join and the names to reach directly. */
-  runPack: (context: StageContext, extra?: Pick<AgentExtra, "qaTarget" | "alsoJoin" | "noProxy">) => Promise<StageResult>;
+  runPack: (context: StageContext, extra?: Pick<AgentExtra, "qaTarget" | "alsoJoin" | "noProxy" | "redactValues">) => Promise<StageResult>;
   /** Starts and seeds the repository's app (`verify.e2e.start`); absent, the browser run boots its own server as before. */
   openApp?: (input: OpenAppInput) => Promise<OpenAppResult>;
   /** Waits for the preview the repository's `url_pattern` names (`verify.e2e.deploy`), deploying first when it has a command. */
@@ -182,7 +182,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         });
         if (!preview.ok) return { done: { outcome: "escalated", detail: preview.detail } };
         try {
-          const pack = await deps.runPack(context, { qaTarget: { ...preview.target, credential: null } });
+          const pack = await deps.runPack(context, { qaTarget: { ...preview.target, credential: null }, redactValues: preview.redactValues });
           return { pack, preview: { kind: "deploy", url: preview.target.baseUrl }, note: null };
         } finally {
           await preview.close();
@@ -200,7 +200,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         });
         if (!opened.ok) return { done: { outcome: "escalated", detail: opened.detail } };
         try {
-          const pack = await deps.runPack(context, { qaTarget: { ...opened.target, credential: null }, alsoJoin: [opened.network], noProxy: opened.aliases });
+          const pack = await deps.runPack(context, { qaTarget: { ...opened.target, credential: null }, alsoJoin: [opened.network], noProxy: opened.aliases, redactValues: opened.redactValues });
           return { pack, preview: { kind: "start", url: opened.target.baseUrl }, note: null };
         } finally {
           await opened.close();

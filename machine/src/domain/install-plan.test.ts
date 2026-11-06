@@ -9,7 +9,7 @@ const argvs = (lockfiles: string[], scripts = false, yarnBerry = false) => plan(
 
 describe("installPlanOf", () => {
   it("gives one fixed argv per lockfile, with no package scripts", () => {
-    expect(argvs(["pnpm-lock.yaml"])).toEqual(["pnpm install --frozen-lockfile --ignore-scripts"]);
+    expect(argvs(["pnpm-lock.yaml"])).toEqual(["pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile"]);
     expect(argvs(["package-lock.json"])).toEqual(["npm ci --ignore-scripts"]);
     expect(argvs(["yarn.lock"])).toEqual(["yarn install --frozen-lockfile --ignore-scripts"]);
     expect(argvs(["bun.lock"])).toEqual(["bun install --frozen-lockfile --ignore-scripts"]);
@@ -19,6 +19,14 @@ describe("installPlanOf", () => {
     expect(argvs(["composer.lock"])).toEqual(["composer install --no-scripts --no-plugins --no-interaction"]);
   });
 
+  it("ignores the card's pnpmfile always, and a yarn classic's own yarnPath, scripts on or off", () => {
+    for (const scripts of [false, true]) {
+      expect(argvs(["pnpm-lock.yaml"], scripts)[0]).toContain("--ignore-pnpmfile");
+      expect(plan(["yarn.lock"], scripts).steps[0]!.env).toMatchObject({ YARN_IGNORE_PATH: "1" });
+    }
+    expect(plan(["package-lock.json"]).steps[0]!.env).toEqual({});
+  });
+
   it("uses yarn's immutable install and turns scripts off by environment when the checkout is yarn berry", () => {
     const { steps } = plan(["yarn.lock"], false, true);
     expect(steps[0]!.argv).toEqual(["yarn", "install", "--immutable"]);
@@ -26,7 +34,7 @@ describe("installPlanOf", () => {
   });
 
   it("leaves the script flags out when sandbox.install.scripts is on", () => {
-    expect(argvs(["pnpm-lock.yaml", "package-lock.json", "uv.lock", "composer.lock"], true)).toEqual(["npm ci", "pnpm install --frozen-lockfile", "uv sync --frozen --no-install-project", "composer install --no-interaction"]);
+    expect(argvs(["pnpm-lock.yaml", "package-lock.json", "uv.lock", "composer.lock"], true)).toEqual(["npm ci", "pnpm install --frozen-lockfile --ignore-pnpmfile", "uv sync --frozen --no-install-project", "composer install --no-interaction"]);
     expect(plan(["yarn.lock"], true, true).steps[0]).toMatchObject({ argv: ["yarn", "install", "--immutable"], env: {} });
   });
 
@@ -40,7 +48,7 @@ describe("installPlanOf", () => {
 
   it("is one step for bun's two lockfiles, in the lockfile list's order, and ignores a name that is not a lockfile", () => {
     expect(argvs(["bun.lockb", "bun.lock"])).toHaveLength(1);
-    expect(argvs(["go.sum", "package.json", "pnpm-lock.yaml"])).toEqual(["pnpm install --frozen-lockfile --ignore-scripts", "go mod download"]);
+    expect(argvs(["go.sum", "package.json", "pnpm-lock.yaml"])).toEqual(["pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile", "go mod download"]);
   });
 
   it("marks the Node steps, which are the ones whose result is a node_modules folder", () => {

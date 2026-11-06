@@ -2,7 +2,7 @@
 
 ## Credentials
 
-Scoped secrets for a repository's checks and its QA target live in `~/.config/hardness/secrets/<repository>/<NAME>` (the folder name is the repository's folder name and 8 hex of its path), one file per name, mode 600, no links, at least 8 characters; `luna.yaml` names a secret and never holds one.
+Scoped secrets for a repository's checks and its QA target live in `~/.config/hardness/secrets/<repository>/<NAME>` (the folder name is the repository's folder name and 8 hex of its path), one file per name, mode 600, no links, at least 8 characters; a name that is an engine's or the machine's variable, or starts `HARDNESS_`, `LUNA_`, `MACHINE_`, `GIT_`, `NODE_`, `LD_`, `CLAUDE_`, `CODEX_`, `DOCKER_` or `BUILDKIT_`, is refused; `luna.yaml` names a secret and never holds one.
 
 Put `claude-oauth-token` or `anthropic-api-key` in `~/.config/hardness/`. Without one, nothing runs for real: every task stage's default engine is a Claude one (the Slack inbox's triage and Jira intake's too), so the machine makes every stage a stub. `POST /runs` is the exception: it runs a pack on any engine whose credential is there.
 

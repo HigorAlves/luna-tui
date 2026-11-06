@@ -210,3 +210,50 @@ describe("openPreview", () => {
     expect(p.runs).toHaveLength(0);
   });
 });
+
+describe("what the app's and the deploy's secrets do after the app is up", () => {
+  // a value with capitals: the proxy logs a host label lowercased
+  const MIXED = ["Mix", "Ed", "Case9"].join("-");
+  const mixedStore = { folder: () => "/f", load: async (_r: string, names: string[]) => ({ values: Object.fromEntries(names.map((n) => [n, MIXED])), missing: [] }) };
+  it("openApp hands back the values of the app's and the seed's secrets for redaction, and redacts the refused hosts, whatever their case", async () => {
+    const s = setup({ text: yaml() });
+    const seenRows: string[] = [];
+    const out = await openApp({ ...s.deps, startServices: s.deps.startServices }, { ...input, onBlocked: (_step, rows) => rows.forEach((r) => seenRows.push(r.host)) });
+    if (!out.ok) throw new Error("expected an app");
+    expect(out.redactValues).toEqual({ APP_KEY: secretA, SEED_KEY: secretB });
+    await out.close();
+    for (const host of seenRows) for (const v of [secretA, secretB]) expect(host.toLowerCase()).not.toContain(v.toLowerCase());
+  });
+
+  it("redacts a mixed-case secret sent as a host label, in the seed's report and in the app's", async () => {
+    const s = setup({ text: yaml() });
+    s.deps.secrets = mixedStore;
+    const label = MIXED.toLowerCase();
+    const rows: string[] = [];
+    const base = s.deps.exec;
+    s.deps.exec = async (run, options) => ((await base(run, options)), { code: 0, stdout: "", stderr: "" });
+    const deps: AppDeps = { ...s.deps, openCardNetwork: async (run, spec, o) => {
+      const card = await s.deps.openCardNetwork(run, spec, o);
+      return { ...card, blocked: async () => [{ host: `${label}.example.com`, port: 53, via: "dns" as const, reason: "not_listed", count: 1 }] } as never;
+    } };
+    const out = await openApp(deps, { ...input, onBlocked: (_step, found) => found.forEach((r) => rows.push(r.host)) });
+    if (!out.ok) throw new Error("expected an app");
+    await out.close();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatch(/^\[secret:(APP_KEY|SEED_KEY)\]\.example\.com$/);
+  });
+
+  it("openPreview hands back the deploy's secret values for redaction and redacts the refused hosts", async () => {
+    const text = "verify:\n  e2e:\n    deploy:\n      command: ./deploy.sh\n      url_pattern: https://{branch}.preview.example.com\n      timeout_minutes: 1\n      secrets: [APP_KEY]\n";
+    const s = setup({ text });
+    s.deps.secrets = mixedStore;
+    s.deps.openCardNetwork = async () => ({ name: "n", dns: "d", containerArgs: () => [], blocked: async () => [{ host: `${MIXED.toLowerCase()}.example.com`, port: 53, via: "dns" as const, reason: "not_listed", count: 1 }], teardown: async () => {} }) as never;
+    s.deps.exec = async () => ({ code: 0, stdout: "", stderr: "" });
+    const rows: string[] = [];
+    const out = await openPreview(s.deps, { ...input, branch: "task/x", onBlocked: (_s, found) => found.forEach((r) => rows.push(r.host)) });
+    if (!out.ok) throw new Error("expected a preview");
+    expect(out.redactValues).toEqual({ APP_KEY: MIXED });
+    await out.close();
+    expect(rows).toEqual(["[secret:APP_KEY].example.com"]);
+  });
+});

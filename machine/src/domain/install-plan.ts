@@ -1,6 +1,10 @@
 // What the machine runs to install a repository's dependencies from its lockfile: one fixed argv per lockfile, no package scripts
 // unless the repository turned `sandbox.install.scripts` on. Pure. The lockfile NAMES come from the card's repository at the commit, the
 // choices (scripts, yarn berry) from the user's checkout; nothing in the card's folder picks a flag.
+// "No scripts" is BEST EFFORT, not a guarantee: a package manager also runs code named by configuration files in the folder. The plan closes
+// the ones it can (`--ignore-pnpmfile`, `YARN_IGNORE_PATH`) and application/install.ts refuses an install when the card changes `.npmrc`,
+// `.yarnrc` or `.yarnrc.yml` from the repository's own; other tool-specific hooks are not covered, and the install holds no credential and
+// no secret and sees only the install list, because it can run code.
 import { createHash } from "node:crypto";
 
 import { LOCKFILES } from "./env-hash.ts";
@@ -31,9 +35,9 @@ function stepOf(lockfile: string, { scripts, yarnBerry }: InstallChoices): Insta
   const flag = (...f: string[]): string[] => (scripts ? [] : f);
   const step = (argv: string[], node = false, env: Record<string, string> = {}): InstallStep => ({ lockfile, tool: argv[0]!, argv, env, node });
   switch (lockfile) {
-    case "pnpm-lock.yaml": return step(["pnpm", "install", "--frozen-lockfile", ...flag("--ignore-scripts")], true);
+    case "pnpm-lock.yaml": return step(["pnpm", "install", "--frozen-lockfile", ...flag("--ignore-scripts"), "--ignore-pnpmfile"], true);
     case "package-lock.json": return step(["npm", "ci", ...flag("--ignore-scripts")], true);
-    case "yarn.lock": return yarnBerry ? step(["yarn", "install", "--immutable"], true, scripts ? {} : { YARN_ENABLE_SCRIPTS: "false" }) : step(["yarn", "install", "--frozen-lockfile", ...flag("--ignore-scripts")], true);
+    case "yarn.lock": return yarnBerry ? step(["yarn", "install", "--immutable"], true, scripts ? {} : { YARN_ENABLE_SCRIPTS: "false" }) : step(["yarn", "install", "--frozen-lockfile", ...flag("--ignore-scripts")], true, { YARN_IGNORE_PATH: "1" });
     case "bun.lock":
     case "bun.lockb": return step(["bun", "install", "--frozen-lockfile", ...flag("--ignore-scripts")], true);
     case "Cargo.lock": return step(["cargo", "fetch", "--locked"]);

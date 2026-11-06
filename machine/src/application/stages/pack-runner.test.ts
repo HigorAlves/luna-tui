@@ -1379,9 +1379,12 @@ describe("scoped secrets and the agent stages", () => {
     const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s };
     await runAgent(d, context("e2e"), "e2e");
     expect(seen?.secrets).toEqual({ QA_PASSWORD: secret });
+    // the names only, so the fill helper knows which variable is the QA login and never the engine's own key
+    expect(seen?.extraEnv?.LUNA_QA_CREDENTIALS).toBe("QA_PASSWORD");
     expect(JSON.stringify(seen?.input)).not.toContain(secret);
     await runAgent(d, context("implementing"), "implementing");
     expect(seen?.secrets).toBeUndefined();
+    expect(seen?.extraEnv?.LUNA_QA_CREDENTIALS).toBeUndefined();
     await runAgent(d, context("triage"), "triage");
     expect(seen?.secrets).toBeUndefined();
   });
@@ -1447,5 +1450,60 @@ describe("the browser run's one target", () => {
     expect(seen?.noProxy).toEqual(["luna-app", "db"]);
     expect(seen?.secrets).toBeUndefined();
     expect(s.loads).toEqual([]);
+  });
+});
+
+describe("a value kept only for redaction, and the failure paths", () => {
+  const secret = ["kept", "pw", "r".repeat(10)].join("-");
+  const extra = { redactValues: { APP_KEY: secret } };
+
+  it("cleans the answer, the files and the events of an app's secret the browser run never held", async () => {
+    const inner = fakeSandbox(output({ summary: `echoed ${secret}`, answer: { note: secret } as never }), (r) => {
+      mkdirSync(join(r.runDir, "out", "files"), { recursive: true });
+      writeFileSync(join(r.runDir, "out", "files", "trace.har"), `{"body":"${secret}"}`);
+    });
+    const result = await runAgent(deps(inner), context("e2e"), "e2e", extra);
+    expect(seen?.secrets).toBeUndefined();
+    expect(JSON.stringify(seen?.input)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(readFileSync(join(stateDir, "runs", "run-1", "out", "files", "trace.har"), "utf8")).toBe('{"body":"[secret:APP_KEY]"}');
+  });
+
+  it("cleans the text of a run stopped as stuck", async () => {
+    const inner = fakeSandbox(output());
+    const result = await runAgent(deps(async (run) => ({ ...(await inner(run)), stuck: `looped on ${secret}` })), context("e2e"), "e2e", extra);
+    expect(result.outcome).toBe("fail");
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).toContain("[secret:APP_KEY]");
+  });
+
+  it("cleans the kept ledger of a run that timed out", async () => {
+    const inner = fakeSandbox(output());
+    const result = await runAgent(
+      deps(async (run) => {
+        const done = await inner(run);
+        writeFileSync(join(run.runDir, "out", "ledger.json"), JSON.stringify({ schema: 1, slices: [{ id: 1, title: `typed ${secret}`, status: "red", commit: null }] }));
+        return { ...done, timedOut: true };
+      }),
+      context("e2e"),
+      "e2e",
+      extra,
+    );
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).toContain("[secret:APP_KEY]");
+  });
+
+  it("cleans the message of an unreadable result", async () => {
+    const result = await runAgent(
+      deps(async (run) => {
+        mkdirSync(join(run.runDir, "out"), { recursive: true });
+        writeFileSync(join(run.runDir, "out", "result.json"), `${secret} is not json`);
+        return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: join(run.runDir, "t.log") };
+      }),
+      context("e2e"),
+      "e2e",
+      extra,
+    );
+    expect(JSON.stringify(result)).not.toContain(secret);
   });
 });

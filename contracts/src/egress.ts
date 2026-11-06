@@ -57,7 +57,7 @@ const RESERVED_NAMES = new Set([
   "PATH", "HOME", "TMPDIR", "SHELL", "USER", "PWD", "PORT", "HOST",
   "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "FTP_PROXY", "YARN_HTTP_PROXY", "YARN_HTTPS_PROXY",
 ]);
-const RESERVED_PREFIXES = ["HARDNESS_", "LUNA_", "MACHINE_", "GIT_", "NODE_", "LD_", "CLAUDE_", "CODEX_"];
+const RESERVED_PREFIXES = ["HARDNESS_", "LUNA_", "MACHINE_", "GIT_", "NODE_", "LD_", "CLAUDE_", "CODEX_", "DOCKER_", "BUILDKIT_"];
 
 export const SECRET_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
 

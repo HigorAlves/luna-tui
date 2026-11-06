@@ -16,6 +16,8 @@ Only user-visible behaviour is yours. A scenario that is not browser-observable 
 QA targets the repo declares (name: base URL; a credential is a reference you resolve from the environment, never a value to print):
 {{context.qaTargets}}
 
+A credential is only ever used through `qa-fill <selector> <VARIABLE>` (the variable is the one in the target's `credential: env:VARIABLE`): it fills the field from the environment and prints no value. You never type, read, print or write a credential's value: what you type is sent to your model's provider.
+
 ## Decisions so far
 {{decisions}}
 

@@ -174,6 +174,8 @@ export interface AgentExtra {
   /** e2e: more networks the run joins (the app's), and the names it reaches directly instead of through its proxy. */
   alsoJoin?: string[];
   noProxy?: string[];
+  /** e2e: secret values of the app, the seed or the deploy, which the browser run never holds: used only to clean what its output and files carry. */
+  redactValues?: Record<string, string>;
 }
 
 /** `host:port` of each QA target's URL, for the browser run's list (an address or a private name is dropped later, by the list's own rules). */
@@ -488,6 +490,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // The one agent stage that holds a scoped secret: the browser run, the credential its QA target names (`credential: env:NAME`), by name in the
   // prompt and by value only in the container's environment. Implementing and the rest get none, whatever a check declares.
   let secretValues: Record<string, string> | undefined;
+  let qaCredentialNames: string[] = [];
   if (deps.secrets && (pack === "e2e" || pack === "recording")) {
     const names = [...new Set((pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : e2eTarget ? [e2eTarget] : []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])))];
     if (names.length > 0) {
@@ -497,6 +500,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
         return { outcome: "escalated", detail: new SecretsMissingError(loaded.missing, deps.secrets.folder(task.repoPath)).detail };
       }
       secretValues = loaded.values;
+      qaCredentialNames = names;
     }
   }
   // The run's own list: its engine's owner and each helper's, and for a browser run the hosts of the QA target(s) it may drive.
@@ -510,6 +514,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   sandbox = await (deps.sandbox ?? runSandbox)({
     ...(egress ? { egress } : {}),
     ...(secretValues ? { secrets: secretValues } : {}),
+    ...(extra.redactValues ? { redactValues: extra.redactValues } : {}),
     ...(extra.alsoJoin?.length ? { alsoJoin: extra.alsoJoin } : {}),
     ...(extra.noProxy?.length ? { noProxy: extra.noProxy } : {}),
     name: container,
@@ -536,7 +541,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       ...(extra.mounts ?? []),
     ],
     // The graph's path for the pack, and what the stage container needs to continue the machine's trace.
-    extraEnv: { ...(graphContext && graphDir ? { LUNA_GRAPH: GRAPH_FILE } : {}), ...(context.traceEnv ?? {}) },
+    extraEnv: { ...(graphContext && graphDir ? { LUNA_GRAPH: GRAPH_FILE } : {}), ...(context.traceEnv ?? {}), ...(qaCredentialNames.length > 0 ? { LUNA_QA_CREDENTIALS: qaCredentialNames.join(",") } : {}) },
     signal: context.signal,
     // The tab's label names the repo too: five repos' Build tabs read apart.
     onStarted: (name) => {
@@ -557,8 +562,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   }
   // A run that had secrets: what its tools wrote into the files it left is cleaned before anything reads the packet, and every string of
   // what is ingested below is cleaned where it is made.
-  const redact = secretRedactor(secretValues ?? {});
-  if (secretValues) await redactFiles(join(runDir, "out", "files"), redact);
+  const known = { ...(extra.redactValues ?? {}), ...(secretValues ?? {}) };
+  const redact = secretRedactor(known);
+  const hasSecrets = Object.keys(known).length > 0;
+  if (hasSecrets) await redactFiles(join(runDir, "out", "files"), redact);
   for (const payload of blockedPayloads(sandbox.blocked, "stage")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
 
   const base: StageResult = {
@@ -584,7 +591,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   };
   const failed = async (error: string, extraDetail: Record<string, unknown> = {}): Promise<StageResult> => {
     const ledger = await keptLedger();
-    return dirty({ ...base, detail: { error, ...extraDetail, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) } });
+    // Whatever text the container left (the stuck line, the ingest error's message, the kept ledger) is cleaned of the run's secrets before it is stored.
+    const detail = { error, ...extraDetail, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) };
+    return dirty({ ...base, detail: hasSecrets ? (redactDeep(detail, redact) as Record<string, unknown>) : detail });
   };
 
   // A nested repository (a `.git` below the folder's top level) is data no host git may read: with a gitlink for it git would start a
@@ -606,7 +615,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   let ingested;
   try {
     ingested = await ingestStageOutput({ outDir: join(runDir, "out"), runId: context.runId, stateDir: deps.stateDir });
-    if (secretValues) ingested = redactDeep(ingested, redact) as typeof ingested;
+    if (hasSecrets) ingested = redactDeep(ingested, redact) as typeof ingested;
   } catch (error) {
     const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
     return failed(

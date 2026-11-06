@@ -321,7 +321,7 @@ describe("the e2e stage and the app the machine starts", () => {
     const events: string[] = [];
     const extras: Array<Record<string, unknown> | undefined> = [];
     const emitted: Array<[string, Record<string, unknown>]> = [];
-    const opened = { ok: true as const, target: { name: "app" as const, baseUrl: "http://luna-app:4000" }, network: "net-app", aliases: ["luna-app"], close: async () => void events.push("close") };
+    const opened = { ok: true as const, target: { name: "app" as const, baseUrl: "http://luna-app:4000" }, network: "net-app", aliases: ["luna-app"], close: async () => void events.push("close"), redactValues: { APP_KEY: "app-secret-value" } };
     const runner = e2eRunner({
       runPack: async (_c: StageContext, extra?: unknown) => (events.push("pack"), extras.push(extra as never), pass()),
       detectWeb: async () => true,
@@ -339,7 +339,9 @@ describe("the e2e stage and the app the machine starts", () => {
     const h = base();
     const result = await h.runner(h.context);
     expect(h.events).toEqual(["open 10", "pack", "close"]);
-    expect(h.extras[0]).toMatchObject({ qaTarget: { name: "app", baseUrl: "http://luna-app:4000", credential: null }, alsoJoin: ["net-app"], noProxy: ["luna-app"] });
+    expect(h.extras[0]).toMatchObject({ qaTarget: { name: "app", baseUrl: "http://luna-app:4000", credential: null }, alsoJoin: ["net-app"], noProxy: ["luna-app"], redactValues: { APP_KEY: "app-secret-value" } });
+    // the browser run is told the values only to clean its output, never as secrets it holds
+    expect((h.extras[0] as { secrets?: unknown }).secrets).toBeUndefined();
     expect(result).toMatchObject({ outcome: "pass", detail: { step: "e2e", preview: { kind: "start", url: "http://luna-app:4000" } } });
     expect(h.emitted).toContainEqual(["sandbox.egress_blocked", { step: "app", host: "x.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }]);
   });
@@ -398,12 +400,12 @@ describe("the e2e stage and a preview", () => {
       policy: async () => deploy,
       headCommit: async () => "c".repeat(40),
       openApp: async () => { throw new Error("must not start the app in deploy mode"); },
-      openPreview: async (input: { branch: string }) => (events.push(`preview ${input.branch}`), { ok: true as const, target: { name: "preview" as const, baseUrl: "https://x.preview.example.com" }, close: async () => void events.push("close") }),
+      openPreview: async (input: { branch: string }) => (events.push(`preview ${input.branch}`), { ok: true as const, target: { name: "preview" as const, baseUrl: "https://x.preview.example.com" }, close: async () => void events.push("close"), redactValues: { DEPLOY_KEY: "deploy-secret-value" } }),
     } as never);
     const context = { task: { id: "t1", repoPath: "/repo", worktreePath: dir, branch: "task/x" }, stage: "e2e", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
     const result = await runner(context);
     expect(events).toEqual(["preview task/x", "pack", "close"]);
-    expect(extras[0]).toMatchObject({ qaTarget: { name: "preview", baseUrl: "https://x.preview.example.com", credential: null } });
+    expect(extras[0]).toMatchObject({ redactValues: { DEPLOY_KEY: "deploy-secret-value" }, qaTarget: { name: "preview", baseUrl: "https://x.preview.example.com", credential: null } });
     expect((extras[0] as { alsoJoin?: unknown }).alsoJoin).toBeUndefined();
     expect(result.detail).toMatchObject({ preview: { kind: "deploy", url: "https://x.preview.example.com" } });
   });

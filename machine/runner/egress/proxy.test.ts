@@ -34,7 +34,9 @@ let lookups: string[] = [];
 let answers: Record<string, string[]> = {};
 const sockets = new Set<Socket>();
 
-async function start(allow: string[], allowPrivate: string[] = []): Promise<void> {
+let privateLookups: string[] = [];
+async function start(allow: string[], allowPrivate: string[] = [], hosts?: Record<string, string[]>): Promise<void> {
+  privateLookups = [];
   proxy = createEgressProxy({
     allow,
     allowPrivate,
@@ -44,6 +46,7 @@ async function start(allow: string[], allowPrivate: string[] = []): Promise<void
       if (!a) throw new Error("NXDOMAIN");
       return a;
     },
+    ...(hosts ? { resolvePrivate: async (name: string) => (privateLookups.push(name), hosts[name] ?? []) } : {}),
     connect: (p, address) => {
       connects.push({ port: p, address });
       return netConnect(echoPort, "127.0.0.1");
@@ -208,6 +211,18 @@ describe("CONNECT", () => {
     answers["a.example.net"] = ["10.0.0.1"];
     expect(status(await talk([connectLine("a.example.net:9000")]))).toBe("HTTP/1.1 403 Forbidden");
     expect(status(await talk([connectLine("127.0.0.1:9000")]))).toBe("HTTP/1.1 403 Forbidden");
+  });
+
+  it("resolves an exact allowPrivate name through the hosts file (the trace endpoint's --add-host entry), and every other name only through the one checked lookup", async () => {
+    await start(["good.example.com:443"], ["host.docker.internal:8000"], { "host.docker.internal": ["172.17.0.1"] });
+    answers["host.docker.internal"] = []; // the A-record lookup knows nothing of it
+    const ok = await talk([connectLine("host.docker.internal:8000"), "ping"]);
+    expect(ok).toContain("200 Connection Established");
+    expect(connects).toEqual([{ port: 8000, address: "172.17.0.1" }]);
+    expect(privateLookups).toEqual(["host.docker.internal"]);
+    await talk([connectLine("good.example.com:443"), clientHello("good.example.com")]);
+    expect(privateLookups).toEqual(["host.docker.internal"]);
+    expect(lookups).toContain("good.example.com");
   });
 
   it("connects to the address it checked and looks the name up once, whatever it would answer next", async () => {

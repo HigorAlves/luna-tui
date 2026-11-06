@@ -142,6 +142,11 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
     await exec("docker", ["network", "rm", network]);
   };
 
+  // What the daemon does is what counts, not the option it echoes back: an engine older than 28.0 may accept `isolated` and ignore it.
+  const version = await exec("docker", ["version", "--format", "{{.Server.Version}}"]);
+  const parsed = /^(\d+)\.(\d+)/.exec(version.stdout.trim());
+  if (version.code !== 0 || !parsed) throw new EgressUnsupportedError("the daemon's version could not be read");
+  if (Number(parsed[1]) < 28) throw new EgressUnsupportedError(`the daemon is version ${version.stdout.trim()}`);
   const made = await exec("docker", cardNetworkArgs(network));
   if (made.code !== 0) {
     const why = made.stderr.trim() || "docker network create failed";
@@ -150,8 +155,10 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
   }
   try {
     // What was made must be what was asked for: an older daemon that ignored the option must not leave a network with a gateway.
-    const checked = await exec("docker", ["network", "inspect", "--format", `{{.Internal}}|{{index .Options "${ISOLATED}"}}`, network]);
-    if (checked.code !== 0 || checked.stdout.trim() !== "true|isolated") throw new EgressUnsupportedError(`the network came back as "${checked.stdout.trim() || checked.stderr.trim()}"`);
+    // ... and the network must have no gateway address on the host (Docker shows an isolated network's as `invalid IP`).
+    const checked = await exec("docker", ["network", "inspect", "--format", `{{.Internal}}|{{index .Options "${ISOLATED}"}}|{{range .IPAM.Config}}{{.Gateway}}{{end}}`, network]);
+    const [internal, mode, gateway = ""] = checked.stdout.trim().split("|");
+    if (checked.code !== 0 || internal !== "true" || mode !== "isolated" || (gateway !== "" && gateway !== "invalid IP")) throw new EgressUnsupportedError(`the network came back as "${(checked.stdout.trim() || checked.stderr.trim()).slice(0, 80)}"`);
 
     let address = "127.0.0.1";
     if (hasProxy) {

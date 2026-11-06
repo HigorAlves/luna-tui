@@ -17,6 +17,8 @@ Chapters of that run:
 ## Target (a credential is a reference you pass through the environment, never a value to print or write)
 {{context.qaTargets}}
 
+A credential is only ever used through `qa-fill <selector> <VARIABLE>` (the variable is the one in the target's `credential: env:VARIABLE`): it fills the field from the environment and prints no value. You never type, read, print or write a credential's value: what you type is sent to your model's provider.
+
 Chosen target: {{context.video.target}}
 
 ## Narration clip lengths (seconds; hold each scene for its clip with `narration.durationFor(scene)`)

@@ -44,3 +44,14 @@ describe("the browser the machine launches", () => {
     expect(readFileSync(join(machineDir, "..", "factory", "prompts", "e2e.md"), "utf8")).toContain(FLAG);
   });
 });
+
+describe("the QA login helper", () => {
+  it("is installed in the QA image as qa-fill, and the e2e and recording prompts tell the agent to use only it for a credential", () => {
+    expect(readFileSync(join(machineDir, "runner-qa", "Dockerfile"), "utf8")).toMatch(/COPY .*qa-fill\.mjs \/usr\/local\/bin\/qa-fill/);
+    for (const prompt of ["e2e", "recording"]) {
+      const text = readFileSync(join(machineDir, "..", "factory", "prompts", `${prompt}.md`), "utf8");
+      expect(text, prompt).toContain("qa-fill <selector> <VARIABLE>");
+      expect(text, prompt).toMatch(/never type, read, print or write a credential's value/);
+    }
+  });
+});

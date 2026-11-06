@@ -27,4 +27,7 @@ RUN real="$(find /ms-playwright -maxdepth 3 -type f -name chrome -path '*chromiu
  && chmod 0755 /usr/local/bin/chromium-qa
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium-qa
 
+COPY qa-fill.mjs /usr/local/bin/qa-fill
+RUN chmod 0755 /usr/local/bin/qa-fill
+
 USER node

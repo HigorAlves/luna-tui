@@ -5,13 +5,13 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { sandboxExecArgs, type SandboxExec } from "../adapters/docker/docker.ts";
 import { PolicyStore } from "./policy.ts";
-import { type InstallDeps, ensureInstalled } from "./install.ts";
+import { type InstallDeps, configFilesChanged, ensureInstalled } from "./install.ts";
 
 const root = mkdtempSync(join(tmpdir(), "install-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 let n = 0;
 
-function setup(over: { lockfiles?: Record<string, string>; exit?: number; modules?: boolean; scripts?: boolean; run?: "on" | "off"; dirty?: string[]; nested?: string[] } = {}) {
+function setup(over: { changed?: string[]; lockfiles?: Record<string, string>; exit?: number; modules?: boolean; scripts?: boolean; run?: "on" | "off"; dirty?: string[]; nested?: string[] } = {}) {
   const runs: SandboxExec[] = [];
   const asked: unknown[] = [];
   const restored: Array<[string, string[]]> = [];
@@ -26,6 +26,7 @@ function setup(over: { lockfiles?: Record<string, string>; exit?: number; module
     exec: async (run) => (runs.push(run), { code: over.exit ?? 0, stdout: "out line\n", stderr: over.exit ? "boom: tail\n" : "" }),
     egress: { for: async (request) => (asked.push(request), { allow: ["registry.npmjs.org:443"], allowPrivate: [], proxyImage: "machine:dev" }) },
     yarnBerry: async () => false,
+    configChanged: async () => over.changed ?? [],
     hasNodeModules: async () => state.modules,
     removeNested: () => over.nested ?? [],
     dirtyFiles: async () => over.dirty ?? [],
@@ -41,7 +42,7 @@ describe("ensureInstalled", () => {
     const out = await ensureInstalled(deps, input);
     expect(out.ok).toBe(true);
     expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ image: "repo-image:1", worktree: "/ws/repo/card-1", argv: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"], limits: { cpu: 6, memoryGb: 12 }, egress: { allow: ["registry.npmjs.org:443"], proxyImage: "machine:dev" } });
+    expect(runs[0]).toMatchObject({ image: "repo-image:1", worktree: "/ws/repo/card-1", argv: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"], limits: { cpu: 6, memoryGb: 12 }, egress: { allow: ["registry.npmjs.org:443"], proxyImage: "machine:dev" } });
     expect(runs[0]!.cacheVolume).toBe("hardness-cache-repo");
     expect(asked).toContainEqual({ repoPath: "/user/repo", kind: "install" });
     // the lockfiles are read from the card's repository at the commit, never the folder
@@ -106,5 +107,38 @@ describe("ensureInstalled", () => {
     expect(restored).toEqual([[input.commit, ["package.json", "src/a.ts"]]]);
     expect(out.ok && out.notes.join(" ")).toMatch(/nested.*node_modules\/x\/\.git/);
     expect(out.ok && out.notes.join(" ")).toMatch(/restored.*package\.json/);
+  });
+});
+
+describe("an install with the card's own package-manager configuration", () => {
+  it("is refused as env_broken at step install, in fixed words, when the card changes .npmrc, .yarnrc or .yarnrc.yml, and runs nothing", async () => {
+    const { deps, runs, input } = setup({ changed: [".npmrc", ".yarnrc.yml"] });
+    const out = await ensureInstalled(deps, input);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "install", reason: expect.stringContaining(".npmrc, .yarnrc.yml") });
+      expect(String(out.detail.reason)).toContain("differs from the repository's own");
+    }
+    expect(runs).toHaveLength(0);
+  });
+});
+
+describe("configFilesChanged", () => {
+  const names = [".yarnrc.yml", ".yarnrc", ".npmrc"];
+  const check = async (card: Record<string, string>, user: Record<string, string> | null) =>
+    configFilesChanged({ cardBlobs: async () => card, userBlobs: async () => user ?? {}, baseOf: async () => (user === null ? null : "b".repeat(40)) }, { workspace: "/w", repoPath: "/r", commit: "c".repeat(40) });
+
+  it("names the files whose blob differs from the user's checkout at the card's base, added or changed or removed", async () => {
+    expect(await check({ ".npmrc": "x" }, { ".npmrc": "x" })).toEqual([]);
+    expect(await check({ ".npmrc": "new" }, { ".npmrc": "old" })).toEqual([".npmrc"]);
+    expect(await check({ ".yarnrc": "y" }, {})).toEqual([".yarnrc"]);
+    expect(await check({}, { ".yarnrc.yml": "z" })).toEqual([".yarnrc.yml"]);
+    expect(await check({}, {})).toEqual([]);
+    void names;
+  });
+
+  it("fails closed when the base is unknown and the card has any of them", async () => {
+    expect(await check({ ".npmrc": "x" }, null)).toEqual([".npmrc"]);
+    expect(await check({}, null)).toEqual([]);
   });
 });

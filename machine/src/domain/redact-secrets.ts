@@ -36,3 +36,15 @@ export function redactDeep(value: unknown, redact: (text: string) => string): un
   if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [redact(key), redactDeep(item, redact)]));
   return value;
 }
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** The redactor for a host name: the same forms, matched without regard to case, because the proxy lowercases the hosts it logs. */
+export function hostRedactor(secrets: Readonly<Record<string, string>>): (text: string) => string {
+  const pairs = Object.entries(secrets)
+    .filter(([, value]) => value.length > 0)
+    .flatMap(([name, value]) => formsOf(value).map((form) => ({ form, name })))
+    .sort((a, b) => b.form.length - a.form.length);
+  if (pairs.length === 0) return (text) => text;
+  return (text) => pairs.reduce((out, { form, name }) => out.replace(new RegExp(escapeRegExp(form), "gi"), `[secret:${name}]`), text);
+}
