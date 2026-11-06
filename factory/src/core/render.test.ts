@@ -548,6 +548,18 @@ describe("callLine", () => {
     expect(callLine("Glob", { pattern: "**/*.rs" })).toBe("→ Glob **/*.rs");
   });
 
+  it("tells a luna tool's calls apart by their arguments, so a report per scenario is not one call five times", () => {
+    const reds = ["S1", "S2", "S3", "S4", "S5"].map((scenario) => callLine("mcp__luna__scenario_red", { scenario, output: `FAIL ${scenario}` }));
+    expect(new Set(reds).size).toBe(5);
+    expect(reds[0]).toMatch(/^→ mcp__luna__scenario_red S1 ·[0-9a-f]{8}$/);
+    // The same report four times is still a loop.
+    expect(callLine("mcp__luna__scenario_red", { scenario: "S1", output: "FAIL S1" })).toBe(reds[0]);
+    // A call with no arguments keeps its plain line.
+    expect(callLine("mcp__luna__slice_list", {})).toBe("→ mcp__luna__slice_list");
+    // Two lookups with different keys are two calls.
+    expect(callLine("mcp__luna__decision_get", { key: "driver" })).not.toBe(callLine("mcp__luna__decision_get", { key: "target" }));
+  });
+
   it("fingerprints an edit by what it changes, so four different edits of one file are not one call four times", () => {
     const a = callLine("Edit", { file_path: "/work/a.rs", old_string: "x", new_string: "y" });
     const b = callLine("Edit", { file_path: "/work/a.rs", old_string: "y", new_string: "z" });
