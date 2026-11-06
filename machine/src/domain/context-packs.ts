@@ -1,7 +1,7 @@
 // The context-only packs: those that run in no task state (packStates), so a client may run one
 // on data it sends (`POST /runs`). Each reads one key of the stage input's context, with that
 // key's schema. A context-only pack that is not for clients is on NOT_ON_DEMAND instead. Pure.
-import { ChatTriageContext, CheckContext, ConversationContext, DedupContext, TicketContext, IssueContext, JiraIntakeContext, EvidenceContext, type PackId, PlanContext, ShipContext, SizeContext, SlackTriageContext, SplitContext } from "@hardness/contracts";
+import { LessonsContext, ChatTriageContext, CheckContext, ConversationContext, DedupContext, TicketContext, IssueContext, JiraIntakeContext, EvidenceContext, type PackId, PlanContext, ShipContext, SizeContext, SlackTriageContext, SplitContext } from "@hardness/contracts";
 import { z } from "zod";
 
 import { packStates } from "./packs.ts";
@@ -30,6 +30,9 @@ export const CONTEXT_OF = {
   fix_scope: { key: "ship", schema: ShipContext },
   evidence_valid: { key: "ship", schema: ShipContext },
   worth_learning: { key: "ship", schema: ShipContext },
+  memory_extract: { key: "lessons", schema: LessonsContext },
+  memory_worth: { key: "lessons", schema: LessonsContext },
+  memory_conflict: { key: "lessons", schema: LessonsContext },
   intake_dedup: { key: "dedup", schema: DedupContext },
   ticket_validity: { key: "ticket", schema: TicketContext },
   ticket_assess: { key: "ticket", schema: TicketContext },
@@ -55,6 +58,7 @@ export type PackContext =
   | { check: CheckContext }
   | { evidence: EvidenceContext }
   | { ship: ShipContext }
+  | { lessons: LessonsContext }
   | { dedup: DedupContext }
   | { size: SizeContext }
   | { split: SplitContext }
