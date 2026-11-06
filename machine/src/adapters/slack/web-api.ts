@@ -43,6 +43,8 @@ const Message = z.object({
   thread_ts: z.string().optional(),
   reply_count: z.number().optional(),
   latest_reply: z.string().optional(),
+  files: z.array(z.object({ id: z.string(), name: z.string().optional(), title: z.string().optional(), filetype: z.string().optional() }).passthrough()).optional(),
+  edited: z.object({ ts: z.string() }).passthrough().optional(),
 });
 
 const Channel = z.object({
@@ -71,6 +73,8 @@ function toMessage(m: z.infer<typeof Message>): RawMessage {
     threadTs: m.thread_ts ?? null,
     replyCount: m.reply_count ?? 0,
     latestReply: m.latest_reply ?? null,
+    files: (m.files ?? []).map((f) => ({ id: f.id, name: f.name ?? f.title ?? f.id, kind: f.filetype ?? "file" })),
+    editedTs: m.edited?.ts ?? null,
   };
 }
 

@@ -2,6 +2,7 @@ import type { SlackSnapshot } from "@hardness/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SlackItemRow } from "../domain/slack-item.ts";
+import { carriesSecret } from "../domain/postable.ts";
 import { RULES_TEMPLATE } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
@@ -149,6 +150,26 @@ describe("SlackInbox.pollOnce", () => {
     // The second poll searches since the newest hit.
     const searches = slack.calls.filter((c) => c[0] === "searchMentions");
     expect(searches[1]![2]).toBe(ts(10));
+  });
+
+  it("stores no token shape: a message, a reply and a reaction are screened before the row is saved", async () => {
+    const token = ["xox", "b-", "1234567890-abcdefghij"].join("");
+    const key = ["gh", "p_", "B".repeat(24)].join("");
+    const { inbox, store } = setup({
+      hits: [hit({ ts: ts(30), text: `<@U1> deploy failed, token ${token}` })],
+      replies: { [`C1:${ts(30)}`]: [msg({ ts: ts(20), user: "U3", text: `<@U1> also ${key}`, threadTs: ts(30) })] },
+    });
+    await poll(inbox);
+    await poll(inbox);
+    const rows = [...store.rows.values()];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(carriesSecret(row.text)).toBe(false);
+      for (const c of row.context) expect(carriesSecret(c.text)).toBe(false);
+      expect(JSON.stringify(row)).not.toContain(token);
+      expect(JSON.stringify(row)).not.toContain(key);
+    }
+    expect(rows[0]!.text).toContain("[redacted]");
   });
 
   it("runs the rules first: own messages dropped, muted channels never stored, bots settled without the model, VIPs floored", async () => {

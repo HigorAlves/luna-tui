@@ -50,6 +50,10 @@ export interface RawMessage {
   replyCount: number;
   /** The ts of the latest reply, when Slack says. */
   latestReply: string | null;
+  /** Files shared with the message, as references: never content, never an address the machine opens. */
+  files?: { id: string; name: string; kind: string }[];
+  /** The ts of the latest edit; null or absent when never edited. */
+  editedTs?: string | null;
 }
 
 export interface Usergroup {

@@ -26,6 +26,7 @@ import type {
 import type { SocketEvent, SocketState } from "../adapters/slack/socket-mode.ts";
 import { escapeMrkdwn, toPlainText } from "../adapters/slack/mrkdwn.ts";
 import { stats } from "../adapters/http/metrics.ts";
+import { screen } from "../domain/secrets-check.ts";
 import {
   type IncomingMessage,
   KEEP_DONE_MS,
@@ -565,7 +566,7 @@ export class SlackInbox implements SlackInboxPort {
       const channel = await this.channelOf(reaction.channel.id, reaction.channel.name);
       const author = await this.authorOf(reaction.author.id, null);
       const permalink = await slack.permalink(channel.id, reaction.id.split(":")[1]!).catch(() => "");
-      await ingest({ ...reaction, channel, author, text: `${reaction.text} from @${author.name}`, permalink }, { text: "", author });
+      await ingest({ ...reaction, channel, author, text: screen(`${reaction.text} from @${author.name}`).text, permalink }, { text: "", author });
     }
 
     // 5. Threads you are in that moved: replies counted, your own reply noticed, context refreshed.
@@ -769,7 +770,8 @@ export class SlackInbox implements SlackInboxPort {
   /** mrkdwn to plain text, with every mentioned user named. */
   private async plain(text: string): Promise<string> {
     for (const [, id] of text.matchAll(/<@([A-Z0-9]+)>/g)) if (!this.names.has(id!)) await this.authorOf(id!, null);
-    return toPlainText(text, (id) => this.names.get(id));
+    // Every path into a stored row reads text through here: a token, a card number or a key block never gets that far.
+    return screen(toPlainText(text, (id) => this.names.get(id))).text;
   }
 
   private readonly names = new Map<string, string>();
