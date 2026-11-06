@@ -7,8 +7,9 @@ import { RULES_TEMPLATE } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
 import { ChannelClaims } from "./channel-claims.ts";
+import { ConversationDrafts, MemoryDraftStore } from "./conversation-drafts.ts";
 import type { Assessed } from "./conversation-machine.ts";
-import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, SlackInbox } from "./slack-inbox.ts";
+import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, SlackInbox, SlackRefusedError } from "./slack-inbox.ts";
 import { NoSlackTokenError, type RawMessage, type SearchHit, noTokenSlack } from "./slack.ts";
 import type { TriageAnswer, TriageItem, Triager } from "./slack-triage.ts";
 
@@ -43,9 +44,10 @@ interface World {
   claimed?: Record<string, string>;
   conv?: Partial<typeof FACTORY_DEFAULTS.conversation>;
   assessor?: { assess: (row: SlackItemRow) => Promise<Assessed> };
-  drafter?: { draft: (row: SlackItemRow) => Promise<string | null> };
+  drafter?: { draft: (row: SlackItemRow, onRefused?: (why: string) => void) => Promise<string | null> };
+  drafts?: ConversationDrafts;
   actions?: { apply: (row: SlackItemRow, relation: ConversationRelation) => Promise<{ relation: ConversationRelation; taskId?: string; priority?: SlackPriority }>; undo: (previous: ConversationRelation | null | undefined, next: ConversationRelation) => Promise<void> };
-  truth?: { override: (input: unknown) => Promise<void>; relation?: (input: unknown) => Promise<void> };
+  truth?: { override: (input: unknown) => Promise<void>; relation?: (input: unknown) => Promise<void>; outcome?: (input: unknown) => Promise<void> };
 }
 
 const msg = (over: Partial<RawMessage> & { ts: string }): RawMessage => ({ user: "U2", botId: null, text: "", subtype: null, threadTs: null, replyCount: 0, latestReply: null, ...over });
@@ -127,6 +129,7 @@ function setup(world: World = {}) {
     ...(world.assessor ? { assessor: world.assessor } : {}),
     ...(world.actions ? { actions: world.actions } : {}),
     ...(world.drafter ? { drafter: world.drafter } : {}),
+    ...(world.drafts ? { drafts: world.drafts } : {}),
     ...(world.truth ? { truth: world.truth as never } : {}),
     rulesPath: "/rules.md",
     socketToken: null,
@@ -364,7 +367,7 @@ describe("SlackInbox.pollOnce", () => {
     });
 
     it("stores the relation and the shortlist the assessment offered", async () => {
-      const shortlist = [{ slot: 1, id: "card-1", kind: "open" as const, otherSource: { kind: "jira" as const, key: "ENG-1" } }];
+      const shortlist = [{ slot: 1, id: "card-1", kind: "open" as const, otherSource: { kind: "jira" as const, key: "ENG-1" }, title: "t" }];
       const relation = { type: "related_to_in_progress" as const, target: "card-1", confidence: 0.9, by: "model" as const, at: iso(0), record: "rel-1", otherSource: { kind: "jira" as const, key: "ENG-1" } };
       const assessor = { assess: async () => assessed({ relation, shortlist }) };
       const { inbox, store } = setup({ assessor, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
@@ -375,7 +378,7 @@ describe("SlackInbox.pollOnce", () => {
     });
 
     describe("a person sets the relation", () => {
-      const shortlist = [{ slot: 2, id: "card-2", kind: "open" as const, otherSource: null }, { slot: 3, id: "backlog-3", kind: "backlog" as const, otherSource: null }];
+      const shortlist = [{ slot: 2, id: "card-2", kind: "open" as const, otherSource: null, title: "t" }, { slot: 3, id: "backlog-3", kind: "backlog" as const, otherSource: null, title: "t" }];
       const ready = async () => {
         const labels: unknown[] = [];
         const assessor = { assess: async () => assessed({ relation: { type: "ask", target: null, confidence: 0.4, by: "model", at: iso(0), record: "rel-1" }, shortlist, classification: { kind: "bug", confidence: 0.9, by: "model", at: iso(0), records: { assess: "rec-1", relation: "rel-1" }, verdict: "ok" } }) };
@@ -432,7 +435,7 @@ describe("SlackInbox.pollOnce", () => {
       });
       it("runs when a person sets the relation, and takes back what the model's relation raised", async () => {
         const a = actions();
-        const assessor = { assess: async () => assessed({ relation: card, shortlist: [{ slot: 1, id: "card-1", kind: "open", otherSource: null }, { slot: 2, id: "b-2", kind: "backlog", otherSource: null }] }) };
+        const assessor = { assess: async () => assessed({ relation: card, shortlist: [{ slot: 1, id: "card-1", kind: "open", otherSource: null, title: "t" }, { slot: 2, id: "b-2", kind: "backlog", otherSource: null, title: "t" }] }) };
         const { inbox, created } = setup({ assessor, actions: a, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
         await poll(inbox);
         await inbox.relate(`C1:${ts(10)}`, { relation: "related_to_backlog", target: "b-2" });
@@ -458,6 +461,69 @@ describe("SlackInbox.pollOnce", () => {
         const { inbox, store } = setup({ assessor: { assess: async () => assessed({ relation }) }, drafter, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
         await poll(inbox);
         expect(store.rows.get(`C1:${ts(10)}`)!.triage).toBeNull();
+      });
+    });
+
+    describe("drafts wait for a tap", () => {
+      const relation = { type: "none" as const, target: null, confidence: 0.9, by: "model" as const, at: iso(0) };
+      const clock = { ms: NOW.getTime() };
+      const waiting = async (over: World = {}) => {
+        clock.ms = NOW.getTime();
+        const drafts = new ConversationDrafts(new MemoryDraftStore(), { expiryHours: () => 24, now: () => new Date(clock.ms) });
+        const outcomes: unknown[] = [];
+        const world = setup({ assessor: { assess: async () => assessed({ relation }) }, drafter: { draft: async () => "It is queued." }, drafts, now: () => new Date(clock.ms), truth: { override: async () => {}, outcome: async (i: unknown) => void outcomes.push(i) }, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })], ...over });
+        const post = vi.spyOn(world.slack, "postMessage");
+        await poll(world.inbox);
+        return { ...world, drafts, outcomes, post, id: `C1:${ts(10)}` };
+      };
+      it("opens one waiting draft after the relation, mirrored in triage.draft and on the item, which sits in needs_reply", async () => {
+        const { inbox, store, drafts, id, post } = await waiting();
+        expect((await drafts.waiting(id))?.text).toBe("It is queued.");
+        expect(store.rows.get(id)!.triage?.draft).toBe("It is queued.");
+        const item = inbox.snapshot.items.find((i) => i.id === id)!;
+        expect(item.draft).toMatchObject({ kind: "reply", text: "It is queued." });
+        expect(item.split).toBe("needs_reply");
+        expect(post).not.toHaveBeenCalled();
+      });
+      it("writes no draft and supersedes the waiting one when another person is already replying in the thread", async () => {
+        const replies = { [`C1:${ts(10)}`]: [msg({ ts: ts(10), user: "U2", text: "it breaks" }), msg({ ts: ts(9.9), user: "U3", text: "looking" })] };
+        const { drafts, id } = await waiting({ replies });
+        expect(await drafts.waiting(id)).toBeNull();
+      });
+      it("says why in fixed words when the pack's draft is refused for an address", async () => {
+        const { store, drafts, id } = await waiting({ drafter: { draft: async (_row: SlackItemRow, onRefused?: (why: string) => void) => (onRefused?.("the reply held an address, so it was not kept"), null) } });
+        expect(await drafts.waiting(id)).toBeNull();
+        expect(store.rows.get(id)!.triage?.why).toContain("the reply held an address, so it was not kept");
+      });
+      it("a reply with the draft's own text settles it as sent, another text as edited, and each is ground truth", async () => {
+        const first = await waiting();
+        await first.inbox.reply(first.id, "It is queued.");
+        expect(first.post).toHaveBeenCalledTimes(1);
+        expect((await first.drafts.get((first.outcomes[0] as { draft: string }).draft))?.status).toBe("sent");
+        expect(first.outcomes).toMatchObject([{ thread: first.id, outcome: "sent_as_drafted" }]);
+        const second = await waiting();
+        await second.inbox.reply(second.id, "We are on it.");
+        expect(second.outcomes).toMatchObject([{ outcome: "edited", machine: "It is queued.", person: "We are on it." }]);
+        expect(second.store.rows.get(second.id)!.triage?.draft ?? null).toBeNull();
+      });
+      it("refuses a reply that carries a token, with no post and the draft still waiting", async () => {
+        const { inbox, drafts, id, post } = await waiting();
+        const token = ["gh", "p_", "a".repeat(36)].join("");
+        await expect(inbox.reply(id, `use ${token}`)).rejects.toBeInstanceOf(SlackRefusedError);
+        expect(post).not.toHaveBeenCalled();
+        expect(await drafts.waiting(id)).not.toBeNull();
+      });
+      it("marks the waiting draft ignored on done, and expires it after the configured hours without posting", async () => {
+        const a = await waiting();
+        await a.inbox.patch(a.id, { done: true });
+        expect((await a.drafts.waiting(a.id))).toBeNull();
+        expect(a.outcomes).toMatchObject([{ outcome: "ignored" }]);
+        const b = await waiting();
+        clock.ms += 25 * 3_600_000;
+        await b.inbox.expireDrafts();
+        expect(b.outcomes).toMatchObject([{ outcome: "expired" }]);
+        expect(b.store.rows.get(b.id)!.triage?.draft ?? null).toBeNull();
+        expect(b.post).not.toHaveBeenCalled();
       });
     });
 

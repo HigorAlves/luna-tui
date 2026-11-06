@@ -73,4 +73,12 @@ describe("harvest", () => {
     expect(caseIdOf("task 7/x")).toBe("task-7-x");
     expect(caseIdOf("...")).toBeNull();
   });
+
+  it("skips a decision record of a private conversation: nothing of it becomes a case, and the report says why", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvest-"));
+    const conversation = { channel: "secret", private: true, thread: ["marta: the plan is banana"], latest: "the plan is banana", author: { profile: "member", title: null }, candidates: [] };
+    const out = harvest(dir, "conversation_assess", [record({ pack: "conversation_assess", context: { conversation }, truth: { label: { kind: { choice: "question" } }, source: "person", at: "2026-11-05T00:00:00.000Z" } } as never)]);
+    expect(out.written).toEqual([]);
+    expect(out.refused).toEqual([{ id: "6b0f2c52-7a3e-4d0b-9c1e-0a1f2b3c4d5e", reason: "a private conversation: its text never becomes a case" }]);
+  });
 });

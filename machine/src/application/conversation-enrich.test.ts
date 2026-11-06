@@ -66,13 +66,13 @@ describe("enrichConversation", () => {
     const out = await enrichConversation(row({ repo: "/r/a" }), deps({ candidates }), NOW);
     expect(asked).toEqual([["/r/a", { kind: "slack", channel: "C1", ts: "1700000000.000000", permalink: "https://x.slack.com/p1" }]]);
     expect(out.context.candidates).toEqual([{ slot: 1, kind: "open", title: "Export fails", summary: "csv export fails" }]);
-    expect(out.shortlist).toEqual([{ slot: 1, id: "t1", kind: "open", otherSource: null }]);
+    expect(out.shortlist).toMatchObject([{ slot: 1, id: "t1", kind: "open", otherSource: null }]);
   });
 
   it("adds a ticket-sourced card of the repository only in a channel the repository claims, and marks where it came from", async () => {
     const claimedCandidates = async () => [{ id: "t9", kind: "open" as const, title: "Export fails for big files", text: "the export fails", repo: "/r/a", closedAt: null, otherSource: { kind: "jira" as const, key: "PAY-9" } }];
     const claimed = await enrichConversation(row({ repo: "/r/a" }), deps({ claimedCandidates, claimedBy: () => "/r/a" }), NOW);
-    expect(claimed.shortlist).toEqual([{ slot: 1, id: "t9", kind: "open", otherSource: { kind: "jira", key: "PAY-9" } }]);
+    expect(claimed.shortlist).toMatchObject([{ slot: 1, id: "t9", kind: "open", otherSource: { kind: "jira", key: "PAY-9" } }]);
     const watched = await enrichConversation(row({ repo: "/r/a" }), deps({ claimedCandidates, claimedBy: () => null }), NOW);
     expect(watched.shortlist).toEqual([]);
   });
@@ -122,5 +122,19 @@ describe("Pipeline.claimedRepoCandidates", () => {
     expect(found.map((c) => c.id).sort()).toEqual([jira.id, issue.id].sort());
     expect(found.find((c) => c.id === jira.id)?.otherSource).toEqual({ kind: "jira", key: "PAY-9" });
     expect(found.find((c) => c.id === issue.id)?.otherSource).toEqual({ kind: "github", key: "o/a#4" });
+  });
+});
+
+describe("the shortlist the board shows", () => {
+  it("carries a flattened, capped title per slot, only for candidates that passed the audience filter", async () => {
+    const long = `Export fails ${"z".repeat(400)}\nsecond line ana@example.com`;
+    const near = { id: "c1", kind: "open" as const, title: long, text: "the export fails with a timeout", repo: "/r", closedAt: null };
+    const hidden = { id: "c2", kind: "open" as const, title: "export fails elsewhere", text: "the export fails with a timeout", repo: "/r", closedAt: null };
+    const out = await enrichConversation(row({ repo: "/r" }), deps({ candidates: async () => [near] }), NOW);
+    void hidden;
+    expect(out.shortlist).toHaveLength(1);
+    expect(out.shortlist[0]!.title.length).toBeLessThanOrEqual(120);
+    expect(out.shortlist[0]!.title).not.toMatch(/\n|@example/);
+    expect(out.shortlist.map((e) => e.id)).toEqual(["c1"]);
   });
 });

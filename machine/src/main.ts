@@ -78,6 +78,9 @@ import { ChannelClaims } from "./application/channel-claims.ts";
 import { ConversationMachine } from "./application/conversation-machine.ts";
 import { enrichConversation } from "./application/conversation-enrich.ts";
 import { ConversationDrafter } from "./application/conversation-draft.ts";
+import { ConversationDrafts } from "./application/conversation-drafts.ts";
+import { PgDraftStore } from "./adapters/persistence/slack-drafts.ts";
+import { evidenceView } from "./domain/conversation-evidence.ts";
 import { repoDocs } from "./application/repo-docs.ts";
 import { ConversationActions } from "./application/conversation-actions.ts";
 import { ConversationTruth } from "./application/conversation-truth.ts";
@@ -446,6 +449,7 @@ const prTasks = {
  *  container with the same image and credential as the stages, so it is off when they are. */
 const slackApi = config.slackInbox.userToken ? createSlack(config.slackInbox.userToken) : noTokenSlack();
 const slackStore = new PgSlackStore(db);
+const conversationDrafts = new ConversationDrafts(new PgDraftStore(db), { expiryHours: (channel) => channelClaims.configOf(channel).conversation.draft_expiry_hours });
 const triager = agentDeps ? createSlackTriager({ ...agentDeps, store: slackStore }) : null;
 const slackInbox = new SlackInbox({
   slack: slackApi,
@@ -471,13 +475,14 @@ const slackInbox = new SlackInbox({
   // The Conversation Machine's chain: only where agents are on (the triager exists); the pack runs through `packRuns`, built below.
   ...(triager ? { assessor: { assess: (row) => conversationMachine().assess(row) } } : {}),
   truth: new ConversationTruth(config.stateDir, decisionTruth),
+  drafts: conversationDrafts,
   // The reply draft: one `conversation_reply` run over the card's state, its evidence and the docs, all as data. Built lazily: `packRuns` is below.
   drafter: new ConversationDrafter({
     card: async (id) => {
       const task = await pipeline.get(id).catch(() => null);
       if (!task) return null;
-      const pr = (task as { prUrl?: string | null }).prUrl ?? null;
-      return { state: task.state.replace(/_/g, " "), title: task.title, pr, evidence: null };
+      // The PR address is read where Ship reads it (the last shipping run); the evidence goes through the allowlist.
+      return { state: task.state.replace(/_/g, " "), title: task.title, pr: await pipeline.prLinkOf(id), evidence: evidenceView(task.evidence) };
     },
     rank: async (id) => {
       const list = await backlog.list();
@@ -485,7 +490,7 @@ const slackInbox = new SlackInbox({
       return at < 0 ? null : `it ranks ${at + 1} of ${list.length}`;
     },
     docs: (repo, text) => repoDocs(repo, text),
-    tone: async () => [],
+    tone: (channel, isPrivate) => conversationDrafts.recentEdits(channel, isPrivate),
     run: async (context) => {
       if (!packRuns) throw new Error("agents are off: no model to draft the reply");
       const out = await packRuns.run({ pack: "conversation_reply", context: { conversation: context } }, INTAKE_CLIENT);

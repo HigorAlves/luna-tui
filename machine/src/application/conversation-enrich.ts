@@ -29,6 +29,8 @@ export interface ShortlistEntry {
   kind: "open" | "closed" | "backlog";
   /** Where a ticket-sourced card came from; null for a card the channel could see anyway. The board says so before the tap. */
   otherSource: TicketMark | null;
+  /** Flattened, masked and capped: what the board shows for the slot. */
+  title: string;
 }
 
 export interface Enriched {
@@ -64,7 +66,7 @@ export async function enrichConversation(row: SlackItemRow, deps: EnrichDeps, no
   for (const n of near) {
     const c = byId.get(n.id)!;
     const slot = shortlist.length + 1;
-    shortlist.push({ slot, id: c.id, kind: c.kind, otherSource: marks.get(c.id) ?? null });
+    shortlist.push({ slot, id: c.id, kind: c.kind, otherSource: marks.get(c.id) ?? null, title: flat(c.title, 120) });
     candidates.push({ slot, kind: c.kind, title: flat(c.title, 500), summary: flat(c.text, 1000) });
   }
   return { context: { channel: flat(row.channel.name, 120), private: conversation?.private ?? row.channel.kind !== "channel", thread, latest, author: { profile, title }, candidates }, shortlist };

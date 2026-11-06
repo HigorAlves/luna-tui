@@ -23,19 +23,20 @@ export interface DraftDeps {
   rank(id: string): Promise<string | null>;
   docs(repo: string, text: string): Promise<string[]>;
   /** The channel's notes for tone (the rules file's Notes), and later its past edits. */
-  tone(channel: string): Promise<Array<{ machine: string; person: string }>>;
+  tone(channel: string, isPrivate: boolean): Promise<Array<{ machine: string; person: string }>>;
   /** The one run of the `conversation_reply` pack. */
   run(context: ConversationContext): Promise<{ reply: string; confidence: number }>;
 }
 
+export const ADDRESS_REFUSED = "the reply held an address, so it was not kept";
 const KINDS_WITHOUT_REPLY = new Set(["fyi", "chatter"]);
 const flat = (text: string, cap: number): string => maskPii(text).replace(/\s+/g, " ").trim().slice(0, cap);
 
 export class ConversationDrafter {
   constructor(private readonly deps: DraftDeps) {}
 
-  /** The draft text, or null when none is due or the answer carried a secret. A failed run throws (the inbox retries). */
-  async draft(row: SlackItemRow): Promise<string | null> {
+  /** The draft text, or null when none is due, the answer carried a secret, or it held an address the machine did not give (`onRefused` says why in fixed words). A failed run throws (the inbox retries). */
+  async draft(row: SlackItemRow, onRefused?: (why: string) => void): Promise<string | null> {
     const c = row.conversation;
     const relation = c?.relation;
     if (!c || !relation || relation.type === "ask" || !c.classification) return null;
@@ -44,9 +45,12 @@ export class ConversationDrafter {
     const entry = relation.target ? (c.shortlist ?? []).find((e) => e.id === relation.target) : undefined;
     let card: string | null = null;
     let evidence: string | null = null;
+    // The only addresses a draft may hold: the ones the machine itself put into the context.
+    const given = new Set<string>();
     if (entry && entry.kind !== "backlog" && relation.type === "related_to_in_progress") {
       const view = await this.deps.card(entry.id).catch(() => null);
       if (view) {
+        if (view.pr) given.add(view.pr);
         card = flat(`State: ${view.state}. Title: ${view.title}.${view.pr ? ` PR: ${view.pr}` : ""}`, 2000);
         evidence = view.evidence ? flat(view.evidence, 2000) : null;
       }
@@ -55,7 +59,7 @@ export class ConversationDrafter {
       card = flat(`It is queued in the backlog${rank ? `; ${rank}` : ""}.`, 2000);
     }
     const docs = c.repo ? await this.deps.docs(c.repo, history.map((m) => m.text).join(" ")).catch(() => []) : [];
-    const tone = await this.deps.tone(row.channel.id).catch(() => []);
+    const tone = await this.deps.tone(row.channel.id, c.private).catch(() => []);
     const context: ConversationContext = {
       channel: flat(row.channel.name, 120),
       private: c.private,
@@ -67,6 +71,12 @@ export class ConversationDrafter {
     };
     const answer = await this.deps.run(context);
     if (carriesSecret(answer.reply)) return null;
+    // A pack-written text keeps an address only when it is exactly one the machine gave (the card's PR link); any other is not kept.
+    const addresses = answer.reply.match(/(?:https?:\/\/|www\.)[^\s<>"')\]|]+/gi) ?? [];
+    if (addresses.some((a) => !given.has(a.replace(/[.,;:!?]+$/, "")))) {
+      onRefused?.(ADDRESS_REFUSED);
+      return null;
+    }
     const text = postable(answer.reply);
     return text === "" ? null : text;
   }

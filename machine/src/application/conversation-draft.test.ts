@@ -8,22 +8,23 @@ import { ConversationDrafter, type DraftDeps } from "./conversation-draft.ts";
 const relation = (over: Partial<ConversationRelation> = {}): ConversationRelation => ({ type: "related_to_in_progress", target: "card-1", confidence: 0.9, by: "model", at: "2026-10-28T12:00:00Z", ...over });
 const row = (rel: ConversationRelation | null, over: { kind?: string; verdict?: "ok" | "ask"; needsReply?: boolean; shortlist?: Array<{ slot: number; id: string; kind: "open" | "closed" | "backlog"; otherSource: null }> } = {}) => {
   const base = conversationRow();
-  return { ...base, triage: { priority: "P1", category: "request", expectsReply: over.needsReply ?? true, summary: "s", why: "w", draft: null, refs: [], deadline: null, by: "model", triagedAt: "t", overridden: false } as never, conversation: { ...base.conversation!, classification: { kind: over.kind ?? "bug", confidence: 0.9, by: "model" as const, at: "t", records: {}, verdict: over.verdict ?? "ok" }, relation: rel, shortlist: over.shortlist ?? [{ slot: 1, id: "card-1", kind: "open" as const, otherSource: null }, { slot: 2, id: "b-1", kind: "backlog" as const, otherSource: null }] } };
+  return { ...base, triage: { priority: "P1", category: "request", expectsReply: over.needsReply ?? true, summary: "s", why: "w", draft: null, refs: [], deadline: null, by: "model", triagedAt: "t", overridden: false } as never, conversation: { ...base.conversation!, classification: { kind: over.kind ?? "bug", confidence: 0.9, by: "model" as const, at: "t", records: {}, verdict: over.verdict ?? "ok" }, relation: rel, shortlist: over.shortlist ?? [{ slot: 1, id: "card-1", kind: "open" as const, otherSource: null }, { slot: 2, id: "b-1", kind: "backlog" as const, otherSource: null, title: "t" }] } };
 };
 const world = (reply: string | Error = "It is queued.") => {
-  const contexts: Array<{ reply?: { relation: string; card: string | null; docs: string[]; tone: unknown[] } }> = [];
+  const toneCalls: string[] = [];
+  const contexts: Array<{ reply?: { relation: string; card: string | null; evidence: string | null; docs: string[]; tone: unknown[] } }> = [];
   const deps: DraftDeps = {
-    card: async (id) => (id === "card-1" ? { state: "in progress", title: "Checkout fails", pr: "https://github.com/acme/app/pull/4", evidence: "Results: 3 passed" } : null),
+    card: async (id) => (id === "card-1" ? { state: "in progress", title: "Checkout fails", pr: "https://github.com/acme/app/pull/4", evidence: "Summary: ok. Format: text. Results: 3 pass, 0 fail, 0 partial, 0 skipped." } : null),
     rank: async () => "ranks 4th of 12",
     docs: async () => ["docs/checkout.md: retries"],
-    tone: async () => [],
+    tone: async (channel) => (toneCalls.push(channel), []),
     run: async (context) => {
       contexts.push(context as never);
       if (reply instanceof Error) throw reply;
       return { reply, confidence: 0.8 };
     },
   };
-  return { contexts, drafter: new ConversationDrafter(deps) };
+  return { contexts, toneCalls, drafter: new ConversationDrafter(deps) };
 };
 
 describe("ConversationDrafter", () => {
@@ -49,9 +50,29 @@ describe("ConversationDrafter", () => {
   it("refuses an answer that carries a secret, checked on the raw text, and flattens a good one", async () => {
     const token = ["gh", "p_", "a".repeat(36)].join("");
     expect(await world(`use ${token} to log in`).drafter.draft(row(relation()))).toBeNull();
-    expect(await world("Line one\n\n@channel see <https://evil.example|here>").drafter.draft(row(relation()))).not.toMatch(/@channel|\n/);
+    expect(await world("Line one\n\n@channel see this").drafter.draft(row(relation()))).not.toMatch(/@channel|\n/);
   });
   it("lets a failed run throw so the inbox retries", async () => {
     await expect(world(new Error("container failed")).drafter.draft(row(relation()))).rejects.toThrow("container failed");
+  });
+
+  it("keeps an address only when the machine put that exact address into the context: the card's own PR link", async () => {
+    const link = "https://github.com/acme/app/pull/4";
+    expect(await world(`The fix is in ${link}.`).drafter.draft(row(relation()))).toBe(`The fix is in ${link}.`);
+  });
+  it("does not keep a draft with an address the thread asked for and the pack invented, and says why in fixed words", async () => {
+    const asked = row(relation());
+    asked.conversation!.history[0]!.text = "can you send me the link to the dashboard?";
+    for (const invented of ["Here: https://dash.example/a", "see http://evil.example", "go to www.evil.example now", "close: https://github.com/acme/app/pull/44"]) {
+      const why: string[] = [];
+      expect(await world(invented).drafter.draft(asked, (w) => why.push(w))).toBeNull();
+      expect(why).toEqual(["the reply held an address, so it was not kept"]);
+    }
+  });
+  it("sends the card's evidence summary and asks tone of the channel and the privacy of this conversation", async () => {
+    const { drafter, contexts, toneCalls } = world();
+    await drafter.draft(row(relation()));
+    expect(contexts[0]!.reply!.evidence).toContain("Results: 3 pass");
+    expect(toneCalls).toEqual(["C1"]);
   });
 });

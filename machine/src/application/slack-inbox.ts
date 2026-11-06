@@ -31,6 +31,8 @@ import { escapeMrkdwn, toPlainText } from "../adapters/slack/mrkdwn.ts";
 import { stats } from "../adapters/http/metrics.ts";
 import { inConversationScope, optedIn, type SlackScope } from "../domain/conversation-scope.ts";
 import { candidateOf } from "../domain/conversation-candidate.ts";
+import { humansActive } from "../domain/conversation-quiet.ts";
+import { carriesSecret, postable } from "../domain/postable.ts";
 import { applyEdit, canonicalMessageOf, emptyConversation, foldMessage, latestText } from "../domain/conversation.ts";
 import { screen } from "../domain/secrets-check.ts";
 import {
@@ -55,6 +57,7 @@ import type { TaskRow } from "../domain/task.ts";
 import { ChannelClaims } from "./channel-claims.ts";
 import { type Assessed, CATEGORY } from "./conversation-machine.ts";
 import type { ConversationActions } from "./conversation-actions.ts";
+import type { ConversationDrafts } from "./conversation-drafts.ts";
 import type { ConversationTruth } from "./conversation-truth.ts";
 import { settled as threadQuiet } from "../domain/ticket-scope.ts";
 import type { NewTask } from "./pipeline.ts";
@@ -108,6 +111,14 @@ export class BuiltinWatchError extends Error {
 }
 
 /** A relation a person set that the stored shortlist does not allow: a target it does not hold, a missing one, or one where none belongs. */
+/** Text the machine will not send: it carries something shaped like a secret (HTTP 409 `slack_refused`). */
+export class SlackRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SlackRefusedError";
+  }
+}
+
 export class BadRelationError extends Error {
   constructor(message: string) {
     super(message);
@@ -152,11 +163,13 @@ export interface SlackInboxOptions {
   /** The Conversation Machine's chain. Without it (agents off) every item takes the `slack_triage` path as before. */
   assessor?: { assess(row: SlackItemRow): Promise<Assessed> };
   /** The reply draft written after the relation: stored in `triage.draft`, never posted. A failing run retries the chain. */
-  drafter?: { draft(row: SlackItemRow): Promise<string | null> };
+  drafter?: { draft(row: SlackItemRow, onRefused?: (why: string) => void): Promise<string | null> };
   /** What a relation does once it is not `ask` (attach, bump, add): never a post, never a card. Absent: the relation is stored and nothing else happens. */
   actions?: Pick<ConversationActions, "apply" | "undo">;
   /** Ground truth of a hand-set kind or priority. */
-  truth?: Pick<ConversationTruth, "override" | "relation">;
+  truth?: Pick<ConversationTruth, "override" | "relation" | "outcome">;
+  /** The drafts that wait for a tap, one per thread. */
+  drafts?: ConversationDrafts;
 }
 
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
@@ -306,9 +319,28 @@ export class SlackInbox implements SlackInboxPort {
    */
   tick(): void {
     this.kickTriage();
+    if (this.options.drafts) void this.expireDrafts().catch((error: unknown) => console.warn(`slack inbox: draft expiry failed: ${messageOf(error)}`));
     const now = this.now();
     const items = this.snapshot.items.map((item) => ({ ...item, ...dueOf(item, now, this.sla), split: splitOf(item, now) }));
     this.publishIfChanged({ ...this.snapshot, items, quiet: this.lastRules ? inQuietHours(this.lastRules, now) : false });
+  }
+
+  /** Marks the drafts past their expiry `expired` (kept, never posted) and clears their mirror in `triage.draft`. Run by the minute tick. */
+  async expireDrafts(): Promise<void> {
+    const { drafts, truth, store } = this.options;
+    if (!drafts) return;
+    const done = await drafts.expire(this.now());
+    for (const d of done) {
+      await truth?.outcome({ thread: d.thread, draft: d.id, outcome: "expired", machine: d.text, records: d.records }).catch(() => {});
+      await this.clearMirror(d.thread);
+    }
+    if (done.length > 0) await this.refresh(this.snapshot.polledAt, this.snapshot.error);
+    void store;
+  }
+
+  private async clearMirror(thread: string): Promise<void> {
+    const row = await this.options.store.item(thread);
+    if (row?.triage?.draft) await this.options.store.save([{ ...row, triage: { ...row.triage, draft: null } }]);
   }
 
   /** One poll; a poll already running is shared rather than doubled. Inside a rate-limit backoff only a forced one runs. */
@@ -437,11 +469,13 @@ export class SlackInbox implements SlackInboxPort {
       const stamped = new Map(aged.map((row) => [row.id, row]));
       rows = rows.map((row) => stamped.get(row.id) ?? row);
     }
+    const waitingDrafts = new Map((await this.options.drafts?.allWaiting().catch(() => []) ?? []).map((d) => [d.thread, d]));
     const items = rows
       .filter((row) => inSnapshot(row, now))
       .map((row) => {
         const pr = this.options.linkPr(prUrlsIn(row.text)) ?? row.linked.pr;
-        return toSlackItem({ ...row, linked: { ...row.linked, pr } }, now, this.sla);
+        const d = waitingDrafts.get(row.id);
+        return toSlackItem({ ...row, linked: { ...row.linked, pr }, ...(d ? { draft: { id: d.id, kind: d.kind === "reply" || d.kind === "questions" || d.kind === "shipped" || d.kind === "status" ? d.kind : "reply", text: d.text, expiresAt: d.expiresAt.toISOString() } } : {}) }, now, this.sla);
       });
     const watches = await this.options.store.watches();
     this.publishIfChanged({
@@ -850,16 +884,23 @@ export class SlackInbox implements SlackInboxPort {
       let triage = withFloor(this.keepOverride(fresh.triage, out.triage), entry.floor);
       const previous = conversation.relation;
       // The draft is asked before any action runs: a failed run retries the chain, and no action has run yet to run twice.
+      let draftText: string | null = null;
       if (relation && relation.type !== "ask" && this.options.drafter) {
-        try {
-          const text = await this.options.drafter.draft({ ...fresh, triage, conversation: { ...conversation, classification: kept, relation, shortlist: out.shortlist } });
-          if (text && triage) triage = { ...triage, draft: text };
-        } catch (error) {
-          console.warn(`slack inbox: conversation draft failed for ${id}: ${messageOf(error)}`);
-          const delay = TRIAGE_RETRY_MS[entry.failures];
-          if (delay !== undefined) this.triageQueue.set(id, { ...entry, failures: entry.failures + 1, notBefore: this.now().getTime() + delay });
-          continue;
+        const me = await this.whoAmI().catch(() => null);
+        const quiet = me !== null && humansActive(conversation.history, me.id, this.now(), this.claims.configOf(fresh.channel.id).conversation.active_minutes);
+        let refused: string | null = null;
+        if (!quiet) {
+          try {
+            draftText = await this.options.drafter.draft({ ...fresh, triage, conversation: { ...conversation, classification: kept, relation, shortlist: out.shortlist } }, (why) => void (refused = why));
+          } catch (error) {
+            console.warn(`slack inbox: conversation draft failed for ${id}: ${messageOf(error)}`);
+            const delay = TRIAGE_RETRY_MS[entry.failures];
+            if (delay !== undefined) this.triageQueue.set(id, { ...entry, failures: entry.failures + 1, notBefore: this.now().getTime() + delay });
+            continue;
+          }
         }
+        if (draftText && triage) triage = { ...triage, draft: draftText };
+        if (refused && triage) triage = { ...triage, why: `${triage.why}; ${refused}` };
       }
       if (relation && relation.type !== "ask" && this.options.actions) {
         if (previous?.applied && previous.type === relation.type && previous.target === relation.target) relation = { ...relation, applied: previous.applied };
@@ -876,6 +917,11 @@ export class SlackInbox implements SlackInboxPort {
         }
       }
       await store.save([{ ...fresh, linked, triage, conversation: { ...conversation, classification: kept, relation, shortlist: out.shortlist } }]);
+      // The thread was assessed again: its waiting draft is replaced by the new one, or dropped.
+      if (this.options.drafts) {
+        if (draftText) await this.options.drafts.open({ thread: id, channel: fresh.channel.id, threadTs: id.split(":")[1] ?? fresh.slackTs, kind: "reply", text: draftText, cardId: relation?.type === "related_to_in_progress" ? relation.target : null, private: conversation.private, records: kept.records });
+        else await this.options.drafts.supersede(id);
+      }
       await this.refresh(this.snapshot.polledAt, this.snapshot.error);
     }
     if (!triager || rows.size === 0) return;
@@ -1026,6 +1072,11 @@ export class SlackInbox implements SlackInboxPort {
     let next = row;
     if (patch.done === true && !row.doneAt) {
       next = { ...next, doneAt: now, snoozedUntil: null };
+      const ignored = this.options.drafts ? await this.options.drafts.ignore(row.id).catch(() => null) : null;
+      if (ignored) {
+        await this.options.truth?.outcome({ thread: row.id, draft: ignored.id, outcome: "ignored", machine: ignored.text, records: ignored.records }).catch(() => {});
+        if (next.triage?.draft) next = { ...next, triage: { ...next.triage, draft: null } };
+      }
       if (!row.youReplied && !row.repliedAt) await this.learnFrom(row, "lowered");
       if (this.options.markRead) {
         try {
@@ -1085,7 +1136,11 @@ export class SlackInbox implements SlackInboxPort {
   }
 
   async reply(id: string, text: string, nudge = false): Promise<SlackItem> {
-    const row = await this.get(id);
+    let row = await this.get(id);
+    // Nothing that looks like a secret is sent, typed or drafted; a draft sent as drafted must still equal its own `postable()`.
+    const waiting = this.options.drafts ? await this.options.drafts.waiting(row.id) : null;
+    if (carriesSecret(text)) throw new SlackRefusedError("the text carries something shaped like a secret, so it was not sent");
+    if (waiting && text === waiting.text && postable(text) !== text) throw new SlackRefusedError("the draft is not safe to send as it stands");
     // The thread is the item's own ts (the root of a collapsed thread, not its latest message);
     // a top-level DM is answered in the DM itself.
     const isDm = row.channel.kind === "dm" || row.channel.kind === "mpim";
@@ -1093,6 +1148,14 @@ export class SlackInbox implements SlackInboxPort {
     // What you typed is escaped so it cannot open a mention or a link; the nudge's mention is built here, by id.
     await this.options.slack.postMessage(row.channel.id, `${nudge ? `<@${row.author.id}> ` : ""}${escapeMrkdwn(text)}`, threadTs);
     const now = this.now();
+    // The message went out: it stays posted whatever fails below. A draft waiting for this thread is settled by what was sent.
+    if (this.options.drafts) {
+      const settled = await this.options.drafts.settle(row.id, text).catch(() => null);
+      if (settled) {
+        await this.options.truth?.outcome({ thread: row.id, draft: settled.draft.id, outcome: settled.outcome, machine: settled.draft.original ?? settled.draft.text, person: text, records: settled.draft.records }).catch(() => {});
+        if (row.triage?.draft) row = { ...row, triage: { ...row.triage, draft: null } };
+      }
+    }
     if (now.getTime() - new Date(row.arrivedAt).getTime() < HOUR_MS) await this.learnFrom(row, "raised");
     return this.saveAndPublish({ ...row, doneAt: now.toISOString(), youReplied: true, repliedAt: now.toISOString(), snoozedUntil: null });
   }

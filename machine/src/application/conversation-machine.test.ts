@@ -16,7 +16,7 @@ const answer = (over: Record<string, unknown> = {}) => ({
   kind: { choice: "incident", confidence: 0.95 }, needs_reply: { value: true, p: 0.9 }, production_down: { value: true, p: 0.9 }, data_loss: { value: false, p: 0.05 }, security: { value: false, p: 0.05 },
   who: { score: 2, confidence: 0.9 }, what: { score: 2, confidence: 0.9 }, impact: { score: 2, confidence: 0.9 }, time: { score: 2, confidence: 0.9 }, demand: { score: 1, confidence: 0.9 }, ...over,
 });
-const SHORTLIST = [{ slot: 1, id: "card-1", kind: "open" as const, otherSource: null }];
+const SHORTLIST = [{ slot: 1, id: "card-1", kind: "open" as const, otherSource: null, title: "t" }];
 const machine = (decide: () => Promise<{ answer: unknown; recordId?: string }>, relate: (context: unknown) => Promise<{ answer: unknown; recordId?: string }> = async () => ({ answer: { related: { choice: "none", confidence: 0.9 }, new_work: { value: false, p: 0.1 } } })) =>
   new ConversationMachine({
     enrich: async () => ({ context: { channel: "eng", private: false, thread: ["marta: checkout is down"], latest: "checkout is down", author: { profile: "member", title: null }, candidates: [] }, shortlist: SHORTLIST }),

@@ -619,6 +619,12 @@ export class Pipeline {
     return { priority: priority === "P0" || priority === "P1" || priority === "P2" || priority === "P3" ? priority : null };
   }
 
+  /** The address of the card's PR, read where Ship reads it: the last shipping run's finish detail. Only a web address; null otherwise. */
+  async prLinkOf(id: string): Promise<string | null> {
+    const url = (await this.latestStageFinish(id, "shipping"))?.detail?.prUrl;
+    return typeof url === "string" && /^https:\/\/[^\s]+$/.test(url) ? url : null;
+  }
+
   /** The latest task linked to a Jira issue, by its link or its intake source, if any. */
   findByJiraKey(key: string): Promise<TaskRow | null> {
     return this.store.findTaskByJiraKey(key);

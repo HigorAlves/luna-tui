@@ -95,6 +95,14 @@ export interface SlackMessage {
 }
 
 /** One thing in your inbox: a message, or a thread's worth of them collapsed into one. */
+/** A draft waiting for a person: what it is, the text a tap sends, and when it expires. */
+export interface SlackDraft {
+  id: string;
+  kind: "reply" | "questions" | "shipped" | "status";
+  text: string;
+  expiresAt: string;
+}
+
 export interface SlackItem {
   /** `<channel id>:<message ts>`; for a collapsed thread, the parent's. */
   id: string;
@@ -130,6 +138,8 @@ export interface SlackItem {
   triage: SlackTriage | null;
   split: SlackSplit;
   linked: { pr: { repo: string; number: number; split: string } | null; taskId: string | null };
+  /** The draft that waits for a tap on this thread (a reply, a status, questions, the shipped summary); absent when none waits. */
+  draft?: SlackDraft | null;
   /** The thread as the conversation machine holds it; absent or null on an item stored before wave 17. */
   conversation?: Conversation | null;
 }

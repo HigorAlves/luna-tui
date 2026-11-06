@@ -15,6 +15,22 @@ export class ConversationTruth {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
+  /** What a person did with a draft: a file per draft (`<thread>-<draft>.json`, mode 0600) with the record ids; sent or edited also labels `needs_reply` true on the assess record. Ignored and expired label nothing: either can mean "no reply was needed" or "the draft was bad". */
+  async outcome(input: { thread: string; draft: string; outcome: "sent_as_drafted" | "edited" | "ignored" | "expired"; machine: string; person?: string; records: Record<string, string> }): Promise<void> {
+    try {
+      const dir = join(this.stateDir, "ground-truth", "conversation");
+      await mkdir(dir, { recursive: true });
+      const safeName = (s: string): string => s.replace(/[^A-Za-z0-9._-]/g, "_");
+      const lines = (t: string): number => t.split("\n").length;
+      const body = { thread: input.thread, draft: input.draft, outcome: input.outcome, records: input.records, machine: input.machine, ...(input.person !== undefined ? { person: input.person, lineDifference: lines(input.person) - lines(input.machine) } : {}), at: this.now().toISOString() };
+      await writeFile(join(dir, `${safeName(input.thread)}-${safeName(input.draft)}.json`), `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
+    } catch (error) {
+      console.warn(`conversation truth: could not write the outcome: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const record = input.records.assess;
+    if ((input.outcome === "sent_as_drafted" || input.outcome === "edited") && record && this.truth) await this.truth.learned({ pack: "conversation_assess", recordId: record, label: { needs_reply: { value: true } }, source: "person" });
+  }
+
   /** A hand-set relation: labels `related` (the slot, or none) and, for a new candidate or none, `new_work`, on the `conversation_relation` record. */
   async relation(input: { thread: string; record: string | null; relation: string; slot: number | null }): Promise<void> {
     if (!input.record || !this.truth) return;

@@ -1128,7 +1128,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     skills: [],
     access: NO_ACCESS,
     writable: false,
-    maxTurns: 3,
+    maxTurns: 1,
     timeoutMs: 2 * MINUTE,
     engines: only("claude:haiku"),
     effort: "low",

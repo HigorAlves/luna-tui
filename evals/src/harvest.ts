@@ -58,6 +58,11 @@ export function harvest(evalsDir: string, pack: PackId, records: DecisionRecord[
   const report: HarvestReport = { written: [], kept: [], refused: [] };
   for (const record of records) {
     const id = caseIdOf(`rec-${record.id.slice(0, 8)}`)!;
+    // A private conversation's text never becomes a case.
+    if ((record.context as { conversation?: { private?: unknown } }).conversation?.private === true) {
+      report.refused.push({ id: record.id, reason: "a private conversation: its text never becomes a case" });
+      continue;
+    }
     const scrubbed = scrubContext(record.context);
     if (!scrubbed.ok) {
       report.refused.push({ id: record.id, reason: scrubbed.reason });

@@ -425,7 +425,7 @@ describe("the conversation_reply agent pack reads hostile text and has no hands"
   it("drafts with the thread-writer role, read-only, on a cheap engine, answering a reply and a confidence", async () => {
     const { PACKS, NO_ACCESS } = await import("./index.ts");
     const pack = PACKS.conversation_reply;
-    expect(pack).toMatchObject({ kind: "agent", agent: "thread-writer", writable: false, template: "conversation_reply.md", maxTurns: 3, effort: "low", access: NO_ACCESS });
+    expect(pack).toMatchObject({ kind: "agent", agent: "thread-writer", writable: false, template: "conversation_reply.md", maxTurns: 1, effort: "low", access: NO_ACCESS });
     expect(pack.answer.safeParse({ reply: "It is queued.", confidence: 0.8 }).success).toBe(true);
     expect(pack.answer.safeParse({ reply: "x".repeat(1501), confidence: 0.8 }).success).toBe(false);
   });

@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { relationOf } from "./conversation-relation.ts";
 
 const shortlist = [
-  { slot: 1, id: "card-open", kind: "open" as const, otherSource: null },
-  { slot: 2, id: "card-old", kind: "closed" as const, otherSource: { kind: "jira" as const, key: "ENG-1" } },
-  { slot: 3, id: "backlog-1", kind: "backlog" as const, otherSource: null },
+  { slot: 1, id: "card-open", kind: "open" as const, otherSource: null, title: "t" },
+  { slot: 2, id: "card-old", kind: "closed" as const, otherSource: { kind: "jira" as const, key: "ENG-1" }, title: "t" },
+  { slot: 3, id: "backlog-1", kind: "backlog" as const, otherSource: null, title: "t" },
 ];
 const answer = (related: string, confidence: number, newWork?: { value: boolean; p: number }) => ({ related: { choice: related, confidence }, new_work: newWork ?? { value: false, p: 0.1 } });
 

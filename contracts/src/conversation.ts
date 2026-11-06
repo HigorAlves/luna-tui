@@ -78,6 +78,8 @@ export interface ConversationShortlistEntry {
   id: string;
   kind: "open" | "closed" | "backlog";
   otherSource: { kind: "jira" | "github"; key: string } | null;
+  /** A flattened, capped title for the board's picker; only candidates that passed the audience filter are ever listed. Absent on a shortlist stored before. */
+  title?: string;
 }
 
 export interface ConversationParticipant {
