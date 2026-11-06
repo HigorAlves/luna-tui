@@ -14,7 +14,8 @@ export type StageOutcome = z.infer<typeof StageOutcome>;
 
 /** Where a task came from: a tracker issue, or an open PR acted on from the PR inbox. */
 export const TaskSource = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string() }),
+  /** `labels` are the issue's own at intake: the card keeps them so a `security` label still knocks the priority out to P0 when triage reads the signals again. */
+  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional() }),
   z.object({
     kind: z.literal("github_pr"),
     repo: z.string(),
@@ -26,7 +27,7 @@ export const TaskSource = z.discriminatedUnion("kind", [
   /** A ticket made from a Slack message (`t` in the board's Slack inbox). */
   z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string() }),
   /** A ticket imported from a Jira issue by intake. `issueType` is Jira's type name, e.g. `Bug`. */
-  z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable() }),
+  z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable(), labels: z.array(z.string()).optional() }),
   /** A Luna Notch ticket run on the machine: `ref` is its board key (`LUNA-14`), `id` its uuid.
    *  The notch talks to Jira, Slack and Teams about it; `jiraKey` only names the branch. */
   z.object({ kind: z.literal("notch"), ref: z.string().min(1), id: z.string().min(1), jiraKey: z.string().nullable().optional() }),

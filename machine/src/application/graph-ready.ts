@@ -52,7 +52,7 @@ export async function ensureGraphReady(
   const stamp = await deps.graph.stampOf(input.repoPath);
   let reason: string | null = null;
   if (!stamp) reason = "has no code graph yet";
-  else if (!(await deps.graph.isFresh(input.repoPath, stamp, stamp.commit))) reason = "has a code graph built by another Graphify";
+  else if (!(await deps.graph.isFresh(input.repoPath, stamp, stamp.commit))) reason = "has a code graph built by another Graphify or in another image";
   else {
     const behind = await deps.graph.behind?.(input.repoPath, stamp.commit).catch(() => null);
     if (behind !== null && behind !== undefined && behind > bar) reason = `has a code graph ${behind} commits behind (more than ${bar})`;

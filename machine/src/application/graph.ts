@@ -46,7 +46,9 @@ export interface Graph {
   currentDir(repoPath: string): string | null;
   /** Builds the graph of the default branch's head, unless that commit has one. Throws GraphBuildError. */
   build(repoPath: string, signal?: AbortSignal): Promise<GraphStamp>;
-  /** False only when the graph is older than `baseCommit`: its commit is a strict ancestor of it. */
+  /** Whether a build of this repository is running now (whoever asked for it) and the last one's failure, flattened and capped. */
+  health?(repoPath: string): { building: boolean; lastFailure: string | null };
+  /** False when the graph is older than `baseCommit`: its commit is a strict ancestor of it. */
   isFresh(repoPath: string, stamp: GraphStamp, baseCommit: string): Promise<boolean>;
   /** Commits the default branch has over `commit`; null when they cannot be counted. */
   behind?(repoPath: string, commit: string): Promise<number | null>;

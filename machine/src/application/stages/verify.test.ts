@@ -628,6 +628,35 @@ describe("verify on a fresh clone", () => {
       expect(await runner(context)).toMatchObject({ outcome: "fail", findings: [{ category: "env" }] });
     });
 
+    it("compares, runs the checks and runs the review in one image, chosen once, even when the repository's image moves in between", async () => {
+      // A floating base moves: each resolution of the repository's image answers a new one.
+      let resolutions = 0;
+      const imageOf = vi.fn(async () => `sha256:moving-${++resolutions}`);
+      const compared: Array<string | undefined> = [];
+      const execImages: Array<string | undefined> = [];
+      const pack = vi.fn(async (_context: StageContext, _extra?: { image?: string }) => ({ outcome: "pass", detail: { answer: { verdict: "pass", findings: [], results: [], summary: "ok" } } }) as StageResult);
+      const runner = verifyRunner({
+        exec: async (_c, _a, options) => (execImages.push(options.image), { code: 0, stdout: "", stderr: "" }),
+        runPack: pack,
+        stateDir: "/tmp/state",
+        detect: async () => ({ test: ["t"] }) as never,
+        gitIdentity: async () => ({ name: "a", email: "a@b" }),
+        changedPaths: async () => null,
+        fresh: { make: async () => ({ path: "/card.verify", commit: recorded.commit }), bringBack: async () => ({ ok: true }), remove: async () => {} },
+        buildEnv: async () => ({ ...recorded, image: "sha256:moving-1" }),
+        imageOf,
+        envOf: async (_path, commit, _repo, image) => (compared.push(image), { image: image ?? "", lockfiles: recorded.lockfiles, commit, hash: "x" }),
+      });
+      const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+      const result = await runner(context);
+      expect(result.outcome).toBe("pass");
+      expect(imageOf).toHaveBeenCalledTimes(1);
+      expect(compared).toEqual(["sha256:moving-1"]);
+      expect(execImages.length).toBeGreaterThan(0);
+      expect(new Set(execImages)).toEqual(new Set(["sha256:moving-1"]));
+      expect(pack.mock.calls[0]![1]).toMatchObject({ image: "sha256:moving-1" });
+    });
+
     it("compares nothing when Build recorded nothing", async () => {
       const { runner, context } = runnerFor({ image: "sha256:other", lockfiles: {} }, null);
       const result = await runner(context);

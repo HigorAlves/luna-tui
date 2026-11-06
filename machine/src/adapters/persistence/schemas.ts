@@ -68,6 +68,7 @@ export const StageRunEntity = new EntitySchema<StageRunRow & { task?: TaskRow }>
     turns: { type: "integer", nullable: true },
     containerId: { name: "container_id", type: "text", nullable: true },
     inputCommit: { name: "input_commit", type: "text", nullable: true },
+    baseCommit: { name: "base_commit", type: "text", nullable: true },
     outputCommit: { name: "output_commit", type: "text", nullable: true },
     transcriptPath: { name: "transcript_path", type: "text", nullable: true },
     cases: { type: "jsonb", nullable: true },
