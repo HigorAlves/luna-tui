@@ -101,7 +101,7 @@ import { createGitHub } from "./adapters/github/octokit.ts";
 import { taskDiff } from "./adapters/git/diff.ts";
 import { noTokenGitHub } from "./application/github.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
-import { stackFactsOf } from "./application/stack.ts";
+import { currentStackFacts } from "./application/stack.ts";
 import { similarCards } from "./application/size-estimate.ts";
 import { shipRunner } from "./application/stages/ship.ts";
 import { StubStages } from "./application/stages/stubs.ts";
@@ -259,7 +259,7 @@ const stackDeps = {
   clearBase: (id: string) => pipeline.clearBase(id),
   hasChildren: async (id: string) => (await pipeline.stackedOn(id)).length > 0,
   facts: (slug: string, task: Parameters<typeof pipeline.baseOf>[0]) =>
-    stackFactsOf(
+    currentStackFacts(
       {
         github,
         getTask: (id) => pipeline.get(id).catch(() => null),

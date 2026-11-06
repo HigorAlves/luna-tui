@@ -51,6 +51,16 @@ export async function stackFactsOf(deps: StackDeps, slug: string, task: TaskRow)
 }
 
 /**
+ * The facts of a watched card's stack, read from the card's row as it is now: the watch holds the row it started with for days, and `clearBase` (the card left its
+ * stack) changes the stored one. A row that cannot be read throws: the caller waits and never reads a base that may be gone.
+ */
+export async function currentStackFacts(deps: StackDeps, slug: string, task: TaskRow): Promise<StackFacts | null> {
+  const fresh = await deps.getTask(task.id);
+  if (!fresh) throw new Error(`the card ${task.id} cannot be read`);
+  return stackFactsOf(deps, slug, fresh);
+}
+
+/**
  * For a PR GitHub shows merged: the branch it merged into when that is known and is not the repository's default branch, else null. A merge into any
  * other branch (a stacked card's parent, a branch a person retargeted to) is not a ship. Unreadable is null: nothing here ever invents a branch.
  */
