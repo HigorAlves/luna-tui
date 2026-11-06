@@ -167,6 +167,19 @@ describe("the dependency rule in the backlog (wave 15)", () => {
     expect((await call("GET", "/backlog")).body[0]).toMatchObject({ id: a.body.id, schedulable: true });
   });
 
+  it("fails closed: when the states of its dependencies cannot be read, an item with dependencies is not schedulable and promote refuses", async () => {
+    const done = await card("closed");
+    const a = await add("After a card", { dependsOn: [done.id] });
+    const broken = new Backlog({ store: new PgBacklogStore(db), pipeline: { createTask: (i) => pipeline.createTask(i), dependencyStates: async () => { throw new Error("the database blinked"); } }, staleDays: 14 });
+    const entry = (await broken.list()).find((e) => e.id === a.body.id)!;
+    expect(entry.schedulable).toBe(false);
+    expect(entry.blockedBy).toEqual([{ id: done.id, kind: "card", state: "unreadable" }]);
+    await expect(broken.promote(a.body.id)).rejects.toMatchObject({ name: "NotSchedulableError" });
+    expect(await pipeline.list()).toHaveLength(1);
+    const none = new Backlog({ store: new PgBacklogStore(db), pipeline: { createTask: (i) => pipeline.createTask(i) }, staleDays: 14 });
+    expect((await none.list()).find((e) => e.id === a.body.id)!.schedulable).toBe(false);
+  });
+
   it("promote refuses an item that is not schedulable with 409 not_schedulable and the ids, and removes nothing", async () => {
     const first = await add("First");
     const second = await add("Second", { dependsOn: [first.body.id] });

@@ -73,12 +73,15 @@ export class Backlog {
   private async blockers(rows: BacklogRow[], all: BacklogRow[]): Promise<Map<string, NonNullable<BacklogEntry["blockedBy"]>>> {
     const items = new Set(all.map((r) => r.id));
     const wanted = [...new Set(rows.flatMap((r) => r.dependsOn).filter((id) => !items.has(id)))];
-    const cards = wanted.length > 0 && this.options.pipeline.dependencyStates ? await this.options.pipeline.dependencyStates(wanted).catch(() => new Map<string, { state: string; satisfied: boolean }>()) : new Map<string, { state: string; satisfied: boolean }>();
+    // A read that fails (or a pipeline that cannot be asked) leaves the states unknown: every card dependency then blocks.
+    const read = wanted.length > 0 && this.options.pipeline.dependencyStates ? await this.options.pipeline.dependencyStates(wanted).catch((): null => null) : wanted.length > 0 ? null : new Map<string, { state: string; satisfied: boolean }>();
+    const cards = read ?? new Map<string, { state: string; satisfied: boolean }>();
     return new Map(
       rows.map((r) => [
         r.id,
         r.dependsOn.flatMap((id): NonNullable<BacklogEntry["blockedBy"]> => {
           if (items.has(id)) return [{ id, kind: "item", state: "in the backlog" }];
+          if (read === null) return [{ id, kind: "card", state: "unreadable" }];
           const card = cards.get(id);
           return card && !card.satisfied ? [{ id, kind: "card", state: card.state }] : [];
         }),
@@ -130,7 +133,7 @@ export class Backlog {
     const blockedBy = (await this.blockers([item], all)).get(id) ?? [];
     if (blockedBy.length > 0) throw new NotSchedulableError(blockedBy);
     // Its dependencies that are cards: what the new card waits for (an id that is gone is dropped).
-    const cardDeps = item.dependsOn.length > 0 && this.options.pipeline.dependencyStates ? [...(await this.options.pipeline.dependencyStates(item.dependsOn).catch(() => new Map())).keys()] : [];
+    const cardDeps = item.dependsOn.length > 0 && this.options.pipeline.dependencyStates ? [...(await this.options.pipeline.dependencyStates(item.dependsOn)).keys()] : [];
     if (!(await this.options.store.remove(id))) throw new BacklogItemNotFoundError(id);
     const first = item.sources.find((s): s is TaskSource => "kind" in s);
     try {
