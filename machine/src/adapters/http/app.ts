@@ -72,7 +72,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitNotReadyError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitChangedError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -223,7 +223,7 @@ export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog,
     if (error instanceof OutsideApproverRequiredError) return fail(c, 409, "outside_approver_required", error.message);
     if (error instanceof PlanApprovedError) return fail(c, 409, "plan_approved", error.message);
     if (error instanceof RejectNotAllowedError) return fail(c, 409, "reject_not_allowed", error.message);
-    if (error instanceof SplitNotReadyError) return fail(c, 409, "split_not_ready", error.message);
+    if (error instanceof SplitChangedError) return fail(c, 409, "split_changed", error.message);
     if (error instanceof SplitNotValidError) return fail(c, 409, "split_not_valid", error.message);
     if (error instanceof StageStartedError) return fail(c, 409, "stage_started", error.message);
     if (error instanceof SourceImmutableError) return fail(c, 400, "source_immutable", error.message);

@@ -6,6 +6,7 @@ import { carriesSecret, postable } from "./postable.ts";
 /** What a card is told when it is archived: a clock's reasons say who did not answer. */
 export function archivedNotice(reason: unknown): string {
   if (reason === "no_setup") return "Archived: nobody set the repository up in time.";
+  if (reason === "split") return "This was split into smaller changes; each one ships on its own.";
   if (reason === "no_answer") return "Archived: nobody answered the questions in time.";
   return `Archived: ${String(reason ?? "no reason given")}.`;
 }

@@ -106,7 +106,7 @@ export async function buildRealStages(
   /** Triage's first read of a ticket with no signals; `classify` is bound late, once PackRuns exists. */
   triageSignals?: TriageSignalDeps,
   /** The plan stage's decisions (coverage, plan check, risk): `decide` is bound late, once PackRuns exists; null runs the stage without them. */
-  planDecisions?: { decide: PlanDeps["decide"]; size?: { decide: NonNullable<PlanDeps["size"]>["decide"] }; split?: { decompose: NonNullable<PlanDeps["split"]>["decompose"]; check: NonNullable<PlanDeps["split"]>["check"]; depthOf?: NonNullable<PlanDeps["split"]>["depthOf"] } },
+  planDecisions?: { decide: PlanDeps["decide"]; size?: { decide: NonNullable<PlanDeps["size"]>["decide"] }; split?: { decompose: NonNullable<PlanDeps["split"]>["decompose"]; check: NonNullable<PlanDeps["split"]>["check"]; depthOf?: NonNullable<PlanDeps["split"]>["depthOf"]; via?: NonNullable<PlanDeps["split"]>["via"] } },
   /** The machine's code graphs, mounted read-only in every stage; `ensure` asks for a first build of a repo with none. */
   graphs?: { graph: Graph; ensure: (repoPath: string) => void; rebuild?: (repoPath: string) => void },
   /** Build's checks (red_check, scope_check): `decide` is bound late, once PackRuns exists; null runs Build without them. */
@@ -335,6 +335,7 @@ export async function buildRealStages(
           return planDecisions?.split?.check ?? null;
         },
         depthOf: (task) => (planDecisions?.split?.depthOf ? planDecisions.split.depthOf(task) : Promise.resolve(1)),
+        via: (task) => (planDecisions?.split?.via ? planDecisions.split.via(task) : Promise.resolve("cards")),
       },
       policies: { for: (repoPath) => policies.for(repoPath) },
       ...(graphs ? { graph: graphs.graph, graphReady } : {}),

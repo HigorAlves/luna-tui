@@ -34,11 +34,14 @@ export interface Workspace {
  *  `bug/PLAT-123`); every other task `task/<id8>-<slug>`. The checkout folder is the branch
  *  with `/` as `-`, so `bug/PLAT-123` lives in `<repo>/bug-PLAT-123`. */
 export function workspaceFor(
-  task: { id: string; title: string; route?: string; jira?: import("@hardness/contracts").JiraLink | null; source?: import("@hardness/contracts").TaskSource | null },
+  task: { id: string; title: string; route?: string; jira?: import("@hardness/contracts").JiraLink | null; source?: import("@hardness/contracts").TaskSource | null; card?: { splitFrom?: string; splitPart?: { n: number } } | null },
   repoPath: string,
   worktreesDir: string,
   jiraPattern?: string,
 ): Workspace {
+  // A part of a split: the branch is built from ids alone, never a word of the title a model wrote.
+  const part = task.card?.splitFrom && task.card.splitPart ? `task/${task.id.slice(0, 8)}-part-${task.card.splitPart.n}-of-${task.card.splitFrom.slice(0, 8)}` : null;
+  if (part) return { branch: part, path: join(worktreesDir, basename(repoPath), part.replaceAll("/", "-")) };
   const linked = jiraBranch({ id: task.id, title: task.title, route: task.route ?? "feature", jira: task.jira ?? null, source: task.source ?? null }, jiraPattern);
   const branch = linked ?? `task/${task.id.slice(0, 8)}-${slug(task.title)}`;
   return { branch, path: join(worktreesDir, basename(repoPath), branch.replaceAll("/", "-")) };

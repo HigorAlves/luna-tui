@@ -82,9 +82,9 @@ describe("a plan over the size limit", () => {
     }
   });
 
-  it("refuses an approval that has nothing to make yet: split_not_ready at a split, split_not_valid when no split was found", async () => {
+  it("refuses an approval that has nothing valid to make: a split that fails the checks now, or no split at all", async () => {
     const id = await atGate("split");
-    await expect(pipeline.decide(id, "approved")).rejects.toMatchObject({ name: "SplitNotReadyError" });
+    await expect(pipeline.decide(id, "approved")).rejects.toMatchObject({ name: "SplitNotValidError" });
     const failed = await atGate("split_failed");
     await expect(pipeline.decide(failed, "approved")).rejects.toMatchObject({ name: "SplitNotValidError" });
     expect(await count("tasks")).toBe(2);

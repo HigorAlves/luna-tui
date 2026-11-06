@@ -89,6 +89,16 @@ export interface CardFields {
   };
   /** The card this one was split from (an id); only the machine sets it, when a person approves a split. Its chain gives the card's depth. */
   splitFrom?: string;
+  /** The cards a split made from this one, and which part of how many this card is. */
+  splitInto?: string[];
+  splitPart?: { n: number; of: number };
+  /** The cards this one waits for (ids), and whether it starts by itself once they are there. */
+  dependsOn?: string[];
+  startWhenReady?: boolean;
+  /** The lowest risk this card may be scored: a child of a split is never riskier than its origin was, only the other way. */
+  riskFloor?: "low" | "medium" | "high";
+  /** The card and branch this one is stacked on (filled from the dependency rule). */
+  base?: { card: string; branch: string };
   /** Cards linked as related to this one (ids). */
   related?: string[];
   /** The card this one was merged into (a card, or a backlog item); the card is `closed`. */

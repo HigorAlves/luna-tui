@@ -140,3 +140,27 @@ export function withDemand(record: TriageRecord | null, count: number, scoring: 
   const subScores = { ...detail.subScores, demand: Math.min(DEMAND_MAX, Math.max(1, count)) };
   return { ...record, urgencyDetail: { priority: scorePriority(subScores, scoring).priority, subScores } };
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const MAX_DEPENDENCIES = 20;
+
+/** What the machine alone says about a card in a stack (`NewTask.stack`): well-formed ids only, bounded lists, a floor that is a level. A card made from a split has its duplicate check marked answered, so wave 14's check never merges two parts of one split. Pure. */
+export function stackFieldsOf(
+  stack: { splitFrom?: string; splitPart?: { n: number; of: number }; dependsOn?: string[]; startWhenReady?: boolean; riskFloor?: "low" | "medium" | "high" } | undefined,
+  at: string,
+): Partial<CardFields> {
+  if (!stack) return {};
+  const splitFrom = stack.splitFrom && UUID.test(stack.splitFrom) ? stack.splitFrom : undefined;
+  const part = stack.splitPart;
+  const splitPart = part && Number.isInteger(part.n) && Number.isInteger(part.of) && part.n >= 1 && part.of >= 2 && part.of <= 20 && part.n <= part.of ? { n: part.n, of: part.of } : undefined;
+  const dependsOn = [...new Set((stack.dependsOn ?? []).filter((id) => UUID.test(id)))].slice(0, MAX_DEPENDENCIES);
+  const riskFloor = stack.riskFloor === "low" || stack.riskFloor === "medium" || stack.riskFloor === "high" ? stack.riskFloor : undefined;
+  return {
+    ...(splitFrom ? { splitFrom } : {}),
+    ...(splitPart ? { splitPart } : {}),
+    ...(dependsOn.length > 0 ? { dependsOn } : {}),
+    ...(stack.startWhenReady === true ? { startWhenReady: true } : {}),
+    ...(riskFloor ? { riskFloor } : {}),
+    ...(splitFrom ? { dedup: { at, recordId: null, candidates: [], answer: null, outcome: "none" as const, chosen: "neither" as const } } : {}),
+  };
+}

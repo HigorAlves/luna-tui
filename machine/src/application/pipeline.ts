@@ -2,7 +2,9 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE } from "@hardness/contracts";
+import { z } from "zod";
+
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -14,7 +16,8 @@ import { type CardFields, type ContextMissing, type DedupContext, contextComplet
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type DedupAnswer, checkDuplicates } from "./intake-dedup.ts";
 import type { Candidate } from "../domain/similarity.ts";
-import { type CardFieldsInput, MAX_FOLLOWERS, MAX_LINKS, appendSource, cardFieldsOf, cardOf, mergeFields, unmergeFields, withDemand } from "../domain/card-fields.ts";
+import { type CardFieldsInput, MAX_FOLLOWERS, MAX_LINKS, appendSource, cardFieldsOf, cardOf, mergeFields, stackFieldsOf, unmergeFields, withDemand } from "../domain/card-fields.ts";
+import { splitFacts } from "../domain/split.ts";
 import { canSeeKept, contextAsk, mergedNotice, questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -104,15 +107,15 @@ export class NoContextGateError extends Error {
   }
 }
 
-/** A person approved a split that makes nothing yet: the gate says so instead of closing on an approval that does nothing. */
-export class SplitNotReadyError extends Error {
-  constructor(id: string) {
-    super(`task ${id} waits at a split proposal: approving a split is not available yet; send it back, reject it, or keep the card whole`);
-    this.name = "SplitNotReadyError";
+/** The gate was opened for one way of splitting (cards or tickets) and the approval would now do the other: the person read something else. */
+export class SplitChangedError extends Error {
+  constructor(id: string, was: string, now: string) {
+    super(`task ${id}: the split was proposed to make ${was}, and an approval would now make ${now}: read it again`);
+    this.name = "SplitChangedError";
   }
 }
 
-/** A person approved a gate that carries no valid split: only sending back, rejecting or keeping the card whole answer it. */
+/** A person approved a gate whose split does not pass the checks as they are now (or that carries none): send it back, reject it, or keep the card whole. */
 export class SplitNotValidError extends Error {
   constructor(id: string) {
     super(`task ${id} has no valid split to approve: send it back with a comment, reject it, or keep the card whole`);
@@ -121,6 +124,9 @@ export class SplitNotValidError extends Error {
 }
 
 /** The plan gate's two split outcomes: a proposal a person reads, or the reason there is none. */
+/** A size bucket for a child's estimate, as a hint for triage (weighed, never trusted). */
+const sizeBucketOf = (estLoc: number): string => (estLoc <= 100 ? "XS" : estLoc <= 400 ? "S" : estLoc <= 1000 ? "M" : estLoc <= 2000 ? "L" : "XL");
+
 const isSplitOutcome = (outcome: unknown): outcome is "split" | "split_failed" => outcome === "split" || outcome === "split_failed";
 
 /** What the duplicate check needs from outside: the one decision call, and the backlog (to list its items and to bump one). */
@@ -176,9 +182,16 @@ export interface NewTask extends Omit<CardFieldsInput, "source"> {
   classification?: TaskClassification | null;
   record?: TriageRecord | null;
   evidence?: EvidencePack | null;
+  /** The machine's alone (a split's approval sets it; `POST /tasks` has no such field): what stacks this card on others. */
+  stack?: { splitFrom?: string; splitPart?: { n: number; of: number }; dependsOn?: string[]; startWhenReady?: boolean; riskFloor?: "low" | "medium" | "high" };
 }
 
 export interface PipelineOptions {
+  /** A card that came from a ticket the tracker port knows is split into child tickets, never child cards (slice 11 wires it): `knows` answers where the card's ticket lives, `create` makes the children there once a person approved. */
+  splitTickets?: {
+    knows(task: TaskRow): Promise<{ tool: string; key: string } | null>;
+    create(task: TaskRow, children: SplitChild[], gateId: string): Promise<{ keys: string[] }>;
+  };
   /** Looks at an open release question (the ship approval) against GitHub: `merged` closes it as an automatic approval, `withdraw` takes it back so the watch asks again, `keep` leaves it. Nothing polls while a person is asked, so `tick` calls it at most once per `shipProbeMs`. */
   shipGateProbe?: (task: TaskRow, gate: ApprovalRow) => Promise<"merged" | "closed" | "withdraw" | "keep">;
   /** The shortest time between two probes of one card's release question (the repository's poll interval); 0 probes on every tick. */
@@ -422,6 +435,7 @@ export class Pipeline {
   private readonly policies: Pick<PolicyStore, "for">;
   private readonly onAlert: (alert: BudgetAlert) => void;
   private readonly jiraSite: string | null;
+  private readonly splitTickets: PipelineOptions["splitTickets"] | null;
   /** The highest threshold already raised per scope key (`task:<id>`, `repo:<path>:<month>`, `day:<date>`). */
   private readonly alerted = new Map<string, number>();
   /** Set by shutdown(): no slot is filled and no loop started from here on. */
@@ -478,6 +492,7 @@ export class Pipeline {
     this.policies = options.policies ?? new PolicyStore();
     this.onAlert = options.onAlert ?? (() => {});
     this.jiraSite = options.jiraSite ?? null;
+    this.splitTickets = options.splitTickets ?? null;
     this.credentials = options.credentials ?? { check: () => Promise.resolve({ available: true }) };
     this.engineBudgets = options.engineBudgets ?? null;
     this.telemetry = options.telemetry ?? noTelemetry();
@@ -551,7 +566,7 @@ export class Pipeline {
       ...(input.classification ? { classification: input.classification } : {}),
       ...(input.record ? { record: input.record } : {}),
       ...(input.evidence ? { evidence: input.evidence } : {}),
-      card: cardFieldsOf({ ...input, source }),
+      card: { ...cardFieldsOf({ ...input, source }), ...stackFieldsOf(input.stack, new Date().toISOString()) },
     };
   }
 
@@ -1382,7 +1397,10 @@ export class Pipeline {
       response = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (decision === "approved" && open && isSplitOutcome(outcome)) {
-      if (response?.keepWhole !== true) throw outcome === "split_failed" ? new SplitNotValidError(id) : new SplitNotReadyError(id);
+      if (response?.keepWhole !== true) {
+        if (outcome === "split_failed") throw new SplitNotValidError(id);
+        return this.approveSplit(id, open, { ...(reason ? { reason } : {}), ...(approver ? { approver } : {}), gate });
+      }
       // Kept whole: the gate closes approved with the person's answer, and the plan stage runs again, which now plans without the size guard.
       const size = (open.requested.size ?? {}) as { estLoc?: unknown; planned?: unknown; by?: unknown; limit?: { hard?: unknown } };
       const lines = size.by === "plan" && typeof size.planned === "number" ? size.planned : size.estLoc;
@@ -1489,6 +1507,72 @@ export class Pipeline {
     const stepFiles = plan.success ? plan.data.steps.flatMap((st) => st.files ?? st.touchpoints) : slices.flatMap((sl) => (Array.isArray((sl as { touchpoints?: unknown }).touchpoints) ? ((sl as { touchpoints: unknown[] }).touchpoints.map(String)) : []));
     const found = await this.owners(repoPath, ruleFiles(map.success ? map.data : null, stepFiles)).catch((): "failed" => "failed");
     return ownersStateOf(found);
+  }
+
+  /** How an approval of a split would be made now: child tickets when the tracker port knows the card's ticket, else child cards. */
+  async splitVia(task: TaskRow): Promise<"cards" | "tickets"> {
+    return (await this.splitTickets?.knows(task).catch(() => null)) ? "tickets" : "cards";
+  }
+
+  /** A person approved the split the gate shows: the children are made (cards once each, under `split:<origin>:<n>`; or tickets through the port), then the origin ends `split`.
+   *  Checked first against the repository's limits as they are now and against the way of splitting the gate was opened for. A failure midway archives nothing; the next approval goes on from the keys. */
+  private async approveSplit(id: string, open: ApprovalRow, how: { reason?: string; approver?: string; gate: ApprovalRow | undefined }): Promise<TaskRow> {
+    const task = await this.get(id);
+    const proposed = (open.requested.split ?? {}) as { children?: unknown; via?: unknown };
+    const parsed = z.array(SplitChild).safeParse(proposed.children);
+    if (!parsed.success) throw new SplitNotValidError(id);
+    const limits = sizeLimits((await this.policyFor(task.repoPath)).factory.size);
+    const facts = splitFacts(parsed.data, { criteria: criteriaOf(task.criteria) }, { hard: limits.hard, maxChildren: limits.maxChildren });
+    if (facts.issues.length > 0) throw new SplitNotValidError(id);
+    const via = await this.splitVia(task);
+    if (proposed.via !== via) throw new SplitChangedError(id, String(proposed.via), via);
+    const kids = facts.children;
+    const record = { decision: "approved" as const, ...(how.reason ? { reason: how.reason } : {}), response: { ...(how.approver ? { approver: how.approver } : {}) } };
+    if (via === "tickets") {
+      await this.splitTickets!.create(task, kids, open.id);
+      await this.log(id, "card.split", { children: kids.length, via: "tickets" });
+      await this.archive(id, "split", { onlyFrom: new Set<TaskState>(["awaiting_approval"]), decision: record });
+      if (how.gate) await this.learnFromGate(id, how.gate, "approved", {});
+      return this.get(id);
+    }
+    // A child is never riskier than the gate's own level allows to fall: its floor is the origin's risk.
+    const gateRisk = (open.requested.risk ?? {}) as { level?: unknown; machine?: unknown };
+    const floor: "low" | "medium" | "high" = gateRisk.level === "high" || gateRisk.machine === "high" ? "high" : gateRisk.level === "medium" || gateRisk.machine === "medium" ? "medium" : "low";
+    const made = new Map<number, string>();
+    const topological = kids.map((_, i) => i).sort((a, b) => kids[a]!.order - kids[b]!.order || a - b);
+    for (const i of topological) {
+      const kid = kids[i]!;
+      const n = i + 1;
+      const files = kid.files_hint.length > 0 ? `\n\nFiles:\n${kid.files_hint.map((f) => `- ${f}`).join("\n")}` : "";
+      const { task: child, created } = await this.createTaskOnce(
+        {
+          title: kid.title,
+          description: `Part ${n} of ${kids.length} of card ${id.slice(0, 8)}.\n\n${kid.goal}${files}`,
+          criteria: kid.acceptance_criteria,
+          repoPath: task.repoPath,
+          stages: task.stages,
+          noJiraDetection: true,
+          originMachine: "automation",
+          hints: { size: sizeBucketOf(kid.est_loc) },
+          stack: { splitFrom: id, splitPart: { n, of: kids.length }, dependsOn: kid.depends_on.map((p) => made.get(p - 1)).filter((x): x is string => x !== undefined), startWhenReady: true, riskFloor: floor },
+        },
+        `split:${id}:${n}`,
+      );
+      made.set(i, child.id);
+      if (created) await this.log(child.id, "card.child", { of: id, n, total: kids.length });
+    }
+    const ids = kids.map((_, i) => made.get(i)!);
+    await this.store.updateTask(id, { card: { ...cardOf(task), splitInto: ids } });
+    await this.log(id, "card.split", { children: kids.length, via: "cards" });
+    await this.archive(id, "split", { onlyFrom: new Set<TaskState>(["awaiting_approval"]), decision: record });
+    if (how.gate) await this.learnFromGate(id, how.gate, "approved", {});
+    // The children with nothing to wait for start now; the others stay drafts that start when ready.
+    for (const child of ids) {
+      const row = await this.get(child);
+      if ((cardOf(row).dependsOn ?? []).length > 0) continue;
+      await this.start(child).catch((error: unknown) => console.error(`could not start part ${child} of ${id}`, error));
+    }
+    return this.get(id);
   }
 
   /** A rejection: the plan gate's alone (an open plan, not triage's outcome and not a later gate). The card is archived with reason `rejected`, the comment kept. */

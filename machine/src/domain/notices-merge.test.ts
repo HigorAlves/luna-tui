@@ -42,3 +42,10 @@ describe("what a merged duplicate's reporter may be told: it fails closed", () =
     expect(hidden).not.toMatch(/[0-9a-f]{8}/);
   });
 });
+
+describe("the notice a split card's source hears", () => {
+  it("is one fixed line and carries nothing of a child", async () => {
+    const { archivedNotice } = await import("./notices.ts");
+    expect(archivedNotice("split")).toBe("This was split into smaller changes; each one ships on its own.");
+  });
+});

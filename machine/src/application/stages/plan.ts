@@ -37,6 +37,7 @@ import {
   riskOf,
 } from "@hardness/contracts";
 
+import { cardOf } from "../../domain/card-fields.ts";
 import type { RequiredOwners } from "../../domain/codeowners.ts";
 import { decompositionLoop } from "./decompose.ts";
 import { type SizeDecision, sizeAssessment, sizeContextOf, sizeDecisionOf } from "../size-estimate.ts";
@@ -74,6 +75,8 @@ export interface PlanDeps {
     check: ((context: SplitContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
     /** The card's depth: 1, plus one for each card it was split from, up its chain. Absent, 1. */
     depthOf?: (task: StageContext["task"]) => Promise<number>;
+    /** How an approval would make the children now: "tickets" when the card's ticket lives in a tracker the machine can write to, else "cards". Absent, "cards". */
+    via?: (task: StageContext["task"]) => Promise<"cards" | "tickets">;
   };
   /** Each repo's luna.yaml bars for the decisions. */
   policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { size?: FactoryConfig["size"]; fast_lane?: FactoryConfig["fast_lane"]; plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number; approvers?: FactoryConfig["plan"]["approvers"] }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
@@ -263,6 +266,14 @@ export function planStage(deps: PlanDeps): StageRunner {
       level = maxRisk(level, raisedTo.data);
       risk = { ...risk, level, machine: level };
     }
+    // A part of a split is never scored below its origin: the floor is the origin's level, applied whatever the decision said.
+    let floorRaised: string | undefined;
+    const floor = cardOf(task).riskFloor;
+    if (floor && maxRisk(level, floor) !== level) {
+      level = maxRisk(level, floor);
+      risk = { ...risk, level, machine: level };
+      floorRaised = `its origin was scored ${floor}`;
+    }
     const riskPart = { risk };
     // A plan found wrong in Build, Verify or review comes back with its evidence: the planner's alone.
     const replanPart = context.replan ? { replan: context.replan } : {};
@@ -323,7 +334,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         summary: ok ? `this change is over the size limit: split into ${looked.children.length} changes` : "this change is over the size limit and no valid split was found",
         ...(!ok ? { reason: reason ?? (looked as { reason: string }).reason } : {}),
         ...(looked
-          ? { split: looked.ok ? { children: looked.children, rounds: looked.rounds, judged: looked.judged, via: "cards" } : { children: looked.children, issues: looked.issues, rounds: looked.rounds } }
+          ? { split: looked.ok ? { children: looked.children, rounds: looked.rounds, judged: looked.judged, via: (await split.via?.(task).catch(() => "cards" as const)) ?? "cards" } : { children: looked.children, issues: looked.issues, rounds: looked.rounds } }
           : { split: { children: [], issues: [], rounds: 0 } }),
         size,
         risk,
@@ -505,7 +516,7 @@ export function planStage(deps: PlanDeps): StageRunner {
     // approvers rule and Ship read, and the machine's own floor from here on.
     const stepFiles = (finalPlan?.steps ?? []).flatMap((s) => s.files ?? s.touchpoints);
     const control = controlPlaneFiles(stepFiles);
-    let riskRaised: string | undefined;
+    let riskRaised: string | undefined = floorRaised;
     if (control.length > 0 && level !== "high") {
       level = "high";
       risk = { ...risk, level: "high", machine: "high" };

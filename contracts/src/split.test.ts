@@ -94,3 +94,18 @@ describe("decompose: the agent pack that proposes the children", () => {
     expect(AgentRole.options).toContain("decomposer");
   });
 });
+
+describe("what only the machine sets on a split card", () => {
+  it("refuses the archive reason split from a client, and keeps it as a reason the machine writes", async () => {
+    const { ArchiveInput, ArchiveReason } = await import("./index.ts");
+    expect(ArchiveReason.safeParse("split").success).toBe(true);
+    expect(ArchiveInput.safeParse({ reason: "split" }).success).toBe(false);
+    expect(ArchiveInput.safeParse({ reason: "rejected" }).success).toBe(true);
+  });
+
+  it("takes none of the stack's fields from a client's new card", async () => {
+    const { NewTaskInput } = await import("./index.ts");
+    const body = { title: "x", stack: { splitFrom: "a" }, splitFrom: "a", splitInto: ["a"], splitPart: { n: 1, of: 2 }, dependsOn: ["a"], startWhenReady: true, riskFloor: "low", base: { card: "a", branch: "b" } };
+    expect(Object.keys(NewTaskInput.parse(body))).toEqual(["title"]);
+  });
+});

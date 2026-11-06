@@ -1031,3 +1031,30 @@ describe("planStage's split exit", () => {
     expect((result.detail as { flagged: string[] }).flagged).toContain("over the size limit");
   });
 });
+
+describe("planStage's risk floor and the way a split is made", () => {
+  it("never scores a part of a split below its origin: the level is raised to the floor and the gate says why", async () => {
+    const part = { ...task, card: { riskFloor: "high" } } as unknown as TaskRow;
+    const { run } = setup();
+    const result = await run(context({ task: part }));
+    expect(result.detail).toMatchObject({ risk: { level: "high", machine: "high" }, riskRaised: "its origin was scored high" });
+  });
+
+  it("leaves a card with no floor, or a floor under its own level, as it was", async () => {
+    const { run } = setup();
+    const plain = await run(context());
+    expect(plain.detail).not.toHaveProperty("riskRaised");
+    const low = await run(context({ task: { ...task, card: { riskFloor: "low" } } as unknown as TaskRow }));
+    expect(low.detail).not.toHaveProperty("riskRaised");
+  });
+
+  it("opens a split gate with the way an approval would make the children, as the pipeline says it now", async () => {
+    const base = setup({ plan: [planned()] });
+    base.deps.size = { decide: async () => ({ est_loc: { score: 6, confidence: 0.95 }, est_files: { score: 1, confidence: 0.95 }, reviewable: { value: true, p: 0.95 } }) };
+    const words = Array.from({ length: 25 }, (_, i) => `w${i}`).join(" ");
+    const kid = (n: number) => ({ title: `Part ${n}`, goal: words, acceptance_criteria: ["ok"], covers: [`C${n}`], files_hint: [], est_loc: 400, depends_on: [], order: n });
+    base.deps.split = { decompose: async () => ({ children: [kid(1), kid(2)] }), check: null, via: async () => "tickets" };
+    const result = await planStage(base.deps)(context({ task: { ...task, criteria: ["a", "b"] } as unknown as TaskRow }));
+    expect(result.detail).toMatchObject({ outcome: "split", split: { via: "tickets" } });
+  });
+});

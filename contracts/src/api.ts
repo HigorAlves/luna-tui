@@ -172,7 +172,8 @@ export type AddFindingInput = z.infer<typeof AddFindingInput>;
 export const EvidenceFeedbackInput = z.object({ useful: z.boolean(), note: z.string().max(500).optional() });
 export type EvidenceFeedbackInput = z.infer<typeof EvidenceFeedbackInput>;
 
-export const ArchiveInput = z.object({ reason: ArchiveReason });
+/** `split` is the machine's alone: only the approval of a split archives a card with it. */
+export const ArchiveInput = z.object({ reason: ArchiveReason.exclude(["split"]) });
 export type ArchiveInput = z.infer<typeof ArchiveInput>;
 
 export const DecisionInput = z.object({

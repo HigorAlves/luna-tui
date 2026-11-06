@@ -93,8 +93,8 @@ describe("POST /tasks/:id/decision at a split gate", () => {
     return task.id;
   };
 
-  it("answers 409 split_not_ready to an approval of a split, and 409 split_not_valid when there is none", async () => {
-    expect(await decide(await atSplit("split"), { decision: "approved" })).toMatchObject({ status: 409, body: { error: "split_not_ready" } });
+  it("answers 409 split_not_valid to an approval of a split that fails the checks, and when there is none", async () => {
+    expect(await decide(await atSplit("split"), { decision: "approved" })).toMatchObject({ status: 409, body: { error: "split_not_valid" } });
     expect(await decide(await atSplit("split_failed"), { decision: "approved" })).toMatchObject({ status: 409, body: { error: "split_not_valid" } });
   });
 
