@@ -81,25 +81,137 @@ export type RebaseResult = { ok: true; onto: string } | { ok: false; error: stri
 const BRANCH_NAME = /^[A-Za-z0-9][\w./-]*$/;
 export const isBranchName = (name: string): boolean => BRANCH_NAME.test(name) && !name.includes("..") && !name.includes("//") && !name.endsWith("/") && !name.endsWith(".lock");
 
-/** Rebases the task's worktree onto `origin/<default branch>`, once. A rebase that stops is aborted
- *  (the worktree is left as it was) and reports the files in conflict. Never pushes: the caller does. */
-export async function rebaseOntoDefault(
+/** Where a stacked card's base commit is recorded in its own repository (the machine's `M`), and the config key of the parent's branch name. Only the host writes either. */
+export const BASE_REF = "refs/luna/base";
+const BASE_KEY = "luna.baseBranch";
+
+/** What the card's repository records of its stack: the base commit and the parent's branch name (null for a card that never had one, or that left its stack). */
+export async function stackOf(path: string): Promise<{ sha: string | null; branch: string | null }> {
+  const sha = await exec("git", [...HOST_GIT, ...at(path), "rev-parse", "--verify", "--quiet", `${BASE_REF}^{commit}`]);
+  const branch = await exec("git", [...HOST_GIT, ...at(path), "config", "--local", "--get", BASE_KEY]);
+  const name = branch.code === 0 ? branch.stdout.trim() : "";
+  return { sha: sha.code === 0 && /^[0-9a-f]{40,64}$/.test(sha.stdout.trim()) ? sha.stdout.trim() : null, branch: isBranchName(name) ? name : null };
+}
+
+const hasGitlink = (raw: { code: number; stdout: string }): boolean => raw.code !== 0 || /^:\d{6} 160000 /m.test(raw.stdout);
+
+/** Whether the change from `from` to `to` (from their merge base) adds or changes a gitlink (mode 160000) in the user's repository: a nested repository a stack must not carry in. Unreadable counts as yes. */
+export async function repoAddsGitlink(run: GitExec, repoPath: string, from: string, to: string): Promise<boolean> {
+  const mb = await run("git", [...HOST_GIT, "-C", repoPath, "merge-base", from, to]);
+  const since = mb.code === 0 && mb.stdout.trim() ? mb.stdout.trim() : from;
+  return hasGitlink(await run("git", [...HOST_GIT, "-C", repoPath, "diff", "--raw", "--no-renames", since, to]));
+}
+
+/** The same in a card's own repository (`from` and `to` are refs or commits there). */
+async function workspaceAddsGitlink(run: GitExec, path: string, from: string, to: string): Promise<boolean> {
+  const mb = await run("git", [...HOST_GIT, ...at(path), "merge-base", from, to]);
+  const since = mb.code === 0 && mb.stdout.trim() ? mb.stdout.trim() : from;
+  return hasGitlink(await run("git", [...HOST_GIT, ...at(path), "diff", "--raw", "--no-renames", since, to]));
+}
+
+const failed = (stage: string, out: { code: number; stdout: string; stderr: string }): RebaseResult => ({ ok: false, error: `${stage} failed: ${(out.stderr || out.stdout).trim() || `exit code ${out.code}`}`, conflicts: [] });
+
+const conflictsOf = (out: { stdout: string }): string[] => out.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+
+async function defaultTarget(defaultBranchOf: (repoPath: string) => Promise<string | null>, repoPath: string): Promise<string | RebaseResult> {
+  const base = await defaultBranchOf(repoPath);
+  return !base || !isBranchName(base) ? { ok: false, error: `no usable default branch: ${JSON.stringify(base ?? null)}`, conflicts: [] } : base;
+}
+
+/** The rebase of a card that is, or was, stacked: `--onto <onto> refs/luna/base` replays only the card's own commits; aborted when it stops (the folder is left as it was), with the files in conflict. Its commits are unsigned, as every commit the machine makes is. */
+async function replayOwn(run: GitExec, worktreePath: string, onto: string, label: string): Promise<RebaseResult> {
+  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), "-c", "commit.gpgsign=false", "rebase", "--onto", onto, BASE_REF]);
+  if (rebased.code === 0) return { ok: true, onto: label };
+  const unmerged = await run("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", "--diff-filter=U"]);
+  await run("git", [...HOST_GIT, ...at(worktreePath), "rebase", "--abort"]);
+  return { ok: false, error: (rebased.stderr || rebased.stdout).trim() || `exit code ${rebased.code}`, conflicts: conflictsOf(unmerged) };
+}
+
+/** The refusal a nested repository in the folder gets: a failed result, never a thrown error. */
+function nestedRefusal(worktreePath: string): RebaseResult | null {
+  try {
+    assertNoNestedRepository(worktreePath);
+    return null;
+  } catch (error) {
+    return { ok: false, error: (error as Error).message, conflicts: [] };
+  }
+}
+
+/**
+ * Rebases the task's worktree onto its base, once, and never pushes (the caller does). A rebase that stops is aborted
+ * (the worktree is left as it was) and reports the files in conflict.
+ * - A stacked card (`luna.baseBranch` recorded): the parent's branch is fetched from `origin`, a range that adds a
+ *   gitlink is refused, `rebase --onto origin/<branch> refs/luna/base` replays only the card's own commits, and the recorded base moves to the new tip.
+ * - A card that left its stack (a base commit and no branch): onto `origin/<default branch>` as below, and the recorded base moves there.
+ * - A card with neither: onto `origin/<default branch>`, nothing recorded.
+ */
+export async function rebaseOntoBase(
   run: GitExec,
   worktreePath: string,
   repoPath: string,
   defaultBranchOf: (repoPath: string) => Promise<string | null> = defaultBranch,
 ): Promise<RebaseResult> {
-  const base = await defaultBranchOf(repoPath);
-  if (!base || !isBranchName(base)) return { ok: false, error: `no usable default branch: ${JSON.stringify(base ?? null)}`, conflicts: [] };
-  const git = (...args: string[]) => [...HOST_GIT, ...at(worktreePath), ...args];
+  const recorded = await stackOf(worktreePath);
+  if (recorded.sha && recorded.branch) {
+    const nested = nestedRefusal(worktreePath);
+    if (nested) return nested;
+    const b = recorded.branch;
+    const fetched = await run("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--end-of-options", "origin", `+refs/heads/${b}:refs/remotes/origin/${b}`], { timeoutMs: FETCH_TIMEOUT });
+    if (fetched.code !== 0) return failed("git fetch", fetched);
+    const tip = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", `refs/remotes/origin/${b}^{commit}`]);
+    if (tip.code !== 0) return failed("reading the parent's branch", tip);
+    if (await workspaceAddsGitlink(run, worktreePath, recorded.sha, tip.stdout.trim())) return { ok: false, error: "the parent's branch adds a nested repository (mode 160000): nothing was rebased", conflicts: [] };
+    const result = await replayOwn(run, worktreePath, `refs/remotes/origin/${b}`, `origin/${b}`);
+    if (result.ok) await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, tip.stdout.trim()]);
+    return result;
+  }
+  const base = await defaultTarget(defaultBranchOf, repoPath);
+  if (typeof base !== "string") return base;
   // `--end-of-options`: whatever the name, it is a ref, never an option.
-  const fetched = await run("git", git("fetch", "--quiet", "--end-of-options", "origin", base), { timeoutMs: FETCH_TIMEOUT });
-  if (fetched.code !== 0) return { ok: false, error: `git fetch failed: ${(fetched.stderr || fetched.stdout).trim() || `exit code ${fetched.code}`}`, conflicts: [] };
-  const rebased = await run("git", git("rebase", `origin/${base}`));
-  if (rebased.code === 0) return { ok: true, onto: `origin/${base}` };
-  const unmerged = await run("git", git("diff", "--name-only", "--diff-filter=U"));
-  await run("git", git("rebase", "--abort"));
-  return { ok: false, error: (rebased.stderr || rebased.stdout).trim() || `exit code ${rebased.code}`, conflicts: unmerged.stdout.split("\n").map((l) => l.trim()).filter(Boolean) };
+  const fetched = await run("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--end-of-options", "origin", base], { timeoutMs: FETCH_TIMEOUT });
+  if (fetched.code !== 0) return failed("git fetch", fetched);
+  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), ...(recorded.sha ? ["-c", "commit.gpgsign=false"] : []), "rebase", `origin/${base}`]);
+  if (rebased.code === 0) {
+    if (recorded.sha) {
+      const tip = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", `origin/${base}^{commit}`]);
+      if (tip.code === 0) await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, tip.stdout.trim()]);
+    }
+    return { ok: true, onto: `origin/${base}` };
+  }
+  const unmerged = await run("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", "--diff-filter=U"]);
+  await run("git", [...HOST_GIT, ...at(worktreePath), "rebase", "--abort"]);
+  return { ok: false, error: (rebased.stderr || rebased.stdout).trim() || `exit code ${rebased.code}`, conflicts: conflictsOf(unmerged) };
+}
+
+/** The same function, under the name every caller before the stack used. */
+export const rebaseOntoDefault = rebaseOntoBase;
+
+/**
+ * The card's parent merged: only the card's own commits (those after `refs/luna/base`) are replayed onto `origin/<default branch>`, the recorded
+ * base moves to that commit and the parent's branch name is forgotten. A rebase that stops is aborted and nothing recorded changes.
+ */
+export async function unstack(
+  run: GitExec,
+  worktreePath: string,
+  repoPath: string,
+  defaultBranchOf: (repoPath: string) => Promise<string | null> = defaultBranch,
+): Promise<RebaseResult> {
+  const recorded = await stackOf(worktreePath);
+  if (!recorded.sha) return { ok: false, error: "the card has no recorded base", conflicts: [] };
+  const nested = nestedRefusal(worktreePath);
+  if (nested) return nested;
+  const base = await defaultTarget(defaultBranchOf, repoPath);
+  if (typeof base !== "string") return base;
+  const fetched = await run("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--end-of-options", "origin", base], { timeoutMs: FETCH_TIMEOUT });
+  if (fetched.code !== 0) return failed("git fetch", fetched);
+  const tip = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", `origin/${base}^{commit}`]);
+  if (tip.code !== 0) return failed("reading the default branch", tip);
+  const result = await replayOwn(run, worktreePath, `origin/${base}`, `origin/${base}`);
+  if (result.ok) {
+    await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, tip.stdout.trim()]);
+    await run("git", [...HOST_GIT, ...at(worktreePath), "config", "--local", "--unset", BASE_KEY]);
+  }
+  return result;
 }
 
 /** Whether `refs/heads/<branch>` exists in the repo. */
@@ -267,6 +379,9 @@ export function commonGitDir(repoPath: string): Promise<string> {
 /** The commit the task branch forked from: the merge base of the worktree's HEAD and the
  *  repo's own HEAD (which may have moved on since). Null when either side is not a repo. */
 export async function branchBase(worktreePath: string, repoPath: string): Promise<string | null> {
+  // A stacked card is diffed against where it left its parent's branch: its own change only.
+  const stacked = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "HEAD", BASE_REF]);
+  if (stacked.code === 0 && stacked.stdout.trim()) return stacked.stdout.trim();
   const repoHead = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "HEAD"]);
   if (repoHead.code !== 0) return null;
   const head = repoHead.stdout.trim();

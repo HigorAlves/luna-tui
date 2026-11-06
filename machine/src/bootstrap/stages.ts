@@ -128,6 +128,8 @@ export async function buildRealStages(
   truth?: TruthSink,
   /** The board search triage's agent may ask for; absent, `card_search` answers nothing. */
   cards?: AgentDeps["cards"],
+  /** What a stacked card's workspace is cut from (`Pipeline.baseOf`) and the base it drops (`Pipeline.clearBase`). */
+  stack?: { baseFor: NonNullable<AgentDeps["baseFor"]>; clearBase: NonNullable<AgentDeps["clearBase"]> },
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -236,6 +238,7 @@ export async function buildRealStages(
     },
     truth: truth ?? null,
     ...(cards ? { cards } : {}),
+    ...(stack ? { baseFor: stack.baseFor, clearBase: stack.clearBase } : {}),
     policies,
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure, graphReady } : {}),

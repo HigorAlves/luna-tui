@@ -42,7 +42,7 @@ describe("taskDiff", () => {
         { path: "logo.png", status: "A", added: 0, removed: 0 },
       ],
     });
-    expect(git.calls.every((c) => c.includes("HEAD") || c.startsWith("symbolic-ref") || c.startsWith("merge-base"))).toBe(true);
+    expect(git.calls.every((c) => c.includes("HEAD") || c.startsWith("symbolic-ref") || c.startsWith("merge-base") || c.includes("refs/luna/base"))).toBe(true);
   });
 
   it("falls back to main, then to the repo's own HEAD, when origin has no default branch", async () => {

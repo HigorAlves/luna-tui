@@ -4,7 +4,7 @@ import type { TaskDiff, TaskDiffFile } from "@hardness/contracts";
 
 import type { ExecResult } from "../process/exec.ts";
 import { at } from "./machine-repo.ts";
-import { HOST_GIT } from "./worktree.ts";
+import { BASE_REF, HOST_GIT } from "./worktree.ts";
 
 export type GitExec = (command: string, args: string[]) => Promise<ExecResult>;
 
@@ -63,6 +63,8 @@ function parseNameStatus(text: string): Array<{ path: string; status: TaskDiffFi
 /** The ref the branch is diffed against: origin's default branch, else `main`, else the repo's own HEAD. */
 async function baseRef(exec: GitExec, worktreePath: string, repoPath: string | null): Promise<string | null> {
   const work = (...args: string[]) => exec("git", [...HOST_GIT, ...at(worktreePath), ...args]);
+  // A stacked card is shown against its parent's branch, as it was cut: its own change only.
+  if ((await work("rev-parse", "--verify", "--quiet", `${BASE_REF}^{commit}`)).code === 0) return BASE_REF;
   const origin = await work("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD");
   if (origin.code === 0 && origin.stdout.trim()) return origin.stdout.trim().replace(/^refs\/remotes\//, "");
   const main = await work("rev-parse", "--verify", "--quiet", "main");

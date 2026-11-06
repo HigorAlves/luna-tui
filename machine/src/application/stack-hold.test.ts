@@ -172,3 +172,35 @@ describe("the stack, read and cleared", () => {
     expect(retargets.map((e) => e.payload)).toEqual([{ to: "default" }]);
   });
 });
+
+describe("what a stacked card's workspace is cut from, read from the rows as they are now", () => {
+  it("is null for a card with no base", async () => {
+    const task = await pipeline.createTask({ title: "Plain", criteria: ["c"], repoPath: REPO });
+    expect(await pipeline.baseOf(task)).toBeNull();
+  });
+
+  it("is the parent's branch while its PR is open", async () => {
+    const parent = await parentCard();
+    await openPr(parent);
+    const kid = await child([parent]);
+    await pipeline.start(kid);
+    expect(await pipeline.baseOf(await pipeline.get(kid))).toEqual({ state: "open", branch: (await pipeline.get(parent)).branch });
+  });
+
+  it("is merged once the parent closed, and gone, in fixed words with the reason, once it was archived", async () => {
+    const parent = await parentCard();
+    await openPr(parent);
+    const kid = await child([parent]);
+    await pipeline.start(kid);
+    await pipeline.archive(parent, "rejected");
+    expect(await pipeline.baseOf(await pipeline.get(kid))).toEqual({ state: "gone", reason: `the card this one is stacked on (${parent.slice(0, 8)}) was archived (rejected); it needs a person` });
+
+    const other = await parentCard();
+    await openPr(other);
+    const kid2 = await child([other]);
+    await pipeline.start(kid2);
+    await pipeline.decide(other, "approved");
+    expect((await pipeline.get(other)).state).toBe("closed");
+    expect(await pipeline.baseOf(await pipeline.get(kid2))).toEqual({ state: "merged" });
+  });
+});

@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 
 import { exec, execOrThrow } from "../process/exec.ts";
 import { at, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
-import { HOST_GIT, type Workspace, branchExists, clearStaleLock, headCommit, isBranchName, startPoint } from "./worktree.ts";
+import { BASE_REF, HOST_GIT, type Workspace, repoAddsGitlink, branchExists, clearStaleLock, headCommit, isBranchName, stackOf, startPoint } from "./worktree.ts";
 
 const CLONE_TIMEOUT_MS = 300_000;
 
@@ -85,16 +85,35 @@ async function checkoutWork(path: string, branch: string): Promise<void> {
  * branch after a fetch in the user's repository (its HEAD with no origin), and the work folder checked out from it.
  * An existing workspace is reused and a stale `index.lock` cleared.
  */
-export async function ensureClone(repoPath: string, workspace: Workspace): Promise<void> {
+export async function ensureClone(repoPath: string, workspace: Workspace, base?: { branch: string }): Promise<void> {
   const machine = machineGitDir(workspace.path);
   if (existsSync(machine)) {
     if (!existsSync(workspace.path)) await checkoutWork(workspace.path, workspace.branch);
     await clearStaleLock(workspace.path);
     return;
   }
+  if (base) return ensureStackedClone(repoPath, workspace, base.branch);
   const start = await startPoint(repoPath);
   const sha = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", `${start}^{commit}`]);
   await seedMachineRepo(workspace.path, await objectsOf(repoPath), sha, workspace.branch, ["-C", repoPath], repoPath);
+  await checkoutWork(workspace.path, workspace.branch);
+}
+
+/**
+ * A stacked card's workspace: the parent's branch is fetched from `origin` into the user's repository (never read from another card's
+ * repository or folder), the range from its merge base with the default branch holds no gitlink, and the card's repository is seeded at
+ * that tip. The tip is recorded as `refs/luna/base` and the name as `luna.baseBranch`: what later diffs and rebases read.
+ */
+async function ensureStackedClone(repoPath: string, workspace: Workspace, branch: string): Promise<void> {
+  if (!isBranchName(branch)) throw new Error(`not a usable branch name: ${JSON.stringify(branch)}`);
+  const fetched = await exec("git", [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "--end-of-options", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { timeoutMs: CLONE_TIMEOUT_MS });
+  if (fetched.code !== 0) throw new Error(`git fetch origin ${branch} failed: ${(fetched.stderr || fetched.stdout).trim()}`);
+  const sha = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", `refs/remotes/origin/${branch}^{commit}`]);
+  const start = await startPoint(repoPath);
+  if (await repoAddsGitlink(exec, repoPath, start, sha)) throw new Error(`the parent's branch ${branch} adds a nested repository (mode 160000): the card was not started on it`);
+  await seedMachineRepo(workspace.path, await objectsOf(repoPath), sha, workspace.branch, ["-C", repoPath], repoPath);
+  await execOrThrow("git", [...HOST_GIT, ...inMachine(workspace.path), "update-ref", BASE_REF, sha]);
+  await execOrThrow("git", [...HOST_GIT, ...inMachine(workspace.path), "config", "luna.baseBranch", branch]);
   await checkoutWork(workspace.path, workspace.branch);
 }
 
@@ -207,6 +226,10 @@ export async function freshClone(cardPath: string, sha: string, branch: string, 
   if (existsSync(path) || existsSync(machineGitDir(path))) throw new Error(`${path} exists already`);
   const card = machineGitDir(cardPath);
   await seedMachineRepo(path, join(card, "objects"), sha, branch, ["--git-dir=" + card], card);
+  // The card's base goes with it, so Verify and a fix round diff against the same commit.
+  const stack = await stackOf(cardPath);
+  if (stack.sha) await execOrThrow("git", [...HOST_GIT, ...inMachine(path), "update-ref", BASE_REF, stack.sha]);
+  if (stack.branch) await execOrThrow("git", [...HOST_GIT, ...inMachine(path), "config", "luna.baseBranch", stack.branch]);
   await checkoutWork(path, branch);
 }
 

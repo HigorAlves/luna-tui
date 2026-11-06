@@ -1190,6 +1190,17 @@ export class Pipeline {
     return this.store.findStackedOn(id);
   }
 
+  /** What a stacked card's workspace is cut from, from the rows as they are now: the parent's branch while its PR is open, `merged` once it merged (the card then starts from the default branch), `gone` when it was archived or is no card. Null for a card with no base. */
+  async baseOf(task: TaskRow): Promise<{ state: "open"; branch: string } | { state: "merged" } | { state: "gone"; reason: string } | null> {
+    const base = cardOf(task).base;
+    if (!base) return null;
+    const fact = (await this.dependencyFacts([base.card])).get(base.card);
+    if (fact?.merged) return { state: "merged" };
+    const short = base.card.slice(0, 8);
+    if (!fact || fact.state === "archived") return { state: "gone", reason: `the card this one is stacked on (${short}) was ${fact ? `archived (${fact.archiveReason ?? "no reason"})` : "removed"}; it needs a person` };
+    return { state: "open", branch: base.branch };
+  }
+
   /** The card left its stack (its parent merged and it now targets the default branch): the base goes, under the lock, and the retarget is logged once. */
   async clearBase(id: string): Promise<void> {
     await this.store.withTaskLock(id, async (task, tx) => {

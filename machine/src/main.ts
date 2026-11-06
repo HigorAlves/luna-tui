@@ -289,6 +289,8 @@ const { real, verifyPack, checksExec, agentDeps, shipGateProbe } = await buildRe
   decisionTruth,
   // Triage's card_search: the task's own repository's cards, from the board the pipeline keeps.
   { search: async ({ repoPath, selfId, selfSource, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, selfSource, now: new Date() }) },
+  // A stacked card's workspace: what it is cut from and the base it drops, read from the pipeline's rows when a run first makes it.
+  { baseFor: (task) => pipeline.baseOf(task), clearBase: (id) => pipeline.clearBase(id) },
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {

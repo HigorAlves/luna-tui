@@ -1215,6 +1215,81 @@ describe("the engine a stage runs on", () => {
       expect(result.detail).toMatchObject({ base: expect.stringMatching(/^(main|master)$/) });
     });
 
+    describe("a stacked card", () => {
+      const PARENT = "task/aaaaaaaa-parent";
+      /** The repository gets an origin with the parent's branch (two commits) pushed there and forgotten locally. */
+      const withParent = (): string => {
+        const remote = join(root, "remote.git");
+        execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+        git(repo, "remote", "add", "origin", remote);
+        git(repo, "push", "-q", "origin", "main");
+        git(repo, "fetch", "-q", "origin");
+        git(repo, "remote", "set-head", "origin", "main");
+        git(repo, "checkout", "-q", "-b", PARENT);
+        for (const n of [1, 2]) {
+          writeFileSync(join(repo, `p${n}.txt`), "p\n");
+          git(repo, "add", "-A");
+          git(repo, "commit", "-q", "-m", `parent ${n}`);
+        }
+        const tip = git(repo, "rev-parse", "HEAD");
+        git(repo, "push", "-q", "origin", PARENT);
+        git(repo, "checkout", "-q", "main");
+        git(repo, "branch", "-q", "-D", PARENT);
+        git(repo, "update-ref", "-d", `refs/remotes/origin/${PARENT}`);
+        return tip;
+      };
+
+      it("cuts a new workspace from the parent's tip when the rule says open, and the Build Report's base is the parent's branch", async () => {
+        const tip = withParent();
+        const baseFor = vi.fn(async () => ({ state: "open" as const, branch: PARENT }));
+        const result = await agentRunners({ ...deps(fakeSandbox(output(), commitFiles("b.txt"))), baseFor }).implementing!(planned());
+        expect(baseFor).toHaveBeenCalledTimes(1);
+        expect(result.outcome).toBe("pass");
+        expect(git(seen!.worktree, "log", "--format=%s", "-n", "2")).toBe("slice\nparent 2");
+        expect(git(seen!.worktree, "rev-parse", "refs/luna/base")).toBe(tip);
+        expect(result.detail).toMatchObject({ base: PARENT });
+      });
+
+      it("cuts from the default branch and clears the card's base when the parent merged meanwhile", async () => {
+        withParent();
+        const clearBase = vi.fn(async () => {});
+        const result = await agentRunners({ ...deps(fakeSandbox(output(), commitFiles("b.txt"))), baseFor: async () => ({ state: "merged" as const }), clearBase }).implementing!(planned());
+        expect(result.outcome).toBe("pass");
+        expect(clearBase).toHaveBeenCalledWith(planned().task.id);
+        expect(() => git(seen!.worktree, "rev-parse", "--verify", "--quiet", "refs/luna/base")).toThrow();
+        expect(result.detail).toMatchObject({ base: expect.stringMatching(/^(main|master)$/) });
+        expect(git(seen!.worktree, "log", "--format=%s", "-n", "2")).toBe("slice\ninit");
+      });
+
+      it("fails the run with the reason, and makes no workspace, when the parent was archived", async () => {
+        withParent();
+        const sandbox = vi.fn(fakeSandbox(output()));
+        const result = await agentRunners({ ...deps(sandbox), baseFor: async () => ({ state: "gone" as const, reason: "the card this one is stacked on was archived (rejected)" }) }).implementing!(planned());
+        expect(result).toMatchObject({ outcome: "fail", detail: { error: "the card this one is stacked on was archived (rejected)" } });
+        expect(sandbox).not.toHaveBeenCalled();
+      });
+
+      it("holds the card with a reason, and makes no workspace, when the parent's branch is missing on origin", async () => {
+        withParent();
+        const sandbox = vi.fn(fakeSandbox(output()));
+        const result = await agentRunners({ ...deps(sandbox), baseFor: async () => ({ state: "open" as const, branch: "task/zzzzzzzz-gone" }) }).implementing!(planned());
+        expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("task/zzzzzzzz-gone") } });
+        expect(sandbox).not.toHaveBeenCalled();
+        expect(existsSync(machineGitDir(join(root, "worktrees", "repo", "task-11111111-fix-it")))).toBe(false);
+      });
+
+      it("never asks once the workspace exists, and a card with no base is not asked about at all", async () => {
+        withParent();
+        const baseFor = vi.fn(async () => null);
+        const first = await agentRunners({ ...deps(fakeSandbox(output(), commitFiles("b.txt"))), baseFor }).implementing!(planned());
+        expect(first.detail).toMatchObject({ base: expect.stringMatching(/^(main|master)$/) });
+        const again = { ...planned(), runId: "run-2", attempt: 2, task: { ...planned().task, branch: first.workspace!.branch, worktreePath: first.workspace!.worktreePath } } as StageContext;
+        baseFor.mockClear();
+        await agentRunners({ ...deps(fakeSandbox(output(), () => {})), baseFor }).implementing!(again);
+        expect(baseFor).not.toHaveBeenCalled();
+      });
+    });
+
     it("reads a plain string diffSummary, as an older answer gave it, as `what`", async () => {
       const answer = { kind: "done", summary: "x", diffSummary: "Adds b", outOfMap: [{ path: "extra.txt", reason: "shared helper" }] };
       const result = await runners(fakeSandbox(output({ answer } as Partial<StageOutput>), commitFiles("b.txt", "extra.txt"))).implementing!(planned());

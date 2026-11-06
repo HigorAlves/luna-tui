@@ -9,6 +9,7 @@ import { basename, join, relative } from "node:path";
 import { readRegularFile } from "../../adapters/fs/bounded.ts";
 import { removeNestedRepositories } from "../../adapters/git/machine-repo.ts";
 import { bundleImporter } from "../../adapters/git/bundles.ts";
+import type { TaskRow } from "../../domain/task.ts";
 import { ensureClone, isClone, moveToClone, publishBranch, refreshScratch } from "../../adapters/git/clone.ts";
 import {
   type Workspace,
@@ -25,6 +26,7 @@ import {
   ownedWorkspace,
   resetWorktree,
   restoreFiles,
+  stackOf,
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, SecretsMissingError, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
@@ -97,6 +99,10 @@ export interface AgentDeps {
   ensureGraph?: (repoPath: string) => void;
   /** Waits for the repository's code graph before triage reads it (see plan.ts); absent, triage never waits. */
   graphReady?: (input: { repoPath: string; signal: AbortSignal; skip: boolean; note?: (text: string) => Promise<void> }) => Promise<GraphReadiness>;
+  /** What a stacked card's workspace is cut from, asked once when the workspace is first made (built from the dependency rule over the rows as they are now): the parent's branch, "merged" (cut from the default branch and drop the card's base), "gone" (the run fails with the reason), or null for a card with no base. */
+  baseFor?: (task: TaskRow) => Promise<{ state: "open"; branch: string } | { state: "merged" } | { state: "gone"; reason: string } | null>;
+  /** Drops a card's `card.base` (the pipeline's `clearBase`). */
+  clearBase?: (taskId: string) => Promise<void>;
   /** Runs a host command; the locked-test replay uses it for the project's test command. */
   exec?: (
     command: string,
@@ -287,7 +293,22 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   }
   // A card still on a linked worktree moves to a workspace of its own before its next run: branch and commits kept, uncommitted work carried over.
   if (!extra.checkout && persisted && !isClone(workspace.path)) await moveToClone(task.repoPath, workspace);
-  if (!extra.checkout) await ensureClone(task.repoPath, workspace);
+  let stackedOn: { branch: string } | undefined;
+  if (!extra.checkout && deps.baseFor && !isClone(workspace.path)) {
+    const answer = await deps.baseFor(task);
+    if (answer?.state === "gone") return { outcome: "fail", detail: { error: answer.reason } };
+    if (answer?.state === "open") stackedOn = { branch: answer.branch };
+    else if (answer?.state === "merged") await deps.clearBase?.(task.id);
+  }
+  if (!extra.checkout) {
+    try {
+      await ensureClone(task.repoPath, workspace, stackedOn);
+    } catch (error) {
+      // A parent branch that is not on origin, or a tip that is no commit: the card waits for a person with the reason; no workspace is left.
+      if (!stackedOn) throw error;
+      return { outcome: "fail", detail: { error: `the card could not be started on its parent's branch ${stackedOn.branch}: ${(error as Error).message.slice(0, 300)}` } };
+    }
+  }
   // After a restart, the container the last machine started may still be running: its name and
   // the commit it started from come from the run row, and the sandbox waits on it instead.
   const resume = context.resume;
@@ -790,12 +811,14 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       const declared = answered.success ? answered.data : [];
       try {
         const facts = await checks.finalFacts(declared);
+        const builtOn = (await stackOf(workspace.path)).branch ?? (await defaultBranch(task.repoPath).catch(() => null));
         mapped.detail = {
           ...mapped.detail,
           scope: { facts, verdict: await checks.lastVerdict() },
           // The agent's own summary of its diff, with git's facts over it.
           // The branch the card was cut from, for the Build Report.
-          ...((await defaultBranch(task.repoPath).catch(() => null)) ? { base: (await defaultBranch(task.repoPath)) as string } : {}),
+          // (a stacked card: its parent's branch).
+          ...(builtOn ? { base: builtOn } : {}),
           diffSummary: diffSummaryOf(answerOf(output.answer)?.diffSummary, { changed: facts.changed, newDependencies: facts.newDependencies, todos: facts.todos, mapFiles: (input.plan?.map?.files ?? []).map((f) => f.path) }),
         };
         // Every issue has a severity: a blocker fails the stage (one fix pass, then a person: the pipeline counts scope reds); a should_fix or a nit
