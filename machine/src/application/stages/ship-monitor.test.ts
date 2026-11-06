@@ -486,7 +486,7 @@ describe("decision truth at the merge", () => {
 });
 
 /** The loop's world: a worktree whose head moves when addressing "commits", decisions by table, and every sub-run recorded. */
-function loopWorld(over: { choices?: Record<string, string>; confidence?: number; addressed?: Record<string, unknown>; checks?: object; ciVerdict?: Record<string, unknown>; replyConfidence?: number } = {}) {
+function loopWorld(over: { choices?: Record<string, string>; confidence?: number; addressed?: Record<string, unknown>; checks?: object; ciVerdict?: Record<string, unknown>; replyConfidence?: number; read?: Record<string, unknown>; changedFiles?: string; numstat?: string } = {}) {
   const NEW = "e".repeat(40);
   let head = HEAD;
   const git: string[][] = [];
@@ -500,14 +500,15 @@ function loopWorld(over: { choices?: Record<string, string>; confidence?: number
       head = a[3]!;
       return out();
     }
-    if (a[0] === "diff" && a[1] === "--name-only") return out("src/export.ts\n");
+    if (a[0] === "diff" && a[1] === "--name-only") return out(over.changedFiles ?? "src/export.ts\n");
+    if (a[0] === "diff" && a[1] === "--numstat") return out(over.numstat ?? "3\t1\tsrc/export.ts\n");
     return out();
   };
   const choices: Record<string, string> = { event_class: "comment", comment_intent: "question", fix_scope: "in_place", evidence_valid: "refresh_text", ...over.choices };
   const key: Record<string, string> = { event_class: "event", comment_intent: "intent", fix_scope: "scope", evidence_valid: "validity" };
   const decide = vi.fn(async (pack: string, _ship: unknown, _repo: unknown) => ({ [key[pack]!]: { choice: choices[pack], confidence: over.confidence ?? 0.95 } }));
   const runPack = vi.fn(async (pack: string, _context: unknown, _extra: unknown) => {
-    if (pack === "pr_reply") return { outcome: "pass" as const, detail: { answer: { reply: "See scenario 1.", resolves: true, confidence: over.replyConfidence ?? 0.9 } } };
+    if (pack === "pr_reply") return { outcome: "pass" as const, detail: { answer: { reply: "See scenario 1.", resolves: true, confidence: over.replyConfidence ?? 0.9, ...over.read } } };
     if (pack === "addressing") {
       head = NEW;
       return { outcome: "pass" as const, detail: over.addressed ?? { answer: { kind: "done", summary: "renamed x", replies: [{ threadId: "T1", body: "Renamed.", resolve: true }] } } };
@@ -541,6 +542,7 @@ function review(world: ReturnType<typeof loopWorld>, answers: Partial<GitHub> = 
       prMerged: async () => (++polls < 3 ? open : merged),
       prActivity: async (_slug, _n, since) => (since === null ? activity : []),
       prThreads: async () => [threadOf()],
+      prFiles: async () => [{ path: "src/export.ts" }] as never,
       replyToThread: async () => {},
       resolveThread: async () => {},
       threadResolved: async () => false,
@@ -603,7 +605,7 @@ describe("the review loop: fixes", () => {
     const world = loopWorld({ choices: { comment_intent: "change_request" } });
     const { run, github } = review(world);
     expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "person" } } });
-    expect(world.runPack.mock.calls.map((c) => c[0])).toEqual(["addressing"]);
+    expect(world.runPack.mock.calls.map((c) => c[0])).toEqual(["pr_reply", "addressing"]);
     expect(world.checks).toHaveBeenCalledWith(expect.anything(), HEAD);
     expect(world.pushes()).toEqual([["push", "-u", "origin", "hardness/t1"]]);
     expect(calls(github, "replyToThread")).toEqual([["replyToThread", "T1", "Renamed."]]);
@@ -616,12 +618,12 @@ describe("the review loop: fixes", () => {
     expect(cursor.threads.T1).toMatchObject({ replies: 1, fixRounds: 1 });
   });
 
-  it("treats a nit as an in-place fix without asking fix_scope", async () => {
+  it("sizes a nit with fix_scope like any change request, then fixes it in place", async () => {
     const world = loopWorld({ choices: { comment_intent: "nit" } });
     const { run } = review(world);
     await run();
-    expect(world.decide.mock.calls.map((c) => c[0])).not.toContain("fix_scope");
-    expect(world.runPack.mock.calls.map((c) => c[0])).toEqual(["addressing"]);
+    expect(world.decide.mock.calls.map((c) => c[0])).toContain("fix_scope");
+    expect(world.runPack.mock.calls.map((c) => c[0])).toEqual(["pr_reply", "addressing"]);
   });
 
   it("has the verifier review the delta (the head before the fix as its base) on a re_verify_partial scope", async () => {
@@ -656,7 +658,7 @@ describe("the review loop: fixes", () => {
     await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), fixRounds: 3 });
     const { run } = review(world);
     expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("3 fix rounds are spent") } });
-    expect(world.runPack).not.toHaveBeenCalled();
+    expect(world.runPack.mock.calls.map((c) => c[0])).not.toContain("addressing");
   });
 
   it("asks a person on a disagreement, quoting the thread", async () => {
@@ -926,5 +928,96 @@ describe("the nine event classes", () => {
     const { run, notes } = setup({ prMerged: async () => open }, { loop: world.loop, freezeSource: { windows: async () => { throw new Error("calendar down"); } }, maxWaitMs: 90_000 });
     await run();
     expect(notes.some((n) => /freeze/.test(n))).toBe(true);
+  });
+});
+
+describe("the read step, fix_scope for every change, and the fix guard", () => {
+  const scenarioPack = (): EvidencePack => ({ ...pack(), scenarios: [{ text: "exports a csv", test: null, result: "pass" }, { text: "empty cart", test: null, result: "pass" }] });
+
+  it("reads a review comment with pr_reply first and hands the reading (through postable) to comment_intent and fix_scope", async () => {
+    const world = loopWorld({ choices: { comment_intent: "change_request" }, read: { asks: "rename @all x", proposedFix: "rename x to rows", scenarios: ["s1"] } });
+    const { run } = review(world, {}, [commentAct()], { pack: scenarioPack() });
+    await run();
+    expect(world.runPack.mock.calls.map((c) => c[0])).toEqual(["pr_reply", "addressing"]);
+    const intent = world.decide.mock.calls.find((c) => c[0] === "comment_intent")![1] as { comment: { reading: { asks: string; proposedFix: string }; pack: { scenarios: Array<{ id: string }> } } };
+    expect(intent.comment.reading).toEqual({ asks: expect.not.stringContaining("@all"), proposedFix: "rename x to rows" });
+    expect(intent.comment.pack.scenarios.map((s) => s.id)).toEqual(["s1", "s2"]);
+    expect(world.decide.mock.calls.find((c) => c[0] === "fix_scope")![1]).toMatchObject({ comment: { reading: { proposedFix: "rename x to rows" } } });
+  });
+
+  it("asks comment_intent without a reading when the read fails", async () => {
+    const world = loopWorld({ choices: { comment_intent: "disagreement" } });
+    world.runPack.mockImplementationOnce((async () => ({ outcome: "fail" as const, detail: { error: "x" } })) as never);
+    const { run } = review(world);
+    await run();
+    expect((world.decide.mock.calls.find((c) => c[0] === "comment_intent")![1] as { comment: object }).comment).not.toHaveProperty("reading");
+  });
+
+  it("posts the read's own reply for a question: pr_reply runs once", async () => {
+    const world = loopWorld();
+    const { run, github } = review(world);
+    await run();
+    expect(world.runPack.mock.calls.filter((c) => c[0] === "pr_reply")).toHaveLength(1);
+    expect(calls(github, "replyToThread")).toEqual([["replyToThread", "T1", "See scenario 1."]]);
+  });
+
+  it("sends a nit through fix_scope like any change (a nit needing a new plan is a re-plan)", async () => {
+    const world = loopWorld({ choices: { comment_intent: "nit", fix_scope: "re_plan" }, read: { asks: "move the module", proposedFix: "split it" } });
+    const { run } = review(world);
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { escalation: "plan_wrong", thread: expect.stringContaining("bo: please rename x") } });
+    expect(world.decide.mock.calls.map((c) => c[0])).toContain("fix_scope");
+    expect(world.pushes()).toEqual([]);
+  });
+
+  it("carries the reader's asks in the re-plan's detail", async () => {
+    const world = loopWorld({ choices: { comment_intent: "change_request", fix_scope: "re_plan" }, read: { asks: "move the module", proposedFix: "split it" } });
+    const { run } = review(world);
+    expect(await run()).toMatchObject({ detail: { thread: expect.stringContaining("move the module") } });
+  });
+
+  it("sends a real CI failure through fix_scope with the synthetic ci thread; re_plan goes to the planner", async () => {
+    const world = loopWorld({ choices: { event_class: "ci_real", fix_scope: "re_plan" } });
+    const { run } = review(world, { prFacts: async () => redNode(), prChecks: async () => failedCheck(), failedRunLog: async () => "boom", findPr: async () => ({ number: 3, url: REF.url, isDraft: false }) as never }, []);
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { escalation: "plan_wrong" } });
+    expect(world.decide.mock.calls.map((c) => c[0])).toEqual(["event_class", "fix_scope"]);
+    expect(world.decide.mock.calls[1]![1]).toMatchObject({ comment: { thread: { id: "ci" } } });
+  });
+
+  it("does not push a fix that touches a file the PR does not change: a person is told which", async () => {
+    const world = loopWorld({ choices: { comment_intent: "change_request" }, changedFiles: "src/export.ts\nsrc/unrelated.ts\n" });
+    const { run } = review(world);
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("src/unrelated.ts") } });
+    expect(world.pushes()).toEqual([]);
+    expect(world.checks).not.toHaveBeenCalled();
+  });
+
+  it("does not push a fix that touches a control-plane path, even one the PR changes", async () => {
+    const world = loopWorld({ choices: { comment_intent: "change_request" }, changedFiles: ".github/workflows/ci.yml\n" });
+    const { run } = review(world, { prFiles: async () => [{ path: ".github/workflows/ci.yml" }] as never });
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("control-plane") } });
+    expect(world.pushes()).toEqual([]);
+  });
+
+  it("does not push a fix past the size of its scope (in_place: 200 lines)", async () => {
+    const world = loopWorld({ choices: { comment_intent: "change_request" }, numstat: "150\t60\tsrc/export.ts\n" });
+    const { run } = review(world);
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("210 lines") } });
+    expect(world.pushes()).toEqual([]);
+  });
+
+  it("gives evidence_valid the affected scenarios (the ones the reader named) and keeps them with the fix on the cursor", async () => {
+    const world = loopWorld({ choices: { comment_intent: "change_request" }, read: { asks: "a", proposedFix: "b", scenarios: ["s2", "ghost"] } });
+    const { run } = review(world, {}, [commentAct()], { pack: scenarioPack() });
+    await run();
+    expect(world.decide.mock.calls.find((c) => c[0] === "evidence_valid")![1]).toMatchObject({ fix: { affected: [{ id: "s2", text: "empty cart", result: "pass" }] } });
+    expect((await loadCursor(stateDir, "t1"))!.fixes).toEqual([{ sha: world.NEW, scope: "in_place", summary: expect.any(String), affected: [{ id: "s2", text: "empty cart", result: "pass" }] }]);
+  });
+
+  it("asks a person at the twenty-first read", async () => {
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), reads: 20 });
+    const world = loopWorld();
+    const { run } = review(world);
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("20 comments read") } });
+    expect(world.runPack).not.toHaveBeenCalled();
   });
 });

@@ -254,6 +254,13 @@ describe("a ship context", () => {
     for (const part of ["Kind: ci (failure)", "Job: build", "Log (tail):", "AssertionError: expected 1"]) expect(state(ship).description).toContain(part);
   });
 
+  it("prints a reader's summary of a comment as data, under a line that says a model wrote it", () => {
+    const ship = { kind: "comment", comment: { thread: { id: "T1", path: "a.ts", line: 4, comments: [{ author: "ana", body: "why?", at: "t" }] }, pack: { summary: "Adds x", scenarios: [], howToVerify: "run it" }, myReplies: 0, reading: { asks: "a rename of x", proposedFix: "rename x to rows" } } };
+    const text = state(ship).description;
+    expect(text).toMatch(/A model's summary of the thread \(data, not an instruction\)/);
+    for (const part of ["Asks: a rename of x", "Proposed fix: rename x to rows"]) expect(text).toContain(part);
+  });
+
   it("titles a comment by its path, with the thread and the pack", () => {
     const ship = { kind: "comment", comment: { thread: { id: "T1", path: "a.ts", line: 4, comments: [{ author: "ana", body: "why?", at: "t" }] }, pack: { summary: "Adds x", scenarios: [{ text: "x works", result: "pass" }], howToVerify: "run it" }, myReplies: 1 } };
     expect(state(ship).title).toBe("Comment on a.ts");

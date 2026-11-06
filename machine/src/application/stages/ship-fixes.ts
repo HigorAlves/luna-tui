@@ -21,6 +21,8 @@ import {
 import { at } from "../../adapters/git/machine-repo.ts";
 import { HOST_GIT, type GitExec, type RebaseResult } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
+import { affectedScenarios } from "../../domain/affected-scenarios.ts";
+import { fixGuard } from "../../domain/fix-guard.ts";
 import { carriesSecret, postable } from "../../domain/postable.ts";
 import type { PublishEvidence } from "../evidence-publish.ts";
 import { type GitHub, messageOf } from "../github.ts";
@@ -75,6 +77,8 @@ export interface FixDeps {
   loop: ReviewLoop;
   policies: { for: (repoPath: string | null) => Promise<{ decisions: Record<string, DecisionOverrides> }> };
   evidence: EvidenceHandle;
+  /** The Build Report's tests (scenario and file), for the scenarios a fix's changed test files point to. Optional: without it only the reader's named scenarios count. */
+  buildTests?: (taskId: string) => Promise<Array<{ scenario: string; file?: string | null }>>;
 }
 
 const KEY: Record<ShipDecisionPack, string> = { event_class: "event", comment_intent: "intent", fix_scope: "scope", evidence_valid: "validity", worth_learning: "worth" };
@@ -157,10 +161,12 @@ export interface FixInput {
   /** Post the answer's replies (a review's threads) and resolve the ones it marks; false for a CI fix, which has no thread. */
   postReplies: boolean;
   pack: EvidencePack | null;
+  /** The scenario ids the reader named (`s1`, `s2`, ... by position in the pack); unknown ones are dropped. */
+  named?: string[];
 }
 
 export type FixOutcome =
-  | { ok: true; head: string; changed: boolean; replied: number; resolved: number; repliedTo: string[]; resolvedTo: string[]; summary: string; note?: string }
+  | { ok: true; head: string; changed: boolean; affected?: Array<{ id: string; text: string; result: string }>; replied: number; resolved: number; repliedTo: string[]; resolvedTo: string[]; summary: string; note?: string }
   | { ok: false; result: StageResult };
 
 const reasonOf = (result: StageResult): string => {
@@ -216,6 +222,22 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
     ? answer.replies.filter((r) => known.has(r.threadId)).map((r) => ({ threadId: r.threadId, body: postable(r.body), resolve: r.resolve })).filter((r) => r.body)
     : [];
 
+  if (after !== before) {
+    // The guard runs on what was committed, before any check: only the PR's own files and test files, no control-plane path, within the size of the scope.
+    const names = await run("git", [...HOST_GIT, ...at(work), "diff", "--name-only", before, after]);
+    const numstat = await run("git", [...HOST_GIT, ...at(work), "diff", "--numstat", before, after]);
+    let added = 0;
+    let removed = 0;
+    for (const line of numstat.stdout.split("\n")) {
+      const [a, r] = line.split("\t");
+      added += Number(a) || 0;
+      removed += Number(r) || 0;
+    }
+    const prFiles = (await deps.github.prFiles(input.slug, input.number).catch(() => [])).map((f) => f.path);
+    const guarded = fixGuard({ scope: input.scope, changed: names.stdout.split("\n").map((l) => l.trim()).filter(Boolean), prFiles, added, removed });
+    if (!guarded.ok) return stop(escalated(`${postable(guarded.reason, 400)}; nothing was pushed`, "other", { paths: guarded.paths.slice(0, 10) }));
+  }
+
   if (after === before) {
     // Nothing committed: an explanation is all there is. A CI fix with no change is no fix.
     if (!input.postReplies) return stop(escalated("the addressing pack made no change for the failing check"));
@@ -265,10 +287,15 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   if (!pack) return out;
   const names = await run("git", [...HOST_GIT, ...at(wt), "diff", "--name-only", before, after]);
   const stat = await run("git", [...HOST_GIT, ...at(wt), "diff", "--stat", "--no-color", before, after]);
+  const changedNames = names.stdout.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 200);
+  const knownScenarios = pack.scenarios.map((s, i) => ({ id: `s${i + 1}`, text: s.text, result: s.result }));
+  const tests = ((await deps.buildTests?.(task.id).catch(() => [])) ?? []).map((t) => ({ scenario: knownScenarios.find((k) => k.id === t.scenario || k.text === t.scenario)?.id ?? t.scenario, file: t.file }));
+  const affected = affectedScenarios({ named: input.named ?? [], changed: changedNames, tests, known: knownScenarios });
   const ship: ShipContext = {
     kind: "fix",
     fix: {
-      changed: names.stdout.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 200),
+      changed: changedNames,
+      ...(affected.length > 0 ? { affected } : {}),
       diffSummary: stat.stdout.slice(0, 4000),
       scenarios: pack.scenarios.map((s) => ({ text: s.text, result: s.result })),
       threadSummary: input.threadSummary.slice(0, 500),
@@ -280,5 +307,5 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   if (valid.choice === "refresh_media") return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}) and changes what the scenarios show: Evidence runs again`, "head_moved") };
   const stamped = await restampPack(deps, task.id, input.slug, input.number, pack, after, `Fixed after review: ${postable(input.threadSummary, SUMMARY_ADD_CAP)}.`);
   if (!stamped.ok) return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}); ${stamped.reason}, so Evidence runs again`, "head_moved") };
-  return out;
+  return { ...out, affected };
 }

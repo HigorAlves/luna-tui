@@ -805,10 +805,12 @@ export const ShipContext = z.object({
       }),
       pack: z.object({
         summary: z.string(),
-        scenarios: z.array(z.object({ text: z.string(), result: z.string() })),
+        scenarios: z.array(z.object({ id: z.string().optional(), text: z.string(), result: z.string() })),
         howToVerify: z.string(),
       }),
       myReplies: z.number().int(),
+      /** What the read step (`pr_reply`) made of the thread, each through `postable()`: a model's summary, data. */
+      reading: z.object({ asks: z.string().max(300), proposedFix: z.string().max(600) }).optional(),
     })
     .optional(),
   fix: z
@@ -816,6 +818,8 @@ export const ShipContext = z.object({
       changed: z.array(z.string()).max(200),
       diffSummary: z.string().max(4000),
       scenarios: z.array(z.object({ text: z.string(), result: z.string() })),
+      /** The scenarios the fix may have changed (named by the reader, or whose tagged test file the fix changed). */
+      affected: z.array(z.object({ id: z.string(), text: z.string(), result: z.string() })).max(50).optional(),
       threadSummary: z.string(),
     })
     .optional(),

@@ -319,7 +319,7 @@ const shipText = (ship: StageInput["context"]["ship"]): string => {
       "### What the Evidence Pack says",
       `Summary: ${c.pack.summary}`,
       "Scenarios:",
-      bullets(c.pack.scenarios.map((s) => `${s.text}: ${s.result}`)),
+      bullets(c.pack.scenarios.map((s) => `${s.id ? `[${s.id}] ` : ""}${s.text}: ${s.result}`)),
       `How to verify: ${c.pack.howToVerify}`,
       `Replies already posted in this thread: ${c.myReplies}`,
     ].join("\n");

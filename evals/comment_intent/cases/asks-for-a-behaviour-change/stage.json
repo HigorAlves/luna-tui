@@ -42,7 +42,11 @@
           ],
           "howToVerify": "Open the cart and click Export."
         },
-        "myReplies": 0
+        "myReplies": 0,
+        "reading": {
+          "asks": "Include the discount column and return a 400 for a missing cart id.",
+          "proposedFix": "Add the column in export.ts and validate the id first."
+        }
       }
     }
   },

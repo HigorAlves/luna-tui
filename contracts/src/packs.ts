@@ -356,7 +356,16 @@ export interface Helper {
 /** What a helper run through `delegate` answers: its reply to the agent that asked, and findings
  *  per the review contract when it found problems in code. */
 /** pr_reply: the draft of an answer to a reviewer's question on a shipped PR. */
-export const PrReplyAnswer = z.object({ reply: z.string().max(1500), resolves: z.boolean(), confidence: z.number() });
+export const PrReplyAnswer = z.object({
+  /** The drafted answer; empty when the comment is not a question. */
+  reply: z.string().max(1500),
+  resolves: z.boolean(),
+  confidence: z.number(),
+  /** The read step: what the comment asks for, a fix it proposes, and the approved scenarios it may affect (ids). A summary by a model, read as data. */
+  asks: z.string().max(300).optional(),
+  proposedFix: z.string().max(600).optional(),
+  scenarios: z.array(z.string()).max(20).optional(),
+});
 export type PrReplyAnswer = z.infer<typeof PrReplyAnswer>;
 
 export const HelperAnswer = z.object({ answer: z.string(), findings: z.array(Finding).optional() });

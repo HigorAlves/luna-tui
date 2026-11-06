@@ -10,6 +10,7 @@ import {
   CloneInput,
   EscalationReason,
   EvidenceContext,
+  PrReplyAnswer,
   ShipContext,
   VideoContext,
   CheckContext,
@@ -561,6 +562,24 @@ describe("ShipContext ci events", () => {
     expect(ShipContext.safeParse({ kind: "event", event: { ...ci, job: "x".repeat(201) } }).success).toBe(false);
     expect(ShipContext.safeParse({ kind: "event", event: { ...ci, log: "x".repeat(4001) } }).success).toBe(false);
     expect(ShipContext.safeParse({ kind: "event", event: { ...ci, log: "x".repeat(4000) } }).success).toBe(true);
+  });
+});
+
+describe("the read step's shapes", () => {
+  const thread = { id: "T1", path: "a.ts", line: 1, comments: [{ author: "ana", body: "rename x", at: "t" }] };
+  const comment = { thread, pack: { summary: "s", scenarios: [{ id: "s1", text: "t", result: "pass" }], howToVerify: "h" }, myReplies: 0 };
+  it("a comment carries an optional reading; a fix optional affected scenarios", () => {
+    expect(ShipContext.parse({ kind: "comment", comment: { ...comment, reading: { asks: "a rename", proposedFix: "rename x to y" } } }).comment?.reading).toEqual({ asks: "a rename", proposedFix: "rename x to y" });
+    expect(ShipContext.safeParse({ kind: "comment", comment }).success).toBe(true);
+    expect(ShipContext.safeParse({ kind: "fix", fix: { changed: [], diffSummary: "", scenarios: [], threadSummary: "", affected: [{ id: "s1", text: "t", result: "pass" }] } }).success).toBe(true);
+  });
+  it("PrReplyAnswer takes asks (300), proposedFix (600), scenarios (20); an empty reply and an old answer parse", () => {
+    const base = { reply: "", resolves: false, confidence: 0.8 };
+    expect(PrReplyAnswer.safeParse(base).success).toBe(true);
+    expect(PrReplyAnswer.safeParse({ ...base, asks: "x".repeat(300), proposedFix: "y".repeat(600), scenarios: Array(20).fill("s1") }).success).toBe(true);
+    expect(PrReplyAnswer.safeParse({ ...base, asks: "x".repeat(301) }).success).toBe(false);
+    expect(PrReplyAnswer.safeParse({ ...base, proposedFix: "y".repeat(601) }).success).toBe(false);
+    expect(PrReplyAnswer.safeParse({ ...base, scenarios: Array(21).fill("s1") }).success).toBe(false);
   });
 });
 

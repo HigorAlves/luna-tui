@@ -33,6 +33,8 @@ export const MAX_CI_RERUNS = 1;
 export const MAX_REBASES = 1;
 /** Questions answered on one PR; past this a person takes over (a stranger's, or a loop's, appetite for model runs has a limit). */
 export const MAX_PR_REPLIES = 10;
+/** Comments read by the read step on one PR; past this a person takes over. */
+export const MAX_PR_READS = 20;
 /** Only these may drive a reply or a fix: GitHub's own word for who the author is to the repo. */
 const TRUSTED = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 /** A drafted answer below this confidence is not posted: a person answers. */
@@ -252,6 +254,10 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       return `${thread.path ?? "the PR"}${thread.line ? `:${thread.line}` : ""}: ${last ? `${last.author}: "${plain(last.body, 300)}"` : "(no comment)"}`;
     };
 
+    /** The review says the plan is wrong: back to the planner, with the thread and what the reader said it asks (flattened by `replanOf`). */
+    const replan = (thread: Thread, asks?: string): StageResult =>
+      escalated(`the review says the plan is wrong: ${quoted(thread)}`, "plan_wrong", { thread: [...thread.comments.map((c) => `${c.author}: ${c.body}`), ...(asks ? [`The reader's summary of what it asks: ${asks}`] : [])].join("\n").slice(0, 20_000) });
+
     /** A review comment becomes a question to answer, a change to make or a person's call. */
     const handleComment = async (a: PrActivity, pack: EvidencePack | null): Promise<Outcome> => {
       const mine = await login();
@@ -269,15 +275,23 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       if (answered >= MAX_PR_REPLIES) return { result: escalated("ten questions answered on this PR; a person takes over") };
       const myReplies = Math.max(found.comments.filter((c) => c.author.toLowerCase() === mine).length, cursor.threads[thread.id]?.replies ?? 0);
       if (myReplies >= 2) return { result: escalated(`third round trip on ${thread.path ?? "the PR"}: ${quoted(thread)}`) };
+      const reads = cursor.reads ?? 0;
+      if (reads >= MAX_PR_READS) return { result: escalated(`${MAX_PR_READS} comments read on this PR; a person takes over`) };
+      cursor.reads = reads + 1;
+      await saveCursor(deps.stateDir, task.id, cursor);
       const ship: ShipContext = {
         kind: "comment",
-        comment: { thread, pack: { summary: pack?.summary ?? "", scenarios: (pack?.scenarios ?? []).map((s) => ({ text: s.text, result: s.result })), howToVerify: pack?.howToVerify ?? "" }, myReplies },
+        comment: { thread, pack: { summary: pack?.summary ?? "", scenarios: (pack?.scenarios ?? []).map((s, i) => ({ id: `s${i + 1}`, text: s.text, result: s.result })), howToVerify: pack?.howToVerify ?? "" }, myReplies },
       };
+      // The read step: the pack reads the thread against the pack, the plan and the diff before anything is decided. A failed read leaves the reading out.
+      const ran = await deps.loop!.runPack("pr_reply", subContext(context, `read-${slugId(a.id)}`), ship);
+      const read = ran.outcome === "pass" ? PrReplyAnswer.safeParse(ran.detail?.answer) : null;
+      const named = read?.success ? (read.data.scenarios ?? []) : [];
+      if (read?.success && (read.data.asks || read.data.proposedFix)) ship.comment!.reading = { asks: plain(read.data.asks ?? "", 300), proposedFix: plain(read.data.proposedFix ?? "", 600) };
       const intent = await judgeShip(fixDeps(), "comment_intent", ship, task.repoPath);
       if (!intent.ok) return { result: escalated(`a review comment needs a person (${intent.reason}): ${quoted(thread)}`) };
       if (intent.choice === "question") {
-        const ran = await deps.loop!.runPack("pr_reply", subContext(context, `reply-${slugId(a.id)}`), ship);
-        const drafted = ran.outcome === "pass" ? PrReplyAnswer.safeParse(ran.detail?.answer) : null;
+        const drafted = read;
         if (!drafted?.success) return { result: escalated(`a question needs a person: no usable answer was drafted: ${quoted(thread)}`) };
         if (carriesSecret(drafted.data.reply)) return { result: escalated(SECRET_REASON) };
         const text = postable(drafted.data.reply);
@@ -295,37 +309,35 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         return {};
       }
       if (intent.choice === "disagreement") return { result: escalated(`a reviewer disagrees: ${quoted(thread)}`) };
-      let scope: "in_place" | "re_verify_partial" = "in_place";
-      if (intent.choice === "change_request") {
-        const sized = await judgeShip(fixDeps(), "fix_scope", ship, task.repoPath);
-        if (!sized.ok) return { result: escalated(`a change request needs a person (${sized.reason}): ${quoted(thread)}`) };
-        if (sized.choice === "re_plan") return { result: escalated(`the review says the plan is wrong: ${quoted(thread)}`, "plan_wrong", { thread: thread.comments.map((c) => `${c.author}: ${c.body}`).join("\n").slice(0, 20_000) }) };
-        if (sized.choice !== "in_place" && sized.choice !== "re_verify_partial") return { result: escalated(`a change request needs a person: ${quoted(thread)}`) };
-        scope = sized.choice;
-      } else if (intent.choice !== "nit") {
-        return { result: escalated(`a review comment needs a person: ${quoted(thread)}`) };
-      }
-      const fixed = await fix({ id: thread.id, threads: [found], scope, summary: `${thread.path ?? "the PR"}: ${plain(a.body, 120)}`, postReplies: !topLevel, quote: quoted(thread), topLevel }, pack);
+      if (intent.choice !== "change_request" && intent.choice !== "nit") return { result: escalated(`a review comment needs a person: ${quoted(thread)}`) };
+      // A nit is sized like any other change request: it can still need a new plan.
+      const sized = await judgeShip(fixDeps(), "fix_scope", ship, task.repoPath);
+      if (!sized.ok) return { result: escalated(`a change request needs a person (${sized.reason}): ${quoted(thread)}`) };
+      if (sized.choice === "re_plan") return { result: replan(thread, ship.comment!.reading?.asks) };
+      if (sized.choice !== "in_place" && sized.choice !== "re_verify_partial") return { result: escalated(`a change request needs a person: ${quoted(thread)}`) };
+      const scope = sized.choice;
+      const fixed = await fix({ id: thread.id, threads: [found], scope, summary: `${thread.path ?? "the PR"}: ${plain(a.body, 120)}`, postReplies: !topLevel, quote: quoted(thread), topLevel, named }, pack);
       if (fixed.moved && intent.choice === "change_request" && intent.recordId) cursor.decisions = [...(cursor.decisions ?? []), { pack: "comment_intent", recordId: intent.recordId, choice: "change_request", threadId: thread.id }];
       return fixed;
     };
 
     /** One bounded fix round; the counters are spent before it runs, so a crash cannot loop. */
     const fix = async (
-      round: { id: string; threads: Array<NonNullable<Awaited<ReturnType<GitHub["prThreads"]>>>[number]>; scope: "in_place" | "re_verify_partial"; summary: string; postReplies: boolean; quote: string; topLevel?: boolean },
+      round: { id: string; threads: Array<NonNullable<Awaited<ReturnType<GitHub["prThreads"]>>>[number]>; scope: "in_place" | "re_verify_partial"; summary: string; postReplies: boolean; quote: string; topLevel?: boolean; named?: string[] },
       pack: EvidencePack | null,
     ): Promise<Outcome> => {
       if ((cursor.threads[round.id]?.fixRounds ?? 0) >= MAX_THREAD_FIX_ROUNDS) return { result: escalated(`third round trip on ${round.quote}`) };
       if (cursor.fixRounds >= MAX_PR_FIX_ROUNDS) return { result: escalated(`${MAX_PR_FIX_ROUNDS} fix rounds are spent on this PR: ${round.quote}`) };
       cursor.fixRounds++;
       await bump(round.id, { fixRounds: 1 });
-      const out = await fixRound(fixDeps(), context, { slug, number, threads: round.threads, scope: round.scope, threadSummary: round.summary, label: String(cursor.fixRounds), postReplies: round.postReplies, pack });
+      const out = await fixRound(fixDeps(), context, { slug, number, threads: round.threads, scope: round.scope, threadSummary: round.summary, label: String(cursor.fixRounds), postReplies: round.postReplies, pack, named: round.named ?? [] });
       if (!out.ok) return { result: out.result };
       if (out.resolvedTo.length > 0) cursor.resolvedByMachine = [...new Set([...(cursor.resolvedByMachine ?? []), ...out.resolvedTo])];
       if (out.replied > 0) await bump(round.id, { replies: out.replied });
       if (out.note) await note(`a reply could not be posted: ${out.note}`);
       if (round.topLevel && out.summary) await deps.github.commentOnIssue(slug, number, postable(out.summary)).catch(() => {});
       cursor.published = { sha: out.head };
+      if (out.changed) cursor.fixes = [...(cursor.fixes ?? []), { sha: out.head, scope: round.scope, summary: round.summary.slice(0, 300), affected: out.affected ?? [] }].slice(-20);
       await note(out.changed ? `fixed and pushed ${out.head.slice(0, 7)}: ${round.summary}` : `answered without a change: ${round.summary}`);
       return { moved: out.changed };
     };
@@ -402,7 +414,13 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const findings = Array.isArray(answer.findings) ? (answer.findings as Array<{ title?: unknown; body?: unknown }>).slice(0, 10).map((f) => `${plain(String(f.title ?? ""), 120)}: ${plain(String(f.body ?? ""), 300)}`) : [];
       const text = [summary, ...findings].filter(Boolean).join("\n");
       const synthetic = { id: "ci", path: null, line: null, comments: [{ author: "ci", body: text.slice(0, 3000), at: now().toISOString() }] };
-      return fix({ id: "ci", threads: [synthetic], scope: "in_place", summary: `CI: ${plain(summary || "a failing check", 120)}`, postReplies: false, quote: `CI: ${plain(summary, 200)}` }, pack);
+      // A real failure is sized like any change.
+      const ciShip: ShipContext = { kind: "comment", comment: { thread: { id: "ci", path: null, line: null, comments: [{ author: "ci", body: text.slice(0, 3000), at: now().toISOString() }] }, pack: { summary: pack?.summary ?? "", scenarios: (pack?.scenarios ?? []).map((s, i) => ({ id: `s${i + 1}`, text: s.text, result: s.result })), howToVerify: pack?.howToVerify ?? "" }, myReplies: 0 } };
+      const sizedCi = await judgeShip(fixDeps(), "fix_scope", ciShip, task.repoPath);
+      if (!sizedCi.ok) return { result: escalated(`a red CI needs a person (${sizedCi.reason}): ${plain(summary, 200)}`) };
+      if (sizedCi.choice === "re_plan") return { result: replan(ciShip.comment!.thread) };
+      if (sizedCi.choice !== "in_place" && sizedCi.choice !== "re_verify_partial") return { result: escalated(`a red CI needs a person: ${plain(summary, 200)}`) };
+      return fix({ id: "ci", threads: [synthetic], scope: sizedCi.choice, summary: `CI: ${plain(summary || "a failing check", 120)}`, postReplies: false, quote: `CI: ${plain(summary, 200)}` }, pack);
     };
 
     /** The base moved and the PR conflicts: rebase once, push with a lease, re-stamp the pack; a second time is a person's. */

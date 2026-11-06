@@ -55,6 +55,7 @@ function setup(over: { addressed?: StageResult; commit?: boolean; checks?: Stage
     return { validity: { choice: over.valid ?? "refresh_text", confidence: 0.9 } };
   });
   const github = fakeGitHub({
+    prFiles: async () => [{ path: "src/export.ts" }, { path: "src/other.ts" }] as never,
     prHeadSha: async () => over.remote ?? B,
     prFacts: async () => ({ number: 3, title: "t", body: null, url: "https://x/pull/3", baseRefName: "main", headRefName: "hardness/t1", author: { login: "me" } }) as never,
     threadResolved: async () => false,

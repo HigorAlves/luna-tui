@@ -42,6 +42,10 @@ const ShipCursorSchema = z.object({
   reviewRequiredSeen: z.boolean().optional(),
   /** The classes facts decided at the last poll (`conflict`, `base_moved`, `freeze`, `blocked_by_other_pr`): one `ship.event` per change. */
   lastEvents: z.array(z.string()).optional(),
+  /** Comments read by the `pr_reply` read step on this PR (at most `MAX_PR_READS`). */
+  reads: z.number().int().optional(),
+  /** The fixes pushed: the commit, the scope, a line, and the scenarios the fix may have changed. */
+  fixes: z.array(z.object({ sha: z.string(), scope: z.enum(["in_place", "re_verify_partial"]), summary: z.string(), affected: z.array(z.object({ id: z.string(), text: z.string(), result: z.string() })) })).optional(),
   /** `ship.ready` was logged: readiness is announced the first time it is true. */
   readyNoted: z.boolean().optional(),
 });
