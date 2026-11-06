@@ -335,6 +335,19 @@ describe("posting once", () => {
     expect((await x.machine.view("PAY-12")).drafts[0]!.status).toBe("posted");
   });
 
+  it("a comment that went out stays posted when the transition after it fails: a second tap cannot post it again", async () => {
+    const x = setup();
+    await x.machine.ingest(ticket(), ctx);
+    const [d] = (await x.machine.view("PAY-12")).drafts;
+    x.port.transition = async () => {
+      throw new Error("no such transition");
+    };
+    await expect(x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash, transition: "Done" })).rejects.toThrow(/posted.*transition|transition.*posted/i);
+    expect((await x.machine.view("PAY-12")).drafts[0]!.status).toBe("posted");
+    await expect(x.machine.approve("PAY-12", { draft: d!.id, hash: d!.hash })).rejects.toBeInstanceOf(TicketRefusal);
+    expect(x.writes.filter((w) => w[0] === "comment")).toHaveLength(1);
+  });
+
   it("an ingest between the read and the write keeps the posting mark, and then the posted one", async () => {
     let release!: () => void;
     const hold = new Promise<void>((r) => (release = r));

@@ -278,14 +278,21 @@ export class TicketMachine implements TicketIntake {
     if (!claimed) throw new TicketRefusal("the draft is already being posted, or it changed since you read it");
     try {
       await port.comment(row.key, to.text);
-      if (transition !== undefined) await port.transition(row.key, transition);
     } catch (error) {
       await this.deps.store.updateDrafts(row.key, (current) => (current as unknown as Draft[]).map((d) => (d.id === before.id && d.status === "posting" ? before : d)) as unknown as Record<string, unknown>[]);
       throw error;
     }
+    // The comment is out: the draft is posted whatever the transition does next, so a second tap cannot post it again.
     const at = this.now().toISOString();
     await this.deps.store.updateDrafts(row.key, (current) => (current as unknown as Draft[]).map((d) => (d.id === before.id ? { ...d, status: "posted" as const, history: [...to.history, { at, did: "posted" as const, from: before.text }] } : d)) as unknown as Record<string, unknown>[]);
     if (before.kind === "park") await this.deps.store.setMachine(row.key, { status: "parked" });
+    if (transition !== undefined) {
+      try {
+        await port.transition(row.key, transition);
+      } catch {
+        throw new TicketRefusal("the comment was posted, but the transition did not happen: make it in the ticket's own tool");
+      }
+    }
     await this.acknowledge(row.key);
   }
 
