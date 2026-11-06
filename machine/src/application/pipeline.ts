@@ -2695,6 +2695,8 @@ export class Pipeline {
                 ...(typeof result.detail?.reason === "string" ? { reason: result.detail.reason } : {}),
                 ...(stage === "triage" && TriageOutcome.safeParse(result.detail?.outcome).success ? { triage: result.detail!.outcome as TriageOutcome } : {}),
                 ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
+                // Verify's own run failed with no verdict and no finding: it is asked again, Build has nothing to fix.
+                ...(stage === "verifying" && result.outcome === "fail" && result.detail?.runFailed === true && (result.findings ?? []).length === 0 ? { unanswered: true as const } : {}),
                 ...(await this.blockerSet(id, stage, result)),
                 ...(await this.loopCap(id, stage, result)),
                 // The merge that did not happen because the PR is not ready; a fix that changed what a scenario shows (media from a new browser run).

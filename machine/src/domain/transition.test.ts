@@ -273,6 +273,22 @@ describe("retry loops", () => {
     expect(transition(ci, e2e(5)).state).not.toBe("escalated");
   });
 
+  describe("a Verify that could not answer", () => {
+    const unanswered: PipelineEvent = { type: "stage_done", outcome: "fail", unanswered: true };
+
+    it("runs Verify again, not Build: nothing was found in the code, so there is nothing for Build to fix", () => {
+      const step = transition(at("verifying"), unanswered);
+      expect(step.state).toBe("verifying");
+      expect(step.effect).toEqual({ kind: "run", stage: "verifying" });
+      expect(step.retries).toMatchObject({ verify: 1, total: 0 });
+    });
+
+    it("asks a person after the loop cap, resuming at Verify", () => {
+      const step = transition(at("verifying", { retries: { ...NO_RETRIES, verify: 2 } }), unanswered);
+      expect(step).toMatchObject({ state: "escalated", resumeTo: "verifying", reason: "verifying could not answer 3 times" });
+    });
+  });
+
   describe("one Build round per set of blocker findings", () => {
     const failing = (findingSet: string, buildRounds?: number): PipelineEvent => ({ type: "stage_done", outcome: "fail", findingSet, ...(buildRounds ? { buildRounds } : {}) });
 

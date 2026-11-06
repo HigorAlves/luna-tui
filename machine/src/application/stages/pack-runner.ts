@@ -683,7 +683,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   }
   if (output.outcome === "fail" || !output.ok) {
     return dirty(
-      merged({ ...mapped, outcome: "fail", detail: { ...mapped.detail, error: output.error ?? output.summary } }),
+      merged({ ...mapped, outcome: "fail", detail: { ...mapped.detail, error: output.error ?? output.summary, runFailed: true } }),
     );
   }
   if (output.outcome === "needs_input") {
