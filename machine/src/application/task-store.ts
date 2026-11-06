@@ -130,6 +130,8 @@ export interface TaskStore {
   /** The highest sequence number any committed change holds; 0 before the first. */
   lastSeq(): Promise<number>;
   findStuckTasks(running: ReadonlySet<TaskState>): Promise<TaskRow[]>;
+  /** The cards that are not closed or archived and are stacked on this one (`card.base.card`). */
+  findStackedOn(id: string): Promise<TaskRow[]>;
   /** Ends every stage run still `running` as aborted, except the ones a restart re-attached to. */
   markRunningStageRunsAborted(except?: readonly string[]): Promise<void>;
   /** The container's name and the commit it started from, known once the stage is under way. */

@@ -144,6 +144,16 @@ export class PgTaskStore implements TaskStore {
       .find({ where: { state: In([...running]) }, order: { updatedAt: "ASC" } });
   }
 
+  findStackedOn(id: string): Promise<TaskRow[]> {
+    return this.db
+      .getRepository(TaskEntity)
+      .createQueryBuilder("task")
+      .where("task.card->'base'->>'card' = :id", { id })
+      .andWhere("task.state not in ('closed', 'archived')")
+      .orderBy("task.createdAt", "ASC")
+      .getMany();
+  }
+
   async markRunningStageRunsAborted(except: readonly string[] = []): Promise<void> {
     await this.db
       .getRepository(StageRunEntity)

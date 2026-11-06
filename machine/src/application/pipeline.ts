@@ -16,6 +16,7 @@ import { type CardFields, type ContextMissing, type DedupContext, contextComplet
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type DedupAnswer, checkDuplicates } from "./intake-dedup.ts";
 import type { Candidate } from "../domain/similarity.ts";
+import { type DepFact, schedulable } from "../domain/stack.ts";
 import { type CardFieldsInput, MAX_FOLLOWERS, MAX_LINKS, appendSource, cardFieldsOf, cardOf, mergeFields, stackFieldsOf, unmergeFields, withDemand } from "../domain/card-fields.ts";
 import { splitFacts } from "../domain/split.ts";
 import { canSeeKept, contextAsk, mergedNotice, questionsComment } from "../domain/notices.ts";
@@ -393,6 +394,8 @@ function revisePlan(current: unknown, after: Record<string, unknown>, steps?: Pl
     version: plan.version + 1,
   };
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class Pipeline {
   private readonly store: TaskStore;
@@ -1174,8 +1177,92 @@ export class Pipeline {
       const checked = await this.dedupCheck(id);
       if (checked) return checked;
     }
+    if (task.state === "draft" && (cardOf(task).dependsOn?.length ?? 0) > 0) {
+      const held = await this.holdOrRelease(task);
+      if (held) return held;
+    }
     const setup = task.route === "setup" || (task.repoPath !== null && !this.hasConfig(task.repoPath));
     return this.dispatch(id, { type: "start", setup });
+  }
+
+  /** The open cards stacked on this one. */
+  stackedOn(id: string): Promise<TaskRow[]> {
+    return this.store.findStackedOn(id);
+  }
+
+  /** The card left its stack (its parent merged and it now targets the default branch): the base goes, under the lock, and the retarget is logged once. */
+  async clearBase(id: string): Promise<void> {
+    await this.store.withTaskLock(id, async (task, tx) => {
+      const { base, ...rest } = cardOf(task);
+      if (!base) return;
+      await tx.updateTask(id, { card: rest });
+      await tx.recordEvent({ taskId: id, kind: "stack.retargeted", payload: { to: "default" }, stageRunId: null });
+    });
+  }
+
+  private releasing = false;
+  private releaseAgain = false;
+
+  /** Tries every draft that waits for its dependencies (`startWhenReady`) through `start` again. A call made while another runs (a card closing inside a stage loop that is itself releasing) asks that one to go round once more; it never waits for it. */
+  async releaseHeld(): Promise<void> {
+    if (this.releasing) {
+      this.releaseAgain = true;
+      return;
+    }
+    this.releasing = true;
+    try {
+      do {
+        this.releaseAgain = false;
+        for (const row of await this.store.listTasks()) {
+          const card = cardOf(row);
+          if (row.state !== "draft" || card.startWhenReady !== true || (card.dependsOn?.length ?? 0) === 0) continue;
+          await this.start(row.id).catch((error: unknown) => console.error(`could not release held card ${row.id}`, error));
+        }
+      } while (this.releaseAgain && !this.stopping);
+    } finally {
+      this.releasing = false;
+    }
+  }
+
+  /** What the dependency rule needs of the cards a card waits for, and of the cards they are stacked on (at most 200 reads, so a long or looping chain cannot run on). */
+  private async dependencyFacts(ids: readonly string[]): Promise<Map<string, DepFact>> {
+    const facts = new Map<string, DepFact>();
+    const queue = [...ids];
+    for (let reads = 0; queue.length > 0 && reads < 200; reads++) {
+      const id = queue.shift()!;
+      if (facts.has(id) || !UUID.test(id)) continue;
+      const row = await this.store.getTask(id);
+      if (!row) continue;
+      const card = cardOf(row);
+      const delivered = (await this.latestStageFinish(id, "delivering"))?.detail;
+      const merged = row.state === "closed" ? !card.mergedInto : row.state === "reviewing_memory" ? (await this.mergedPr(id)) !== null : false;
+      facts.set(id, { id, repoPath: row.repoPath, branch: row.branch, state: row.state, archiveReason: row.archiveReason, hasOpenPr: typeof delivered?.prNumber === "number", merged, base: card.base ?? null, mergedInto: card.mergedInto ?? null });
+      if (card.mergedInto) queue.push(card.mergedInto);
+      if (card.base) queue.push(card.base.card);
+    }
+    return facts;
+  }
+
+  /** The dependency rule at start: a card that must wait stays a draft (and says what for, when that changed); one that may go on takes its base and starts. Null means "start as usual". */
+  private async holdOrRelease(task: TaskRow): Promise<TaskRow | null> {
+    const card = cardOf(task);
+    const maxDepth = (await this.policyFor(task.repoPath)).factory.size.max_children;
+    const verdict = schedulable({ id: task.id, repoPath: task.repoPath, dependsOn: card.dependsOn ?? [] }, await this.dependencyFacts(card.dependsOn ?? []), { maxDepth });
+    const last = (await this.events(task.id)).findLast((e) => e.kind === "card.held" || e.kind === "card.released");
+    return this.store.withTaskLock(task.id, async (now, tx) => {
+      if (now.state !== "draft") return this.get(task.id);
+      const current = cardOf(now);
+      if (!verdict.ok) {
+        if (current.startWhenReady !== true) await tx.updateTask(task.id, { card: { ...current, startWhenReady: true } });
+        const same = last?.kind === "card.held" && last.payload.reason === verdict.reason && JSON.stringify(last.payload.waitingOn) === JSON.stringify(verdict.waitingOn);
+        if (!same) await tx.recordEvent({ taskId: task.id, kind: "card.held", payload: { reason: verdict.reason, waitingOn: verdict.waitingOn }, stageRunId: null });
+        return this.get(task.id);
+      }
+      const { base: _gone, ...rest } = current;
+      await tx.updateTask(task.id, { card: verdict.base ? { ...rest, base: verdict.base } : rest });
+      await tx.recordEvent({ taskId: task.id, kind: "card.released", payload: { base: verdict.base }, stageRunId: null });
+      return null;
+    });
   }
 
   /** A linked ticket\'s scope or priority changed: the card, before Build, keeps the field names and the time, and its open gate shows them ("the ticket changed since this was written"). The next gate it opens before Build carries them too. After Build a flag is the machine's business, not the gate\'s. */
@@ -1916,6 +2003,7 @@ export class Pipeline {
     }
     await this.rearmPaused();
     await this.autoApprovePlans();
+    await this.releaseHeld();
     await this.probeShipGates();
     await this.fillSlots();
   }
@@ -2188,6 +2276,11 @@ export class Pipeline {
 
   /** Runs the host-side close step for a task that just closed and logs what it did. Never throws. */
   private async close(id: string): Promise<void> {
+    await this.closeOut(id);
+    await this.releaseHeld();
+  }
+
+  private async closeOut(id: string): Promise<void> {
     await this.releaseKept?.(id).catch((error: unknown) => console.error(`could not release the kept sandbox of ${id}`, error));
     if (!this.closeDeps) return;
     try {
@@ -2422,6 +2515,8 @@ export class Pipeline {
               }
             : result.detail;
         const step = await this.apply(id, next, { detail });
+        // The PR is open: a card that waited for this one may start.
+        if (stage === "delivering" && result.outcome === "pass") await this.releaseHeld();
         // A retro with nothing to propose (or one that broke) ends the card here: no click, the close step runs.
         if (step.effect.kind === "done") {
           await this.close(id);
