@@ -21,7 +21,7 @@ const CARD = pathToFileURL("/video-tools/cards/card.html").href;
 const FPS = 30;
 const safe = (id: string) => id.replace(/[^A-Za-z0-9_-]/g, "_");
 
-const browser = await playwright.chromium.launch({ executablePath: "/usr/local/bin/chromium-qa", args: ["--no-sandbox", "--disable-gpu"] });
+const browser = await playwright.chromium.launch({ executablePath: "/usr/local/bin/chromium-qa", args: ["--no-sandbox", "--disable-gpu", "--disable-features=EncryptedClientHello"] });
 try {
   for (const scene of timeline.scenes.filter((s) => s.kind === "card")) {
     const clip = narration.scenes.find((n) => n.id === scene.id)?.durationS ?? 0;

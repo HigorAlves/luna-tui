@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs the layer's binary of this name with the layer's shared libraries (libstdc++ and friends) in reach. Shell builtins only:
+# the base image's own tools are never called by name here.
+name="${0##*/}"
+LD_LIBRARY_PATH="/opt/luna/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "/opt/luna/libexec/$name" "$@"

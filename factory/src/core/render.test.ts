@@ -571,3 +571,13 @@ describe("ticket and model text in a prompt", () => {
     expect(render({}).split("\n")).toContain("Attempt 2");
   });
 });
+
+describe("{{context.checks}} and secrets", () => {
+  it("marks a check that declares secrets as run by the machine, without naming them, and leaves the others as they were", () => {
+    const checks = [{ name: "db", run: "make db-test", secrets: ["DB_URL"] }, { name: "unit", run: "make test" }];
+    const text = renderPrompt({ pack: PACKS.implementing, input: { ...input, context: { ...input.context, checks } } as never, template: "checks:\n{{context.checks}}" });
+    expect(text).toContain("- db: `make db-test` (run by the machine with its own secrets; do not chase its failure)");
+    expect(text).not.toContain("DB_URL");
+    expect(text).toContain("- unit: `make test`");
+  });
+});

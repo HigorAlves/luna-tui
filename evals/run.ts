@@ -17,6 +17,9 @@
 import { EngineId, PACKS, PackId } from "@hardness/contracts";
 import { machineCredentials } from "@hardness/machine/credentials";
 import { imageExists } from "@hardness/machine/docker";
+import { loadConfig } from "@hardness/machine/config";
+import { buildEgress } from "@hardness/machine/egress";
+import { PolicyStore } from "@hardness/machine/policy";
 import { outputError, runPackOnce } from "@hardness/machine/run-once";
 import { type Evaluation, buildTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -66,6 +69,8 @@ const trials = (() => {
 })();
 const image = values.image!;
 const credentials = machineCredentials();
+// The same list a real run of the pack gets (kind agent: the engine's host, GitHub, the registries), so what is measured is what runs; MACHINE_EGRESS=off applies here too.
+const egress = buildEgress({ egress: loadConfig(process.env).egress, runnerImage: image, traces: tracesFromEnv() }, new PolicyStore());
 
 // Traces and evaluations go to the same local Laminar the machine reports to, when a key is set.
 const telemetry = await buildTelemetry(tracesFromEnv());
@@ -103,8 +108,8 @@ async function runCase(evalCase: EvalCase, engine: EngineId, index: number, tria
   const span = telemetry.run({ kind: "eval", pack, engine, client: "eval", sessionId: `eval-${pack}-${stamp}` });
   const started = Date.now();
   const run = await runPackOnce(
-    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image, runDir, worktree, input: caseInput(evalCase.input, engine), engine, labels: { luna: "eval" }, extraEnv: span.childEnv() },
-    { credentials },
+    { name: `hardness-eval-${slug(pack)}-${slug(evalCase.id)}-${slug(engine)}-${stamp.slice(11, 19)}${trial > 1 ? `-t${trial}` : ""}`, image, runDir, worktree, input: caseInput(evalCase.input, engine), engine, labels: { luna: "eval" }, extraEnv: span.childEnv(), egressKind: "agent" },
+    { credentials, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   const caseRun = { id: evalCase.id, output: run.output, error: run.error, wallMs: Date.now() - started };
   const { answer, schema } = gradeAnswer(pack, evalCase.expect, caseRun);
@@ -132,8 +137,8 @@ async function runCase(evalCase: EvalCase, engine: EngineId, index: number, tria
 async function judgeAnswer(evalCase: EvalCase, answer: unknown, engine: EngineId, runDir: string): Promise<JudgeVerdict> {
   mkdirSync(join(runDir, "work"), { recursive: true });
   const run = await runPackOnce(
-    { name: `hardness-eval-judge-${slug(evalCase.id)}-${stamp.slice(11, 19)}-${Math.random().toString(36).slice(2, 6)}`, image, runDir, worktree: join(runDir, "work"), input: judgeInput(evalCase, answer, engine), engine, labels: { luna: "eval" } },
-    { credentials },
+    { name: `hardness-eval-judge-${slug(evalCase.id)}-${stamp.slice(11, 19)}-${Math.random().toString(36).slice(2, 6)}`, image, runDir, worktree: join(runDir, "work"), input: judgeInput(evalCase, answer, engine), engine, labels: { luna: "eval" }, egressKind: "agent" },
+    { credentials, ...(egress ? { egress } : {}) },
   ).catch((error: Error) => ({ output: null, error: error.message }) as const);
   if (run.error !== null) return { error: `judge: ${run.error}` };
   if (!run.output.ok) return { error: `judge: ${outputError(run.output)}` };

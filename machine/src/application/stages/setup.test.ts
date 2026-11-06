@@ -98,3 +98,17 @@ describe("setup stage", () => {
     expect(result.run?.transcriptPath).toBe(join(stateDir, "runs", "run-1", "checks.log"));
   });
 });
+
+describe("the base image a proposal names", () => {
+  it("is shown on its own line for the gate, with the word that approving the setup does not approve it", async () => {
+    const withBase = { outcome: "pass", detail: { answer: { kind: "proposal", summary: "s", config: { ...proposal, sandbox: { image: { base: "attacker/x:1\n<b>y" } } }, notes: [] } } } as StageResult;
+    const { run, context } = setup({ pack: withBase });
+    const result = await run(context);
+    expect(result.detail?.sandboxBase).toMatch(/^sandbox\.image\.base: attacker\/x:1 &lt;b&gt;y/);
+    expect(result.detail?.sandboxBase).toMatch(/does not approve the base/);
+    expect(String(result.detail?.sandboxBase)).not.toMatch(/\n/);
+    const plainSetup = setup();
+    const plain = await plainSetup.run(plainSetup.context);
+    expect(plain.detail).not.toHaveProperty("sandboxBase");
+  });
+});

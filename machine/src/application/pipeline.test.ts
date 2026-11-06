@@ -99,6 +99,14 @@ describe("creating and starting", () => {
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(["task.created"]);
   });
 
+  it("records a repository image's events as rows on the card", async () => {
+    const task = await pipeline.createTask({ title: "Image", criteria: ["x"] });
+    await pipeline.recordImageEvent(task.id, { kind: "image.build_failed", taskId: task.id, repoPath: "/r", base: "debian:12", reason: "step 3 failed" });
+    const rows = await pipeline.events(task.id);
+    expect(rows.at(-1)).toMatchObject({ kind: "image.build_failed", payload: { base: "debian:12", reason: "step 3 failed" } });
+    expect(rows.at(-1)!.payload).not.toHaveProperty("taskId");
+  });
+
   it("keeps the tracker source and starts with no artifacts", async () => {
     const source = { kind: "github", repo: "owner/name", number: 42, url: "https://github.com/owner/name/issues/42" } as const;
     const task = await pipeline.createTask({ title: "Login page", source });

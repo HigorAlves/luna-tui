@@ -62,7 +62,7 @@ function policyWith(over: (Partial<Policy> & { autoMerge?: "off" | "low" | "medi
 
 function setup(
   answers: Partial<GitHub> = {},
-  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; pollMs?: number | null; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"]; freezeSource?: ShipMonitorDeps["freeze"]; buildTests?: ShipMonitorDeps["buildTests"] } = {},
+  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; pollMs?: number | null; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"]; freezeSource?: ShipMonitorDeps["freeze"]; buildTests?: ShipMonitorDeps["buildTests"]; onMerged?: ShipMonitorDeps["onMerged"] } = {},
 ) {
   const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => ({ merged: true as const, sha: null }), ...answers });
   let clock = START.getTime();
@@ -74,6 +74,7 @@ function setup(
     policies: { for: async () => policyWith(over.policy) },
     evidence: { load: async () => (over.pack === undefined ? pack() : over.pack), ...over.evidence },
     stateDir,
+    ...(over.onMerged ? { onMerged: over.onMerged } : {}),
     pollMs: over.pollMs === undefined ? 60_000 : over.pollMs,
     ...(over.maxWaitMs !== undefined ? { maxWaitMs: over.maxWaitMs } : {}),
     sleep: async (ms) => {
@@ -168,6 +169,13 @@ describe("the ship monitor", () => {
     expect(result).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD }, prUrl: REF.url, number: 3 } });
     expect(calls(github, "mergePr")).toEqual([]);
     expect(slept).toEqual([]);
+  });
+
+  it("asks for a rebuild of the repository's graph at once when the PR is seen merged, by a person or by the machine", async () => {
+    const asked: string[] = [];
+    const person = setup({ prMerged: async () => merged }, { onMerged: (repo) => void asked.push(repo) });
+    await person.run();
+    expect(asked).toEqual(["/repo"]);
   });
 
   it("does not merge with auto_merge off, and passes when a person merges later", async () => {

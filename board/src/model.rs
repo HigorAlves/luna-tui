@@ -1778,6 +1778,102 @@ impl RepoMetrics {
     }
 }
 
+/// One repository's sandbox image and code graph, a row of `GET /repos`. The base's name and the failures are text from outside: they are
+/// shown through `plain`, never as markup or with control characters.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoHealth {
+    pub repo: String,
+    pub image: ImageHealth,
+    pub graph: GraphHealth,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageHealth {
+    pub in_use: String,
+    pub base: Option<String>,
+    pub built_at: Option<String>,
+    pub last_failure: Option<String>,
+    /// A base the repository names that nobody approved yet; it runs on the machine's image until you approve it.
+    #[serde(default)]
+    pub pending_base: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphHealth {
+    pub on: bool,
+    pub commit: Option<String>,
+    pub behind: Option<u64>,
+    pub graphify: Option<String>,
+    pub built_at: Option<String>,
+    pub building: bool,
+    pub last_failure: Option<String>,
+}
+
+/// Text from outside on one line: control characters become spaces, at most `max` characters.
+pub fn plain(text: &str, max: usize) -> String {
+    let flat: String = text.chars().map(|ch| if ch.is_control() { ' ' } else { ch }).collect();
+    let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max { flat } else { format!("{}…", flat.chars().take(max.saturating_sub(1)).collect::<String>()) }
+}
+
+impl RepoHealth {
+    pub fn name(&self) -> &str {
+        self.repo.trim_end_matches('/').rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("(none)")
+    }
+
+    /// The image in one line: the machine's, or its own with its base, when it was built and the last failure.
+    pub fn image_line(&self, now: u64) -> String {
+        let i = &self.image;
+        let mut line = match &i.base {
+            Some(base) => format!("image: own on {} ({})", plain(base, 40), plain(&i.in_use, 40)),
+            None => "image: machine's".to_string(),
+        };
+        if let Some(at) = &i.built_at {
+            line.push_str(&format!(" · built {} ago", age(at, now)));
+        }
+        if let Some(why) = &i.last_failure {
+            line.push_str(&format!(" · build failed: {}", plain(why, 60)));
+        }
+        line
+    }
+
+    /// The base waiting for approval, on its own line, with the key: approving trusts that image with the stage's credential.
+    pub fn pending_line(&self) -> Option<String> {
+        self.image.pending_base.as_ref().map(|base| format!("base waiting for you: {} (A approves; it will run with the stage's credential)", plain(base, 80)))
+    }
+
+    /// The graph in one line: off, building, or its commit, distance, Graphify, age and last failure.
+    pub fn graph_line(&self, now: u64) -> String {
+        let g = &self.graph;
+        if !g.on {
+            return "graph: off".to_string();
+        }
+        let mut line = match &g.commit {
+            Some(commit) => format!("graph: {}", plain(&commit.chars().take(7).collect::<String>(), 7)),
+            None => "graph: none yet".to_string(),
+        };
+        if let Some(behind) = g.behind {
+            line.push_str(&format!(" · {behind} behind"));
+        }
+        if let Some(v) = &g.graphify {
+            line.push_str(&format!(" · graphify {}", plain(v, 16)));
+        }
+        if let Some(at) = &g.built_at {
+            line.push_str(&format!(" · built {} ago", age(at, now)));
+        }
+        if g.building {
+            line.push_str(" · building");
+        }
+        if let Some(why) = &g.last_failure {
+            line.push_str(&format!(" · failed: {}", plain(why, 60)));
+        }
+        line
+    }
+}
+
 /// One engine's row of `GET /metrics?groupBy=engine`. Unknown keys (`meanDurationMs`) are ignored.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

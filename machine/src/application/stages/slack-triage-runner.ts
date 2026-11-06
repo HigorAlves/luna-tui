@@ -4,6 +4,7 @@
 // `context.slack`, and the structured answer comes back in /out/result.json. One row per run
 // goes to slack_triage_runs so the Floor can show what triage costs. A run that answered has
 // its folder removed at once; a failed one keeps it for the retention sweep (sweepSlackTriageRuns).
+import type { EgressPolicy } from "../egress-policy.ts";
 import { PACKS, SlackTriageAnswer, type SlackTriageContext, resolveEngine } from "@hardness/contracts";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -27,6 +28,8 @@ export interface SlackTriageDeps {
   store: Pick<SlackStore, "recordTriageRun">;
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
+  /** The list a pack run may reach; absent, the run joins an ordinary bridge as before. */
+  egress?: EgressPolicy;
   now?: () => Date;
   /** One line per run; defaults to console.log. */
   log?: (line: string) => void;
@@ -97,7 +100,7 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
     try {
       const run = await runPackOnce(
         { name: `hardness-slack-triage-${stamp}`, image: deps.image, runDir, worktree: work, input, engine, labels: { luna: "slack-triage" } },
-        { credentials: deps.credentials, sandbox: deps.sandbox },
+        { credentials: deps.credentials, sandbox: deps.sandbox, ...(deps.egress ? { egress: deps.egress } : {}) },
       );
       if (run.error !== null) error = run.error;
       else {

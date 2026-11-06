@@ -17,7 +17,7 @@ const MERGE_READS = 3;
 const MERGE_READ_PAUSE_MS = 1000;
 const MERGE_ATTEMPTS = 2;
 
-export interface MergeDeps extends Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "truth" | "stateDir" | "sleep" | "now" | "readCodeowners"> {
+export interface MergeDeps extends Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "truth" | "stateDir" | "sleep" | "now" | "readCodeowners" | "onMerged"> {
   /** Milliseconds between the merge's own reads (a queue wait). */
   pollMs: number;
   /** The facts of one poll; default `readShipFacts`. Tests inject one. */
@@ -44,6 +44,8 @@ export function mergeRunner(deps: MergeDeps): StageRunner {
     const policy = await deps.policies.for(task.repoPath);
     const config = { ...FACTORY_DEFAULTS.ship.merge, ...(policy.factory?.ship?.merge ?? {}) };
     const recorded = async (state: Awaited<ReturnType<GitHub["prMerged"]>>, note?: string, made?: { sha: string | null; method: string }): Promise<StageResult> => {
+      // A merged card's repository gets its graph rebuilt at once.
+      if (task.repoPath) deps.onMerged?.(task.repoPath);
       await settle(task.id, cursor, slug, number).catch(() => {});
       // A queue merge the machine asked for leaves the head branch for the queue; it goes now (never after a person's merge). Already gone is not an error.
       if (cursor.queued && config.delete_branch && task.branch) await deps.github.deleteBranch(slug, task.branch).catch(() => {});
@@ -117,7 +119,10 @@ export function mergeRunner(deps: MergeDeps): StageRunner {
         await sleep(MERGE_READ_PAUSE_MS);
         last = await deps.github.prMerged(slug, number);
       }
-      if (!last.merged) return { outcome: "pass", detail: { merged: { sha: mergeSha, at: now().toISOString(), by: "machine", method: config.method }, prUrl: url, number, ...(mergeSha ? {} : { note: "GitHub did not report the merge commit" }) } };
+      if (!last.merged) {
+        if (task.repoPath) deps.onMerged?.(task.repoPath);
+        return { outcome: "pass", detail: { merged: { sha: mergeSha, at: now().toISOString(), by: "machine", method: config.method }, prUrl: url, number, ...(mergeSha ? {} : { note: "GitHub did not report the merge commit" }) } };
+      }
       return await recorded(last, mergeSha || last.mergedSha ? undefined : "GitHub did not report the merge commit", { sha: mergeSha, method: config.method });
     } catch (error) {
       return { outcome: "fail", detail: { error: messageOf(error) } };

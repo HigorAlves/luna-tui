@@ -16,13 +16,13 @@ const open = { merged: false, mergedSha: null, state: "open" as const, mergedAt:
 const context = { task: { id: "t1", title: "feat", description: "d", criteria: [], branch: "hardness/t1", worktreePath: "/wt", repoPath: "/repo", source: null } as unknown as TaskRow, stage: "shipping", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as StageContext;
 const facts = (canAutoMerge: boolean, head = HEAD, reason = "not ready: CI is red"): ShipFacts => ({ pr: { title: "Export CSV", headRef: "hardness/t1", fromFork: false } as ShipFacts["pr"], head, pack: null, risk: "low", review: { required: false }, paths: [], events: [], releaseOwners: [], readiness: { ready: canAutoMerge, canAutoMerge, blockers: canAutoMerge ? [] : [reason], reason, checklist: [] } as unknown as ShipFacts["readiness"] });
 
-async function wire(over: { github?: Parameters<typeof fakeGitHub>[0]; facts?: () => Promise<ShipFacts | null>; cursor?: boolean; merge?: Record<string, unknown>; queuedCursor?: boolean } = {}) {
+async function wire(over: { github?: Parameters<typeof fakeGitHub>[0]; facts?: () => Promise<ShipFacts | null>; cursor?: boolean; merge?: Record<string, unknown>; queuedCursor?: boolean; onMerged?: (repoPath: string) => void } = {}) {
   const stateDir = await mkdtemp(join(tmpdir(), "merge-"));
   if (over.cursor !== false) await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "a/b", number: 3 }), ...(over.queuedCursor ? { queued: true } : {}) });
   const github = fakeGitHub({ prMerged: async () => open, mergePr: async () => ({ merged: true as const, sha: null }), deleteBranch: async () => {}, ...over.github });
   const settle = vi.fn(async () => {});
   const sleep = vi.fn(async () => {});
-  const run = mergeRunner({ github, policies: { for: async () => ({ factory: { ship: { merge: { method: "squash", queue: true, delete_branch: true, commit_template: null, ...over.merge } } } }) as never }, evidence: { load: async () => null }, stateDir, pollMs: 1000, sleep, readFacts: over.facts ?? (async () => facts(true)), settle });
+  const run = mergeRunner({ github, policies: { for: async () => ({ factory: { ship: { merge: { method: "squash", queue: true, delete_branch: true, commit_template: null, ...over.merge } } } }) as never }, evidence: { load: async () => null }, stateDir, pollMs: 1000, sleep, readFacts: over.facts ?? (async () => facts(true)), settle, ...(over.onMerged ? { onMerged: over.onMerged } : {}) });
   return { run, github, stateDir, settle, sleep };
 }
 
@@ -35,6 +35,16 @@ describe("mergeRunner (shipping)", () => {
     expect(MERGE_COMMIT).not.toBe(HEAD);
     expect(github.mergePr).toHaveBeenCalledWith("a/b", 3, expect.objectContaining({ sha: HEAD }));
     expect(settle).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for the repository's graph to be rebuilt when the machine merges, and when a person already had (wave 11b's rule, now at the merge stage)", async () => {
+    let merged = false;
+    const asked: string[] = [];
+    const machine = await wire({ onMerged: (repo) => void asked.push(repo), github: { mergePr: async () => { merged = true; return { merged: true as const, sha: null }; }, prMerged: async () => (merged ? { merged: true, mergedSha: MERGE_COMMIT, state: "closed", mergedAt: "t" } : open) } });
+    await machine.run(context);
+    const person = await wire({ onMerged: (repo) => void asked.push(repo), github: { prMerged: async () => ({ merged: true, mergedSha: MERGE_COMMIT, state: "closed", mergedAt: "t" }) } });
+    await person.run(context);
+    expect(asked).toEqual(["/repo", "/repo"]);
   });
 
   it("records a PR a person merged first without merging again", async () => {

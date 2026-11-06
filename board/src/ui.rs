@@ -1041,6 +1041,13 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
             format!("jira blocked: no transition to \"{}\" from \"{}\"{why}", s("wanted"), s("current"))
         }
         "jira.moved" => format!("jira moved to {}", s("status")),
+        "sandbox.egress_blocked" => match p["more"].as_u64() {
+            Some(more) => format!("blocked: {more} more ({})", detail::plain(&s("step"))),
+            None => {
+                let count = p["count"].as_u64().filter(|c| *c > 1).map(|c| format!(" x{c}")).unwrap_or_default();
+                format!("blocked: {}:{} ({}, {}){count}", detail::plain(&s("host")), p["port"], detail::plain(&s("step")), detail::plain(&s("via")))
+            }
+        },
         other => other.to_string(),
     };
     match event.names.first() {
@@ -2137,7 +2144,7 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
 
     // The per-repo table takes the bottom when there is more than one repo to compare, the
     // per-engine one sits above it once there are numbers.
-    let repo_height = if floor.repos.is_empty() { 0 } else { (floor.repos.len() as u16 + 3).min(area.height / 3) };
+    let repo_height = if floor.repos.is_empty() { 0 } else { (floor.repos.len() as u16 + 3 + floor.health.len() as u16 * 3).min(area.height / 2) };
     let engine_rows = floor_engine_rows(floor);
     let engine_height = match (&floor.d7, &floor.by_engine) {
         (None, _) => 0,
@@ -2289,6 +2296,18 @@ fn render_floor_repos(frame: &mut Frame, area: Rect, floor: &FloorState, head_st
             &fmt_usd(Some(r.cost_usd)),
         );
         out.push(Line::from(Span::from(text).style(if focused { Style::new().fg(c(ACCENT)).bold() } else { Style::new() })));
+    }
+    // Under the table: each repository's image and graph, and what failed.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    for h in &floor.health {
+        if out.len() + 3 > area.height as usize {
+            break;
+        }
+        out.push(Line::from(Span::from(format!("  {:<16}{}", truncate(h.name(), 15), h.image_line(now))).style(label_style)));
+        out.push(Line::from(Span::from(format!("  {:<16}{}", "", h.graph_line(now))).style(label_style)));
+        if let Some(pending) = h.pending_line() {
+            out.push(Line::from(Span::from(format!("  {:<16}{}", "", pending)).style(Style::new().fg(c(ACCENT)).bold())));
+        }
     }
     frame.render_widget(Paragraph::new(out), area);
 }
@@ -2646,6 +2665,38 @@ mod tests {
     }
 
     #[test]
+    fn floor_shows_each_repository_s_image_and_graph_and_what_failed_without_control_characters() {
+        let mut state = floor();
+        state.repos = repos();
+        state.health = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","image":{"inUse":"hardness-runner-alpha:1","base":"python:3.13-slim","builtAt":null,"lastFailure":"step 3\u001b[31m failed\nreally"},
+                 "graph":{"on":true,"commit":"abcdef0123456789","behind":7,"graphify":"0.9.34","builtAt":null,"building":true,"lastFailure":"exit code 1"}},
+                {"repo":"/r/beta","image":{"inUse":"hardness-runner:dev","base":null,"builtAt":null,"lastFailure":null},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        let text = render(160, 40, &state);
+        assert!(text.contains("image: own on python:3.13-slim (hardness-runner-alpha:1)"), "{text}");
+        assert!(text.contains("graph: abcdef0 · 7 behind · graphify 0.9.34 · building · failed: exit code 1"), "{text}");
+        assert!(text.contains("image: machine's") && text.contains("graph: off"), "{text}");
+        assert!(text.contains("build failed: step 3 [31m failed really"), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text}");
+    }
+
+    #[test]
+    fn floor_shows_a_base_waiting_for_approval_on_its_own_line_with_the_key() {
+        let mut state = floor();
+        state.repos = repos();
+        state.health = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","image":{"inUse":"hardness-runner:dev","base":null,"builtAt":null,"lastFailure":null,"pendingBase":"attacker/x:1"},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        let text = render(160, 40, &state);
+        assert!(text.lines().any(|l| l.contains("base waiting for you: attacker/x:1") && l.contains("A approves")), "{text}");
+    }
+
+    #[test]
     fn floor_lists_every_repo_with_its_own_numbers_and_marks_the_focused_one() {
         let mut state = floor();
         state.repos = repos();
@@ -2727,6 +2778,18 @@ mod tests {
             names: vec![],
         };
         assert_eq!(describe(&event), "10:11:12  triage: waiting for the Codex login");
+    }
+
+    #[test]
+    fn a_refused_connection_reads_as_host_port_step_and_how_it_was_asked_with_its_count_and_no_control_characters() {
+        let at = "2026-11-03T10:11:12.000Z".to_string();
+        let one = TaskEvent { task_id: "t1".into(), kind: "sandbox.egress_blocked".into(), payload: serde_json::json!({"step": "check", "host": "evil.example.com", "port": 443, "via": "connect", "reason": "not_listed", "count": 1}), at: at.clone(), names: vec![] };
+        assert_eq!(describe(&one), "10:11:12  blocked: evil.example.com:443 (check, connect)");
+        let many = TaskEvent { payload: serde_json::json!({"step": "stage", "host": "a.b\u{1b}[31m.example", "port": 53, "via": "dns", "reason": "not_listed", "count": 12}), ..one.clone() };
+        let text = describe(&many);
+        assert_eq!(text, "10:11:12  blocked: a.b [31m.example:53 (stage, dns) x12");
+        let more = TaskEvent { payload: serde_json::json!({"step": "stage", "more": 5}), ..one };
+        assert_eq!(describe(&more), "10:11:12  blocked: 5 more (stage)");
     }
 
     #[test]

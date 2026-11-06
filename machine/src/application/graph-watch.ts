@@ -3,6 +3,7 @@
 // whose stamp is older (or missing), one build at a time. A repo whose luna.yaml says
 // `policy.graph: off` is left alone. A failed build is logged, never thrown.
 import { defaultHead as gitDefaultHead } from "../adapters/git/worktree.ts";
+import { safe } from "../domain/evidence-markdown.ts";
 import type { Graph } from "./graph.ts";
 
 export interface GraphWatchOptions {
@@ -20,6 +21,8 @@ export class GraphWatch {
   private readonly scheduled = new Set<string>();
   /** The head each repo's last build failed at: not tried again until the head moves, so a broken repo does not burn a build every tick. */
   private readonly failed = new Map<string, string>();
+  /** The last failure of each repo's build, as the build said it (flattened and capped); cleared by a success. */
+  private readonly reasons = new Map<string, string>();
   private ticking: Promise<void> | null = null;
   private readonly starting = new Set<Promise<void>>();
   private readonly head: (repoPath: string) => Promise<string>;
@@ -48,6 +51,23 @@ export class GraphWatch {
     })().catch((error: unknown) => this.log(`graph: ${repoPath}: ${error instanceof Error ? error.message : String(error)}`));
     this.starting.add(starting);
     void starting.finally(() => this.starting.delete(starting));
+  }
+
+  /** A card of this repository merged (RFC 0006 D8): rebuild its graph now, whatever the poll has seen; the poll stays as the fallback.
+   *  Not tried again until the head moves does not apply here: a merge is new news, so an earlier failure is forgotten. */
+  requestRebuild(repoPath: string): void {
+    const starting = (async () => {
+      if (!(await this.options.policies.for(repoPath)).graph) return;
+      this.failed.delete(repoPath);
+      await this.build(repoPath, "");
+    })().catch((error: unknown) => this.log(`graph: ${repoPath}: ${error instanceof Error ? error.message : String(error)}`));
+    this.starting.add(starting);
+    void starting.finally(() => this.starting.delete(starting));
+  }
+
+  /** Whether a build of this repo is waiting or running, and the last one's failure. */
+  health(repoPath: string): { building: boolean; lastFailure: string | null } {
+    return { building: this.scheduled.has(repoPath), lastFailure: this.reasons.get(repoPath) ?? null };
   }
 
   /** Resolves once the builds scheduled so far are done. */
@@ -79,8 +99,10 @@ export class GraphWatch {
       try {
         await this.options.graph.build(repoPath);
         this.failed.delete(repoPath);
+        this.reasons.delete(repoPath);
       } catch (error) {
         this.failed.set(repoPath, head);
+        this.reasons.set(repoPath, safe(error instanceof Error ? error.message : String(error)).slice(0, 400));
         this.log(`graph: ${repoPath}: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         this.scheduled.delete(repoPath);

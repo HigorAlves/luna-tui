@@ -50,7 +50,7 @@ const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : n
 const rows = [];
 const check = (name, ok, detail) => rows.push({ name, ok, detail });
 
-async function sandbox(label, pack, writable, extraEnv, entrypoint) {
+async function sandbox(label, pack, writable, extraEnv, entrypoint, egress) {
   const runDir = join(root, label);
   // The agent's own repository in the folder, made by the machine before every run.
   await refreshScratch(clone, branch);
@@ -68,6 +68,7 @@ async function sandbox(label, pack, writable, extraEnv, entrypoint) {
     credential: { env: { ANTHROPIC_API_KEY: "smoke-no-call" }, mounts: [] },
     labels: { "dev.hardness.smoke": label },
     extraEnv,
+    ...(egress ? { egress: { ...egress, proxyImage: image } } : {}),
   });
   const transcript = existsSync(result.transcriptPath) ? readFileSync(result.transcriptPath, "utf8") : "";
   return { result, transcript, out: join(runDir, "out") };
@@ -111,6 +112,16 @@ try {
   const status = hostGit("status", "--porcelain");
   hostGit("add", "-A");
   check("isolation: the host's git reads the machine's repository, not the folder's .git", status.includes("a-new-file.txt") && !existsSync(join(c.out, "pwned-fsmonitor")) && !existsSync(join(c.out, "pwned-filter")), `status ${status}; markers ${existsSync(join(c.out, "pwned-filter"))}`);
+
+  // The network: a stage on a card network whose list is empty (no proxy) reaches no address and resolves no name.
+  const probeNet = [
+    `/opt/luna/bin/node -e "const n=require('node:net').connect({host:'1.1.1.1',port:443});n.setTimeout(4000,()=>{console.log('addr:unreachable');n.destroy()});n.on('connect',()=>{console.log('addr:REACHED');n.destroy()});n.on('error',()=>console.log('addr:unreachable'))"`,
+    `/opt/luna/bin/node -e "require('node:dns').lookup('off-the-list.example.org',(e)=>console.log(e?'name:unresolved':'name:RESOLVED'))"`,
+  ].join("; ");
+  const d = await sandbox("network", "implementing", true, undefined, ["sh", "-c", `{ ${probeNet}; } > /out/net.txt 2>&1`], { allow: [], allowPrivate: [] });
+  const net = existsSync(join(d.out, "net.txt")) ? readFileSync(join(d.out, "net.txt"), "utf8") : "(no output)";
+  check("network: an address off the list is not reachable from a stage", net.includes("addr:unreachable") && !net.includes("REACHED"), net);
+  check("network: a name off the list does not resolve", net.includes("name:unresolved") && !net.includes("RESOLVED"), net);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

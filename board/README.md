@@ -521,6 +521,7 @@ What the ticket shows:
 | Key | Does |
 |---|---|
 | `R` | refresh the numbers |
+| `A` | approve a waiting base image |
 | `?` | keys |
 
 <!-- keys:end -->

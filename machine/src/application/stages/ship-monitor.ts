@@ -57,6 +57,8 @@ export interface ShipMonitorDeps {
   latestFinish?: (taskId: string, stage: TaskState) => Promise<{ runId: string; detail?: Record<string, unknown> } | null>;
   /** Told, when the PR merges, what its outcome says about event_class and comment_intent decisions (RFC 0005 wave 7). */
   truth?: TruthSink | null;
+  /** The PR of this repository merged: the machine asks for a rebuild of its code graph at once (RFC 0006 D8). */
+  onMerged?: (repoPath: string) => void;
   stateDir: string;
   /** Milliseconds between polls; null: the repository's `ship.poll_minutes` (the machine-wide `MACHINE_SHIP_POLL_INTERVAL`, when set, is passed here as a number and wins). */
   pollMs: number | null;
@@ -538,6 +540,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       try {
         const state = await deps.github.prMerged(slug, number);
         if (state.merged) {
+          if (task.repoPath) deps.onMerged?.(task.repoPath);
           await settle().catch(() => {});
           return { outcome: "pass", detail: { merged: { sha: state.mergedSha, at: state.mergedAt, by: cursor.mergeRequested || cursor.queued ? "machine" : "person" }, prUrl: url, number } };
         }
