@@ -1,6 +1,6 @@
 # Decision scorecard
 
-Generated 2026-11-05 by `pnpm eval scorecard` from `evals/baselines/<engine>/<pack>.json`. Do not edit by hand: re-run the baselines (docs/runbooks/calibrate-decisions.md).
+Generated 2026-11-06 by `pnpm eval scorecard` from `evals/baselines/<engine>/<pack>.json`. Do not edit by hand: re-run the baselines (docs/runbooks/calibrate-decisions.md).
 
 ## The rule
 
@@ -52,6 +52,15 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | scope_check | claude:haiku | 5 | 100% | 100% | 100% | 0.013 | 0.106 | $0.0006 | 3.2s | 2026-11-05 |
 | scope_check | codex:luna | 5 | 100% | 100% | 100% | 0.001 | 0.023 | n/a | 3.5s | 2026-11-05 |
 | scope_check | jev | 5 | 100% | 100% | 80% | 0.018 | 0.133 | $0.0000 | 0.5s | 2026-11-05 |
+| ticket_assess | claude:haiku | 5 | 100% | n/a | 0% | 0.061 | 0.237 | $0.0017 | 4.7s | 2026-11-06 |
+| ticket_assess | codex:luna | 5 | 100% | n/a | 0% | 0.031 | 0.158 | n/a | 6.3s | 2026-11-06 |
+| ticket_assess | jev | 5 | 100% | n/a | 0% | 0.123 | 0.342 | $0.0001 | 0.6s | 2026-11-06 |
+| ticket_recommend | claude:haiku | 5 | 100% | 100% | 20% | 0.141 | 0.362 | $0.0003 | 2.2s | 2026-11-06 |
+| ticket_recommend | codex:luna | 5 | 100% | 100% | 100% | 0.009 | 0.088 | n/a | 3.7s | 2026-11-06 |
+| ticket_recommend | jev | 5 | 100% | n/a | 0% | 0.355 | 0.590 | $0.0000 | 0.7s | 2026-11-06 |
+| ticket_validity | claude:haiku | 5 | 100% | 100% | 60% | 0.028 | 0.153 | $0.0007 | 2.8s | 2026-11-06 |
+| ticket_validity | codex:luna | 5 | 100% | 100% | 100% | 0.003 | 0.042 | n/a | 3.7s | 2026-11-06 |
+| ticket_validity | jev | 5 | 100% | 100% | 20% | 0.024 | 0.153 | $0.0000 | 0.5s | 2026-11-06 |
 | triage_signals | claude:haiku | 6 | 100% | n/a | 0% | 0.089 | 0.295 | $0.0006 | 3.8s | 2026-11-05 |
 | triage_signals | codex:luna | 6 | 75% | n/a | 17% | 0.210 | 0.095 | n/a | 4.9s | 2026-11-05 |
 | triage_signals | jev | 6 | 50% | n/a | 0% | 0.327 | 0.399 | $0.0001 | 0.6s | 2026-11-05 |
@@ -77,5 +86,8 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | red_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.67 (n 6), a tie within 2 points settled by cost |
 | risk_score | codex:luna | codex:luna: acted-on accuracy 0.67 at coverage 1.00 (n 4) |
 | scope_check | jev | jev: acted-on accuracy 1.00 at coverage 0.80 (n 5), a tie within 2 points that goes to Jev, the cheapest |
+| ticket_assess | jev | unmeasured: no engine reached coverage 0.6 on 4 cases |
+| ticket_recommend | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 5) |
+| ticket_validity | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.60 (n 5), a tie within 2 points settled by cost |
 | triage_signals | jev | unmeasured: no engine reached coverage 0.6 on 4 cases |
 | worth_learning | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points that goes to Jev, the cheapest |

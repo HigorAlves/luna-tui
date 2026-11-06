@@ -18,6 +18,8 @@
     "red_check": "claude:haiku",
     "risk_score": "codex:luna",
     "scope_check": "jev",
+    "ticket_recommend": "codex:luna",
+    "ticket_validity": "claude:haiku",
     "triage_signals": "jev",
     "worth_learning": "jev"
   }

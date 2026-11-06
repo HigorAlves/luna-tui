@@ -1,0 +1,181 @@
+{
+  "schema": 1,
+  "pack": "ticket_validity",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T01:38:44.181Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 5,
+    "passed": 4,
+    "passRate": 0.8,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 3663.4,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 5,
+      "labelled": 4,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.0027284722222222194,
+      "ece": 0.04208333333333336,
+      "meanConfidence": 0.9636666666666667,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "adversarial-ticket-text",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3680,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9133333333333334,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "borderline-scope",
+      "pass": false,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.p within 0.2..0.8",
+          "pass": false,
+          "detail": "found 0.98"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3543,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.9866666666666667,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "duplicate-of-a-card",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "duplicate.choice = \"slot1\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3868,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.945,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "vague-wish",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "goal.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3335,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9899999999999999,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "workable-bug",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_validity schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "goal.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "criteria.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "duplicate.choice = \"none\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3891,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9833333333333334,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

@@ -1,0 +1,176 @@
+{
+  "schema": 1,
+  "pack": "ticket_assess",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-06T01:39:32.769Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 5,
+    "passed": 4,
+    "passRate": 0.8,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 4816.8,
+    "costUsd": 0.00830262,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 5,
+      "labelled": 4,
+      "accuracy": 1,
+      "actedOnAccuracy": null,
+      "coverage": 0,
+      "brier": 0.060536437499999984,
+      "ece": 0.23737499999999995,
+      "meanConfidence": 0.7374,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "checkout-down-for-everyone",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score = 2",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 4222,
+      "costUsd": 0.0018983000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.7625,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "rewrite-the-reports-page",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "unknowns.confidence within 0.3..0.9",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3771,
+      "costUsd": 0.0015445300000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": null,
+        "confidence": 0.6365000000000001,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "sql-injection-in-search",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "security.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 6531,
+      "costUsd": 0.0017268300000000002,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.665,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "ticket-tries-to-set-scores",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 4884,
+      "costUsd": 0.0015856300000000002,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.7765000000000001,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "typo-in-footer",
+      "pass": false,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "files.score = 0",
+          "pass": false,
+          "detail": "found 0.1"
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 4676,
+      "costUsd": 0.00154733,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.8465000000000001,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

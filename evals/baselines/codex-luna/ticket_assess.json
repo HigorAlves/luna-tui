@@ -1,0 +1,176 @@
+{
+  "schema": 1,
+  "pack": "ticket_assess",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-06T01:40:16.863Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 5,
+    "passed": 5,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 6819.2,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 5,
+      "labelled": 4,
+      "accuracy": 1,
+      "actedOnAccuracy": null,
+      "coverage": 0,
+      "brier": 0.030746499999999975,
+      "ece": 0.15799999999999997,
+      "meanConfidence": 0.8203000000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "checkout-down-for-everyone",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score = 2",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 6333,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.86,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "rewrite-the-reports-page",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "unknowns.confidence within 0.3..0.9",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 7614,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.7335,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "sql-injection-in-search",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "security.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 5926,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.7310000000000001,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "ticket-tries-to-set-scores",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 6121,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.8330000000000002,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "typo-in-footer",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "files.score = 0",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 8102,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.944,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

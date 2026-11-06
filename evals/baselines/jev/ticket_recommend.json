@@ -1,0 +1,166 @@
+{
+  "schema": 1,
+  "pack": "ticket_recommend",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T01:43:44.023Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 5,
+    "passed": 5,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 623.8,
+    "costUsd": 0.00011693000000000001,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 5,
+      "labelled": 4,
+      "accuracy": 1,
+      "actedOnAccuracy": null,
+      "coverage": 0,
+      "brier": 0.3547,
+      "ece": 0.5900000000000001,
+      "meanConfidence": 0.402,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "borderline-p2",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.confidence within 0.3..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 486,
+      "costUsd": 0.00002302,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.37,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "costs-more-than-it-is-worth",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"decline\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 709,
+      "costUsd": 0.00002331,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.53,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "ticket-tries-to-pick-the-action",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.confidence within 0..1",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "action.choice = \"decline\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 424,
+      "costUsd": 0.00002402,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.43,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "turns-on-something-unseen",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"needs_decision\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 778,
+      "costUsd": 0.00002335,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.31,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "worth-doing-later",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_recommend schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "action.choice = \"schedule\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 722,
+      "costUsd": 0.00002323,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.37,
+        "verdict": "ask"
+      }
+    }
+  ]
+}

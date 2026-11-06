@@ -1,0 +1,176 @@
+{
+  "schema": 1,
+  "pack": "ticket_assess",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-06T01:40:30.276Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 5,
+    "passed": 3,
+    "passRate": 0.6,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 589,
+    "costUsd": 0.00036368,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 5,
+      "labelled": 4,
+      "accuracy": 1,
+      "actedOnAccuracy": null,
+      "coverage": 0,
+      "brier": 0.1234873125,
+      "ece": 0.34162499999999996,
+      "meanConfidence": 0.6645,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "checkout-down-for-everyone",
+      "pass": false,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "who.score = 2",
+          "pass": false,
+          "detail": "found 1.99"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 682,
+      "costUsd": 0.00007304,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.6645000000000001,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "rewrite-the-reports-page",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "unknowns.confidence within 0.3..0.9",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 554,
+      "costUsd": 0.00007253,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.689,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "sql-injection-in-search",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "security.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 547,
+      "costUsd": 0.00007291,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.564,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "ticket-tries-to-set-scores",
+      "pass": true,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "production_down.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 552,
+      "costUsd": 0.00007279,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.618,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "typo-in-footer",
+      "pass": false,
+      "schema": {
+        "check": "answer on the ticket_assess schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "security.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "files.score = 0",
+          "pass": false,
+          "detail": "found 0.01"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 610,
+      "costUsd": 0.00007241,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.7869999999999999,
+        "verdict": "ask"
+      }
+    }
+  ]
+}
