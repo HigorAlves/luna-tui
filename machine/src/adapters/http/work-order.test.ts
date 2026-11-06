@@ -1,6 +1,7 @@
 // `POST /tasks` as a work order: an Idempotency-Key makes a retry answer the task already made,
 // and `start: true` starts the pipeline in the same call.
 import { createHash } from "node:crypto";
+import { previewOn } from "../../test/policies.ts";
 
 import { NewTaskInput } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
@@ -25,7 +26,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
 });
 
 const order = {
@@ -94,7 +95,7 @@ describe("POST /tasks with an Idempotency-Key", () => {
 
   it("keeps the key across a restart: a new machine over the same database answers the same task", async () => {
     const first = await post(order, "ticket-3:1");
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     expect(await post(order, "ticket-3:1")).toMatchObject({ status: 200, body: { id: first.body.id } });
   });
 

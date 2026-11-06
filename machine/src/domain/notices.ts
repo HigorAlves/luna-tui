@@ -62,5 +62,7 @@ export function canSeeKept(dup: CardView, kept: CardView): boolean {
 /** What a duplicate's source is told: which card tracks it (fixed words, the card's id and a link, never its title or text) when its reporter could see that card, else only that the report is tracked. */
 export function mergedNotice(keptId: string | null, link: string | null): string {
   if (!keptId) return postable("This report is already tracked on another card.", 200);
-  return postable(`This report was merged into card ${keptId.slice(0, 8)}${link ? `: ${link}` : ""}. Follow it there.`, 400);
+  // The link is the machine's own (its public board address and the card's id), so it is printed outside `postable`, which breaks every address; one that is not a plain web address is left out.
+  const own = link !== null && /^https?:\/\/[^\s<>"'`\u0000-\u001f]{1,500}$/i.test(link) ? link : null;
+  return `${postable(`This report was merged into card ${keptId.slice(0, 8)}`, 200)}${own ? `: ${own}` : ""}. Follow it there.`;
 }

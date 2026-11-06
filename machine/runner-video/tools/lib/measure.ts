@@ -78,6 +78,8 @@ export function checks(input: {
   picture: PictureReport;
   audio: AudioReport;
   timeline: Timeline;
+  /** The film's length limit (`evidence.video_budget_s`); 240 when absent. */
+  maxS?: number;
 }): Check[] {
   const { info, picture, audio, timeline } = input;
   const out: Check[] = [];
@@ -94,7 +96,8 @@ export function checks(input: {
   const flat = picture.flat.filter((t) => t > 0.5 && t < info.durationS - 0.5 && !inCard(t, t));
   if (flat.length > 0) warn("flat", `flat frames mid-film at ${flat.slice(0, 5).join(", ")}s${flat.length > 5 ? ` and ${flat.length - 5} more` : ""}`);
 
-  if (info.durationS > 240) fail("duration", `the film runs ${info.durationS}s, over 240s`);
+  const maxS = input.maxS ?? 240;
+  if (info.durationS > maxS) fail("duration", `the film runs ${info.durationS}s, over ${maxS}s`);
   else if (Math.abs(info.durationS - timeline.meta.dur) > 0.1 * timeline.meta.dur) {
     warn("duration", `the film runs ${info.durationS}s, more than 10% off the timeline's ${timeline.meta.dur}s`);
   }

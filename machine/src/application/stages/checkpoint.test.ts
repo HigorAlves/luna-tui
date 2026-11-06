@@ -12,7 +12,7 @@ function setup(results: Array<typeof ok>) {
   const pushes: string[][] = [];
   let i = 0;
   const deps = {
-    exec: async (_c: string, args: string[]) => (pushes.push(args), results[Math.min(i++, results.length - 1)]!),
+    exec: async (_c: string, args: string[]) => (args.includes("update-ref") ? results[0]! : (pushes.push(args), results[Math.min(i++, results.length - 1)]!)),
     tip: async () => sha,
     emit: async (kind: string, payload: Record<string, unknown>) => void rows.push([kind, payload]),
     note: async (text: string) => void notes.push(text),

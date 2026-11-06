@@ -27,6 +27,18 @@ const record = (over: Partial<DecisionRecord> = {}): DecisionRecord => ({
 });
 const read = (dir: string, id: string, file: string) => JSON.parse(readFileSync(join(dir, "worth_learning", "cases", id, file), "utf8"));
 
+describe("harvest of an event_class record stored before the nine classes", () => {
+  it("writes the old label as its new one", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvest-"));
+    const ship = { kind: "event", event: { actor: "ana", isBot: false, isMe: false, kind: "comment", state: null, body: "rename tmp", url: null } };
+    const out = harvest(dir, "event_class", [record({ pack: "event_class", context: { ship }, answer: { event: { choice: "comment", confidence: 0.9 } }, verdicts: { event: "proceed" }, truth: { label: { event: { choice: "comment" } }, source: "pr_merged", at: "2026-11-05T00:00:00.000Z" } })]);
+    expect(out.written).toEqual(["rec-6b0f2c52"]);
+    const written = JSON.parse(readFileSync(join(dir, "event_class", "cases", "rec-6b0f2c52", "expect.json"), "utf8"));
+    expect(written.checks).toEqual([{ kind: "equals", path: "event.choice", value: "review_comment" }]);
+    expect(written.label).toEqual({ event: { choice: "review_comment" } });
+  });
+});
+
 describe("harvest", () => {
   it("writes a case from a record with a truth: the pack's input without an engine, equals checks, a rubric, and the way back to the record", () => {
     const dir = mkdtempSync(join(tmpdir(), "harvest-"));

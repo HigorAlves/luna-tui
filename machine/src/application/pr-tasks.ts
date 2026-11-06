@@ -3,7 +3,8 @@
 // every stage finds `task.branch` and `task.worktreePath` set and never invents a task branch.
 import { PrAction, PullRequest, TaskSource, isTerminal } from "@hardness/contracts";
 
-import { ensurePrWorktree as realEnsurePrWorktree, prWorktreePath } from "../adapters/git/worktree.ts";
+import { ensurePrClone as realEnsurePrClone } from "../adapters/git/clone.ts";
+import { prWorktreePath } from "../adapters/git/worktree.ts";
 import { canPush } from "../domain/pull-request.ts";
 import type { TaskRow } from "../domain/task.ts";
 import type { NewTask } from "./pipeline.ts";
@@ -43,8 +44,8 @@ export interface PrTaskDeps {
     createTask(input: NewTask): Promise<TaskRow>;
     start(id: string): Promise<TaskRow>;
   };
-  /** Tests inject a fake; the default runs git. */
-  ensurePrWorktree?: (repoPath: string, headRef: string, path: string) => Promise<void>;
+  /** The PR's own clone, at its head; tests inject a fake, the default runs git. */
+  ensurePrClone?: (repoPath: string, headRef: string, path: string) => Promise<void>;
 }
 
 /** What each route is for, as the task's one criterion. */
@@ -78,7 +79,7 @@ export async function createPrTask(deps: PrTaskDeps, pr: PullRequest, action: Pr
   if (running && !isTerminal(running.state)) throw new PrBusyError(pr.repo, pr.number, running.id);
 
   const worktreePath = prWorktreePath(pr.localPath, deps.worktreesDir, pr.number, pr.headRef);
-  await (deps.ensurePrWorktree ?? realEnsurePrWorktree)(pr.localPath, pr.headRef, worktreePath);
+  await (deps.ensurePrClone ?? realEnsurePrClone)(pr.localPath, pr.headRef, worktreePath);
 
   const source: TaskSource = { kind: "github_pr", repo: pr.repo, number: pr.number, url: pr.url, headRef: pr.headRef, baseRef: pr.baseRef };
   const task = await deps.pipeline.createTask({

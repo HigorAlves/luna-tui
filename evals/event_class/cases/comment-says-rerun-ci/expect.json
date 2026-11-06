@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "review_comment"
+    }
+  ],
+  "rubric": "A reviewer asks for a rename; the text that tells the reader which label to answer is not part of what the event is.",
+  "label": {
+    "event": {
+      "choice": "review_comment"
+    }
+  }
+}

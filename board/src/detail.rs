@@ -405,6 +405,10 @@ fn run_glyph(run: &StageRun) -> (&'static str, ratatui::style::Color) {
 /// The one line that says what the ticket waits on you for and which keys answer, on top
 /// of every section while a gate is open (or the ticket is escalated or paused).
 pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'static>> {
+    // The watch and the retro are not gates: the strip says nothing unless the machine waits on you.
+    if matches!(task.state.as_str(), "awaiting_ship" | "reviewing_memory") && !task.waiting_on_you {
+        return None;
+    }
     let look = task.look();
     let gate = detail.and_then(|d| d.open_approval()).filter(|a| a.kind_or_guess() == "awaiting_approval");
     let approve_plan = match gate {
@@ -422,14 +426,21 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
         }
         _ => "a approve · r send back · e edit the plan".to_string(),
     };
+    let release = detail.and_then(|d| d.open_approval()).filter(|a| a.is_ship_approval());
+    let release_keys = if release.is_some_and(|a| a.requested["risk"].as_str() == Some("high")) || (release.is_some() && ship_risk_is_high(detail)) {
+        "S approve the release · N reject and archive (high risk: a release owner, not one of the plan's approvers)"
+    } else {
+        "S approve the release · N reject and archive"
+    };
     let keys = match task.state.as_str() {
         "awaiting_approval" => approve_plan.as_str(),
         "awaiting_test_check" => "a approve · r send back · e edit the cases",
         "awaiting_setup" => "a write luna.yaml · r send back",
         "awaiting_answers" => "a answer the questions",
         "awaiting_ship" if task.route == "review" => "a post the verdict · r drop it",
-        "awaiting_ship" if ship_risk_is_high(detail) => "S ship (high risk: another approver than the plan's) · r send back",
-        "awaiting_ship" => "S ship · r send back",
+        "awaiting_ship" if release.is_some() => release_keys,
+        "awaiting_ship" if ship_risk_is_high(detail) => "S publish and watch the PR (high risk: a release owner will be asked after the checks) · r send back",
+        "awaiting_ship" => "S publish and watch the PR · r send back",
         "reviewing_memory" => "a apply the rules · A skip them",
         "escalated" => "a retry (guidance optional) · X abort",
         "paused_rate_limit" => "a resume now",
@@ -443,7 +454,11 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
 
 /// Whether the ship gate's Evidence Pack is High risk: shipping then needs an approver who did not approve the plan.
 fn ship_risk_is_high(detail: Option<&TaskDetail>) -> bool {
-    detail.and_then(|d| d.latest_approval("awaiting_ship")).is_some_and(|a| a.requested["evidence"]["risk"].as_str() == Some("high"))
+    // The open or last gate's pack, else the task's own: the same source the Evidence section shows.
+    detail.is_some_and(|d| match d.latest_approval("awaiting_ship") {
+        Some(a) => a.requested["evidence"]["risk"].as_str() == Some("high"),
+        None => d.task.evidence.as_ref().is_some_and(|p| p["risk"].as_str() == Some("high")),
+    })
 }
 
 fn heading(text: &str) -> Line<'static> {
@@ -739,6 +754,11 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         if let Some(config) = requested["config"].as_str() {
             lines.extend([Line::default(), proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)")]);
             lines.extend(config.lines().map(|l| Line::from(format!("  {l}"))));
+            // The base image, singled out of the long proposal: it runs the stage's process, and approving the setup does not approve it.
+            if let Some(base) = requested["sandboxBase"].as_str() {
+                lines.extend([Line::default(), proposal_heading("Base image (not approved by this gate)")]);
+                lines.push(Line::from(format!("  {}", crate::model::plain(base, 400))).fg(c(RED)));
+            }
             let proof = proof_lines(&requested["proof"]);
             if !proof.is_empty() {
                 lines.extend([Line::default(), proposal_heading("Proof (each check run once)")]);
@@ -859,6 +879,11 @@ fn escalation_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
     }
     if let Some(summary) = gate.requested["summary"].as_str().filter(|s| !s.trim().is_empty()) {
         lines.push(Line::from(format!("  {}", plain(summary))));
+    }
+    // The sandbox the machine kept: the clone as the agent left it, and until when.
+    if let Some(path) = gate.requested["keptSandbox"]["path"].as_str() {
+        let until = gate.requested["keptSandbox"]["until"].as_str().map(|u| format!(" until {}", plain(u))).unwrap_or_default();
+        lines.push(muted(format!("  sandbox kept at {}{until}", plain(path))));
     }
     if let Some(tail) = gate.requested["outputTail"].as_str().filter(|s| !s.trim().is_empty()) {
         lines.push(muted("  last failing output:".into()));
@@ -1174,6 +1199,57 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
     DiffHead { lines, cursor_row: Some(cursor_row), patch, tail }
 }
 
+/// Verify's report: the open findings by level, each with where it is and the plan criterion it is about, then the browser run by scenario.
+/// Every text is the reviewer's or a container's, so it goes through `plain`.
+fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
+    let Some(report) = detail.reports.as_ref().and_then(|r| r.verify.as_ref()) else { return Vec::new() };
+    let mut lines = Vec::new();
+    let open: Vec<_> = report.findings.iter().filter(|f| f.resolution.is_none()).collect();
+    if !open.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::from("Verify findings").fg(c(ACCENT)).bold()));
+        for level in ["blocker", "should_fix", "nit"] {
+            let at: Vec<_> = open.iter().filter(|f| f.level() == level).collect();
+            if at.is_empty() {
+                continue;
+            }
+            let color = match level {
+                "blocker" => RED,
+                "should_fix" => YELLOW,
+                _ => SUBTEXT0,
+            };
+            lines.push(Line::from(vec![Span::from(format!("  {level}")).fg(c(color)).bold(), Span::from(format!("  {}", at.len())).fg(c(SUBTEXT0))]));
+            for f in at.iter().take(30) {
+                let place = if f.path.is_empty() { String::new() } else { format!("  {}:{}", truncate(&plain(&f.path), 60), f.line) };
+                let criterion = f.criterion_ref.as_deref().map(|r| format!("  {}", truncate(&plain(r), 20))).unwrap_or_default();
+                lines.push(Line::from(format!("    {}{place}{criterion}", truncate(&plain(&f.title), 100))));
+            }
+        }
+    }
+    if let Some(e2e) = report.e2e.as_ref().filter(|e| !e.rows.is_empty()) {
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            Span::from("Browser run").fg(c(ACCENT)).bold(),
+            Span::from(format!("  {}", plain(e2e.verdict.as_deref().unwrap_or("no verdict")))).fg(c(SUBTEXT0)),
+        ]));
+        for row in e2e.rows.iter().take(40) {
+            let (glyph, color) = match row.result.as_str() {
+                "pass" => ("✓", GREEN),
+                "fail" => ("✗", RED),
+                "partial" => ("◐", YELLOW),
+                _ => ("○", SUBTEXT0),
+            };
+            let seen = if row.seen.is_empty() { String::new() } else { format!("  {}", truncate(&plain(&row.seen), 80)) };
+            let artifacts = if row.artifacts.is_empty() { String::new() } else { format!("  {}", truncate(&plain(&row.artifacts.join(", ")), 80)) };
+            lines.push(Line::from(vec![
+                Span::from(format!("  {glyph} ")).fg(c(color)),
+                Span::from(format!("{}  {}{seen}{artifacts}", truncate(&plain(&row.scenario), 12), truncate(&plain(&row.title), 80))),
+            ]));
+        }
+    }
+    lines
+}
+
 /// Evidence: the QA verdict from the ship gate and every artifact the stages produced. With
 /// the index of the selected row, so the pane can keep it in view.
 fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
@@ -1181,11 +1257,31 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
         return (vec![heading("Evidence"), Line::default(), muted("  loading…".into())], None);
     };
     let mut lines = vec![heading("Evidence")];
-    let verdict = d.latest_approval("awaiting_ship").map(|a| evidence_lines(&a.requested["evidence"])).unwrap_or_default();
+    // The release question first: the checklist as it was when it was asked, then the pack it is about.
+    if let Some(a) = d.open_approval().filter(|a| a.is_ship_approval()) {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::from(format!("  {}", plain(a.requested["question"].as_str().unwrap_or("safe to release now?")))).bold()));
+        for item in a.requested["checklist"].as_array().into_iter().flatten() {
+            let ok = item["ok"].as_bool().unwrap_or(false);
+            lines.push(Line::from(vec![
+                Span::from(format!("    {} ", if ok { "✓" } else { "✗" })).fg(c(if ok { GREEN } else { RED })),
+                Span::from(plain(item["detail"].as_str().unwrap_or(item["id"].as_str().unwrap_or("")))),
+            ]));
+        }
+    }
+    // The pack from the open or last awaiting_ship gate when there is one, else the task's own (Evidence publishes with no gate).
+    let verdict = match d.latest_approval("awaiting_ship") {
+        Some(a) => evidence_lines(&a.requested["evidence"]),
+        None => d.task.evidence.as_ref().map(crate::ui::pack_lines).unwrap_or_default(),
+    };
     if !verdict.is_empty() {
         lines.push(Line::default());
-        lines.extend(verdict.iter().map(|l| Line::from(format!("  {l}"))));
+        lines.extend(verdict.iter().map(|l| Line::from(format!("  {}", plain(l)))));
+        if d.task.evidence.is_some() {
+            lines.push(muted("  y useful · n not useful (with a note)".into()));
+        }
     }
+    lines.extend(verify_report_lines(d));
     lines.push(Line::default());
     if d.artifacts.is_empty() {
         lines.push(muted("  nothing yet: E2E and Evidence write screenshots, a recording and the manifest here".into()));
@@ -1228,8 +1324,54 @@ fn pr_url(detail: &TaskDetail) -> Option<String> {
 }
 
 /// PR: the branch's pull request as the inbox sees it, or what the ship gate said.
+/// The watched PR: the checklist item by item, whether the machine may merge and why not, the review rule, the fix rounds, how long it has been quiet, and a freeze or a blocking PR as its own line.
+/// Every text is the machine's and goes through `plain`.
+pub(crate) fn ship_lines(ship: &crate::model::ShipView, now: u64) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![
+        Span::from("Watching  ").fg(c(SUBTEXT0)),
+        Span::from(if ship.ready { "✓ every item passes" } else { "◐ waiting on the items below" }).fg(c(if ship.ready { GREEN } else { YELLOW })),
+    ])];
+    for item in &ship.checklist {
+        let (glyph, color) = if item.ok { ("✓", GREEN) } else { ("✗", RED) };
+        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(format!("{:<16}", plain(&item.id).replace('_', " "))), Span::from(plain(&item.detail)).fg(c(SUBTEXT0))]));
+        if !item.ok && matches!(item.id.as_str(), "freeze" | "blocked") {
+            lines.push(muted(format!("    the machine keeps waiting and goes on when it ends: {}", plain(&item.detail))));
+        }
+    }
+    lines.push(Line::from(vec![
+        Span::from("Merge      ").fg(c(SUBTEXT0)),
+        Span::from(if ship.auto_merge.allowed { format!("✓ the machine will merge: {}", plain(&ship.auto_merge.reason)) } else { format!("a person merges, or the machine waits: {}", plain(&ship.auto_merge.reason)) }).fg(c(if ship.auto_merge.allowed { GREEN } else { YELLOW })),
+    ]));
+    let review = match (ship.review.required, ship.review.by.as_deref()) {
+        (Some(true), Some(by)) => format!("required by {}", plain(by)),
+        (Some(true), None) => "required".to_string(),
+        (Some(false), _) => "not required here: the machine never merges without one".to_string(),
+        (None, _) => "unreadable: a person merges".to_string(),
+    };
+    lines.push(Line::from(vec![Span::from("Review     ").fg(c(SUBTEXT0)), Span::from(review)]));
+    let mut clocks = vec![format!("{} fix round{}", ship.fix_rounds, if ship.fix_rounds == 1 { "" } else { "s" })];
+    if ship.queued {
+        clocks.push("in the merge queue".to_string());
+    }
+    if let Some(since) = ship.quiet_since.as_deref().and_then(crate::model::unix_secs) {
+        let days = now.saturating_sub(since) / 86_400;
+        clocks.push(format!("quiet {}", if days == 0 { "today".to_string() } else { format!("{days} day{}", if days == 1 { "" } else { "s" }) }));
+    }
+    if let Some(event) = &ship.last_event {
+        clocks.push(format!("last event: {}", plain(&event.class).replace('_', " ")));
+    }
+    lines.push(Line::from(vec![Span::from("Clocks     ").fg(c(SUBTEXT0)), Span::from(clocks.join(" · "))]));
+    lines.push(muted("  a reminder after two quiet days, the release owners named after five; neither merges or archives".to_string()));
+    lines.push(muted("  :dismiss <finding id> [reason] · :finding <blocker|should_fix|nit> <title>".to_string()));
+    lines
+}
+
 fn pr_lines(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], now: u64) -> Vec<Line<'static>> {
     let mut lines = vec![heading("PR"), Line::default()];
+    if let Some(ship) = detail.and_then(|d| d.ship.as_ref()) {
+        lines.extend(ship_lines(ship, now));
+        lines.push(Line::default());
+    }
     match pr_for(task, prs) {
         Some(pr) => {
             lines.extend(pr_widget(pr, now));
@@ -1562,6 +1704,70 @@ mod tests {
     }
 
     #[test]
+    fn the_evidence_section_shows_verify_s_findings_by_level_with_their_criterion_and_the_browser_run_by_scenario() {
+        let (task, mut detail) = fixture();
+        detail.reports = Some(
+            serde_json::from_str(
+                r#"{"verify":{"findings":[
+                  {"severity":"bug","title":"off by one\u001b[31m","path":"a.ts","line":3,"criterion_ref":"C1"},
+                  {"severity":"nit","title":"naming","path":"b.ts","line":9},
+                  {"severity":"blocker","title":"already fixed","path":"c.ts","line":1,"resolution":{"status":"fixed","by":"build"}}],
+                 "e2e":{"verdict":"fail","rows":[
+                  {"scenario":"S1","title":"export downloads a file","result":"fail","seen":"got a 500","artifacts":["shot.png"]},
+                  {"scenario":"S2","title":"empty report","result":"not_run","seen":"","artifacts":[]}]}}}"#,
+            )
+            .unwrap(),
+        );
+        let text = render(120, 40, &task, Some(&detail), Section::Evidence, 0).join("\n");
+        assert!(text.contains("Verify findings"), "{text}");
+        assert!(text.contains("blocker  1"), "{text}");
+        assert!(text.contains("off by one [31m  a.ts:3  C1"), "the escape is a space: {text}");
+        assert!(!text.contains('\u{1b}'), "{text}");
+        assert!(text.contains("nit  1"), "{text}");
+        assert!(!text.contains("already fixed"), "{text}");
+        assert!(text.contains("Browser run  fail"), "{text}");
+        assert!(text.contains("✗ S1  export downloads a file  got a 500  shot.png"), "{text}");
+        assert!(text.contains("○ S2  empty report"), "{text}");
+    }
+
+    #[test]
+    fn the_evidence_section_shows_the_task_s_pack_when_no_gate_is_open() {
+        let (mut task, detail) = fixture();
+        task.evidence = Some(serde_json::json!({
+            "summary":"Show the cart total.","format":"video","note":"the film is short","risk":"low","commitSha":"abc1234def",
+            "scenarios":[{"text":"Total shows","test":null,"result":"pass"},{"text":"Zero on empty","test":null,"result":"not_run"}],
+            "media":[{"kind":"video","label":"walk.mp4","url":"https://x/w.mp4"},{"kind":"report","label":"terminal.txt","url":"/Users/me/state/evidence/t/abc/terminal.txt"}],
+            "video":{"verdict":"ship","scores":{"hook":9},"defects":[]},
+            "results":{"unit":{"passed":3,"total":4},"integration":null,"e2e":{"verdict":"pass","passed":2,"total":2},"coverageDelta":null}}));
+        let mut detail = detail;
+        let mut task_detail_task = detail.task.clone();
+        task_detail_task.evidence = task.evidence.clone();
+        detail.task = task_detail_task;
+        let text = render(120, 50, &task, Some(&detail), Section::Evidence, 0).join("\n");
+        for part in ["format: video (degraded: the film is short)", "Show the cart total.", "✓ Total shows", "? Zero on empty", "media: walk.mp4  https://x/w.mp4", "critic: ship", "published: yes", "y useful · n not useful"] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
+        assert!(!text.contains("/Users/me"), "a local path is never printed: {text}");
+        assert!(text.contains("media: terminal.txt"), "{text}");
+    }
+
+    #[test]
+    fn a_pack_with_no_web_media_says_it_is_not_published_and_text_is_made_plain() {
+        let lines = crate::ui::pack_lines(&serde_json::json!({"summary":"hi\u{1b}[31m red","format":"text","scenarios":[],"media":[{"label":"a\u{1b}[2Jb","url":"/x/a.txt"}]}));
+        let text = lines.join("\n");
+        assert!(text.contains("published: no"), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+    }
+
+    #[test]
+    fn a_high_risk_pack_is_read_from_the_task_when_no_gate_is_open() {
+        let (_, mut detail) = fixture();
+        assert!(!ship_risk_is_high(Some(&detail)));
+        detail.task.evidence = Some(serde_json::json!({"risk":"high"}));
+        assert!(ship_risk_is_high(Some(&detail)));
+    }
+
+    #[test]
     fn the_evidence_section_shows_the_whole_pack_and_the_send_back_footer() {
         let (task, mut detail) = fixture();
         detail.approvals.push(
@@ -1664,6 +1870,7 @@ mod tests {
               "config":"checks:\n  - name: board tests\n    run: cargo test\n",
               "proof":[{{"name":"board tests","cmd":"cargo test (in board)","ok":true,"tail":""}},
                        {{"name":"lint","cmd":"pnpm lint","ok":false,"tail":"a\nb\n3 problems"}}],
+              "sandboxBase":"sandbox.image.base: attacker/x:1 (approving the setup does not approve the base)",
               "notes":["no e2e surface"]}},"decision":null}}],"events":[]}}"#
         ))
         .unwrap();
@@ -1671,6 +1878,7 @@ mod tests {
         assert!(text.contains("approve setup") && text.contains("a write luna.yaml"), "{text}");
         assert!(text.contains("Proposed luna.yaml"), "{text}");
         assert!(text.contains("run: cargo test"), "the file is shown as is: {text}");
+        assert!(text.contains("Base image (not approved by this gate)") && text.contains("sandbox.image.base: attacker/x:1"), "{text}");
         assert!(text.contains("✓ board tests: cargo test (in board)"), "{text}");
         assert!(text.contains("✗ lint: pnpm lint"), "{text}");
         assert!(text.contains("3 problems"), "a failed check shows its tail: {text}");
@@ -1875,8 +2083,8 @@ mod tests {
             detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":{"evidence":{"risk":risk}}})).unwrap()];
             gate_strip(&task, Some(&detail)).unwrap().to_string()
         };
-        assert!(strip("high").contains("S ship (high risk: another approver than the plan's) · r send back"), "{}", strip("high"));
-        assert!(strip("low").contains("S ship · r send back") && !strip("low").contains("high risk"), "{}", strip("low"));
+        assert!(strip("high").contains("S publish and watch the PR (high risk: a release owner will be asked after the checks) · r send back"), "{}", strip("high"));
+        assert!(strip("low").contains("S publish and watch the PR · r send back") && !strip("low").contains("high risk"), "{}", strip("low"));
     }
 
     #[test]
@@ -1994,5 +2202,45 @@ mod tests {
         detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x"},"decision":null}"#).unwrap());
         detail.events.push(serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"escalation.corrected","payload":{"from":"flaky_tests","to":"env_broken"},"at":"2026-10-22T10:20:00Z"}"#).unwrap());
         assert!(lines_text(&escalation_lines(&detail)).contains("corrected to env_broken"));
+    }
+
+    #[test]
+    fn an_escalated_gate_names_the_kept_sandbox_and_how_long_it_lasts_with_control_characters_taken_out() {
+        let task = TASK.replace("\"state\":\"implementing\"", "\"state\":\"escalated\"");
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x","keptSandbox":{"path":"/w/app/task-1\u001b[31m","ref":"refs/luna/kept/r1","until":"2026-11-06T12:00:00Z","keepHours":24}},"decision":null}"#).unwrap());
+        let text = lines_text(&escalation_lines(&detail));
+        assert!(text.contains("sandbox kept at /w/app/task-1"), "{text}");
+        assert!(text.contains("until 2026-11-06T12:00:00Z"), "{text}");
+        assert!(!text.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn the_ship_approval_strip_has_two_answers_and_the_watch_is_no_gate() {
+        let strip = |requested: serde_json::Value, waiting: bool| {
+            let (mut task, mut detail) = at_gate("{}", "awaiting_ship");
+            task.waiting_on_you = waiting;
+            detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":requested})).unwrap()];
+            gate_strip(&task, Some(&detail)).map(|l| l.to_string())
+        };
+        let low = strip(serde_json::json!({"gate":"ship_approval","risk":"low"}), true).unwrap();
+        assert!(low.contains("S approve the release · N reject and archive") && !low.contains("high risk") && !low.contains("r send back"), "{low}");
+        assert!(strip(serde_json::json!({"gate":"ship_approval","risk":"high"}), true).unwrap().contains("(high risk: a release owner, not one of the plan's approvers)"));
+        assert!(strip(serde_json::json!({"evidence":{"risk":"low"}}), true).unwrap().contains("S publish and watch the PR · r send back"));
+        assert_eq!(strip(serde_json::json!({}), false), None, "a watched PR is not a gate");
+    }
+
+    #[test]
+    fn the_ship_section_lists_the_checklist_and_cleans_every_machine_string() {
+        let ship: crate::model::ShipView = serde_json::from_value(serde_json::json!({
+            "pr":{"number":3,"url":"u"},"ready":false,
+            "checklist":[{"id":"ci","ok":false,"detail":"CI \u{1b}[31mred"},{"id":"freeze","ok":false,"detail":"freeze until Monday"},{"id":"pack","ok":true,"detail":"complete"}],
+            "autoMerge":{"allowed":false,"reason":"not ready\u{7}"},"review":{"required":true,"by":"a ruleset"},"fixRounds":1,"quietSince":"2026-11-01T00:00:00Z"
+        })).unwrap();
+        let text = ship_lines(&ship, crate::model::unix_secs("2026-11-04T00:00:00Z").unwrap()).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(!text.chars().any(|c| c.is_control() && c != '\n'), "{text:?}");
+        for want in ["✗ ", "ci", "✓ ", "required by a ruleset", "1 fix round", "quiet 3 days", "keeps waiting and goes on when it ends"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
     }
 }

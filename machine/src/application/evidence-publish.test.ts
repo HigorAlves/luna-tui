@@ -1,13 +1,15 @@
 import type { EvidencePack } from "@hardness/contracts";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { COMMENT_MARKER, SECTION_START } from "../domain/evidence-markdown.ts";
+import { COMMENT_MARKER, SECTION_END, SECTION_START } from "../domain/evidence-markdown.ts";
 import { fakeGitHub } from "../test/github.ts";
-import { publishEvidence } from "./evidence-publish.ts";
+import { publishAndReady, publishChosen, publishEvidence } from "./evidence-publish.ts";
+import { loadCursor } from "./ship-cursor.ts";
+import { localStorage } from "./evidence-storage.ts";
 import { GitHubError, noTokenGitHub } from "./github.ts";
 
 let localDir: string;
@@ -58,20 +60,20 @@ function github(over: Partial<Parameters<typeof fakeGitHub>[0]> = {}, state: { b
 const base = { slug: "o/a", number: 3, taskId: "0123456789abcdef" };
 
 describe("publishEvidence", () => {
-  it("uploads each local file as <task8>-<sha7>-<name> to the luna-evidence pre-release and rewrites the urls", async () => {
+  it("uploads each local file as <task8>-<sha7>-<digest8><ext> to the luna-evidence pre-release and rewrites the urls", async () => {
     const gh = github();
-    const result = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "cart.png", url: put("cart.png", "png") }, { kind: "video", label: "walk.webm", url: put("walk.webm", "vid") }]) });
+    const result = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "cart.png", url: put("cart.png", "png") }, { kind: "video", label: "walk.webm", url: put("walk.webm", "vid"), scanned: true }]) });
     expect(result.assets).toBe(2);
     expect(result.comment).toBe("created");
     expect(gh.ensureRelease).toHaveBeenCalledTimes(1);
     expect(gh.ensureRelease).toHaveBeenCalledWith("o/a", "luna-evidence", { name: "Luna evidence", prerelease: true });
-    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-cart.png", Buffer.from("png"), "image/png");
-    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-walk.webm", Buffer.from("vid"), "video/webm");
-    expect(result.pack.media.map((m) => m.url)).toEqual(["https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-cart.png", "https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-walk.webm"]);
+    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-8f8cbb7d.png", Buffer.from("png"), "image/png");
+    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-1ff838dc.webm", Buffer.from("vid"), "video/webm");
+    expect(result.pack.media.map((m) => m.url)).toEqual(["https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-8f8cbb7d.png", "https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-1ff838dc.webm"]);
   });
 
   it("reuses an asset of the same name instead of uploading it again", async () => {
-    const existing = { id: 1, name: "01234567-abc1234-cart.png", url: "https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-cart.png" };
+    const existing = { id: 1, name: "01234567-abc1234-3a6eb079.png", url: "https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-3a6eb079.png" };
     const gh = github({}, { body: "", comments: [], assets: [existing] });
     const result = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "cart.png", url: put("cart.png") }]) });
     expect(gh.uploadReleaseAsset).not.toHaveBeenCalled();
@@ -163,6 +165,15 @@ describe("publishEvidence", () => {
     expect(result.pack.media).toEqual(media);
   });
 
+  it("never uploads a HAR by its kind, whatever its name: one with a 130-character name is refused too", async () => {
+    const gh = github();
+    const long = put("h".repeat(126) + ".har", "{}");
+    const odd = put("capture.dat", "{}");
+    const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "har", label: "long", url: long }, { kind: "har", label: "odd", url: odd }]) });
+    expect(gh.uploadReleaseAsset).not.toHaveBeenCalled();
+    expect(out.pack.media.map((m) => m.url)).toEqual([long, odd]);
+  });
+
   it("never uploads a HAR: it can carry cookies and tokens", async () => {
     const gh = github();
     const har = put("run.har", "{}");
@@ -171,10 +182,18 @@ describe("publishEvidence", () => {
     expect(result.pack.media[0]!.url).toBe(har);
   });
 
-  it("names uploaded files with a safe name", async () => {
+  it("names an asset from the task, the commit, the digest and the extension only: a file named like a token leaks nothing into its name", async () => {
     const gh = github();
-    await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "x", url: put("shot one (1).png") }]) });
-    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-shot_one__1_.png", expect.any(Buffer), "image/png");
+    const token = "gh" + "p_" + "a".repeat(36);
+    const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "x", url: put(`${token}.png`), scanned: true }]) });
+    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-3a6eb079.png", expect.any(Buffer), "image/png");
+    expect(JSON.stringify(out)).not.toContain(token);
+  });
+
+  it("builds the extension from letters and digits only", async () => {
+    const gh = github();
+    await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "x", url: put("shot.p_n g"), scanned: true }]) });
+    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-3a6eb079", expect.any(Buffer), "application/octet-stream");
   });
 
   it("with no GitHub token the pack keeps its local urls and nothing is thrown", async () => {
@@ -191,3 +210,236 @@ describe("publishEvidence", () => {
     await expect(publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "a.png", url: put("a.png") }]) })).rejects.toThrow(/422/);
   });
 });
+
+describe("publishEvidence: what may be uploaded", () => {
+  const token = "gh" + "p_" + "a".repeat(36);
+  const urlOf = (name: string) => `https://github.com/o/a/releases/download/luna-evidence/${name}`;
+
+  it("names an asset with the hash of its content, so a file made again at the same commit is uploaded anew", async () => {
+    const gh = github();
+    const first = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "a.png", url: put("a.png", "one") }]) });
+    const second = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "a.png", url: put("a.png", "two") }]) });
+    expect(first.assets).toBe(1);
+    expect(second.assets).toBe(1);
+    expect(first.pack.media[0]!.url).not.toBe(second.pack.media[0]!.url);
+  });
+
+  it("keeps an image with scanned: false as a local copy unless a person approved the preview", async () => {
+    const media = [{ kind: "screenshot" as const, label: "a.png", url: put("a.png", "x"), scanned: false }, { kind: "screenshot" as const, label: "b.png", url: put("b.png", "y"), scanned: true }];
+    const held = github();
+    const out = await publishEvidence({ ...base, github: held, localDir, pack: pack(media) });
+    expect(out.assets).toBe(1);
+    expect(out.pack.media[0]!.url).toBe(media[0]!.url);
+    const approved = github();
+    const open = await publishEvidence({ ...base, github: approved, localDir, pack: pack(media), approved: true });
+    expect(open.assets).toBe(2);
+  });
+
+  it("keeps a video local unless it was checked (scanned: true) or a person approved: a film withheld for a key does not leave the raw recording of the same pages uploaded", async () => {
+    const raw = { kind: "video" as const, label: "qa-cart.webm", url: put("qa-cart.webm", "raw"), scanned: false };
+    const unmarked = { kind: "video" as const, label: "other.webm", url: put("other.webm", "other") };
+    const held = github();
+    const out = await publishEvidence({ ...base, github: held, localDir, pack: pack([raw, unmarked]) });
+    expect(held.uploadReleaseAsset).not.toHaveBeenCalled();
+    expect(out.pack.media.map((m) => m.url)).toEqual([raw.url, unmarked.url]);
+    expect((out.notes ?? []).join(" ")).toMatch(/qa-cart\.webm stays a local copy/);
+    const approved = github();
+    expect((await publishEvidence({ ...base, github: approved, localDir, pack: pack([raw, unmarked]), approved: true })).assets).toBe(2);
+    const checked = github();
+    expect((await publishEvidence({ ...base, github: checked, localDir, pack: pack([{ ...raw, scanned: true }]) })).assets).toBe(1);
+  });
+
+  it("keeps a text medium local, with a note in fixed words, when it holds a secret or personal data the token shapes do not catch", async () => {
+    const join = (...p: string[]) => p.join("");
+    const dirty: [string, string][] = [
+      ["terminal.txt", join("DATABASE_URL=postgres", "://app:", "hunter2hunter2", "@db:5432/app")],
+      ["checks.txt", join("DB_", "PASSWORD", "=", "correct-horse")],
+      ["meta.json", JSON.stringify({ headers: { Authorization: join("Bearer ", "abcdefghijklmnopqrst") } })],
+      ["c.vtt", join("WEBVTT\n-----BEGIN ", "PRIVATE KEY", "-----")],
+      ["report.json", JSON.stringify({ owner: "jane.roe@acme-corp.io" })],
+    ];
+    for (const [name, text] of dirty) {
+      const gh = github();
+      const path = put(name, text);
+      const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: name === "c.vtt" ? "captions" : "report", label: name, url: path }]), approved: true });
+      expect(gh.uploadReleaseAsset, name).not.toHaveBeenCalled();
+      expect(out.pack.media[0]!.url, name).toBe(path);
+      expect(out.notes, name).toEqual([`${name} stays a local copy: it may hold a secret or personal data`]);
+    }
+    const clean = github();
+    const ok = await publishEvidence({ ...base, github: clean, localDir, pack: pack([{ kind: "report", label: "terminal.txt", url: put("terminal.txt", "3 passed\nGET /health 200") }]) });
+    expect(ok.assets).toBe(1);
+  });
+
+  it("keeps every text media kind with a token in it local: nothing with the token reaches the target", async () => {
+    const gh = github();
+    const media = [
+      { kind: "report" as const, label: "terminal.txt", url: put("terminal.txt", `$ pnpm test\nTOKEN=${token}\nok`) },
+      { kind: "report" as const, label: "checks.txt", url: put("checks.txt", `x ${token}`) },
+      { kind: "report" as const, label: "meta.json", url: put("meta.json", JSON.stringify({ k: token })) },
+      { kind: "captions" as const, label: "c.vtt", url: put("c.vtt", `WEBVTT\n${token}`) },
+    ];
+    const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack(media) });
+    expect(gh.uploadReleaseAsset).not.toHaveBeenCalled();
+    expect(out.notes).toHaveLength(4);
+    expect(JSON.stringify(out.notes)).not.toContain(token);
+  });
+
+  it("does not publish a text file it cannot read within its cap", async () => {
+    const gh = github();
+    const big = put("terminal.txt", "x".repeat(2 * 1024 * 1024 + 1));
+    const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "report", label: "terminal.txt", url: big }]) });
+    expect(out.assets).toBe(0);
+    expect(out.pack.media[0]!.url).toBe(big);
+  });
+
+  it("uses a returned url only when it is https with no whitespace, parenthesis or angle bracket, and falls back to the local copy with a note", async () => {
+    for (const bad of ["http://x.example/a.png", "https://x.example/a b.png", "https://x.example/a).png", "https://x.example/<a>.png"]) {
+      const gh = github({ uploadReleaseAsset: async () => ({ url: bad }) });
+      const path = put("a.png");
+      const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "a.png", url: path }]) });
+      expect(out.pack.media[0]!.url, bad).toBe(path);
+      expect((out.notes ?? []).join(" "), bad).toMatch(/local copy/);
+    }
+  });
+
+  it("asks the target whether each url still resolves, and a url that does not goes back to the local copy", async () => {
+    const gh = github({ uploadReleaseAsset: async (_s, _r, name) => ({ url: urlOf(name) }), releaseAssets: async () => [] });
+    const path = put("a.png");
+    const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "a.png", url: path }]) });
+    expect(out.pack.media[0]!.url).toBe(path);
+    expect((out.notes ?? []).join(" ")).toMatch(/does not resolve|local copy/);
+  });
+
+  it("uploads nothing with the local storage and leaves every entry a local copy", async () => {
+    const gh = github();
+    const path = put("a.png");
+    const out = await publishEvidence({ ...base, github: gh, localDir, storage: localStorage(), pack: pack([{ kind: "screenshot", label: "a.png", url: path }]) });
+    expect(gh.ensureRelease).not.toHaveBeenCalled();
+    expect(out.assets).toBe(0);
+    expect(out.pack.media[0]!.url).toBe(path);
+  });
+});
+
+describe("publishChosen: the repository's evidence.storage picks the target", () => {
+  it("local uploads nothing, release_asset uploads, and a card with no repository takes release_asset", async () => {
+    const asked: (string | null)[] = [];
+    const publish = publishChosen(async (repoPath) => (asked.push(repoPath), repoPath === "/local" ? "local" : "release_asset"));
+    const path = put("a.png");
+    const media = [{ kind: "screenshot" as const, label: "a.png", url: path }];
+    const local = github();
+    expect((await publish({ ...base, github: local, localDir, pack: pack(media), repoPath: "/local" })).assets).toBe(0);
+    expect(local.ensureRelease).not.toHaveBeenCalled();
+    const remote = github();
+    expect((await publish({ ...base, github: remote, localDir, pack: pack(media), repoPath: "/remote" })).assets).toBe(1);
+    expect((await publish({ ...base, github: github(), localDir, pack: pack(media) })).assets).toBe(1);
+    expect(asked).toEqual(["/local", "/remote", null]);
+  });
+});
+
+describe("publishAndReady", () => {
+  const HEAD = "abc1234def5678";
+  const run = async (over: { pack?: EvidencePack; headSha?: string; draft?: boolean; approved?: boolean; gh?: ReturnType<typeof github> } = {}) => {
+    const stateDir = mkdtempSync(join(tmpdir(), "ready-state-"));
+    const saved: EvidencePack[] = [];
+    const gh = over.gh ?? github({ markPrReady: async () => {} });
+    const deps = { github: gh, publish: publishEvidence, save: async (_id: string, p: EvidencePack) => void saved.push(p), stateDir, localDir: () => localDir };
+    const out = await publishAndReady(deps, { task: { id: base.taskId, repoPath: "/repo" }, slug: "o/a", number: 3, headSha: over.headSha ?? HEAD, draft: over.draft ?? true, pack: over.pack ?? pack([{ kind: "screenshot", label: "a.png", url: put("a.png"), scanned: true }]), approved: over.approved ?? false });
+    return { out, gh, saved, stateDir };
+  };
+
+  it("publishes, saves the pack with its urls, records the cursor with the pr and the published sha, then marks a draft ready", async () => {
+    const { out, gh, saved, stateDir } = await run();
+    expect(out).toMatchObject({ published: true, readied: true, assets: 1 });
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.media[0]!.url).toMatch(/^https:\/\//);
+    expect(await loadCursor(stateDir, base.taskId)).toMatchObject({ pr: { slug: "o/a", number: 3 }, published: { sha: "abc1234def5678" } });
+    expect(gh.markPrReady).toHaveBeenCalledWith("o/a", 3);
+    expect((gh.markPrReady as unknown as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0]!).toBeGreaterThan((gh.updatePrBody as unknown as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0]!);
+  });
+
+  describe("a person's edit of the section", () => {
+    const again = async (edit: ((body: string) => string) | null, saveFirst = true) => {
+      const state = { body: "## Why\n- cart", comments: [] as Comment[], assets: [] as Array<{ id: number; name: string; url: string }> };
+      const gh = github({ markPrReady: async () => {} }, state);
+      const stateDir = mkdtempSync(join(tmpdir(), "ready-edit-"));
+      const deps = { github: gh, publish: publishEvidence, save: async () => {}, stateDir, localDir: () => localDir };
+      const input = { task: { id: base.taskId, repoPath: "/repo" }, slug: "o/a", number: 3, headSha: HEAD, draft: false, pack: pack([{ kind: "screenshot", label: "a.png", url: put("a.png"), scanned: true }]), approved: false };
+      await publishAndReady(deps, input);
+      if (!saveFirst) {
+        const cursor = (await loadCursor(stateDir, base.taskId))!;
+        const { publishedSection: _gone, ...rest } = cursor as typeof cursor & { publishedSection?: string };
+        const { saveCursor } = await import("./ship-cursor.ts");
+        await saveCursor(stateDir, base.taskId, rest);
+      }
+      if (edit) state.body = edit(state.body);
+      const out = await publishAndReady(deps, input);
+      return { out, state, stateDir };
+    };
+
+    it("records nothing when the section is as the machine left it, and saves its hash at each publish", async () => {
+      const { out, stateDir } = await again(null);
+      expect(out).toMatchObject({ published: true });
+      expect((out as { edited?: unknown }).edited).toBeUndefined();
+      expect((await loadCursor(stateDir, base.taskId))!.publishedSection).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it("writes the edited section to the ground truth before replacing it, and says so", async () => {
+      const { out, stateDir } = await again((body) => body.replace("<!-- luna-evidence:end -->", "my own line\n<!-- luna-evidence:end -->"));
+      expect(out).toMatchObject({ published: true, edited: { sha: HEAD.slice(0, 7) } });
+      const file = JSON.parse(readFileSync(join(stateDir, "ground-truth", "evidence", `${base.taskId}-${HEAD.slice(0, 7)}-edit.json`), "utf8"));
+      expect(file.section).toContain("my own line");
+    });
+
+    it("records nothing for a cursor with no publishedSection (a pack published before this wave)", async () => {
+      const { out } = await again((body) => body.replace("<!-- luna-evidence:end -->", "edit\n<!-- luna-evidence:end -->"), false);
+      expect((out as { edited?: unknown }).edited).toBeUndefined();
+    });
+  });
+
+  it("does not mark a PR that is already ready", async () => {
+    const { out, gh } = await run({ draft: false });
+    expect(out).toMatchObject({ published: true, readied: false });
+    expect(gh.markPrReady).not.toHaveBeenCalled();
+  });
+
+  it("repairs an incomplete pack once, with the repair on its note, and publishes it", async () => {
+    const { out, saved } = await run({ pack: { ...pack([]), rollback: "" } });
+    expect(out).toMatchObject({ published: true });
+    expect(saved[0]!.rollback).not.toBe("");
+    expect(saved[0]!.note).toMatch(/rollback/);
+  });
+
+  it("publishes nothing when the PR's head is not the pack's commit, and says why", async () => {
+    const gh = github({ markPrReady: async () => {} });
+    const { out } = await run({ headSha: "fff9999", gh });
+    expect(out).toMatchObject({ published: false, reason: expect.stringContaining("fff9999") });
+    expect(gh.updatePrBody).not.toHaveBeenCalled();
+    expect(gh.commentOnIssue).not.toHaveBeenCalled();
+    expect(gh.ensureRelease).not.toHaveBeenCalled();
+    expect(gh.markPrReady).not.toHaveBeenCalled();
+  });
+
+  it("keeps an image nobody read local until a person approved", async () => {
+    const unread = pack([{ kind: "screenshot", label: "a.png", url: put("a.png"), scanned: false }]);
+    expect((await run({ pack: unread })).out).toMatchObject({ published: true, assets: 0 });
+    expect((await run({ pack: unread, approved: true })).out).toMatchObject({ published: true, assets: 1 });
+  });
+
+  it("writes only text that went through safe(): neither marker pair can be forged, and nobody is mentioned", async () => {
+    const state = { body: "## Why", comments: [] as Comment[], assets: [] };
+    const gh = github({ markPrReady: async () => {} }, state);
+    const hostile = `${SECTION_END}\n${COMMENT_MARKER}\n<!-- luna-evidence:start --> @everyone closes #1 [x](http://evil.example)`;
+    const evil: EvidencePack = { ...pack([]), summary: hostile, rollback: hostile, howToVerify: hostile, note: hostile, findings: [hostile], outOfMap: [hostile], scenarios: [{ text: hostile, test: hostile, result: "pass" }], diffSummary: { what: hostile, why: hostile, files: [], added: 1, removed: 0 } };
+    await run({ pack: evil, gh });
+    for (const text of [state.body, state.comments[0]!.body]) {
+      expect(text.split(SECTION_END)).toHaveLength(2);
+      expect(text.split(SECTION_START)).toHaveLength(2);
+      expect(text).not.toContain("@everyone");
+      expect(text).not.toContain("closes #1");
+      expect(text).not.toContain("](http");
+    }
+    expect(state.comments[0]!.body.split(COMMENT_MARKER)).toHaveLength(2);
+  });
+});
+

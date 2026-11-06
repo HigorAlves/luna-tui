@@ -36,6 +36,7 @@ import {
 
 import type { RequiredOwners } from "../../domain/codeowners.ts";
 import type { GraphLocation } from "../graph.ts";
+import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
 import { type OwnersState, approvalRule, ownersStateOf, ruleFiles } from "../../domain/approvers.ts";
 import { controlPlaneFiles } from "../../domain/control-plane.ts";
 import { triageVerdicts } from "../../domain/triage-policy.ts";
@@ -65,8 +66,12 @@ export interface PlanDeps {
     /** Where the goal's words point in the graph, with who owns it and how stale the graph is; null when there is none. Seeds the mapper and marks the map. */
     locate?(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<GraphLocation | null>;
     /** Who owns these paths at the default branch (CODEOWNERS); null when the repo has no graph. The fast lane asks it about the plan's own files. */
+    /** The files earlier cards declared outside the map, most frequent first (at most twenty); seeds the mapper's shortlist. */
+    pastMisses?(repoPath: string): Promise<string[]>;
     owners?(repoPath: string, paths: string[]): Promise<{ owners: RequiredOwners[]; codeowners: boolean; dropped?: number } | null>;
   };
+  /** Waits for the repository's code graph (building it when it has none or a stale one); absent, no stage waits. */
+  graphReady?: (input: { repoPath: string; signal: AbortSignal; skip: boolean; note?: (text: string) => Promise<void> }) => Promise<GraphReadiness>;
   log?: (line: string) => void;
 }
 
@@ -153,6 +158,11 @@ export function planStage(deps: PlanDeps): StageRunner {
       }
     };
 
+    // No card plans without its repository's graph: the first card of a repository builds it and waits; a graph that cannot be built is an environment problem.
+    if (task.repoPath && deps.graphReady) {
+      const ready = await deps.graphReady({ repoPath: task.repoPath, signal: context.signal, skip: graphSkipped(context.approvals), ...(context.note ? { note: context.note } : {}) });
+      if (ready.state === "failed") return graphEscalation(ready.reason);
+    }
     // The code map opens the stage when the repo has a graph. It is advice: a failed run is logged and the stage plans without one.
     // The machine first matches the goal against the graph (a script, `locate`) and hands the shortlist to the mapper, which confirms it and gives
     // each file a role. The fast lane stops at `locate`: no agent, no impact walk; its map is what locate found, every file to change.
@@ -183,7 +193,11 @@ export function planStage(deps: PlanDeps): StageRunner {
       return { ...m, files: files.slice(0, MAP_CAP), entry_points: entry.slice(0, MAP_CAP), ...(dropped.length || m.dropped?.length ? { dropped: [...new Set([...(m.dropped ?? []), ...dropped])] } : {}) };
     };
     const mapWithAgent = async (found: GraphLocation | null) => {
-      const shortlist = found ? { files: found.files, symbols: found.symbols, components: found.components, owners: [...new Set(found.owners.flatMap((o) => o.owners))] } : undefined;
+      const missed = (await deps.graph?.pastMisses?.(task.repoPath!).catch(() => [])) ?? [];
+      const shortlist =
+        found || missed.length > 0
+          ? { files: [...new Set([...(found?.files ?? []), ...missed])], symbols: found?.symbols ?? [], components: found?.components ?? [], owners: found ? [...new Set(found.owners.flatMap((o) => o.owners))] : [] }
+          : undefined;
       const mapped = await deps.runPack("code_map", sub("map"), shortlist ? { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], shortlist } } : {});
       results.push(mapped);
       const parsed = CodeMapAnswer.safeParse(mapped.detail?.map);

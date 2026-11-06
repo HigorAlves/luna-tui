@@ -17,7 +17,7 @@ You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`, branch `{{tas
 ## What to do
 1. Start from the CI section above: it is the PR, its checks and the failed run's log tail, fetched outside the sandbox. Use `gh pr checks` / `gh run view <id> --log-failed` only when that section is empty or you need more of a log; `gh` may have no credential here, and a denial is not a finding.
 2. Every classification cites the log line that proves it.
-3. Classify per your taxonomy: `test`, `lint`, `build`, `flake`, `infra`, `drift`, `conflict`. Apply `ci-routing` to pick `verdict`:
+3. The machine has already decided, by a typed decision on the failing job's log, that this run is a real failure (a flake, an infrastructure failure or a drift never reaches you). Name the `classification` (`test`, `lint`, `build`, `conflict`) and give the fix as findings; your `verdict` is `fixable` unless the failure cannot be fixed in code. Taxonomy: `test`, `lint`, `build`, `flake`, `infra`, `drift`, `conflict`. Apply `ci-routing` to pick `verdict`:
    - `fixable`: the diff caused it and a concrete fix exists.
    - `flake`: intermittent, with run-history evidence.
    - `infra`: runner, quota, network or secrets problem outside the repo.
@@ -36,5 +36,5 @@ You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`, branch `{{tas
 
 ## Rules
 - Uncertainty goes in `summary`, with `needs_debug`: nobody answers a question during the run.
-- Never `gh run rerun`: the machine re-runs a flake once itself, on your verdict.
+- Never `gh run rerun`: the machine re-runs a flake itself, on its own decision.
 

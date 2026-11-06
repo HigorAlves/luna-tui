@@ -3,33 +3,33 @@
   "pack": "fix_scope",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T12:11:18.821Z",
+  "at": "2026-11-06T06:49:12.953Z",
   "model": "claude-haiku-5-5",
   "summary": {
-    "cases": 4,
+    "cases": 5,
     "passed": 4,
-    "passRate": 1,
+    "passRate": 0.8,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 2153,
-    "costUsd": 0.0018902300000000001,
+    "meanDurationMs": 1806,
+    "costUsd": 0.0021250400000000003,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
+      "n": 5,
+      "labelled": 4,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 0.75,
-      "brier": 0.06246666666666668,
-      "ece": 0.20666666666666667,
-      "meanConfidence": 0.8075,
+      "coverage": 1,
+      "brier": 0.029975000000000005,
+      "ece": 0.1425,
+      "meanConfidence": 0.866,
       "overconfident": 0
     }
   },
   "cases": [
     {
       "id": "adds-a-validation",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the fix_scope schema",
         "pass": true,
@@ -38,18 +38,18 @@
       "checks": [
         {
           "check": "scope.confidence within 0..0.85",
-          "pass": true,
-          "detail": null
+          "pass": false,
+          "detail": "found 0.9"
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1576,
-      "costUsd": 0.00047630000000000003,
+      "durationMs": 1754,
+      "costUsd": 0.0005369000000000001,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": null,
-        "confidence": 0.85,
+        "confidence": 0.9,
         "verdict": "proceed"
       }
     },
@@ -70,13 +70,39 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2441,
-      "costUsd": 0.00045401,
+      "durationMs": 2438,
+      "costUsd": 0.0005171100000000001,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.6,
-        "verdict": "flag"
+        "confidence": 0.7,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "nit-rename-a-local",
+      "pass": true,
+      "schema": {
+        "check": "answer on the fix_scope schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "scope.choice = \"in_place\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1576,
+      "costUsd": 0.00040761000000000004,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.93,
+        "verdict": "proceed"
       }
     },
     {
@@ -96,8 +122,8 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3143,
-      "costUsd": 0.0005961100000000001,
+      "durationMs": 1765,
+      "costUsd": 0.00043721,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
@@ -122,12 +148,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1452,
-      "costUsd": 0.00036381,
+      "durationMs": 1497,
+      "costUsd": 0.00022621000000000002,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.93,
+        "confidence": 0.95,
         "verdict": "proceed"
       }
     }

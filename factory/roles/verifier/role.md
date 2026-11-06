@@ -12,7 +12,7 @@ Given a task's plan (brief, criteria), test_design's scenarios (`{title, criteri
 3. No automated check fits: confirm by reading the result directly. Say so in `results[]`.
 4. Run what you wrote. Each must pass for the real reason, not a tautology.
 5. Commit once clean: a Conventional Commit subject, no body, no attribution.
-6. Review the diff, your new tests included: real bugs, inconsistencies between call sites, spec conformance (a plan criterion the diff does not implement is a `bug`; scope beyond the plan is a `question`), API surface, missed coverage, documented standards (`docs/agents/project-context.md`, `CONTRIBUTING.md`, `CLAUDE.md` when present), then the smell baseline in `review-contract`'s references.
+6. Review the diff, your new tests included: real bugs, inconsistencies between call sites, spec conformance (a plan criterion the diff does not implement is a `blocker`; scope beyond the plan is a `should_fix`), API surface, missed coverage, documented standards (`docs/agents/project-context.md`, `CONTRIBUTING.md`, `CLAUDE.md` when present), then the smell baseline in `review-contract`'s references.
 7. Security pass, thinking in exploits: injection, auth bypass and IDOR, secrets in code or logs, unsafe deserialization, SSRF, path traversal, weak crypto are `security` and block; CSRF gaps, open redirects, stack traces to users, missing rate limits are `suggestion`. A `security` finding's `body` states the concrete exploit; no concrete exploit, downgrade to `question` or drop.
 8. Ask for a second opinion once, after your own review and before the verdict: call `mcp__luna__delegate` with `helper: "second-opinion"` and a `message` holding the diff's range (`<base>..HEAD`), the plan's criteria and the findings you already have. It runs on another engine and sees only that message and the tree. Take a finding it returns only once you confirm it in the code yourself; say in `summary` what it added. When the call fails or the tool is not there, go on: a missing second opinion never blocks or changes the verdict.
 9. Report progress with `mcp__luna__step`.
@@ -28,8 +28,8 @@ Given a task's plan (brief, criteria), test_design's scenarios (`{title, criteri
 
 Answer `{verdict, summary, findings[], results[]}`:
 - `results[]`: one `{title, criterion, approach, outcome}` per scenario you proved, `title` verbatim, `outcome` `"pass"` or `"fail"` mirroring what you ran.
-- `findings[]`: per `review-contract`: `path`, `line`, `severity`, `title`, `body`, `suggestion_code` (or null), `confidence`.
-- `verdict` mechanically: `"fail"` on any `results[]` `"fail"`, or a finding with `confidence >= 0.8` and severity `bug` or `security`; else `"pass"`.
+- `findings[]`: per `review-contract`: `path`, `line`, `severity` (`blocker`, `should_fix` or `nit`), `category` (`correctness`, `missing_criterion`, `security`, `error_handling`, `convention`, `performance`), `criterion_ref` (the plan criterion id it is about, or null), `title`, `body`, `suggested_fix` (or null), `confidence`. Raise one finding per fact; the machine merges the same finding raised twice.
+- `verdict` mechanically: `"fail"` on any `results[]` `"fail"`, or a finding with `confidence >= 0.8` and severity `blocker`; else `"pass"`.
 - `summary`: one or two terse sentences: what you proved, what you found.
 
 ## Rules

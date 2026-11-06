@@ -4,7 +4,9 @@
 // with its guard's decision, usage); only the facts for the task's log are taken from it, the
 // rest stays in the file.
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, readFile } from "node:fs/promises";
+import { lstat, mkdir, readFile } from "node:fs/promises";
+
+import { copyRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
 import { dirname, join } from "node:path";
 
 import { isReservedKind } from "../../domain/reserved-kinds.ts";
@@ -34,13 +36,17 @@ export interface Ingested {
 
 const exists = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.code !== "ENOENT";
 
+/** What the host reads of a container's result and events: a regular file within these caps, never a link or a FIFO. */
+const RESULT_CAP = 8 * 1024 * 1024;
+const EVENTS_CAP = 32 * 1024 * 1024;
+
 export async function ingestStageOutput(opts: {
   outDir: string;
   runId: string;
   stateDir: string;
 }): Promise<Ingested> {
   const { outDir, runId, stateDir } = opts;
-  const raw = await readFile(join(outDir, "result.json"), "utf8");
+  const raw = await readRegularFile(join(outDir, "result.json"), RESULT_CAP);
   const parsed = StageOutput.safeParse(JSON.parse(raw));
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);
@@ -51,7 +57,7 @@ export async function ingestStageOutput(opts: {
   const events: IngestedEvent[] = [];
   let lines = "";
   try {
-    lines = await readFile(join(outDir, "events.jsonl"), "utf8");
+    lines = await readRegularFile(join(outDir, "events.jsonl"), EVENTS_CAP);
   } catch (error) {
     if (exists(error)) throw error;
   }
@@ -95,7 +101,7 @@ export async function ingestStageOutput(opts: {
     }
     try {
       await mkdir(dirname(dest), { recursive: true });
-      await copyFile(src, dest);
+      await copyRegularFile(src, dest);
     } catch (error) {
       if (exists(error)) throw error;
       events.push({

@@ -23,7 +23,7 @@ describe("replanOf: the evidence a wrong plan goes back to the planner with", ()
     const { thread: kept } = replanOf({ raisedBy: "shipping", reason: "the review says the plan is wrong", finished: { detail: { thread } } });
     expect(kept!.length).toBeLessThanOrEqual(REPLAN_THREAD_CAP);
     expect(kept).not.toMatch(/\]\(|!\[|@team/);
-    expect(kept).toContain("click (https://evil.example/x)");
+    expect(kept).toContain("click (https\u200b://evil.example/x)");
   });
 
   it("flattens and caps the reason and each finding, takes at most ten findings, and leaves out what is missing", () => {

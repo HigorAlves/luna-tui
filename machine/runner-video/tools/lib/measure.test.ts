@@ -106,3 +106,11 @@ describe("checks", () => {
     expect(verdictOf(out)).toBe("pass");
   });
 });
+
+describe("checks with a budget", () => {
+  it("fails a film over the budget it is given, and not one under it", () => {
+    expect(checks({ ...good, info: { durationS: 100, hasAudio: true }, maxS: 90 }).filter((c) => c.level === "FAIL").map((c) => c.check)).toContain("duration");
+    expect(checks({ ...good, info: { durationS: 100, hasAudio: true }, maxS: 120 }).filter((c) => c.level === "FAIL")).toEqual([]);
+    expect(checks({ ...good, info: { durationS: 250, hasAudio: true } }).filter((c) => c.level === "FAIL").map((c) => c.check)).toContain("duration");
+  });
+});

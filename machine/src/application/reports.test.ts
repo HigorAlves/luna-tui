@@ -2,7 +2,7 @@ import { BuildReport, VerifyReport, findingId } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { buildProgressOf, buildReportOf, verifyReportOf } from "./reports.ts";
+import { buildProgressOf, buildReportOf, prFactsOf, verifyReportOf } from "./reports.ts";
 
 const task = { branch: "luna/x", diffAdded: 12, diffRemoved: 3, testsPassed: 4, testsTotal: 5 } as unknown as TaskRow;
 
@@ -149,6 +149,23 @@ describe("verifyReportOf", () => {
     expect(VerifyReport.safeParse(report).success).toBe(true);
   });
 
+  it("is complete: who reviewed, the mutation score, the browser run by scenario, the CI class and the rounds used; a report from before still validates", () => {
+    const runs = [run("verifying", 1, { engine: "codex:sol" }), run("ci_watch", 1)];
+    const rows = [{ scenario: "S1", title: "s1", criterion: null, result: "fail", seen: "got a 500", artifacts: ["a.png"] }];
+    const events = [
+      finished("verifying", 1, "passed", { findings: [], mutation: { score: 0.4, min: 0.6 } }),
+      finished("e2e", 1, "failed", { verdict: "fail", criteria: [{ text: "s1", result: "fail" }], manifest: rows }),
+      finished("ci_watch", 1, "passed", { class: "flake" }),
+    ];
+    const withRetries = { ...task, retries: { verify: 2, e2e: 1, ci: 0, total: 4, stronger: 0 } } as unknown as TaskRow;
+    const report = verifyReportOf(withRetries, runs, events);
+    expect(report).toMatchObject({ review: { engine: "codex:sol", family: "codex" }, mutation: { score: 0.4, min: 0.6 }, ciClass: "flake", rounds: { verify: 2, e2e: 1, ci: 0 } });
+    expect(report?.e2e.rows).toEqual(rows);
+    expect(VerifyReport.safeParse(report).success).toBe(true);
+    const old = { prNumber: null, headSha: null, findings: [], tests: { passed: 0, total: 0 }, coverageDelta: null, e2e: { verdict: null, scenarios: [], artifacts: [] }, envReproduction: null, overrides: [], version: 2 };
+    expect(VerifyReport.safeParse(old).success).toBe(true);
+  });
+
   it("marks a finding the next verifying run no longer raises as fixed by the implementer that ran between", () => {
     const runs = [run("verifying", 1), run("implementing", 2, { outputCommit: "fixsha" }), run("verifying", 2, { outputCommit: "v2sha" })];
     const events = [
@@ -204,5 +221,54 @@ describe("buildProgressOf", () => {
     expect(progress.scenarios).toEqual([{ id: "S1", state: "green" }, { id: "S2", state: "red" }]);
     expect(progress.budget).toMatchObject({ iterations: 2, tokens: 1000, minutes: 5, limits: { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90 } });
     expect(progress.lastCheckpoint).toMatchObject({ sha: "b".repeat(40), follows: "green" });
+  });
+});
+
+describe("the environment in the reports", () => {
+  it("puts the hash Build recorded in the Build Report, and null when none was", () => {
+    const runs = [run("implementing", 1, { outputCommit: "abc" })];
+    const env = { hash: "f".repeat(64), image: "sha256:i", commit: "abc", lockfiles: {} };
+    expect(buildReportOf(task, runs, [finished("implementing", 1, "passed", { env })])?.envHash).toBe("f".repeat(64));
+    expect(buildReportOf(task, runs, [finished("implementing", 1, "passed", {})])?.envHash).toBeNull();
+    expect(buildReportOf(task, runs, [finished("implementing", 1, "passed", { env: { hash: 7 } })])?.envHash).toBeNull();
+  });
+
+  it("puts what Verify's comparison said in the Verify Report, as matched or what differed", () => {
+    const runs = [run("verifying", 1)];
+    expect(verifyReportOf(task, runs, [finished("verifying", 1, "passed", { envReproduction: "matched" })])?.envReproduction).toBe("matched");
+    expect(verifyReportOf(task, runs, [finished("verifying", 1, "failed", { envReproduction: "the runner image differs" })])?.envReproduction).toBe("the runner image differs");
+    expect(verifyReportOf(task, runs, [finished("verifying", 1, "passed", {})])?.envReproduction).toBeNull();
+  });
+});
+
+describe("prFactsOf: what the draft PR's body is fed after Build, Verify and the browser run", () => {
+  it("gives the open should_fix and nit findings of the last verifying run, the files Build declared outside the map and each scenario's tagged test", () => {
+    const runs = [run("implementing", 1), run("verifying", 1), run("implementing", 2), run("verifying", 2), run("e2e", 1)];
+    const soft = (title: string, severity: string) => ({ path: "src/a.ts", line: title.length, severity, title, body: "b", confidence: 0.9 });
+    const events = [
+      event("scenario.red", { scenario: "S1" }),
+      finished("implementing", 1, "passed", { answer: { outOfMap: [{ path: "docs/old.md", reason: "stale" }] } }),
+      finished("verifying", 1, "failed", { findings: [soft("old blocker", "blocker")] }),
+      finished("implementing", 2, "passed", { answer: { outOfMap: [{ path: "docs/x.md", reason: "the guide named the old flag" }] } }),
+      finished("verifying", 2, "passed", { findings: [soft("rename it", "nit"), soft("add a test", "should_fix")] }),
+      finished("e2e", 1, "passed", { verdict: "pass" }),
+    ];
+    const facts = prFactsOf(task, runs, events);
+    expect(facts.findings.map((f) => f.title).sort()).toEqual(["add a test", "rename it"]);
+    expect(facts.outOfMap).toEqual([{ path: "docs/x.md", reason: "the guide named the old flag" }]);
+    expect(facts.tests).toBeInstanceOf(Map);
+  });
+
+  it("is empty for a card with no rows", () => {
+    expect(prFactsOf(task, [], [])).toEqual({ findings: [], outOfMap: [], tests: new Map() });
+  });
+
+  it("maps a scenario to the file of its test from the Build Report", () => {
+    const runs = [run("implementing", 1, { outputCommit: "abc" })];
+    const events = [finished("implementing", 1, "passed", { testsStep: { scenarioTests: [{ scenario: "S1", file: "src/export.test.ts" }, { scenario: "S2" }] } })];
+    const report = buildReportOf(task, runs, events);
+    const facts = prFactsOf(task, runs, events);
+    expect(report?.tests.map((t) => t.scenario)).toEqual(["S1", "S2"]);
+    expect([...facts.tests]).toEqual([["S1", "src/export.test.ts"]]);
   });
 });

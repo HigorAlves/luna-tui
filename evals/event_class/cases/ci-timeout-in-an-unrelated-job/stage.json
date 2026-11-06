@@ -1,0 +1,42 @@
+{
+  "schema": 3,
+  "stage": "event_class",
+  "pack": "event_class",
+  "attempt": 1,
+  "task": {
+    "id": "event-class",
+    "title": "PR event: ci failure",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "event",
+      "event": {
+        "actor": "ci",
+        "isBot": true,
+        "isMe": false,
+        "kind": "ci",
+        "state": "failure",
+        "body": "e2e-browser",
+        "url": null,
+        "job": "e2e-browser",
+        "log": "Error: connect ETIMEDOUT 10.0.0.4:5432 while pulling the fixture image; runner lost communication with the server"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

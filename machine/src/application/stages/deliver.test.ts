@@ -1,3 +1,5 @@
+import { at } from "../../adapters/git/machine-repo.ts";
+import { HOST_GIT } from "../../adapters/git/worktree.ts";
 import { describe, expect, it, vi } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
@@ -12,6 +14,8 @@ const bad = (stderr = "nope"): ExecResult => ({ code: 1, stdout: "", stderr });
 function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult; task?: Record<string, unknown>; respond?: (args: string[]) => ExecResult | undefined; defaultBranch?: string | null } = {}) {
   const calls: string[][] = [];
   const exec = vi.fn(async (command: string, args: string[]) => {
+    // Recording what was pushed is the machine's own bookkeeping, asserted once below.
+    if (args.includes("update-ref")) return ok();
     calls.push([command, ...args]);
     return opts.respond?.(args) ?? opts.push ?? ok();
   });
@@ -26,6 +30,22 @@ function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult;
   return { run: deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => (opts.defaultBranch === undefined ? "main" : opts.defaultBranch) }), context, calls };
 }
 
+describe("what the machine pushed", () => {
+  it("is recorded in the card's own repository, so an unpushed commit is told from a pushed one by what the machine did", async () => {
+    const { pushBranch, pushCheckpoint } = await import("./deliver.ts");
+    const calls: string[][] = [];
+    const exec = async (_c: string, args: string[]) => (calls.push(args), ok());
+    expect(await pushBranch(exec, "hardness/t1", "/wt")).toBeNull();
+    expect(await pushCheckpoint(exec, "hardness/t1", "/wt")).toBeNull();
+    const refs = calls.filter((c) => c.includes("update-ref")).map((c) => c.slice(c.indexOf("update-ref") + 1));
+    expect(refs).toEqual([["refs/luna/pushed/hardness/t1", "refs/heads/hardness/t1"], ["refs/luna/pushed/wip/hardness/t1", "HEAD"]]);
+    const failed = async () => bad();
+    const before = refs.length;
+    expect(await pushBranch(failed, "hardness/t1", "/wt")).toMatch(/push failed/);
+    expect(refs.length).toBe(before);
+  });
+});
+
 describe("delivering", () => {
   it("pushes with git, then opens a draft PR through GitHub, logging pr.opened", async () => {
     const github = fakeGitHub({
@@ -37,7 +57,7 @@ describe("delivering", () => {
     expect(result.outcome).toBe("pass");
     expect(result.detail).toMatchObject({ prUrl: "https://github.com/acme/widgets/pull/7", prNumber: 7, draft: true, reused: false });
     expect(result.events).toMatchObject([{ kind: "pr.opened", payload: { url: "https://github.com/acme/widgets/pull/7", number: 7 } }]);
-    expect(calls).toEqual([["git", "-c", "core.hooksPath=/dev/null", "-C", "/wt", "push", "-u", "origin", "hardness/t1"]]);
+    expect(calls).toEqual([["git", ...HOST_GIT, ...at("/wt"), "push", "-u", "origin", "hardness/t1"]]);
     expect(github.openPr).toHaveBeenCalledWith("acme/widgets", expect.objectContaining({ head: "hardness/t1", draft: true, title: "feat: thing" }));
   });
 
@@ -69,8 +89,56 @@ describe("delivering", () => {
   });
 });
 
+describe("the draft PR's body", () => {
+  const withBody = (github: ReturnType<typeof fakeGitHub>) => {
+    const { context } = setup(github, { task: { record: { goal: "Readers export a CSV" } } });
+    const run = deliverRunner({ exec: async () => ok(), github, slugOf: async () => "acme/widgets", defaultBranch: async () => "main", commitsOf: async () => ({ base: "a".repeat(40), head: "b".repeat(40) }) });
+    return { run, context };
+  };
+
+  it("carries the record's goal and the base and head commits between the machine's markers", async () => {
+    const github = fakeGitHub({ findPr: async () => null, openPr: async () => ({ url: "u", number: 7, isDraft: true }) });
+    const { run, context } = withBody(github);
+    await run(context);
+    const body = (github.openPr as ReturnType<typeof vi.fn>).mock.calls[0]![1].body as string;
+    expect(body.startsWith("<!-- luna:pr:start -->")).toBe(true);
+    expect(body).toContain("- Readers export a CSV");
+    expect(body).toContain(`Base ${"a".repeat(7)}, head ${"b".repeat(7)}`);
+  });
+
+  it("is fed the open findings, the files outside the map and each scenario's test by the context", async () => {
+    const github = fakeGitHub({ findPr: async () => null, openPr: async () => ({ url: "u", number: 7, isDraft: true }) });
+    const { run, context } = withBody(github);
+    const finding = (title: string, severity: string) => ({ path: "a.ts", line: 2, severity, title, body: "b", confidence: 0.9 });
+    const ctx = {
+      ...context,
+      approvals: [{ kind: "awaiting_approval", decision: "approved", requested: { cases: [{ title: "export downloads", criterion: null, approach: "a" }] } }],
+      prFacts: { findings: [finding("add a test", "should_fix"), finding("rename", "nit")], outOfMap: [{ path: "docs/x.md", reason: "stale flag" }], tests: new Map([["S1", "src/export.test.ts"]]) },
+    } as unknown as StageContext;
+    await run(ctx);
+    const body = (github.openPr as ReturnType<typeof vi.fn>).mock.calls[0]![1].body as string;
+    expect(body).toContain("### should_fix\n- add a test (a.ts:2)");
+    expect(body).toContain("### nit\n- rename (a.ts:2)");
+    expect(body).toContain("- docs/x.md: stale flag");
+    expect(body).toContain("- S1: export downloads, test `src/export.test.ts`");
+  });
+
+  it("on a PR that exists, replaces only what is between the markers and keeps a person's own text", async () => {
+    const updatePrBody = vi.fn(async () => {});
+    const old = "My note\n\n<!-- luna:pr:start -->\nold\n<!-- luna:pr:end -->\n\nafter";
+    const github = fakeGitHub({ findPr: async () => ({ url: "u", number: 3, isDraft: true }), prFacts: async () => ({ body: old, mergeable: "MERGEABLE" }) as never, updatePrBody });
+    const { run, context } = withBody(github);
+    await run(context);
+    const written = (updatePrBody.mock.calls[0] as unknown as [string, number, string])[2];
+    expect(written.startsWith("My note\n\n<!-- luna:pr:start -->\n")).toBe(true);
+    expect(written.endsWith("<!-- luna:pr:end -->\n\nafter")).toBe(true);
+    expect(written).not.toContain("\nold\n");
+    expect(written).toContain("Readers export a CSV");
+  });
+});
+
 describe("delivering a branch that conflicts with the default branch", () => {
-  const G = ["git", "-c", "core.hooksPath=/dev/null", "-C", "/wt"];
+  const G = ["git", ...HOST_GIT, ...at("/wt")];
   const pr = { url: "https://x/pull/3", number: 3, isDraft: true };
   const facts = (mergeable: string) => async () => ({ mergeable }) as never;
 
@@ -138,7 +206,7 @@ describe("pushBranch with a lease", () => {
   it("pins the lease to the sha it is given, and refuses a lease that is not a sha", async () => {
     const { pushBranch } = await import("./deliver.ts");
     const calls: string[][] = [];
-    const exec = async (_c: string, args: string[]) => (calls.push(args), ok());
+    const exec = async (_c: string, args: string[]) => (args.includes("update-ref") || calls.push(args), ok());
     const sha = "a".repeat(40);
     expect(await pushBranch(exec, "hardness/t1", "/wt", { force: true, lease: sha })).toBeNull();
     expect(calls[0]).toContain(`--force-with-lease=refs/heads/hardness/t1:${sha}`);

@@ -45,6 +45,19 @@ describe("toTask", () => {
   });
 });
 
+describe("toTask at the states that hold a stage or a gate", () => {
+  it("counts awaiting_ship and reviewing_memory as waiting on you only with an open gate, else as running", () => {
+    const gate = { state: "awaiting_ship" as const, requested: {} };
+    for (const state of ["awaiting_ship", "reviewing_memory"] as const) {
+      expect(toTask({ ...row(), state }, null, null, { lastRun: null, gate: null })).toMatchObject({ waitingOnYou: false, running: true });
+      expect(toTask({ ...row(), state, queued: true }, null, null, { lastRun: null, gate: null })).toMatchObject({ waitingOnYou: false, running: false });
+      expect(toTask({ ...row(), state }, null, null, { lastRun: null, gate: { ...gate, state } })).toMatchObject({ waitingOnYou: true, running: false });
+    }
+    expect(toTask({ ...row(), state: "awaiting_approval" })).toMatchObject({ waitingOnYou: true, running: false });
+    expect(toTask({ ...row(), state: "shipping" })).toMatchObject({ waitingOnYou: false, running: true });
+  });
+});
+
 describe("toEvent names", () => {
   const row = (kind: string, payload: Record<string, unknown>) => ({ id: "5", taskId: "t", stageRunId: null, kind, payload, at: new Date("2026-11-05T00:00:00Z") });
 

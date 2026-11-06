@@ -40,8 +40,8 @@ export interface SlaRow {
   escalateTo?: string[];
 }
 
-/** The gate that escalates: the plan's. A gate past it is reminded of and, at the plan, escalated; never archived. */
-const ESCALATING_GATE: TaskState = "awaiting_approval";
+/** The gates that escalate: the plan's and the ship approval's (to the gate's release owners). A gate past it is reminded of and, at the plan, escalated; never archived. */
+const ESCALATING_GATES: ReadonlySet<TaskState> = new Set<TaskState>(["awaiting_approval", "awaiting_ship"]);
 
 export function slaActions(rows: SlaRow[], now: Date): SlaAction[] {
   const actions: SlaAction[] = [];
@@ -58,7 +58,7 @@ export function slaActions(rows: SlaRow[], now: Date): SlaAction[] {
     }
     // The plan gate escalates once per visit, after a reminder: past `plan.sla.escalate_days` somebody is named.
     const inThisVisit = (at: Date | null | undefined) => at !== null && at !== undefined && at.getTime() >= since.getTime();
-    if (gate === ESCALATING_GATE && typeof escalateAfter === "number" && now.getTime() - since.getTime() >= escalateAfter * 1000 && inThisVisit(lastReminderAt) && !inThisVisit(lastEscalationAt)) {
+    if (ESCALATING_GATES.has(gate) && typeof escalateAfter === "number" && now.getTime() - since.getTime() >= escalateAfter * 1000 && inThisVisit(lastReminderAt) && !inThisVisit(lastEscalationAt)) {
       actions.push({ taskId: task.id, action: "escalate", gate, to: escalateTo ?? [], afterSecs: escalateAfter });
       continue;
     }

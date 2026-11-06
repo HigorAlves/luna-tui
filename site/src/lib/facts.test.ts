@@ -43,9 +43,9 @@ describe("facts", () => {
     expect(diffFacts({ decisionDefaults: { a: "jev" } }, { decisionDefaults: { a: "claude:haiku" } })).toEqual(['decisionDefaults: {"a":"jev"} → {"a":"claude:haiku"}'])
   })
 
-  it("committed facts.json has the factory numbers, and a default engine for each of the 16 measured decision slots", () => {
-    expect(facts).toMatchObject({ states: 23, columns: 8, packs: 41, images: 3 })
-    expect(Object.keys(facts.decisionDefaults)).toHaveLength(16)
+  it("committed facts.json has the factory numbers, and a default engine for each of the 18 measured decision slots", () => {
+    expect(facts).toMatchObject({ states: 23, columns: 8, packs: 43, images: 3 })
+    expect(Object.keys(facts.decisionDefaults)).toHaveLength(18)
   })
 
   it("--check passes against the real repo", () => {

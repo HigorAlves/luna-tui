@@ -33,6 +33,10 @@ describe("what a merged duplicate's reporter may be told: it fails closed", () =
     expect(mergedNotice(id, null)).toContain("11111111");
     expect(mergedNotice(id, null)).not.toContain("22222222");
     expect(mergedNotice(id, "https://board.example/tasks/" + id)).toContain("https://board.example/tasks/");
+    // The machine's own link stays whole and clickable; a "link" that is not a plain web address is not printed.
+    expect(mergedNotice(id, "https://board.example/tasks/" + id)).toContain(": https://board.example/tasks/" + id + ". Follow");
+    expect(mergedNotice(id, "javascript:alert(1)")).not.toContain("javascript");
+    expect(mergedNotice(id, "https://x.example/ <b>hi</b>")).not.toContain("x.example");
     const hidden = mergedNotice(null, null);
     expect(hidden).toContain("tracked");
     expect(hidden).not.toMatch(/[0-9a-f]{8}/);

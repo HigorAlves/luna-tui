@@ -88,11 +88,11 @@ and a test fails when they drift from the registry.
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
-| `N` | reject the plan, with a comment |
+| `N` | reject the plan, with a comment; reject the release, archive the card |
 | `r` | send back with a reason |
 | `x` then `S` | ship: approve and open the PR |
 
@@ -184,6 +184,8 @@ and a test fails when they drift from the registry.
 | `:fold` | fold the focused column |
 | `:unfold` | unfold the focused column |
 | `:setup <repo>` | propose the repo's luna.yaml |
+| `:dismiss <finding id> [reason]` | dismiss a finding Verify reported |
+| `:finding <blocker\|should_fix\|nit> <title>` | add a finding Verify missed |
 | `:slots <n>` | resize the pool |
 | `:drain` | take no new work |
 | `:resume` | carry on taking new work |
@@ -233,11 +235,11 @@ link is the board's `J`):
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
-| `N` | reject the plan, with a comment |
+| `N` | reject the plan, with a comment; reject the release, archive the card |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 
@@ -254,6 +256,8 @@ link is the board's `J`):
 | `R` | set the repo (search) |
 | `e` | edit: the plan, the cases or the ticket |
 | `o` | open: the file, the PR or the issue |
+| `y` | Evidence Pack was useful |
+| `n` | Evidence Pack was not useful (note) |
 | `E` | pick the selected stage's engine |
 | `M` | close as a duplicate of another |
 | `U` | bring a closed duplicate back |
@@ -554,6 +558,7 @@ What the ticket shows:
 | Key | Does |
 |---|---|
 | `R` | refresh the numbers |
+| `A` | approve a waiting base image |
 | `?` | keys |
 
 <!-- keys:end -->
@@ -569,10 +574,10 @@ What the ticket shows:
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
-| `N` | reject the plan, with a comment |
+| `N` | reject the plan, with a comment; reject the release, archive the card |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 

@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "format.choice",
+      "value": "text_only"
+    }
+  ],
+  "rubric": "A pure refactor: the existing checks pass and nothing is different to look at, text_only.",
+  "label": {
+    "format": {
+      "choice": "text_only"
+    }
+  }
+}

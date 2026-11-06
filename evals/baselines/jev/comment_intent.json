@@ -3,26 +3,26 @@
   "pack": "comment_intent",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-05T12:07:58.514Z",
+  "at": "2026-11-06T06:48:50.461Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 4,
-    "passed": 4,
+    "cases": 5,
+    "passed": 5,
     "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 420.25,
-    "costUsd": 0.00008492,
+    "meanDurationMs": 457.8,
+    "costUsd": 0.00011158000000000001,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
+      "n": 5,
+      "labelled": 4,
       "accuracy": 1,
       "actedOnAccuracy": 1,
       "coverage": 1,
-      "brier": 0.006166666666666664,
-      "ece": 0.06333333333333335,
-      "meanConfidence": 0.915,
+      "brier": 0.003649999999999997,
+      "ece": 0.04499999999999993,
+      "meanConfidence": 0.9339999999999999,
       "overconfident": 0
     }
   },
@@ -44,8 +44,8 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 414,
-      "costUsd": 0.00002142,
+      "durationMs": 567,
+      "costUsd": 0.00002356,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": true,
@@ -70,8 +70,8 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 396,
-      "costUsd": 0.000021,
+      "durationMs": 443,
+      "costUsd": 0.00002234,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": true,
@@ -96,12 +96,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 492,
+      "durationMs": 412,
       "costUsd": 0.0000215,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": true,
-        "confidence": 0.89,
+        "confidence": 0.91,
         "verdict": "proceed"
       }
     },
@@ -122,12 +122,38 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 379,
+      "durationMs": 459,
       "costUsd": 0.000021,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": null,
         "confidence": 0.85,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "reading-says-question-thread-asks-for-a-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the comment_intent schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "intent.choice = \"change_request\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 408,
+      "costUsd": 0.00002318,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     }

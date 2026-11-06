@@ -8,6 +8,7 @@ Before sending a change, run:
 pnpm test             # machine, contracts, factory and the evals' grading
 pnpm typecheck
 pnpm board:test       # board (Rust)
+cd board && cargo clippy --all-targets -- -D warnings -A clippy::large_enum_variant   # the board's lint: CI fails on any Rust warning
 pnpm golden           # end-to-end, needs a running machine (see docs/install.md)
 ```
 

@@ -3,6 +3,7 @@
 import type { Task } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../../test/policies.ts";
 
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
@@ -23,7 +24,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
 });
 
 const app = () => createApp({ db, pipeline, bus: new Bus() });
@@ -89,5 +90,26 @@ describe("a task snapshot's classification", () => {
     expect((await one(classified.id)).classification).toEqual(classification);
     expect((await one(plain.id)).classification).toBeNull();
     expect((await all()).map((t) => t.classification)).toEqual([classification, null]);
+  });
+});
+
+describe("GET /tasks/:id carries the ship view", () => {
+  const detail = async (id: string, shipView?: (taskId: string) => Promise<unknown>) => {
+    const res = await createApp({ db, pipeline, bus: new Bus(), ...(shipView ? { shipView: shipView as never } : {}) }).request(`/tasks/${id}`);
+    return (await res.json()) as { ship?: unknown };
+  };
+
+  it("is null with no ship reader, and null for a card the reader knows nothing about", async () => {
+    const task = await pipeline.createTask({ title: "Login" });
+    expect((await detail(task.id)).ship).toBeNull();
+    expect((await detail(task.id, async () => null)).ship).toBeNull();
+  });
+
+  it("is what the reader gives for the card's id", async () => {
+    const task = await pipeline.createTask({ title: "Login" });
+    const seen: string[] = [];
+    const out = await detail(task.id, async (id) => (seen.push(id), { pr: { slug: "o/a", number: 3, url: "https://github.com/o/a/pull/3" }, ready: true }));
+    expect(seen).toEqual([task.id]);
+    expect(out.ship).toMatchObject({ ready: true, pr: { number: 3 } });
   });
 });

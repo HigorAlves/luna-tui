@@ -9,7 +9,7 @@
 // Jira in turn, so the later one lands last. A stepping stone the task has already left is
 // skipped when the newer status is reachable directly. Nothing here ever throws into the
 // pipeline; a failure is a warning and, where it fits, a blocked mark.
-import { WAITING_ON_USER, type JiraLink, type TaskState } from "@hardness/contracts";
+import { type JiraLink, type TaskState } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
 import { jiraOf } from "../domain/jira-link.ts";
@@ -18,7 +18,8 @@ import { carriesSecret, postable } from "../domain/postable.ts";
 import type { JiraPolicy, Policy } from "../domain/policy.ts";
 import type { ArtifactRow, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { type Jira, messageOf } from "./jira.ts";
-import { ShippedEvent, shippedSummary } from "./ship-loop.ts";
+import { ShippedEvent, isShippedKind, shippedSummary } from "./ship-loop.ts";
+import { needsYou } from "./threads.ts";
 
 export interface JiraSyncOptions {
   pipeline: {
@@ -111,14 +112,14 @@ export class JiraSync {
   }
 
   private async react(event: EventRow): Promise<void> {
-    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder" && event.kind !== "task.reply" && event.kind !== "task.questions" && event.kind !== "task.shipped") return;
+    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder" && event.kind !== "task.reply" && event.kind !== "task.questions" && !isShippedKind(event.kind)) return;
     const task = await this.options.pipeline.get(event.taskId);
     const link = jiraOf(task);
     if (!link) return;
     const policy = (await this.options.pipeline.policyFor(task.repoPath)).jira;
     if (!policy) return;
 
-    if (event.kind === "task.shipped") {
+    if (isShippedKind(event.kind)) {
       // Once per task: the record, not memory, says whether the summary was posted.
       const parsed = ShippedEvent.safeParse(event.payload);
       if (!parsed.success || policy.comments === "none") return;
@@ -162,7 +163,7 @@ export class JiraSync {
       if (from === "draft" && event.payload.event === "start" && task.source?.kind !== "jira") await this.comment(link, `Picked up as task #${task.id.slice(0, 8)} on the Luna board.`);
       else if (to === "closed") await this.comment(link, await this.closing(task));
       else if (to === "archived") await this.comment(link, archivedNotice(event.payload.archiveReason));
-      else if (policy.comments === "gates" && WAITING_ON_USER.has(to) && to !== from) {
+      else if (policy.comments === "gates" && needsYou(to, from, event.payload.gate === true)) {
         await this.comment(link, to === "escalated" ? `Escalated: ${safe(String(event.payload.reason ?? "see the board"))}.` : `Needs you: ${ASKS[to] ?? to}.`);
       }
     }

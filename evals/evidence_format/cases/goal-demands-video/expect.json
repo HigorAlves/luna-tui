@@ -4,13 +4,13 @@
     {
       "kind": "equals",
       "path": "format.choice",
-      "value": "text"
+      "value": "text_only"
     }
   ],
-  "rubric": "The ticket text demands video, but there is no surface and no browser run: text.",
+  "rubric": "The ticket text demands video, but the change is a pure refactor with no surface and no browser run: text_only.",
   "label": {
     "format": {
-      "choice": "text"
+      "choice": "text_only"
     }
   }
 }

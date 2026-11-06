@@ -4,8 +4,6 @@ import { PACKS, type Pack, type PackId, type PackInfo, type TaskState } from "@h
 
 /** Packs that do not run in the task state of their own name. */
 const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
-  // The retro runs after the push, inside the shipping stage; its proposal waits at reviewing_memory.
-  reviewing_memory: ["shipping"],
   // The plan stage: the planner runs first, then test design, both in the test_design state.
   plan: ["test_design"],
   plan_fast: ["test_design"],
@@ -30,6 +28,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   // Decisions on Verify's work, run on demand by the verify and e2e stages.
   finding_classify: [],
   e2e_failure_cause: [],
+  ci_failure_class: [],
+  frame_privacy: [],
   // A decision on the evidence context, run on demand by the evidence stage.
   evidence_format: [],
   // The video pipeline runs inside evidence, sub-run by sub-run; `evidence` stays first in PACKS so the state still picks it.
@@ -45,7 +45,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   worth_learning: [],
   intake_dedup: [],
   // Drafts an answer inside the shipping stage's monitor; `reviewing_memory` stays first in PACKS so the state still picks it.
-  pr_reply: ["shipping"],
+  pr_reply: ["awaiting_ship"],
   eval_judge: [],
   chat_triage: [],
 };

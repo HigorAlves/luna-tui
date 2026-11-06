@@ -26,7 +26,7 @@ What the ticket asked, as the record has it:
 {{context.projectContext}}
 
 ## What to do
-1. Use the `video-script` skill. The film runs 45 to 120 seconds (never over 240): a hook card, one `demo` scene per scenario above, an end card.
+1. Use the `video-script` skill. The film runs 45 to 120 seconds (never over {{context.video.budgetS}}): a hook card, one `demo` scene per scenario above, an end card.
 2. Compose the script (markdown) and the timeline (the JSON object the skill gives, with `meta.clock` `"voice"`, `meta.commit` the pack's commit and every number cited in `facts` or labelled `SCHEMATIC`); they go in the answer as `script` and `timeline`.
 3. Answer `{script, timeline, facts, durationEstimateS}`: the same script and timeline as the files.
 

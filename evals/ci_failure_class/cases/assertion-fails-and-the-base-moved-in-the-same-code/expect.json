@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "class.confidence",
+      "min": 0,
+      "max": 0.8
+    }
+  ],
+  "rubric": "An assertion fails in code the base also changed since the branch was cut: the change may have broken it, or the base moved under it. The log does not decide, so the model should hedge."
+}

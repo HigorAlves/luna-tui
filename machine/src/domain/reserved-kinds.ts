@@ -5,7 +5,7 @@
 import { STAGE_REPORTS } from "./card-events.ts";
 
 /** Rows the machine logs itself under a `stage.` kind (the pipeline's, the pack runner's, the stages'): never from a container. `stage.note` is not here: the container's own notes are stored under it. */
-const MACHINE_STAGE_KINDS = ["stage.started", "stage.finished", "stage.engine", "stage.held", "stage.reattached", "stage.restarted", "stage.malformed"];
+const MACHINE_STAGE_KINDS = ["stage.started", "stage.finished", "stage.engine", "stage.held", "stage.reattached", "stage.restarted", "stage.malformed", "stage.sandbox.egress_blocked"];
 
 /** The kinds the agent's own tools write (the slice ledger) and its notes: a container may write these. */
 export const CONTAINER_STAGE_KINDS = ["stage.slice.red", "stage.slice.green", "stage.slice.committed", "stage.note"];

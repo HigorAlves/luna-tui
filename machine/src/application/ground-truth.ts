@@ -5,6 +5,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import type { EvidencePack } from "@hardness/contracts";
+
+import { safe } from "../domain/evidence-markdown.ts";
 import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 
 const PLAN_KEYS = ["brief", "criteria", "assumptions", "slices", "rollback", "cases", "risk", "map"] as const;
@@ -108,6 +111,47 @@ export function escalationTruthWriter(stateDir: string): (task: TaskRow, approva
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${task.id}-${approval.id}.json`);
     await writeFile(path, `${JSON.stringify(escalationTruthOf(task, approval, commits, corrected), null, 2)}\n`);
+    return path;
+  };
+}
+
+export interface EvidenceFeedbackTruth {
+  schema: 1;
+  taskId: string;
+  format: string;
+  commit: string;
+  revision: number | null;
+  video: { verdict: string; scores: Record<string, number> } | null;
+  useful: boolean;
+  note: string | null;
+  at: string;
+}
+
+const NOTE_CAP = 500;
+
+/** What a person said about a pack, as one record. It labels no decision: a thumbs-down does not say which format would have been right. The note is flattened. */
+export function evidenceFeedbackOf(task: TaskRow, pack: EvidencePack, feedback: { useful: boolean; note?: string | undefined }, at: Date): EvidenceFeedbackTruth {
+  const note = feedback.note ? safe(feedback.note).slice(0, NOTE_CAP) : "";
+  return {
+    schema: 1,
+    taskId: task.id,
+    format: pack.format,
+    commit: pack.commitSha,
+    revision: pack.revision ?? null,
+    video: pack.video ? { verdict: pack.video.verdict, scores: pack.video.scores } : null,
+    useful: feedback.useful,
+    note: note === "" ? null : note,
+    at: at.toISOString(),
+  };
+}
+
+/** Writes `<stateDir>/ground-truth/evidence/<taskId>-<sha 7>.json` (the last answer for a commit wins) and answers its path. */
+export function evidenceFeedbackWriter(stateDir: string): (task: TaskRow, pack: EvidencePack, feedback: { useful: boolean; note?: string | undefined }, at: Date) => Promise<string> {
+  return async (task, pack, feedback, at) => {
+    const dir = join(stateDir, "ground-truth", "evidence");
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${task.id}-${pack.commitSha.slice(0, 7).replace(/[^A-Za-z0-9]/g, "_")}.json`);
+    await writeFile(path, `${JSON.stringify(evidenceFeedbackOf(task, pack, feedback, at), null, 2)}\n`);
     return path;
   };
 }

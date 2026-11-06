@@ -1,4 +1,4 @@
-import { PACKS, PackId, RUNNING } from "@hardness/contracts";
+import { PACKS, PackId, RUNNING, RUN_OR_GATE } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import { packForState, packInfo, packStates } from "./packs.ts";
@@ -25,15 +25,15 @@ describe("packStates", () => {
     expect(packForState("evidence")).toBe("evidence");
   });
 
-  it("runs the memory review inside shipping, and the inbox and on-demand packs in no task state", () => {
-    expect(packStates("reviewing_memory")).toEqual(["shipping"]);
+  it("runs the memory review in its own state, and the inbox and on-demand packs in no task state", () => {
+    expect(packStates("reviewing_memory")).toEqual(["reviewing_memory"]);
     expect(packStates("slack_triage")).toEqual([]);
     expect(packStates("jira_intake")).toEqual([]);
     expect(packStates("chat_triage")).toEqual([]);
   });
 
   it("names only states in which a stage runs", () => {
-    for (const id of PackId.options) for (const state of packStates(id)) expect(RUNNING.has(state)).toBe(true);
+    for (const id of PackId.options) for (const state of packStates(id)) expect(RUNNING.has(state) || RUN_OR_GATE.has(state)).toBe(true);
   });
 });
 

@@ -186,3 +186,17 @@ describe("ingestStageOutput", () => {
     expect(result.detail?.answer).toEqual(answer);
   });
 });
+
+describe("a FIFO where the result should be", () => {
+  it("is refused at once instead of blocking the machine", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const out = mkdtempSync(join(tmpdir(), "ingest-fifo-"));
+    execFileSync("mkfifo", [join(out, "result.json")]);
+    const started = Date.now();
+    await expect(ingestStageOutput({ outDir: out, runId: "r", stateDir: out })).rejects.toThrow(/regular file/);
+    expect(Date.now() - started).toBeLessThan(3000);
+  }, 10_000);
+});

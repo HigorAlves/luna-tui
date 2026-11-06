@@ -3,26 +3,26 @@
   "pack": "event_class",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T12:10:43.812Z",
+  "at": "2026-11-06T06:47:30.922Z",
   "model": "claude-haiku-5-5",
   "summary": {
-    "cases": 4,
-    "passed": 4,
+    "cases": 7,
+    "passed": 7,
     "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 2129,
-    "costUsd": 0.0011506300000000001,
+    "meanDurationMs": 2048.1428571428573,
+    "costUsd": 0.0027356000000000004,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
+      "n": 7,
+      "labelled": 6,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 0.5,
-      "brier": 0.056600000000000004,
-      "ece": 0.17999999999999997,
-      "meanConfidence": 0.7525000000000001,
+      "coverage": 0.8571428571428571,
+      "brier": 0.010716666666666664,
+      "ece": 0.08499999999999985,
+      "meanConfidence": 0.8700000000000001,
       "overconfident": 0
     }
   },
@@ -44,13 +44,39 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2201,
-      "costUsd": 0.0003879,
+      "durationMs": 2935,
+      "costUsd": 0.0008129000000000001,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.6,
-        "verdict": "flag"
+        "confidence": 0.8,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ci-assertion-in-the-changed-test",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"ci_real\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2119,
+      "costUsd": 0.00028295,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
       }
     },
     {
@@ -70,12 +96,64 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1367,
-      "costUsd": 0.00018821000000000002,
+      "durationMs": 1979,
+      "costUsd": 0.00027735,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.97,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "ci-timeout-in-an-unrelated-job",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"ci_flaky\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1601,
+      "costUsd": 0.00027775,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
         "confidence": 0.93,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "comment-says-rerun-ci",
+      "pass": true,
+      "schema": {
+        "check": "answer on the event_class schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "event.choice = \"review_comment\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 1844,
+      "costUsd": 0.00048335,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.96,
         "verdict": "proceed"
       }
     },
@@ -96,12 +174,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3217,
-      "costUsd": 0.00038571000000000005,
+      "durationMs": 2007,
+      "costUsd": 0.00034685,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": null,
-        "confidence": 0.55,
+        "confidence": 0.6,
         "verdict": "flag"
       }
     },
@@ -115,19 +193,19 @@
       },
       "checks": [
         {
-          "check": "event.choice = \"comment\"",
+          "check": "event.choice = \"review_comment\"",
           "pass": true,
           "detail": null
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1731,
-      "costUsd": 0.00018881000000000003,
+      "durationMs": 1852,
+      "costUsd": 0.00025445000000000003,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.93,
+        "confidence": 0.95,
         "verdict": "proceed"
       }
     }

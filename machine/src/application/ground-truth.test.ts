@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "../domain/task.ts";
-import { groundTruthOf, groundTruthWriter } from "./ground-truth.ts";
+import { evidenceFeedbackOf, evidenceFeedbackWriter, groundTruthOf, groundTruthWriter } from "./ground-truth.ts";
 
 const task = { id: "task-1", title: "Login", description: "Sign in", criteria: ["c1", "c2"], record: { goal: "Sign in works" } } as unknown as TaskRow;
 const slices = [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }];
@@ -66,3 +66,40 @@ describe("groundTruthWriter", () => {
     expect(existsSync(path)).toBe(true);
   });
 });
+
+describe("the Evidence feedback file", () => {
+  const pack = { summary: "s", format: "video", scenarios: [], findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "abc1234def5678", media: [], at: "t", revision: 2, video: { file: "w.mp4", durationS: 60, verdict: "ship", scores: { hook: 9 }, defects: [], rounds: 1, confidence: 0.8 } } as never;
+  const at = new Date("2026-11-06T10:00:00.000Z");
+
+  it("holds the task, the pack's format, commit and revision, the film's verdict and scores, the answer and the time", () => {
+    expect(evidenceFeedbackOf(task, pack, { useful: false, note: "too long" }, at)).toEqual({
+      schema: 1,
+      taskId: "task-1",
+      format: "video",
+      commit: "abc1234def5678",
+      revision: 2,
+      video: { verdict: "ship", scores: { hook: 9 } },
+      useful: false,
+      note: "too long",
+      at: "2026-11-06T10:00:00.000Z",
+    });
+    expect(evidenceFeedbackOf(task, { ...(pack as object), video: undefined, revision: undefined } as never, { useful: true }, at)).toMatchObject({ video: null, revision: null, note: null, useful: true });
+  });
+
+  it("flattens the note through safe(): no markup, no mention, no reference, no newline", () => {
+    const out = evidenceFeedbackOf(task, pack, { useful: true, note: "<b>x</b>\n@bob closes #12 [a](http://x)" }, at);
+    expect(out.note).not.toMatch(/[<>\n]/);
+    expect(out.note).not.toContain("@bob");
+    expect(out.note).not.toContain("#12");
+  });
+
+  it("is written to <stateDir>/ground-truth/evidence/<task>-<sha7>.json, and the last answer for a commit wins", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "gt-"));
+    const write = evidenceFeedbackWriter(stateDir);
+    const path = await write(task, pack, { useful: false }, at);
+    expect(path).toBe(join(stateDir, "ground-truth", "evidence", "task-1-abc1234.json"));
+    await write(task, pack, { useful: true, note: "fine" }, at);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ useful: true, note: "fine" });
+  });
+});
+

@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "frame_privacy",
+  "pack": "frame_privacy",
+  "attempt": 1,
+  "task": {
+    "id": "frame-privacy",
+    "title": "Frame privacy",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "frames",
+      "frames": {
+        "texts": [
+          "Customer record",
+          "Maria Fernandez Oliveira",
+          "12 Rua das Flores, Sao Paulo",
+          "CPF 123.456.789-09",
+          "Card ending 4242, expires 09/28"
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

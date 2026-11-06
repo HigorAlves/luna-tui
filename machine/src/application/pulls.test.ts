@@ -1,3 +1,4 @@
+import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { mkdtempSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,6 +61,7 @@ function setup(world: World, over: Partial<ConstructorParameters<typeof GitHubPu
     mergePr: async (repo, number) => {
       calls.push(["merge", repo, String(number)]);
       if (world.mergeError) throw new Error(world.mergeError);
+      return { merged: true as const, sha: null };
     },
   });
   const exec = async (command: string, args: string[]) => {
@@ -219,7 +221,7 @@ describe("GitHubPulls.clone", () => {
     const dest = join(root, "b");
     await pulls.clone("o/b", dest);
     await pulls.cloning;
-    expect(calls).toContainEqual(["git", "-c", "core.hooksPath=/dev/null", "clone", "https://github.com/o/b.git", dest]);
+    expect(calls).toContainEqual(["git", ...HOST_GIT, "clone", "https://github.com/o/b.git", dest]);
     expect(remembered).toEqual([]);
     expect(resolved.get("o/b")).toBe(dest);
     expect(pulls.snapshot.prs[0]?.localPath).toBe(dest);

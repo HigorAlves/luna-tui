@@ -1,11 +1,13 @@
 // The host-side close step, run after a task reaches `closed`. It adds no task state: the
 // pipeline stores the transition first, then calls this and logs the report. A failed step
 // is reported, never thrown, because the task is already closed.
+import { inert, proposalsSection } from "./retro-text.ts";
 import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { redact } from "../domain/evidence-markdown.ts";
-import { HOST_GIT, defaultBranch as hostDefaultBranch, isBranchName, originSlugOf } from "../adapters/git/worktree.ts";
+import { isClone, unpushedCommits } from "../adapters/git/clone.ts";
+import { at } from "../adapters/git/machine-repo.ts";
+import { HOST_GIT, defaultBranch as hostDefaultBranch, isBranchName, originSlugOf, removeWorktree } from "../adapters/git/worktree.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import type { GitHub } from "./github.ts";
 import { CAP_BYTES, CAP_LINES, CONTEXT_FILE, mergeRules } from "./stages/memory.ts";
@@ -40,7 +42,7 @@ export interface CloseTarget {
   repoPath: string | null;
   worktreePath: string | null;
   /** The memory review's proposal; `apply` is false when the approval said to skip it. */
-  rules?: { markdown: string; apply: boolean };
+  rules?: { markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }> };
   title?: string;
   /** The task's PR, when it merged: the rules then go to their own branch, never the merged one. */
   merged?: { prUrl: string; number: number } | null;
@@ -89,7 +91,7 @@ async function applyRules(
   await mkdir(dirname(file), { recursive: true });
   await requireInside(worktreePath, file);
   await writeFile(file, merged);
-  const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, "-C", worktreePath, ...args]);
+  const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, ...at(worktreePath), ...args]);
   const added = await run(["add", CONTEXT_FILE]);
   if (added.code !== 0) throw new Error(`git add failed: ${(added.stderr || added.stdout).trim()}`);
   const committed = await run(["-c", "commit.gpgsign=false", "commit", "-m", "docs(context): rules from the memory review"]);
@@ -101,18 +103,15 @@ async function applyRules(
   return `committed and pushed ${CONTEXT_FILE} (${lines} lines)`;
 }
 
-/** A model's text for a draft PR's body: tokens redacted, HTML escaped (a `<!--` or `<details>` would hide the rest from the reviewer), mentions and issue references neutralized: a draft PR must not ping anyone or close anything. */
-const inert = (text: string): string => redact(text).replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@(?=[A-Za-z0-9])/g, "@\u200b").replace(/#(?=\d)/g, "#\u200b");
-
 /** After a merge the task's branch is gone: the rules go on `luna/memory-<task8>`, cut from origin's default branch, pushed with -u and opened as a draft PR. The branch name is the machine's, never from a model. */
-async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rules: { markdown: string }, deps: CloseDeps): Promise<string> {
+async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rules: { markdown: string; proposals?: Array<{ kind: string; title: string; body: string }> }, deps: CloseDeps): Promise<string> {
   const base = await (deps.defaultBranchOf ?? hostDefaultBranch)(target.repoPath ?? worktreePath);
   if (!base || !isBranchName(base)) throw new Error(`no usable default branch: ${JSON.stringify(base ?? null)}`);
   const short = target.id.replace(/[^0-9a-f]/gi, "").slice(0, 8) || "task";
   const branch = `luna/memory-${short}`;
   const slug = await (deps.slugOf ?? originSlugOf)(worktreePath);
   if (!deps.github || !slug) throw new Error("cannot open the rules PR: no GitHub token or origin");
-  const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, "-C", worktreePath, ...args]);
+  const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, ...at(worktreePath), ...args]);
   const must = async (what: string, args: string[]) => {
     const out = await run(args);
     if (out.code !== 0) throw new Error(`git ${what} failed: ${(out.stderr || out.stdout).trim()}`);
@@ -138,7 +137,7 @@ async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rul
   await must("commit", ["-c", "commit.gpgsign=false", "commit", "-m", "docs(context): rules from the memory review"]);
   await must("push", ["push", "-u", "origin", branch]);
   const title = `docs(agents): rules from ${(target.title ?? "the task").replace(/\s+/g, " ").trim().slice(0, 100)}`;
-  const body = `Rules proposed by the retro of the task whose PR merged: ${target.merged!.prUrl}\n\n${inert(rules.markdown).slice(0, 20_000)}`;
+  const body = `Rules proposed by the retro of the task whose PR merged: ${target.merged!.prUrl}\n\n${inert(rules.markdown).slice(0, 20_000)}${rules.proposals?.length ? `\n\n${proposalsSection(rules.proposals)}` : ""}`;
   const pr = await deps.github.openPr(slug, { title, body, head: branch, draft: true });
   return `committed ${CONTEXT_FILE} (${lines} lines) on ${branch}, pushed, and opened the draft PR ${pr.url}`;
 }
@@ -166,7 +165,15 @@ export async function closeTask(task: CloseTarget, deps: CloseDeps): Promise<Clo
 
   const worktree = await attempt("worktree", async () => {
     if (!task.worktreePath || !task.repoPath) return "skipped: the task has no worktree";
-    if (!deps.worktreeRemove) return "kept: remove it from the board with w";
+    // A merged card has nothing left in its workspace to keep (the unpushed-commits guard below still holds); any other close leaves it for the board's `w`.
+    if (!deps.worktreeRemove && !task.merged) return "kept: remove it from the board with w";
+    if (isClone(task.worktreePath)) {
+      const unpushed = await unpushedCommits(task.worktreePath);
+      if (unpushed.length > 0) return `kept: the clone holds ${unpushed.length} unpushed commit(s); push them, or remove it from the board`;
+      await removeWorktree(task.repoPath, task.worktreePath);
+      worktreeRemoved = true;
+      return "workspace removed";
+    }
     const result = await deps.exec("git", [...HOST_GIT, "-C", task.repoPath, "worktree", "remove", "--force", task.worktreePath]);
     if (result.code !== 0) throw new Error(`git worktree remove failed: ${(result.stderr || result.stdout).trim()}`);
     worktreeRemoved = true;

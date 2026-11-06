@@ -1,6 +1,7 @@
 import type { IssueContext, JiraIntakeAnswer, TaskClassification } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { previewOn } from "../test/policies.ts";
 
 import { DEFAULT_POLICY, type JiraPolicy } from "../domain/policy.ts";
 import { freshTestDatabase } from "../test/database.ts";
@@ -46,7 +47,7 @@ function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"]; clas
   const read: IssueContext[] = [];
   const classify = over.classify;
   const classifier = classify ? { classify: async (issue: IssueContext) => (read.push(issue), classify(issue)) } : undefined;
-  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: "https://acme.atlassian.net" });
+  const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, policies: previewOn, jiraSite: "https://acme.atlassian.net" });
   let now = new Date("2026-10-28T12:00:00Z");
   const logs: string[] = [];
   const intake = new JiraIntake({

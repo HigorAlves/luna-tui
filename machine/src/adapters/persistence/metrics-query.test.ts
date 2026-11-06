@@ -28,7 +28,7 @@ describe("flowMetrics", () => {
     approved("B", "09:20"),
     built("B", "09:21"),
     finished("B", "09:25", "implementing"),
-    row("B", "09:30", "task.shipped", { number: 2 }),
+    row("B", "09:30", "ship.merged", { number: 2 }),
     // Task C: triaged and waiting at the plan gate: it adds to nothing.
     row("C", "08:00", "task.created"),
     finished("C", "08:05", "triage"),

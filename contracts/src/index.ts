@@ -15,6 +15,7 @@ export * from "./reports.ts";
 export * from "./card-events.ts";
 export * from "./scoring.ts";
 export * from "./config-v22.ts";
+export * from "./egress.ts";
 export * from "./events.ts";
 export * from "./packs.ts";
 export * from "./models.ts";
@@ -127,3 +128,9 @@ export const WAITING_ON_USER: ReadonlySet<TaskState> = new Set([
   "reviewing_memory",
   "escalated",
 ]);
+
+/** States where a stage can run and, at another moment, a gate can be open: an open approval decides which it is. */
+export const RUN_OR_GATE: ReadonlySet<TaskState> = new Set(["awaiting_ship", "reviewing_memory"]);
+
+/** Whether a card in `state` waits on a person: a `RUN_OR_GATE` state only with an open gate. */
+export const waitsOnPerson = (state: TaskState, gateOpen: boolean): boolean => (RUN_OR_GATE.has(state) ? gateOpen : WAITING_ON_USER.has(state));

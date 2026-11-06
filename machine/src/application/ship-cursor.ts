@@ -38,6 +38,40 @@ const ShipCursorSchema = z.object({
   resolvedByMachine: z.array(z.string()).optional(),
   /** The blockers last noted, so a poll that finds the same ones says nothing. */
   lastBlockers: z.string().optional(),
+  /** GitHub itself answered `reviewDecision: REVIEW_REQUIRED` for this PR at some poll: a review is required here (kept as evidence the rule reader may not see), with the base branch it was seen on: it is forgotten when the PR's base changes. An old cursor holds the bare flag, read as seen on the current base. */
+  reviewRequiredSeen: z.union([z.boolean(), z.object({ base: z.string() })]).optional(),
+  /** The classes facts decided at the last poll (`conflict`, `base_moved`, `freeze`, `blocked_by_other_pr`): one `ship.event` per change. */
+  lastEvents: z.array(z.string()).optional(),
+  /** Comments read by the `pr_reply` read step on this PR (at most `MAX_PR_READS`). */
+  reads: z.number().int().optional(),
+  /** The fixes pushed: the commit, the scope, a line, and the scenarios the fix may have changed. */
+  fixes: z.array(z.object({ sha: z.string(), scope: z.enum(["in_place", "re_verify_partial"]), summary: z.string(), affected: z.array(z.object({ id: z.string(), text: z.string(), result: z.string() })) })).optional(),
+  /** The last thing that happened on the PR (a new activity item, a new head, a change of the checks' state, a fix): the quiet clock counts from it. Set when the watch starts. */
+  lastActivityAt: z.string().optional(),
+  /** What `lastActivityAt` was last compared with (head, checks, fixes, last activity id): a poll that finds it changed is activity. */
+  activitySig: z.string().optional(),
+  /** When this quiet period was reminded and escalated; both are cleared by activity. */
+  remindedAt: z.string().nullable().optional(),
+  escalatedAt: z.string().nullable().optional(),
+  /** The head that was re-verified for staleness, and when: the stale clock counts from `at` for that head. */
+  reverified: z.object({ sha: z.string(), at: z.string() }).optional(),
+  /** sha256 of the Evidence section as the machine last published it: a different section in the PR body is a person's edit. */
+  publishedSection: z.string().optional(),
+  /** The last poll's readiness, for the board (`shipViewOf`): the checklist, the merge rule's answer, the review rule. Facts and fixed words; the details are flattened when the view is built. */
+  view: z
+    .object({
+      head: z.string().nullable(),
+      ready: z.boolean(),
+      checklist: z.array(z.object({ id: z.string(), ok: z.boolean(), detail: z.string() })),
+      canAutoMerge: z.boolean(),
+      reason: z.string(),
+      reviewRequired: z.boolean().nullable(),
+      reviewBy: z.string().nullable(),
+      at: z.string(),
+    })
+    .optional(),
+  /** The last event class the watch logged (an enum value) and when. */
+  lastEvent: z.object({ class: z.string(), at: z.string() }).optional(),
   /** `ship.ready` was logged: readiness is announced the first time it is true. */
   readyNoted: z.boolean().optional(),
 });

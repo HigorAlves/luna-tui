@@ -10,7 +10,10 @@ describe("what each fact says about the answer", () => {
   });
 
   it("evidence_format: the format the pack shipped with", () => {
-    expect(evidenceFormatTruth("captures")).toEqual({ format: { choice: "captures" } });
+    // The decision's own labels, from the stored format.
+    expect(evidenceFormatTruth("captures")).toEqual({ format: { choice: "screenshots_or_terminal" } });
+    expect(evidenceFormatTruth("video")).toEqual({ format: { choice: "video" } });
+    expect(evidenceFormatTruth("text")).toEqual({ format: { choice: "text_only" } });
   });
 
   it("red_check: a slice that went green with the test unchanged was a right-reason red; a rewritten test was not", () => {
@@ -25,7 +28,7 @@ describe("what each fact says about the answer", () => {
 
   it("event_class: no further activity confirms noise, further activity makes it a comment", () => {
     expect(eventClassTruth(false)).toEqual({ event: { choice: "noise" } });
-    expect(eventClassTruth(true)).toEqual({ event: { choice: "comment" } });
+    expect(eventClassTruth(true)).toEqual({ event: { choice: "review_comment" } });
   });
 
   it("comment_intent: a question the reviewer resolved, a change request fixed and resolved", () => {

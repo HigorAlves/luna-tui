@@ -3,7 +3,7 @@
 // set; never for a notch task, whose ticket the notch talks about. Only the moments that
 // matter get a line: picked up, needs you, escalated, paused, the PR, closed. Stage-to-stage
 // progress stays on the board.
-import { WAITING_ON_USER, type TaskState } from "@hardness/contracts";
+import { RUN_OR_GATE, WAITING_ON_USER, type TaskState } from "@hardness/contracts";
 import { basename } from "node:path";
 
 import { safe } from "../domain/evidence-markdown.ts";
@@ -13,7 +13,7 @@ import { fromNotch } from "../domain/jira-link.ts";
 import { type GitHub, messageOf } from "./github.ts";
 import type { EventRow, TaskRow } from "../domain/task.ts";
 import type { Pipeline } from "./pipeline.ts";
-import { ShippedEvent, shippedSummary } from "./ship-loop.ts";
+import { ShippedEvent, isShippedKind, shippedSummary } from "./ship-loop.ts";
 import type { Slack } from "./slack.ts";
 
 export interface SlackOptions {
@@ -44,6 +44,9 @@ const ASKS: Partial<Record<TaskState, string>> = {
 };
 
 const SLACK_API = "https://slack.com/api/chat.postMessage";
+
+/** A transition into a state that waits on a person; a state that holds a stage or a gate waits only when the step opened a gate (also when it stays in the state). */
+export const needsYou = (to: TaskState, from: TaskState, gate: boolean): boolean => (RUN_OR_GATE.has(to) ? gate : WAITING_ON_USER.has(to) && to !== from);
 
 export class ThreadReplies {
   private readonly pending = new Set<Promise<void>>();
@@ -77,18 +80,22 @@ export class ThreadReplies {
       if (to === "paused_rate_limit") return this.reply(event.taskId, "Paused on a usage limit; it resumes by itself.");
       if (to === "closed") return this.reply(event.taskId, "Closed.");
       if (to === "archived") return this.reply(event.taskId, archivedNotice(event.payload.archiveReason));
-      if (WAITING_ON_USER.has(to) && to !== from) return this.reply(event.taskId, `Needs you: ${ASKS[to] ?? to}.`);
+      if (needsYou(to, from, event.payload.gate === true)) return this.reply(event.taskId, `Needs you: ${ASKS[to] ?? to}.`);
       return;
     }
     // A conversation outcome's answer (approved in one tap) and triage's questions: posted where the card came from, and nowhere else.
     if (event.kind === "task.reply" || event.kind === "task.questions") return typeof event.payload.body === "string" && event.payload.body ? this.toSource(event.taskId, event.payload.body, event.payload.secret === true) : undefined;
+    // The watched PR's clocks: fixed lines with a number of days, no name and no model word.
+    const days = (value: unknown) => Math.max(0, Math.min(365, Math.floor(Number(value) || 0)));
+    if (event.kind === "sla.reminder" && event.payload.gate === "awaiting_ship" && event.payload.quietDays !== undefined) return this.reply(event.taskId, `The PR has been quiet for ${days(event.payload.quietDays)} days.`);
+    if (event.kind === "sla.escalated" && event.payload.gate === "awaiting_ship") return this.reply(event.taskId, `The PR has waited ${days(event.payload.afterDays)} days; its release owners were told.`);
     if (event.kind === "sla.reminder") {
       const gate = event.payload.gate as TaskState;
       return this.reply(event.taskId, `Still waiting on you: ${ASKS[gate] ?? gate}.`);
     }
     // The names stay on the event and the board: nothing outward says who the owners are, or how many.
     if (event.kind === "sla.escalated") return this.reply(event.taskId, "The plan has waited too long for approval and was escalated to the code owners.");
-    if (event.kind === "task.shipped") return this.shipped(event);
+    if (isShippedKind(event.kind)) return this.shipped(event);
     if (event.kind === "stage.finished") {
       const detail = event.payload.detail as { prUrl?: unknown } | undefined;
       const url = typeof detail?.prUrl === "string" ? detail.prUrl : null;

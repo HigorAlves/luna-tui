@@ -88,6 +88,21 @@ describe("PackRuns", () => {
     expect(flat).not.toContain('"priority"');
   });
 
+  it("runs the duplicate check in a container that joins its run's network with the engine's hosts only, in an empty work folder", async () => {
+    const asked: Array<{ repoPath: string | null; kind: string; owners: string[] }> = [];
+    const spec = { allow: ["api.anthropic.com"], allowPrivate: [], proxyImage: "img" };
+    const slot = { choice: "different", confidence: 0.9 };
+    const answer = { slot1: slot, slot2: slot, slot3: slot, slot4: slot, slot5: slot };
+    const dedup = { title: "t", text: "x", candidates: [{ slot: 1, kind: "open" as const, title: "a", summary: "b" }] };
+    const work: string[][] = [];
+    const inner = fakeSandbox(output({ answer }));
+    await runs(async (run) => (work.push(readdirSync(run.worktree)), inner(run)), { egress: { for: async (r) => (asked.push({ repoPath: r.repoPath, kind: r.kind, owners: [...(r.owners ?? [])] }), spec) } }).run({ pack: "intake_dedup", context: { dedup } }, "intake");
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ repoPath: null, kind: "pack" });
+    expect(seen[0]!.egress).toEqual(spec);
+    expect(work).toEqual([[]]);
+  });
+
   it("ends the span before the run folder goes, so the transcript can still be read", async () => {
     const seenAtEnd: boolean[] = [];
     const telemetry: Telemetry = {

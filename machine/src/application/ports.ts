@@ -13,7 +13,7 @@ import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 import type { StageOutcome } from "../domain/transition.ts";
 
 /** The rows a running stage may log through `emit`: the diagram's names for facts only it knows. Never a kind other code acts on (`transition`, `task.reply`...). */
-export const EMITTABLE = ["ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "scenario.red", "build.checkpoint", "build.sweep_failed", "scenario.green"] as const;
+export const EMITTABLE = ["ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "evidence.stale", "scenario.red", "build.checkpoint", "build.sweep_failed", "scenario.green", "sla.reminder", "sla.escalated", "evidence.edited", "ship.override", "sandbox.egress_blocked"] as const;
 export type EmittableKind = (typeof EMITTABLE)[number];
 
 export interface StageContext {
@@ -33,6 +33,8 @@ export interface StageContext {
   testsCommit?: string;
   /** For implementing: the minutes Build's budget has left; a run's time limit is the smaller of its own and this. */
   budgetMinutes?: number;
+  /** For delivering: what the draft PR's body is fed, from the rows of the stages before it (the open findings, the files outside the map, each scenario's test file). */
+  prFacts?: { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string> };
   /** Findings from the latest verifying run, fed to the next implementing attempt. */
   priorFindings?: Finding[];
   /** Aborted when you abort the task; the runner should stop its container. */

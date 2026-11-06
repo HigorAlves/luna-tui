@@ -4,13 +4,13 @@
     {
       "kind": "equals",
       "path": "format.choice",
-      "value": "text"
+      "value": "screenshots_or_terminal"
     }
   ],
-  "rubric": "An API with no user-visible surface: text.",
+  "rubric": "An API change with no user-visible surface: screenshots_or_terminal (a terminal capture of the checks and the scenarios' tests).",
   "label": {
     "format": {
-      "choice": "text"
+      "choice": "screenshots_or_terminal"
     }
   }
 }

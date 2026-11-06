@@ -47,6 +47,12 @@ function stub(answers: Record<string, unknown>) {
         reRunWorkflowFailedJobs: endpoint("actions.reRunWorkflowFailedJobs"),
       },
     },
+    request: vi.fn(async (route: string, params: unknown) => {
+      calls.push([route, params]);
+      const answer = answers[route];
+      if (answer instanceof Error) throw answer;
+      return { data: typeof answer === "function" ? (answer as (p: unknown) => unknown)(params) : answer };
+    }),
     graphql: vi.fn(async (query: string, variables?: Record<string, unknown>) => {
       calls.push(["graphql", { query, variables }]);
       const answer = answers.graphql;
@@ -189,6 +195,52 @@ describe("OctokitGitHub: shipping", () => {
     expect(other.calls.map((c) => c[0])).not.toContain("graphql");
   });
 
+  it("answers the merge commit GitHub reports, and null when it names none", async () => {
+    const withSha = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": { sha: "m".repeat(40), merged: true }, "git.deleteRef": {} });
+    expect(await withSha.github.mergePr("o/a", 7, { sha: "abc123" })).toEqual({ merged: true, sha: "m".repeat(40) });
+    const bare = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": {}, "git.deleteRef": {} });
+    expect(await bare.github.mergePr("o/a", 7)).toEqual({ merged: true, sha: null });
+  });
+
+  it("uses the configured method when the repository allows it, else the fallback order", async () => {
+    const methodOf = async (method: "squash" | "merge" | "rebase", settings: Record<string, unknown>) => {
+      const { github, calls } = stub({ "pulls.get": head, "repos.get": settings, "pulls.merge": {}, "git.deleteRef": {} });
+      await github.mergePr("o/a", 1, { method });
+      return (calls.find((c) => c[0] === "pulls.merge")![1] as { merge_method: string }).merge_method;
+    };
+    expect(await methodOf("rebase", allowed)).toBe("rebase");
+    expect(await methodOf("merge", allowed)).toBe("merge");
+    expect(await methodOf("rebase", { ...allowed, allow_rebase_merge: false })).toBe("squash");
+    expect(await methodOf("squash", { allow_squash_merge: false, allow_merge_commit: false, allow_rebase_merge: true })).toBe("rebase");
+  });
+
+  it("passes the commit title and message, and keeps the head branch unless deleteBranch is on", async () => {
+    const kept = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": {}, "git.deleteRef": {} });
+    await kept.github.mergePr("o/a", 7, { title: "T", message: "M", deleteBranch: false });
+    expect(kept.calls.find((c) => c[0] === "pulls.merge")![1]).toMatchObject({ commit_title: "T", commit_message: "M" });
+    expect(kept.calls.map((c) => c[0])).not.toContain("git.deleteRef");
+    const plain = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": {}, "git.deleteRef": {} });
+    await plain.github.mergePr("o/a", 7, { deleteBranch: true });
+    expect(plain.calls.find((c) => c[0] === "pulls.merge")![1]).not.toHaveProperty("commit_title");
+    expect(plain.calls.map((c) => c[0])).toContain("git.deleteRef");
+  });
+
+  it("with queue off a merge-queue refusal is an error, not an enqueue", async () => {
+    const queue = Object.assign(new Error("Changes must be made through the merge queue"), { status: 405 });
+    const { github, calls } = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": queue, graphql: {} });
+    await expect(github.mergePr("o/a", 7, { queue: false })).rejects.toThrow(/405/);
+    expect(calls.map((c) => c[0])).not.toContain("graphql");
+  });
+
+  it("deletes a head branch by name, and a branch already gone is not an error", async () => {
+    const ok = stub({ "git.deleteRef": {} });
+    await ok.github.deleteBranch("o/a", "feat/x");
+    expect(ok.calls[0]).toEqual(["git.deleteRef", { owner: "o", repo: "a", ref: "heads/feat/x" }]);
+    await expect(stub({ "git.deleteRef": Object.assign(new Error("Reference does not exist"), { status: 422 }) }).github.deleteBranch("o/a", "feat/x")).resolves.toBeUndefined();
+    await expect(stub({ "git.deleteRef": Object.assign(new Error("Not Found"), { status: 404 }) }).github.deleteBranch("o/a", "feat/x")).resolves.toBeUndefined();
+    await expect(stub({ "git.deleteRef": Object.assign(new Error("boom"), { status: 500 }) }).github.deleteBranch("o/a", "feat/x")).rejects.toThrow(GitHubError);
+  });
+
   it("enqueues by node id", async () => {
     const { github, calls } = stub({ graphql: {} });
     expect(await github.enqueuePr("PR_node", "abc123")).toEqual({ queued: true });
@@ -233,14 +285,28 @@ describe("OctokitGitHub: shipping", () => {
     expect(all).toHaveLength(1);
   });
 
+  it("reads each thread comment with its author's association", async () => {
+    const { github, calls } = stub({ graphql: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "T1", isResolved: false, path: "a.ts", line: 3, comments: { nodes: [{ author: { login: "bo" }, authorAssociation: "MEMBER", body: "x", createdAt: "t" }, { author: null, body: "y", createdAt: "t2" }] } }] } } } } });
+    expect(await github.prThreads("o/a", 3)).toEqual([{ id: "T1", path: "a.ts", line: 3, comments: [{ author: "bo", body: "x", at: "t", association: "MEMBER" }, { author: "ghost", body: "y", at: "t2", association: null }] }]);
+    expect(String((calls[0]![1] as { query: string }).query)).toContain("authorAssociation");
+  });
+
+  it("lists the files of a PR with the previous name of a renamed one", async () => {
+    const { github } = stub({ "pulls.listFiles": [{ filename: "src/n.test.ts", previous_filename: ".github/CODEOWNERS", additions: 1, deletions: 0 }, { filename: "src/a.ts", additions: 2, deletions: 1 }] });
+    expect(await github.prFiles("o/a", 7)).toEqual([
+      { path: "src/n.test.ts", additions: 1, deletions: 0, previousPath: ".github/CODEOWNERS" },
+      { path: "src/a.ts", additions: 2, deletions: 1 },
+    ]);
+  });
+
   it("lists every review with its author, state, commit and time, and a team's members by login", async () => {
     const { github, calls } = stub({
-      "pulls.listReviews": [{ id: 1, user: { login: "ana" }, state: "APPROVED", commit_id: "abc", submitted_at: "t1" }, { id: 2, user: null, state: "COMMENTED", submitted_at: "t2" }],
+      "pulls.listReviews": [{ id: 1, user: { login: "ana" }, state: "APPROVED", commit_id: "abc", submitted_at: "t1", author_association: "MEMBER" }, { id: 2, user: null, state: "COMMENTED", submitted_at: "t2" }],
       "teams.listMembersInOrg": [{ login: "bob" }, { login: "cy" }],
     });
     expect(await github.prReviews("o/a", 7)).toEqual([
-      { author: "ana", state: "APPROVED", commitId: "abc", at: "t1" },
-      { author: null, state: "COMMENTED", commitId: null, at: "t2" },
+      { author: "ana", state: "APPROVED", commitId: "abc", at: "t1", association: "MEMBER" },
+      { author: null, state: "COMMENTED", commitId: null, at: "t2", association: null },
     ]);
     expect(await github.teamMembers("acme", "core")).toEqual(["bob", "cy"]);
     expect(calls.at(-1)![1]).toMatchObject({ org: "acme", team_slug: "core", per_page: 100 });
@@ -326,5 +392,42 @@ describe("OctokitGitHub: publishing evidence", () => {
   it("wraps a failed upload as a GitHubError", async () => {
     const { github } = stub({ "repos.uploadReleaseAsset": Object.assign(new Error("Validation Failed"), { status: 422 }) });
     await expect(github.uploadReleaseAsset("o/a", 11, "n", Buffer.from("x"), "image/png")).rejects.toThrow(/422/);
+  });
+});
+
+describe("reviewRule", () => {
+  const RULES = "GET /repos/{owner}/{repo}/rules/branches/{branch}";
+  const BRANCH = "GET /repos/{owner}/{repo}/branches/{branch}";
+  const PROTECTION = "GET /repos/{owner}/{repo}/branches/{branch}/protection";
+  const denied = (status: number) => Object.assign(new Error("denied"), { status });
+
+  it("reads a pull_request rule of a ruleset that applies to the branch", async () => {
+    const { github, calls } = stub({ [RULES]: [{ type: "deletion" }, { type: "pull_request", parameters: { required_approving_review_count: 2, require_code_owner_review: true } }] });
+    expect(await github.reviewRule("o/a", "release/1")).toEqual({ source: "ruleset", approvals: 2, codeOwners: true });
+    expect(calls[0]![1]).toMatchObject({ owner: "o", repo: "a", branch: "release/1" });
+  });
+
+  it("falls back to the protection of a protected branch", async () => {
+    const { github } = stub({ [RULES]: [], [BRANCH]: { protected: true }, [PROTECTION]: { required_pull_request_reviews: { required_approving_review_count: 1, require_code_owner_reviews: false } } });
+    expect(await github.reviewRule("o/a", "main")).toEqual({ source: "branch_protection", approvals: 1, codeOwners: false });
+  });
+
+  it("a protected branch whose protection cannot be read is unreadable, never none", async () => {
+    for (const status of [403, 404]) {
+      const { github } = stub({ [RULES]: [], [BRANCH]: { protected: true }, [PROTECTION]: denied(status) });
+      expect(await github.reviewRule("o/a", "main")).toMatchObject({ source: "unreadable" });
+    }
+  });
+
+  it("an unprotected branch with no pull_request rule is none; with the rules unreadable it is unreadable", async () => {
+    expect(await stub({ [RULES]: [], [BRANCH]: { protected: false } }).github.reviewRule("o/a", "main")).toEqual({ source: "none" });
+    expect(await stub({ [RULES]: [{ type: "deletion" }], [BRANCH]: { protected: false } }).github.reviewRule("o/a", "main")).toEqual({ source: "none" });
+    expect(await stub({ [RULES]: denied(403), [BRANCH]: { protected: false } }).github.reviewRule("o/a", "main")).toMatchObject({ source: "unreadable" });
+    expect(await stub({ [RULES]: [], [BRANCH]: denied(403) }).github.reviewRule("o/a", "main")).toMatchObject({ source: "unreadable" });
+  });
+
+  it("protection with no required reviews is none", async () => {
+    const { github } = stub({ [RULES]: [], [BRANCH]: { protected: true }, [PROTECTION]: { required_status_checks: {} } });
+    expect(await github.reviewRule("o/a", "main")).toEqual({ source: "none" });
   });
 });

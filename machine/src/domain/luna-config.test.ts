@@ -83,7 +83,6 @@ describe("parseLunaConfig", () => {
       engineBudgets: { "openai:sol": 10, codex: 0 },
       decisions: {},
       evidenceRetentionDays: 30,
-      autoMerge: "off",
       freeze: [{ from: "2026-12-24T00:00:00Z", to: "2026-12-27T00:00:00Z", reason: "holiday freeze" }],
       factory: factoryConfigOf({ evidence: { retention_days: 30 } }),
     });
@@ -94,10 +93,17 @@ describe("parseLunaConfig", () => {
     expect(parseLunaConfig('freeze:\n  - from: "2026-12-24"\n    to: "2026-12-27T00:00:00Z"\n    reason: r\n').freeze).toHaveLength(1);
   });
 
-  it("reads policy.auto_merge (off by default, low or medium) and refuses any other value", () => {
-    expect(parseLunaConfig("").autoMerge).toBe("off");
-    expect(parseLunaConfig("policy:\n  auto_merge: low\n").autoMerge).toBe("low");
-    expect(parseLunaConfig("policy:\n  auto_merge: medium\n").autoMerge).toBe("medium");
+  it("reads ship.auto_merge (medium_when_review_required by default); the old policy.auto_merge is read as the same word, with one warning, unless ship.auto_merge is set", () => {
+    const warnings: string[] = [];
+    expect(parseLunaConfig("").factory.ship.auto_merge).toBe("medium_when_review_required");
+    expect(parseLunaConfig("policy:\n  auto_merge: low\n", (m) => warnings.push(m)).factory.ship.auto_merge).toBe("low");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/policy\.auto_merge.*ship\.auto_merge/);
+    expect(parseLunaConfig("policy:\n  auto_merge: medium\n").factory.ship.auto_merge).toBe("medium");
+    expect(parseLunaConfig("policy:\n  auto_merge: off\n").factory.ship.auto_merge).toBe("off");
+    const both: string[] = [];
+    expect(parseLunaConfig("policy:\n  auto_merge: low\nship:\n  auto_merge: medium\n", (m) => both.push(m)).factory.ship.auto_merge).toBe("medium");
+    expect(both).toEqual([]);
     expect(() => parseLunaConfig("policy:\n  auto_merge: high\n")).toThrow(/auto_merge/);
     expect(parseLunaConfig("").freeze).toEqual([]);
   });
@@ -264,6 +270,12 @@ describe("the v2.2 diagram's sections", () => {
     expect(policy.factory.ship).toMatchObject({ stale_days: 30, merge: { method: "rebase", queue: true } });
   });
 
+  it("carry the backlog's bar into the policy beside the stage chain's sections", () => {
+    const policy = parseLunaConfig("backlog:\n  stale_days: 3\nsandbox:\n  egress:\n    allow: [example.com]\n");
+    expect(policy.factory.backlog).toEqual({ stale_days: 3 });
+    expect(policy.factory.sandbox.egress.allow).toContain("example.com");
+  });
+
   it("name the key of a wrong type, an out-of-range number or an unknown key", () => {
     expect(() => parseLunaConfig("dedup:\n  duplicate: 2\n")).toThrow(/dedup\.duplicate/);
     expect(() => parseLunaConfig("plan:\n  coverage_rounds: many\n")).toThrow(/plan\.coverage_rounds/);
@@ -283,12 +295,11 @@ describe("the v2.2 diagram's sections", () => {
 
   it("leave the existing keys meaning what they did, and win over the new forms", () => {
     const policy = parseLunaConfig("policy:\n  auto_merge: low\nevidence:\n  retention_days: 7\nsla:\n  cycle: 3d\nship:\n  auto_merge: medium\n");
-    expect(policy.autoMerge).toBe("low");
     expect(policy.evidenceRetentionDays).toBe(7);
     expect(policy.sla.cycle).toBe(3 * 86_400);
-    // the new form is defined and not wired: today's behaviour does not read it
+    // the new form wins over the old spelling
     expect(policy.factory.ship.auto_merge).toBe("medium");
-    expect(parseLunaConfig("ship:\n  preview: off\n").autoMerge).toBe("off");
+    expect(parseLunaConfig("ship:\n  preview: off\n").factory.ship.auto_merge).toBe("medium_when_review_required");
   });
 
   it("render back into a file the parser reads to the same sections", () => {
@@ -342,5 +353,57 @@ describe("the v2.2 diagram's sections", () => {
     }
     const planned = Object.entries(CONSUMED_FROM).filter(([k, w]) => w === 9 && !(k in read)).map(([k]) => k).sort();
     expect(planned).toEqual(["plan.approvers.high", "plan.approvers.low", "plan.approvers.medium", "plan.approvers.outside_owning_team", "plan.coverage_score_min", "plan.sla.escalate_days", "plan.sla.reminder_days"]);
+  });
+});
+
+describe("the evidence keys the film reads reach the policy from a repository's luna.yaml", () => {
+  it("video_budget_s, regenerate, tts.voice and tts.language", () => {
+    const policy = parseLunaConfig("evidence:\n  video_budget_s: 90\n  regenerate: 0\n  tts:\n    voice: bf_emma\n    language: en-GB\n");
+    expect(policy.factory.evidence).toMatchObject({ video_budget_s: 90, regenerate: 0, tts: { voice: "bf_emma", language: "en-GB" } });
+    expect(parseLunaConfig("").factory.evidence).toMatchObject({ video_budget_s: 240, regenerate: 1, tts: { voice: null, language: null } });
+  });
+});
+
+describe("a repository's base image in luna.yaml", () => {
+  it("reaches the policy's sandbox section, and is none when absent", () => {
+    expect(parseLunaConfig("sandbox:\n  image:\n    base: python:3.13-slim\n").factory.sandbox.image).toEqual({ base: "python:3.13-slim" });
+    expect(parseLunaConfig("").factory.sandbox.image).toEqual({ base: null });
+  });
+});
+
+describe("sandbox.egress, before and after it became a section", () => {
+  it("still parses the list form: the preset words are dropped, a valid host becomes an allow entry, and the warning is said once", () => {
+    const warnings: string[] = [];
+    const policy = parseLunaConfig("sandbox:\n  egress: [registries, github, Docs.Example.com, 1.2.3.4, '*']\n", (m) => warnings.push(m));
+    expect(policy.factory.sandbox.egress).toEqual({ allow: ["docs.example.com"], registries: "always" });
+    expect(warnings.filter((w) => w.includes("sandbox.egress"))).toHaveLength(1);
+    expect(warnings[0]).toMatch(/section/);
+  });
+
+  it("reads the section form with no warning", () => {
+    const warnings: string[] = [];
+    const policy = parseLunaConfig("sandbox:\n  egress:\n    allow: [Docs.Example.com]\n    registries: install\n  install:\n    scripts: on\n", (m) => warnings.push(m));
+    expect(policy.factory.sandbox).toMatchObject({ egress: { allow: ["docs.example.com"], registries: "install" }, install: { run: "on", scripts: "on" }, cpu: 2, memory_gb: 4 });
+    expect(warnings).toEqual([]);
+  });
+
+  it("refuses a bad host in the section naming the entry", () => {
+    expect(() => parseLunaConfig("sandbox:\n  egress:\n    allow: ['*.com']\n")).toThrow(/\*\.com/);
+  });
+
+  it("carries the e2e start, seed and deploy keys and a check's secrets into the policy", () => {
+    const policy = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 5173\n      secrets: [APP_KEY]\n    seed:\n      command: npm run seed\n    deploy:\n      url_pattern: https://{branch}.example.com\nchecks:\n  - name: t\n    run: x\n    secrets: [DB_URL]\n");
+    expect(policy.factory.verify.e2e.start).toMatchObject({ command: "npm start", port: 5173, ready: "/", secrets: ["APP_KEY"] });
+    expect(policy.factory.verify.e2e.seed).toEqual({ command: "npm run seed", secrets: [] });
+    expect(policy.factory.verify.e2e.deploy.url_pattern).toBe("https://{branch}.example.com");
+    expect(policy.checks?.[0]?.secrets).toEqual(["DB_URL"]);
+  });
+});
+
+describe("the name luna-app", () => {
+  it("is the machine's alias for the app it starts: a service or a check may not take it", () => {
+    expect(() => parseLunaConfig("services:\n  luna-app:\n    image: x\n")).toThrow(/services\.luna-app.*luna-app/);
+    expect(() => parseLunaConfig("checks:\n  - name: luna-app\n    run: x\n")).toThrow(/checks.*luna-app/);
+    expect(parseLunaConfig("services:\n  db:\n    image: x\nchecks:\n  - name: unit\n    run: x\n").services).toHaveProperty("db");
   });
 });

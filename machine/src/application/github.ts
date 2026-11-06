@@ -87,11 +87,15 @@ export interface PrActivity {
 }
 
 /** A submitted review: who, its state, the commit it was given on (when GitHub says) and when. */
+import type { ReviewRule } from "../domain/review-rule.ts";
+
 export interface PrReview {
   author: string | null;
   state: string;
   commitId: string | null;
   at: string;
+  /** GitHub's `author_association` of the reviewer to the repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...); null when GitHub gave none. */
+  association: string | null;
 }
 
 export interface GitHub {
@@ -107,10 +111,13 @@ export interface GitHub {
   prComments(slug: string, number: number): Promise<ReviewContext["existingComments"]>;
   /** The unresolved review threads, with the ids replies and resolutions address. */
   prThreads(slug: string, number: number): Promise<ThreadsContext["threads"]>;
-  /** Merges the way the repo allows (squash, else merge, else rebase) and deletes the head branch. With `sha`, GitHub
-   *  refuses (409) when the head is no longer that commit. A repo with a merge queue gets the PR enqueued instead and
-   *  the branch stays: `{ queued: true }`. */
-  mergePr(slug: string, number: number, options?: { sha?: string }): Promise<void | { queued: true }>;
+  /** Merges. `method` is used when the repository allows it, else squash, merge, rebase in that order. With `sha`, GitHub refuses (409) when the head is no
+   *  longer that commit. `title` and `message` are the commit's, when given. The head branch goes only with `deleteBranch` (default true: what a merge did before
+   *  `ship.merge`). A repo with a merge queue gets the PR enqueued instead (the branch stays) unless `queue` is false, where the refusal is an error.
+   *  `sha` of the answer is the merge commit GitHub reports, null when it names none. */
+  mergePr(slug: string, number: number, options?: { sha?: string; method?: "squash" | "merge" | "rebase"; queue?: boolean; deleteBranch?: boolean; title?: string; message?: string }): Promise<{ merged: true; sha: string | null } | { queued: true }>;
+  /** Deletes a branch of the repository; one that is already gone is not an error. */
+  deleteBranch(slug: string, ref: string): Promise<void>;
   /** Puts the PR (by its GraphQL node id) in the repo's merge queue; with `sha`, GitHub refuses when the head is no longer that commit. */
   enqueuePr(nodeId: string, sha?: string): Promise<{ queued: true }>;
   /** A file's text at `ref` (a branch or a commit), or null when it is not there, is not a regular file, or is over 256 KB. */
@@ -119,6 +126,8 @@ export interface GitHub {
   prActivity(slug: string, number: number, since: string | null): Promise<PrActivity[]>;
   /** Every submitted review, oldest first. */
   prReviews(slug: string, number: number): Promise<PrReview[]>;
+  /** What the repository's own rules ask of a PR into `baseRef`: a ruleset's or the branch protection's required reviews, none, or unreadable (a protected branch whose protection the token cannot read is never `none`). */
+  reviewRule(slug: string, baseRef: string): Promise<ReviewRule>;
   /** The logins in `org/<teamSlug>`; throws a GitHubError when the token cannot read the team. */
   teamMembers(org: string, teamSlug: string): Promise<string[]>;
   /** Whether the PR is merged, and its state. */
@@ -171,10 +180,12 @@ export function noTokenGitHub(): GitHub {
     prComments: refuse,
     prThreads: refuse,
     mergePr: refuse,
+    deleteBranch: refuse,
     enqueuePr: refuse,
     fileAtRef: refuse,
     prActivity: refuse,
     prReviews: refuse,
+    reviewRule: refuse,
     teamMembers: refuse,
     prMerged: refuse,
     closePr: refuse,

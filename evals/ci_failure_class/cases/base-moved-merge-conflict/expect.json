@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "class.choice",
+      "value": "drift"
+    }
+  ],
+  "rubric": "The base moved and the lockfile conflicts with it: a drift from the base, a rebase is the right move.",
+  "label": {
+    "class": {
+      "choice": "drift"
+    }
+  }
+}
