@@ -13,6 +13,7 @@ import type { Policy } from "../domain/policy.ts";
 import type { EgressPolicy } from "./egress-policy.ts";
 import type { InstallInput, InstallOutcome } from "./install.ts";
 import type { SecretStore } from "./secrets.ts";
+import { previewUrlOf } from "../domain/preview-url.ts";
 
 export type E2eMode = "deploy" | "start" | "target" | "agent";
 
@@ -46,7 +47,7 @@ export interface OpenAppInput {
   attempt: number;
   signal?: AbortSignal;
   /** What the app's proxy refused, once per row, as `seed` and then `app`. */
-  onBlocked(step: "seed" | "app", rows: BlockedRow[]): void;
+  onBlocked(step: "seed" | "app" | "deploy", rows: BlockedRow[]): void;
 }
 
 export interface OpenedApp {
@@ -139,4 +140,82 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
     throw error;
   }
   return { ok: true, target: { name: "app", baseUrl: `http://${APP_ALIAS}:${start.port}` }, network: card.name, aliases: [APP_ALIAS, ...Object.keys(policy.services)], close };
+}
+
+export interface OpenedPreview {
+  ok: true;
+  target: { name: "preview"; baseUrl: string };
+  close(): Promise<void>;
+}
+export type OpenPreviewResult = OpenedPreview | { ok: false; detail: Record<string, unknown> };
+
+/** Waits for the preview from a container on the proxy: the URL and the path are arguments, never part of the script. */
+export const HEALTH_SCRIPT = 'fetch(process.argv[1]+process.argv[2],{redirect:"manual",signal:AbortSignal.timeout(10000)}).then((r)=>process.exit(r.status<400?0:1),()=>process.exit(1));';
+
+/** The preview the repository's config names (`verify.e2e.deploy`): the URL is the pattern filled by the machine; the deploy command, when there is one, runs in the repository's image with its own secrets, no credential, the check list plus the preview's host; then the health path is awaited through the proxy. */
+export async function openPreview(deps: AppDeps, input: OpenAppInput & { branch: string }): Promise<OpenPreviewResult> {
+  const policy = await deps.policies.for(input.repoPath);
+  const { deploy } = policy.factory.verify.e2e;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = deps.now ?? Date.now;
+  const filled = previewUrlOf(deploy.url_pattern!, { branch: input.branch, sha: input.commit, card: input.taskId });
+  const broken = (reason: string, logs = "", redact: (t: string) => string = (t) => t): OpenPreviewResult => ({
+    ok: false,
+    detail: { escalation: "env_broken", envBroken: true, step: "deploy", reason, logTail: safe(redact(logs)).slice(0, REASON_CAP), options: ["fix verify.e2e.deploy in luna.yaml (the command, the url_pattern or the health_check), then resume"] },
+  });
+  if (!filled.ok) return broken(`no preview URL can be made: ${filled.reason}`);
+  const host = new URL(filled.url).hostname;
+
+  let values: Record<string, string> = {};
+  if (deploy.secrets.length > 0) {
+    const loaded = deps.secrets ? await deps.secrets.load(input.repoPath, deploy.secrets) : { values: {}, missing: deploy.secrets.map((name) => ({ name, reason: "no secrets store is configured" })) };
+    if (loaded.missing.length > 0) return { ok: false, detail: new SecretsMissingError(loaded.missing, deps.secrets?.folder(input.repoPath) ?? "(no secrets store)").detail };
+    values = loaded.values;
+  }
+  const redact = secretRedactor(values);
+  const installed = await deps.install({ taskId: input.taskId, repoPath: input.repoPath, workspace: input.workspace, commit: input.commit, ...(input.signal ? { signal: input.signal } : {}) });
+  if (!installed.ok) return { ok: false, detail: installed.detail };
+  const image = await deps.imageFor(input.repoPath, input.taskId);
+  const base = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "check" }) : { allow: [], allowPrivate: [], proxyImage: image };
+  const spec = { ...base, allow: [...new Set([...base.allow, `${host}:443`])].sort() };
+  const runName = `${input.taskId.slice(0, 8)}-deploy-${input.attempt}`;
+  const card = await deps.openCardNetwork(runName, spec, { proxyImage: spec.proxyImage });
+  const seen = new Set<string>();
+  const report = async (): Promise<void> => {
+    const fresh = (await card.blocked()).filter((row) => !seen.has(`${row.via}|${row.host}|${row.port}`));
+    for (const row of fresh) seen.add(`${row.via}|${row.host}|${row.port}`);
+    if (fresh.length > 0) input.onBlocked("deploy", fresh);
+  };
+  let closed = false;
+  const close = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    await report().catch(() => {});
+    await card.teardown();
+  };
+  const limits = { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb };
+  const minutes = deploy.timeout_minutes;
+  try {
+    if (deploy.command) {
+      const ran = await deps.exec({ name: `hardness-${runName}`, image, worktree: input.workspace, limits, argv: ["sh", "-c", deploy.command], cacheVolume: cacheVolumeFor(input.repoPath), cardNetwork: card, services: policy.services, ...(deploy.secrets.length > 0 ? { secrets: values } : {}) }, { timeoutMs: minutes * 60_000 });
+      if (ran.code !== 0) {
+        await close();
+        return broken(`the deploy command exited ${ran.code}`, `${ran.stdout}\n${ran.stderr}`, redact);
+      }
+    }
+    const deadline = now() + minutes * 60_000;
+    for (let n = 0; ; n++) {
+      const probe = await deps.exec({ name: `hardness-${runName}-health-${n}`, image, worktree: input.workspace, limits, argv: ["/opt/luna/bin/node", "-e", HEALTH_SCRIPT, filled.url, deploy.health_check], cardNetwork: card }, { timeoutMs: 30_000 });
+      if (probe.code === 0) break;
+      if (now() >= deadline) {
+        await close();
+        return broken(`the preview ${host} never answered ${deploy.health_check} within ${minutes} minutes`);
+      }
+      await sleep(5000);
+    }
+  } catch (error) {
+    await close();
+    throw error;
+  }
+  return { ok: true, target: { name: "preview", baseUrl: filled.url }, close };
 }

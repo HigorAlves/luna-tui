@@ -44,7 +44,7 @@ import { DEFAULT_SANDBOX_SIZE, execInSandbox, imageExists, imageId, imageLabel, 
 import { removeLeftoverApps } from "../adapters/docker/app.ts";
 import { openCardNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
 import { startServices } from "../adapters/docker/services.ts";
-import { type AppDeps, openApp } from "../application/app-session.ts";
+import { type AppDeps, openApp, openPreview } from "../application/app-session.ts";
 import { type EgressPolicy, blockedPayloads } from "../application/egress-policy.ts";
 import { buildEgress } from "./egress.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
@@ -327,6 +327,7 @@ export async function buildRealStages(
       ? e2eRunner({
           runPack: (context, extra) => runAgent(deps, context, "e2e", extra ?? {}),
           openApp: (input) => openApp(appDeps, input),
+          openPreview: (input) => openPreview(appDeps, input),
           policy: (repoPath) => policies.for(repoPath),
           get decide() {
             return verifyDecisions?.decide ?? null;

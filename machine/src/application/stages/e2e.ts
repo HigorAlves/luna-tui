@@ -7,7 +7,7 @@ import { branchBase, diffNameStatus, headCommit } from "../../adapters/git/workt
 import type { DecisionOverrides } from "@hardness/contracts";
 
 import type { Policy } from "../../domain/policy.ts";
-import { type OpenAppInput, type OpenAppResult, e2eModeOf } from "../app-session.ts";
+import { type OpenAppInput, type OpenAppResult, type OpenPreviewResult, e2eModeOf } from "../app-session.ts";
 import { blockedPayloads } from "../egress-policy.ts";
 import type { AgentExtra } from "./pack-runner.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -19,6 +19,8 @@ export interface E2eDeps {
   runPack: (context: StageContext, extra?: Pick<AgentExtra, "qaTarget" | "alsoJoin" | "noProxy">) => Promise<StageResult>;
   /** Starts and seeds the repository's app (`verify.e2e.start`); absent, the browser run boots its own server as before. */
   openApp?: (input: OpenAppInput) => Promise<OpenAppResult>;
+  /** Waits for the preview the repository's `url_pattern` names (`verify.e2e.deploy`), deploying first when it has a command. */
+  openPreview?: (input: OpenAppInput & { branch: string }) => Promise<OpenPreviewResult>;
   /** The card's head commit, for the install; defaults to the real one. */
   headCommit?: (worktreePath: string) => Promise<string>;
   detectWeb?: (worktreePath: string) => Promise<boolean>;
@@ -167,6 +169,25 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
       const e2e = repoPolicy?.factory?.verify.e2e;
       const mode = repoPolicy && e2e ? e2eModeOf({ qaTargets: repoPolicy.qaTargets ?? [], factory: { verify: { e2e } } as never }) : "agent";
       const repoPath = context.task.repoPath ?? null;
+      if (mode === "deploy" && deps.openPreview && repoPath) {
+        const preview = await deps.openPreview({
+          taskId: context.task.id,
+          repoPath,
+          workspace: worktree,
+          commit: await (deps.headCommit ?? headCommit)(worktree),
+          branch: context.task.branch ?? "",
+          attempt: context.attempt * 10 + runs++,
+          signal: context.signal,
+          onBlocked: (step, rows) => void Promise.all(blockedPayloads(rows, step).map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}),
+        });
+        if (!preview.ok) return { done: { outcome: "escalated", detail: preview.detail } };
+        try {
+          const pack = await deps.runPack(context, { qaTarget: { ...preview.target, credential: null } });
+          return { pack, preview: { kind: "deploy", url: preview.target.baseUrl }, note: null };
+        } finally {
+          await preview.close();
+        }
+      }
       if (mode === "start" && deps.openApp && repoPath) {
         const opened = await deps.openApp({
           taskId: context.task.id,

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { parseLunaConfig } from "../domain/luna-config.ts";
-import { type AppDeps, e2eModeOf, openApp } from "./app-session.ts";
+import { type AppDeps, e2eModeOf, openApp, openPreview } from "./app-session.ts";
 
 const yaml = (extra = "") => `verify:\n  e2e:\n    start:\n      command: npm start\n      port: 4000\n      ready: /up\n      ready_timeout_s: 5\n      secrets: [APP_KEY]\n    seed:\n      command: npm run seed\n      secrets: [SEED_KEY]\nservices:\n  db:\n    image: pg\n${extra}`;
 const secretA = ["app", "k", "a".repeat(10)].join("-");
@@ -142,3 +142,71 @@ describe("openApp", () => {
   });
 });
 
+describe("openPreview", () => {
+  const text = "verify:\n  e2e:\n    deploy:\n      command: ./deploy.sh\n      url_pattern: https://{branch}.preview.example.com\n      health_check: /up\n      timeout_minutes: 1\n      secrets: [APP_KEY]\n";
+  const pinput = { ...input, branch: "task/Fix-It", onBlocked: () => {} };
+
+  function previewSetup(over: { deployExit?: number; health?: number[]; deployOut?: string } = {}) {
+    const s = setup({ text });
+    const runs: Array<{ argv: string[]; secrets?: Record<string, string>; egress?: unknown }> = [];
+    const health = [...(over.health ?? [0])];
+    const requests: Array<{ kind: string }> = [];
+    s.deps.egress = { for: async (r) => (requests.push(r as never), { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" }) };
+    let spec: { allow: string[] } | undefined;
+    s.deps.openCardNetwork = async (_run, sp) => ((spec = sp as never), s.events.push("network"), { name: "net", dns: "d", containerArgs: () => [], blocked: async () => [], teardown: async () => void s.events.push("teardown network") } as never);
+    s.deps.exec = async (run) => {
+      runs.push({ argv: run.argv, ...(run.secrets ? { secrets: run.secrets } : {}) });
+      if (run.argv[0] === "sh") return { code: over.deployExit ?? 0, stdout: over.deployOut ?? `deployed to https://evil.example.com/x ${secretA}`, stderr: "" };
+      s.events.push("health");
+      return { code: health.length > 1 ? health.shift()! : health[0]!, stdout: "", stderr: "" };
+    };
+    return { ...s, runs, requests, spec: () => spec };
+  }
+
+  it("runs the deploy command with its secrets and the check list plus the preview's host, then waits for the health path from a container on the proxy", async () => {
+    const p = previewSetup({ health: [1, 0] });
+    const out = await openPreview(p.deps, pinput);
+    expect(out.ok).toBe(true);
+    expect(p.runs[0]).toMatchObject({ argv: ["sh", "-c", "./deploy.sh"], secrets: { APP_KEY: secretA } });
+    expect(p.spec()!.allow).toEqual(expect.arrayContaining(["github.com:443", "task-fix-it.preview.example.com:443"]));
+    expect(p.requests[0]!.kind).toBe("check");
+    const probes = p.runs.filter((r) => r.argv[0] !== "sh");
+    expect(probes).toHaveLength(2);
+    expect(probes[0]!.argv.slice(0, 2)).toEqual(["/opt/luna/bin/node", "-e"]);
+    expect(probes[0]!.argv.slice(-2)).toEqual(["https://task-fix-it.preview.example.com", "/up"]);
+  });
+
+  it("takes the URL only from the pattern: a deploy command that prints another URL changes nothing", async () => {
+    const p = previewSetup();
+    const out = await openPreview(p.deps, pinput);
+    if (!out.ok) throw new Error("expected a preview");
+    expect(out.target).toEqual({ name: "preview", baseUrl: "https://task-fix-it.preview.example.com" });
+    expect(p.runs.some((r) => r.argv.includes("https://evil.example.com/x"))).toBe(false);
+  });
+
+  it("ends as env_broken at step deploy, with the redacted tail, when the deploy fails or the preview never answers; the network is removed", async () => {
+    const failed = previewSetup({ deployExit: 2 });
+    const out = await openPreview(failed.deps, pinput);
+    expect(out).toMatchObject({ ok: false, detail: { escalation: "env_broken", envBroken: true, step: "deploy" } });
+    expect(JSON.stringify(out)).not.toContain(secretA);
+    expect(failed.events.at(-1)).toBe("teardown network");
+    const silent = previewSetup({ health: [1] });
+    const gone = await openPreview(silent.deps, pinput);
+    expect(gone).toMatchObject({ ok: false, detail: { step: "deploy", reason: expect.stringContaining("never answered") } });
+    expect(silent.events.at(-1)).toBe("teardown network");
+  });
+
+  it("runs no command and only waits for the URL when the repository has a pattern and no command (a host that deploys every branch by itself)", async () => {
+    const s = previewSetup();
+    s.deps.policies = { for: async () => parseLunaConfig("verify:\n  e2e:\n    deploy:\n      url_pattern: https://{branch}.preview.example.com\n") };
+    const out = await openPreview(s.deps, pinput);
+    expect(out.ok).toBe(true);
+    expect(s.runs.every((r) => r.argv[0] !== "sh")).toBe(true);
+  });
+
+  it("refuses a branch that leaves nothing for {branch}, running nothing", async () => {
+    const p = previewSetup();
+    expect(await openPreview(p.deps, { ...pinput, branch: "///" })).toMatchObject({ ok: false, detail: { step: "deploy" } });
+    expect(p.runs).toHaveLength(0);
+  });
+});

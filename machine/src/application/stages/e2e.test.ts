@@ -386,3 +386,25 @@ describe("the e2e stage and the app the machine starts", () => {
   });
 });
 
+describe("the e2e stage and a preview", () => {
+  const deploy = parseLunaConfig("verify:\n  e2e:\n    deploy:\n      url_pattern: https://{branch}.preview.example.com\n    start:\n      command: npm start\n");
+  it("drives the preview the pattern names instead of starting the app, records it, and removes the preview's network", async () => {
+    const events: string[] = [];
+    const extras: unknown[] = [];
+    const runner = e2eRunner({
+      runPack: async (_c: StageContext, extra?: unknown) => (events.push("pack"), extras.push(extra), { outcome: "pass", detail: { answer: { verdict: "pass", summary: "ok", criteria: [] } } }),
+      detectWeb: async () => true,
+      changedFiles: async () => null,
+      policy: async () => deploy,
+      headCommit: async () => "c".repeat(40),
+      openApp: async () => { throw new Error("must not start the app in deploy mode"); },
+      openPreview: async (input: { branch: string }) => (events.push(`preview ${input.branch}`), { ok: true as const, target: { name: "preview" as const, baseUrl: "https://x.preview.example.com" }, close: async () => void events.push("close") }),
+    } as never);
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: dir, branch: "task/x" }, stage: "e2e", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    const result = await runner(context);
+    expect(events).toEqual(["preview task/x", "pack", "close"]);
+    expect(extras[0]).toMatchObject({ qaTarget: { name: "preview", baseUrl: "https://x.preview.example.com", credential: null } });
+    expect((extras[0] as { alsoJoin?: unknown }).alsoJoin).toBeUndefined();
+    expect(result.detail).toMatchObject({ preview: { kind: "deploy", url: "https://x.preview.example.com" } });
+  });
+});
