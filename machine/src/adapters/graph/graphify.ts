@@ -15,7 +15,7 @@ import { parseCodeowners, requiredOwners } from "../../domain/codeowners.ts";
 import { impact } from "../../domain/graph-impact.ts";
 import { type LocateGraph, locate } from "../../domain/graph-locate.ts";
 import type { SandboxResult, SandboxRun } from "../docker/docker.ts";
-import { commitsBehind, defaultBranchFile, ensureCleanCheckout, graphCheckoutPath, headCommit, isAncestor } from "../git/worktree.ts";
+import { checkoutHead, commitsBehind, defaultBranchFile, ensureCleanCheckout, graphCheckoutPath, isAncestor } from "../git/worktree.ts";
 import { repoSlug } from "./slug.ts";
 
 /** Where a repo's misses file is mounted in the build container. */
@@ -26,7 +26,8 @@ export const KEEP_GRAPHS = 3;
 
 export interface GraphGit {
   ensureCleanCheckout(repoPath: string, path: string): Promise<string>;
-  headCommit(path: string): Promise<string>;
+  /** HEAD of the read-only checkout `ensureCleanCheckout` made, read from the repository that registered it. */
+  headCommit(path: string, repoPath: string): Promise<string>;
   /** Commits the default branch has over `commit`; null when unknown. Default: the repo's last-known default branch. */
   commitsBehind?(repoPath: string, commit: string): Promise<number | null>;
   /** The repo's CODEOWNERS text at the default branch; null when it has none. */
@@ -60,7 +61,7 @@ export interface GraphifyDeps {
 }
 
 export function graphifyGraph(deps: GraphifyDeps): Graph {
-  const git: GraphGit = deps.git ?? { ensureCleanCheckout, headCommit };
+  const git: GraphGit = deps.git ?? { ensureCleanCheckout, headCommit: (path, repoPath) => checkoutHead(repoPath, path) };
   const behindOf = git.commitsBehind ?? commitsBehind;
   const ownersText = git.codeowners ?? ((repoPath: string) => defaultBranchFile(repoPath, CODEOWNERS_PATHS));
   const dirOf = (repoPath: string) => join(deps.stateDir, "graphs", repoSlug(repoPath));
@@ -110,7 +111,7 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     async build(repoPath, signal) {
       const repoDir = dirOf(repoPath);
       const checkout = await git.ensureCleanCheckout(repoPath, graphCheckoutPath(repoSlug(repoPath), deps.worktreesDir));
-      const commit = await git.headCommit(checkout);
+      const commit = await git.headCommit(checkout, repoPath);
       const target = join(repoDir, commit);
       const have = await readStamp(target);
       if (have) {
