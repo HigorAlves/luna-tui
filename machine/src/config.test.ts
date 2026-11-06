@@ -21,6 +21,7 @@ describe("loadConfig", () => {
       host: "127.0.0.1",
       apiToken: null,
       agents: true,
+      egress: { enabled: true, engineHosts: [] },
       maxConcurrentTasks: DEFAULT_MAX_CONCURRENT_TASKS,
       runnerImage: "hardness-runner:dev",
       runnerQaImage: "hardness-runner-qa:dev",
@@ -29,7 +30,7 @@ describe("loadConfig", () => {
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
       githubPrs: { enabled: true, intervalMs: 60_000 },
-      shipPoll: { intervalMs: 60_000, maxWaitDays: 14 },
+      shipPoll: { intervalMs: null },
       githubToken: null,
       graphIntervalSecs: 600,
       retentionDays: DEFAULT_RETENTION_DAYS,
@@ -134,9 +135,10 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ MACHINE_GITHUB_POLL_INTERVAL: "x" })).toThrow(/MACHINE_GITHUB_POLL_INTERVAL/);
     expect(() => loadConfig({ MACHINE_GITHUB_POLL: "nope" })).toThrow(/MACHINE_GITHUB_POLL/);
     expect(loadConfig({ HOME: "/h", MACHINE_GITHUB_PRS: "off", MACHINE_GITHUB_PRS_INTERVAL: "120" }).githubPrs).toEqual({ enabled: false, intervalMs: 120_000 });
-    expect(loadConfig({ HOME: "/h", MACHINE_SHIP_POLL_INTERVAL: "5", MACHINE_SHIP_MAX_WAIT_DAYS: "3" }).shipPoll).toEqual({ intervalMs: 5_000, maxWaitDays: 3 });
+    expect(loadConfig({ HOME: "/h", MACHINE_SHIP_POLL_INTERVAL: "5", MACHINE_SHIP_MAX_WAIT_DAYS: "3" }).shipPoll).toEqual({ intervalMs: 5_000 });
     expect(() => loadConfig({ HOME: "/h", MACHINE_SHIP_POLL_INTERVAL: "0" })).toThrow(/MACHINE_SHIP_POLL_INTERVAL/);
-    expect(() => loadConfig({ HOME: "/h", MACHINE_SHIP_MAX_WAIT_DAYS: "x" })).toThrow(/MACHINE_SHIP_MAX_WAIT_DAYS/);
+    // The five-day clock (`ship.sla.escalate_days`) names the release owners; no second, total-time cap exists, so the old variable is ignored.
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SHIP_MAX_WAIT_DAYS: "x" })).not.toThrow();
     expect(() => loadConfig({ MACHINE_GITHUB_PRS_INTERVAL: "0" })).toThrow(/MACHINE_GITHUB_PRS_INTERVAL/);
     expect(loadConfig({ HOME: "/h", GITHUB_TOKEN: "ghp_a", GH_TOKEN: "ghp_b" }).githubToken).toBe("ghp_a");
     expect(loadConfig({ HOME: "/h", GH_TOKEN: " ghp_b " }).githubToken).toBe("ghp_b");
@@ -282,5 +284,20 @@ describe("loadConfig", () => {
     expect(loadConfig({ MACHINE_SLA_GATE: "30m", MACHINE_SLA_CYCLE: "3d" }).sla).toEqual({ gateSecs: 1800, cycleSecs: 259_200 });
     expect(loadConfig({ MACHINE_SLA_GATE: "off" }).sla.gateSecs).toBeNull();
     expect(() => loadConfig({ MACHINE_SLA_GATE: "soon" })).toThrow(/MACHINE_SLA_GATE must be a duration/);
+  });
+});
+
+describe("MACHINE_EGRESS and MACHINE_EGRESS_ENGINE_HOSTS", () => {
+  it("are on and empty by default; off is the owner's switch", () => {
+    expect(loadConfig({ HOME: "/h" }).egress).toEqual({ enabled: true, engineHosts: [] });
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "off" }).egress.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "on" }).egress.enabled).toBe(true);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS: "maybe" })).toThrow(/MACHINE_EGRESS/);
+  });
+
+  it("takes a comma list of host patterns, lowercased, and refuses one that is not", () => {
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: " Gateway.Example.net , *.llm.example.com:8443 " }).egress.engineHosts).toEqual(["gateway.example.net", "*.llm.example.com:8443"]);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: "ok.example.com,10.0.0.1" })).toThrow(/MACHINE_EGRESS_ENGINE_HOSTS.*10\.0\.0\.1/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: "*" })).toThrow(/MACHINE_EGRESS_ENGINE_HOSTS/);
   });
 });

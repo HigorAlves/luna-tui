@@ -147,6 +147,12 @@ describe("nothing reaches Slack without a tap", () => {
       ["task.reply", { body: "Done.", by: "machine" }],
       ["task.shipped", { title: "Checkout fails", prUrl: "https://github.com/o/a/pull/4", number: 4, mergedSha: null, by: "machine", format: null, howToVerify: null, media: [] }],
       ["stage.finished", { detail: { prUrl: "https://github.com/o/a/pull/4" } }],
+      // Wave 13's events and Ship's clocks: the same door, so the same rule.
+      ["ship.merged", { title: "Checkout fails", prUrl: "https://github.com/o/a/pull/4", number: 4, mergedSha: null, by: "machine", method: "squash", format: null, howToVerify: null, media: [] }],
+      ["transition", { from: "evidence", to: "awaiting_ship", gate: true }],
+      ["sla.reminder", { gate: "awaiting_ship", quietDays: 2 }],
+      ["sla.escalated", { gate: "awaiting_ship", afterDays: 5, to: ["@marta"] }],
+      ["task.reply", { body: "This report was merged into card 1234abcd: https://board.example/tasks/1234abcd-0. Follow it there.", secret: false, by: "machine", kind: "merged" }],
     ];
     for (const [kind, payload] of kinds) await w.replies.handle(event(card.id, kind, payload));
     await w.replies.idle();
@@ -155,6 +161,22 @@ describe("nothing reaches Slack without a tap", () => {
     const outbound = (await w.drafts.allWaiting()).filter((d) => d.kind !== "reply");
     expect(outbound.length).toBeGreaterThan(0);
     expect(outbound.every((d) => d.thread === row.id)).toBe(true);
+  });
+
+  it("never drafts Ship's clock lines: with auto off they are a comment on the issue and nothing in Slack", async () => {
+    const w = await world();
+    await w.inbox.pollOnce();
+    await new Promise((r) => setTimeout(r, 20));
+    const card = await slackCard(w.pipeline);
+    const row = [...w.store.rows.values()][0]!;
+    await w.store.save([{ ...row, linked: { ...row.linked, taskId: card.id } }]);
+    const before = (await w.drafts.allWaiting()).length;
+    await w.replies.handle(event(card.id, "sla.reminder", { gate: "awaiting_ship", quietDays: 2 }));
+    await w.replies.handle(event(card.id, "sla.escalated", { gate: "awaiting_ship", afterDays: 5, to: ["@marta"] }));
+    await w.replies.idle();
+    expect((await w.drafts.allWaiting()).length).toBe(before);
+    expect(w.writes()).toEqual([]);
+    expect(w.fetched).toEqual([]);
   });
 
   it("gives a card with no conversation a conversation.undeliverable event and no draft", async () => {

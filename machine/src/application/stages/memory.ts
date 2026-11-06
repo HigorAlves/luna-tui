@@ -9,6 +9,7 @@ import { type DecisionOverrides, type Ledger, PACKS, type ShipContext, applyPoli
 import { recordIdOf } from "../decision-truth.ts";
 import type { EventRow, TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import { postable } from "./ship-fixes.ts";
 
 export const CONTEXT_FILE = "docs/agents/project-context.md";
 export const CAP_LINES = 150;
@@ -81,6 +82,7 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
       ...(Array.isArray(answer.recalibration) ? { recalibration: answer.recalibration } : {}),
       ...(Array.isArray(answer.graphMisses) ? { graphMisses: answer.graphMisses } : {}),
       ...(Array.isArray(answer.promptUpdates) ? { promptUpdates: answer.promptUpdates } : {}),
+      ...(Array.isArray(answer.proposals) ? { proposals: answer.proposals } : {}),
     };
     const hasLearned = Object.values(learned).some((v) => (v as unknown[]).length > 0);
     if (markdown.trim() === "" && !hasLearned) {
@@ -103,33 +105,6 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
           ...learned,
         },
       },
-    };
-  };
-}
-
-/**
- * `reviewing_memory` is a gate, not a stage, so the retro rides on the stage before it: after
- * shipping passes, the retro pack runs and its rules join the shipping detail the gate shows.
- * A retro that fails never fails the ship; the gate opens with `rules: null` and a note.
- */
-export function withMemoryReview(ship: StageRunner, memory: StageRunner): StageRunner {
-  return async (context) => {
-    const shipped = await ship(context);
-    if (shipped.outcome !== "pass") return shipped;
-    let review: StageResult;
-    try {
-      review = await memory({ ...context, stage: "reviewing_memory" });
-    } catch (error) {
-      const why = error instanceof Error ? error.message : String(error);
-      return { ...shipped, detail: { ...shipped.detail, rules: null, note: `memory review failed: ${why}` } };
-    }
-    const rules = review.detail?.rules ?? null;
-    const note = review.outcome === "pass" ? review.detail?.note : `memory review failed: ${String(review.detail?.error ?? "unknown")}`;
-    return {
-      ...shipped,
-      detail: { ...shipped.detail, rules: review.outcome === "pass" ? rules : null, ...(review.outcome === "pass" && review.detail?.decisions ? { decisions: review.detail.decisions } : {}), ...(note ? { note } : {}) },
-      artifacts: [...(shipped.artifacts ?? []), ...(review.artifacts ?? [])],
-      events: [...(shipped.events ?? []), ...(review.events ?? [])],
     };
   };
 }
@@ -196,17 +171,29 @@ export function mergeRules(existing: string | null, markdown: string): string {
   return `${lines.join("\n")}\n`;
 }
 
-/** The retro's facts for a finished task, from the machine's own records: predicted (the triage record, the plan's estimates) against actual (the diff, retries, escalations, format, wall time). */
+const OVERRIDE_KINDS: ReadonlySet<string> = new Set(["task.edited", "plan.edited", "cases.edited", "escalation.corrected", "ship.override"]);
+const TIMELINE_MAX = 300;
+const COMMENTS_MAX = 20;
+
+/** The retro's facts for a finished task, from the machine's own records: predicted (the triage record, the plan's estimates) against actual (the diff, retries, escalations, format, wall time, a person's overrides, the review's rounds). The timeline holds event names and states only. */
 export function retroFactsOf(input: {
   task: Pick<TaskRow, "record" | "diffAdded" | "diffRemoved" | "retries" | "evidence" | "createdAt" | "updatedAt">;
   ledger: Ledger | null;
-  events: Array<Pick<EventRow, "kind" | "payload">>;
+  events: Array<Pick<EventRow, "kind" | "payload"> & { at?: Date }>;
   runs: number;
+  /** The ship cursor's review counts and the fix rounds' summaries. */
+  cursor?: { fixRounds: number; threads: Record<string, unknown>; fixes?: Array<{ summary: string }> } | null;
+  costUsd?: number;
+  declaredFiles?: number;
 }): RetroFacts {
   const { task } = input;
   const est = (input.ledger?.slices ?? []).map((s) => s.estLoc).filter((n): n is number => typeof n === "number");
+  const urgency = (task.record as { urgency?: unknown } | null)?.urgency;
+  const nameOf = (e: { kind: string; payload: Record<string, unknown> }): string => (e.kind === "transition" ? `${String(e.payload.from ?? "?").slice(0, 40)}->${String(e.payload.to ?? "?").slice(0, 40)}` : e.kind.slice(0, 80));
+  const timeline = input.events.slice(0, TIMELINE_MAX).map((e) => `${e.at ? e.at.toISOString() : "?"} ${nameOf(e)}`);
+  const reviewComments = (input.cursor?.fixes ?? []).slice(0, COMMENTS_MAX).map((f) => postable(f.summary, 200)).filter(Boolean);
   return {
-    predicted: { size: task.record?.size ?? null, risk: task.record?.risk ?? null, estLoc: est.length > 0 ? est.reduce((a, b) => a + b, 0) : null },
+    predicted: { size: task.record?.size ?? null, risk: task.record?.risk ?? null, estLoc: est.length > 0 ? est.reduce((a, b) => a + b, 0) : null, ...(typeof urgency === "string" ? { urgency } : {}) },
     actual: {
       added: task.diffAdded ?? 0,
       removed: task.diffRemoved ?? 0,
@@ -214,7 +201,13 @@ export function retroFactsOf(input: {
       escalations: input.events.filter((e) => e.kind === "transition" && e.payload.to === "escalated").length,
       format: task.evidence?.format ?? null,
       durationMin: Math.max(0, Math.round((task.updatedAt.getTime() - task.createdAt.getTime()) / 60_000)),
+      overrides: input.events.filter((e) => OVERRIDE_KINDS.has(e.kind)).length,
+      ...(input.cursor ? { reviewRounds: input.cursor.fixRounds, reviewThreads: Object.keys(input.cursor.threads).length } : {}),
+      ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
+      ...(input.declaredFiles !== undefined ? { declaredFiles: input.declaredFiles } : {}),
     },
     runs: input.runs,
+    timeline,
+    ...(reviewComments.length > 0 ? { reviewComments } : {}),
   };
 }

@@ -3,27 +3,27 @@
   "pack": "triage_signals",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T15:39:51.555Z",
+  "at": "2026-11-05T22:45:02.255Z",
   "model": "gpt-6-luna-fast",
   "summary": {
     "cases": 6,
-    "passed": 4,
-    "passRate": 0.6666666666666666,
+    "passed": 3,
+    "passRate": 0.5,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 4907.666666666667,
+    "meanDurationMs": 5094.833333333333,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
       "n": 6,
       "labelled": 4,
-      "accuracy": 0.75,
-      "actedOnAccuracy": null,
-      "coverage": 0.16666666666666666,
-      "brier": 0.2098020833333333,
-      "ece": 0.09458333333333335,
-      "meanConfidence": 0.8216666666666667,
-      "overconfident": 1
+      "accuracy": 0.5,
+      "actedOnAccuracy": 0,
+      "coverage": 0.3333333333333333,
+      "brier": 0.4167189236111111,
+      "ece": 0.3660416666666667,
+      "meanConfidence": 0.83625,
+      "overconfident": 2
     }
   },
   "cases": [
@@ -79,13 +79,13 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4513,
+      "durationMs": 5596,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": false,
-        "confidence": 0.8683333333333333,
-        "verdict": "ask"
+        "confidence": 0.8866666666666667,
+        "verdict": "flag"
       }
     },
     {
@@ -135,12 +135,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 5383,
+      "durationMs": 4851,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.9333333333333332,
+        "confidence": 0.9433333333333334,
         "verdict": "proceed"
       }
     },
@@ -166,12 +166,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4998,
+      "durationMs": 5048,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.8133333333333334,
+        "confidence": 0.8558333333333333,
         "verdict": "flag"
       }
     },
@@ -217,12 +217,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4731,
+      "durationMs": 5384,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.8016666666666666,
+        "confidence": 0.8133333333333334,
         "verdict": "ask"
       }
     },
@@ -248,23 +248,23 @@
         {
           "check": "ready.p within 0..0.4",
           "pass": false,
-          "detail": "found 0.91"
+          "detail": "found 0.94"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 5226,
+      "durationMs": 4979,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.6183333333333333,
+        "confidence": 0.61,
         "verdict": "ask"
       }
     },
     {
       "id": "zod-upgrade-contracts",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the triage_signals schema",
         "pass": true,
@@ -303,8 +303,8 @@
         },
         {
           "check": "risk_prelim.choice = \"medium\"",
-          "pass": true,
-          "detail": null
+          "pass": false,
+          "detail": "found \"low\""
         },
         {
           "check": "archive.value = false",
@@ -314,13 +314,13 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4595,
+      "durationMs": 4711,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
-        "correct": true,
-        "confidence": 0.895,
-        "verdict": "flag"
+        "correct": false,
+        "confidence": 0.9083333333333333,
+        "verdict": "proceed"
       }
     }
   ]

@@ -3,14 +3,18 @@
 //   const page = await context.newPage();
 //   narration.startRecording(page);
 //   narration.mark("add-coupon");
-//   await page.waitForTimeout(narration.durationFor("add-coupon"));   // ms, from the clip's length
+//   await page.waitForTimeout(narration.durationFor("add-coupon"));   // ms: the clip's length, else the timeline's plan (end - start)
 //   ...
 //   await narration.finish(page);          // closes the page so the video is written, then writes timing.json
 // The fixture has no dependency of its own: it takes the page it is given and uses only its API.
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
+import { durationFor } from "./lib/pace.ts";
 
 const JOB = process.env.LUNA_JOB ?? "/work";
 const NARRATION = process.env.LUNA_NARRATION ?? `${JOB}/narration/narration.json`;
+// The recorder runs beside the voice, so the narration is usually not there yet: it paces by the timeline's plan (`LUNA_TIMELINE`, /video-job/timeline.json).
+const TIMELINE = process.env.LUNA_TIMELINE ?? "/video-job/timeline.json";
 const TIMING = process.env.LUNA_TIMING ?? `${JOB}/timing.json`;
 
 type PageLike = {
@@ -24,14 +28,7 @@ type PageLike = {
 
 let t0 = 0;
 const marks: { scene: string; t: number }[] = [];
-let clips: Record<string, number> | null = null;
-
-function clipLengths(): Record<string, number> {
-  if (clips) return clips;
-  const j = JSON.parse(readFileSync(NARRATION, "utf8")) as { scenes: { id: string; durationS: number }[] };
-  clips = Object.fromEntries(j.scenes.map((s) => [s.id, s.durationS]));
-  return clips;
-}
+const readJson = <T>(path: string): T | null => (existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as T) : null);
 
 function write(videoPath: string | null) {
   writeFileSync(TIMING, JSON.stringify({ marks, videoPath }, null, 2));
@@ -49,11 +46,21 @@ export const narration = {
     marks.push({ scene, t: Math.round(((Date.now() - t0) / 1000) * 1000) / 1000 });
     write(null);
   },
-  /** How long the scene's narration clip runs, in milliseconds: the time the demo should take. */
+  /** How long the scene should hold, in milliseconds: the narration clip's length when `LUNA_NARRATION` points at a file that has the scene, else the timeline's plan (`end - start`). */
   durationFor(scene: string): number {
-    const s = clipLengths()[scene];
-    if (s === undefined) throw new Error(`no narration for scene "${scene}"`);
-    return Math.round(s * 1000);
+    return durationFor(scene, { narration: readJson(NARRATION), timeline: readJson(TIMELINE) });
+  },
+  /** A call to action on screen for `ms`, in the picture itself (compose burns only the captions). */
+  async cta(page: PageLike, text: string, ms: number) {
+    await page.evaluate(((t: string) => {
+      const el = document.createElement("div");
+      el.id = "luna-cta";
+      el.textContent = t;
+      el.style.cssText = "position:fixed;left:50%;top:48px;transform:translateX(-50%);max-width:80%;padding:14px 26px;background:#4da3ff;color:#06121f;font:700 30px/1.3 system-ui,sans-serif;border-radius:999px;z-index:2147483647";
+      document.body.appendChild(el);
+    }) as never, text);
+    await page.waitForTimeout(ms);
+    await page.evaluate((() => document.getElementById("luna-cta")?.remove()) as never);
   },
   /** An on-screen caption for `ms`. */
   async caption(page: PageLike, text: string, ms: number) {

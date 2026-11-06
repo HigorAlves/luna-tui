@@ -5,6 +5,9 @@ import {
   type ApiError,
   CloneInput,
   ArchiveInput,
+  AddFindingInput,
+  DismissFindingInput,
+  EvidenceFeedbackInput,
   DecisionInput,
   EscalationReasonInput,
   EngineId,
@@ -42,10 +45,12 @@ import {
   SlackWatchInput,
   SlackWatchPatch,
   type StreamMessage,
+  type ShipView,
   StubPlanInput,
   TaskSource,
   TaskState,
   UpdateTaskInput,
+  type RepoHealth,
 } from "@hardness/contracts";
 import { type Context, Hono } from "hono";
 import { type Backlog, BacklogItemNotFoundError } from "../../application/backlog.ts";
@@ -67,7 +72,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -96,6 +101,10 @@ const IDEMPOTENCY_KEY_MAX = 200;
 const RECENT_EVENTS = 50;
 
 export interface AppDeps {
+  /** Each repository's image and graph health for `GET /repos`; absent, the list is empty. */
+  repoHealth?: () => Promise<RepoHealth[]>;
+  /** Approves a base for a repository (refused unless it is the one in the repository's luna.yaml on the user's checkout); absent, `POST /repos/base/approve` is absent. */
+  approveBase?: (repo: string, base: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   db: DataSource;
   pipeline: Pipeline;
   bus: Bus;
@@ -119,6 +128,8 @@ export interface AppDeps {
   jira?: JiraTasksPort;
   /** The ticket's SLA clocks, computed when a task is answered or published; without it every task shows `sla: null`. */
   sla?: (task: TaskRow) => Promise<TaskSla | null>;
+  /** The watched PR's checklist and clocks for `GET /tasks/:id`; without it `ship` is null. */
+  shipView?: (taskId: string) => Promise<ShipView | null>;
   /** The same for a whole list at once (`GET /tasks`); falls back to `sla` per task. */
   slaAll?: (tasks: TaskRow[]) => Promise<Map<string, TaskSla | null>>;
   /** Whether this machine has each engine's credential, for `GET /engines`; defaults to the machine's own. */
@@ -176,7 +187,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -188,6 +199,7 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
     if (error instanceof TaskNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
+    if (error instanceof WorktreeUnpushedError) return fail(c, 409, "unpushed_commits", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
     if (error instanceof TicketNotFound) return fail(c, 404, "not_found", error.message);
     if (error instanceof TicketRefusal) return fail(c, 409, "ticket_refused", error.message);
@@ -197,6 +209,8 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
     if (error instanceof MergeError) return fail(c, 409, "cannot_merge", error.message);
     if (error instanceof NoContextGateError) return fail(c, 409, "no_context_gate", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
+    if (error instanceof FindingNotFoundError) return fail(c, 404, "not_found", error.message);
+    if (error instanceof NoEvidenceError) return fail(c, 409, "no_evidence", error.message);
     if (error instanceof NoQuestionsToPostError) return fail(c, 409, "no_questions", error.message);
     if (error instanceof QuestionsCarrySecretError) return fail(c, 409, "secret", error.message);
     if (error instanceof RecordNotEditableError) return fail(c, 409, "record_locked", error.message);
@@ -205,6 +219,7 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
     if (error instanceof InvalidEscalationReasonError) return fail(c, 400, "invalid_reason", error.message);
     if (error instanceof ApproverRequiredError) return fail(c, 400, "approver_required", error.message);
     if (error instanceof SameApproverError) return fail(c, 409, "same_approver", error.message);
+    if (error instanceof NotReleaseOwnerError) return fail(c, 409, "not_release_owner", error.message);
     if (error instanceof OutsideApproverRequiredError) return fail(c, 409, "outside_approver_required", error.message);
     if (error instanceof PlanApprovedError) return fail(c, 409, "plan_approved", error.message);
     if (error instanceof RejectNotAllowedError) return fail(c, 409, "reject_not_allowed", error.message);
@@ -279,6 +294,19 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
     return c.json(pipeline.setSlots(max));
   });
 
+  app.get("/repos", async (c) => c.json((await repoHealth?.()) ?? []));
+
+  if (approveBase) {
+    // A base runs the stage's process and can read its credential: a person approves the exact reference, here, and only for the base the repository names now.
+    app.post("/repos/base/approve", async (c) => {
+      const body = (await c.req.json().catch(() => null)) as { repo?: unknown; base?: unknown } | null;
+      if (typeof body?.repo !== "string" || typeof body.base !== "string" || !body.repo || !body.base) throw new BadRequest("repo and base are required");
+      const result = await approveBase(body.repo, body.base);
+      if (!result.ok) throw new BadRequest(result.reason);
+      return c.json({ repo: body.repo, base: body.base, approved: true });
+    });
+  }
+
   app.get("/metrics", async (c) => {
     let since: Date;
     try {
@@ -346,6 +374,7 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
       artifacts: artifacts.map(toArtifact),
       reports,
       buildProgress,
+      ship: (await shipView?.(id).catch(() => null)) ?? null,
     });
   });
 
@@ -518,13 +547,36 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
     return c.json(task);
   });
 
+  /** A person's thumbs on the card's Evidence Pack: useful or not, with a short note. A card with no pack is a 409 (no_evidence). */
+  app.post("/tasks/:id/evidence/feedback", async (c) => {
+    const id = taskId(c);
+    const { useful, note } = await body(c, EvidenceFeedbackInput);
+    await pipeline.evidenceFeedback(id, { useful, note });
+    return c.json(await serialize(await pipeline.get(id)));
+  });
+
+  /** A person dismisses one of the findings the last Verify reported, while the card waits at awaiting_ship. */
+  app.post("/tasks/:id/findings/:findingId/dismiss", async (c) => {
+    const id = taskId(c);
+    await body(c, DismissFindingInput);
+    await pipeline.dismissFinding(id, c.req.param("findingId").slice(0, 200));
+    return c.json(await serialize(await pipeline.get(id)));
+  });
+
+  /** A person adds a finding Verify missed. */
+  app.post("/tasks/:id/findings", async (c) => {
+    const id = taskId(c);
+    await pipeline.addFinding(id, await body(c, AddFindingInput));
+    return c.json(await serialize(await pipeline.get(id)));
+  });
+
   app.post("/tasks/:id/abort", async (c) => c.json(await serialize(await pipeline.abort(taskId(c)))));
 
   /** Re-runs the stage a task paused in after a usage limit. */
   app.post("/tasks/:id/resume", async (c) => c.json(await serialize(await pipeline.windowReset(taskId(c)))));
 
   /** Removes the task's worktree from disk; the task and its branch stay. */
-  app.post("/tasks/:id/worktree/remove", async (c) => c.json(await serialize(await pipeline.removeWorktree(taskId(c)))));
+  app.post("/tasks/:id/worktree/remove", async (c) => c.json(await serialize(await pipeline.removeWorktree(taskId(c), { discard: c.req.query("discard") === "true" }))));
 
   if (pulls) {
     // The PR inbox: what the last poll saw, a poll on demand, a merge, and a clone for a repo

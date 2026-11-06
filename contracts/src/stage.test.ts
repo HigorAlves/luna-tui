@@ -10,8 +10,10 @@ import {
   CloneInput,
   EscalationReason,
   EvidenceContext,
+  PrReplyAnswer,
   ShipContext,
   VideoContext,
+  CheckContext,
   EvidencePack,
   EvalJudgeAnswer,
   CodeMapAnswer,
@@ -204,9 +206,9 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "evidence_format", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "conversation_assess", "conversation_relation", "conversation_reply", "ticket_recommend", "ticket_reply", "pr_reply"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply"].sort(),
     );
-    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "evidence_format", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "conversation_assess", "conversation_relation", "conversation_reply", "ticket_recommend", "ticket_reply"];
+    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "conversation_assess", "conversation_relation", "conversation_reply"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
     const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
     for (const pack of PackId.options) {
@@ -484,6 +486,48 @@ describe("TriageRecord and EvidencePack", () => {
     expect(TriageRecord.safeParse({ ...record, risk: "huge" }).success).toBe(false);
     expect(EvidencePack.safeParse({ ...evidence, format: "slides" }).success).toBe(false);
   });
+  it("take a scenario that was not run, and a pack stored with the old values still parses", () => {
+    const notRun = { ...evidence, scenarios: [{ text: "a", test: null, result: "not_run" }] };
+    expect(EvidencePack.parse(notRun)).toEqual(notRun);
+    for (const result of ["pass", "fail", "partial", "skipped"]) expect(EvidencePack.safeParse({ ...evidence, scenarios: [{ text: "a", test: null, result }] }).success).toBe(true);
+    expect(EvidencePack.safeParse({ ...evidence, scenarios: [{ text: "a", test: null, result: "maybe" }] }).success).toBe(false);
+  });
+  it("keep the critic's confidence on the film, optional", () => {
+    const video = { file: "w.mp4", durationS: 10, verdict: "ship", scores: {}, defects: [], rounds: 1 };
+    expect(EvidencePack.parse({ ...evidence, video }).video).not.toHaveProperty("confidence");
+    expect(EvidencePack.parse({ ...evidence, video: { ...video, confidence: 0.8 } }).video?.confidence).toBe(0.8);
+    expect(EvidencePack.safeParse({ ...evidence, video: { ...video, confidence: 1.5 } }).success).toBe(false);
+  });
+  it("take a video context with a budget, absent for an older one", () => {
+    expect(VideoContext.shape.budgetS.safeParse(undefined).success).toBe(true);
+    expect(VideoContext.shape.budgetS.safeParse(90).success).toBe(true);
+    expect(VideoContext.shape.budgetS.safeParse(-1).success).toBe(false);
+  });
+  it("take a frames check context for frame_privacy, and a context from before it still parses", () => {
+    expect(CheckContext.safeParse({ kind: "frames", frames: { texts: ["Cart total $12"] } }).success).toBe(true);
+    expect(CheckContext.safeParse({ kind: "frames", frames: { texts: Array.from({ length: 41 }, () => "x") } }).success).toBe(false);
+    expect(CheckContext.safeParse({ kind: "frames", frames: { texts: ["x".repeat(1001)] } }).success).toBe(false);
+    expect(CheckContext.safeParse({ kind: "red" }).success).toBe(true);
+  });
+  it("take a media entry's scanned flag, optional", () => {
+    const media = { kind: "screenshot", label: "a.png", url: "/x/a.png" };
+    expect(EvidencePack.parse({ ...evidence, media: [media] }).media[0]).not.toHaveProperty("scanned");
+    expect(EvidencePack.parse({ ...evidence, media: [{ ...media, scanned: false }] }).media[0]?.scanned).toBe(false);
+  });
+  it("take a source for staleness, optional", () => {
+    expect(EvidencePack.parse(evidence)).not.toHaveProperty("source");
+    const source = { e2eRunId: "run-1", scenariosKey: "k", stepsSha: null };
+    expect(EvidencePack.parse({ ...evidence, source }).source).toEqual(source);
+  });
+  it("take a diff summary and a revision, and a pack stored without them still parses", () => {
+    const plain = EvidencePack.parse(evidence);
+    expect(plain).not.toHaveProperty("diffSummary");
+    expect(plain).not.toHaveProperty("revision");
+    const rich = { ...evidence, revision: 2, diffSummary: { what: "Adds the total", why: "The ticket asks for it", files: ["web/cart.tsx"], added: 12, removed: 3 } };
+    expect(EvidencePack.parse(rich)).toEqual(rich);
+    expect(EvidencePack.parse({ ...rich, diffSummary: { what: "", why: "", files: [], added: null, removed: null } }).diffSummary?.added).toBeNull();
+    expect(EvidencePack.safeParse({ ...rich, revision: 1.5 }).success).toBe(false);
+  });
   it("carry a video's verdict, scores and defects, and a note when a format was degraded", () => {
     const video = { file: "walkthrough.mp4", durationS: 92.4, verdict: "ship", scores: { hook: 8, clarity: 9 }, rounds: 1, defects: [{ priority: "P1", t: 12.5, scene: "cart", element: "cta", symptom: "the headline is cut off", fix: "shorten the heading to two lines" }], transcript: "Here is the cart." };
     const rich = { ...evidence, format: "video", note: "the critic passed round 2", video, media: [{ kind: "video", label: "walkthrough", url: "w.mp4" }, { kind: "cover", label: "cover", url: "c.jpg" }, { kind: "captions", label: "captions", url: "c.srt" }, { kind: "audio", label: "voice", url: "v.wav" }] };
@@ -508,6 +552,44 @@ describe("ShipContext", () => {
     expect(ShipContext.safeParse({ kind: "other" }).success).toBe(false);
     expect(ShipContext.safeParse({ kind: "event", event: { ...event, body: "x".repeat(2001) } }).success).toBe(false);
     expect(StageInput.parse({ ...stageInputExample, schema: 3, context: { projectContext: null, ship: { kind: "event", event } } }).context.ship?.event?.actor).toBe("ana");
+  });
+});
+
+describe("ShipContext ci events", () => {
+  const ci = { actor: "ci", isBot: true, isMe: false, kind: "ci" as const, state: "failure", body: "build", url: null, job: "build", log: "boom" };
+  it("carries a job (200) and the tail of a log (4000)", () => {
+    expect(ShipContext.parse({ kind: "event", event: ci }).event).toEqual(ci);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...ci, job: "x".repeat(201) } }).success).toBe(false);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...ci, log: "x".repeat(4001) } }).success).toBe(false);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...ci, log: "x".repeat(4000) } }).success).toBe(true);
+  });
+});
+
+describe("EvidencePack fixes", () => {
+  const base = { summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk: "low" as const, rollback: "r", howToVerify: "h", commitSha: "a", media: [], at: "t" };
+  it("takes at most 20 fixes, and a pack without any parses", () => {
+    const fix = { sha: "a", scope: "in_place" as const, summary: "s", at: "t" };
+    expect(EvidencePack.safeParse(base).success).toBe(true);
+    expect(EvidencePack.safeParse({ ...base, fixes: Array(20).fill(fix) }).success).toBe(true);
+    expect(EvidencePack.safeParse({ ...base, fixes: Array(21).fill(fix) }).success).toBe(false);
+  });
+});
+
+describe("the read step's shapes", () => {
+  const thread = { id: "T1", path: "a.ts", line: 1, comments: [{ author: "ana", body: "rename x", at: "t" }] };
+  const comment = { thread, pack: { summary: "s", scenarios: [{ id: "s1", text: "t", result: "pass" }], howToVerify: "h" }, myReplies: 0 };
+  it("a comment carries an optional reading; a fix optional affected scenarios", () => {
+    expect(ShipContext.parse({ kind: "comment", comment: { ...comment, reading: { asks: "a rename", proposedFix: "rename x to y" } } }).comment?.reading).toEqual({ asks: "a rename", proposedFix: "rename x to y" });
+    expect(ShipContext.safeParse({ kind: "comment", comment }).success).toBe(true);
+    expect(ShipContext.safeParse({ kind: "fix", fix: { changed: [], diffSummary: "", scenarios: [], threadSummary: "", affected: [{ id: "s1", text: "t", result: "pass" }] } }).success).toBe(true);
+  });
+  it("PrReplyAnswer takes asks (300), proposedFix (600), scenarios (20); an empty reply and an old answer parse", () => {
+    const base = { reply: "", resolves: false, confidence: 0.8 };
+    expect(PrReplyAnswer.safeParse(base).success).toBe(true);
+    expect(PrReplyAnswer.safeParse({ ...base, asks: "x".repeat(300), proposedFix: "y".repeat(600), scenarios: Array(20).fill("s1") }).success).toBe(true);
+    expect(PrReplyAnswer.safeParse({ ...base, asks: "x".repeat(301) }).success).toBe(false);
+    expect(PrReplyAnswer.safeParse({ ...base, proposedFix: "y".repeat(601) }).success).toBe(false);
+    expect(PrReplyAnswer.safeParse({ ...base, scenarios: Array(21).fill("s1") }).success).toBe(false);
   });
 });
 
@@ -596,3 +678,4 @@ describe("VideoContext", () => {
     expect(StageInput.parse({ ...stageInputExample, schema: 3, context: { projectContext: null, video: context } }).context.video).toEqual(context);
   });
 });
+ 

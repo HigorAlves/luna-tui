@@ -2,7 +2,7 @@
 // state), the running stage run's start and its repo's targets, at the moment it is serialized.
 // Nothing is stored beyond `state_since`; a minute tick (main.ts) recomputes every open task
 // from one list and one stage-run query, and republishes the tasks whose clocks flipped.
-import { FACTORY_DEFAULTS, TaskSla, isTerminal } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, RUN_OR_GATE, TaskSla, isTerminal } from "@hardness/contracts";
 
 import { type SlaDefaults, type SlaTargets, computeSla, slaFlags } from "../domain/sla.ts";
 import { AUTO_ARCHIVE_GATES } from "./sla-actions.ts";
@@ -13,6 +13,7 @@ export interface SlaClocksOptions {
   pipeline: {
     /** When each task's running stage run started, for the tasks that have one. */
     runningStageStarts(): Promise<Map<string, Date>>;
+    approvals(id: string): Promise<Array<{ decision: string | null }>>;
     policyFor(repoPath: string | null): Promise<Policy>;
   };
   /** The machine's env defaults (`MACHINE_SLA_GATE`, `MACHINE_SLA_CYCLE`). */
@@ -66,7 +67,8 @@ export class SlaClocks {
         try {
           const policy = await policyOf(task.repoPath);
           const stageStartedAt = policy.sla.stage?.[task.state] ? await startOf(task) : null;
-          const sla = computeSla({ task, stateSince: task.stateSince, stageStartedAt, targets: triageGateTargets(task.state, policy), defaults: this.options.defaults }, now);
+          const gateOpen = RUN_OR_GATE.has(task.state) ? (await this.options.pipeline.approvals(task.id)).some((a) => a.decision === null) : undefined;
+          const sla = computeSla({ task, stateSince: task.stateSince, stageStartedAt, targets: triageGateTargets(task.state, policy), defaults: this.options.defaults, ...(gateOpen === undefined ? {} : { gateOpen }) }, now);
           this.shown.set(task.id, slaFlags(sla));
           return sla;
         } catch (error) {
@@ -81,8 +83,9 @@ export class SlaClocks {
 /** The repo's targets, with the plan gate's reminder (`plan.sla.reminder_days`) and the triage gates' reminder (`triage.sla.reminder_days`) where the repo moved it off the diagram's two days and its `sla` block names no gate target. */
 function triageGateTargets(state: string, policy: Policy): Partial<SlaTargets> {
   // The plan gate has its own days (`plan.sla.reminder_days`); the intake gates take triage's.
-  const days = state === "awaiting_approval" ? policy.factory.plan.sla.reminder_days : policy.factory.triage.sla.reminder_days;
-  const standard = state === "awaiting_approval" ? FACTORY_DEFAULTS.plan.sla.reminder_days : FACTORY_DEFAULTS.triage.sla.reminder_days;
-  if (policy.sla.gate !== undefined || !(state === "awaiting_approval" || AUTO_ARCHIVE_GATES.has(state as never)) || days === standard) return policy.sla;
+  // The ship approval has its own (`ship.sla.reminder_days`).
+  const days = state === "awaiting_approval" ? policy.factory.plan.sla.reminder_days : state === "awaiting_ship" ? policy.factory.ship.sla.reminder_days : policy.factory.triage.sla.reminder_days;
+  const standard = state === "awaiting_approval" ? FACTORY_DEFAULTS.plan.sla.reminder_days : state === "awaiting_ship" ? FACTORY_DEFAULTS.ship.sla.reminder_days : FACTORY_DEFAULTS.triage.sla.reminder_days;
+  if (policy.sla.gate !== undefined || !(state === "awaiting_approval" || state === "awaiting_ship" || AUTO_ARCHIVE_GATES.has(state as never)) || days === standard) return policy.sla;
   return { ...policy.sla, gate: days * 86_400 };
 }

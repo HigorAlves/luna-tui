@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "class.choice",
+      "value": "infra"
+    }
+  ],
+  "rubric": "The registry could not be reached and the runner was shut down: infrastructure, nothing in the change can fix it.",
+  "label": {
+    "class": {
+      "choice": "infra"
+    }
+  }
+}

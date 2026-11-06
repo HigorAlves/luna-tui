@@ -242,6 +242,16 @@ impl Machine {
     }
 
     /// `GET /engines`: each engine's credential, and this month's spend against its cap.
+    /// Each repository's image and graph health; a machine from before them answers 404.
+    pub fn repo_health(&self) -> Result<Vec<crate::model::RepoHealth>, String> {
+        Self::typed(self.agent.get(self.url("/repos")).call())
+    }
+
+    /// Approves the exact base the repository's luna.yaml names now; the machine refuses any other reference.
+    pub fn approve_base(&self, repo: &str, base: &str) -> Result<(), String> {
+        Self::json(self.agent.post(self.url("/repos/base/approve")).send_json(json!({ "repo": repo, "base": base }))).map(|_| ())
+    }
+
     pub fn engines(&self) -> Result<Vec<EngineInfo>, String> {
         Self::typed(self.agent.get(self.url("/engines")).call())
     }
@@ -309,6 +319,21 @@ impl Machine {
     /// Ends the ticket as archived, with one of `ARCHIVE_REASONS`.
     pub fn archive(&self, id: &str, reason: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/archive"), json!({ "reason": reason }))
+    }
+
+    /// Says whether the card's Evidence Pack was useful (`y` / `n`), with a short note for a no. The machine keeps it as ground truth; it labels no decision.
+    pub fn evidence_feedback(&self, id: &str, useful: bool, note: Option<&str>) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/evidence/feedback"), evidence_feedback_body(useful, note))
+    }
+
+    /// Dismisses a finding the last Verify reported (the card waits at the ship gate, or its PR is watched); the reason is kept as ground truth, out of the stream.
+    pub fn dismiss_finding(&self, id: &str, finding: &str, reason: Option<&str>) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/findings/{}/dismiss", path_segment(finding)), dismiss_body(reason))
+    }
+
+    /// Adds a finding Verify missed, with a severity (`blocker`, `should_fix`, `nit`) and a title.
+    pub fn add_finding(&self, id: &str, severity: &str, title: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/findings"), json!({ "severity": severity, "title": title }))
     }
 
     /// Corrects the reason an escalation was decided with, to one of `ESCALATION_REASONS`; the card stays where it is.
@@ -657,6 +682,27 @@ fn decision_body(approve: bool, reason: Option<&str>, approver: Option<&str>) ->
     body
 }
 
+/// The body of an Evidence feedback: the fixed value, and the note only when there is one (trimmed, at most 500 characters, as the machine allows).
+/// One path segment, percent-encoded: a finding id is the machine's, but a typed one is not trusted to keep a `/` or a `?` out of the URL.
+fn path_segment(text: &str) -> String {
+    text.bytes().map(|b| if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.') { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+fn dismiss_body(reason: Option<&str>) -> Value {
+    match reason {
+        Some(r) if !r.trim().is_empty() => json!({ "reason": r.trim() }),
+        _ => json!({}),
+    }
+}
+
+fn evidence_feedback_body(useful: bool, note: Option<&str>) -> Value {
+    let mut body = json!({ "useful": useful });
+    if let Some(text) = note.map(str::trim).filter(|t| !t.is_empty()) {
+        body["note"] = json!(text.chars().take(500).collect::<String>());
+    }
+    body
+}
+
 /// The body of a rejection: `rejected` with its comment (the machine reads it as the reason), and the approver when there is one.
 fn reject_body(comment: &str, approver: Option<&str>) -> Value {
     let mut body = json!({ "decision": "rejected", "reason": comment });
@@ -680,6 +726,14 @@ mod tests {
     fn a_decision_names_its_approver_when_there_is_one_and_stays_as_it_was_when_not() {
         assert_eq!(decision_body(true, None, None), json!({ "decision": "approved", "reason": null }));
         assert_eq!(decision_body(false, Some("split it"), Some("ana")), json!({ "decision": "sent_back", "reason": "split it", "approver": "ana" }));
+    }
+
+    #[test]
+    fn the_feedback_body_is_the_fixed_value_and_a_note_only_when_there_is_one() {
+        assert_eq!(evidence_feedback_body(true, None), json!({ "useful": true }));
+        assert_eq!(evidence_feedback_body(false, Some("too long")), json!({ "useful": false, "note": "too long" }));
+        assert_eq!(evidence_feedback_body(false, Some("  ")), json!({ "useful": false }));
+        assert_eq!(evidence_feedback_body(false, Some(&"x".repeat(900)))["note"].as_str().unwrap().chars().count(), 500);
     }
 
     #[test]
@@ -812,5 +866,13 @@ mod pr_tests {
         assert!(matches!(event, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.len() == 3 && snapshot.socket == "connected"));
         let bare = parse_stream_event("slack.items", r#"{"type":"slack.items","snapshot":{"items":[],"watches":[],"me":null,"polledAt":null,"error":null,"socket":"off"}}"#);
         assert!(matches!(bare, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.is_empty()));
+    }
+
+    #[test]
+    fn a_finding_id_travels_as_one_encoded_path_segment() {
+        assert_eq!(path_segment("f-3_a.b"), "f-3_a.b");
+        assert_eq!(path_segment("a/b?c d"), "a%2Fb%3Fc%20d");
+        assert_eq!(dismiss_body(None), json!({}));
+        assert_eq!(dismiss_body(Some(" no ")), json!({"reason":"no"}));
     }
 }

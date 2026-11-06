@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "class.choice",
+      "value": "real"
+    }
+  ],
+  "rubric": "A test of the file the change touched fails with a plain assertion: a real failure.",
+  "label": {
+    "class": {
+      "choice": "real"
+    }
+  }
+}

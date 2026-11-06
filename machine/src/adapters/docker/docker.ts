@@ -10,13 +10,23 @@ import { randomUUID } from "node:crypto";
 import type { ServiceSpec } from "@hardness/contracts";
 
 import type { CredentialMount, RunCredential } from "../credentials/index.ts";
-import { startServices } from "./services.ts";
-import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
+import { hostRedactor, secretRedactor } from "../../domain/redact-secrets.ts";
+import type { SecretStore } from "../../application/secrets.ts";
+import { type BlockedRow, type CardNetwork, findCardNetwork, openCardNetwork } from "./egress.ts";
+import { serviceName, startServices } from "./services.ts";
+import { type ExecResult, exec, execOrThrow, OUTPUT_CAP } from "../process/exec.ts";
 
 /** Label on every stage container, so leftovers can be found and removed. */
 export const CONTAINER_LABEL = "dev.hardness.stage";
 /** What one stage may take of the machine: one runaway build or fork bomb stays one slot's problem. */
-export const SANDBOX_LIMITS = ["--memory", "4g", "--cpus", "2", "--pids-limit", "1024"];
+/** What a container may use: `sandbox.cpu` and `sandbox.memory_gb` of luna.yaml (the defaults are 2 and 4, below the diagram's 4 and 8 by the user's decision); the process limit is fixed. */
+export interface SandboxSize {
+  cpu: number;
+  memoryGb: number;
+}
+export const DEFAULT_SANDBOX_SIZE: SandboxSize = { cpu: 2, memoryGb: 4 };
+export const sandboxLimits = (size: SandboxSize = DEFAULT_SANDBOX_SIZE): string[] => ["--memory", `${size.memoryGb}g`, "--cpus", `${size.cpu}`, "--pids-limit", "1024"];
+export const SANDBOX_LIMITS = sandboxLimits();
 /** `docker wait` gets this long past the stage's own timeout before the container is forced down. */
 const WAIT_GRACE_MS = 60_000;
 /** Where the repo's cache volume is mounted, and what each package manager is told to keep
@@ -35,6 +45,12 @@ export const CACHE_ENV = [
   `PIP_CACHE_DIR=${CACHE_DIR}/pip`,
   `UV_CACHE_DIR=${CACHE_DIR}/uv`,
 ];
+/** Corepack never prompts and never takes the latest version of a package manager, in any container, and keeps what it downloads on the container's own tmpfs: corepack checks a package manager's hash only when it downloads, so a copy on the shared cache volume could be replaced by one container and run by a later agent stage that holds a credential. */
+const COREPACK_ENV = ["COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_DEFAULT_TO_LATEST=0", "COREPACK_HOME=/tmp/corepack"];
+
+/** Variables a repository's image must not set for the process the machine starts in it (`ENV NODE_OPTIONS=--require=...` would run its code in the factory before the guards load): every container the machine starts passes them empty. */
+export const BLANKED_ENV = ["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"];
+const blankedEnv = (): string[] => BLANKED_ENV.flatMap((name) => ["-e", `${name}=`]);
 
 /** The docker volume holding one repo's caches: `hardness-cache-<repo>`, from the checkout's name. */
 export function cacheVolumeFor(repoPath: string): string {
@@ -56,13 +72,11 @@ export interface SandboxRun {
   runDir: string;
   worktree: string;
   writable: boolean;
-  /** The repo's git dir, mounted at the same path so git works inside: writable for a
-   * writable stage, since committing writes objects, refs and the worktree's index there. */
+  /** The user's repository's git dir, for a checkout run that reads the repository itself, mounted at the same path so git
+   * works inside: always read-only, whatever the run. A card's workspace has no git dir mounted (its repository is the machine's). */
   gitDir: string | null;
-  /** Paths under `gitDir` to keep read-only even when the rest is writable: `hooks` and
-   * `config`, so a stage cannot plant a hook (or point `core.hooksPath` at one) that the
-   * host would then run as you. */
-  gitReadOnly?: string[];
+  /** The container's CPUs and memory; absent, the defaults (2 CPUs, 4 GB). */
+  limits?: SandboxSize;
   /** Who a writable stage commits as. The container has no gitconfig of its own. */
   gitIdentity?: { name: string; email: string } | null;
   input: Record<string, unknown>;
@@ -92,6 +106,18 @@ export interface SandboxRun {
   /** Join no network at all: for a job that needs none (the graph build parses untrusted code). Ignored when a service network is given. */
   networkNone?: boolean;
   serviceEnv?: Record<string, string>;
+  /** The list this run may reach (`egressFor`), and the machine's own image the proxy runs from (never a repository's). `runSandbox` opens a card network with a proxy for it, and removes both when the run ends. */
+  egress?: { allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string };
+  /** Secret values by name, for this run only: passed as `-e NAME`, the values in the docker client's environment alone. */
+  secrets?: Record<string, string>;
+  /** Values the container never holds but its output may carry (the app's, the seed's and the deploy's secrets seen by the browser run): replaced in the transcript and the refused hosts only. */
+  redactValues?: Record<string, string>;
+  /** The run's card network (egress.ts): joined in place of the plain network, with the proxy as the only way out. */
+  cardNetwork?: CardNetwork;
+  /** More networks to join, by name (the browser run joins the app's). */
+  alsoJoin?: string[];
+  /** Names the run reaches directly, not through its proxy (the app's alias), besides its services. */
+  noProxy?: string[];
   /** `uid:gid` the container runs as. The run folder, the session dir and the worktree are bind
    *  mounts owned by the host user, so the stage must be that user to write them (the image's
    *  `node` user is uid 1000, which is not the host user on a Linux host). Defaults to the
@@ -115,7 +141,19 @@ export interface SandboxResult {
   /** Why `onLine` stopped the run, when it did. */
   stuck?: string | null;
   transcriptPath: string;
+  /** What the run's proxy refused (untrusted text, flattened); absent for a run with no card network. */
+  blocked?: BlockedRow[];
 }
+
+/** What `runSandbox` and `execInSandbox` call out to; the host's by default, a fake in a test. */
+export interface RunDeps {
+  exec: typeof exec;
+  execOrThrow: typeof execOrThrow;
+  startServices: typeof startServices;
+  openCardNetwork: typeof openCardNetwork;
+  findCardNetwork: typeof findCardNetwork;
+}
+const HOST_DEPS: RunDeps = { exec, execOrThrow, startServices, openCardNetwork, findCardNetwork };
 
 /** The `docker run` argument list for one stage. Pure: the credential's variables are named, never valued. */
 export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): string[] {
@@ -125,7 +163,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   // but nothing it does needs write access outside its mounted worktree, /in, /out or /tmp.
   // The tmpfs is `exec`: Docker's default is noexec, and `go test` runs the test binary it
   // builds under TMPDIR. The worktree bind mount is executable anyway, so this hides nothing.
-  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
+  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
   args.push(
@@ -133,11 +171,15 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     // otherwise hit the now-read-only root filesystem — point HOME at the one writable,
     // throwaway place left: the tmpfs above.
     "-e", "HOME=/tmp",
+    ...COREPACK_ENV.flatMap((env) => ["-e", env]),
+    ...blankedEnv(),
     // Temp files live on the tmpfs; the SDK's sessions too, unless a host dir is mounted below.
     "-e", "TMPDIR=/tmp",
     "-e", `CLAUDE_CONFIG_DIR=${run.sessionMount ? "/session" : "/tmp/claude"}`,
     // The credential is passed by name; its value is only in docker's environment.
     ...Object.keys(run.credential.env).flatMap((name) => ["-e", name]),
+    // A scoped secret the same way: by name here, the value only in docker's environment.
+    ...Object.keys(run.secrets ?? {}).flatMap((name) => ["-e", name]),
     // The worktree is owned by the host user, not the container's; and there is no gpg key
     // in here, so a commit must not try to sign.
     ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]),
@@ -150,17 +192,14 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   for (const mount of run.mounts ?? []) args.push("-v", `${mount.host}:${mount.container}${mount.readOnly ? ":ro" : ""}`);
   args.push(...cacheArgs(run.cacheVolume));
   if (run.gitDir) {
-    args.push("-v", `${run.gitDir}:${run.gitDir}${run.writable ? "" : ":ro"}`);
-    // Later mounts shadow earlier ones, so these ride over the writable mount above.
-    if (run.writable) {
-      for (const sub of run.gitReadOnly ?? []) args.push("-v", `${run.gitDir}/${sub}:${run.gitDir}/${sub}:ro`);
-    }
+    args.push("-v", `${run.gitDir}:${run.gitDir}:ro`);
   }
   args.push(...identityEnv(run.gitIdentity));
   // A trace backend on the host (docs/configuration.md "Observability"): Docker Desktop resolves
   // host.docker.internal by itself, Linux needs the gateway alias.
-  if (Object.values(run.extraEnv ?? {}).some((value) => value.includes("host.docker.internal"))) args.push("--add-host", "host.docker.internal:host-gateway");
-  args.push(...networkArgs(run.network, run.serviceEnv, run.networkNone));
+  // On a card network the host is not reachable at all: a trace endpoint there is the proxy's private entry, never an alias in the stage.
+  if (!run.cardNetwork && Object.values(run.extraEnv ?? {}).some((value) => value.includes("host.docker.internal"))) args.push("--add-host", "host.docker.internal:host-gateway");
+  args.push(...networkArgs(run.network, run.serviceEnv, run.networkNone, run.cardNetwork, run.alsoJoin, [...Object.keys(run.services ?? {}), ...(run.noProxy ?? [])]));
   // The run's own extra env last: docker keeps the last value, so a repo's service exports
   // (luna.yaml) never redirect the trace context the machine set.
   for (const [key, value] of Object.entries(run.extraEnv ?? {})) args.push("-e", `${key}=${value}`);
@@ -171,35 +210,52 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   return args;
 }
 
-/** The service network to join and what the services export, when a run has any. */
-function networkArgs(network: string | null | undefined, serviceEnv: Record<string, string> | undefined, none?: boolean): string[] {
+/** The network to join and what the services export, when a run has any. A card network comes after the service env, so an export cannot take the proxy variables; `alsoJoin` adds networks by name. */
+function networkArgs(network: string | null | undefined, serviceEnv: Record<string, string> | undefined, none?: boolean, card?: CardNetwork, alsoJoin?: string[], aliases: string[] = []): string[] {
+  const env = Object.entries(serviceEnv ?? {}).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+  if (card) return [...env, ...card.containerArgs(aliases), ...(alsoJoin ?? []).flatMap((name) => ["--network", name])];
   if (!network) return none ? ["--network", "none"] : [];
-  return ["--network", network, ...Object.entries(serviceEnv ?? {}).flatMap(([key, value]) => ["-e", `${key}=${value}`])];
+  return ["--network", network, ...env];
 }
 
-export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
-  // A re-attached run's services are still up from before; they are torn down with it below.
-  const services = run.attach
-    ? { network: null, env: {}, teardown: () => startServices(run.name, run.services ?? {}).then((s) => s.teardown(), () => {}) }
-    : await startServices(run.name, run.services ?? {});
+export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}): Promise<SandboxResult> {
+  const deps: RunDeps = { ...HOST_DEPS, ...given };
+  // The run's own card network, when it has a list: opened here and removed in `finally`, whatever the outcome. A card network
+  // it is handed (the browser run's, the app's) is joined and left alone; a re-attached run's is found by name and removed at its end.
+  let own: CardNetwork | null = null;
+  if (run.attach) own = run.cardNetwork ? null : run.egress ? await deps.findCardNetwork(run.name) : null;
+  else if (!run.cardNetwork && run.egress) own = await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage });
+  const card = run.cardNetwork ?? own;
   try {
-    if (!run.attach) {
-      const inDir = join(run.runDir, "in");
-      const outDir = join(run.runDir, "out");
-      await mkdir(inDir, { recursive: true });
-      await mkdir(outDir, { recursive: true });
-      await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
-      await execOrThrow("docker", sandboxArgs({ ...run, network: services.network, serviceEnv: services.env }, inDir, outDir), {
-        env: { ...process.env, ...run.credential.env },
-      });
+    // A re-attached run's services are still up from before; they are torn down with it below.
+    const services = run.attach
+      ? { network: null, env: {}, teardown: async () => void (await Promise.all(Object.keys(run.services ?? {}).map((key) => deps.exec("docker", ["rm", "-f", serviceName(run.name, key)])))) }
+      : await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
+    try {
+      if (!run.attach) {
+        const inDir = join(run.runDir, "in");
+        const outDir = join(run.runDir, "out");
+        await mkdir(inDir, { recursive: true });
+        await mkdir(outDir, { recursive: true });
+        await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
+        await deps.execOrThrow("docker", sandboxArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }, inDir, outDir), {
+          env: { ...process.env, ...run.credential.env, ...(run.secrets ?? {}) },
+        });
+      }
+      const known = { ...(run.redactValues ?? {}), ...(run.secrets ?? {}) };
+      const redact = secretRedactor(known);
+      const redactHost = hostRedactor(known);
+      const result = await waitSandbox(run, deps.exec, redact);
+      return own ? { ...result, blocked: ((await own.blocked()) as BlockedRow[]).map((row) => ({ ...row, host: redactHost(row.host) })) } : result;
+    } finally {
+      await services.teardown();
     }
-    return await waitSandbox(run);
   } finally {
-    await services.teardown();
+    await own?.teardown();
   }
 }
 
-async function waitSandbox(run: SandboxRun): Promise<SandboxResult> {
+async function waitSandbox(run: SandboxRun, exec: RunDeps["exec"], redact: (text: string) => string = (text) => text): Promise<SandboxResult> {
   run.onStarted?.(run.name);
 
   let timedOut = false;
@@ -227,7 +283,7 @@ async function waitSandbox(run: SandboxRun): Promise<SandboxResult> {
 
   const transcriptPath = join(run.runDir, "transcript.log");
   const logs = await exec("docker", ["logs", run.name]);
-  await writeFile(transcriptPath, logs.stdout + logs.stderr);
+  await writeFile(transcriptPath, redact(logs.stdout + logs.stderr));
   await exec("docker", ["rm", "-f", run.name]);
 
   const exitCode = waited.code === 0 ? Number(waited.stdout.trim()) : null;
@@ -265,6 +321,8 @@ export interface SandboxExec {
   name: string;
   image: string;
   worktree: string;
+  /** CPUs and memory; absent, the defaults. */
+  limits?: SandboxSize;
   argv: string[];
   /** As for a stage: the host user, so what the check writes into the worktree stays the host's. */
   user?: string | null;
@@ -279,6 +337,13 @@ export interface SandboxExec {
   services?: Record<string, ServiceSpec>;
   network?: string | null;
   serviceEnv?: Record<string, string>;
+  /** Secret values by name for this command only, passed as `-e NAME`; the values go in the docker client's environment alone. */
+  secrets?: Record<string, string>;
+  /** The list the check may reach, as for a stage; `execInSandbox` opens and removes the network. */
+  egress?: { allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string };
+  /** The check's card network and any more networks to join, as for a stage. */
+  cardNetwork?: CardNetwork;
+  alsoJoin?: string[];
   /** A linked worktree's `.git` file, mounted read-only over `/work/.git` so the check cannot repoint it. */
   gitFile?: string;
 }
@@ -302,13 +367,14 @@ const identityEnv = (identity: { name: string; email: string } | null | undefine
 export function sandboxExecArgs(run: SandboxExec): string[] {
   const [command, ...rest] = run.argv;
   const args = ["run", "--rm", "--name", run.name, "--label", `${CONTAINER_LABEL}=1`];
-  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
+  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
-  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
+  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...COREPACK_ENV.flatMap((env) => ["-e", env]), ...blankedEnv(), ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.env ?? {})) args.push("-e", `${key}=${value}`);
+  for (const name of Object.keys(run.secrets ?? {})) args.push("-e", name);
   args.push(...cacheArgs(run.cacheVolume));
-  args.push(...networkArgs(run.network, run.serviceEnv));
+  args.push(...networkArgs(run.network, run.serviceEnv, false, run.cardNetwork, run.alsoJoin, Object.keys(run.services ?? {})));
   // Writable: a test runner writes its cache next to the code (node_modules/.vite, go's are on the tmpfs).
   args.push("-v", `${run.worktree}:/work`);
   // Later mounts shadow earlier ones: the pointer file stays the machine's.
@@ -322,14 +388,26 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
 export async function execInSandbox(
   run: SandboxExec,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
-): Promise<ExecResult> {
-  const services = await startServices(run.name, run.services ?? {});
+  given: Partial<RunDeps> = {},
+): Promise<ExecResult & { blocked?: BlockedRow[] }> {
+  const deps: RunDeps = { ...HOST_DEPS, ...given };
+  const own = !run.cardNetwork && run.egress ? await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage }) : null;
+  const card = run.cardNetwork ?? own;
   try {
-    const result = await exec("docker", sandboxExecArgs({ ...run, network: services.network, serviceEnv: services.env }), options);
-    await exec("docker", ["rm", "-f", run.name]);
-    return result;
+    const services = await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
+    try {
+      // What the project's own commands print is theirs to choose: only its tail is kept.
+      const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }), { ...options, outputCap: OUTPUT_CAP, ...(run.secrets ? { env: { ...process.env, ...run.secrets } } : {}) });
+      await deps.exec("docker", ["rm", "-f", run.name]);
+      const redact = secretRedactor(run.secrets ?? {});
+      const redactHost = hostRedactor(run.secrets ?? {});
+      const clean = run.secrets ? { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) } : result;
+      return own ? { ...clean, blocked: ((await own.blocked()) as BlockedRow[]).map((row) => ({ ...row, host: redactHost(row.host) })) } : clean;
+    } finally {
+      await services.teardown();
+    }
   } finally {
-    await services.teardown();
+    await own?.teardown();
   }
 }
 
@@ -337,13 +415,26 @@ export async function execInSandbox(
  *  `cwd` is the worktree, and only HARDNESS_* env and the git identity (GIT_AUTHOR_*,
  *  GIT_COMMITTER_*) reach the container. The cache volume is the repo's: task worktrees live
  *  at `<worktreesDir>/<repo>/task-…`, so the parent names it. */
-export function sandboxExecutor(image: string) {
-  return (
+export function sandboxExecutor(
+  images: {
+    machine: string;
+    imageOf: (repoPath: string) => Promise<string>;
+    /** The list a check of this repository may reach (`egressPolicy`, kind `check`); absent, the check joins an ordinary bridge. */
+    egress?: (repoPath: string | undefined) => Promise<{ allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string }>;
+    /** The repository's own `sandbox.cpu` and `sandbox.memory_gb`; absent, the defaults. */
+    limitsOf?: (repoPath: string | undefined) => Promise<SandboxSize>;
+    /** The owner's store of this repository's scoped secrets; a check gets only the names it declares. */
+    secrets?: SecretStore;
+  },
+  run: typeof execInSandbox = execInSandbox) {
+  return async (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> } = {},
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[] } = {},
   ): Promise<ExecResult> => {
     if (!options.cwd) throw new Error("sandboxExecutor needs cwd: the worktree to mount");
+    // The image is the repository's, named by the caller: never guessed from the folder. No repository, the machine's image.
+    const image = options.repoPath ? await images.imageOf(options.repoPath) : images.machine;
     const env: Record<string, string> = {};
     const identity: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env ?? {})) {
@@ -353,14 +444,24 @@ export function sandboxExecutor(image: string) {
     }
     const gitIdentity =
       identity.GIT_AUTHOR_NAME && identity.GIT_AUTHOR_EMAIL ? { name: identity.GIT_AUTHOR_NAME, email: identity.GIT_AUTHOR_EMAIL } : null;
-    return execInSandbox(
+    let secrets: Record<string, string> | undefined;
+    if (options.secrets && options.secrets.length > 0) {
+      if (!images.secrets || !options.repoPath) throw new SecretsMissingError(options.secrets.map((name) => ({ name, reason: "no secrets store is configured" })), "(no secrets store)");
+      const loaded = await images.secrets.load(options.repoPath, options.secrets);
+      if (loaded.missing.length > 0) throw new SecretsMissingError(loaded.missing, images.secrets.folder(options.repoPath));
+      secrets = loaded.values;
+    }
+    return run(
       {
+        ...(secrets ? { secrets } : {}),
         name: `hardness-check-${randomUUID().slice(0, 8)}`,
         image,
         worktree: options.cwd,
         ...(isFile(join(options.cwd, ".git")) ? { gitFile: join(options.cwd, ".git") } : {}),
         argv: [command, ...args],
         env,
+        ...(images.egress ? { egress: await images.egress(options.repoPath) } : {}),
+        ...(images.limitsOf ? { limits: await images.limitsOf(options.repoPath) } : {}),
         gitIdentity,
         services: options.services,
         cacheVolume: cacheVolumeFor(dirname(options.cwd)),
@@ -368,6 +469,18 @@ export function sandboxExecutor(image: string) {
       { signal: options.signal, timeoutMs: options.timeoutMs },
     );
   };
+}
+
+/** A step declares a secret the owner's store does not hold: nothing ran. The detail names the secret and the folder, never a value. */
+export class SecretsMissingError extends Error {
+  readonly detail: Record<string, unknown>;
+  constructor(missing: ReadonlyArray<{ name: string; reason: string }>, folder: string) {
+    const names = missing.map((m) => m.name);
+    const reason = `the step declares secrets the machine cannot read: ${missing.map((m) => `${m.name} (${m.reason})`).join("; ")}; put each in ${folder}/<NAME> (mode 600)`;
+    super(reason);
+    this.name = "SecretsMissingError";
+    this.detail = { escalation: "env_broken", envBroken: true, step: "secrets", names, reason, options: [`put the secret file(s) in ${folder}, then resume`] };
+  }
 }
 
 const isFile = (path: string): boolean => {
@@ -401,4 +514,18 @@ export async function removeContainer(name: string): Promise<void> {
 
 export async function imageExists(image: string): Promise<boolean> {
   return (await exec("docker", ["image", "inspect", image])).code === 0;
+}
+
+/** The id of a local image (`sha256:...`), the part of the environment a tag cannot pin; the tag itself when docker cannot say. */
+export async function imageId(image: string): Promise<string> {
+  const out = await exec("docker", ["image", "inspect", "--format", "{{.Id}}", image]);
+  const id = out.stdout.trim();
+  return out.code === 0 && id ? id : image;
+}
+
+/** One label of a local image; null when the image or the label is not there. */
+export async function imageLabel(image: string, label: string): Promise<string | null> {
+  const out = await exec("docker", ["image", "inspect", "--format", `{{index .Config.Labels "${label}"}}`, image]);
+  const value = out.stdout.trim();
+  return out.code === 0 && value ? value : null;
 }

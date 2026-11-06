@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "exposure.choice",
+      "value": "credential"
+    }
+  ],
+  "rubric": "A settings page that shows a secret key in full: credential.",
+  "label": {
+    "exposure": {
+      "choice": "credential"
+    }
+  }
+}

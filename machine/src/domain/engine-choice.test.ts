@@ -1,7 +1,7 @@
 import { type EngineId, PACKS } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { chooseEngine, engineProblem, fallbackCandidates, stagesProblem } from "./engine-choice.ts";
+import { chooseEngine, engineProblem, fallbackCandidates, reviewerEngine, stagesProblem } from "./engine-choice.ts";
 
 // No pack allows two engines yet, so the choice is proved on one that does.
 const triage = { id: "triage" as const, engines: { default: "claude:opus" as EngineId, allowed: ["claude:opus", "codex:sol", "openai:sol"] as EngineId[] } };
@@ -82,5 +82,17 @@ describe("fallbackCandidates", () => {
 
   it("is empty for a pack with no fallback", () => {
     expect(fallbackCandidates(PACKS.implementing, ["claude:sonnet"])).toEqual([]);
+  });
+});
+
+describe("reviewerEngine", () => {
+  const pack = PACKS.verifying;
+  it("prefers an engine of another family than the implementer's when its credential is there", () => {
+    expect(reviewerEngine(pack, "claude:sonnet", () => true)).toEqual({ engine: "codex:sol", reason: "the reviewer runs on another model family than the implementer (claude:sonnet): codex:sol" });
+    expect(reviewerEngine(pack, "codex:luna", () => true)?.engine).toBe("claude:opus");
+  });
+  it("runs as today (null) with only one family's credential, or when the pack allows one family", () => {
+    expect(reviewerEngine(pack, "claude:sonnet", (e) => e.startsWith("claude"))).toBeNull();
+    expect(reviewerEngine(PACKS.implementing, "claude:sonnet", () => true)).toBeNull();
   });
 });

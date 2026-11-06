@@ -14,6 +14,8 @@ export interface GraphStamp {
   edges: number;
   communities: number;
   graphify: string;
+  /** The id of the image the graph was built in (the repository's own); absent on a graph built before wave 11b. */
+  image?: string;
   /** Files tasks changed that the code map did not name, counted from `misses.jsonl` when the graph was built. */
   misses?: number;
 }
@@ -46,12 +48,16 @@ export interface Graph {
   build(repoPath: string, signal?: AbortSignal): Promise<GraphStamp>;
   /** False only when the graph is older than `baseCommit`: its commit is a strict ancestor of it. */
   isFresh(repoPath: string, stamp: GraphStamp, baseCommit: string): Promise<boolean>;
+  /** Commits the default branch has over `commit`; null when they cannot be counted. */
+  behind?(repoPath: string, commit: string): Promise<number | null>;
   /** Where `text` points in the repo's code, from the current graph; null when the repo has none. No model. */
   locate(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<GraphLocation | null>;
   /** Who owns `paths` at the default branch (CODEOWNERS), for any plain repo-relative paths whether or not the graph knows them; null when the repo has no graph. */
   owners(repoPath: string, paths: string[]): Promise<{ owners: RequiredOwners[]; codeowners: boolean; dropped?: number } | null>;
   /** What a change to `files` reaches (importers, dependents, tests), from the current graph; null when there is none. */
   impact(repoPath: string, files: string[]): Promise<Impact | null>;
+  /** The files earlier cards declared outside the map and the machine accepted, most frequent first, at most twenty, plain repository paths. */
+  pastMisses?(repoPath: string): Promise<string[]>;
   /** Appends the files a task changed that its plan and the code map did not name (accepted by scope_check), one JSON line per call. */
   recordMisses(repoPath: string, miss: GraphMiss): Promise<void>;
 }

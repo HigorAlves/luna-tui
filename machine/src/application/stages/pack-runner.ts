@@ -1,11 +1,15 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
+import { readRegularFile } from "../../adapters/fs/bounded.ts";
+import { removeNestedRepositories } from "../../adapters/git/machine-repo.ts";
+import { bundleImporter } from "../../adapters/git/bundles.ts";
+import { ensureClone, isClone, moveToClone, publishBranch, refreshScratch } from "../../adapters/git/clone.ts";
 import {
   type Workspace,
   branchBase,
@@ -13,17 +17,25 @@ import {
   gitIdentity,
   diffNameStatus,
   diffText,
-  ensureWorktree,
   headCommit,
+  lockfilesAt,
+  repoHead,
   defaultBranch,
   dirtyFiles,
   ownedWorkspace,
   resetWorktree,
   restoreFiles,
-  worktreeAdminDir,
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
-import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
+import { type SandboxResult, type SandboxRun, SecretsMissingError, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { type EgressPolicy, blockedPayloads } from "../egress-policy.ts";
+import type { InstallInput, InstallOutcome } from "../install.ts";
+import type { SecretStore } from "../secrets.ts";
+import { redactDeep, secretRedactor } from "../../domain/redact-secrets.ts";
+import { redactFiles } from "../../adapters/fs/redact-files.ts";
+import { saveKept } from "../kept-sandboxes.ts";
+import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -41,14 +53,21 @@ import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
+import { reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
 import type { Graph } from "../graph.ts";
 import { PolicyStore } from "../policy.ts";
+import { RepoImageError } from "../repo-images.ts";
+import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
 export interface AgentDeps {
+  /** The id of a local image, for the environment hash; absent, no environment is recorded. */
+  imageId?: (image: string) => Promise<string>;
   /** The base stage image. */
   image: string;
+  /** Resolves the image a repository's stages run in (its own, built from its base, or `image`); absent, every repository runs in `image`. */
+  repoImages?: { ensure(repoPath: string, signal?: AbortSignal, taskId?: string): Promise<{ image: string }> };
   /** The image with browsers, used by the e2e pack. */
   qaImage: string;
   /** The image with the video tools, used by the recording pack; absent falls back to the QA image. */
@@ -60,6 +79,12 @@ export interface AgentDeps {
   watcher: Watcher;
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
+  /** The list of hosts each run may reach; absent (`MACHINE_EGRESS=off`, tests) a run joins an ordinary bridge as before the allow-list. */
+  egress?: EgressPolicy;
+  /** Installs the card's dependencies from its lockfile before a writable stage (application/install.ts); absent, nothing is installed by the machine. */
+  install?: (input: InstallInput) => Promise<InstallOutcome>;
+  /** The owner's store of a repository's scoped secrets; only the browser runs read it, for their QA target's credential. */
+  secrets?: SecretStore;
   /** Finds the project's own check commands; the locked-test replay runs the test one. */
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** Each repo's luna.yaml; one store is shared so a bad edit warns once. */
@@ -70,11 +95,13 @@ export interface AgentDeps {
   graph?: Graph;
   /** Asked for when a repo has no graph yet, so the first build starts without a stage waiting on it. */
   ensureGraph?: (repoPath: string) => void;
+  /** Waits for the repository's code graph before triage reads it (see plan.ts); absent, triage never waits. */
+  graphReady?: (input: { repoPath: string; signal: AbortSignal; skip: boolean; note?: (text: string) => Promise<void> }) => Promise<GraphReadiness>;
   /** Runs a host command; the locked-test replay uses it for the project's test command. */
   exec?: (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string },
   ) => Promise<ExecResult>;
   /** Runs a command on the host (not in the stage image): the build watch pushes the task branch with it. */
   hostExec?: (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<ExecResult>;
@@ -102,10 +129,6 @@ const MINUTE = 60_000;
 /** Where a repo's graph is mounted in a stage container, and the file the `graphify` verbs read. */
 const GRAPH_MOUNT = "/graph";
 const GRAPH_FILE = "/graph/graphify-out/graph.json";
-/** Kept read-only inside a writable stage's git dir: a planted hook or a rewritten config
- *  would otherwise run on the host, as you, at the next git command the machine issues. */
-const GIT_READ_ONLY = ["hooks", "config"];
-
 const isFile = (path: string): boolean => {
   try {
     return statSync(path).isFile();
@@ -147,6 +170,25 @@ export interface AgentExtra {
   sweepFailures?: { name: string; tail: string }[];
   /** Extra mounts for the container, after the worktree's own (the critic's /evidence, read-only). */
   mounts?: CredentialMount[];
+  /** e2e: the one target the browser run is given, chosen by the machine (the app it started, a preview); absent, the repository's first declared QA target, or none. Only its credential is loaded. */
+  qaTarget?: { name: string; baseUrl: string; credential?: string | null; reentrant?: boolean } | null;
+  /** e2e: more networks the run joins (the app's), and the names it reaches directly instead of through its proxy. */
+  alsoJoin?: string[];
+  noProxy?: string[];
+  /** e2e: secret values of the app, the seed or the deploy, which the browser run never holds: used only to clean what its output and files carry. */
+  redactValues?: Record<string, string>;
+}
+
+/** `host:port` of each QA target's URL, for the browser run's list (an address or a private name is dropped later, by the list's own rules). */
+function targetHosts(targets: ReadonlyArray<{ baseUrl: string }>): string[] {
+  return targets.flatMap((target) => {
+    try {
+      const url = new URL(target.baseUrl);
+      return [`${url.hostname}:${url.port || (url.protocol === "https:" ? "443" : "80")}`];
+    } catch {
+      return [];
+    }
+  });
 }
 
 /** The files the plan's slices touch, with the code map's files to change or test when it has one (a file only to read is not planned). */
@@ -179,6 +221,20 @@ const SCOPE_ADVICE: Partial<Record<ScopeIssue["kind"], string>> = {
 const OutOfMap = z.array(z.object({ path: z.string(), reason: z.string() }));
 
 export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
+  const result = await runAgentIn(deps, context, pack, extra);
+  // The environment a passing Build ran in: the run's own record, and the Build Report's `envHash`.
+  const path = result.workspace?.worktreePath;
+  if (pack !== "implementing" || result.outcome !== "pass" || !path || !deps.imageId) return result;
+  try {
+    const commit = await headCommit(path);
+    return { ...result, detail: { ...result.detail, env: envOf({ image: await deps.imageId(deps.repoImages && context.task.repoPath ? (await deps.repoImages.ensure(context.task.repoPath)).image : deps.image), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }) } };
+  } catch (error) {
+    console.warn(`could not record the Build's environment: ${(error as Error).message}`);
+    return result;
+  }
+}
+
+async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
   const { task } = context;
   if (!task.repoPath) {
     throw new Error("the task has no repoPath; create it with a repo to run real stages");
@@ -186,6 +242,20 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const limits = PACK_LIMITS[pack];
   if (extra.checkout && limits.writable) throw new Error(`${pack} is writable; a checkout run must be read-only`);
   const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
+  // The repository's own image, built from the base its luna.yaml names; a build that fails is an environment problem with the reason.
+  let stageImage = deps.image;
+  if (deps.repoImages && !extra.checkout) {
+    try {
+      stageImage = (await deps.repoImages.ensure(task.repoPath, context.signal, task.id)).image;
+    } catch (error) {
+      if (!(error instanceof RepoImageError)) throw error;
+      return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "image", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
+    }
+  }
+  if (pack === "triage" && deps.graphReady) {
+    const ready = await deps.graphReady({ repoPath: task.repoPath, signal: context.signal, skip: graphSkipped(context.approvals), ...(context.note ? { note: context.note } : {}) });
+    if (ready.state === "failed") return graphEscalation(ready.reason);
+  }
   // The branch the pipeline would give this task today: `task/<id>-<slug>`, or the repo's
   // `jira.branch` pattern for a linked task (with the id appended when the repo already has
   // that branch). A task that already works somewhere keeps that branch: it was named and
@@ -211,16 +281,20 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches (or the branch it named for a Jira-linked task)` },
     };
   }
-  if (!extra.checkout) await ensureWorktree(task.repoPath, workspace);
+  // A folder that is neither a card's workspace nor a linked worktree of the repository (its own main checkout) is nobody's to run in.
+  if (!extra.checkout && persisted && !isClone(workspace.path) && !isFile(join(workspace.path, ".git")) && existsSync(workspace.path)) {
+    return { outcome: "fail", detail: { error: `refusing to run ${pack} in ${workspace.path}: it is not a card's workspace` } };
+  }
+  // A card still on a linked worktree moves to a workspace of its own before its next run: branch and commits kept, uncommitted work carried over.
+  if (!extra.checkout && persisted && !isClone(workspace.path)) await moveToClone(task.repoPath, workspace);
+  if (!extra.checkout) await ensureClone(task.repoPath, workspace);
   // After a restart, the container the last machine started may still be running: its name and
   // the commit it started from come from the run row, and the sandbox waits on it instead.
   const resume = context.resume;
-  const inputCommit = resume?.inputCommit ?? (await headCommit(workspace.path));
-  const gitDir = await commonGitDir(task.repoPath);
-  // The admin dir's pointers back to the checkout and to the common dir: a stage must not rewrite them.
-  const adminDir = await worktreeAdminDir(workspace.path);
-  const adminRel = adminDir ? relative(gitDir, adminDir) : null;
-  const adminPointers = adminRel && adminRel.startsWith("worktrees/") ? ["commondir", "gitdir"].map((f) => `${adminRel}/${f}`) : [];
+  const inputCommit = resume?.inputCommit ?? (await (extra.checkout ? repoHead(workspace.path) : headCommit(workspace.path)));
+  // A card's workspace is a folder: its repository is the machine's and is never mounted. Only a checkout run reads the user's
+  // repository directly, through its git dir, read-only.
+  const gitDir = extra.checkout ? await commonGitDir(task.repoPath) : null;
   // A pack the state is not named for (the planner in test_design) names its container after itself.
   const unit = pack === context.stage ? context.stage : pack;
   const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${unit.replaceAll("_", "-")}-${context.attempt}`;
@@ -228,18 +302,26 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // The task's own engine for the pack, else luna.yaml's, else the default; a re-attached run
   // keeps the engine its container started on, and a fallback after a usage limit runs the engine
   // the machine handed it (which logs why). An engine passed over is logged with why.
-  const choice = resume?.engine
+  let choice: { engine: EngineId; reason: string | null; note?: string } = resume?.engine
     ? { engine: resume.engine, reason: null }
     : context.engine
       ? { engine: context.engine, reason: null }
       : await pickEngine(deps.credentials, PACKS[pack], task.stages ?? null, policy.engines, task.repoPath);
+  // The reviewer is another model family than the implementer when that family's credential is on the machine and nobody named an engine for it.
+  if (pack === "verifying" && !resume?.engine && !context.engine && "source" in choice && choice.source === "default") {
+    const implementer = task.stages?.implementing ?? policy.engines?.implementing ?? PACKS.implementing.engines.default;
+    const ready = new Set<EngineId>();
+    for (const engine of PACKS.verifying.engines.allowed) if ((await deps.credentials.check(engine, { repo: task.repoPath })).available) ready.add(engine);
+    const other = reviewerEngine(PACKS.verifying, implementer, (e) => ready.has(e));
+    if (other) choice = { engine: other.engine, reason: other.reason };
+  }
   const engineEvents = choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : [];
   if (!resume) await context.started?.({ container, inputCommit, engine: choice.engine });
   // An engine asked for that gave way to the default is said on the task as it starts, not only in the run's events.
-  if ("note" in choice && choice.note) await context.note?.(choice.note).catch(() => {});
+  if (choice.note) await context.note?.(choice.note).catch(() => {});
 
   // The repo's code graph, read-only at /graph, with how current it is against where this task forked.
-  const baseCommit = extra.baseCommit ?? (await branchBase(workspace.path, task.repoPath));
+  const baseCommit = extra.baseCommit ?? (await (extra.checkout ? repoHead(workspace.path) : branchBase(workspace.path, task.repoPath)));
   const graphStamp = deps.graph && policy.graph ? await deps.graph.stampOf(task.repoPath) : null;
   const graphDir = graphStamp ? deps.graph!.currentDir(task.repoPath) : null;
   if (deps.graph && policy.graph && !graphDir) deps.ensureGraph?.(task.repoPath);
@@ -248,6 +330,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       ? { path: GRAPH_FILE, commit: graphStamp.commit, builtAt: graphStamp.builtAt, fresh: baseCommit ? await deps.graph!.isFresh(task.repoPath, graphStamp, baseCommit) : true }
       : null;
 
+  // The browser run drives ONE target, chosen here, and holds only that target's credential.
+  const e2eTarget = pack === "e2e" ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -270,7 +354,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
     ...(extra.sweepFailures?.length ? { sweepFailures: extra.sweepFailures } : {}),
     // The recorder drives the one target the film is recorded against; the e2e pack picks from the repo's list.
-    qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : policy.qaTargets,
+    qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : pack === "e2e" ? (e2eTarget ? [e2eTarget] : []) : policy.qaTargets,
     ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
@@ -300,6 +384,20 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     if (!(error instanceof NoCredentialError || error instanceof CredentialWaitError)) throw error;
     return { outcome: "fail", detail: { error: error.message }, ...(engineEvents.length ? { events: engineEvents } : {}) };
   }
+  // What the run commits comes back as bundles in /out/bundles, read like a fetch from an untrusted server: the host never reads the agent's own repository.
+  const importer = extra.checkout
+    ? null
+    : bundleImporter({
+        path: workspace.path,
+        branch: workspace.branch,
+        runId: context.runId,
+        dir: join(runDir, "out", "bundles"),
+        // The card's branch shows in the user's repository too, written by the machine; a refusal is a note.
+        onAccepted: async () => {
+          const shown = await publishBranch(task.repoPath!, workspace.path, workspace.branch);
+          if (!shown.ok) await context.note?.(shown.note).catch(() => {});
+        },
+      });
   // Implementing: every slice that turns committed is pushed as it lands, one push at a time.
   const pushes = { attempted: 0, ok: 0 };
   let lastPushed: string | null = null;
@@ -326,7 +424,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           overrides: policy.decisions,
           truth: deps.truth ?? null,
           taskId: task.id,
-          git: deps.scopeGit ?? { nameStatus: (from, to) => diffNameStatus(workspace.path, from, to), diff: (from, to) => diffText(workspace.path, from, to) },
+          git: deps.scopeGit ?? { nameStatus: async (from, to) => (await importer?.sync(), diffNameStatus(workspace.path, from, to)), diff: async (from, to) => (await importer?.sync(), diffText(workspace.path, from, to)) },
           log: (line) => void context.note?.(line).catch(() => {}),
         })
       : null;
@@ -342,15 +440,17 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       outDir: join(runDir, "out"),
       every: deps.watchEvery ?? 2000,
       log: (line) => void context.note?.(line).catch(() => {}),
-      ...(checks ? { onRed: checks.onRed, onScopeRequest: checks.onScopeRequest } : {}),
+      ...(checks ? { onRed: async (...a: Parameters<typeof checks.onRed>) => (await importer?.sync(), checks.onRed(...a)), onScopeRequest: async (...a: Parameters<typeof checks.onScopeRequest>) => (await importer?.sync(), checks.onScopeRequest(...a)) } : {}),
       ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
       onCommitted: async (slice) => {
         if (!checks) return;
+        await importer?.sync();
         await checks.onGreen(slice).catch((error: Error) => void context.note?.(`red_check truth: ${error.message}`).catch(() => {}));
         if (!hostExec) return;
         pushing = pushing.then(async () => {
           // One push per tip: two slices committed on the same HEAD need one checkpoint, and a tip
           // already on the remote is not pushed again.
+          await importer?.sync();
           const tip = await headCommit(workspace.path).catch(() => null);
           if (tip && tip === lastPushed) return;
           pushes.attempted += 1;
@@ -378,17 +478,65 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       },
     });
   };
-  const sandbox = await (deps.sandbox ?? runSandbox)({
+  // The agent starts with a git repository of its own in the folder, made by the machine from the card's: the one the host never reads.
+  if (!extra.checkout && !resume) await refreshScratch(workspace.path, workspace.branch);
+  // The machine installs the card's dependencies from its lockfile, no credential in that container: the agent then works with them.
+  if (deps.install && limits.writable && !extra.checkout && !resume) {
+    let installed: InstallOutcome;
+    try {
+      installed = await deps.install({ taskId: task.id, repoPath: task.repoPath, workspace: workspace.path, commit: inputCommit, signal: context.signal });
+    } catch (error) {
+      credential.release();
+      throw error;
+    }
+    for (const payload of blockedPayloads(installed.blocked, "install")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
+    if (!installed.ok) {
+      credential.release();
+      return { outcome: "escalated", detail: installed.detail };
+    }
+    for (const note of installed.notes) await context.note?.(note).catch(() => {});
+  }
+  // The one agent stage that holds a scoped secret: the browser run, the credential its QA target names (`credential: env:NAME`), by name in the
+  // prompt and by value only in the container's environment. Implementing and the rest get none, whatever a check declares.
+  let secretValues: Record<string, string> | undefined;
+  let qaCredentialNames: string[] = [];
+  if (deps.secrets && (pack === "e2e" || pack === "recording")) {
+    const names = [...new Set((pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : e2eTarget ? [e2eTarget] : []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])))];
+    if (names.length > 0) {
+      const loaded = await deps.secrets.load(task.repoPath, names);
+      if (loaded.missing.length > 0) {
+        credential.release();
+        return { outcome: "escalated", detail: new SecretsMissingError(loaded.missing, deps.secrets.folder(task.repoPath)).detail };
+      }
+      secretValues = loaded.values;
+      qaCredentialNames = names;
+    }
+  }
+  // The run's own list: its engine's owner and each helper's, and for a browser run the hosts of the QA target(s) it may drive.
+  const found = PACKS[pack];
+  const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : found.helpers.map((h) => credentialOwner(h.engine)))];
+  const egress = deps.egress
+    ? await deps.egress.for({ repoPath: task.repoPath, kind: "agent", owners: [...new Set(owners)], targets: pack === "e2e" || pack === "recording" ? targetHosts(input.context.qaTargets ?? []) : [] })
+    : undefined;
+  let sandbox: SandboxResult;
+  try {
+  sandbox = await (deps.sandbox ?? runSandbox)({
+    ...(egress ? { egress } : {}),
+    ...(secretValues ? { secrets: secretValues } : {}),
+    ...(extra.redactValues ? { redactValues: extra.redactValues } : {}),
+    ...(extra.alsoJoin?.length ? { alsoJoin: extra.alsoJoin } : {}),
+    ...(extra.noProxy?.length ? { noProxy: extra.noProxy } : {}),
     name: container,
     attach: Boolean(resume),
-    sessionMount,
+    // The verifier never sees the card's shared agent session: it reviews from the plan, the scenarios and the Build Report, not the implementer's trail.
+    ...(pack === "verifying" ? {} : { sessionMount }),
     cacheVolume: cacheVolumeFor(task.repoPath),
-    image: pack === "e2e" ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : deps.image,
+    image: pack === "e2e" ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : stageImage,
     runDir,
     worktree: workspace.path,
     writable: limits.writable,
     gitDir,
-    gitReadOnly: [...GIT_READ_ONLY, ...adminPointers].filter((sub) => existsSync(join(gitDir, sub))),
+    limits: { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb },
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
     services: limits.writable ? policy.services : {},
@@ -400,11 +548,10 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     mounts: [
       ...(graphContext && graphDir ? [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }] : []),
       // The worktree's `.git` file points at its admin dir: read-only, so no stage can repoint the checkout.
-      ...(isFile(join(workspace.path, ".git")) ? [{ host: join(workspace.path, ".git"), container: "/work/.git", readOnly: true }] : []),
       ...(extra.mounts ?? []),
     ],
     // The graph's path for the pack, and what the stage container needs to continue the machine's trace.
-    extraEnv: { ...(graphContext && graphDir ? { LUNA_GRAPH: GRAPH_FILE } : {}), ...(context.traceEnv ?? {}) },
+    extraEnv: { ...(graphContext && graphDir ? { LUNA_GRAPH: GRAPH_FILE } : {}), ...(context.traceEnv ?? {}), ...(qaCredentialNames.length > 0 ? { LUNA_QA_CREDENTIALS: qaCredentialNames.join(",") } : {}) },
     signal: context.signal,
     // The tab's label names the repo too: five repos' Build tabs read apart.
     onStarted: (name) => {
@@ -419,6 +566,17 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     await pushing;
     credential.release();
   });
+  } catch (error) {
+    if (!(error instanceof EgressUnsupportedError)) throw error;
+    return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
+  }
+  // A run that had secrets: what its tools wrote into the files it left is cleaned before anything reads the packet, and every string of
+  // what is ingested below is cleaned where it is made.
+  const known = { ...(extra.redactValues ?? {}), ...(secretValues ?? {}) };
+  const redact = secretRedactor(known);
+  const hasSecrets = Object.keys(known).length > 0;
+  if (hasSecrets) await redactFiles(join(runDir, "out", "files"), redact);
+  for (const payload of blockedPayloads(sandbox.blocked, "stage")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
 
   const base: StageResult = {
     outcome: "fail",
@@ -436,16 +594,30 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // What the run left in its ledger survives an abort, a timeout or a stuck stop: the next attempt resumes from it.
   const keptLedger = async () => {
     try {
-      return Ledger.parse(JSON.parse(await readFile(join(runDir, "out", "ledger.json"), "utf8")));
+      return Ledger.parse(JSON.parse(await readRegularFile(join(runDir, "out", "ledger.json"), 4 * 1024 * 1024)));
     } catch {
       return null;
     }
   };
   const failed = async (error: string, extraDetail: Record<string, unknown> = {}): Promise<StageResult> => {
     const ledger = await keptLedger();
-    return dirty({ ...base, detail: { error, ...extraDetail, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) } });
+    // Whatever text the container left (the stuck line, the ingest error's message, the kept ledger) is cleaned of the run's secrets before it is stored.
+    const detail = { error, ...extraDetail, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) };
+    return dirty({ ...base, detail: hasSecrets ? (redactDeep(detail, redact) as Record<string, unknown>) : detail });
   };
 
+  // A nested repository (a `.git` below the folder's top level) is data no host git may read: with a gitlink for it git would start a
+  // child in it and read its own configuration. The walk follows no link; what it finds is removed by plain file removal, and the run fails.
+  if (!extra.checkout) {
+    const nested = removeNestedRepositories(workspace.path);
+    if (nested.length > 0) return failed(`the run left a nested repository (${nested.join(", ")}); it was removed and nothing in the folder was read by git`);
+  }
+  // The run's commits come into the card's repository first, whatever way it ended: only as a fast-forward of the card's branch.
+  const imported = importer ? await importer.sync() : null;
+  if (imported && !imported.ok) {
+    if (imported.kind === "head_moved") return { ...base, outcome: "escalated", detail: { escalation: "head_moved", reason: imported.reason, options: [] } };
+    return failed(`the run's commits could not be taken in: ${imported.reason}`);
+  }
   if (sandbox.aborted) return failed("aborted");
   if (sandbox.timedOut) return failed(`timed out after ${input.limits.timeoutMs / MINUTE} minutes`);
   if (sandbox.stuck) return failed(`stuck: ${sandbox.stuck}`);
@@ -453,6 +625,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   let ingested;
   try {
     ingested = await ingestStageOutput({ outDir: join(runDir, "out"), runId: context.runId, stateDir: deps.stateDir });
+    if (hasSecrets) ingested = redactDeep(ingested, redact) as typeof ingested;
   } catch (error) {
     const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
     return failed(
@@ -505,7 +678,16 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // The agent stopped on purpose. Runners before the `escalated` outcome reported this as a pass.
   const stopped = answerOf(output.answer);
   if (output.outcome === "escalated" || stopped?.kind === "escalated") {
-    return dirty(
+    // An escalated card's clone stays exactly as the agent left it: nothing is reset or cleaned. What it left
+    // uncommitted is also saved on refs/luna/kept/<run>, so a resume that resets the tree loses nothing.
+    let kept: Record<string, unknown> | null = null;
+    if (limits.writable && !extra.checkout) {
+      const saved = await saveKept({ stateDir: deps.stateDir, taskId: task.id, runId: context.runId, path: workspace.path, keepHours: policy.factory.sandbox.keep_hours });
+      kept = saved.ok ? { path: saved.path, ref: saved.ref, until: saved.until, keepHours: policy.factory.sandbox.keep_hours } : { path: workspace.path, error: saved.reason };
+    } else if (limits.writable) {
+      await dirty(null);
+    }
+    return (
       merged({
         ...mapped,
         outcome: "escalated",
@@ -515,8 +697,9 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           reason: typeof stopped?.reason === "string" && stopped.reason ? stopped.reason : output.summary,
           options: Array.isArray(stopped?.options) ? stopped.options : [],
           escalation: EscalationReason.safeParse(stopped?.escalation).data ?? "other",
+          ...(kept ? { keptSandbox: kept } : {}),
         },
-      }),
+      })
     );
   }
 
@@ -555,6 +738,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           timeoutMs: LOCKED_REPLAY_TIMEOUT_MS,
           env: { ...process.env, HARDNESS_STAGE: pack },
           services: policy.services,
+          repoPath: task.repoPath,
         });
         await resetWorktree(workspace.path);
         if (ran.code === 0) replayed = true;

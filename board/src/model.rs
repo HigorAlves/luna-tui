@@ -208,6 +208,9 @@ pub struct Task {
     /// The Triage Record, once triage wrote one; absent before and from machines that predate it.
     #[serde(default)]
     pub record: Option<TriageRecord>,
+    /// The Evidence Pack the machine kept on the task (what `GET /tasks/:id` serialises); absent before Evidence and from machines that predate it.
+    #[serde(default)]
+    pub evidence: Option<Value>,
     /// What every stage run of this ticket has cost so far; None when unknown.
     #[serde(default)]
     pub spent_usd: Option<f64>,
@@ -666,6 +669,11 @@ impl Approval {
         self.requested["archiveReason"].as_str().map(String::from)
     }
 
+    /// The release question the machine asks after readiness ("safe to release now?"), as against the preview gate that comes first.
+    pub fn is_ship_approval(&self) -> bool {
+        self.requested["gate"].as_str() == Some("ship_approval")
+    }
+
     /// The gate's state name, guessed from what was requested when the machine did not say.
     pub fn kind_or_guess(&self) -> &str {
         if let Some(kind) = &self.kind {
@@ -746,6 +754,82 @@ pub struct TaskDetail {
     /// Build's progress, live; absent from a machine that predates it and for a card that has not begun to build.
     #[serde(default)]
     pub build_progress: Option<BuildProgress>,
+    /// The reports of the stages that have passed; absent from a machine that predates them.
+    #[serde(default)]
+    pub reports: Option<TaskReportsView>,
+    /// The watched PR's checklist and clocks; absent from a machine that predates it, and null for a card with no ship cursor.
+    #[serde(default)]
+    pub ship: Option<ShipView>,
+}
+
+/// One checklist item of a watched PR: the machine's fixed id, whether it holds, and a flattened detail.
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipItem {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// What the machine says of the PR it is watching (`GET /tasks/:id`'s `ship`). Every field has a default, so a snapshot from an older machine still parses.
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShipView {
+    #[serde(default)]
+    pub pr: ShipPr,
+    #[serde(default)]
+    pub head: Option<String>,
+    #[serde(default)]
+    pub ready: bool,
+    #[serde(default)]
+    pub checklist: Vec<ShipItem>,
+    #[serde(default)]
+    pub auto_merge: ShipAutoMerge,
+    #[serde(default)]
+    pub review: ShipReview,
+    #[serde(default)]
+    pub fix_rounds: u64,
+    #[serde(default)]
+    pub queued: bool,
+    #[serde(default)]
+    pub quiet_since: Option<String>,
+    #[serde(default)]
+    pub last_event: Option<ShipEvent>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipPr {
+    #[serde(default)]
+    pub number: u64,
+    #[serde(default)]
+    pub url: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipAutoMerge {
+    #[serde(default)]
+    pub allowed: bool,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipReview {
+    /// Null: the machine could not read the rule, so a person merges.
+    #[serde(default)]
+    pub required: Option<bool>,
+    #[serde(default)]
+    pub by: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipEvent {
+    #[serde(default)]
+    pub class: String,
+    #[serde(default)]
+    pub at: String,
 }
 
 impl TaskDetail {
@@ -1830,6 +1914,102 @@ impl RepoMetrics {
     }
 }
 
+/// One repository's sandbox image and code graph, a row of `GET /repos`. The base's name and the failures are text from outside: they are
+/// shown through `plain`, never as markup or with control characters.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoHealth {
+    pub repo: String,
+    pub image: ImageHealth,
+    pub graph: GraphHealth,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageHealth {
+    pub in_use: String,
+    pub base: Option<String>,
+    pub built_at: Option<String>,
+    pub last_failure: Option<String>,
+    /// A base the repository names that nobody approved yet; it runs on the machine's image until you approve it.
+    #[serde(default)]
+    pub pending_base: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphHealth {
+    pub on: bool,
+    pub commit: Option<String>,
+    pub behind: Option<u64>,
+    pub graphify: Option<String>,
+    pub built_at: Option<String>,
+    pub building: bool,
+    pub last_failure: Option<String>,
+}
+
+/// Text from outside on one line: control characters become spaces, at most `max` characters.
+pub fn plain(text: &str, max: usize) -> String {
+    let flat: String = text.chars().map(|ch| if ch.is_control() { ' ' } else { ch }).collect();
+    let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max { flat } else { format!("{}…", flat.chars().take(max.saturating_sub(1)).collect::<String>()) }
+}
+
+impl RepoHealth {
+    pub fn name(&self) -> &str {
+        self.repo.trim_end_matches('/').rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("(none)")
+    }
+
+    /// The image in one line: the machine's, or its own with its base, when it was built and the last failure.
+    pub fn image_line(&self, now: u64) -> String {
+        let i = &self.image;
+        let mut line = match &i.base {
+            Some(base) => format!("image: own on {} ({})", plain(base, 40), plain(&i.in_use, 40)),
+            None => "image: machine's".to_string(),
+        };
+        if let Some(at) = &i.built_at {
+            line.push_str(&format!(" · built {} ago", age(at, now)));
+        }
+        if let Some(why) = &i.last_failure {
+            line.push_str(&format!(" · build failed: {}", plain(why, 60)));
+        }
+        line
+    }
+
+    /// The base waiting for approval, on its own line, with the key: approving trusts that image with the stage's credential.
+    pub fn pending_line(&self) -> Option<String> {
+        self.image.pending_base.as_ref().map(|base| format!("base waiting for you: {} (A approves; it will run with the stage's credential)", plain(base, 80)))
+    }
+
+    /// The graph in one line: off, building, or its commit, distance, Graphify, age and last failure.
+    pub fn graph_line(&self, now: u64) -> String {
+        let g = &self.graph;
+        if !g.on {
+            return "graph: off".to_string();
+        }
+        let mut line = match &g.commit {
+            Some(commit) => format!("graph: {}", plain(&commit.chars().take(7).collect::<String>(), 7)),
+            None => "graph: none yet".to_string(),
+        };
+        if let Some(behind) = g.behind {
+            line.push_str(&format!(" · {behind} behind"));
+        }
+        if let Some(v) = &g.graphify {
+            line.push_str(&format!(" · graphify {}", plain(v, 16)));
+        }
+        if let Some(at) = &g.built_at {
+            line.push_str(&format!(" · built {} ago", age(at, now)));
+        }
+        if g.building {
+            line.push_str(" · building");
+        }
+        if let Some(why) = &g.last_failure {
+            line.push_str(&format!(" · failed: {}", plain(why, 60)));
+        }
+        line
+    }
+}
+
 /// One engine's row of `GET /metrics?groupBy=engine`. Unknown keys (`meanDurationMs`) are ignored.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -2166,8 +2346,11 @@ impl Task {
             "awaiting_approval" => "approve plan".to_string(),
             "awaiting_test_check" => "check tests".to_string(),
             "awaiting_ship" if self.route == "review" => "post the verdict".to_string(),
+            // Not a gate unless the machine says it waits on you: otherwise it is watching the PR.
+            "awaiting_ship" if !self.waiting_on_you => "watching the PR".to_string(),
             "awaiting_ship" => "choose ship".to_string(),
             "shipping" => "opening PR".to_string(),
+            "reviewing_memory" if !self.waiting_on_you => "retro".to_string(),
             "reviewing_memory" => "review memory".to_string(),
             "escalated" => "escalated".to_string(),
             "paused_rate_limit" => "paused: usage limit".to_string(),
@@ -2505,6 +2688,74 @@ pub fn age_secs(secs: u64) -> String {
         3600..=86_399 => format!("{}h", secs / 3600),
         _ => format!("{}d", secs / 86_400),
     }
+}
+
+/// The reports as the board reads them: only what the detail shows of Verify.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct TaskReportsView {
+    #[serde(default)]
+    pub verify: Option<VerifyReportView>,
+}
+
+/// Verify's report: its findings (by level when shown) and the browser run by scenario.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct VerifyReportView {
+    #[serde(default)]
+    pub findings: Vec<ReportFinding>,
+    #[serde(default)]
+    pub e2e: Option<ReportE2e>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ReportFinding {
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub line: i64,
+    /// The plan criterion the finding is about, when the reviewer named one.
+    #[serde(default)]
+    pub criterion_ref: Option<String>,
+    /// How it ended (fixed, kept, dismissed); open when absent.
+    #[serde(default)]
+    pub resolution: Option<serde_json::Value>,
+}
+
+impl ReportFinding {
+    /// The level of the finding: the machine's own table (`bug` and `security` block, `test`, `perf` and `question` should be fixed, `nit` and its kin are nits), an unknown word reads as should_fix.
+    pub fn level(&self) -> &'static str {
+        match self.severity.trim().to_lowercase().as_str() {
+            "bug" | "security" | "blocker" | "critical" | "high" | "major" | "error" => "blocker",
+            "nit" | "low" | "minor" | "style" | "info" | "nitpick" | "suggestion" => "nit",
+            _ => "should_fix",
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ReportE2e {
+    #[serde(default)]
+    pub verdict: Option<String>,
+    #[serde(default)]
+    pub rows: Vec<ReportRow>,
+}
+
+/// One approved scenario in the browser run: how it went, what was seen, which artifacts.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ReportRow {
+    #[serde(default)]
+    pub scenario: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub result: String,
+    #[serde(default)]
+    pub seen: String,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
 }
 
 #[cfg(test)]
@@ -3350,5 +3601,39 @@ pub(crate) mod engine_tests {
         assert_eq!(choices[1].off, None);
         assert_eq!(choices[2].engine.as_deref(), Some("codex:sol"));
         assert_eq!(choices[2].off.as_deref(), Some("no ~/.codex/auth.json"));
+    }
+
+    #[test]
+    fn a_detail_from_before_the_ship_view_parses_and_a_new_one_carries_it() {
+        let task = tests::task_json("");
+        let old: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        assert_eq!(old.ship, None);
+        let null: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[],"ship":null}}"#)).unwrap();
+        assert_eq!(null.ship, None);
+        let new: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[],"ship":{{"pr":{{"slug":"o/a","number":3,"url":"https://github.com/o/a/pull/3"}},"head":"abc","ready":false,
+            "checklist":[{{"id":"ci","ok":false,"detail":"CI is running"}}],"autoMerge":{{"allowed":false,"reason":"not ready"}},"review":{{"required":null,"by":null}},
+            "fixRounds":2,"queued":false,"quietSince":"2026-11-04T10:00:00.000Z","lastEvent":{{"class":"noise","at":"t"}},"at":"t"}}}}"#
+        ))
+        .unwrap();
+        let ship = new.ship.unwrap();
+        assert_eq!((ship.pr.number, ship.fix_rounds, ship.review.required), (3, 2, None));
+        assert_eq!(ship.checklist, vec![ShipItem { id: "ci".into(), ok: false, detail: "CI is running".into() }]);
+        let sparse: ShipView = serde_json::from_str("{}").unwrap();
+        assert!(!sparse.ready && sparse.checklist.is_empty());
+    }
+
+    #[test]
+    fn awaiting_ship_and_reviewing_memory_are_watching_and_retro_until_the_machine_waits_on_you() {
+        let mut task: Task = serde_json::from_str(&tests::task_json("")).unwrap();
+        task.state = "awaiting_ship".into();
+        assert_eq!(task.status_label(), "watching the PR");
+        task.waiting_on_you = true;
+        assert_eq!(task.status_label(), "choose ship");
+        task.state = "reviewing_memory".into();
+        assert_eq!(task.status_label(), "review memory");
+        task.waiting_on_you = false;
+        assert_eq!(task.status_label(), "retro");
+        assert_eq!(task.look(), Look::Working);
     }
 }

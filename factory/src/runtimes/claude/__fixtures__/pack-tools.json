@@ -315,7 +315,6 @@
       "Bash(graphify god-nodes:*)",
       "Write",
       "Edit",
-      "mcp__luna__slice_list",
       "Bash(gh pr view:*)",
       "Bash(gh pr diff:*)",
       "Bash(git diff:*)",
@@ -342,8 +341,7 @@
       "mcp__luna__step",
       "Bash",
       "Write",
-      "Edit",
-      "mcp__luna__slice_list"
+      "Edit"
     ]
   },
   "e2e": {

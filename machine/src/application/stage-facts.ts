@@ -22,7 +22,7 @@ export function stageFactRows(stage: string, status: string, result: Pick<StageR
   if (stage === "ci_watch" && ran && Array.isArray(detail.checks)) {
     const checks = detail.checks as Array<{ name?: string; state?: string }>;
     const failed = failedChecks(checks as never).length;
-    rows.push({ kind: "ci.status", payload: { state: failed > 0 ? "red" : "green", total: checks.length, failed } });
+    rows.push({ kind: "ci.status", payload: { state: failed > 0 ? "red" : "green", total: checks.length, failed, ...(typeof detail.class === "string" && /^[a-z_]{1,20}$/.test(detail.class) ? { class: detail.class } : {}) } });
   }
   if (stage === "evidence" && status === "passed" && typeof detail.artifactCount === "number" && detail.artifactCount > 0) {
     rows.push({ kind: "evidence.media_ready", payload: { count: detail.artifactCount } });

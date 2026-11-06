@@ -162,6 +162,16 @@ export type MergeCardInput = z.infer<typeof MergeCardInput>;
 export const DedupAnswerInput = z.object({ choice: z.enum(["duplicate", "related", "neither"]), of: z.array(z.string().uuid()).max(5).optional() });
 export type DedupAnswerInput = z.infer<typeof DedupAnswerInput>;
 
+/** A person's answer on whether an Evidence Pack was useful: a boolean from the fixed set, and a short note that is flattened before anything keeps it. */
+/** A person dismisses a finding Verify reported (the card waits at awaiting_ship): the reason stays out of the stream. */
+export const DismissFindingInput = z.object({ reason: z.string().max(500).optional() });
+export type DismissFindingInput = z.infer<typeof DismissFindingInput>;
+/** A person adds a finding Verify missed. */
+export const AddFindingInput = z.object({ title: z.string().min(1).max(200), severity: z.enum(["blocker", "should_fix", "nit"]), path: z.string().max(300).optional(), line: z.number().int().min(1).max(1_000_000).optional() });
+export type AddFindingInput = z.infer<typeof AddFindingInput>;
+export const EvidenceFeedbackInput = z.object({ useful: z.boolean(), note: z.string().max(500).optional() });
+export type EvidenceFeedbackInput = z.infer<typeof EvidenceFeedbackInput>;
+
 export const ArchiveInput = z.object({ reason: ArchiveReason });
 export type ArchiveInput = z.infer<typeof ArchiveInput>;
 
@@ -397,6 +407,29 @@ export interface BuildProgress {
   lastCheckpoint: { sha: string; follows: "red" | "green"; at: string } | null;
 }
 
+/** What a watched PR looks like from the board: the readiness checklist, why the machine will or will not merge, the clocks. Facts and fixed words only: no reviewer text, no thread. Every field read from a stored view is optional on the way back in. */
+export interface ShipView {
+  pr: { slug: string; number: number; url: string };
+  /** The head the last poll read; null before the first poll. */
+  head: string | null;
+  ready: boolean;
+  /** One entry per checklist item (fixed in code), each with its detail flattened and capped. */
+  checklist: Array<{ id: string; ok: boolean; detail: string }>;
+  /** Whether the machine may merge by itself, and the reason in a sentence. */
+  autoMerge: { allowed: boolean; reason: string };
+  /** Whether the repository requires a review (null: unreadable, so manual) and what requires it. */
+  review: { required: boolean | null; by: string | null };
+  fixRounds: number;
+  /** The PR sits in the merge queue. */
+  queued: boolean;
+  /** When the last activity on the PR was: the quiet clocks count from it. */
+  quietSince: string | null;
+  /** The last event class the watch logged, with its time. */
+  lastEvent: { class: string; at: string } | null;
+  /** When the checklist was read. */
+  at: string | null;
+}
+
 /** `GET /tasks/:id` */
 export interface TaskDetail {
   task: Task;
@@ -408,6 +441,8 @@ export interface TaskDetail {
   reports?: TaskReports;
   /** Build's progress, live; null for a card that has not begun to build. */
   buildProgress?: BuildProgress | null;
+  /** The watched PR's checklist and clocks; null for a card with no ship cursor. */
+  ship?: ShipView | null;
 }
 
 /**
@@ -512,6 +547,34 @@ export interface Slots {
 export interface UsageLatch {
   owner: CredentialOwner;
   until: string;
+}
+
+/** One repository's sandbox image and code graph, for `GET /repos`. Text (a base's name, a failure reason) is untrusted: flattened and capped by the machine, still never rendered as markup. */
+export interface RepoHealth {
+  /** The checkout's path. */
+  repo: string;
+  image: {
+    /** The image its stages run in: the machine's, or its own. */
+    inUse: string;
+    /** The base `sandbox.image.base` names; null when the repository runs on the machine's image. */
+    base: string | null;
+    /** When its own image was built by this machine; null when unknown or not its own. */
+    builtAt: string | null;
+    lastFailure: string | null;
+    /** A base the repository's luna.yaml names that no person approved yet (flattened, capped); it runs on the machine's image until `POST /repos/base/approve`. */
+    pendingBase: string | null;
+  };
+  graph: {
+    /** `policy.graph` is on. */
+    on: boolean;
+    commit: string | null;
+    /** Commits the default branch has over the graph's; null when unknown. */
+    behind: number | null;
+    graphify: string | null;
+    builtAt: string | null;
+    building: boolean;
+    lastFailure: string | null;
+  };
 }
 
 /** One repo's slice of the window, for `GET /metrics?groupBy=repo`. */

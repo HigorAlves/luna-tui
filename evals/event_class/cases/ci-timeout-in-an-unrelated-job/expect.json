@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "ci_flaky"
+    }
+  ],
+  "rubric": "A timeout in a job this change does not touch.",
+  "label": {
+    "event": {
+      "choice": "ci_flaky"
+    }
+  }
+}

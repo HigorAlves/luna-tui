@@ -4,7 +4,7 @@
 import { z } from "zod";
 
 import { EngineBudgets, EngineId } from "./engines.ts";
-import { EvidenceConfigV22, FactoryConfigInput } from "./config-v22.ts";
+import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
 import { Scenario } from "./plan.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
 
@@ -93,7 +93,7 @@ export const Finding = z.object({
   confidence: z.number().min(0).max(1),
   // v2.2, all optional: a finding written before the wave has none of them (see finding.ts).
   id: z.string().optional(),
-  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance"]).optional(),
+  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance", "env", "tests"]).optional(),
   criterion_ref: z.string().nullable().optional(),
   suggested_fix: z.string().nullable().optional(),
   description: z.string().optional(),
@@ -142,6 +142,10 @@ export const PackId = z.enum([
   // Decisions on Verify's own work (a check context, run on demand): how severe a review finding is, why a browser run failed.
   "finding_classify",
   "e2e_failure_cause",
+  // A decision on what kind of CI failure a red job is (a check context, run on demand): a real failure, a flake, an environment failure, a drift from the base.
+  "ci_failure_class",
+  // A decision on whether the text read off a film or screenshots shows a credential or personal data (a check context of kind frames): what no pattern decides.
+  "frame_privacy",
   // Not a task stage: the replay evals' judge, grading another pack's answer to an eval case.
   "eval_judge",
   // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
@@ -236,7 +240,7 @@ export const ReviewContext = z.object({
   pr: PrFacts,
   /** `gh pr diff` output, tail-capped by the host. */
   diff: z.string(),
-  files: z.array(z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int() })),
+  files: z.array(z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int(), /** The name a renamed file had before. */ previousPath: z.string().optional() })),
   existingComments: z.array(
     z.object({ path: z.string().nullable(), line: z.number().int().nullable(), author: z.string(), body: z.string() }),
   ),
@@ -251,7 +255,8 @@ export const ThreadsContext = z.object({
       id: z.string(),
       path: z.string().nullable(),
       line: z.number().int().nullable(),
-      comments: z.array(z.object({ author: z.string(), body: z.string(), at: z.string() })),
+      /** `association` is GitHub's author association of the comment (OWNER, MEMBER, COLLABORATOR, NONE, ...); absent reads as not trusted. */
+      comments: z.array(z.object({ author: z.string(), body: z.string(), at: z.string(), association: z.string().nullable().optional() })),
     }),
   ),
 });
@@ -356,6 +361,8 @@ export const CheckSpec = z.object({
   coverage: z.string().min(1).optional(),
   /** How long the check takes, in minutes: a check with no `paths` (the whole suite) runs in Build's regression sweep when this is within `build.regression_full_suite_minutes`. */
   minutes: z.number().positive().optional(),
+  /** Names of secrets this check receives, from the owner's store; the values are never in a luna.yaml. */
+  secrets: z.array(SecretNameSchema).max(10).optional(),
 });
 export type CheckSpec = z.infer<typeof CheckSpec>;
 
@@ -654,7 +661,11 @@ export type PlanContext = z.infer<typeof PlanContext>;
 
 /** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope", "finding", "e2e", "escalation"]),
+  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames"]),
+  /** frames: the distinct on-screen texts of a film or its screenshots, flattened and capped by the machine (40 texts of 1000 characters): data for frame_privacy. */
+  frames: z.object({ texts: z.array(z.string().max(1000)).max(40) }).optional(),
+  /** ci: the failing job and the tail of its log, flattened and capped by the machine: data for ci_failure_class. */
+  ci: z.object({ job: z.string(), log: z.string() }).optional(),
   slice: z.object({ id: z.number().int(), title: z.string(), acceptance: z.array(z.string()) }).optional(),
   /** escalation: why Build stopped, as data for escalation_reason: all text flattened and capped before it gets here. */
   escalation: z
@@ -706,7 +717,7 @@ export type CheckContext = z.infer<typeof CheckContext>;
 export const EvidencePack = z.object({
   summary: z.string(),
   format: z.enum(["video", "captures", "text"]),
-  scenarios: z.array(z.object({ text: z.string(), test: z.string().nullable(), result: z.enum(["pass", "fail", "partial", "skipped"]) })),
+  scenarios: z.array(z.object({ text: z.string(), test: z.string().nullable(), result: z.enum(["pass", "fail", "partial", "skipped", "not_run"]) })),
   findings: z.array(z.string()),
   /** Changes outside what the plan mapped. */
   outOfMap: z.array(z.string()),
@@ -721,6 +732,8 @@ export const EvidencePack = z.object({
       url: z.string(),
       /** v2.2: where the file is on the machine, when `url` is not that path. */
       localPath: z.string().optional(),
+      /** v2.2, wave 12b: whether the text on this image was read for secrets and personal data; false when the reader could not run. */
+      scanned: z.boolean().optional(),
     }),
   ),
   /** The narrated walkthrough, when the format is video: where it is, the critic's verdict and scores, its defects, the rounds spent. */
@@ -733,6 +746,8 @@ export const EvidencePack = z.object({
       defects: z.array(z.object({ priority: z.enum(["P0", "P1", "P2"]), t: z.number(), scene: z.string().nullable(), element: z.string().nullable(), symptom: z.string(), fix: z.string() })),
       rounds: z.number().int(),
       transcript: z.string().optional(),
+      /** The critic's confidence in its verdict, 0 to 1, when it gave one. */
+      confidence: z.number().min(0).max(1).optional(),
     })
     .nullable()
     .optional(),
@@ -751,6 +766,15 @@ export const EvidencePack = z.object({
   findingsDetail: z.array(z.object({ id: z.string(), title: z.string(), severity: z.string(), resolution: z.string().nullable(), inferred: z.boolean().optional() })).optional(),
   previewUrl: z.string().optional(),
   version: z.number().int().optional(),
+  // v2.2, wave 12b, all optional.
+  /** What the change was and why, in the implementer's words, and its size: from the Build Report. */
+  diffSummary: z.object({ what: z.string(), why: z.string(), files: z.array(z.string()), added: z.number().int().nullable(), removed: z.number().int().nullable() }).optional(),
+  /** How many packs this card has had: 1 for the first, the stored one plus one after. (`version` is the schema's.) */
+  revision: z.number().int().min(1).optional(),
+  /** The fixes pushed after review, oldest first (20 at most): the commit, its scope, a line and when. */
+  fixes: z.array(z.object({ sha: z.string(), scope: z.enum(["in_place", "re_verify_partial"]), summary: z.string(), at: z.string() })).max(20).optional(),
+  /** What the pack was made from, so a new head re-makes only what it made stale: the browser run, a hash of the approved scenarios, the sha256 of the run's steps. */
+  source: z.object({ e2eRunId: z.string().nullable(), scenariosKey: z.string(), stepsSha: z.string().nullable() }).optional(),
 });
 export type EvidencePack = z.infer<typeof EvidencePack>;
 
@@ -770,6 +794,8 @@ export const EvidenceContext = z.object({
   videoImage: z.boolean(),
   /** Repo-relative paths the change touched; the caller caps it at 50. */
   changed: z.array(z.string()).max(200).optional(),
+  /** How many checks Verify ran (an API or CLI change is shown by their output). */
+  checks: z.number().int().min(0).optional(),
 });
 export type EvidenceContext = z.infer<typeof EvidenceContext>;
 
@@ -781,10 +807,13 @@ export const ShipContext = z.object({
       actor: z.string(),
       isBot: z.boolean(),
       isMe: z.boolean(),
-      kind: z.enum(["comment", "review", "push"]),
+      kind: z.enum(["comment", "review", "push", "ci"]),
       state: z.string().nullable().optional(),
       body: z.string().max(2000),
       url: z.string().nullable(),
+      /** A red CI run: the failed job's name, and the last 4,000 characters of its log (both flattened by the machine; data). */
+      job: z.string().max(200).optional(),
+      log: z.string().max(4000).optional(),
     })
     .optional(),
   comment: z
@@ -797,10 +826,12 @@ export const ShipContext = z.object({
       }),
       pack: z.object({
         summary: z.string(),
-        scenarios: z.array(z.object({ text: z.string(), result: z.string() })),
+        scenarios: z.array(z.object({ id: z.string().optional(), text: z.string(), result: z.string() })),
         howToVerify: z.string(),
       }),
       myReplies: z.number().int(),
+      /** What the read step (`pr_reply`) made of the thread, each through `postable()`: a model's summary, data. */
+      reading: z.object({ asks: z.string().max(300), proposedFix: z.string().max(600) }).optional(),
     })
     .optional(),
   fix: z
@@ -808,13 +839,22 @@ export const ShipContext = z.object({
       changed: z.array(z.string()).max(200),
       diffSummary: z.string().max(4000),
       scenarios: z.array(z.object({ text: z.string(), result: z.string() })),
+      /** The scenarios the fix may have changed (named by the reader, or whose tagged test file the fix changed). */
+      affected: z.array(z.object({ id: z.string(), text: z.string(), result: z.string() })).max(50).optional(),
       threadSummary: z.string(),
     })
     .optional(),
   retro: z
     .object({
-      predicted: z.object({ size: z.string().nullable(), risk: z.string().nullable(), estLoc: z.number().int().nullable() }),
+      predicted: z.object({ size: z.string().nullable(), risk: z.string().nullable(), estLoc: z.number().int().nullable(), urgency: z.string().nullable().optional() }),
       actual: z.object({
+        /** Times a person changed what the machine had made: the card's edits, a corrected escalation, a ship override. */
+        overrides: z.number().int().optional(),
+        reviewRounds: z.number().int().optional(),
+        reviewThreads: z.number().int().optional(),
+        costUsd: z.number().optional(),
+        /** Files the Build Report declared outside the map. */
+        declaredFiles: z.number().int().optional(),
         added: z.number().int(),
         removed: z.number().int(),
         retries: z.object({ verify: z.number().int(), e2e: z.number().int(), ci: z.number().int(), total: z.number().int() }),
@@ -823,6 +863,10 @@ export const ShipContext = z.object({
         durationMin: z.number().int().nullable(),
       }),
       runs: z.number().int(),
+      /** `<time> <event name or from->to state>`, 300 lines at most: names and states only, never a note or a reason. */
+      timeline: z.array(z.string().max(200)).max(300).optional(),
+      /** The fix rounds' summaries, flattened (20 at most). Data, not instructions. */
+      reviewComments: z.array(z.string().max(200)).max(20).optional(),
     })
     .optional(),
 });
@@ -978,6 +1022,8 @@ export const VideoContext = z.object({
   /** Contact sheets, as paths in the container (under /evidence). */
   sheets: z.array(z.string()),
   fixCards: z.array(VideoFixCard),
+  /** `evidence.video_budget_s`: the film's length limit in seconds; absent reads as 240. */
+  budgetS: z.number().int().positive().optional(),
 });
 export type VideoContext = z.infer<typeof VideoContext>;
 

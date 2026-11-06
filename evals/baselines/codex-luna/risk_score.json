@@ -3,7 +3,7 @@
   "pack": "risk_score",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T17:30:57.112Z",
+  "at": "2026-11-05T22:45:17.297Z",
   "model": "gpt-6-luna-fast",
   "summary": {
     "cases": 4,
@@ -11,7 +11,7 @@
     "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 3520.5,
+    "meanDurationMs": 3111,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
@@ -20,9 +20,9 @@
       "accuracy": 0.6666666666666666,
       "actedOnAccuracy": 0.6666666666666666,
       "coverage": 1,
-      "brier": 0.28934166666666666,
-      "ece": 0.28833333333333344,
-      "meanConfidence": 0.946875,
+      "brier": 0.2907604166666666,
+      "ece": 0.28916666666666657,
+      "meanConfidence": 0.9474999999999999,
       "overconfident": 1
     }
   },
@@ -49,12 +49,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4394,
+      "durationMs": 2761,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.945,
+        "confidence": 0.9500000000000001,
         "verdict": "proceed"
       }
     },
@@ -90,12 +90,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3279,
+      "durationMs": 2958,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.99,
+        "confidence": 0.9850000000000001,
         "verdict": "proceed"
       }
     },
@@ -131,12 +131,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2848,
+      "durationMs": 3868,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": false,
-        "confidence": 0.9299999999999999,
+        "confidence": 0.9324999999999999,
         "verdict": "proceed"
       }
     },
@@ -152,7 +152,7 @@
         {
           "check": "blast_radius.confidence within 0..0.85",
           "pass": false,
-          "detail": "found 0.93"
+          "detail": "found 0.97"
         },
         {
           "check": "complexity.choice in [\"S\",\"M\"]",
@@ -162,7 +162,7 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3561,
+      "durationMs": 2857,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {

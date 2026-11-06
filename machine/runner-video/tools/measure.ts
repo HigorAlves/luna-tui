@@ -84,7 +84,8 @@ if (info.hasAudio) {
   }
 }
 
-const found = checks({ info, picture, audio, timeline: effective });
+const maxArg = typeof args["max-s"] === "string" ? Number(args["max-s"]) : NaN;
+const found = checks({ info, picture, audio, timeline: effective, ...(Number.isFinite(maxArg) && maxArg > 0 ? { maxS: maxArg } : {}) });
 const verdict = verdictOf(found);
 
 // Contact sheets: frames to a temp folder inside the job, tiled by ffmpeg.

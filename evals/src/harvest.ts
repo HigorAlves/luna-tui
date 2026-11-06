@@ -1,7 +1,7 @@
 // Harvest: decision records become cases (`evals/<pack>/cases/<id>/{stage.json,expect.json}`). The
 // record's context is scrubbed first; a record the scrub refuses is named and left out. A case that
 // exists is never overwritten: the repository is the source of truth, reviewed in a PR.
-import type { DecisionRecord, PackId, StageInput } from "@hardness/contracts";
+import { type DecisionRecord, type PackId, type StageInput, eventClassOf } from "@hardness/contracts";
 import { type ContextPackId, buildContextPackInput, contextSchema, isContextPack } from "@hardness/machine/decisions";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -53,6 +53,13 @@ export interface HarvestReport {
   refused: Array<{ id: string; reason: string }>;
 }
 
+/** A label stored before the nine classes reads as the class it became. */
+function currentLabel(pack: PackId, label: Label | null): Label | null {
+  const choice = pack === "event_class" ? (label as { event?: { choice?: unknown } } | null)?.event?.choice : undefined;
+  const now = typeof choice === "string" ? eventClassOf(choice) : null;
+  return now ? ({ event: { choice: now } } as Label) : label;
+}
+
 /** The harvest of `records` (one pack's) into `evalsDir`: scrub, write, report. */
 export function harvest(evalsDir: string, pack: PackId, records: DecisionRecord[]): HarvestReport {
   const report: HarvestReport = { written: [], kept: [], refused: [] };
@@ -70,7 +77,7 @@ export function harvest(evalsDir: string, pack: PackId, records: DecisionRecord[
     }
     let files: CaseFiles;
     try {
-      files = caseOf(pack, id, scrubbed.value, (record.truth?.label as Label | undefined) ?? null, { recordId: record.id, traceId: record.traceId, modelAnswer: record.answer });
+      files = caseOf(pack, id, scrubbed.value, currentLabel(pack, (record.truth?.label as Label | undefined) ?? null), { recordId: record.id, traceId: record.traceId, modelAnswer: record.answer });
     } catch (error) {
       report.refused.push({ id: record.id, reason: `the context is off the pack's schema: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}` });
       continue;

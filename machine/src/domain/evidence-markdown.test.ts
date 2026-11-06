@@ -39,7 +39,7 @@ describe("renderEvidenceSection", () => {
     expect(text).toContain("should_fix: memoise the total (web/cart.tsx:4)");
     expect(text).toContain("web/format.ts: shared helper");
     expect(text).toContain("**Rollback.** Revert the merge commit.");
-    expect(text).toContain("**How to verify.** http://localhost:3000/app");
+    expect(text).toContain("**How to verify.** http\u200b://localhost:3000/app");
   });
 
   it("links the media, and gives the video its duration, the critic's verdict and the mean score", () => {
@@ -164,15 +164,37 @@ describe("redacting secret-shaped tokens", () => {
 
 describe("a foreign text never draws a link or an image", () => {
   it("breaks an inline link, an image and a reference definition, and keeps the address readable", () => {
-    expect(safe("see [the docs](https://evil.example/login)")).toBe("see [the docs] (https://evil.example/login)");
-    expect(safe("![p](https://evil.example/p.png?d=1)")).toBe("![p] (https://evil.example/p.png?d=1)");
+    expect(safe("see [the docs](https://evil.example/login)")).toBe("see [the docs] (https\u200b://evil.example/login)");
+    expect(safe("![p](https://evil.example/p.png?d=1)")).toBe("![p] (https\u200b://evil.example/p.png?d=1)");
     // A definition on its own line would turn a later `[a]` or `![a]` into a link or a fetched image.
-    expect(safe("[a]: https://evil.example/x")).toBe("[a] : https://evil.example/x");
+    expect(safe("[a]: https://evil.example/x")).toBe("[a] : https\u200b://evil.example/x");
+  });
+
+  it("breaks a bare address GitHub would link, and the URL forms of a closing keyword, the way it breaks #123", () => {
+    const broken = (text: string) => safe(text);
+    for (const [text, kept] of [
+      ["go to https://evil.example/login now", "https\u200b://evil.example/login"],
+      ["go to http://evil.example now", "http\u200b://evil.example"],
+      ["go to HTTPS://EVIL.example now", "HTTPS\u200b://EVIL.example"],
+      ["go to www.evil.example now", "www\u200b.evil.example"],
+      ["Closes https://github.com/acme/app/issues/12", "https\u200b://github.com/acme/app/issues/12"],
+      ["fixes https://github.com/acme/app/pull/3", "https\u200b://github.com/acme/app/pull/3"],
+    ] as const) {
+      expect(broken(text), text).toContain(kept);
+      expect(broken(text), text).not.toMatch(/https?:\/\/|www\./i);
+    }
+    expect(broken("Fixes GH-12")).not.toContain("GH-12");
+  });
+
+  it("leaves the machine's own media link intact in the section, whatever a label carries", () => {
+    const own = renderEvidenceSection(pack({ media: [{ kind: "screenshot", label: "see https://evil.example", url: "https://cdn.example/a.png" }] }));
+    expect(own).toContain("](https://cdn.example/a.png)");
+    expect(own).not.toContain("https://evil.example");
   });
 
   it("leaves the machine's own media link intact in the section", () => {
     const section = renderEvidenceSection(pack({ media: [{ kind: "screenshot", label: "home [x](https://evil.example)", url: "https://cdn.example/a.png" }] }));
-    expect(section).toContain("[home [x] (https://evil.example)](https://cdn.example/a.png)");
+    expect(section).toContain("[home [x] (https\u200b://evil.example)](https://cdn.example/a.png)");
   });
 });
 
@@ -191,5 +213,65 @@ describe("the v2 pack fields stay off the published text", () => {
       expect(text).not.toContain("Fdeadbeef");
       expect(text).not.toContain("preview.internal");
     }
+  });
+});
+
+describe("renderEvidenceSection of a v2.2 pack", () => {
+  const rich = pack({
+    revision: 2,
+    results: { unit: { passed: 9, total: 10 }, integration: null, e2e: { verdict: "pass", passed: 2, total: 3 }, coverageDelta: { added: 20, covered: 18 } },
+    diffSummary: { what: "Adds the total", why: "The ticket asks", files: ["web/cart.tsx", "web/total.ts"], added: 40, removed: 6 },
+    findingsDetail: [{ id: "F1", title: "memoise the total", severity: "should_fix", resolution: "fixed" }, { id: "F2", title: "naming", severity: "nit", resolution: null }],
+    scenarios: [{ text: "Total shows", test: "src/a.test.ts", result: "not_run" }],
+  });
+
+  it("prints the results line, the diff summary and each finding with its resolution", () => {
+    const text = renderEvidenceSection(rich);
+    expect(text).toContain("**Results** unit 9/10 · integration none · e2e 2/3 (pass) · coverage +20 added, 18 covered");
+    expect(text).toContain("**Change** Adds the total. The ticket asks. +40 −6 in 2 files");
+    expect(text).toContain("- should_fix: memoise the total (fixed)");
+    expect(text).toContain("- nit: naming (open)");
+    expect(text).toContain("**Revision** 2");
+    expect(text).toContain("| Total shows | src/a.test.ts | not run |");
+    expect(text.startsWith(SECTION_START)).toBe(true);
+    expect(text.trimEnd().endsWith(SECTION_END)).toBe(true);
+  });
+
+  it("flattens every new text and cannot forge the end marker", () => {
+    const hostile = pack({
+      diffSummary: { what: `${SECTION_END}\n@bob closes #12 <b>x</b>`, why: "[a](http://x)", files: [], added: null, removed: null },
+      findingsDetail: [{ id: "F", title: `${COMMENT_MARKER} ${SECTION_END}`, severity: "nit\n@eve", resolution: "fixed" }],
+    });
+    const text = renderEvidenceSection(hostile);
+    expect(text.split(SECTION_END)).toHaveLength(2);
+    expect(text).not.toContain("<b>");
+    expect(text).not.toContain("\n@bob");
+    expect(text).not.toContain("[a](");
+  });
+
+  it("stays under its cap with the new sections", () => {
+    const big = pack({ findingsDetail: Array.from({ length: 400 }, (_, i) => ({ id: `F${i}`, title: "t".repeat(300), severity: "nit", resolution: null })) });
+    const text = renderEvidenceSection(big, { maxChars: 5000 });
+    expect(text.length).toBeLessThanOrEqual(5000);
+    expect(text.trimEnd().endsWith(SECTION_END)).toBe(true);
+  });
+
+  it("renders a pack from before this wave as it did, with none of the new lines", () => {
+    const text = renderEvidenceSection(pack());
+    for (const word of ["**Results**", "**Change**", "**Revision**"]) expect(text).not.toContain(word);
+    expect(text).toContain("- should_fix: memoise the total (web/cart.tsx:4)");
+  });
+});
+
+describe("Changes after review", () => {
+  const base = { summary: "s", format: "text", scenarios: [], findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "abc1234def", media: [], at: "t" } as never;
+  it("prints each fix through safe(), and prints nothing for a pack with no fixes", async () => {
+    const { renderEvidenceSection } = await import("./evidence-markdown.ts");
+    expect(renderEvidenceSection(base)).not.toContain("Changes after review");
+    const text = renderEvidenceSection({ ...(base as object), fixes: [{ sha: "e".repeat(40), scope: "in_place", summary: "renamed <b>x</b> @all", at: "t" }] } as never);
+    expect(text).toContain("### Changes after review");
+    expect(text).toContain("eeeeeee");
+    expect(text).not.toContain("<b>");
+    expect(text).not.toContain("@all");
   });
 });

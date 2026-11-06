@@ -160,6 +160,22 @@ export class TaskBusyError extends Error {
   }
 }
 
+/** A card's clone holds commits no remote has: removing it would drop them. */
+export class WorktreeUnpushedError extends Error {
+  constructor(id: string, public readonly commits: number) {
+    super(`task ${id}'s workspace holds ${commits} unpushed commit(s); push them, or remove it with discard`);
+    this.name = "WorktreeUnpushedError";
+  }
+}
+
+/** Feedback on an Evidence Pack the card does not have. */
+export class NoEvidenceError extends Error {
+  constructor(id: string) {
+    super(`task ${id} has no Evidence Pack to give feedback on`);
+    this.name = "NoEvidenceError";
+  }
+}
+
 /** No plan to edit: the ticket is neither awaiting the plan's approval nor at the test check. */
 export class NoPlanToEditError extends Error {
   constructor(id: string) {
@@ -240,8 +256,23 @@ export class PlanApprovedError extends Error {
 /** A rejection anywhere but the plan gate: only a plan is rejected, and only while it waits. */
 export class RejectNotAllowedError extends Error {
   constructor(id: string, state: string) {
-    super(`task ${id} is ${state}: a card is rejected only at the plan gate`);
+    super(`task ${id} is ${state}: a card is rejected only at the plan gate or the release question`);
     this.name = "RejectNotAllowedError";
+  }
+}
+
+/** A High-risk release approved by someone the gate's release owners do not name. */
+export class FindingNotFoundError extends Error {
+  constructor(readonly findingId: string) {
+    super("the last Verify did not report that finding");
+    this.name = "FindingNotFoundError";
+  }
+}
+
+export class NotReleaseOwnerError extends Error {
+  constructor(id: string, approver: string) {
+    super(`task ${id}: ${approver} is not one of the release owners this question names`);
+    this.name = "NotReleaseOwnerError";
   }
 }
 

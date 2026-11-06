@@ -30,6 +30,19 @@ describe("archive", () => {
   });
 });
 
+describe("evidence without the preview gate", () => {
+  it("goes straight to shipping on a pass unless the repository keeps the preview", () => {
+    const step = transition(at("evidence"), { type: "stage_done", outcome: "pass" });
+    expect(step).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("evidence"), { type: "stage_done", outcome: "pass", preview: false })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("evidence"), { type: "stage_done", outcome: "pass", preview: true })).toMatchObject({ state: "awaiting_ship", effect: { kind: "wait", gate: "awaiting_ship" } });
+  });
+
+  it("a card already at awaiting_ship is approved or sent back as before", () => {
+    expect(transition(at("awaiting_ship"), { type: "sent_back" })).toMatchObject({ state: "evidence" });
+  });
+});
+
 describe("evidence at the ship gate", () => {
   it("a feature task sent back at awaiting_ship re-runs evidence", () => {
     expect(transition(at("awaiting_ship", { retries: { ...NO_RETRIES, total: 2 } }), { type: "sent_back" })).toMatchObject({ state: "evidence", effect: { kind: "run", stage: "evidence" }, retries: { total: 2 } });
@@ -127,9 +140,10 @@ describe("happy path", () => {
       pass, // e2e
       pass, // delivering
       pass, // ci_watch
-      pass, // evidence
-      approved, // ship targets
-      pass, // shipping
+      { ...pass, preview: true }, // evidence, the repository keeps the preview gate
+      approved, // the preview gate: publishes and starts the watch
+      pass, // the watch at awaiting_ship: a merge to make
+      pass, // shipping: the merge
       approved, // memory proposals
     ]);
 
@@ -143,6 +157,7 @@ describe("happy path", () => {
       "delivering",
       "ci_watch",
       "evidence",
+      "awaiting_ship",
       "awaiting_ship",
       "shipping",
       "reviewing_memory",
@@ -231,11 +246,13 @@ describe("retry loops", () => {
     expect(last?.retries.total).toBe(2);
   });
 
-  it("counts evidence failures against the e2e loop", () => {
+  it("never sends a card back to Build from Evidence: a failure asks a person and resumes at Evidence", () => {
     const start = at("implementing", { retries: { ...NO_RETRIES, total: 1 } });
     const last = play(start, [...toEvidence, fail]).at(-1);
-    expect(last?.state).toBe("implementing");
-    expect(last?.retries.e2e).toBe(1);
+    expect(last?.state).toBe("escalated");
+    expect(last?.effect).toEqual({ kind: "wait", gate: "escalated" });
+    expect(last?.resumeTo).toBe("evidence");
+    expect(last?.retries.e2e).toBe(0);
   });
 
   it(`escalates after ${LOOP_CAP} failures in one loop`, () => {
@@ -245,6 +262,42 @@ describe("retry loops", () => {
     expect(step.effect).toEqual({ kind: "wait", gate: "escalated" });
     expect(step.reason).toMatch(/verify failed 3 times/);
     expect(step.resumeTo).toBe("implementing");
+  });
+
+  it("takes the browser run's and CI's caps from the event, three when it has none", () => {
+    const e2e = (loopCap?: number): PipelineEvent => ({ type: "stage_done", outcome: "fail", ...(loopCap ? { loopCap } : {}) });
+    const two = at("e2e", { retries: { ...NO_RETRIES, e2e: 1, total: 2 } });
+    expect(transition(two, e2e()).state).toBe("implementing");
+    expect(transition(two, e2e(2))).toMatchObject({ state: "escalated", reason: "e2e failed 2 times" });
+    const ci = at("ci_watch", { route: "ci_fix", retries: { ...NO_RETRIES, ci: 3, total: 2 } });
+    expect(transition(ci, e2e(5)).state).not.toBe("escalated");
+  });
+
+  describe("one Build round per set of blocker findings", () => {
+    const failing = (findingSet: string, buildRounds?: number): PipelineEvent => ({ type: "stage_done", outcome: "fail", findingSet, ...(buildRounds ? { buildRounds } : {}) });
+
+    it("sends a first set to Build and remembers it", () => {
+      const step = transition(at("verifying"), failing("k1"));
+      expect(step.state).toBe("implementing");
+      expect(step.retries.findingSet).toEqual({ key: "k1", rounds: 1 });
+    });
+
+    it("asks a person when the same set comes back after its rounds, with the findings named in the reason", () => {
+      const step = transition(at("verifying", { retries: { ...NO_RETRIES, verify: 1, total: 2, findingSet: { key: "k1", rounds: 1 } } }), failing("k1"));
+      expect(step.state).toBe("escalated");
+      expect(step.reason).toMatch(/same findings came back after 1 round/);
+      expect(step.resumeTo).toBe("implementing");
+    });
+
+    it("lets Build have more rounds when the config says so, and starts a new count for a new set", () => {
+      const again = at("verifying", { retries: { ...NO_RETRIES, verify: 1, total: 2, findingSet: { key: "k1", rounds: 1 } } });
+      expect(transition(again, failing("k1", 2)).state).toBe("implementing");
+      expect(transition(again, failing("k2")).retries.findingSet).toEqual({ key: "k2", rounds: 1 });
+    });
+
+    it("keeps the loop cap for a failure with no blocker set", () => {
+      expect(transition(at("verifying"), fail).retries.verify).toBe(1);
+    });
   });
 
   it(`escalates when the implementer has used all ${IMPLEMENTER_CAP} runs`, () => {
@@ -310,7 +363,7 @@ describe("a task over its budget", () => {
   });
 
   it("is rejected outside a running state", () => {
-    expect(() => transition(at("awaiting_ship"), { type: "over_budget", reason: "x" })).toThrow(TransitionError);
+    expect(() => transition(at("awaiting_approval"), { type: "over_budget", reason: "x" })).toThrow(TransitionError);
   });
 });
 
@@ -550,5 +603,65 @@ describe("a card merged into another", () => {
   });
   it.each([...TERMINAL])("%s cannot be merged", (state) => {
     expect(() => transition(at(state), { type: "merged" })).toThrow(TransitionError);
+  });
+});
+
+describe("awaiting_ship and reviewing_memory hold a running stage or an open gate (feature route)", () => {
+  it.each(["crash", "over_budget", "abort"] as const)("%s at awaiting_ship escalates with resumeTo awaiting_ship", (type) => {
+    const event: PipelineEvent = type === "crash" ? { type, error: "x" } : type === "over_budget" ? { type, reason: "r" } : { type };
+    expect(transition(at("awaiting_ship"), event)).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship" });
+    expect(transition(at("reviewing_memory"), event)).toMatchObject({ state: "escalated", resumeTo: "reviewing_memory" });
+  });
+  it("rate_limited at awaiting_ship pauses and the window reset resumes there", () => {
+    const paused = transition(at("awaiting_ship"), { type: "rate_limited" });
+    expect(paused).toMatchObject({ state: "paused_rate_limit", resumeTo: "awaiting_ship", effect: { kind: "pause" } });
+    expect(transition(at("paused_rate_limit", { resumeTo: "awaiting_ship" }), { type: "window_reset" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+  });
+  it("the review route's verdict gate is untouched", () => {
+    expect(() => transition(at("awaiting_ship", { route: "review" }), { type: "crash", error: "x" })).toThrow(TransitionError);
+  });
+  it("stage_done at awaiting_ship: pass runs shipping, needs_input waits, fail escalates", () => {
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "shipping", effect: { kind: "run", stage: "shipping" } });
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "needs_input" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "wait", gate: "awaiting_ship" } });
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "fail" })).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship", reason: "the ship watch failed" });
+  });
+  it("shipping passes to the retro stage; the retro closes the card, or waits when it has proposals; a failed retro closes it with the reason kept", () => {
+    expect(transition(at("shipping"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "reviewing_memory", effect: { kind: "run", stage: "reviewing_memory" } });
+    expect(transition(at("reviewing_memory"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+    expect(transition(at("reviewing_memory"), { type: "stage_done", outcome: "pass", proposals: true })).toMatchObject({ state: "reviewing_memory", effect: { kind: "wait", gate: "reviewing_memory" } });
+    expect(transition(at("reviewing_memory"), { type: "stage_done", outcome: "fail", reason: "the retro broke" })).toMatchObject({ state: "closed", effect: { kind: "done" }, reason: "the retro broke" });
+  });
+  it("a usage limit during the retro pauses there and resumes there", () => {
+    expect(transition(at("reviewing_memory"), { type: "rate_limited" })).toMatchObject({ state: "paused_rate_limit", resumeTo: "reviewing_memory" });
+    expect(transition(at("paused_rate_limit", { resumeTo: "reviewing_memory" }), { type: "window_reset" })).toMatchObject({ state: "reviewing_memory", effect: { kind: "run", stage: "reviewing_memory" } });
+  });
+  it("approved at the retro gate closes, as before", () => {
+    expect(transition(at("reviewing_memory"), { type: "approved" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+  });
+  it("plan_wrong from awaiting_ship runs the plan stage once per card", () => {
+    const step = transition(at("awaiting_ship"), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" });
+    expect(step).toMatchObject({ state: "test_design", retries: { planWrong: 1 }, escalation: "plan_wrong" });
+    const again = transition(at("awaiting_ship", { retries: { ...NO_RETRIES, planWrong: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" });
+    expect(again).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship" });
+  });
+  it("head_moved from awaiting_ship or shipping runs evidence, or e2e when media are to be refreshed", () => {
+    for (const state of ["awaiting_ship", "shipping"] as const) {
+      expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r" })).toMatchObject({ state: "evidence" });
+      expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r", refresh: "media" })).toMatchObject({ state: "e2e", effect: { kind: "run", stage: "e2e" } });
+    }
+  });
+  it("another escalation at awaiting_ship asks a person and resumes there", () => {
+    expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "escalated", reason: "stuck" })).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship", reason: "stuck" });
+  });
+  it("shipping that is not ready hands the card back to the watch", () => {
+    expect(transition(at("shipping"), { type: "stage_done", outcome: "fail", notReady: true })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("shipping"), { type: "stage_done", outcome: "fail" })).toMatchObject({ state: "escalated", resumeTo: "shipping" });
+  });
+  it("the ship approval's answers: approved runs shipping, sent_back runs the watch again; without the gate both are as before", () => {
+    expect(transition(at("awaiting_ship"), { type: "approved", gate: "ship_approval" })).toMatchObject({ state: "shipping" });
+    expect(transition(at("awaiting_ship"), { type: "sent_back", gate: "ship_approval" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    // The preview gate (no `gate`, and any gate stored before this wave): approving publishes and starts the watch.
+    expect(transition(at("awaiting_ship"), { type: "approved" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("awaiting_ship"), { type: "sent_back" })).toMatchObject({ state: "evidence" });
   });
 });

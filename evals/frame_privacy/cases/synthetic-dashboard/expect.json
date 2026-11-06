@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "exposure.choice",
+      "value": "none"
+    }
+  ],
+  "rubric": "A dashboard with placeholder data: Jane Doe at example.com is synthetic, so none.",
+  "label": {
+    "exposure": {
+      "choice": "none"
+    }
+  }
+}

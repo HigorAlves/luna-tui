@@ -1,0 +1,35 @@
+{
+  "schema": 3,
+  "stage": "ci_failure_class",
+  "pack": "ci_failure_class",
+  "attempt": 1,
+  "task": {
+    "id": "ci-failure-class",
+    "title": "CI failure: test (ubuntu)",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "ci",
+      "ci": {
+        "job": "test (ubuntu)",
+        "log": "FAIL src/cart/export.test.ts\n  x exports one row per item\n    expected 3 rows, received 2\n      at src/cart/export.ts:41:12\nTests: 1 failed, 40 passed"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

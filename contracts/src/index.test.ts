@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { DecisionInput, EditCasesInput, EditPlanInput } from "./api.ts";
 import { readFileSync } from "node:fs";
-import { COLUMNS, COLUMN_OF, RUNNING, TERMINAL, TaskState, WAITING_ON_USER, isTerminal } from "./index.ts";
+import { COLUMNS, COLUMN_OF, RUNNING, RUN_OR_GATE, TERMINAL, TaskState, WAITING_ON_USER, isTerminal, waitsOnPerson } from "./index.ts";
 
 describe("task states", () => {
   it("ends in closed or archived, both in Done", () => {
@@ -163,5 +163,19 @@ describe("decision input", () => {
     expect(COLUMNS[0]).toBe("Intake");
     expect(TaskState.options).not.toContain("backlog");
     expect(COLUMN_OF.draft).toBe("Intake");
+  });
+});
+
+describe("states that hold a stage or a gate", () => {
+  it("are awaiting_ship and reviewing_memory", () => {
+    expect([...RUN_OR_GATE].sort()).toEqual(["awaiting_ship", "reviewing_memory"]);
+  });
+  it("wait on a person only with an open gate; other states as WAITING_ON_USER says", () => {
+    expect(waitsOnPerson("awaiting_ship", false)).toBe(false);
+    expect(waitsOnPerson("awaiting_ship", true)).toBe(true);
+    expect(waitsOnPerson("reviewing_memory", false)).toBe(false);
+    expect(waitsOnPerson("reviewing_memory", true)).toBe(true);
+    expect(waitsOnPerson("awaiting_approval", false)).toBe(true);
+    expect(waitsOnPerson("implementing", true)).toBe(false);
   });
 });

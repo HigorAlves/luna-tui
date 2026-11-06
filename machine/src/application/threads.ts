@@ -3,19 +3,19 @@
 // set; never for a notch task, whose ticket the notch talks about. Only the moments that
 // matter get a line: picked up, needs you, escalated, paused, the PR, closed. Stage-to-stage
 // progress stays on the board.
-import { WAITING_ON_USER, type TaskState } from "@hardness/contracts";
+import { RUN_OR_GATE, WAITING_ON_USER, type TaskState } from "@hardness/contracts";
 import { basename } from "node:path";
 
 import { safe } from "../domain/evidence-markdown.ts";
 import { archivedNotice } from "../domain/notices.ts";
 import { holdsForeignAddress } from "../domain/address-rule.ts";
-import { carriesSecret, postable } from "../domain/postable.ts";
+import { carriesSecret, isMachineNotice, postable } from "../domain/postable.ts";
 import { ADDRESS_REFUSED } from "./conversation-draft.ts";
 import { fromNotch } from "../domain/jira-link.ts";
 import { type GitHub, messageOf } from "./github.ts";
 import type { EventRow, TaskRow } from "../domain/task.ts";
 import type { Pipeline } from "./pipeline.ts";
-import { ShippedEvent, shippedSummary } from "./ship-loop.ts";
+import { ShippedEvent, isShippedKind, shippedSummary } from "./ship-loop.ts";
 import type { Slack } from "./slack.ts";
 import { type Authority, SlackSender, standingOf, tapOfEvent } from "./slack-send.ts";
 import type { ConversationDrafts, DraftKind } from "./conversation-drafts.ts";
@@ -60,6 +60,9 @@ const ASKS: Partial<Record<TaskState, string>> = {
   reviewing_memory: "review the memory proposal",
 };
 
+/** A transition into a state that waits on a person; a state that holds a stage or a gate waits only when the step opened a gate (also when it stays in the state). */
+export const needsYou = (to: TaskState, from: TaskState, gate: boolean): boolean => (RUN_OR_GATE.has(to) ? gate : WAITING_ON_USER.has(to) && to !== from);
+
 export class ThreadReplies {
   private readonly pending = new Set<Promise<void>>();
   /** Slack thread per task, once known; filled from `thread.opened` events after a restart. */
@@ -85,14 +88,14 @@ export class ThreadReplies {
 
   private async react(event: EventRow): Promise<void> {
     const moment = this.momentOf(event);
-    if (event.kind === "transition" || event.kind === "sla.reminder" || event.kind === "sla.escalated" || event.kind === "task.shipped" || event.kind === "stage.finished") {
-      if (event.kind === "task.shipped") return this.shipped(event);
+    if (event.kind === "transition" || event.kind === "sla.reminder" || event.kind === "sla.escalated" || isShippedKind(event.kind) || event.kind === "stage.finished") {
+      if (isShippedKind(event.kind)) return this.shipped(event);
       if (event.kind === "stage.finished" && !moment) return;
       if (!moment) return;
       return this.reply(event.taskId, moment.text, moment.status);
     }
     // A conversation outcome's answer (approved in one tap) and triage's questions: where the card came from, and nowhere else.
-    if (event.kind === "task.reply" || event.kind === "task.questions") return typeof event.payload.body === "string" && event.payload.body ? this.toSource(event, event.payload.body, event.payload.secret === true) : undefined;
+    if (event.kind === "task.reply" || event.kind === "task.questions") return typeof event.payload.body === "string" && event.payload.body ? this.toSource(event, event.payload.body, event.payload.secret === true, isMachineNotice(event.payload)) : undefined;
   }
 
   /** The moments that matter, as one line of fixed words; `status` marks the ones that become a draft on the originating thread when the repository has not turned `conversation.auto` on. */
@@ -105,9 +108,14 @@ export class ThreadReplies {
       if (to === "paused_rate_limit") return { text: "Paused on a usage limit; it resumes by itself.", status: false };
       if (to === "closed") return { text: "Closed.", status: true };
       if (to === "archived") return { text: archivedNotice(event.payload.archiveReason), status: true };
-      if (WAITING_ON_USER.has(to) && to !== from) return { text: `Needs you: ${ASKS[to] ?? to}.`, status: false };
+      if (needsYou(to, from, event.payload.gate === true)) return { text: `Needs you: ${ASKS[to] ?? to}.`, status: false };
       return null;
     }
+    // The watched PR's clocks: fixed lines with a number of days, no name and no model word. A standing line like any other: a comment on the issue, and in Slack only
+    // through the sender, in the machine's own thread under `conversation.auto: on`; with it off they are not drafted (a clock is never what a person is asked to tap).
+    const days = (value: unknown) => Math.max(0, Math.min(365, Math.floor(Number(value) || 0)));
+    if (event.kind === "sla.reminder" && event.payload.gate === "awaiting_ship" && event.payload.quietDays !== undefined) return { text: `The PR has been quiet for ${days(event.payload.quietDays)} days.`, status: false };
+    if (event.kind === "sla.escalated" && event.payload.gate === "awaiting_ship") return { text: `The PR has waited ${days(event.payload.afterDays)} days; its release owners were told.`, status: false };
     if (event.kind === "sla.reminder") {
       const gate = event.payload.gate as TaskState;
       return { text: `Still waiting on you: ${ASKS[gate] ?? gate}.`, status: false };
@@ -162,11 +170,11 @@ export class ThreadReplies {
    * (at its root ts, not at `source.ts`), waiting for a tap. A card with no conversation gets a `conversation.undeliverable` event and no draft. A later
    * status never replaces a waiting questions or shipped draft: what a person is looking at is not swapped under them.
    */
-  private async outbound(task: TaskRow, kind: DraftKind, text: string, secret = false, given?: SlackItemRow): Promise<void> {
+  private async outbound(task: TaskRow, kind: DraftKind, text: string, secret = false, given?: SlackItemRow, own = false): Promise<void> {
     const { drafts, store } = this.options;
-    const body = postable(text);
+    const body = own ? text.trim() : postable(text);
     if (!body || secret || carriesSecret(text)) return;
-    if (kind === "questions" && !(await this.addressOk(task, body))) return;
+    if (kind === "questions" && !own && !(await this.addressOk(task, body))) return;
     const item = given ?? (drafts && store ? await store.itemByTask(task.id) : null);
     if (!drafts || !item) {
       await this.options.pipeline.record(task.id, "conversation.undeliverable", { kind });
@@ -182,11 +190,11 @@ export class ThreadReplies {
   /** Text a model or a person wrote, flattened with `postable`, to the card's own source only: its GitHub issue, or the Slack thread it came
    *  from. Posted only on a person's tap (an event stamped `by: "person"`) or with `conversation.auto: on`; a machine's text is a draft. A card with no
    *  source gets nothing; a Jira ticket is JiraSync's. Text that carries a token is not posted. */
-  private async toSource(event: EventRow, text: string, secret = false): Promise<void> {
+  private async toSource(event: EventRow, text: string, secret = false, own = false): Promise<void> {
     const taskId = event.taskId;
     const task = await this.options.pipeline.get(taskId);
     if (fromNotch(task)) return;
-    const body = postable(text);
+    const body = own ? text.trim() : postable(text);
     if (!body) return;
     // Flattening redacts a token, but a text that carried one is a drafted answer nobody should post as it stands.
     if (secret || carriesSecret(text)) {
@@ -196,9 +204,10 @@ export class ThreadReplies {
     const source = task.source;
     if (source?.kind === "github") return this.comment(task, body);
     if (source?.kind !== "slack") return;
-    if (!(await this.addressOk(task, body))) return;
+    // The machine's own notice carries its own board link, which is no foreign address; every other text answers to the address rule.
+    if (!own && !(await this.addressOk(task, body))) return;
     const auth: Authority | null = tapOfEvent(event) ?? standingOf({ auto: await this.auto(task) });
-    if (!auth) return this.outbound(task, "questions", body);
+    if (!auth) return this.outbound(task, "questions", body, false, undefined, own);
     const sender = this.sender();
     if (!sender) return;
     const item = this.options.store ? await this.options.store.itemByTask(taskId) : null;

@@ -4,7 +4,7 @@
 import type { ConversationContext } from "@hardness/contracts";
 
 import { domainTokens, holdsForeignAddress } from "../domain/address-rule.ts";
-import { carriesSecret, postable } from "../domain/postable.ts";
+import { carriesSecret, postableKeeping } from "../domain/postable.ts";
 import { maskPii } from "../domain/secrets-check.ts";
 import type { SlackItemRow } from "../domain/slack-item.ts";
 
@@ -78,7 +78,7 @@ export class ConversationDrafter {
       onRefused?.(ADDRESS_REFUSED);
       return null;
     }
-    const text = postable(answer.reply);
+    const text = postableKeeping(answer.reply, given);
     return text === "" ? null : text;
   }
 }

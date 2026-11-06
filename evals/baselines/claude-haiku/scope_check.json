@@ -3,7 +3,7 @@
   "pack": "scope_check",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T20:09:25.689Z",
+  "at": "2026-11-05T22:47:06.859Z",
   "model": "claude-haiku-5-5",
   "summary": {
     "cases": 5,
@@ -11,18 +11,18 @@
     "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 2877.6,
-    "costUsd": 0.00281004,
+    "meanDurationMs": 2859.6,
+    "costUsd": 0.0036945600000000004,
     "judgeCostUsd": null,
     "calibration": {
       "n": 5,
       "labelled": 4,
       "accuracy": 1,
       "actedOnAccuracy": 1,
-      "coverage": 1,
-      "brier": 0.012731250000000005,
-      "ece": 0.10625000000000007,
-      "meanConfidence": 0.8883333333333333,
+      "coverage": 0.8,
+      "brier": 0.012843750000000003,
+      "ece": 0.11208333333333342,
+      "meanConfidence": 0.8803333333333333,
       "overconfident": 0
     }
   },
@@ -69,12 +69,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3294,
-      "costUsd": 0.00059617,
+      "durationMs": 2590,
+      "costUsd": 0.0008111,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.9199999999999999,
+        "confidence": 0.9116666666666667,
         "verdict": "proceed"
       }
     },
@@ -100,12 +100,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3273,
-      "costUsd": 0.00063027,
+      "durationMs": 3130,
+      "costUsd": 0.00092899,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.8999999999999999,
+        "confidence": 0.895,
         "verdict": "proceed"
       }
     },
@@ -131,12 +131,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 1963,
-      "costUsd": 0.00036327,
+      "durationMs": 2885,
+      "costUsd": 0.00054549,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.8300000000000001,
+        "confidence": 0.8683333333333333,
         "verdict": "proceed"
       }
     },
@@ -157,13 +157,13 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3161,
-      "costUsd": 0.00063871,
+      "durationMs": 3128,
+      "costUsd": 0.00091389,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.9249999999999999,
-        "verdict": "proceed"
+        "confidence": 0.8766666666666666,
+        "verdict": "flag"
       }
     },
     {
@@ -188,12 +188,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2697,
-      "costUsd": 0.00058162,
+      "durationMs": 2565,
+      "costUsd": 0.00049509,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": null,
-        "confidence": 0.8666666666666666,
+        "confidence": 0.8500000000000001,
         "verdict": "proceed"
       }
     }

@@ -11,5 +11,5 @@
     // TypeScript 7 no longer loads @types packages on its own.
     "types": ["node"]
   },
-  "include": ["src", "runner-video/tools/lib"]
+  "include": ["src", "runner/egress", "runner-video/tools/lib"]
 }

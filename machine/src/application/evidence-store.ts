@@ -2,18 +2,32 @@
 // the media store when the machine has no GitHub token, and what Ship publishes from when it has
 // one. The task id and sha come from the machine; file names come from a container, so they are
 // reduced to `[A-Za-z0-9._-]` and nothing but a regular file under the size cap is copied.
-import { copyFile, lstat, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+
+import { EvidencePack } from "@hardness/contracts";
+
+import { copyRegularFile, readRegularFile } from "../adapters/fs/bounded.ts";
 
 const MEGABYTE = 1024 * 1024;
 export const MAX_MEDIA_BYTES = 512 * MEGABYTE;
 const DAY_MS = 86_400_000;
+/** Evidence is kept 180 days unless the repository says otherwise; `MACHINE_RETENTION_DAYS` does not apply to it. */
+export const DEFAULT_EVIDENCE_RETENTION_DAYS = 180;
+
+/** The days a pack's local copies are kept: the repository's `evidence.retention_days` (0 keeps them), else 180 for a card whose repository is gone. */
+export function evidenceRetentionDays(policy: { factory: { evidence: { retention_days: number } } } | null): number {
+  return policy ? policy.factory.evidence.retention_days : DEFAULT_EVIDENCE_RETENTION_DAYS;
+}
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** A file name a container chose, made safe: separators and anything odd become `_`, no leading dot. */
 export function safeName(label: string): string {
-  const flat = label.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._]+/, "").slice(0, 120);
-  return flat === "" ? "file" : flat;
+  const flat = label.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._]+/, "");
+  if (flat.length <= 120) return flat === "" ? "file" : flat;
+  // A cut keeps the extension: `.har` is how a HAR is told apart by name, and a content type comes from the extension.
+  const ext = /\.[A-Za-z0-9]{1,8}$/.exec(flat)?.[0] ?? "";
+  return flat.slice(0, 120 - ext.length) + ext;
 }
 
 export interface EvidenceStoreOptions {
@@ -37,22 +51,43 @@ export class EvidenceStore {
   }
 
   /** Copies each regular file (no symlink, no directory, under the cap) into the task's dir and says where each went. */
-  async keep(taskId: string, sha: string, files: { path: string; label: string }[]): Promise<{ label: string; path: string }[]> {
+  async keep(taskId: string, sha: string, files: { path: string; label: string }[]): Promise<{ label: string; path: string; index: number }[]> {
     const dir = this.dirFor(taskId, sha);
     await mkdir(dir, { recursive: true });
     const taken = new Set<string>(["pack.json"]);
-    const kept: { label: string; path: string }[] = [];
-    for (const file of files) {
+    const kept: { label: string; path: string; index: number }[] = [];
+    for (const [index, file] of files.entries()) {
       const info = await lstat(file.path).catch(() => null);
       if (!info?.isFile() || info.size > this.maxFileBytes) continue;
       let name = safeName(file.label);
       for (let n = 2; taken.has(name); n++) name = `${n}-${safeName(file.label)}`;
       taken.add(name);
       const dest = join(dir, name);
-      await copyFile(file.path, dest);
-      kept.push({ label: file.label, path: dest });
+      // Through the open file, never following a link: a file swapped in after the check is refused here.
+      if (!(await copyRegularFile(file.path, dest).then(() => true, () => false))) continue;
+      kept.push({ label: file.label, path: dest, index });
     }
     return kept;
+  }
+
+  /** Writes a text file (the terminal capture, the checks' excerpt) beside the media and says where it went. The name is made safe like any other. */
+  async keepText(taskId: string, sha: string, name: string, text: string): Promise<{ label: string; path: string }> {
+    const dir = this.dirFor(taskId, sha);
+    await mkdir(dir, { recursive: true });
+    const file = safeName(name);
+    const path = join(dir, file === "pack.json" ? "pack-text.json" : file);
+    await writeFile(path, text);
+    return { label: name === file ? name : file, path };
+  }
+
+  /** The pack the machine itself kept for a commit (local paths in its media), or null when there is none or it is not one. Never the published pack on the task row. */
+  async readPack(taskId: string, sha: string): Promise<EvidencePack | null> {
+    try {
+      const parsed = EvidencePack.safeParse(JSON.parse(await readRegularFile(join(this.dirFor(taskId, sha), "pack.json"), 2 * MEGABYTE)));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
   }
 
   /** `pack.json` beside the media: what the sweep dates a store entry by. */

@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "scope.choice",
+      "value": "in_place"
+    }
+  ],
+  "rubric": "A rename of one local inside the function: in place.",
+  "label": {
+    "scope": {
+      "choice": "in_place"
+    }
+  }
+}

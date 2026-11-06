@@ -9,7 +9,7 @@ export const PENDING_EVENTS: Readonly<Partial<Record<CardEventName, number>>> = 
 const KNOWN: ReadonlySet<string> = new Set(CARD_EVENT_NAMES);
 
 /** The names a row a stage reported (`stage.<kind>`) may carry: only facts a stage knows. A stage never says a card was approved, merged, closed, rejected or archived. */
-export const STAGE_REPORTS: ReadonlySet<string> = new Set(["pr.opened", "build.checkpoint", "ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "verify.findings", "ci.status", "evidence.media_ready"]);
+export const STAGE_REPORTS: ReadonlySet<string> = new Set(["pr.opened", "build.checkpoint", "ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "verify.findings", "ci.status", "evidence.media_ready", "evidence.stale"]);
 
 /** The stage whose run is the Build panel's. */
 const BUILD = "implementing";
@@ -77,7 +77,6 @@ function transition(payload: Record<string, unknown>): CardEventName[] {
   if (from === "awaiting_approval" && payload.event === "approved") names.push("card.approved");
   if (to === "paused_rate_limit" && from === BUILD) names.push("build.paused");
   if (to === "escalated" && from === BUILD) names.push("build.escalated");
-  if (to === "escalated" && payload.escalation === "head_moved" && from !== BUILD) names.push("evidence.stale");
   if (to === "archived") {
     names.push("card.archived");
     if (payload.archiveReason === "rejected") names.push("card.rejected");

@@ -75,6 +75,8 @@ export interface LunaToolsOptions {
   checksDir?: string;
   /** How long a check waits for its answer, in ms; 0 asks and does not wait. */
   checkWaitMs?: number;
+  /** Called once a slice is recorded as committed: the run hands its commits to the machine here (core/bundles.ts). */
+  onSliceCommitted?: () => void;
 }
 
 const POLL_MS = 25;
@@ -143,6 +145,8 @@ export function lunaHandlers(options: LunaToolsOptions) {
       if (sliceNote !== undefined) slice.note = sliceNote;
       // An answer left by an earlier red of this slice is cleared before the machine can see the new one.
       if (status === "red") clear(`red-${id}.json`);
+      // The commits leave before the ledger says so: the machine reads the bundle once it sees the slice committed.
+      if (status === "committed") options.onSliceCommitted?.();
       persist();
       const kind = SLICE_EVENT[status];
       if (kind) note({ kind, payload: { id: slice.id, title: slice.title, commit: slice.commit } });

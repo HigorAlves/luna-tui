@@ -191,7 +191,7 @@ const INTERPRETERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "node"
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 /** Paths a stage must never write through a redirection or `tee`: the orchestrator's own
  *  code, the system, and the repository's `.git`. */
-const PROTECTED_WRITE_ROOTS = ["/factory-src", "/factory", "/etc", "/usr", "/root", `${WORK}/.git`];
+const PROTECTED_WRITE_ROOTS = ["/factory-src", "/opt/luna", "/factory", "/etc", "/usr", "/root", `${WORK}/.git`];
 /** `rm -r` targets that would take the worktree, the output, or the container with them. */
 const FORBIDDEN_RM_TARGETS = new Set([
   "/", "/*", WORK, `${WORK}/*`, `${WORK}/.git`, OUT, `${OUT}/*`,

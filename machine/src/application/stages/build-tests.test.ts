@@ -224,6 +224,18 @@ describe("the regression sweep in Build", () => {
   });
 });
 
+describe("a sweep that could not run for the environment", () => {
+  it("escalates with the sweep's own detail (env_broken, the same step names Verify uses) and does not go round again", async () => {
+    sweeps.length = 0;
+    const detail = { escalation: "env_broken", envBroken: true, step: "install", tool: "pnpm", lockfile: "pnpm-lock.yaml", reason: "x", logTail: "boom", options: [] };
+    sweeps.push({ status: "failed", ran: [], failed: [], escalated: detail });
+    const f = fakes([tagged("S1")]);
+    const result = await buildTestsStep(f.deps)(context([v2]));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { ...detail, sweep: { status: "failed" } } });
+    expect(f.calls.filter((c) => c === "implement")).toHaveLength(1);
+  });
+});
+
 describe("Build's tests step", () => {
   it("runs the test writer, commits its tests with the plan's version, then runs the implementer with the tests listed by scenario", async () => {
     const f = fakes([tagged("S1")]);

@@ -1,7 +1,7 @@
-import { EvidencePack, type Finding, type VerifyReport } from "@hardness/contracts";
+import { type BuildReport, EvidencePack, type Finding, type VerifyReport } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { assembleEvidencePack, packComplete } from "./evidence-pack.ts";
+import { DEFAULT_HOW_TO_VERIFY, DEFAULT_ROLLBACK, assembleEvidencePack, packComplete, repairPack } from "./evidence-pack.ts";
 
 const now = new Date("2026-11-04T10:00:00.000Z");
 const record = { source: "github", kind: "feature", goal: "Show the cart total in the header", size: "small", urgency: "normal", risk: "low" as const, signals: {}, qa: [], decision: "plan" as const, reason: "r", at: "2026-11-03T00:00:00.000Z", model: "m" };
@@ -145,5 +145,117 @@ describe("packComplete", () => {
     const result = packComplete(pack, "abc1234def5678", (path) => path.endsWith("b.png"));
     expect(result.ok).toBe(false);
     expect(result.problems).toEqual([expect.stringContaining("a.png"), expect.stringContaining("c.png")]);
+  });
+});
+
+const build = (over: Partial<BuildReport> = {}): BuildReport => ({
+  branch: "b", base: null, headSha: "abc1234def5678", envHash: null,
+  diffSummary: { added: 40, removed: 6, files: ["web/cart.tsx", "web/total.ts"] },
+  declaredFiles: [], tests: [], runs: [], tokens: null, minutes: 3, scopeCheck: { clean: true, issues: [] }, version: 2,
+  ...over,
+});
+
+describe("assembleEvidencePack with the Build Report and the layers", () => {
+  const layered = [
+    { id: "S1", layer: "unit" as const, text: "a", criterion: null, result: "pass" as const, test: "shot.png" },
+    { id: "S2", layer: "unit" as const, text: "b", criterion: null, result: "pass" as const, test: null },
+    { id: "S3", layer: "integration" as const, text: "c", criterion: null, result: "pass" as const, test: null },
+    { id: "S4", layer: "e2e" as const, text: "d", criterion: null, result: "pass" as const, test: "row.png" },
+  ];
+  const tests = [
+    { scenario: "S1", before: "fail" as const, after: "pass" as const, file: "src/a.test.ts" },
+    { scenario: "S2", before: "fail" as const, after: "fail" as const, file: "src/b.test.ts" },
+    { scenario: "S3", before: "fail" as const, after: "pass" as const, file: null },
+  ];
+
+  it("counts unit and integration by the scenarios' layer and their tagged tests' after: pass", () => {
+    const pack = assembleEvidencePack({ ...full, scenarios: layered, verifyReport, buildReport: build({ tests }) });
+    expect(pack.results).toMatchObject({ unit: { passed: 1, total: 2 }, integration: { passed: 1, total: 1 }, e2e: { verdict: "pass", passed: 2, total: 3 } });
+  });
+
+  it("keeps the checks total as unit when no scenario carries a layer", () => {
+    const pack = assembleEvidencePack({ ...full, verifyReport, buildReport: build({ tests }) });
+    expect(pack.results).toMatchObject({ unit: { passed: 9, total: 10 }, integration: null });
+  });
+
+  it("takes e2e from the browser run's rows when the report has them", () => {
+    const rows = [{ scenario: "S1", title: "a", result: "pass", seen: "", artifacts: [] }, { scenario: "S2", title: "b", result: "not_run", seen: "", artifacts: [] }];
+    const pack = assembleEvidencePack({ ...full, verifyReport: { ...verifyReport, e2e: { ...verifyReport.e2e, rows } } });
+    expect(pack.results?.e2e).toEqual({ verdict: "pass", passed: 1, total: 2 });
+  });
+
+  it("names a scenario's test by the Build Report's file, else the row's first artifact", () => {
+    const pack = assembleEvidencePack({ ...full, scenarios: layered, buildReport: build({ tests }) });
+    expect(pack.scenarios.map((s) => s.test)).toEqual(["src/a.test.ts", "src/b.test.ts", null, "row.png"]);
+  });
+
+  it("carries the diff summary from the Build Report, and none without one", () => {
+    const summary = { what: "Adds the total", why: "The ticket", files: [{ path: "web/cart.tsx", reason: null, in_code_map: true }], flags_added: [], migrations: [], risks_noticed: [], deps_added: [], todos: [] };
+    const pack = assembleEvidencePack({ ...full, buildReport: build({ summary }) });
+    expect(pack.diffSummary).toEqual({ what: "Adds the total", why: "The ticket", files: ["web/cart.tsx", "web/total.ts"], added: 40, removed: 6 });
+    expect(assembleEvidencePack({ ...full, buildReport: build() }).diffSummary).toMatchObject({ what: "", why: "" });
+    expect(assembleEvidencePack(full)).not.toHaveProperty("diffSummary");
+    expect(EvidencePack.safeParse(pack).success).toBe(true);
+  });
+
+  it("numbers the revision: 1 for a first pack, the stored one plus one after", () => {
+    expect(assembleEvidencePack(full).revision).toBe(1);
+    expect(assembleEvidencePack({ ...full, previous: { revision: 3 } }).revision).toBe(4);
+    expect(assembleEvidencePack({ ...full, previous: {} }).revision).toBe(2);
+  });
+
+  it("cuts a long summary at a word, to 200 words, and says not_run scenarios", () => {
+    const goal = Array.from({ length: 300 }, (_, i) => `w${i}`).join(" ");
+    const pack = assembleEvidencePack({ ...full, record: { ...record, goal } });
+    const words = pack.summary.split(/\s+/);
+    expect(words.length).toBeLessThanOrEqual(200);
+    expect(pack.summary).not.toMatch(/w\d+…$/);
+    expect(assembleEvidencePack({ ...full, scenarios: [{ text: "a", criterion: null, result: "not_run", test: null }] }).summary).toContain("1 not run");
+  });
+});
+
+describe("repairPack", () => {
+  const head = "abc1234def5678";
+  const base = (): EvidencePack => assembleEvidencePack({ ...full, media: [] });
+  const never = () => false;
+
+  it("rebuilds an empty or over-long summary, defaults an empty rollback and how to verify, and notes each repair", () => {
+    const broken = { ...base(), summary: " ", rollback: "", howToVerify: "" };
+    const { problems } = packComplete(broken, head, never);
+    const out = repairPack(broken, problems, never);
+    expect(out.unfixed).toEqual([]);
+    expect(out.pack.summary.trim()).not.toBe("");
+    expect(out.pack.rollback).toBe(DEFAULT_ROLLBACK);
+    expect(out.pack.howToVerify).toBe(DEFAULT_HOW_TO_VERIFY);
+    expect(out.pack.note).toMatch(/summary/);
+    expect(out.pack.note).toMatch(/rollback/);
+    expect(packComplete(out.pack, head, never).ok).toBe(true);
+
+    const long = { ...base(), summary: Array.from({ length: 260 }, (_, i) => `w${i}`).join(" ") };
+    const fixed = repairPack(long, packComplete(long, head, never).problems, never);
+    expect(fixed.pack.summary.split(/\s+/).length).toBeLessThanOrEqual(200);
+    expect(packComplete(fixed.pack, head, never).ok).toBe(true);
+  });
+
+  it("drops a media entry missing on disk, and turns a captures or video pack with no scenario into text", () => {
+    const pack = { ...base(), scenarios: [], format: "video" as const, media: [{ kind: "screenshot" as const, label: "a.png", url: "/state/a.png" }, { kind: "screenshot" as const, label: "b.png", url: "/state/b.png" }] };
+    const exists = (path: string) => path.endsWith("b.png");
+    const out = repairPack(pack, packComplete(pack, head, exists).problems, exists);
+    expect(out.pack.media.map((m) => m.label)).toEqual(["b.png"]);
+    expect(out.pack.format).toBe("text");
+    expect(out.pack.note).toMatch(/a\.png/);
+    expect(out.unfixed).toEqual([]);
+  });
+
+  it("never repairs a commit that is not the head, and returns it", () => {
+    const pack = base();
+    const out = repairPack(pack, packComplete(pack, "fff9999", never).problems, never);
+    expect(out.unfixed).toEqual([expect.stringContaining("fff9999")]);
+    expect(out.pack.commitSha).toBe(pack.commitSha);
+  });
+
+  it("changes nothing when there is nothing to fix", () => {
+    const pack = base();
+    expect(repairPack(pack, [], never)).toEqual({ pack, unfixed: [] });
   });
 });
