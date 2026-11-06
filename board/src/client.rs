@@ -240,6 +240,11 @@ impl Machine {
     }
 
     /// `GET /engines`: each engine's credential, and this month's spend against its cap.
+    /// Each repository's image and graph health; a machine from before them answers 404.
+    pub fn repo_health(&self) -> Result<Vec<crate::model::RepoHealth>, String> {
+        Self::typed(self.agent.get(self.url("/repos")).call())
+    }
+
     pub fn engines(&self) -> Result<Vec<EngineInfo>, String> {
         Self::typed(self.agent.get(self.url("/engines")).call())
     }

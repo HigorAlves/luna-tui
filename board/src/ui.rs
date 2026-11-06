@@ -2079,7 +2079,7 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
 
     // The per-repo table takes the bottom when there is more than one repo to compare, the
     // per-engine one sits above it once there are numbers.
-    let repo_height = if floor.repos.is_empty() { 0 } else { (floor.repos.len() as u16 + 3).min(area.height / 3) };
+    let repo_height = if floor.repos.is_empty() { 0 } else { (floor.repos.len() as u16 + 3 + floor.health.len() as u16 * 2).min(area.height / 2) };
     let engine_rows = floor_engine_rows(floor);
     let engine_height = match (&floor.d7, &floor.by_engine) {
         (None, _) => 0,
@@ -2231,6 +2231,15 @@ fn render_floor_repos(frame: &mut Frame, area: Rect, floor: &FloorState, head_st
             &fmt_usd(Some(r.cost_usd)),
         );
         out.push(Line::from(Span::from(text).style(if focused { Style::new().fg(c(ACCENT)).bold() } else { Style::new() })));
+    }
+    // Under the table: each repository's image and graph, and what failed.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    for h in &floor.health {
+        if out.len() + 2 > area.height as usize {
+            break;
+        }
+        out.push(Line::from(Span::from(format!("  {:<16}{}", truncate(h.name(), 15), h.image_line(now))).style(label_style)));
+        out.push(Line::from(Span::from(format!("  {:<16}{}", "", h.graph_line(now))).style(label_style)));
     }
     frame.render_widget(Paragraph::new(out), area);
 }
@@ -2585,6 +2594,25 @@ mod tests {
                  "escalationRate":null,"firstPassVerifying":null,"costUsd":0}]"#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn floor_shows_each_repository_s_image_and_graph_and_what_failed_without_control_characters() {
+        let mut state = floor();
+        state.repos = repos();
+        state.health = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","image":{"inUse":"hardness-runner-alpha:1","base":"python:3.13-slim","builtAt":null,"lastFailure":"step 3\u001b[31m failed\nreally"},
+                 "graph":{"on":true,"commit":"abcdef0123456789","behind":7,"graphify":"0.9.34","builtAt":null,"building":true,"lastFailure":"exit code 1"}},
+                {"repo":"/r/beta","image":{"inUse":"hardness-runner:dev","base":null,"builtAt":null,"lastFailure":null},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        let text = render(160, 40, &state);
+        assert!(text.contains("image: own on python:3.13-slim (hardness-runner-alpha:1)"), "{text}");
+        assert!(text.contains("graph: abcdef0 · 7 behind · graphify 0.9.34 · building · failed: exit code 1"), "{text}");
+        assert!(text.contains("image: machine's") && text.contains("graph: off"), "{text}");
+        assert!(text.contains("build failed: step 3 [31m failed really"), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text}");
     }
 
     #[test]

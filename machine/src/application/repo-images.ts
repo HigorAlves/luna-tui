@@ -47,6 +47,8 @@ export interface RepoImagesDeps {
 export interface RepoImages {
   /** The image the repository's stages run in, built first when it names a base and has none yet. */
   ensure(repoPath: string, signal?: AbortSignal, taskId?: string): Promise<{ image: string }>;
+  /** What this machine knows of the repository's own image: its tag, when it was built here, the last failure; null when it has none. */
+  status(repoPath: string): { image: string; builtAt: string | null; lastFailure: string | null } | null;
 }
 
 export class RepoImageError extends Error {
@@ -76,9 +78,11 @@ export function repoImages(deps: RepoImagesDeps): RepoImages {
     queue = run.catch(() => undefined);
     return run;
   };
+  const statuses = new Map<string, { image: string; builtAt: string | null; lastFailure: string | null }>();
   const emit = (event: RepoImageEvent) => deps.onEvent?.(event);
 
   return {
+    status: (repoPath) => statuses.get(repoPath) ?? null,
     async ensure(repoPath, signal, taskId) {
       const at = { repoPath, ...(taskId ? { taskId } : {}) };
       const spec = imageSpecOf(await deps.imageOf(repoPath));
@@ -103,11 +107,14 @@ export function repoImages(deps: RepoImagesDeps): RepoImages {
           if (!built.ok) {
             const reason = logTail(built.log);
             emit({ ...at, kind: "image.build_failed", base: safe(spec.base), reason });
+            statuses.set(repoPath, { image: statuses.get(repoPath)?.image ?? tag, builtAt: statuses.get(repoPath)?.builtAt ?? null, lastFailure: reason });
             throw new RepoImageError(reason);
           }
           emit({ ...at, kind: "image.built", image: tag, base: safe(spec.base) });
+          statuses.set(repoPath, { image: tag, builtAt: new Date(now()).toISOString(), lastFailure: null });
         }
         resolved.set(repoPath, { base: spec.base, image: tag, at: now() });
+        if (!statuses.get(repoPath) || statuses.get(repoPath)!.image !== tag) statuses.set(repoPath, { image: tag, builtAt: null, lastFailure: null });
         return { image: tag };
       });
     },

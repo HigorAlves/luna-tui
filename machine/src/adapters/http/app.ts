@@ -38,6 +38,7 @@ import {
   TaskSource,
   TaskState,
   UpdateTaskInput,
+  type RepoHealth,
 } from "@hardness/contracts";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -85,6 +86,8 @@ const IDEMPOTENCY_KEY_MAX = 200;
 const RECENT_EVENTS = 50;
 
 export interface AppDeps {
+  /** Each repository's image and graph health for `GET /repos`; absent, the list is empty. */
+  repoHealth?: () => Promise<RepoHealth[]>;
   db: DataSource;
   pipeline: Pipeline;
   bus: Bus;
@@ -161,7 +164,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
+export function createApp({ repoHealth, db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -255,6 +258,8 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const { max } = await body(c, SlotsInput);
     return c.json(pipeline.setSlots(max));
   });
+
+  app.get("/repos", async (c) => c.json((await repoHealth?.()) ?? []));
 
   app.get("/metrics", async (c) => {
     let since: Date;

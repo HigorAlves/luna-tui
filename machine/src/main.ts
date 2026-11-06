@@ -61,6 +61,7 @@ import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
 import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
+import { repoHealthOf } from "./application/repo-health.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
 import { machineCredentials } from "./adapters/credentials/index.ts";
@@ -463,7 +464,23 @@ if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await packRuns
 buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
 if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "build" }, "build"));
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
+/** Every checkout the machine knows: the repo map, the repos dir's remembered ones, and the repos of live tasks. */
+const knownRepos = async (): Promise<string[]> => {
+  const known = [...Object.values(config.repoMap), ...(await repoMap.remembered())];
+  for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
+  return [...new Set(known)];
+};
 const app = createApp({
+  repoHealth: () =>
+    repoHealthOf({
+      repos: [],
+      knownRepos,
+      policy: (repoPath) => policies.for(repoPath),
+      machineImage: config.runnerImage,
+      images: { status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null },
+      graph,
+      watch: { health: (repoPath) => graphWatch?.health(repoPath) ?? { building: false, lastFailure: null } },
+    }),
   db,
   pipeline,
   bus,
@@ -572,11 +589,7 @@ if (config.jira) {
 graphWatch = new GraphWatch({
   graph,
   policies,
-  repos: async () => {
-    const known = [...Object.values(config.repoMap), ...(await repoMap.remembered())];
-    for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
-    return [...new Set(known)];
-  },
+  repos: knownRepos,
 });
 const graphTicker = config.agents && config.graphIntervalSecs !== null ? new Ticker(() => void graphWatch?.tick(), config.graphIntervalSecs * 1000) : null;
 if (graphTicker) {

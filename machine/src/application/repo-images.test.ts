@@ -105,4 +105,15 @@ describe("the image a repository's stages run in", () => {
     await make({ base: "debian:12" }, fakeDocker({ build: async () => ({ ok: false, log: "bad" }) }).docker).ensure("/r", undefined, "card-3").catch(() => undefined);
     expect(events.map((e) => (e as { kind: string }).kind)).toEqual(["image.build_started", "image.build_failed"]);
   });
+
+  it("keeps what it knows of a repository's image for the board: its tag, when it was built, the last failure", async () => {
+    const { docker } = fakeDocker();
+    const images = make({ base: "debian:12" }, docker);
+    expect(images.status("/r")).toBeNull();
+    const { image } = await images.ensure("/r");
+    expect(images.status("/r")).toMatchObject({ image, builtAt: expect.stringMatching(/^\d{4}-/), lastFailure: null });
+    const failing = make({ base: "debian:13" }, fakeDocker({ build: async () => ({ ok: false, log: "no space left" }) }).docker);
+    await failing.ensure("/f").catch(() => undefined);
+    expect(failing.status("/f")).toMatchObject({ lastFailure: expect.stringContaining("no space left") });
+  });
 });
