@@ -107,3 +107,18 @@ describe("runPackOnce's list", () => {
     expect(seen.at(-1)?.egress).toBeUndefined();
   });
 });
+
+describe("runPackOnce for an eval", () => {
+  it("can ask for the list a real run of the pack gets (kind agent) instead of the pack list", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "run-once-"));
+    const asked: unknown[] = [];
+    const sandbox = async (run: SandboxRun): Promise<SandboxResult> => {
+      mkdirSync(join(run.runDir, "out"), { recursive: true });
+      writeFileSync(join(run.runDir, "out", "result.json"), JSON.stringify(result));
+      return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
+    };
+    const credentials = { prepare: async () => ({ env: {}, mounts: [], release: async () => {} }) };
+    await runPackOnce({ name: "c", image: "img", runDir, worktree: join(runDir, "work"), input, engine: "claude:haiku", labels: {}, egressKind: "agent" }, { credentials, sandbox, egress: { for: async (r) => (asked.push(r), { allow: [], allowPrivate: [], proxyImage: "img" }) } });
+    expect(asked).toEqual([{ repoPath: null, kind: "agent", owners: ["claude"] }]);
+  });
+});

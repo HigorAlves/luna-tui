@@ -26,6 +26,8 @@ export interface OneRun {
   labels: Record<string, string>;
   /** Extra container env: the run's trace context (RunSpan.childEnv()). */
   extraEnv?: Record<string, string>;
+  /** Which list the run gets: the pack list (default, no repository) or the list a real run of an agent pack gets (an eval measures what runs). */
+  egressKind?: "pack" | "agent";
   signal?: AbortSignal;
 }
 
@@ -50,7 +52,7 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     if (error instanceof CredentialWaitError) return { output: null, error: error.message };
     throw error;
   }
-  const egress = deps.egress ? await deps.egress.for({ repoPath: null, kind: "pack", owners: [credentialOwner(run.engine)] }).catch((error) => credential.release().then(() => Promise.reject(error))) : undefined;
+  const egress = deps.egress ? await deps.egress.for({ repoPath: null, kind: run.egressKind ?? "pack", owners: [credentialOwner(run.engine)] }).catch((error) => credential.release().then(() => Promise.reject(error))) : undefined;
   const result = await (deps.sandbox ?? runSandbox)({
     ...(egress ? { egress } : {}),
     name: run.name,
