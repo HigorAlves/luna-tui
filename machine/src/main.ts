@@ -2,7 +2,7 @@
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
 import { hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
-import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { type BudgetAlert, type EvidenceContext, type MemoryAnswerAnswer, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -12,7 +12,12 @@ import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 
 import { machineSecrets } from "./bootstrap/machine-secrets.ts";
-import { useTruthSecrets } from "./application/ground-truth.ts";
+import { truthName, useTruthSecrets, writeTruthFile } from "./application/ground-truth.ts";
+import { MemoryService } from "./application/memory-service.ts";
+import { MemoryReverts } from "./application/memory-revert.ts";
+import { sweepStale } from "./application/memory-anchoring.ts";
+import { cardMergedAs } from "./adapters/persistence/merged-cards.ts";
+import { repoSlug } from "./adapters/graph/slug.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
@@ -30,7 +35,7 @@ import { DecisionLog } from "./application/decision-log.ts";
 import { ownCalls } from "./application/pack-runs.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
 import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
-import { commitsSince, defaultHead, headCommit } from "./adapters/git/worktree.ts";
+import { commitsSince, defaultHead, headCommit, linesChangedSince } from "./adapters/git/worktree.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
 import { loadCursor } from "./application/ship-cursor.ts";
@@ -70,7 +75,6 @@ import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
 import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
 import { blobAt, exportRepoCommit, treeAt } from "./adapters/git/main-export.ts";
-import { repoSlug } from "./adapters/graph/slug.ts";
 import { CompanyDocs } from "./application/memory-company-docs.ts";
 import { MemorySync } from "./application/memory-sync.ts";
 import { recallReviewAsks, writeReviewAsks } from "./application/memory-review-asks.ts";
@@ -462,6 +466,8 @@ let replies: ThreadReplies;
 let jiraSync: JiraSync;
 /** The ticket clocks, computed whenever a task is serialized. */
 let slaClocks: SlaClocks;
+/** Retires what memory learned from a card whose merged PR a later merged PR reverts; built below, once GitHub and the database are. */
+let memoryReverts: MemoryReverts | null = null;
 
 /** Streams each logged event, plus the whole task whenever its state (or its Jira link) may have changed. */
 function publish(event: EventRow): void {
@@ -470,6 +476,7 @@ function publish(event: EventRow): void {
   if (shipped) bus.publish(shipped);
   void replies.handle(event);
   void jiraSync.handle(event);
+  void memoryReverts?.handle(event);
   if (event.kind === "transition" || event.kind === "task.created" || event.kind === "approval.partial" || event.kind.startsWith("jira.")) {
     pipeline.get(event.taskId).then(
       async (task) =>
@@ -653,6 +660,8 @@ const slackInbox = new SlackInbox({
       return at < 0 ? null : `it ranks ${at + 1} of ${list.length}`;
     },
     docs: (repo, text) => repoDocs(repo, text),
+    // Memory's part of the draft: recalled as the Slack viewer of this repository and channel, so only this channel's own items and the shared docs come back.
+    memory: async (repo, channel, query) => (await memory.recall({ query, viewer: { kind: "slack", repo: repoSlug(repo), channel }, scope: "memory" })).items,
     tone: (channel, isPrivate) => conversationDrafts.recentEdits(channel, isPrivate),
     run: async (context) => {
       if (!packRuns) throw new Error("agents are off: no model to draft the reply");
@@ -741,6 +750,46 @@ verifyDecisions.lastRed = async (taskId) => {
 };
 // A run folder a crash left holds a client's context: never kept.
 await packRuns?.clearLeftovers();
+/** What the API does with memory (RFC 0007): ask (the `memory_answer` pack over recalled items, or Cognee's own answer), recall for the host MCP server, the memory view's list, forget and adopt. */
+const memoryService = new MemoryService({
+  memory,
+  ...(packRuns ? { run: async (context) => (await ownCalls(packRuns).run({ pack: "memory_answer", context: { memoryAnswer: context } }, "memory")).answer as MemoryAnswerAnswer } : {}),
+  slugOf: repoSlug,
+  ...(config.groundTruth ? { onForgotten: async (record) => void (await writeTruthFile(config.stateDir, "memory_forget", truthName(`${record.at}-${record.id}.json`), record)) } : {}),
+});
+// Forgetting (RFC 0007): a merged revert retires the reverted card's items; hourly, items whose anchored files moved on go stale.
+// Idempotent (a second pass changes nothing). `memory.reconcile()` is scheduled by the Cognee bootstrap, not here.
+memoryReverts = new MemoryReverts({
+  memory,
+  pr: async (repo, number) => {
+    const facts = await github.prFacts(repo, number);
+    return facts ? { title: facts.title, body: facts.body ?? null } : null;
+  },
+  cardMergedAs: (target) => cardMergedAs(db, target),
+});
+const memoryRepoPaths = async (): Promise<string[]> => [...new Set([...Object.values(config.repoMap), ...(await repoMap.remembered())])];
+let memoryMaintaining = false;
+async function maintainMemory(): Promise<void> {
+  if (!memory.enabled || memoryMaintaining) return;
+  memoryMaintaining = true;
+  try {
+    const swept = await sweepStale({
+      memory,
+      repoPaths: memoryRepoPaths,
+      slugOf: repoSlug,
+      linesChanged: linesChangedSince,
+      // `memory.stale_lines` in the repository's luna.yaml; absent, the default of 200.
+      staleLines: async (repoPath) => ((await policies.for(repoPath)).factory as { memory?: { stale_lines?: number } }).memory?.stale_lines,
+    });
+    if (swept.staled > 0) console.log(`memory: ${swept.staled} items gone stale of ${swept.checked} checked`);
+  } catch (error) {
+    console.warn("memory: maintenance failed", error);
+  } finally {
+    memoryMaintaining = false;
+  }
+}
+setInterval(() => void maintainMemory(), 60 * MINUTE_MS).unref();
+setTimeout(() => void maintainMemory(), 2 * MINUTE_MS).unref();
 /** Intake's first read of a new issue: triage_signals on Jev through the same PackRuns, recorded
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
 const classifier = packRuns ? createIssueClassifier({ runs: ownCalls(packRuns) }) : null;
@@ -820,6 +869,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
   return { ok: true };
 };
 const app = createApp({
+  memory: memoryService,
   approveBase,
   memoryFloor: () => memoryBoot_.floor(),
   repoHealth: () =>

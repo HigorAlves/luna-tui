@@ -3,6 +3,7 @@
 import { z } from "zod";
 
 import type { Column, TaskState } from "./index.ts";
+import type { RecalledMemory } from "./memory.ts";
 import type { PrSnapshot } from "./github.ts";
 import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
@@ -722,4 +723,46 @@ export interface ApiError {
   taskId?: string;
   /** `POST /runs`' 429: when the engine's usage window resets (ISO), when the run said. */
   resetsAt?: string | null;
+}
+
+/** `POST /memory/ask`; `?via=cognee` asks the graph completion of Cognee in place of the memory_answer pack. */
+export const MemoryAskInput = z.object({ question: z.string().trim().min(1).max(1000), repo: z.string().trim().min(1).optional() });
+export type MemoryAskInput = z.infer<typeof MemoryAskInput>;
+
+/** `POST /memory/recall`: what the host MCP server's `recall` tool calls. Items, never an answer. */
+export const MemoryRecallInput = z.object({
+  query: z.string().trim().min(1).max(1000),
+  repo: z.string().trim().min(1).optional(),
+  scope: z.enum(["memory", "docs", "code", "all"]).optional(),
+});
+export type MemoryRecallInput = z.infer<typeof MemoryRecallInput>;
+
+/** `POST /memory/items/:id/forget`. */
+export const MemoryForgetInput = z.object({ reason: z.string().trim().max(500).optional() });
+export type MemoryForgetInput = z.infer<typeof MemoryForgetInput>;
+
+/** What `POST /memory/ask` answers, whichever way it was asked. */
+export interface MemoryAskResult {
+  /** `pack`: the memory_answer pack over recalled items; `cognee`: the graph completion. */
+  via: "pack" | "cognee";
+  answer: string;
+  citations: Array<{ kind: "item" | "doc" | "code"; ref: string }>;
+  /** False when the items did not answer the question. */
+  grounded: boolean;
+  note: string | null;
+}
+
+/** What `POST /memory/recall` answers. */
+export interface MemoryRecallResult {
+  items: RecalledMemory[];
+  note: string | null;
+}
+
+/** `GET /memory/status`: memory's mode and today's usage, for the board's Floor. */
+export interface MemoryStatusView {
+  enabled: boolean;
+  mode: "openai" | "local" | null;
+  tokensToday: number | null;
+  costUsdToday: number | null;
+  cognifiedToday: number;
 }

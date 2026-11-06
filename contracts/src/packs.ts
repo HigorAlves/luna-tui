@@ -36,6 +36,8 @@ export const AgentRole = z.enum([
   "pr-reviewer",
   // The Slack inbox's triage: no tools, no worktree, a batch of messages in and verdicts out.
   "slack-triager",
+  // Memory's answer on demand (RFC 0007): reads recalled items as data and answers a question with citations; no tools, no worktree.
+  "memory-answerer",
   // Chat triage on demand: a Slack or Teams batch a client sends, verdicts out; no tools, no worktree.
   "chat-triager",
   // Jira intake: reads an issue (and, read-only, the repo) before it becomes a ticket.
@@ -386,6 +388,17 @@ export type TicketReplyAnswer = z.infer<typeof TicketReplyAnswer>;
 /** conversation_reply: the draft reply to a Slack thread. A draft only: a person decides whether it is posted. */
 export const ConversationReplyAnswer = z.object({ reply: z.string().max(1500), confidence: z.number().min(0).max(1) });
 export type ConversationReplyAnswer = z.infer<typeof ConversationReplyAnswer>;
+
+/** memory_answer: a written answer to a question, from the recalled memory items it was given as data, citing their ids. */
+export const MemoryAnswerAnswer = z.object({
+  /** At most 1500 characters, only from the items; says so plainly when they do not answer it. */
+  answer: z.string().max(1500),
+  /** The ids of the items the answer rests on, copied verbatim; the machine drops any it did not give. */
+  citations: z.array(z.string().max(64)).max(12),
+  /** False when the items do not answer the question. */
+  grounded: z.boolean(),
+});
+export type MemoryAnswerAnswer = z.infer<typeof MemoryAnswerAnswer>;
 
 export const HelperAnswer = z.object({ answer: z.string(), findings: z.array(Finding).optional() });
 export type HelperAnswer = z.infer<typeof HelperAnswer>;
@@ -1224,6 +1237,22 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: ConversationReplyAnswer,
     template: "conversation_reply.md",
+  },
+  // Answers a question over recalled memory items given as data (the board's `?` pane, POST /memory/ask); on demand, never in a task state. The items are in the input: no tools.
+  memory_answer: {
+    id: "memory_answer",
+    kind: "agent",
+    agent: "memory-answerer",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 2,
+    timeoutMs: 3 * MINUTE,
+    engines: { default: "codex:luna", allowed: ["codex:luna", "claude:haiku"], fallback: ["claude:haiku", "codex:luna"] },
+    effort: "low",
+    answer: MemoryAnswerAnswer,
+    template: "memory_answer.md",
   },
   // Proposes the children of a split from the origin as data; on demand, in the decomposition loop, never in a task state. It reads hostile text: no tools at all.
   decompose: {

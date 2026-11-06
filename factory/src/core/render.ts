@@ -77,6 +77,13 @@ const slackText = (slack: StageInput["context"]["slack"]) => {
   };
 };
 
+/** The recalled items, one block per item, for memory_answer: the id to cite, the kind, where it came from, whether it is stale, then the text. */
+const memoryAnswerText = (memory: StageInput["context"]["memoryAnswer"]) => {
+  if (!memory) return { question: NONE, items: NONE, note: NONE };
+  const items = memory.items.map((i) => `[${i.id}] ${i.kind} from ${i.source}${i.stale ? " (stale: its files changed a lot since)" : ""}${i.anchors.files.length > 0 ? ` · files ${i.anchors.files.slice(0, 5).join(", ")}` : ""}\n${i.text}`);
+  return { question: memory.question, items: items.length > 0 ? items.join("\n\n") : NONE, note: memory.note ?? NONE };
+};
+
 const CHAT_SOURCE = { slack: "Slack", teams: "Microsoft Teams" } as const;
 
 /** The chat batch, as chat_triage reads it: one block per item, its place, flag, floor and context inline. */
@@ -392,6 +399,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   const jira = jiraText(input.context.jira);
   const judged = evalText(input.context.eval);
   const chat = chatText(input.context.chat);
+  const asked = memoryAnswerText(input.context.memoryAnswer);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
@@ -484,6 +492,9 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.jira.classification}}": jira.classification,
     "{{context.eval.pack}}": judged.pack,
     "{{context.eval.case}}": judged.case,
+    "{{context.memoryAnswer.question}}": asked.question,
+    "{{context.memoryAnswer.items}}": asked.items,
+    "{{context.memoryAnswer.note}}": asked.note,
     "{{context.eval.rubric}}": judged.rubric,
     "{{context.eval.input}}": judged.input,
     "{{context.eval.checks}}": judged.checks,
