@@ -99,7 +99,7 @@ export function approvedScenarios(approvals: ApprovalRow[]): Scenario[] {
 }
 
 /** What Intake gathered, as triage reads it: each stranger's text flattened again and capped, every list bounded, attachments as references only. */
-export function intakeOf(task: TaskRow): IntakeContext {
+export function intakeOf(task: TaskRow, similar?: IntakeContext["similar"]): IntakeContext {
   const card = cardOf(task);
   const hints = card.hints ? Object.fromEntries(Object.entries(card.hints).map(([k, v]) => [k, typeof v === "string" ? safe(v).slice(0, 120) : v])) : null;
   return {
@@ -109,6 +109,7 @@ export function intakeOf(task: TaskRow): IntakeContext {
     history: (card.history ?? []).slice(0, 50).map((h) => ({ author: h.author ? safe(h.author).slice(0, 60) : null, text: safe(h.text).slice(0, 500) })),
     attachments: (card.attachments ?? []).slice(0, 20).map((a) => ({ name: safe(a.name).slice(0, 120), url: a.url, ...(a.mediaType ? { mediaType: safe(a.mediaType).slice(0, 80) } : {}), ...(a.size !== undefined ? { size: a.size } : {}) })),
     hints: hints && Object.keys(hints).length ? (hints as IntakeContext["hints"]) : null,
+    ...(similar?.length ? { similar: similar.slice(0, 5).map((s) => ({ card: s.card, text: safe(s.text).slice(0, 400) })) } : {}),
   };
 }
 
@@ -134,6 +135,8 @@ export function buildStageInput(opts: {
   holdoutCases?: boolean;
   /** For implementing: the checks Build's regression sweep saw fail, with the tail of each one's output. */
   sweepFailures?: { name: string; tail: string }[];
+  /** For triage: similar past cards' recalled outcomes from memory (predicted against actual), rendered as data; absent, none. */
+  similarOutcomes?: IntakeContext["similar"];
   /** For implementing: the minutes Build's budget has left; the run's time limit is the smaller of its own and this. */
   budgetMinutes?: number;
   /** For implementing: the tests Build's tests step wrote, one entry per scenario. */
@@ -216,7 +219,7 @@ export function buildStageInput(opts: {
       ...(pack === "implementing" && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
       ...(pack === "implementing" && opts.sweepFailures?.length ? { sweepFailures: opts.sweepFailures.slice(0, SWEEP_FAILURES_MAX).map((f) => ({ name: safe(f.name).slice(0, 60), tail: safe(f.tail.slice(-SWEEP_TAIL_CAP)).slice(-SWEEP_TAIL_CAP) })) } : {}),
       baseCommit: opts.baseCommit ?? null,
-      ...(pack === "triage" ? { intake: intakeOf(task) } : {}),
+      ...(pack === "triage" ? { intake: intakeOf(task, opts.similarOutcomes) } : {}),
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: reviewed ?? opts.plan } : {}),

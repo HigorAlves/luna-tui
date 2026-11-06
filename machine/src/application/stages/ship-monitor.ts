@@ -86,6 +86,8 @@ export interface ShipMonitorDeps {
   truth?: TruthSink | null;
   /** The PR of this repository merged: the machine asks for a rebuild of its code graph at once (RFC 0006 D8). */
   onMerged?: (repoPath: string) => void;
+  /** The PR merged: the review asks its threads left (RFC 0007, M4) go to memory, for the card's repository. Never throws into the merge. */
+  reviewAsks?: (taskId: string, asks: NonNullable<ShipCursor["asks"]>) => Promise<void>;
   stateDir: string;
   /** Milliseconds between polls; null: the repository's `ship.poll_minutes` (the machine-wide `MACHINE_SHIP_POLL_INTERVAL`, when set, is passed here as a number and wins). */
   pollMs: number | null;
@@ -260,7 +262,14 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
 }
 
 /** The PR merged: the decisions it was waiting on are settled by what happened to their threads. Called wherever a merge is recorded. */
-export async function settleDecisions(deps: Pick<ShipMonitorDeps, "github" | "truth" | "stateDir">, taskId: string, cursor: ShipCursor, slug: string, number: number): Promise<void> {
+export async function settleDecisions(deps: Pick<ShipMonitorDeps, "github" | "truth" | "stateDir" | "reviewAsks">, taskId: string, cursor: ShipCursor, slug: string, number: number): Promise<void> {
+  // The review asks the threads left go to memory once, at the merge.
+  if (deps.reviewAsks && (cursor.asks?.length ?? 0) > 0) {
+    const asks = cursor.asks!;
+    cursor.asks = [];
+    await deps.reviewAsks(taskId, asks).catch(() => {});
+    await saveCursor(deps.stateDir, taskId, cursor);
+  }
   const pending = cursor.decisions ?? [];
   if (!deps.truth || pending.length === 0) return;
   const open = await deps.github.prThreads(slug, number).catch(() => null);
@@ -387,6 +396,12 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       if (sized.choice === "re_plan") return { result: replan(thread, ship.comment!.reading?.asks) };
       if (sized.choice !== "in_place" && sized.choice !== "re_verify_partial") return { result: escalated(`a change request needs a person: ${quoted(thread)}`) };
       const scope = sized.choice;
+      // A change request from one of the repository's own people (never the machine) is kept for memory (RFC 0007, M4): it is written when the PR merges.
+      if (deps.reviewAsks && author !== mine && TRUSTED.has(a.association ?? "") && !(cursor.asks ?? []).some((k) => k.thread === thread.id)) {
+        const excerpt = carriesSecret(a.body) ? "" : postable(a.body, 150);
+        cursor.asks = [...(cursor.asks ?? []), { thread: thread.id, reviewer: a.actor ?? author, kind: intent.choice === "nit" ? ("nit" as const) : ("change_request" as const), path: thread.path, excerpt }].slice(-20);
+        await saveCursor(deps.stateDir, task.id, cursor);
+      }
       const fixed = await fix({ ...(sized.recordId ? { scopeRecord: sized.recordId } : {}), id: thread.id, threads: [instructable], scope, summary: `${thread.path ?? "the PR"}: ${plain(a.body, 120)}`, postReplies: !topLevel, quote: quoted(thread), topLevel, named }, pack);
       if (fixed.moved && intent.choice === "change_request" && intent.recordId) cursor.decisions = [...(cursor.decisions ?? []), { pack: "comment_intent", recordId: intent.recordId, choice: "change_request", threadId: thread.id }];
       return fixed;

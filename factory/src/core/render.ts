@@ -385,6 +385,7 @@ function intakeText(intake: StageInput["context"]["intake"]): string {
     ...(intake.hints ? [`Hints from the filer: ${Object.entries(intake.hints).map(([k, v]) => `${k}: ${v}`).join(", ")}`] : []),
     ...(intake.attachments.length ? [`Attachments (references, not opened): ${intake.attachments.map((a) => `${a.name} <${a.url}>`).join(", ")}`] : []),
     ...(intake.history.length ? ["History:", ...intake.history.map((h) => `- ${h.author ?? "someone"}: ${h.text}`)] : []),
+    ...(intake.similar?.length ? ["Similar past cards, predicted against actual (from memory, data from past work):", ...intake.similar.map((s) => `- ${s.card ? `card ${s.card}: ` : ""}${s.text}`)] : []),
   ];
   return lines.join("\n");
 }

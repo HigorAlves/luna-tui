@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { datasetFor, datasetsFor } from "./memory-datasets.ts";
+import { datasetFor, datasetsFor, publicPostFor } from "./memory-datasets.ts";
 
 const repo = "luna-tui-1a2b3c4d";
 const known = [
@@ -71,5 +71,22 @@ describe("datasetsFor", () => {
 
   it("names no dataset Cognee does not hold", () => {
     expect(datasetsFor({ kind: "card", repo: "absent-00000000", source: { kind: "github", ref: null }, publicPost: false }, known)).toEqual(["company"]);
+  });
+});
+
+describe("publicPostFor", () => {
+  it("is public for pr_reply and for any pack on a GitHub issue or PR", () => {
+    expect(publicPostFor("pr_reply", { kind: "slack" })).toBe(true);
+    expect(publicPostFor("triage", { kind: "github" })).toBe(true);
+    expect(publicPostFor("triage", { kind: "github_pr" })).toBe(true);
+  });
+  it("is private for Slack, Jira and the TUI", () => {
+    for (const kind of ["slack", "jira", "tui", "notch"]) expect(publicPostFor("triage", { kind })).toBe(false);
+  });
+  it("drops the company dataset from a viewer built with it", () => {
+    const publicViewer = { kind: "card" as const, repo, source: { kind: "github" as const, ref: "o/r#1" }, publicPost: publicPostFor("pr_reply", { kind: "github" }) };
+    expect(datasetsFor(publicViewer, known)).not.toContain("company");
+    const privateViewer = { ...publicViewer, source: { kind: "slack" as const, ref: "C123" }, publicPost: publicPostFor("triage", { kind: "slack" }) };
+    expect(datasetsFor(privateViewer, known)).toContain("company");
   });
 });

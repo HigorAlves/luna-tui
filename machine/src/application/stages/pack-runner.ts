@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, type IntakeContext, type RecalledMemory, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -62,6 +62,7 @@ import { PolicyStore } from "../policy.ts";
 import { RepoImageError } from "../repo-images.ts";
 import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
+import { mergeReviewAsks, planFilesOf } from "../memory-review-asks.ts";
 
 export interface AgentDeps {
   /** The id of a local image, for the environment hash; absent, no environment is recorded. */
@@ -123,6 +124,13 @@ export interface AgentDeps {
   pushSleep?: (ms: number) => Promise<void>;
   /** The board search triage's agent asks for (`card_search`): read-only, the task's own repository only. Absent: the tool answers nothing. */
   cards?: { search(request: { repoPath: string | null; selfId: string; selfSource: string | null; query: string }): Promise<CardHit[]> };
+  /** What memory adds to a stage's input (RFC 0007). Each may fail or be absent: the stage then runs without the block. */
+  memoryFor?: {
+    /** Triage (M3): similar past cards' recalled outcomes, predicted against actual. */
+    similarOutcomes?: (task: TaskRow) => Promise<NonNullable<IntakeContext["similar"]>>;
+    /** Implementing (M4): the review asks recalled for the plan's files and their code owners. */
+    reviewAsks?: (task: TaskRow, planFiles: string[]) => Promise<RecalledMemory[]>;
+  };
 }
 
 /** Every branch the pipeline writes starts with this; see `workspaceFor`. */
@@ -395,7 +403,15 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
+    ...(pack === "triage" && deps.memoryFor?.similarOutcomes ? { similarOutcomes: await deps.memoryFor.similarOutcomes(task).catch(() => []) } : {}),
   });
+  // MEMORY: review asks (RFC 0007, M4). Before the implementing run, the review asks recalled for the plan's files and their code owners join `context.memory`
+  // (created when absent, within the contract's item and byte caps). Reconcile with lane M2's pushed block here.
+  if (pack === "implementing" && deps.memoryFor?.reviewAsks) {
+    const asks = await deps.memoryFor.reviewAsks(task, planFilesOf(input.plan)).catch(() => []);
+    const merged = mergeReviewAsks(input.context.memory, asks);
+    if (merged) input.context.memory = merged;
+  }
 
   // Watches the transcript as it streams: a loop on one call is stopped before it spends the turn budget.
   const detector = new StuckDetector();

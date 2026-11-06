@@ -50,6 +50,15 @@ describe("what triage receives of what Intake gathered", () => {
       hints: { urgency: "high" },
     });
   });
+  it("carries similar past cards' recalled outcomes to triage only, as capped flattened data, at most five", () => {
+    const similarOutcomes = Array.from({ length: 7 }, (_, i) => ({ card: `c${i}`, text: `<b>predicted size M, changed ${i}</b>\n${"x".repeat(600)}` }));
+    const intake = StageInput.parse(buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [], similarOutcomes })).context.intake!;
+    expect(intake.similar).toHaveLength(5);
+    expect(intake.similar![0]!.text.length).toBeLessThanOrEqual(400);
+    expect(intake.similar![0]!.text).not.toMatch(/[<>\n]/);
+    expect(buildStageInput({ task, stage: "test_design", attempt: 1, approvals: [], priorFindings: [], similarOutcomes }).context.intake).toBeUndefined();
+    expect(build("triage", task).context.intake).not.toHaveProperty("similar");
+  });
   it("gives it to no other pack, and a card from before has empty lists", () => {
     expect(build("test_design").context.intake).toBeUndefined();
     expect(build("triage", task).context.intake).toEqual({ project: null, owners: [], reporter: null, history: [], attachments: [], hints: null });

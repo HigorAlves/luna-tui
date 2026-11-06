@@ -47,6 +47,14 @@ describe("the triage prompt's Intake section", () => {
     expect(prompt).toMatch(/## What Intake gathered[^\n]*\n[^\n]*data/i);
     for (const needle of ["Project: PAY", "Owners: @team-a", "Reporter: Alice (slack)", "carol: it fails every time", "trace.txt", "urgency: high"]) expect(prompt).toContain(needle);
   });
+  it("lists similar past cards' predicted-against-actual lines as data, and only when memory gave some", () => {
+    const similar = [{ card: "c1", text: "predicted size M, changed 340 lines, 2 retries" }];
+    const withSimilar = renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage", context: { ...input.context, intake: { ...intake, similar } } } as StageInput, template });
+    expect(withSimilar).toContain("Similar past cards, predicted against actual");
+    expect(withSimilar).toContain("- card c1: predicted size M, changed 340 lines, 2 retries");
+    const without = renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage", context: { ...input.context, intake } } as StageInput, template });
+    expect(without).not.toContain("Similar past cards");
+  });
   it("prints (none) without it", () => {
     const prompt = renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage" } as StageInput, template });
     expect(prompt).toMatch(/## What Intake gathered[\s\S]*\(none\)/);
