@@ -49,10 +49,26 @@ export class PgTicketStore implements TicketStore {
          machine_status = case when $2::boolean then $3 else machine_status end,
          machine_links = case when $4::boolean then $5::jsonb else machine_links end,
          card_id = case when $6::boolean then $7 else card_id end,
+         card_claimed_at = case when $6::boolean then null else card_claimed_at end,
          updated_at = now()
        where key = $1`,
       [key, change.status !== undefined, change.status ?? null, change.links !== undefined, JSON.stringify(change.links ?? []), change.cardId !== undefined, change.cardId ?? null],
     );
+  }
+
+  /** One conditional statement, so the row lock decides: true for exactly one of two simultaneous callers, and only while the ticket has no card and no claim younger than `ttlMs`. */
+  async claimCard(key: string, now: Date, ttlMs: number): Promise<boolean> {
+    const rows = (await this.db.query(
+      "update tickets set card_claimed_at = $2 where key = $1 and card_id is null and (card_claimed_at is null or card_claimed_at < $3) returning key",
+      [key, now, new Date(now.getTime() - ttlMs)],
+    )) as unknown[][] | unknown[];
+    // typeorm's raw update returns [rows, count]
+    const found = Array.isArray(rows[0]) ? (rows[0] as unknown[]) : rows;
+    return found.length > 0;
+  }
+
+  async releaseCard(key: string): Promise<void> {
+    await this.db.query("update tickets set card_claimed_at = null where key = $1 and card_id is null", [key]);
   }
 
   async appendAssessment(key: string, entry: Record<string, unknown>): Promise<void> {
