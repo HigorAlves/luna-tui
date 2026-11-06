@@ -67,6 +67,10 @@ export interface TicketStore {
   get(key: string): Promise<TicketRow | null>;
   list(): Promise<TicketRow[]>;
   setMachine(key: string, change: { status?: string | null; links?: Array<{ kind: string; target: string }>; cardId?: string | null }): Promise<void>;
+  /** Reserves the creation of the ticket's card: true for one caller at a time (and false once it has a card); a claim older than `ttlMs` is retaken. */
+  claimCard(key: string, now: Date, ttlMs: number): Promise<boolean>;
+  /** Gives the reservation back after a creation that failed. */
+  releaseCard(key: string): Promise<void>;
   appendAssessment(key: string, entry: Record<string, unknown>): Promise<void>;
   setDrafts(key: string, drafts: Record<string, unknown>[]): Promise<void>;
   /** Changes the drafts under a row lock (see the Postgres store): a draft being posted is never lost to a read-modify-write. */

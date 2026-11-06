@@ -1,8 +1,8 @@
 // Task worktrees on the host. Each task gets its own branch and checkout; the agent works
 // there through a bind mount, and the machine commits on the host.
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { branchLinkOf, jiraBranch, slug } from "../../domain/jira-link.ts";
 import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
@@ -310,6 +310,27 @@ export async function ensureCleanCheckout(repoPath: string, path: string): Promi
   await execOrThrow("git", [...HOST_GIT, "-C", path, "reset", "--hard", "--quiet", sha]); // read-only checkout
   await execOrThrow("git", [...HOST_GIT, "-C", path, "clean", "-fd", "--quiet"]); // read-only checkout
   return path;
+}
+
+/**
+ * HEAD of a read-only checkout the machine itself made with `ensureCleanCheckout` (the graph's and the Jira intake's), read from the
+ * repository that registered it: `git worktree list` in `repoPath` names each linked checkout and its HEAD from the repository's own
+ * administrative files, which no container can write. The checkout's own `.git` file is never opened and nothing in the folder is followed:
+ * a folder that is a link, or is not a checkout the repository registered, is refused. A card's workspace is not read here (`headCommit`).
+ */
+export async function checkoutHead(repoPath: string, path: string): Promise<string> {
+  const target = resolve(path);
+  const info = lstatSync(target);
+  if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`${target} is not a checkout the machine made`);
+  const canonical = join(realpathSync(dirname(target)), basename(target));
+  const listed = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "list", "--porcelain"]);
+  for (const block of listed.split(/\n\n+/)) {
+    const lines = block.split("\n");
+    if (lines[0] !== `worktree ${canonical}`) continue;
+    const head = /^HEAD ([0-9a-f]{40,64})$/m.exec(block)?.[1];
+    if (head) return head;
+  }
+  throw new Error(`${target} is not a checkout the repository registered`);
 }
 
 /** `origin/<default>` freshly fetched when the repo has an origin; HEAD otherwise. */

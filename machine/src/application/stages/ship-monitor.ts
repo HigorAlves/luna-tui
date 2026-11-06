@@ -22,7 +22,14 @@ import { fromGraphQl } from "../../domain/pull-request.ts";
 import { type GitHub, type PrActivity, type PrReview, messageOf } from "../github.ts";
 import type { FreezeSource } from "../freeze.ts";
 import type { StageContext, StageResult } from "../ports.ts";
-import { type ShipCursor, SEEN_CAP, emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
+import { type ShipCursor, SEEN_CAP, emptyCursor, loadCursor, saveCursor as writeCursor } from "../ship-cursor.ts";
+
+/** The monitor holds its cursor for a whole watch, and `publishAndReady` (the one publisher) saves the hash of the section it just published straight to the file: every save here takes that hash from the file first, so the monitor never writes back a stale one (which would read the machine's own section as a person's edit). */
+async function saveCursor(stateDir: string, taskId: string, cursor: ShipCursor): Promise<void> {
+  const onDisk = await loadCursor(stateDir, taskId);
+  if (onDisk?.publishedSection) cursor.publishedSection = onDisk.publishedSection;
+  await writeCursor(stateDir, taskId, cursor);
+}
 import { ciContextOf, ciRunIdOf, failedChecks } from "./ci.ts";
 import { buildPr, mergePrSection } from "../../domain/prbody.ts";
 import { approvedPlan } from "../../domain/stage-input.ts";
@@ -320,7 +327,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         await note(`the comment from ${a.actor ?? "ghost"} is on no open thread; nothing to answer`);
         return {};
       }
-      found ??= { id: a.id, path: null, line: null, comments: [{ author: a.actor ?? "ghost", body: a.body, at: a.at }] };
+      found ??= { id: a.id, path: null, line: null, comments: [{ author: a.actor ?? "ghost", body: a.body, at: a.at, association: a.association }] };
       // Only the repository's own people (and the machine's own replies) can instruct: a comment from anyone else, or with an association GitHub did
       // not give, never reaches the fix agent or the re-plan, and reaches the reader and the decisions only inside a block marked as untrusted data.
       const trustedComment = (c: { author: string; association?: string | null }) => c.author.toLowerCase() === mine || TRUSTED.has(c.association ?? "");

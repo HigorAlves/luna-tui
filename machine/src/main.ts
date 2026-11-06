@@ -77,7 +77,7 @@ import { Backlog } from "./application/backlog.ts";
 import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
 import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
 import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
-import { TicketMachine } from "./application/ticket-machine.ts";
+import { TicketMachine, cardOnce } from "./application/ticket-machine.ts";
 import { TicketEvents } from "./application/ticket-events.ts";
 import { INTAKE_CLIENT } from "./application/classify.ts";
 import type { DedupAnswer } from "./application/intake-dedup.ts";
@@ -345,7 +345,9 @@ const realVerifyRunner = verifyRunner({
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
     return env && typeof env.hash === "string" ? env : null;
   },
-  envOf: async (path, commit, repoPath) => envOf({ image: await imageId(agentDeps && repoPath ? await agentDeps.repoImageOf(repoPath) : config.runnerImage), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
+  imageOf: agentDeps ? (repoPath, signal) => agentDeps.repoImageOf(repoPath, signal) : async () => config.runnerImage,
+  // The image Verify chose once (the sandboxes run in it) is the one compared; only a caller that chose none resolves the repository's image here.
+  envOf: async (path, commit, repoPath, image) => envOf({ image: await imageId(image ?? (agentDeps && repoPath ? await agentDeps.repoImageOf(repoPath) : config.runnerImage)), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
   graph,
   stateDir: config.stateDir,
   get decide() {
@@ -572,6 +574,8 @@ const slackInbox = new SlackInbox({
   ...(triager ? { assessor: { assess: (row) => conversationMachine().assess(row) } } : {}),
   truth: new ConversationTruth(config.stateDir, decisionTruth),
   drafts: conversationDrafts,
+  // The one address a draft about a card may hold whole, read where the drafter reads it.
+  cardAddress: (id) => pipeline.prLinkOf(id),
   // The reply draft: one `conversation_reply` run over the card's state, its evidence and the docs, all as data. Built lazily: `packRuns` is below.
   drafter: new ConversationDrafter({
     card: async (id) => {
@@ -689,7 +693,7 @@ const ticketMachine = new TicketMachine({
   candidates: (ticket, repoPath) => pipeline.ticketCandidates(repoPath, ticket.tool === "github" ? { kind: "github", repo: ticket.key.split("#")[0]!, number: Number(ticket.key.split("#")[1]), url: ticket.permalink } : { kind: "jira", key: ticket.key, url: ticket.permalink, issueType: ticket.type }),
   config: async (repoPath) => (await policies.for(repoPath)).factory,
   locate: async (repoPath, text) => (repoPath ? ((await graph.locate(repoPath, text))?.files ?? []).map((f: { path?: string } | string) => (typeof f === "string" ? f : (f.path ?? ""))).filter(Boolean) : []),
-  createCard: (input) => pipeline.createTask(input),
+  createCard: (input, key) => cardOnce(pipeline, input, key),
   validity: { decide: async (c) => (await ticketPack("ticket_validity", c)) as never },
   assess: { decide: async (c) => (await ticketPack("ticket_assess", c)) as never },
   recommend: { decide: async (c) => (await ticketPack("ticket_recommend", c)) as never },

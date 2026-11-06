@@ -160,6 +160,8 @@ export interface AgentExtra {
   blastRadius?: string[];
   /** verifying: the coverage of the change's added lines. */
   coverage?: CoverageSummary;
+  /** verifying: the image the stage chose once (it compared the environment against it); the sandbox runs in it and the repository's image is not resolved again. */
+  image?: string;
   /** The video packs: the scenarios, target, narration and measurements. */
   video?: VideoContext | null;
   /** verifying after a shipped PR's fix: the commit to diff against, over the branch's fork point (only the delta is reviewed). */
@@ -227,20 +229,22 @@ const SCOPE_ADVICE: Partial<Record<ScopeIssue["kind"], string>> = {
 const OutOfMap = z.array(z.object({ path: z.string(), reason: z.string() }));
 
 export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
-  const result = await runAgentIn(deps, context, pack, extra);
+  // The image the stage's sandbox runs in is chosen once, inside the run, and carried out here: the record of Build's environment names it, never a second resolution.
+  const chosen: { image?: string } = {};
+  const result = await runAgentIn(deps, context, pack, extra, chosen);
   // The environment a passing Build ran in: the run's own record, and the Build Report's `envHash`.
   const path = result.workspace?.worktreePath;
   if (pack !== "implementing" || result.outcome !== "pass" || !path || !deps.imageId) return result;
   try {
     const commit = await headCommit(path);
-    return { ...result, detail: { ...result.detail, env: envOf({ image: await deps.imageId(deps.repoImages && context.task.repoPath ? (await deps.repoImages.ensure(context.task.repoPath)).image : deps.image), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }) } };
+    return { ...result, detail: { ...result.detail, env: envOf({ image: await deps.imageId(chosen.image ?? deps.image), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }) } };
   } catch (error) {
     console.warn(`could not record the Build's environment: ${(error as Error).message}`);
     return result;
   }
 }
 
-async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
+async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}, chosen: { image?: string } = {}): Promise<StageResult> {
   const { task } = context;
   if (!task.repoPath) {
     throw new Error("the task has no repoPath; create it with a repo to run real stages");
@@ -249,8 +253,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   if (extra.checkout && limits.writable) throw new Error(`${pack} is writable; a checkout run must be read-only`);
   const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
   // The repository's own image, built from the base its luna.yaml names; a build that fails is an environment problem with the reason.
-  let stageImage = deps.image;
-  if (deps.repoImages && !extra.checkout) {
+  let stageImage = extra.image ?? deps.image;
+  if (deps.repoImages && !extra.checkout && !extra.image) {
     try {
       stageImage = (await deps.repoImages.ensure(task.repoPath, context.signal, task.id)).image;
     } catch (error) {
@@ -258,6 +262,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "image", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
     }
   }
+  chosen.image = stageImage;
   if (pack === "triage" && deps.graphReady) {
     const ready = await deps.graphReady({ repoPath: task.repoPath, signal: context.signal, skip: graphSkipped(context.approvals), ...(context.note ? { note: context.note } : {}) });
     if (ready.state === "failed") return graphEscalation(ready.reason);

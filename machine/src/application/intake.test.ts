@@ -112,6 +112,8 @@ describe("GitHubIntake with triage_signals", () => {
     ]);
     const tasks = await pipeline.list();
     expect(tasks.map((t) => [t.title, t.classification])).toEqual([["Export CSV", null]]);
+    // The card keeps the issue's labels: triage reads the signals again from the card, and a security label must survive that.
+    expect(tasks[0]!.source).toMatchObject({ kind: "github", labels: ["enhancement"] });
     expect(github.commentOnIssue).toHaveBeenCalledTimes(1);
     expect(github.commentOnIssue).toHaveBeenCalledWith("o/a", 8, "Not for an agent: it reads as a question, not a change (question · machine · not ready · size small · lowest confidence 0.90 (typesafe-ai/jev)).");
     await intake.pollOnce();

@@ -2,12 +2,13 @@ import { type ConversationRelation, FACTORY_DEFAULTS, type SlackPriority, type S
 import { describe, expect, it, vi } from "vitest";
 
 import type { SlackItemRow } from "../domain/slack-item.ts";
-import { carriesSecret, postable } from "../domain/postable.ts";
+import { carriesSecret, postable, postableKeeping } from "../domain/postable.ts";
 import { RULES_TEMPLATE } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
 import { tapOf } from "./slack-send.ts";
 import { ChannelClaims } from "./channel-claims.ts";
+import { ConversationActions } from "./conversation-actions.ts";
 import { ConversationDrafts, draftHash, MemoryDraftStore } from "./conversation-drafts.ts";
 import type { Assessed } from "./conversation-machine.ts";
 import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, SlackInbox, SlackRefusedError } from "./slack-inbox.ts";
@@ -47,6 +48,7 @@ interface World {
   assessor?: { assess: (row: SlackItemRow) => Promise<Assessed> };
   drafter?: { draft: (row: SlackItemRow, onRefused?: (why: string) => void) => Promise<string | null> };
   drafts?: ConversationDrafts;
+  cardAddress?: (cardId: string) => Promise<string | null>;
   actions?: { apply: (row: SlackItemRow, relation: ConversationRelation) => Promise<{ relation: ConversationRelation; taskId?: string; priority?: SlackPriority }>; undo: (previous: ConversationRelation | null | undefined, next: ConversationRelation) => Promise<void> };
   truth?: { override: (input: unknown) => Promise<void>; relation?: (input: unknown) => Promise<void>; outcome?: (input: unknown) => Promise<void> };
 }
@@ -132,6 +134,7 @@ function setup(world: World = {}) {
     ...(world.actions ? { actions: world.actions } : {}),
     ...(world.drafter ? { drafter: world.drafter } : {}),
     ...(world.drafts ? { drafts: world.drafts } : {}),
+    ...(world.cardAddress ? { cardAddress: world.cardAddress } : {}),
     digest: true,
     ...(world.truth ? { truth: world.truth as never } : {}),
     rulesPath: "/rules.md",
@@ -428,6 +431,18 @@ describe("SlackInbox.pollOnce", () => {
         expect(row.conversation?.relation?.applied).toBeDefined();
         expect(created).toEqual([]);
       });
+      it("hands a first assessment's own classification to the action: a new candidate is added to the backlog on the first run", async () => {
+        const added: unknown[] = [];
+        const real = new ConversationActions({ attachThread: async () => ({}) as never, bump: async () => {}, unbump: async () => {}, addCandidate: async (input) => (added.push(input), { id: "b-1" }), linkedTo: async () => [] });
+        const scores = { who: { score: 2, confidence: 0.9 }, what: { score: 2, confidence: 0.9 }, impact: { score: 1, confidence: 0.9 }, time: { score: 3, confidence: 0.9 }, demand: { score: 1, confidence: 0.9 } };
+        const assessor = { assess: async () => assessed({ relation: { type: "new_candidate", target: null, confidence: 0.9, by: "model", at: iso(0) }, classification: { kind: "bug", confidence: 0.9, by: "model", at: iso(0), records: {}, verdict: "ok", scores } }) };
+        const { inbox, store } = setup({ assessor, actions: real, claimed: { C1: "/r" }, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
+        await poll(inbox);
+        await poll(inbox);
+        expect(added).toHaveLength(1);
+        expect(added[0]).toMatchObject({ repo: "/r", scores: { who: 2, what: 2, impact: 1, time: 3, demand: 1 } });
+        expect(store.rows.get(`C1:${ts(10)}`)!.conversation?.relation?.applied).toMatchObject({ backlog: "b-1" });
+      });
       it("does not run for ask, nor for a verdict ask", async () => {
         const a = actions();
         const assessor = { assess: async () => assessed({ relation: { ...card, type: "ask", target: null } }) };
@@ -507,6 +522,33 @@ describe("SlackInbox.pollOnce", () => {
         expect((await w.drafts.waiting(w.id))?.text).toBe("a &lt; b & c &gt; d");
         await w.inbox.reply(w.id, "a &lt; b & c &gt; d", TAP, false, await proof(w.drafts, w.id));
         expect(w.post).toHaveBeenLastCalledWith("C1", "a &lt; b &amp; c &gt; d", expect.anything());
+      });
+      describe("the card's own PR address", () => {
+        const PR = "https://github.com/acme/app/pull/42";
+        const card = { type: "related_to_in_progress" as const, target: "card-1", confidence: 0.9, by: "model" as const, at: iso(0) };
+        const shortlist = [{ slot: 1, id: "card-1", kind: "open" as const, otherSource: null, title: "t" }];
+        const withCard = (text: string, cardAddress: World["cardAddress"] = async () => PR) =>
+          waiting({ assessor: { assess: async () => assessed({ relation: card, shortlist }) }, drafter: { draft: async () => postableKeeping(text, [PR]) }, cardAddress });
+        it("sends an unchanged draft that holds it, whole", async () => {
+          const w = await withCard(`Fix: ${PR}`);
+          expect((await w.drafts.waiting(w.id))?.text).toBe(`Fix: ${PR}`);
+          await w.inbox.reply(w.id, `Fix: ${PR}`, TAP, false, await proof(w.drafts, w.id));
+          expect(w.post).toHaveBeenCalledTimes(1);
+          expect(w.post.mock.calls[0]![1]).toContain(PR);
+        });
+        it("refuses a stored draft that holds another address, even beside the card's", async () => {
+          const w = await withCard(`Fix: ${PR}`);
+          const d = (await w.drafts.waiting(w.id))!;
+          const other = `Fix: ${PR} and https://evil.example/x`;
+          await w.drafts.open({ thread: w.id, channel: "C1", threadTs: ts(10), kind: "reply", text: other, cardId: d.cardId, private: false, records: {} });
+          await expect(w.inbox.reply(w.id, other, TAP, false, await proof(w.drafts, w.id))).rejects.toBeInstanceOf(SlackRefusedError);
+          expect(w.post).not.toHaveBeenCalled();
+        });
+        it("refuses a draft with the card's address when the machine cannot read that address", async () => {
+          const w = await withCard(`Fix: ${PR}`, async () => null);
+          await expect(w.inbox.reply(w.id, `Fix: ${PR}`, TAP, false, await proof(w.drafts, w.id))).rejects.toBeInstanceOf(SlackRefusedError);
+          expect(w.post).not.toHaveBeenCalled();
+        });
       });
       it("a reply with the id and hash of another draft posts the person's text and settles and labels nothing", async () => {
         const w = await waiting();

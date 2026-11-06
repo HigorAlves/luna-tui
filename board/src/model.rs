@@ -1438,6 +1438,9 @@ pub struct SlackDraft {
     pub hash: String,
     #[serde(default)]
     pub kind: String,
+    /// The text a tap on this draft sends (the machine's current outbound draft: a reply, questions, a status, the shipped summary). Absent in a snapshot from before it was sent.
+    #[serde(default)]
+    pub text: String,
     #[serde(default)]
     pub expires_at: String,
 }

@@ -236,9 +236,9 @@ export class ThreadReplies {
     const auto = await this.auto(task);
     if (auto) await this.machineThread(task, text);
     const source = task.source;
-    if (source?.kind !== "slack") return;
     if (!auto) {
-      await this.outbound(task, "shipped", text);
+      // The thread the card came from (a Slack card's own), then each thread attached to the card, whatever the card's source: a GitHub or Jira card has its attached threads too.
+      if (source?.kind === "slack") await this.outbound(task, "shipped", text);
       // Each thread attached to the card hears of it too, as its own draft (a thread not stored is skipped).
       for (const key of Object.keys(cardOf(task).links)) {
         const match = /^slack:([^:]+):(.+)$/.exec(key);
@@ -247,6 +247,7 @@ export class ThreadReplies {
       }
       return;
     }
+    if (source?.kind !== "slack") return;
     const sender = this.sender();
     const standing = standingOf({ auto: true });
     if (!sender || !standing) return;

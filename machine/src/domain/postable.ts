@@ -1,6 +1,7 @@
 // What the machine may post outward from text a model or a person wrote: one line, no HTML, no `@mention`, no `#N`
 // auto-link, capped, and never a token-shaped string. One implementation for every outward post (the review loop's
 // replies, a conversation's reply, triage's questions).
+import { holdsForeignAddress } from "./address-rule.ts";
 import { redact, safe } from "./evidence-markdown.ts";
 
 /** The longest a reply the machine posts may be, after flattening. */
@@ -36,4 +37,13 @@ export function postableKeeping(text: string, given: Iterable<string>, cap = REP
     if (broken !== link) out = out.split(broken).join(link);
   }
   return out;
+}
+
+/** The one rule for a conversation draft's addresses, used where the draft is written and where it is sent: the text holds no address but the exact `given` ones (the
+ *  card's own PR link, as the machine supplied it; `files` are the file names of the docs the machine supplied), else it is dropped (`null`); what is left is
+ *  `postableKeeping`. A draft sent as drafted must equal this function's answer for the same `given`, so the send path is never looser or stricter than the drafting one. */
+export function postableDraft(text: string, given: Iterable<string>, files: Iterable<string> = []): string | null {
+  const links = [...given];
+  if (holdsForeignAddress(text, { given: links, files })) return null;
+  return postableKeeping(text, links);
 }

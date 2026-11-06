@@ -4,7 +4,7 @@
 // published on the host. What the app and the seed print is untrusted: flattened, capped and redacted before it is in a reason.
 import { cacheVolumeFor, type SandboxExec, SecretsMissingError } from "../adapters/docker/docker.ts";
 import { APP_ALIAS, appArgs, probeArgs } from "../adapters/docker/app.ts";
-import type { BlockedRow, CardNetwork, openCardNetwork } from "../adapters/docker/egress.ts";
+import type { BlockedRow, CardNetwork, openCardNetwork, openPlainNetwork } from "../adapters/docker/egress.ts";
 import type { startServices } from "../adapters/docker/services.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { safe } from "../domain/evidence-markdown.ts";
@@ -32,6 +32,8 @@ export interface AppDeps {
   egress?: EgressPolicy;
   secrets?: SecretStore;
   openCardNetwork: typeof openCardNetwork;
+  /** The network when `MACHINE_EGRESS=off` (no `egress` above): an ordinary one, the owner's switch honoured as in every other container start. */
+  openPlainNetwork: typeof openPlainNetwork;
   startServices: typeof startServices;
   exec(run: SandboxExec, options: { timeoutMs?: number }): Promise<ExecResult & { blocked?: BlockedRow[] }>;
   docker(args: string[], options?: { env?: NodeJS.ProcessEnv }): Promise<ExecResult>;
@@ -93,7 +95,7 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
 
   const image = await deps.imageFor(input.repoPath, input.taskId);
   const spec = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "check" }) : { allow: [], allowPrivate: [], proxyImage: image };
-  const card: CardNetwork = await deps.openCardNetwork(runName, spec, { proxyImage: spec.proxyImage });
+  const card: CardNetwork = deps.egress ? await deps.openCardNetwork(runName, spec, { proxyImage: spec.proxyImage }) : await deps.openPlainNetwork(runName);
   let services: Awaited<ReturnType<typeof startServices>> | null = null;
   const seen = new Set<string>();
   const report = async (step: "seed" | "app"): Promise<void> => {
@@ -121,7 +123,7 @@ export async function openApp(deps: AppDeps, input: OpenAppInput): Promise<OpenA
     const limits = { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb };
     const cacheVolume = cacheVolumeFor(input.repoPath);
     if (seed.command) {
-      const seeded = await deps.exec({ name: `${container}-seed`, image, worktree: input.workspace, limits, argv: ["sh", "-c", seed.command], env: services.env, cacheVolume, cardNetwork: card, services: policy.services, ...(seed.secrets.length > 0 ? { secrets: pick(seed.secrets) } : {}) }, { timeoutMs: SEED_TIMEOUT_MS });
+      const seeded = await deps.exec({ name: `${container}-seed`, image, worktree: input.workspace, limits, argv: ["sh", "-c", seed.command], env: services.env, cacheVolume, cardNetwork: card, services: policy.services, servicesUp: true, network: services.network, serviceEnv: services.env, ...(seed.secrets.length > 0 ? { secrets: pick(seed.secrets) } : {}) }, { timeoutMs: SEED_TIMEOUT_MS });
       await report("seed");
       if (seeded.code !== 0) return await fail("seed", `the seed command exited ${seeded.code}`, `${seeded.stdout}\n${seeded.stderr}`);
     }
@@ -186,7 +188,7 @@ export async function openPreview(deps: AppDeps, input: OpenAppInput & { branch:
   const base = deps.egress ? await deps.egress.for({ repoPath: input.repoPath, kind: "check" }) : { allow: [], allowPrivate: [], proxyImage: image };
   const spec = { ...base, allow: [...new Set([...base.allow, `${host}:443`])].sort() };
   const runName = `${input.taskId.slice(0, 8)}-deploy-${input.attempt}`;
-  const card = await deps.openCardNetwork(runName, spec, { proxyImage: spec.proxyImage });
+  const card = deps.egress ? await deps.openCardNetwork(runName, spec, { proxyImage: spec.proxyImage }) : await deps.openPlainNetwork(runName);
   const seen = new Set<string>();
   const report = async (): Promise<void> => {
     const fresh = (await card.blocked()).filter((row) => !seen.has(`${row.via}|${row.host}|${row.port}`));
