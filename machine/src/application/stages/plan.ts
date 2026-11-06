@@ -338,6 +338,8 @@ export function planStage(deps: PlanDeps): StageRunner {
           : { split: { children: [], issues: [], rounds: 0 } }),
         size,
         risk,
+        // Who may approve (to split, or to keep the card whole): the rule of a plan at the origin's level, read again at the tap.
+        approvalRule: approvalRule(level, repoPlan?.approvers ?? FACTORY_DEFAULTS.plan.approvers, { state: "skipped" }),
         ...(map ? { map } : {}),
         ...(mapNote ? { mapNote } : {}),
         decisions: sizeRecords({ split_check: looked?.ok ? looked.recordId : undefined }),

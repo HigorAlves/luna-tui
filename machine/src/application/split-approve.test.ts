@@ -45,6 +45,11 @@ const origin = async (p: Pipeline = pipeline, order: Record<string, unknown> = {
   await p.start(task.id);
   return task.id;
 };
+/** The approval of a high-risk origin's split: two distinct names, as a plan of that risk needs. The answer is the last one's. */
+const approve = async (p: Pipeline, id: string, reason?: string) => {
+  await p.decide(id, "approved", reason, undefined, { approver: "ana" });
+  return p.decide(id, "approved", reason, undefined, { approver: "bo" });
+};
 const count = async (): Promise<number> => Number((await db.query("select count(*)::int as n from tasks"))[0].n);
 const children = async (id: string) => (await db.query("select id from tasks where id <> $1 order by created_at, id", [id])).map((r: { id: string }) => r.id as string);
 
@@ -53,7 +58,7 @@ describe("approving a split", () => {
     stubs.plan("test_design", gate([part(1), part(2, { depends_on: [1] })]));
     const id = await origin();
     expect(await count()).toBe(1);
-    const done = await pipeline.decide(id, "approved", "split it");
+    const done = await approve(pipeline, id, "split it");
     expect(done).toMatchObject({ state: "archived", archiveReason: "split" });
     const kids = await children(id);
     expect(kids).toHaveLength(2);
@@ -71,7 +76,7 @@ describe("approving a split", () => {
     const source = { kind: "github", repo: "o/a", number: 7, url: "https://github.com/o/a/issues/7" } as const;
     const jira = { key: "PLAT-9", url: "https://acme.atlassian.net/browse/PLAT-9", issueType: null, status: null, priority: null, dueAt: null, syncedAt: null };
     const id = await origin(p, { source, jira, reporter: { id: "marta" }, followers: ["ana"], links: { doc: "https://example.com/d" }, attachments: [{ name: "a", url: "https://example.com/a" }] });
-    await p.decide(id, "approved");
+    await approve(p, id);
     const [first, second] = await children(id);
     const a = await p.get(first!);
     const b = await p.get(second!);
@@ -91,7 +96,7 @@ describe("approving a split", () => {
     const p = make({ jiraSite: "https://acme.atlassian.net" });
     pipeline = p;
     const id = await origin(p);
-    await p.decide(id, "approved");
+    await approve(p, id);
     for (const kid of await children(id)) expect((await p.get(kid)).jira).toBeNull();
   });
 
@@ -99,7 +104,7 @@ describe("approving a split", () => {
     stubs.plan("test_design", gate([part(1), part(2, { depends_on: [1] })]));
     const id = await origin();
     seen.length = 0;
-    await pipeline.decide(id, "approved");
+    await approve(pipeline, id);
     const [first, second] = await children(id);
     expect((await pipeline.get(first!)).state).toBe("awaiting_approval");
     expect((await pipeline.get(second!)).state).toBe("draft");
@@ -109,7 +114,7 @@ describe("approving a split", () => {
   it("builds the branch of a part from ids when its workspace is made", async () => {
     stubs.plan("test_design", gate([part(1), part(2, { depends_on: [1] })]));
     const id = await origin();
-    await pipeline.decide(id, "approved");
+    await approve(pipeline, id);
     const { workspaceFor } = await import("../adapters/git/worktree.ts");
     const [first] = await children(id);
     expect(workspaceFor(await pipeline.get(first!), "/r/app", "/w").branch).toBe(`task/${first!.slice(0, 8)}-part-1-of-${id.slice(0, 8)}`);
@@ -125,12 +130,12 @@ describe("approving a split", () => {
       if (calls === 2) throw new Error("the database blinked");
       return real(order, key);
     });
-    await expect(pipeline.decide(id, "approved")).rejects.toThrow("blinked");
+    await expect(approve(pipeline, id)).rejects.toThrow("blinked");
     expect((await pipeline.get(id)).state).toBe("awaiting_approval");
     expect((await pipeline.approvals(id))[0]!.decision).toBeNull();
     expect(await count()).toBe(2);
     spy.mockRestore();
-    await pipeline.decide(id, "approved");
+    await pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" });
     expect(await count()).toBe(3);
     expect((await pipeline.get(id)).archiveReason).toBe("split");
   });
@@ -138,14 +143,14 @@ describe("approving a split", () => {
   it("refuses a split the repository's limits would not pass now", async () => {
     stubs.plan("test_design", gate([part(1, { covers: [] }), part(2)]));
     const id = await origin();
-    await expect(pipeline.decide(id, "approved")).rejects.toBeInstanceOf(SplitNotValidError);
+    await expect(approve(pipeline, id)).rejects.toBeInstanceOf(SplitNotValidError);
     expect(await count()).toBe(1);
   });
 
   it("is refused with split_changed when the gate's way of splitting is not what the approval would do now", async () => {
     stubs.plan("test_design", gate([part(1), part(2)], "tickets"));
     const id = await origin();
-    await expect(pipeline.decide(id, "approved")).rejects.toMatchObject({ name: "SplitChangedError" });
+    await expect(approve(pipeline, id)).rejects.toMatchObject({ name: "SplitChangedError" });
     expect(await count()).toBe(1);
     await pipeline.shutdown();
     await db.query("truncate tasks cascade");
@@ -153,7 +158,7 @@ describe("approving a split", () => {
     pipeline = make({ splitTickets: { knows: async () => ({ tool: "jira", key: "PLAT-1" }), create } });
     stubs.plan("test_design", gate([part(1), part(2)], "cards"));
     const again = await origin();
-    await expect(pipeline.decide(again, "approved")).rejects.toMatchObject({ name: "SplitChangedError" });
+    await expect(approve(pipeline, again)).rejects.toMatchObject({ name: "SplitChangedError" });
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -162,7 +167,7 @@ describe("approving a split", () => {
     pipeline = make({ splitTickets: { knows: async () => ({ tool: "jira", key: "PLAT-1" }), create } });
     stubs.plan("test_design", gate([part(1), part(2)], "tickets"));
     const id = await origin();
-    const done = await pipeline.decide(id, "approved");
+    const done = await approve(pipeline, id);
     expect(done).toMatchObject({ state: "archived", archiveReason: "split" });
     expect(create).toHaveBeenCalledTimes(1);
     expect(await count()).toBe(1);
@@ -181,7 +186,7 @@ describe("approving a split", () => {
     stubs.plan("test_design", gate([part(1), part(2)]));
     const id = await origin();
     decide.mockClear();
-    await pipeline.decide(id, "approved");
+    await approve(pipeline, id);
     expect(decide).not.toHaveBeenCalled();
     for (const kid of await children(id)) expect((await pipeline.get(kid)).state).not.toBe("archived");
   });
@@ -194,7 +199,48 @@ describe("what an approved split teaches split_check", () => {
     pipeline = make({ truth: { learned: async (f: Record<string, unknown>) => (learned.push(f), true), answerOf: async () => yes } });
     stubs.plan("test_design", gate([part(1), part(2)]));
     const id = await origin();
-    await pipeline.decide(id, "approved");
+    await approve(pipeline, id);
     expect(learned.filter((l) => l.pack === "split_check")).toEqual([expect.objectContaining({ recordId: "rec-split", source: "split_approved", label: { covers: { value: true }, no_overlap: { value: true }, stand_alone: { value: true } } })]);
+  });
+});
+
+describe("who may approve a split", () => {
+  const low = { risk: { level: "low", machine: "low", scores: {} } };
+  it("needs the approvers a plan of the origin's risk needs: one name makes nothing, the second distinct name makes the children", async () => {
+    stubs.plan("test_design", gate([part(1), part(2)]));
+    const id = await origin();
+    const first = await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
+    expect(first.state).toBe("awaiting_approval");
+    expect(await count()).toBe(1);
+    expect((await pipeline.events(id)).find((e) => e.kind === "approval.partial")?.payload).toMatchObject({ approver: "ana", needed: 2, have: 1 });
+    await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).rejects.toMatchObject({ name: "SameApproverError" });
+    expect(await count()).toBe(1);
+    expect(await pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" })).toMatchObject({ state: "archived", archiveReason: "split" });
+    expect(await count()).toBe(3);
+  });
+
+  it("asks for a name at all when the rule needs two", async () => {
+    stubs.plan("test_design", gate([part(1), part(2)]));
+    const id = await origin();
+    await expect(pipeline.decide(id, "approved")).rejects.toMatchObject({ name: "ApproverRequiredError" });
+    expect(await count()).toBe(1);
+  });
+
+  it("needs the same approvers to keep a high-risk card whole", async () => {
+    stubs.plan("test_design", gate([part(1), part(2)]));
+    const id = await origin();
+    const one = await pipeline.decide(id, "approved", "keep it", { keepWhole: true }, { approver: "ana" });
+    expect(one.state).toBe("awaiting_approval");
+    expect((await pipeline.approvals(id)).every((a) => a.decision === null)).toBe(true);
+    const done = await pipeline.decide(id, "approved", "keep it", { keepWhole: true }, { approver: "bo" });
+    expect(done.id).toBe(id);
+    expect((await pipeline.approvals(id))[0]).toMatchObject({ decision: "approved", response: { keepWhole: true } });
+  });
+
+  it("keeps one tap for an origin that is not high risk", async () => {
+    stubs.plan("test_design", gate([part(1), part(2)], "cards", low));
+    const id = await origin();
+    expect(await pipeline.decide(id, "approved")).toMatchObject({ archiveReason: "split" });
+    expect(await count()).toBe(3);
   });
 });

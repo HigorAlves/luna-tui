@@ -947,6 +947,9 @@ describe("planStage's split exit", () => {
     expect(result.detail).toMatchObject({ outcome: "split", split: { rounds: 1, judged: true, via: "cards", children: [expect.any(Object), expect.any(Object)] }, size: { verdict: "over", by: "decision" } });
     expect(result.detail).not.toHaveProperty("plan");
     expect(result.detail).not.toHaveProperty("cases");
+    // The gate says who may approve it: the rule of a plan at the origin's level.
+    const level = (result.detail as { risk: { level: "low" | "medium" | "high" } }).risk.level;
+    expect(result.detail).toMatchObject({ approvalRule: { needed: level === "high" ? 2 : 1 } });
     expect(result.detail).toHaveProperty("risk");
     expect(result.detail).toHaveProperty("decisions");
   });

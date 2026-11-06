@@ -1495,9 +1495,13 @@ export class Pipeline {
       response = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (decision === "approved" && open && isSplitOutcome(outcome)) {
+      if (response?.keepWhole !== true && outcome === "split_failed") throw new SplitNotValidError(id);
+      // The same names a plan of the origin's risk needs, for the split and for keeping the card whole; a first name only waits on the gate.
+      const names = await this.splitApprovers(id, task, approver);
+      if (names.partial) return this.get(id);
+      if (names.names.length > 1) response = { ...response, approvers: names.names };
       if (response?.keepWhole !== true) {
-        if (outcome === "split_failed") throw new SplitNotValidError(id);
-        return this.approveSplit(id, open, { ...(reason ? { reason } : {}), ...(approver ? { approver } : {}), gate });
+        return this.approveSplit(id, open, { ...(reason ? { reason } : {}), ...(approver ? { approver } : {}), ...(names.names.length > 1 ? { approvers: names.names } : {}), gate });
       }
       // Kept whole: the gate closes approved with the person's answer, and the plan stage runs again, which now plans without the size guard.
       const size = (open.requested.size ?? {}) as { estLoc?: unknown; planned?: unknown; by?: unknown; limit?: { hard?: unknown } };
@@ -1514,17 +1518,7 @@ export class Pipeline {
     let answered = response;
     let guard: Extra["guard"];
     if (decision === "approved" && open && outcome === undefined) {
-      const configured = (await this.policyFor(task.repoPath)).factory.plan.approvers;
-      const ruleOf = async (requested: Record<string, unknown>) => {
-        const lv = (requested.risk as { level?: unknown } | undefined)?.level;
-        const level: Risk = lv === "high" || lv === "medium" ? lv : "low";
-        let owners: OwnersState = level === "high" ? await this.ruleOwnersOf(task.repoPath, requested) : { state: "skipped" };
-        // CODEOWNERS could not be read just now: the owners the gate was opened with (the machine's own reading, kept on the gate) still hold,
-        // so a lookup that fails at the moment of approval does not switch the condition off.
-        const kept = requested.ruleOwners as { state?: unknown; owners?: unknown } | undefined;
-        if (owners.state === "not_checked" && kept?.state === "ok" && Array.isArray(kept.owners) && kept.owners.length > 0) owners = { state: "ok", owners: kept.owners.map(String) };
-        return { rule: approvalRule(level, configured, owners), owners: owners.state === "ok" ? owners.owners : [] };
-      };
+      const ruleOf = (requested: Record<string, unknown>) => this.planRuleOf(task, requested);
       const prior = await this.store.withTaskLock(id, async (_task, tx) => {
         const fresh = await tx.findOpenApproval(id);
         if (!fresh || fresh.kind !== "awaiting_approval" || fresh.requested.outcome !== undefined) return null;
@@ -1597,6 +1591,43 @@ export class Pipeline {
   }
 
   /** What the outside-approver rule reads for a gate: CODEOWNERS' owners for the map's change and test files and the plan's step files. Never a model's owners. */
+  /** Who may approve a gate of this risk, from the repo's `plan.approvers` and (for high) the owners of the files the gate names; the level is `requested.risk.level`. */
+  private async planRuleOf(task: TaskRow, requested: Record<string, unknown>): Promise<{ rule: ReturnType<typeof approvalRule>; owners: string[] }> {
+    const configured = (await this.policyFor(task.repoPath)).factory.plan.approvers;
+    const lv = (requested.risk as { level?: unknown } | undefined)?.level;
+    const level: Risk = lv === "high" || lv === "medium" ? lv : "low";
+    let owners: OwnersState = level === "high" ? await this.ruleOwnersOf(task.repoPath, requested) : { state: "skipped" };
+    // CODEOWNERS could not be read just now: the owners the gate was opened with (the machine's own reading, kept on the gate) still hold,
+    // so a lookup that fails at the moment of approval does not switch the condition off.
+    const kept = requested.ruleOwners as { state?: unknown; owners?: unknown } | undefined;
+    if (owners.state === "not_checked" && kept?.state === "ok" && Array.isArray(kept.owners) && kept.owners.length > 0) owners = { state: "ok", owners: kept.owners.map(String) };
+    return { rule: approvalRule(level, configured, owners), owners: owners.state === "ok" ? owners.owners : [] };
+  }
+
+  /** The approvers of a split gate (to split, or to keep the card whole): the same rule a plan of the origin's risk has, taken under the task lock; the names so far are kept on the gate and the last one closes it. */
+  private async splitApprovers(id: string, task: TaskRow, approver: string | undefined): Promise<{ partial: true } | { partial: false; names: string[] }> {
+    const outcome = await this.store.withTaskLock(id, async (_task, tx) => {
+      const fresh = await tx.findOpenApproval(id);
+      if (!fresh || fresh.kind !== "awaiting_approval" || !isSplitOutcome(fresh.requested.outcome)) return { partial: false as const, names: [] as string[], needed: 1 };
+      const { rule, owners } = await this.planRuleOf(task, fresh.requested);
+      if (rule.needed <= 1) return { partial: false as const, names: [] as string[], needed: 1 };
+      const names = Array.isArray(fresh.requested.approvers) ? fresh.requested.approvers.map(String) : [];
+      if (!approver) throw new ApproverRequiredError(id, "plan", rule.needed);
+      if (names.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver);
+      if (names.length + 1 < rule.needed) {
+        await tx.updateApprovalRequested(fresh, { ...fresh.requested, approvers: [...names, approver] });
+        return { partial: true as const, names, needed: rule.needed };
+      }
+      if (rule.outside === "required" && !outsideSatisfied([...names, approver], owners)) throw new OutsideApproverRequiredError(id, approver);
+      return { partial: false as const, names: [...names, approver], needed: rule.needed };
+    });
+    if (outcome.partial) {
+      await this.log(id, "approval.partial", { approver, needed: outcome.needed, have: outcome.names.length + 1 });
+      return { partial: true };
+    }
+    return outcome;
+  }
+
   private async ruleOwnersOf(repoPath: string | null, requested: Record<string, unknown>): Promise<OwnersState> {
     if (!repoPath || !this.owners) return ownersStateOf(null);
     const map = CodeMapAnswer.safeParse(requested.map);
@@ -1614,7 +1645,7 @@ export class Pipeline {
 
   /** A person approved the split the gate shows: the children are made (cards once each, under `split:<origin>:<n>`; or tickets through the port), then the origin ends `split`.
    *  Checked first against the repository's limits as they are now and against the way of splitting the gate was opened for. A failure midway archives nothing; the next approval goes on from the keys. */
-  private async approveSplit(id: string, open: ApprovalRow, how: { reason?: string; approver?: string; gate: ApprovalRow | undefined }): Promise<TaskRow> {
+  private async approveSplit(id: string, open: ApprovalRow, how: { reason?: string; approver?: string; approvers?: string[]; gate: ApprovalRow | undefined }): Promise<TaskRow> {
     const task = await this.get(id);
     const proposed = (open.requested.split ?? {}) as { children?: unknown; via?: unknown };
     const parsed = z.array(SplitChild).safeParse(proposed.children);
@@ -1625,7 +1656,7 @@ export class Pipeline {
     const via = await this.splitVia(task);
     if (proposed.via !== via) throw new SplitChangedError(id, String(proposed.via), via);
     const kids = facts.children;
-    const record = { decision: "approved" as const, ...(how.reason ? { reason: how.reason } : {}), response: { ...(how.approver ? { approver: how.approver } : {}) } };
+    const record = { decision: "approved" as const, ...(how.reason ? { reason: how.reason } : {}), response: { ...(how.approver ? { approver: how.approver } : {}), ...(how.approvers ? { approvers: how.approvers } : {}) } };
     if (via === "tickets") {
       await this.splitTickets!.create(task, kids, open.id);
       await this.log(id, "card.split", { children: kids.length, via: "tickets" });
