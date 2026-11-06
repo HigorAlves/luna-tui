@@ -229,6 +229,8 @@ export interface PipelineOptions {
   contextSetup?: ContextDeps;
   /** Intake's duplicate check; absent, no card is checked. */
   dedup?: DedupPort;
+  /** Memory's nearest past cards to a new card (RFC 0007, M3), best first: they join the lexical dedup shortlist, inside the cards its reporter could see. Absent, or failing, dedup is as before. */
+  similarCardIds?: (task: TaskRow) => Promise<string[]>;
   /** The board's PUBLIC address (`MACHINE_PUBLIC_URL`), for the link a merged duplicate's source is given when its reporter may see the kept card; never the machine's own address. */
   publicBoardUrl?: string;
   /** The repositories the machine knows (the repository map, remembered checkouts): the only ones a person may give the context gate. Absent, none. */
@@ -417,6 +419,7 @@ export class Pipeline {
   private readonly hasConfig: (repoPath: string) => boolean;
   private readonly contextDeps: ContextDeps | null;
   private readonly dedupDeps: DedupPort | null;
+  private readonly similarCardIds: ((task: TaskRow) => Promise<string[]>) | null;
   private readonly boardUrl: string | null;
   private readonly knownRepos: (() => Promise<string[]>) | null;
   private readonly escalationDecide: { decide: Decide | null };
@@ -485,6 +488,7 @@ export class Pipeline {
     this.headOf = options.headOf;
     this.contextDeps = options.contextSetup ?? null;
     this.dedupDeps = options.dedup ?? null;
+    this.similarCardIds = options.similarCardIds ?? null;
     this.boardUrl = options.publicBoardUrl ?? null;
     this.knownRepos = options.knownRepos ?? null;
     this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
@@ -1479,7 +1483,8 @@ export class Pipeline {
       { decide: async (ctx) => { const r = await deps.decide(ctx); recordId = r.recordId ?? null; return r.answer; } },
       { title: task.title, text: task.description, repo: task.repoPath },
       await this.dedupCandidates(task),
-      { now: new Date(), dedup: policy.dedup },
+      // Memory's vector shortlist joins the lexical one, inside the same could-see candidates; a failure is no ids.
+      { now: new Date(), dedup: policy.dedup, vectorIds: (await this.similarCardIds?.(task).catch(() => [])) ?? [] },
     );
     const { outcome } = found;
     const kept = outcome.duplicate && outcome.duplicate.kind !== "backlog" ? await this.store.getTask(outcome.duplicate.id) : null;
