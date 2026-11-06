@@ -32,6 +32,8 @@ import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { type EgressPolicy, blockedPayloads } from "../egress-policy.ts";
 import type { InstallInput, InstallOutcome } from "../install.ts";
 import type { SecretStore } from "../secrets.ts";
+import { redactDeep, secretRedactor } from "../../domain/redact-secrets.ts";
+import { redactFiles } from "../../adapters/fs/redact-files.ts";
 import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
@@ -544,6 +546,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     if (!(error instanceof EgressUnsupportedError)) throw error;
     return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
   }
+  // A run that had secrets: what its tools wrote into the files it left is cleaned before anything reads the packet, and every string of
+  // what is ingested below is cleaned where it is made.
+  const redact = secretRedactor(secretValues ?? {});
+  if (secretValues) await redactFiles(join(runDir, "out", "files"), redact);
   for (const payload of blockedPayloads(sandbox.blocked, "stage")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
 
   const base: StageResult = {
@@ -591,6 +597,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   let ingested;
   try {
     ingested = await ingestStageOutput({ outDir: join(runDir, "out"), runId: context.runId, stateDir: deps.stateDir });
+    if (secretValues) ingested = redactDeep(ingested, redact) as typeof ingested;
   } catch (error) {
     const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
     return failed(

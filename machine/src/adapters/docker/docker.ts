@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { ServiceSpec } from "@hardness/contracts";
 
 import type { CredentialMount, RunCredential } from "../credentials/index.ts";
+import { redactDeep, secretRedactor } from "../../domain/redact-secrets.ts";
 import type { SecretStore } from "../../application/secrets.ts";
 import { type BlockedRow, type CardNetwork, findCardNetwork, openCardNetwork } from "./egress.ts";
 import { serviceName, startServices } from "./services.ts";
@@ -239,8 +240,9 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
           env: { ...process.env, ...run.credential.env, ...(run.secrets ?? {}) },
         });
       }
-      const result = await waitSandbox(run, deps.exec);
-      return own ? { ...result, blocked: await own.blocked() } : result;
+      const redact = secretRedactor(run.secrets ?? {});
+      const result = await waitSandbox(run, deps.exec, redact);
+      return own ? { ...result, blocked: ((await own.blocked()) as BlockedRow[]).map((row) => ({ ...row, host: redact(row.host) })) } : result;
     } finally {
       await services.teardown();
     }
@@ -249,7 +251,7 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
   }
 }
 
-async function waitSandbox(run: SandboxRun, exec: RunDeps["exec"]): Promise<SandboxResult> {
+async function waitSandbox(run: SandboxRun, exec: RunDeps["exec"], redact: (text: string) => string = (text) => text): Promise<SandboxResult> {
   run.onStarted?.(run.name);
 
   let timedOut = false;
@@ -277,7 +279,7 @@ async function waitSandbox(run: SandboxRun, exec: RunDeps["exec"]): Promise<Sand
 
   const transcriptPath = join(run.runDir, "transcript.log");
   const logs = await exec("docker", ["logs", run.name]);
-  await writeFile(transcriptPath, logs.stdout + logs.stderr);
+  await writeFile(transcriptPath, redact(logs.stdout + logs.stderr));
   await exec("docker", ["rm", "-f", run.name]);
 
   const exitCode = waited.code === 0 ? Number(waited.stdout.trim()) : null;
@@ -392,7 +394,9 @@ export async function execInSandbox(
     try {
       const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }), { ...options, ...(run.secrets ? { env: { ...process.env, ...run.secrets } } : {}) });
       await deps.exec("docker", ["rm", "-f", run.name]);
-      return own ? { ...result, blocked: await own.blocked() } : result;
+      const redact = secretRedactor(run.secrets ?? {});
+      const clean = run.secrets ? { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) } : result;
+      return own ? { ...clean, blocked: ((await own.blocked()) as BlockedRow[]).map((row) => ({ ...row, host: redact(row.host) })) } : clean;
     } finally {
       await services.teardown();
     }

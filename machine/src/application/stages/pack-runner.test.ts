@@ -1398,3 +1398,20 @@ describe("scoped secrets and the agent stages", () => {
     expect(started).toBe(false);
   });
 });
+
+describe("a secret's value in what a stage returns and leaves", () => {
+  const secret = ["out", "pw", "q".repeat(10)].join("-");
+  it("is replaced in the answer, the summary, the events and the files the run left, for a run that had secrets", async () => {
+    writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n    credential: env:QA_PASSWORD\n");
+    const store = { folder: () => "/f", load: async (_r: string, names: string[]) => ({ values: Object.fromEntries(names.map((n) => [n, secret])), missing: [] }) };
+    const inner = fakeSandbox(output({ summary: `typed ${secret}`, answer: { note: `pw ${secret}` } as never }), (r) => {
+      mkdirSync(join(r.runDir, "out", "files"), { recursive: true });
+      writeFileSync(join(r.runDir, "out", "files", "steps.jsonl"), `{"v":"${secret}"}`);
+    });
+    const d: AgentDeps = { ...deps(inner), secrets: store };
+    const result = await runAgent(d, context("e2e"), "e2e");
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).toContain("[secret:QA_PASSWORD]");
+    expect(readFileSync(join(stateDir, "runs", "run-1", "out", "files", "steps.jsonl"), "utf8")).toBe('{"v":"[secret:QA_PASSWORD]"}');
+  });
+});

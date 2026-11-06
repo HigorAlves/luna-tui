@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -468,5 +468,29 @@ describe("sandboxExecutor's secrets", () => {
     expect((error as SecretsMissingError).detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "secrets", names: ["GONE_ONE"] });
     expect(String((error as Error).message)).toContain("/secrets//a/shop");
     expect(runs).toHaveLength(2);
+  });
+});
+
+describe("a secret's value in what a run returns", () => {
+  const secret = ["red", "act", "w".repeat(10)].join("-");
+  it("is replaced in a check's stdout and stderr before they are returned", async () => {
+    const deps = { exec: async (_c: string, args: string[]) => (args[0] === "run" ? { code: 0, stdout: `ok ${secret}`, stderr: `err ${Buffer.from(secret).toString("base64")}` } : { code: 0, stdout: "", stderr: "" }), startServices: async () => ({ network: null, env: {}, teardown: async () => {} }) } as unknown as Partial<RunDeps>;
+    const out = await execInSandbox({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } }, {}, deps);
+    expect(out.stdout).toBe("ok [secret:DB_URL]");
+    expect(out.stderr).toBe("err [secret:DB_URL]");
+  });
+
+  it("is replaced in the transcript before transcript.log is written, and in the refused hosts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "docker-transcript-"));
+    const deps = {
+      exec: async (_c: string, args: string[]) => (args[0] === "logs" ? { code: 0, stdout: `the agent printed ${secret}`, stderr: "" } : args[0] === "wait" ? { code: 0, stdout: "0", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
+      execOrThrow: async () => "",
+      startServices: async () => ({ network: null, env: {}, teardown: async () => {} }),
+      openCardNetwork: async () => ({ name: "n", dns: "1.1.1.1", containerArgs: () => [], blocked: async () => [{ host: `${secret}.example.com`, port: 53, via: "dns" as const, reason: "not_listed", count: 1 }], teardown: async () => {} }),
+    } as unknown as Partial<RunDeps>;
+    const result = await runSandbox(run({ runDir: dir, secrets: { QA_PASSWORD: secret }, egress: { allow: ["a.example.com:443"], allowPrivate: [], proxyImage: "m" } }), deps);
+    expect(readFileSync(result.transcriptPath, "utf8")).toBe("the agent printed [secret:QA_PASSWORD]");
+    expect(result.blocked![0]!.host).toBe("[secret:QA_PASSWORD].example.com");
+    rmSync(dir, { recursive: true, force: true });
   });
 });
