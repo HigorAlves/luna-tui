@@ -59,7 +59,7 @@ export interface ShipMonitorDeps {
   stateDir: string;
   /** Milliseconds between polls; null: the repository's `ship.poll_minutes` (the machine-wide `MACHINE_SHIP_POLL_INTERVAL`, when set, is passed here as a number and wins). */
   pollMs: number | null;
-  /** The longest the monitor waits for a merge before asking a person (default 14 days). */
+  /** A bound on the whole wait, for tests; production has none: the quiet clock (`ship.sla.escalate_days`) tells the release owners and the watch goes on. */
   maxWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => Date;
@@ -223,7 +223,7 @@ export async function settleDecisions(deps: Pick<ShipMonitorDeps, "github" | "tr
 export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? (() => new Date());
-  const maxWaitMs = deps.maxWaitMs ?? 14 * DAY_MS;
+  const maxWaitMs = deps.maxWaitMs ?? Number.POSITIVE_INFINITY;
   return async (context, ref) => {
     const { task, signal } = context;
     const { slug, number, url } = ref;
@@ -245,7 +245,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
     let me: string | null = null;
     const login = async () => (me ??= (await deps.github.viewer()).login.toLowerCase());
     const settle = () => settleDecisions(deps, task.id, cursor, slug, number);
-    const fixDeps = (): FixDeps => ({ github: deps.github, loop: deps.loop!, policies: deps.policies, evidence: deps.evidence, ...(deps.buildTests ? { buildTests: deps.buildTests } : {}) });
+    const fixDeps = (): FixDeps => ({ github: deps.github, loop: deps.loop!, policies: deps.policies, evidence: deps.evidence, stateDir: deps.stateDir, ...(deps.buildTests ? { buildTests: deps.buildTests } : {}) });
     const runOf = () => deps.loop?.exec ?? realExec;
     const plain = (text: string, cap: number) => postable(text, cap);
     const slugId = (id: string) => id.replace(/[^A-Za-z0-9]+/g, "-").slice(0, 40);
@@ -453,7 +453,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       }
       const now2 = await headOfWorktree(run, wt);
       if (pack && now2) {
-        const stamped = await restampPack(fixDeps(), task.id, slug, number, pack, now2, null);
+        const stamped = await restampPack(fixDeps(), task.id, slug, number, pack, now2, null, { repoPath: task.repoPath ?? null, emit: context.emit });
         if (!stamped.ok) return { result: escalated(`the branch is rebased (${now2.slice(0, 7)}); ${stamped.reason}, so Evidence runs again`, "head_moved") };
       }
       cursor.published = now2 ? { sha: now2 } : cursor.published;
@@ -484,7 +484,23 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         current = (wt ? await headOfWorktree(runOf(), wt) : null) ?? head;
       }
       if (!deps.loop!.checks) return stale("no checks runner is wired to prove it");
-      const checked = await deps.loop!.checks(subContext(context, `stale-${current.slice(0, 7)}`), current);
+      // On a fresh workspace made from the card's at the head (wave 11a): never in the card's own folder, which a container may have written. `since` is the head itself, an empty delta, which the runner reads as "every check".
+      const wt = task.worktreePath;
+      const branch = task.branch;
+      const freshLoop = deps.loop!.fresh;
+      const fresh = freshLoop && wt && branch ? await freshLoop.make(wt, branch, `${context.runId}-stale-${current.slice(0, 7)}`).catch(() => null) : null;
+      if (freshLoop && !fresh) return stale("a fresh workspace could not be made to prove it");
+      if (fresh && fresh.commit !== current) {
+        await freshLoop!.remove(fresh.path).catch(() => {});
+        return stale("the fresh workspace is not at the PR's head, so the checks would prove another commit");
+      }
+      const checkContext = fresh ? { ...context, task: { ...task, worktreePath: fresh.path } } : context;
+      let checked: StageResult;
+      try {
+        checked = await deps.loop!.checks(subContext(checkContext, `stale-${current.slice(0, 7)}`), current);
+      } finally {
+        if (fresh) await freshLoop!.remove(fresh.path).catch(() => {});
+      }
       if (checked.outcome !== "pass") {
         const detail = checked.detail ?? {};
         const findings = Array.isArray(detail.findings) ? (detail.findings as Array<{ title?: unknown; body?: unknown }>).slice(0, 10).map((f) => ({ title: plain(String(f.title ?? ""), 120), body: plain(String(f.body ?? ""), 300) })) : [];

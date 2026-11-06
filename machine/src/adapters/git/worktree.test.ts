@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { ensureClone } from "./clone.ts";
 import { machineGitDir } from "./machine-repo.ts";
-import { commitsSince, currentBranch, dirtyFiles, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { changedSince, commitsSince, currentBranch, dirtyFiles, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -375,5 +375,24 @@ describe("git that takes a path, near the workspaces", () => {
     } finally {
       configureWorkspacesDir("/nonexistent-workspaces-dir");
     }
+  });
+});
+
+describe("changedSince: the files a delta check is scoped to", () => {
+  const exec = (stdout: string, code = 0) => async () => ({ code, stdout, stderr: "" });
+  const SHA = "a".repeat(40);
+
+  it("lists the files changed since a commit", async () => {
+    expect(await changedSince(exec("src/a.ts\n\nsrc/b.ts\n"), "/wt", SHA)).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  it("an empty delta is unknown, so every check runs: nothing is not a reason to run nothing", async () => {
+    expect(await changedSince(exec(""), "/wt", SHA)).toBeNull();
+    expect(await changedSince(exec("\n"), "/wt", SHA)).toBeNull();
+  });
+
+  it("a failed diff or a ref that is not a commit id is unknown too", async () => {
+    expect(await changedSince(exec("src/a.ts", 1), "/wt", SHA)).toBeNull();
+    expect(await changedSince(exec("src/a.ts"), "/wt", "main; rm -rf")).toBeNull();
   });
 });

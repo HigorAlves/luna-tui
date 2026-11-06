@@ -285,6 +285,16 @@ export async function changedPaths(worktreePath: string, repoPath: string): Prom
   return out.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
+/** The files changed since `since` (a commit id the machine read), worktree-relative, for a delta check. Null when unknown: a ref that is not a commit id, a failed diff,
+ *  or an empty delta, so a caller runs every check. Nothing changed is never a reason to run nothing. */
+export async function changedSince(run: GitExec, worktreePath: string, since: string): Promise<string[] | null> {
+  if (!/^[0-9a-f]{40,64}$/.test(since)) return null;
+  const out = await run("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", `${since}..HEAD`]);
+  if (out.code !== 0) return null;
+  const names = out.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  return names.length > 0 ? names : null;
+}
+
 /** Lines added and removed on the branch since `base`, from `git diff --shortstat`. */
 export async function diffShortstat(path: string, base: string): Promise<{ added: number; removed: number }> {
   const out = await execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--shortstat", `${base}..HEAD`]);

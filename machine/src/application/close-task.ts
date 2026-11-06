@@ -1,11 +1,10 @@
 // The host-side close step, run after a task reaches `closed`. It adds no task state: the
 // pipeline stores the transition first, then calls this and logs the report. A failed step
 // is reported, never thrown, because the task is already closed.
-import { proposalsSection } from "./retro-outputs.ts";
+import { inert, proposalsSection } from "./retro-text.ts";
 import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { redact } from "../domain/evidence-markdown.ts";
 import { isClone, unpushedCommits } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
 import { HOST_GIT, defaultBranch as hostDefaultBranch, isBranchName, originSlugOf, removeWorktree } from "../adapters/git/worktree.ts";
@@ -103,9 +102,6 @@ async function applyRules(
   if (pushed.code !== 0) throw new Error(`committed, but git push failed: ${(pushed.stderr || pushed.stdout).trim()}`);
   return `committed and pushed ${CONTEXT_FILE} (${lines} lines)`;
 }
-
-/** A model's text for a draft PR's body: tokens redacted, HTML escaped (a `<!--` or `<details>` would hide the rest from the reviewer), mentions and issue references neutralized: a draft PR must not ping anyone or close anything. */
-export const inert = (text: string): string => redact(text).replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@(?=[A-Za-z0-9])/g, "@\u200b").replace(/#(?=\d)/g, "#\u200b");
 
 /** After a merge the task's branch is gone: the rules go on `luna/memory-<task8>`, cut from origin's default branch, pushed with -u and opened as a draft PR. The branch name is the machine's, never from a model. */
 async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rules: { markdown: string; proposals?: Array<{ kind: string; title: string; body: string }> }, deps: CloseDeps): Promise<string> {

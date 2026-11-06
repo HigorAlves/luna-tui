@@ -81,6 +81,8 @@ export interface FixDeps {
   loop: ReviewLoop;
   policies: { for: (repoPath: string | null) => Promise<{ decisions: Record<string, DecisionOverrides> }> };
   evidence: EvidenceHandle;
+  /** Where the ship cursor lives: a re-publish compares the PR's section with the hash saved there. */
+  stateDir?: string;
   /** The Build Report's tests (scenario and file), for the scenarios a fix's changed test files point to. Optional: without it only the reader's named scenarios count. */
   /** The branch's size and files now, for the pack's text; default: host git through the machine repo's `at()`. */
   branchDiff?: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number; files: string[] } | null>;
@@ -138,22 +140,24 @@ export async function headOfWorktree(run: GitExec, worktreePath: string): Promis
   return SHA.test(sha) ? sha : null;
 }
 
-/** The pack after a change at `sha`: stamped with it, the sentence appended, saved and published (section and comment). */
+/** The pack after a change at `sha`: stamped with it, the sentence appended, saved and published (section and comment) through `publishAndReady`, the one publisher: the pack check, the head check, the media gate and the record of a person's edit hold here too. */
 export async function restampPack(
-  deps: Pick<FixDeps, "github" | "evidence">,
+  deps: Pick<FixDeps, "github" | "evidence" | "stateDir">,
   taskId: string,
   slug: string,
   number: number,
   pack: EvidencePack,
   sha: string,
   sentence: string | null,
+  extra: { repoPath?: string | null; emit?: StageContext["emit"] } = {},
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const { save, publish, store } = deps.evidence;
   if (!save || !publish || !store) return { ok: false, reason: "the Evidence Pack cannot be re-published from here" };
   const next: EvidencePack = { ...pack, commitSha: sha, ...(sentence ? { summary: `${pack.summary} ${sentence}` } : {}) };
   try {
-    const done = await publish({ github: deps.github, slug, number, taskId, pack: next, localDir: store.dirFor(taskId, pack.commitSha) });
-    await save(taskId, done.pack);
+    const done = await publishAndReady({ github: deps.github, publish, save, localDir: (id) => store.dirFor(id, pack.commitSha), ...(deps.stateDir ? { stateDir: deps.stateDir } : {}) }, { task: { id: taskId, repoPath: extra.repoPath ?? null }, slug, number, headSha: sha, draft: false, pack: next, approved: false });
+    if (!done.published) return { ok: false, reason: done.reason };
+    if (done.edited) await extra.emit?.("evidence.edited", { ...done.edited }).catch(() => {});
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: `re-publishing the Evidence Pack failed: ${messageOf(error)}` };
@@ -332,11 +336,12 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
     const next = refreshPackText(pack, { sha: after, fix: { scope: input.scope, summary: input.threadSummary, at: new Date().toISOString() }, delta, diff, now: new Date().toISOString() });
     const { save, publish, store } = deps.evidence;
     if (!save || !publish || !store) return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}); the Evidence Pack cannot be re-published from here, so Evidence runs again`, "head_moved") };
-    const done = await publishAndReady({ github: deps.github, publish, save, localDir: (id) => store.dirFor(id, pack.commitSha) }, { task: { id: task.id, repoPath: task.repoPath ?? null }, slug: input.slug, number: input.number, headSha: after, draft: false, pack: next, approved: false }).catch((error: unknown) => ({ published: false as const, reason: `re-publishing the Evidence Pack failed: ${messageOf(error)}` }));
+    const done = await publishAndReady({ github: deps.github, publish, save, localDir: (id) => store.dirFor(id, pack.commitSha), ...(deps.stateDir ? { stateDir: deps.stateDir } : {}) }, { task: { id: task.id, repoPath: task.repoPath ?? null }, slug: input.slug, number: input.number, headSha: after, draft: false, pack: next, approved: false }).catch((error: unknown) => ({ published: false as const, reason: `re-publishing the Evidence Pack failed: ${messageOf(error)}` }));
     if (!done.published) return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}); ${done.reason}, so Evidence runs again`, "head_moved") };
+    if (done.edited) await context.emit?.("evidence.edited", { ...done.edited }).catch(() => {});
     return { ...out, affected, ...(textNote ? { textNote } : {}) };
   }
-  const stamped = await restampPack(deps, task.id, input.slug, input.number, pack, after, null);
+  const stamped = await restampPack(deps, task.id, input.slug, input.number, pack, after, null, { repoPath: task.repoPath ?? null, emit: context.emit });
   if (!stamped.ok) return { ok: false, result: escalated(`the fix is pushed (${after.slice(0, 7)}); ${stamped.reason}, so Evidence runs again`, "head_moved") };
   return { ...out, affected };
 }

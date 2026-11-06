@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { acceptedMisses, proposalsSection, retroTruthOf, writeRetroTruth } from "./retro-outputs.ts";
+import { acceptedMisses, retroTruthOf, writeRetroTruth } from "./retro-outputs.ts";
 
 const facts = { predicted: { size: "small", risk: "low", estLoc: 100, urgency: "high" }, actual: { added: 50, removed: 5, retries: { verify: 1, e2e: 0, ci: 0, total: 1 }, escalations: 1, format: "text", durationMin: 30, overrides: 2 }, runs: 6 };
 
@@ -32,18 +32,5 @@ describe("acceptedMisses", () => {
   it("keeps only a path that is also one of the card's files outside the map; a path only the model names is dropped", () => {
     expect(acceptedMisses(["src/a.ts", "etc/passwd", "../x"], ["src/a.ts", "src/b.ts"])).toEqual(["src/a.ts"]);
     expect(acceptedMisses("nope", ["a"])).toEqual([]);
-  });
-});
-
-describe("proposalsSection", () => {
-  it("is an inert Proposals section: no mentions, no markup, nothing past the caps", () => {
-    const text = proposalsSection([{ kind: "adr", title: "Use <b>queues</b> @bo", body: "see #12 and @team " + "y".repeat(3000) }]);
-    expect(text).toMatch(/^## Proposals/);
-    expect(text).not.toContain("<b>");
-    expect(text).not.toMatch(/@(?=[A-Za-z])/);
-    expect(text.length).toBeLessThan(2600);
-  });
-  it("is empty with no proposals", () => {
-    expect(proposalsSection([])).toBe("");
   });
 });

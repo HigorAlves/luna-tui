@@ -44,7 +44,7 @@ export interface Config {
   githubPrs: { enabled: boolean; intervalMs: number };
   /** The ship monitor: how often it reads the shipped PR, and how many days it waits for a merge before asking a person. */
   /** `intervalMs` is null when `MACHINE_SHIP_POLL_INTERVAL` is unset: each repository's `ship.poll_minutes` (five) applies. */
-  shipPoll: { intervalMs: number | null; maxWaitDays: number };
+  shipPoll: { intervalMs: number | null };
   /** `owner/name` to the checkout's path, for issues GitHub intake imports. */
   repoMap: Record<string, string>;
   /** Checkouts one level under here are matched to `owner/name` by their origin remote. */
@@ -281,10 +281,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (shipSeconds !== null && (!Number.isInteger(shipSeconds) || shipSeconds < 1)) {
     throw new Error(`MACHINE_SHIP_POLL_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_SHIP_POLL_INTERVAL}"`);
   }
-  const shipWaitDays = env.MACHINE_SHIP_MAX_WAIT_DAYS === undefined ? 14 : Number(env.MACHINE_SHIP_MAX_WAIT_DAYS);
-  if (!Number.isInteger(shipWaitDays) || shipWaitDays < 1) {
-    throw new Error(`MACHINE_SHIP_MAX_WAIT_DAYS must be a positive integer (days), got "${env.MACHINE_SHIP_MAX_WAIT_DAYS}"`);
-  }
   const retentionDays =
     env.MACHINE_RETENTION_DAYS === undefined ? DEFAULT_RETENTION_DAYS : Number(env.MACHINE_RETENTION_DAYS);
   if (!Number.isInteger(retentionDays) || retentionDays < 0) {
@@ -378,7 +374,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     stateDir,
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000 },
-    shipPoll: { intervalMs: shipSeconds === null ? null : shipSeconds * 1000, maxWaitDays: shipWaitDays },
+    shipPoll: { intervalMs: shipSeconds === null ? null : shipSeconds * 1000 },
     graphIntervalSecs: graphIntervalSecs(env),
     githubToken: env.GITHUB_TOKEN?.trim() || env.GH_TOKEN?.trim() || null,
     repoMap,

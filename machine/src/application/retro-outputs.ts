@@ -1,13 +1,12 @@
 // What the retro's outputs become (RFC 0006 wave 13, decision 25): "applied" means recorded where it is used, never written into prompts or rules by itself.
 // Recalibration is a file the eval loop reads; a graph miss goes to the graph's misses file only when the card's own Build Report declared the same path; rules and
-// proposals reach the repository only as a draft PR after a person's `a` (close-task.ts), with the proposals inert in its body.
+// proposals reach the repository only as a draft PR after a person's `a` (the close step), with the proposals inert in its body.
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { ShipContext } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
-import { inert } from "./close-task.ts";
 
 type RetroFacts = NonNullable<ShipContext["retro"]>;
 
@@ -59,12 +58,6 @@ export function acceptedMisses(graphMisses: unknown, declared: readonly string[]
   if (!Array.isArray(graphMisses)) return [];
   const known = new Set(declared);
   return [...new Set(graphMisses.filter((p): p is string => typeof p === "string" && known.has(p)))].slice(0, 50);
-}
-
-/** The retro's runbook and ADR proposals as a section of the draft PR's body. Model text: inert, capped. Nothing is written to the repository by itself. */
-export function proposalsSection(proposals: ReadonlyArray<{ kind: string; title: string; body: string }>): string {
-  if (proposals.length === 0) return "";
-  return ["## Proposals", "", ...proposals.slice(0, 5).flatMap((p) => [`### ${p.kind === "adr" ? "ADR" : "Runbook"}: ${inert(p.title).replace(/\s+/g, " ").slice(0, 120)}`, "", inert(p.body).slice(0, 2000), ""])].join("\n");
 }
 
 /** What `Pipeline` needs to record a merged card's retro. */

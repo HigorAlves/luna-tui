@@ -358,6 +358,12 @@ describe("the ship monitor", () => {
     expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringMatching(/the PR has waited/) } });
   });
 
+  it("has no total-time cap of its own: after thirty days of polling a PR a person merges still passes (the quiet clock names the release owners instead)", async () => {
+    let polls = 0;
+    const { run } = setup({ prMerged: async () => (++polls < 31 ? open : merged) }, { pollMs: 86_400_000 });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: expect.anything() } });
+  });
+
   it("fails as aborted when the task is aborted", async () => {
     const abort = new AbortController();
     abort.abort();
@@ -487,7 +493,7 @@ describe("decision truth at the merge", () => {
 });
 
 /** The loop's world: a worktree whose head moves when addressing "commits", decisions by table, and every sub-run recorded. */
-function loopWorld(over: { choices?: Record<string, string>; confidence?: number; addressed?: Record<string, unknown>; checks?: object; ciVerdict?: Record<string, unknown>; replyConfidence?: number; read?: Record<string, unknown>; changedFiles?: string; numstat?: string } = {}) {
+function loopWorld(over: { fresh?: boolean; choices?: Record<string, string>; confidence?: number; addressed?: Record<string, unknown>; checks?: object; ciVerdict?: Record<string, unknown>; replyConfidence?: number; read?: Record<string, unknown>; changedFiles?: string; numstat?: string } = {}) {
   const NEW = "e".repeat(40);
   let head = HEAD;
   const git: string[][] = [];
@@ -525,8 +531,12 @@ function loopWorld(over: { choices?: Record<string, string>; confidence?: number
   const saved: EvidencePack[] = [];
   const publish = vi.fn(async ({ pack: p }: { pack: EvidencePack }) => ({ pack: p, comment: "updated" as const, assets: 0 }));
   const evidence = { save: async (_id: string, p: EvidencePack) => void saved.push(p), publish, store: { dirFor: (id: string, sha: string) => `/ev/${id}/${sha}` } };
-  const loop: ReviewLoop = { decide, runPack, checks, exec, rebase };
-  return { loop, evidence, decide, runPack, checks, rebase, saved, publish, git, NEW, pushes: () => git.filter((a) => a[0] === "push") };
+  const freshCalls = { made: [] as string[][], removed: [] as string[], checkedIn: [] as Array<string | undefined> };
+  const fresh = over.fresh
+    ? { make: async (path: string, branch: string, runId: string) => (freshCalls.made.push([path, branch, runId]), { path: "/wt.stale", commit: HEAD }), bringBack: async () => ({ ok: true }), remove: async (path: string) => void freshCalls.removed.push(path) }
+    : undefined;
+  const loop: ReviewLoop = { decide, runPack, checks, exec, rebase, ...(fresh ? { fresh } : {}) };
+  return { freshCalls, loop, evidence, decide, runPack, checks, rebase, saved, publish, git, NEW, pushes: () => git.filter((a) => a[0] === "push") };
 }
 
 const ACTIVITY_AT = "2026-11-04T12:01:00Z";
@@ -1101,6 +1111,24 @@ describe("a stale head is re-verified once", () => {
     expect(world.checks).toHaveBeenCalledTimes(1);
     expect(world.rebase).not.toHaveBeenCalled();
     expect((await loadCursor(stateDir, "t1"))!.reverified).toMatchObject({ sha: HEAD });
+  });
+
+  it("runs the checks on a fresh workspace made from the card's, never in the card's own worktree, and removes it", async () => {
+    const world = loopWorld({ fresh: true });
+    const { run } = go(world, {}, { policy: { autoMerge: "low" } });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
+    expect(world.freshCalls.made).toEqual([["/wt", "hardness/t1", expect.stringContaining("stale")]]);
+    expect((world.checks.mock.calls[0]![0] as { task: { worktreePath: string } }).task.worktreePath).toBe("/wt.stale");
+    expect(world.freshCalls.removed).toEqual(["/wt.stale"]);
+  });
+
+  it("a fresh workspace that is not at the head the checks are for is not trusted", async () => {
+    const world = loopWorld({ fresh: true });
+    world.loop.fresh!.make = async () => ({ path: "/wt.stale", commit: "9".repeat(40) });
+    const { run } = go(world);
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("stale") } });
+    expect(world.checks).not.toHaveBeenCalled();
+    expect((await loadCursor(stateDir, "t1"))!.reverified).toBeUndefined();
   });
 
   it("checks that fail go to a person with the findings", async () => {

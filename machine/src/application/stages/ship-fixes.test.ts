@@ -4,6 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { GitExec } from "../../adapters/git/worktree.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
+import { createHash } from "node:crypto";
+import { mkdtemp, readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { SECTION_END, SECTION_START } from "../../domain/evidence-markdown.ts";
+import { emptyCursor, saveCursor } from "../ship-cursor.ts";
 import { type FixInput, fixRound, postable } from "./ship-fixes.ts";
 
 const B = "b".repeat(40);
@@ -306,5 +313,33 @@ describe("a fix round on a fresh clone at the PR's head", () => {
     const s = setup({ fresh: {}, remote: "e".repeat(40) });
     expect(await fixRound(s.deps, s.context, s.input())).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved" } } });
     expect(s.freshCalls.made).toEqual([]);
+  });
+});
+
+describe("a re-stamp after a fix goes through the one publisher", () => {
+  const section = (text: string) => `${SECTION_START}\n${text}\n${SECTION_END}`;
+  const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+
+  it("checks and repairs the pack first: a media file gone from disk is dropped, the repair noted, before anything is published", async () => {
+    const s = setup({ valid: "valid" });
+    const gone = { ...pack(), media: [{ kind: "screenshot", label: "cart", url: "/nowhere/cart.png" }] } as unknown as EvidencePack;
+    const out = await fixRound(s.deps, s.context, s.input({ pack: gone }));
+    expect(out).toMatchObject({ ok: true });
+    expect(s.publish).toHaveBeenCalledWith(expect.objectContaining({ pack: expect.objectContaining({ media: [], note: expect.stringContaining("repaired") }) }));
+  });
+
+  it("publishes with no preview approval, records a person's edit of the section and says so through evidence.edited", async () => {
+    const s = setup({ valid: "valid" });
+    const stateDir = await mkdtemp(join(tmpdir(), "fix-restamp-"));
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), publishedSection: hash(section("what the machine wrote")) });
+    s.github.prFacts.mockImplementation((async () => ({ number: 3, title: "t", body: section("what a person wrote"), url: "https://x/pull/3", baseRefName: "main", headRefName: "hardness/t1", author: { login: "me" } })) as never);
+    const emitted: Array<[string, unknown]> = [];
+    const context = { ...s.context, emit: async (kind: string, payload: unknown) => void emitted.push([kind, payload]) } as unknown as StageContext;
+    (s.deps as { stateDir?: string }).stateDir = stateDir;
+    const out = await fixRound(s.deps, context, s.input());
+    expect(out).toMatchObject({ ok: true });
+    expect(s.publish).toHaveBeenCalledWith(expect.objectContaining({ approved: false }));
+    expect(emitted).toEqual([["evidence.edited", expect.objectContaining({ sha: N.slice(0, 7) })]]);
+    expect(await readdir(join(stateDir, "ground-truth", "evidence"))).toHaveLength(1);
   });
 });

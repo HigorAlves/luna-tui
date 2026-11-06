@@ -40,7 +40,7 @@ import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
 import { hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
-import { HOST_GIT, changedPaths, diffNameStatus, originSlugOf, gitIdentity, commitAll, currentBranch, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
+import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, gitIdentity, commitAll, currentBranch, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
@@ -168,11 +168,7 @@ export async function buildRealStages(
         const { checks, services, decisions, factory } = await policies.for(repoPath);
         return { checks, services, decisions, verify: factory.verify };
       },
-      changedPaths: async (worktreePath) => {
-        if (!/^[0-9a-f]{40,64}$/.test(since)) return null;
-        const out = await exec("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", `${since}..HEAD`]);
-        return out.code === 0 ? out.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : null;
-      },
+      changedPaths: (worktreePath) => changedSince(exec, worktreePath, since),
     })(context);
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agents,
@@ -339,7 +335,6 @@ export async function buildRealStages(
           },
           stateDir: config.stateDir,
           pollMs: config.shipPoll.intervalMs,
-          maxWaitMs: config.shipPoll.maxWaitDays * 86_400_000,
         }),
     }),
     // The merge (decided again on GitHub's facts at that moment).
