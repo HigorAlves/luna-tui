@@ -113,3 +113,15 @@ describe("harvest", () => {
     expect(out.refused).toEqual([{ id: "6b0f2c52-7a3e-4d0b-9c1e-0a1f2b3c4d5e", reason: "a private conversation: its text never becomes a case" }]);
   });
 });
+
+describe("a harvested case's kind", () => {
+  it("is labelled, with no reading: its label is a recorded truth", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvest-"));
+    harvest(dir, "worth_learning", [record({ truth: { label: { worth: { value: true } }, source: "person", kind: "person", at: "2026-11-05T00:00:00.000Z" } })]);
+    const written = read(dir, "rec-6b0f2c52", "expect.json");
+    expect(written.kind).toBe("labelled");
+    expect(written.reading).toBeUndefined();
+    harvest(dir, "worth_learning", [record({ id: "7c1f2c52-7a3e-4d0b-9c1e-0a1f2b3c4d5e" })]);
+    expect(read(dir, "rec-7c1f2c52", "expect.json").kind).toBeUndefined();
+  });
+});

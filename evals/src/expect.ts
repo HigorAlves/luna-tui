@@ -24,6 +24,23 @@ export const Check = z.discriminatedUnion("kind", [
 ]);
 export type Check = z.infer<typeof Check>;
 
+const LabelShape = z.record(z.string(), z.record(z.string(), z.unknown()));
+
+/** The reading behind a hand-written case's label: the pack's own criterion text for each labelled question (checked character for character), why, what was ruled out, and a second reading made later without the label in view. */
+export const Reading = z.object({
+  criteria: z.record(z.string(), z.string()),
+  why: z.string().min(1),
+  ruledOut: z.array(z.object({ question: z.string(), label: z.string(), why: z.string() })).optional(),
+  /** A borderline case: each way it can be read. */
+  readings: z.array(z.object({ label: LabelShape, criteria: z.record(z.string(), z.string()), why: z.string().min(1) })).optional(),
+  second: z.object({ label: LabelShape.nullable(), agrees: z.boolean(), note: z.string().optional() }),
+  note: z.string().optional(),
+});
+export type Reading = z.infer<typeof Reading>;
+
+export const CaseKind = z.enum(["labelled", "adversarial", "borderline"]);
+export type CaseKind = z.infer<typeof CaseKind>;
+
 export const Expect = z.object({
   schema: z.literal(1),
   /** The StageOutput outcome a good answer settles to (`needs_input` for triage's questions). */
@@ -39,6 +56,11 @@ export const Expect = z.object({
   recordId: z.string().optional(),
   traceId: z.string().nullable().optional(),
   modelAnswer: z.record(z.string(), z.unknown()).optional(),
+  /** A hand-written decision case's kind: a clear one, one with steering text inside (and a neutral `twin`), one with two readings. Absent on a harvested case or an older one. */
+  kind: CaseKind.optional(),
+  /** An adversarial case's twin: the id of the same pack's labelled case that is the same input without the steering text. */
+  twin: z.string().optional(),
+  reading: Reading.optional(),
 });
 export type Expect = z.infer<typeof Expect>;
 

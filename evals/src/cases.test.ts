@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { readingProblems } from "./preflight.ts";
 import { TOKEN_SHAPE } from "./scrub.ts";
 import { baselinePath, caseInput, datasetCases, judgeInput, loadCases, parseTrials, prepareWorktree, verdictOf } from "./cases.ts";
 
@@ -173,5 +174,16 @@ describe("the seed cases", () => {
       expect(contextSchema(pack as "worth_learning").safeParse(context).success, `${pack}/${c.id}`).toBe(true);
       expect(c.expect.checks.length, `${pack}/${c.id}`).toBeGreaterThan(0);
     }
+  });
+});
+
+/** The packs whose hand-written cases are checked for their reading (`checkReading`). Slices 9 and 10 add their packs; at the end it is every decision pack. */
+const READ: string[] = [];
+
+describe("the readings of the hand-written cases", () => {
+  const EVALS = resolve(import.meta.dirname, "..");
+  it("hold for every pack in READ: the label is tied to the pack's own criterion text, the twin differs, a borderline case has two readings", () => {
+    const problems = READ.flatMap((pack) => readingProblems(EVALS, pack as "worth_learning"));
+    expect(problems).toEqual([]);
   });
 });

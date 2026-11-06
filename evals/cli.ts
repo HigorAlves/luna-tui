@@ -8,9 +8,13 @@
 //   pnpm eval label --pack <p> --record <id> --set <question>=<value>... [--note <text>]   a person's label, written on this computer
 //   pnpm eval label --pack <p> --next                         the oldest record with no person label, and the command to label it
 //   pnpm eval label push --queue <queue id> [--pack <p>] [--since <date>]   the records still waiting for a label, to the local labelling queue
+//   pnpm eval cases [--pack <p>]                              a table of the cases for a person to read: kind, label, the criterion, the twin, the second reading
+//   pnpm eval preflight                                       what a baseline run needs, checked without a model call; exits 1 when a check fails
 //   pnpm eval scorecard                       evals/scorecard.md over every decision baseline
 //   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
 import { DECISION_DEFAULTS, PACKS, PackId, decisionEngines } from "@hardness/contracts";
+import { machineCredentials } from "@hardness/machine/credentials";
+import { imageExists } from "@hardness/machine/docker";
 import { DecisionLog, machineStateDir } from "@hardness/machine/decisions";
 import { buildTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
 import { collectorGate } from "./src/collector.ts";
@@ -22,6 +26,7 @@ import { parseArgs } from "node:util";
 import { decisionPack } from "./src/labels.ts";
 import { labelFor, nextToLabel, renderNext, setLabel } from "./src/label.ts";
 import { runHarvest, runLabelPush, runPull, runPush } from "./src/loop.ts";
+import { casesTable, decisionPackIds, preflight } from "./src/preflight.ts";
 import { folderMegabytes, priorityHints, printable, recordsReport } from "./src/records.ts";
 import { type Proposal, buildDefaultsFile, loadBaselines, proposeDefaults, renderScorecard } from "./src/scorecard.ts";
 
@@ -85,6 +90,21 @@ if (command === "harvest") {
     const state = machineStateDir();
     for (const [name, dir] of [["decisions", join(state, "decisions")], ["ground-truth", join(state, "ground-truth")], ["evals/.runs", join(EVALS, ".runs")]] as const) console.log(`${name}: ${folderMegabytes(dir).toFixed(1)} MB`);
   }
+} else if (command === "cases") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" } } });
+  for (const pack of values.pack ? [decisionOf(values.pack)] : decisionPackIds()) {
+    console.log(`\n${pack}`);
+    for (const row of casesTable(EVALS, pack)) console.log(`  ${row}`);
+  }
+} else if (command === "preflight") {
+  const credentials = machineCredentials();
+  const out = await preflight(EVALS, {
+    imageExists: (image) => imageExists(image),
+    check: (engine) => credentials.check(engine),
+    collector: async () => (await collectorGate(tracesFromEnv())).ok,
+  }, { image: process.env.RUNNER_IMAGE ?? "hardness-runner:dev" });
+  for (const line of out.lines) console.log(line);
+  if (!out.ok) process.exit(1);
 } else if (command === "label") {
   const rest = process.argv.slice(sub === "push" ? 4 : 3);
   const { values } = parseArgs({ args: rest, options: { pack: { type: "string" }, record: { type: "string" }, set: { type: "string", multiple: true, default: [] }, note: { type: "string" }, next: { type: "boolean", default: false }, queue: { type: "string" }, since: { type: "string" } } });

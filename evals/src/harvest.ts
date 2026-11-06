@@ -31,7 +31,7 @@ export function caseOf(pack: PackId, id: string, context: Record<string, unknown
     schema: 1,
     checks: label ? checksOf(label) : [],
     rubric: rubricOf(decision, label),
-    ...(label ? { label } : { review: true }),
+    ...(label ? { label, kind: "labelled" as const } : { review: true }),
     ...extra,
   };
   return { id, stage, expect };
