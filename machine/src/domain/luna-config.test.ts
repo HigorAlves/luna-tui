@@ -380,3 +380,11 @@ describe("sandbox.egress, before and after it became a section", () => {
     expect(policy.checks?.[0]?.secrets).toEqual(["DB_URL"]);
   });
 });
+
+describe("the name luna-app", () => {
+  it("is the machine's alias for the app it starts: a service or a check may not take it", () => {
+    expect(() => parseLunaConfig("services:\n  luna-app:\n    image: x\n")).toThrow(/services\.luna-app.*luna-app/);
+    expect(() => parseLunaConfig("checks:\n  - name: luna-app\n    run: x\n")).toThrow(/checks.*luna-app/);
+    expect(parseLunaConfig("services:\n  db:\n    image: x\nchecks:\n  - name: unit\n    run: x\n").services).toHaveProperty("db");
+  });
+});

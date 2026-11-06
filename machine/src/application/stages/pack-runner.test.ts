@@ -1299,11 +1299,11 @@ describe("a stage's own list of hosts", () => {
     expect(seen?.egress).toEqual(spec);
   });
 
-  it("gives a browser run the hosts of the repository's QA targets", async () => {
+  it("gives a browser run the host of the one QA target it is given", async () => {
     writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n  - name: local\n    url: http://127.0.0.1:3000\n");
     const { d, requests } = withEgress(fakeSandbox(output()));
     await runAgent(d, context("e2e"), "e2e");
-    expect((requests[0] as { targets: string[] }).targets).toEqual(["staging.example.com:443", "127.0.0.1:3000"]);
+    expect((requests[0] as { targets: string[] }).targets).toEqual(["staging.example.com:443"]); // the one target the machine chose: the first declared
   });
 
   it("runs as before without a policy", async () => {
@@ -1413,5 +1413,39 @@ describe("a secret's value in what a stage returns and leaves", () => {
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(JSON.stringify(result)).toContain("[secret:QA_PASSWORD]");
     expect(readFileSync(join(stateDir, "runs", "run-1", "out", "files", "steps.jsonl"), "utf8")).toBe('{"v":"[secret:QA_PASSWORD]"}');
+  });
+});
+
+describe("the browser run's one target", () => {
+  const secret = ["tgt", "pw", "t".repeat(10)].join("-");
+  const store = (): SecretStore & { loads: string[][] } => {
+    const loads: string[][] = [];
+    return { loads, folder: () => "/f", load: async (_r, names) => (loads.push([...names]), { values: Object.fromEntries(names.map((n) => [n, `${secret}-${n}`])), missing: [] }) };
+  };
+  const two = () => writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n    credential: env:STAGING_PW\n  - name: prod-like\n    url: https://other.example.com\n    credential: env:OTHER_PW\n");
+
+  it("is the first declared QA target: the agent is told that one, its host is on the list, and only its credential is loaded and passed", async () => {
+    two();
+    const s = store();
+    const requests: Array<{ targets?: string[] }> = [];
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s, egress: { for: async (r) => (requests.push(r as never), { allow: [], allowPrivate: [], proxyImage: "img" }) } };
+    await runAgent(d, context("e2e"), "e2e");
+    expect(s.loads).toEqual([["STAGING_PW"]]);
+    expect(seen?.secrets).toEqual({ STAGING_PW: `${secret}-STAGING_PW` });
+    expect((seen?.input as { context: { qaTargets: Array<{ name: string }> } }).context.qaTargets.map((t) => t.name)).toEqual(["staging"]);
+    expect(requests[0]!.targets).toEqual(["staging.example.com:443"]);
+    expect(JSON.stringify(seen?.input)).not.toContain("OTHER_PW");
+  });
+
+  it("is the app the machine started when it is given one: no credential, the app's network joined, and the aliases kept off the proxy", async () => {
+    two();
+    const s = store();
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s };
+    await runAgent(d, context("e2e"), "e2e", { qaTarget: { name: "app", baseUrl: "http://luna-app:4000", credential: null }, alsoJoin: ["hardness-card-app"], noProxy: ["luna-app", "db"] });
+    expect((seen?.input as { context: { qaTargets: unknown[] } }).context.qaTargets).toEqual([{ name: "app", baseUrl: "http://luna-app:4000", credential: null }]);
+    expect(seen?.alsoJoin).toEqual(["hardness-card-app"]);
+    expect(seen?.noProxy).toEqual(["luna-app", "db"]);
+    expect(seen?.secrets).toBeUndefined();
+    expect(s.loads).toEqual([]);
   });
 });

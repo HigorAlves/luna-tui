@@ -3,24 +3,31 @@
 import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { branchBase, diffNameStatus } from "../../adapters/git/worktree.ts";
+import { branchBase, diffNameStatus, headCommit } from "../../adapters/git/worktree.ts";
 import type { DecisionOverrides } from "@hardness/contracts";
 
 import type { Policy } from "../../domain/policy.ts";
+import { type OpenAppInput, type OpenAppResult, e2eModeOf } from "../app-session.ts";
+import { blockedPayloads } from "../egress-policy.ts";
+import type { AgentExtra } from "./pack-runner.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type TruthSink, e2eCauseTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 
 export interface E2eDeps {
-  /** Runs the e2e pack. */
-  runPack: (context: StageContext) => Promise<StageResult>;
+  /** Runs the e2e pack; `extra` names the one target the machine chose (the app it started), the network to join and the names to reach directly. */
+  runPack: (context: StageContext, extra?: Pick<AgentExtra, "qaTarget" | "alsoJoin" | "noProxy">) => Promise<StageResult>;
+  /** Starts and seeds the repository's app (`verify.e2e.start`); absent, the browser run boots its own server as before. */
+  openApp?: (input: OpenAppInput) => Promise<OpenAppResult>;
+  /** The card's head commit, for the install; defaults to the real one. */
+  headCommit?: (worktreePath: string) => Promise<string>;
   detectWeb?: (worktreePath: string) => Promise<boolean>;
   /** The web package dirs, relative ("" is the root); their src/ counts as rendered surface. */
   webRoots?: (worktreePath: string) => Promise<string[]>;
   /** Paths the task branch changed; null when the base is unknown (then the pack runs). */
   changedFiles?: (worktreePath: string, repoPath: string | null) => Promise<string[] | null>;
   /** The repo's config: `qa: none` means this repo never gets a browser run. */
-  policy?: (repoPath: string | null) => Promise<Pick<Policy, "qa"> & { factory?: { verify: { env_flake_retries: number } } }>;
+  policy?: (repoPath: string | null) => Promise<Pick<Policy, "qa"> & { qaTargets?: Policy["qaTargets"]; factory?: { verify: { env_flake_retries: number } & Partial<Pick<Policy["factory"]["verify"], "e2e">> } }>;
   /** Runs e2e_failure_cause on a failed run; null (or absent) leaves a failure as it is. Read at call time. */
   decide?: Decide | null;
   /** The repo's per-pack decision bars. */
@@ -131,8 +138,9 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     if (files !== null && !touchesRenderedSurface(files, await roots(worktree))) {
       return { outcome: "pass", detail: { step: "e2e", skipped: true, reason: "the change touches no rendered surface", files } };
     }
-    const settle = (pack: StageResult): StageResult => {
-      if (pack.outcome !== "pass") return { ...pack, detail: { ...pack.detail, step: "e2e" } };
+    const settle = ([pack, preview, note]: [StageResult, { kind: string; url: string } | null, string | null]): StageResult => {
+      const extra = { ...(preview ? { preview } : {}), ...(note ? { note } : {}) };
+      if (pack.outcome !== "pass") return { ...pack, detail: { ...pack.detail, step: "e2e", ...extra } };
       const answer = (pack.detail?.answer ?? {}) as Record<string, unknown>;
       const verdict = typeof answer.verdict === "string" ? answer.verdict : undefined;
       // `skipped` is not a result.json outcome; the runner reports it as a pass, and so do we.
@@ -146,10 +154,49 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
           verdict: verdict ?? "none",
           summary,
           criteria: Array.isArray(answer.criteria) ? answer.criteria : [],
+          ...extra,
           ...(verdict === "skipped" ? { skipped: true, note: `e2e skipped by the QA agent: ${summary}` } : {}),
           ...(verdict ? {} : { error: "the e2e pack gave no verdict" }),
         },
       };
+    };
+    /** One browser run: in `start` mode a fresh app first (each attempt, the re-run too), that one target on its network, and the app closed after, whatever happens. */
+    let runs = 0;
+    type Attempted = { done: StageResult } | { pack: StageResult; preview: { kind: string; url: string } | null; note: string | null };
+    const attempt = async (): Promise<Attempted> => {
+      const e2e = repoPolicy?.factory?.verify.e2e;
+      const mode = repoPolicy && e2e ? e2eModeOf({ qaTargets: repoPolicy.qaTargets ?? [], factory: { verify: { e2e } } as never }) : "agent";
+      const repoPath = context.task.repoPath ?? null;
+      if (mode === "start" && deps.openApp && repoPath) {
+        const opened = await deps.openApp({
+          taskId: context.task.id,
+          repoPath,
+          workspace: worktree,
+          commit: await (deps.headCommit ?? headCommit)(worktree),
+          attempt: context.attempt * 10 + runs++,
+          signal: context.signal,
+          onBlocked: (step, rows) => void Promise.all(blockedPayloads(rows, step).map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}),
+        });
+        if (!opened.ok) return { done: { outcome: "escalated", detail: opened.detail } };
+        try {
+          const pack = await deps.runPack(context, { qaTarget: { ...opened.target, credential: null }, alsoJoin: [opened.network], noProxy: opened.aliases });
+          return { pack, preview: { kind: "start", url: opened.target.baseUrl }, note: null };
+        } finally {
+          await opened.close();
+        }
+      }
+      const pack = await deps.runPack(context);
+      if (mode === "target") {
+        const targets = repoPolicy?.qaTargets ?? [];
+        const named = typeof (pack.detail?.answer as { target?: unknown } | undefined)?.target === "string" ? targets.find((t) => t.name === (pack.detail!.answer as { target: string }).target) : undefined;
+        const chosen = named ?? targets[0];
+        return { pack, preview: chosen ? { kind: "target", url: chosen.baseUrl } : null, note: null };
+      }
+      return { pack, preview: null, note: mode === "agent" ? "verify.e2e.start is not set: the agent booted its own dev server" : null };
+    };
+    const run = async (): Promise<StageResult> => {
+      const a = await attempt();
+      return "done" in a ? a.done : settle([a.pack, a.preview, a.note]);
     };
     /** Why a browser run failed, from the decision pack: an `env_flake` only when it is confident, else the app's fault. */
     let causeRecord: string | undefined;
@@ -175,7 +222,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
       return (verdict === "proceed" || verdict === "flag") && (choice === "env_flake" || choice === "test_bug") ? choice : verdict === "skipped" ? null : "product_bug";
     };
 
-    let result = settle(await deps.runPack(context));
+    let result = await run();
     if (result.outcome !== "fail") return result;
     const cause = await causeOf(result);
     if (cause === null) return result;
@@ -183,10 +230,10 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     // An environment flake: the scenario was never really tried, so once more before a person is asked.
     // The re-run writes into the same run folder: what the first attempt left there must not be read as its packet.
     if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
-    result = settle(await deps.runPack(context));
+    result = await run();
     for (let more = 1; more < flakeRetries && result.outcome === "fail"; more++) {
       if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
-      result = settle(await deps.runPack(context));
+      result = await run();
     }
     // The re-run is the fact: a pass says it was the environment, a second failure says it was not.
     if (causeRecord) await deps.truth?.learned({ pack: "e2e_failure_cause", recordId: causeRecord, label: e2eCauseTruth(result.outcome !== "fail"), source: "e2e_rerun", taskId: context.task.id });

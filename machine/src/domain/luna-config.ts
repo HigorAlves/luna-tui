@@ -22,6 +22,9 @@ export function validateLunaConfig(raw: unknown, warn: Warn = quiet): LunaConfig
     const issue = parsed.error.issues[0]!;
     throw new PolicyParseError(`${issue.path.join(".") || "file"}: ${issue.message}`);
   }
+  // `luna-app` is the machine's own alias for the app it starts for the browser run.
+  if (parsed.data.services && "luna-app" in parsed.data.services) throw new PolicyParseError("services.luna-app: luna-app is the name the machine gives the app it starts; call the service something else");
+  if (parsed.data.checks?.some((check) => check.name === "luna-app")) throw new PolicyParseError("checks: a check may not be named luna-app (the machine's name for the app it starts)");
   const engines = stagesProblem(parsed.data.engines ?? {});
   if (engines) throw new PolicyParseError(`engines.${engines}`);
   return parsed.data;

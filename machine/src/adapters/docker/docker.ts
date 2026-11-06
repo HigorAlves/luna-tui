@@ -116,6 +116,8 @@ export interface SandboxRun {
   cardNetwork?: CardNetwork;
   /** More networks to join, by name (the browser run joins the app's). */
   alsoJoin?: string[];
+  /** Names the run reaches directly, not through its proxy (the app's alias), besides its services. */
+  noProxy?: string[];
   /** `uid:gid` the container runs as. The run folder, the session dir and the worktree are bind
    *  mounts owned by the host user, so the stage must be that user to write them (the image's
    *  `node` user is uid 1000, which is not the host user on a Linux host). Defaults to the
@@ -197,7 +199,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   // host.docker.internal by itself, Linux needs the gateway alias.
   // On a card network the host is not reachable at all: a trace endpoint there is the proxy's private entry, never an alias in the stage.
   if (!run.cardNetwork && Object.values(run.extraEnv ?? {}).some((value) => value.includes("host.docker.internal"))) args.push("--add-host", "host.docker.internal:host-gateway");
-  args.push(...networkArgs(run.network, run.serviceEnv, run.networkNone, run.cardNetwork, run.alsoJoin, Object.keys(run.services ?? {})));
+  args.push(...networkArgs(run.network, run.serviceEnv, run.networkNone, run.cardNetwork, run.alsoJoin, [...Object.keys(run.services ?? {}), ...(run.noProxy ?? [])]));
   // The run's own extra env last: docker keeps the last value, so a repo's service exports
   // (luna.yaml) never redirect the trace context the machine set.
   for (const [key, value] of Object.entries(run.extraEnv ?? {})) args.push("-e", `${key}=${value}`);

@@ -169,6 +169,11 @@ export interface AgentExtra {
   sweepFailures?: { name: string; tail: string }[];
   /** Extra mounts for the container, after the worktree's own (the critic's /evidence, read-only). */
   mounts?: CredentialMount[];
+  /** e2e: the one target the browser run is given, chosen by the machine (the app it started, a preview); absent, the repository's first declared QA target, or none. Only its credential is loaded. */
+  qaTarget?: { name: string; baseUrl: string; credential?: string | null; reentrant?: boolean } | null;
+  /** e2e: more networks the run joins (the app's), and the names it reaches directly instead of through its proxy. */
+  alsoJoin?: string[];
+  noProxy?: string[];
 }
 
 /** `host:port` of each QA target's URL, for the browser run's list (an address or a private name is dropped later, by the list's own rules). */
@@ -314,6 +319,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       ? { path: GRAPH_FILE, commit: graphStamp.commit, builtAt: graphStamp.builtAt, fresh: baseCommit ? await deps.graph!.isFresh(task.repoPath, graphStamp, baseCommit) : true }
       : null;
 
+  // The browser run drives ONE target, chosen here, and holds only that target's credential.
+  const e2eTarget = pack === "e2e" ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -336,7 +343,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
     ...(extra.sweepFailures?.length ? { sweepFailures: extra.sweepFailures } : {}),
     // The recorder drives the one target the film is recorded against; the e2e pack picks from the repo's list.
-    qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : policy.qaTargets,
+    qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : pack === "e2e" ? (e2eTarget ? [e2eTarget] : []) : policy.qaTargets,
     ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
@@ -482,7 +489,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // prompt and by value only in the container's environment. Implementing and the rest get none, whatever a check declares.
   let secretValues: Record<string, string> | undefined;
   if (deps.secrets && (pack === "e2e" || pack === "recording")) {
-    const names = [...new Set((pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : policy.qaTargets).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])))];
+    const names = [...new Set((pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : e2eTarget ? [e2eTarget] : []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])))];
     if (names.length > 0) {
       const loaded = await deps.secrets.load(task.repoPath, names);
       if (loaded.missing.length > 0) {
@@ -503,6 +510,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   sandbox = await (deps.sandbox ?? runSandbox)({
     ...(egress ? { egress } : {}),
     ...(secretValues ? { secrets: secretValues } : {}),
+    ...(extra.alsoJoin?.length ? { alsoJoin: extra.alsoJoin } : {}),
+    ...(extra.noProxy?.length ? { noProxy: extra.noProxy } : {}),
     name: container,
     attach: Boolean(resume),
     sessionMount,

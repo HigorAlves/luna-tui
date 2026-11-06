@@ -41,7 +41,10 @@ import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInsta
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { isClone } from "../adapters/git/clone.ts";
 import { DEFAULT_SANDBOX_SIZE, execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
-import { removeLeftoverNetworks } from "../adapters/docker/egress.ts";
+import { removeLeftoverApps } from "../adapters/docker/app.ts";
+import { openCardNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
+import { startServices } from "../adapters/docker/services.ts";
+import { type AppDeps, openApp } from "../application/app-session.ts";
 import { type EgressPolicy, blockedPayloads } from "../application/egress-policy.ts";
 import { buildEgress } from "./egress.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
@@ -138,6 +141,8 @@ export async function buildRealStages(
   }
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
+  const removedApps = await removeLeftoverApps();
+  if (removedApps > 0) console.log(`removed ${removedApps} leftover app container(s)`);
   const removedNetworks = await removeLeftoverNetworks();
   if (removedNetworks > 0) console.log(`removed ${removedNetworks} leftover stage network(s)`);
   // A machine that died mid-write-back left its temp copy of the Codex login beside the real one.
@@ -186,6 +191,18 @@ export async function buildRealStages(
       if (!installed.ok) throw new InstallFailedError(installed.detail);
     }
     return sandboxChecks(command, args, options);
+  };
+  // The app the browser run drives (`verify.e2e.start`): the repository's image, its own network with the check list, never the agent's.
+  const appDeps: AppDeps = {
+    policies,
+    imageFor: async (repoPath, taskId) => (await repoImages.ensure(repoPath, undefined, taskId)).image,
+    install,
+    ...(egress ? { egress } : {}),
+    secrets,
+    openCardNetwork,
+    startServices,
+    exec: execInSandbox,
+    docker: (args, options) => exec("docker", args, options ?? {}),
   };
   // Each stage gets only its own engine's credential, read when the stage starts.
   const credentials = engineCredentials;
@@ -308,7 +325,8 @@ export async function buildRealStages(
     // e2e skips repos with no web surface; without the QA image it passes with a note.
     e2e: qaImage
       ? e2eRunner({
-          runPack: (context) => runAgent(deps, context, "e2e"),
+          runPack: (context, extra) => runAgent(deps, context, "e2e", extra ?? {}),
+          openApp: (input) => openApp(appDeps, input),
           policy: (repoPath) => policies.for(repoPath),
           get decide() {
             return verifyDecisions?.decide ?? null;

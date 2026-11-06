@@ -9,6 +9,8 @@ import { tagged } from "../decision-truth.ts";
 import type { Decide } from "./check-decide.ts";
 import { detectWeb, e2eRunner, missingQaImageRunner, touchesRenderedSurface, webRoots } from "./e2e.ts";
 import type { StageContext, StageResult } from "../ports.ts";
+import type { OpenAppInput } from "../app-session.ts";
+import { parseLunaConfig } from "../../domain/luna-config.ts";
 
 let dir: string;
 beforeEach(() => {
@@ -309,3 +311,78 @@ describe("missingQaImageRunner", () => {
     });
   });
 });
+
+describe("the e2e stage and the app the machine starts", () => {
+  const start = parseLunaConfig("verify:\n  e2e:\n    start:\n      command: npm start\n      port: 4000\nqa_targets:\n  - name: staging\n    url: https://staging.example.com\n");
+  const answer = { verdict: "pass", summary: "ok", criteria: [] };
+  const cause = (choice: string, confidence = 0.9) => ({ cause: { choice, confidence } });
+  const pass = (): StageResult => ({ outcome: "pass", detail: { answer } });
+  const base = (over: Record<string, unknown> = {}) => {
+    const events: string[] = [];
+    const extras: Array<Record<string, unknown> | undefined> = [];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const opened = { ok: true as const, target: { name: "app" as const, baseUrl: "http://luna-app:4000" }, network: "net-app", aliases: ["luna-app"], close: async () => void events.push("close") };
+    const runner = e2eRunner({
+      runPack: async (_c: StageContext, extra?: unknown) => (events.push("pack"), extras.push(extra as never), pass()),
+      detectWeb: async () => true,
+      changedFiles: async () => null,
+      policy: async () => start,
+      headCommit: async () => "c".repeat(40),
+      openApp: async (input: OpenAppInput) => (events.push(`open ${input.attempt}`), input.onBlocked("app", [{ host: "x.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }]), opened),
+      ...over,
+    } as never);
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: dir, branch: "task/x" }, stage: "e2e", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal, emit: async (k: string, p: Record<string, unknown>) => void emitted.push([k, p]) } as unknown as StageContext;
+    return { runner, events, extras, emitted, context };
+  };
+
+  it("starts the app, hands the browser run that one target on the app's network, closes the app after, and records the preview", async () => {
+    const h = base();
+    const result = await h.runner(h.context);
+    expect(h.events).toEqual(["open 10", "pack", "close"]);
+    expect(h.extras[0]).toMatchObject({ qaTarget: { name: "app", baseUrl: "http://luna-app:4000", credential: null }, alsoJoin: ["net-app"], noProxy: ["luna-app"] });
+    expect(result).toMatchObject({ outcome: "pass", detail: { step: "e2e", preview: { kind: "start", url: "http://luna-app:4000" } } });
+    expect(h.emitted).toContainEqual(["sandbox.egress_blocked", { step: "app", host: "x.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }]);
+  });
+
+  it("starts a fresh app for each attempt, the re-run after an env_flake too, and closes each", async () => {
+    let n = 0;
+    const h = base({
+      runPack: async () => ({ outcome: "pass", detail: { answer: n++ === 0 ? { verdict: "fail", summary: "x", criteria: [{ text: "a", result: "fail" }] } : answer } }),
+      decide: async () => cause("env_flake"),
+      overrides: async () => ({}),
+    });
+    const result = await h.runner(h.context);
+    expect(result.detail).toMatchObject({ rerun: true });
+    expect(h.events.filter((e) => e.startsWith("open"))).toEqual(["open 10", "open 11"]);
+    expect(h.events.filter((e) => e === "close")).toHaveLength(2);
+  });
+
+  it("ends the stage as env_broken with the app's own detail, and runs no browser, when the app does not come up", async () => {
+    const detail = { escalation: "env_broken", envBroken: true, step: "seed", reason: "the seed command exited 3", logTail: "x", options: [] };
+    const h = base({ openApp: async () => ({ ok: false, detail }) });
+    expect(await h.runner(h.context)).toMatchObject({ outcome: "escalated", detail });
+    expect(h.events).toEqual([]);
+  });
+
+  it("closes the app when the browser run throws", async () => {
+    const h = base({ runPack: async () => { throw new Error("pack crashed"); } });
+    await expect(h.runner(h.context)).rejects.toThrow("pack crashed");
+    expect(h.events).toEqual(["open 10", "close"]);
+  });
+
+  it("is the old behaviour when no start command is set: no app, and the detail says the agent boots its own", async () => {
+    const h = base({ policy: async () => parseLunaConfig("") });
+    const result = await h.runner(h.context);
+    expect(h.events).toEqual(["pack"]);
+    expect(result.detail).toMatchObject({ note: expect.stringContaining("verify.e2e.start is not set") });
+    expect(result.detail?.preview).toBeUndefined();
+  });
+
+  it("hands a repository that has QA targets the machine's choice of the first, and records it as the preview", async () => {
+    const h = base({ policy: async () => parseLunaConfig("qa_targets:\n  - name: staging\n    url: https://staging.example.com\n") });
+    const result = await h.runner(h.context);
+    expect(h.events).toEqual(["pack"]);
+    expect(result.detail).toMatchObject({ preview: { kind: "target", url: "https://staging.example.com" } });
+  });
+});
+
