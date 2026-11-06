@@ -443,6 +443,7 @@ const slackInbox = new SlackInbox({
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
 const packRuns = buildPackRuns(config, {
+  ...(config.egress.enabled && agentDeps?.egress ? { egress: agentDeps.egress } : {}),
   credentials,
   store: new PgPackRunStore(db),
   budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },

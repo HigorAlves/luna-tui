@@ -277,6 +277,18 @@ describe("plain HTTP", () => {
     expect(connects).toEqual([]);
   });
 
+  it("forwards a plain request for the machine's own private entry on its own port (the trace endpoint speaks plain HTTP), and for no other port", async () => {
+    await start(["good.example.com:80"], ["trace.example.com:8000"]);
+    answers["trace.example.com"] = ["172.17.0.9"];
+    echo.close();
+    echo = createServer((s) => s.once("data", () => s.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")));
+    await new Promise<void>((r) => echo.listen(0, "127.0.0.1", () => r()));
+    echoPort = (echo.address() as { port: number }).port;
+    expect(status(await talk(["POST http://trace.example.com:8000/v1/traces HTTP/1.1\r\nHost: trace.example.com:8000\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"], 500))).toBe("HTTP/1.1 200 OK");
+    expect(connects).toEqual([{ port: 8000, address: "172.17.0.9" }]);
+    expect(status(await talk(["GET http://trace.example.com:9000/ HTTP/1.1\r\nHost: x\r\n\r\n"]))).toBe("HTTP/1.1 403 Forbidden");
+  });
+
   it("answers 400 to a request in origin form: the proxy has no routes of its own", async () => {
     await start(["good.example.com:80"]);
     for (const path of ["/", "/status", "/metrics", "/admin", "/healthz"]) expect(status(await talk([`GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n`])), path).toBe("HTTP/1.1 400 Bad Request");

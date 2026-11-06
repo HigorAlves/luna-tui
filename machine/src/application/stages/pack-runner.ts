@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -28,6 +28,8 @@ import {
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { type EgressPolicy, blockedPayloads } from "../egress-policy.ts";
 import { saveKept } from "../kept-sandboxes.ts";
 import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
@@ -72,6 +74,8 @@ export interface AgentDeps {
   watcher: Watcher;
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
+  /** The list of hosts each run may reach; absent (`MACHINE_EGRESS=off`, tests) a run joins an ordinary bridge as before the allow-list. */
+  egress?: EgressPolicy;
   /** Finds the project's own check commands; the locked-test replay runs the test one. */
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** Each repo's luna.yaml; one store is shared so a bad edit warns once. */
@@ -157,6 +161,18 @@ export interface AgentExtra {
   sweepFailures?: { name: string; tail: string }[];
   /** Extra mounts for the container, after the worktree's own (the critic's /evidence, read-only). */
   mounts?: CredentialMount[];
+}
+
+/** `host:port` of each QA target's URL, for the browser run's list (an address or a private name is dropped later, by the list's own rules). */
+function targetHosts(targets: ReadonlyArray<{ baseUrl: string }>): string[] {
+  return targets.flatMap((target) => {
+    try {
+      const url = new URL(target.baseUrl);
+      return [`${url.hostname}:${url.port || (url.protocol === "https:" ? "443" : "80")}`];
+    } catch {
+      return [];
+    }
+  });
 }
 
 /** The files the plan's slices touch, with the code map's files to change or test when it has one (a file only to read is not planned). */
@@ -438,7 +454,16 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   };
   // The agent starts with a git repository of its own in the folder, made by the machine from the card's: the one the host never reads.
   if (!extra.checkout && !resume) await refreshScratch(workspace.path, workspace.branch);
-  const sandbox = await (deps.sandbox ?? runSandbox)({
+  // The run's own list: its engine's owner and each helper's, and for a browser run the hosts of the QA target(s) it may drive.
+  const found = PACKS[pack];
+  const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : found.helpers.map((h) => credentialOwner(h.engine)))];
+  const egress = deps.egress
+    ? await deps.egress.for({ repoPath: task.repoPath, kind: "agent", owners: [...new Set(owners)], targets: pack === "e2e" || pack === "recording" ? targetHosts(input.context.qaTargets ?? []) : [] })
+    : undefined;
+  let sandbox: SandboxResult;
+  try {
+  sandbox = await (deps.sandbox ?? runSandbox)({
+    ...(egress ? { egress } : {}),
     name: container,
     attach: Boolean(resume),
     sessionMount,
@@ -478,6 +503,11 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     await pushing;
     credential.release();
   });
+  } catch (error) {
+    if (!(error instanceof EgressUnsupportedError)) throw error;
+    return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
+  }
+  for (const payload of blockedPayloads(sandbox.blocked, "stage")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
 
   const base: StageResult = {
     outcome: "fail",

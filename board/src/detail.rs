@@ -743,7 +743,7 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
 
 /// Plan: the latest triage plan, decided or not, then what happened to it.
 /// Text from a run or a model, made safe for a terminal: every control character (an escape sequence included) becomes a space.
-fn plain(text: &str) -> String {
+pub(crate) fn plain(text: &str) -> String {
     text.chars().map(|ch| if ch.is_control() && ch != '\n' { ' ' } else { ch }).collect()
 }
 

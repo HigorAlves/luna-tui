@@ -247,6 +247,21 @@ describe("sandboxExecutor's image", () => {
   });
 });
 
+describe("sandboxExecutor's list and size", () => {
+  it("gives each check its repository's list and its own size, and the machine's defaults when no repository is named", async () => {
+    const runs: Array<{ egress?: unknown; limits?: unknown }> = [];
+    const fake = (async (r: { egress?: unknown; limits?: unknown }) => (runs.push(r), { code: 0, stdout: "", stderr: "" })) as never;
+    const asked: Array<string | undefined> = [];
+    const spec = { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" };
+    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async () => "img", egress: async (repo) => (asked.push(repo), spec), limitsOf: async (repo) => (repo ? { cpu: 6, memoryGb: 12 } : { cpu: 2, memoryGb: 4 }) }, fake);
+    await exec("true", [], { cwd: "/wt/a/task-1", repoPath: "/a/shop" });
+    await exec("true", [], { cwd: "/wt/a/task-2" });
+    expect(asked).toEqual(["/a/shop", undefined]);
+    expect(runs[0]).toMatchObject({ egress: spec, limits: { cpu: 6, memoryGb: 12 } });
+    expect(runs[1]).toMatchObject({ limits: { cpu: 2, memoryGb: 4 } });
+  });
+});
+
 describe("the environment a repository's image cannot choose", () => {
   const NAMES = ["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"];
   it("is set empty on every stage container and every check container", () => {

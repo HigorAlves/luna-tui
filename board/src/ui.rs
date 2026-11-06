@@ -983,6 +983,13 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
             format!("jira blocked: no transition to \"{}\" from \"{}\"{why}", s("wanted"), s("current"))
         }
         "jira.moved" => format!("jira moved to {}", s("status")),
+        "sandbox.egress_blocked" => match p["more"].as_u64() {
+            Some(more) => format!("blocked: {more} more ({})", detail::plain(&s("step"))),
+            None => {
+                let count = p["count"].as_u64().filter(|c| *c > 1).map(|c| format!(" x{c}")).unwrap_or_default();
+                format!("blocked: {}:{} ({}, {}){count}", detail::plain(&s("host")), p["port"], detail::plain(&s("step")), detail::plain(&s("via")))
+            }
+        },
         other => other.to_string(),
     };
     match event.names.first() {
@@ -2713,6 +2720,18 @@ mod tests {
             names: vec![],
         };
         assert_eq!(describe(&event), "10:11:12  triage: waiting for the Codex login");
+    }
+
+    #[test]
+    fn a_refused_connection_reads_as_host_port_step_and_how_it_was_asked_with_its_count_and_no_control_characters() {
+        let at = "2026-11-03T10:11:12.000Z".to_string();
+        let one = TaskEvent { task_id: "t1".into(), kind: "sandbox.egress_blocked".into(), payload: serde_json::json!({"step": "check", "host": "evil.example.com", "port": 443, "via": "connect", "reason": "not_listed", "count": 1}), at: at.clone(), names: vec![] };
+        assert_eq!(describe(&one), "10:11:12  blocked: evil.example.com:443 (check, connect)");
+        let many = TaskEvent { payload: serde_json::json!({"step": "stage", "host": "a.b\u{1b}[31m.example", "port": 53, "via": "dns", "reason": "not_listed", "count": 12}), ..one.clone() };
+        let text = describe(&many);
+        assert_eq!(text, "10:11:12  blocked: a.b [31m.example:53 (stage, dns) x12");
+        let more = TaskEvent { payload: serde_json::json!({"step": "stage", "more": 5}), ..one };
+        assert_eq!(describe(&more), "10:11:12  blocked: 5 more (stage)");
     }
 
     #[test]

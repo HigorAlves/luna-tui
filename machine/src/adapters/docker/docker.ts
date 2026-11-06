@@ -392,7 +392,16 @@ export async function execInSandbox(
  *  `cwd` is the worktree, and only HARDNESS_* env and the git identity (GIT_AUTHOR_*,
  *  GIT_COMMITTER_*) reach the container. The cache volume is the repo's: task worktrees live
  *  at `<worktreesDir>/<repo>/task-…`, so the parent names it. */
-export function sandboxExecutor(images: { machine: string; imageOf: (repoPath: string) => Promise<string> }, run: typeof execInSandbox = execInSandbox) {
+export function sandboxExecutor(
+  images: {
+    machine: string;
+    imageOf: (repoPath: string) => Promise<string>;
+    /** The list a check of this repository may reach (`egressPolicy`, kind `check`); absent, the check joins an ordinary bridge. */
+    egress?: (repoPath: string | undefined) => Promise<{ allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string }>;
+    /** The repository's own `sandbox.cpu` and `sandbox.memory_gb`; absent, the defaults. */
+    limitsOf?: (repoPath: string | undefined) => Promise<SandboxSize>;
+  },
+  run: typeof execInSandbox = execInSandbox) {
   return async (
     command: string,
     args: string[],
@@ -418,6 +427,8 @@ export function sandboxExecutor(images: { machine: string; imageOf: (repoPath: s
         ...(isFile(join(options.cwd, ".git")) ? { gitFile: join(options.cwd, ".git") } : {}),
         argv: [command, ...args],
         env,
+        ...(images.egress ? { egress: await images.egress(options.repoPath) } : {}),
+        ...(images.limitsOf ? { limits: await images.limitsOf(options.repoPath) } : {}),
         gitIdentity,
         services: options.services,
         cacheVolume: cacheVolumeFor(dirname(options.cwd)),

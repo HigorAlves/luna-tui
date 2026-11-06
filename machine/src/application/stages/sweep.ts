@@ -4,6 +4,7 @@
 import type { CheckSpec, ServiceSpec } from "@hardness/contracts";
 import picomatch from "picomatch";
 
+import type { BlockedRow } from "../../adapters/docker/egress.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type CheckCommand, checkCommand } from "../../domain/checks.ts";
 
@@ -42,17 +43,17 @@ export interface CheckRun {
   missingTool?: { cmd: string; tail: string };
 }
 
-type Exec = (command: string, args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number; env?: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string }) => Promise<ExecResult>;
+type Exec = (command: string, args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number; env?: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string }) => Promise<ExecResult & { blocked?: BlockedRow[] }>;
 
 /** Runs the commands in order inside one budget of `timeoutMs`; a command that finds the budget spent is reported as failed and skipped. */
-export async function runChecks(opts: { commands: readonly CheckCommand[]; exec: Exec; cwd: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; stage: string; timeoutMs: number }): Promise<CheckRun> {
+export async function runChecks(opts: { commands: readonly CheckCommand[]; exec: Exec; cwd: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; stage: string; timeoutMs: number; onBlocked?: (check: string, rows: BlockedRow[]) => void }): Promise<CheckRun> {
   const reports: CheckReport[] = [];
   const log: string[] = [];
   const deadline = Date.now() + opts.timeoutMs;
   let missingTool: CheckRun["missingTool"];
   for (const { name, cmd, argv } of opts.commands) {
     const remaining = deadline - Date.now();
-    let result: ExecResult;
+    let result: ExecResult & { blocked?: BlockedRow[] };
     let timedOut = false;
     if (remaining <= 0) {
       result = { code: 1, stdout: "", stderr: "skipped: the checks budget ran out" };
@@ -61,6 +62,7 @@ export async function runChecks(opts: { commands: readonly CheckCommand[]; exec:
       result = await opts.exec(argv[0]!, argv.slice(1), { cwd: opts.cwd, ...(opts.signal ? { signal: opts.signal } : {}), timeoutMs: remaining, env: { ...opts.env, HARDNESS_STAGE: opts.stage }, ...(opts.services ? { services: opts.services } : {}), ...(opts.repoPath ? { repoPath: opts.repoPath } : {}) });
       timedOut = result.code !== 0 && Date.now() >= deadline;
     }
+    if (result.blocked?.length) opts.onBlocked?.(name, result.blocked);
     if (opts.signal?.aborted) return { reports, log, aborted: true };
     const text = [result.stdout, result.stderr].filter((part) => part !== "").join("\n");
     if (result.code === 127) {
@@ -95,14 +97,14 @@ export interface SweepOutcome {
 
 const SWEEP_TIMEOUT_MS = 30 * 60_000;
 
-export async function runSweep(deps: SweepDeps, input: { worktree: string; repoPath: string; signal?: AbortSignal; env: NodeJS.ProcessEnv }): Promise<SweepOutcome> {
+export async function runSweep(deps: SweepDeps, input: { worktree: string; repoPath: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; onBlocked?: (check: string, rows: BlockedRow[]) => void }): Promise<SweepOutcome> {
   const { checks, services, wholeSuiteMinutes } = await deps.policy(input.repoPath);
   if (!checks || checks.length === 0) return { status: "skipped", ran: [], failed: [], note: "the repository declares no checks, so there was no regression sweep" };
   const changed = await deps.changedPaths(input.worktree, input.repoPath).catch(() => null);
   const impact = changed && changed.length > 0 ? await deps.impact(input.repoPath, changed).catch(() => []) : [];
   const selected = selectSweep(checks, changed, impact, wholeSuiteMinutes);
   if (selected.length === 0) return { status: "skipped", ran: [], failed: [], note: "no check covers the change, so the regression sweep had nothing to run" };
-  const run = await runChecks({ commands: selected.map(checkCommand), exec: deps.exec, cwd: input.worktree, ...(input.signal ? { signal: input.signal } : {}), env: input.env, services, repoPath: input.repoPath, stage: "implementing", timeoutMs: deps.timeoutMs ?? SWEEP_TIMEOUT_MS });
+  const run = await runChecks({ commands: selected.map(checkCommand), exec: deps.exec, cwd: input.worktree, ...(input.signal ? { signal: input.signal } : {}), env: input.env, services, repoPath: input.repoPath, stage: "implementing", timeoutMs: deps.timeoutMs ?? SWEEP_TIMEOUT_MS, ...(input.onBlocked ? { onBlocked: input.onBlocked } : {}) });
   const failed = run.reports.filter((r) => !r.ok).map((r) => ({ name: r.name, tail: r.tail }));
   return { status: failed.length > 0 ? "failed" : "passed", ran: run.reports.map((r) => r.name), failed, ...(run.missingTool ? { missingTool: run.missingTool } : {}), ...(run.aborted ? { aborted: true } : {}) };
 }

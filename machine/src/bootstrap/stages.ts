@@ -35,8 +35,9 @@ import { dockerImages } from "../adapters/docker/image-build.ts";
 import { repoSlug } from "../adapters/graph/slug.ts";
 import { ensureGraphReady } from "../application/graph-ready.ts";
 import { type RepoImageEvent, repoImages as makeRepoImages } from "../application/repo-images.ts";
-import { imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { DEFAULT_SANDBOX_SIZE, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { removeLeftoverNetworks } from "../adapters/docker/egress.ts";
+import { type EgressPolicy, blockedPayloads, egressPolicy } from "../application/egress-policy.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
@@ -59,7 +60,23 @@ export interface RealStagesResult {
   checksExec: ReturnType<typeof sandboxExecutor> | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
    *  the credentials, the state dir, the worktrees dir and each repo's luna.yaml; null when agents are off or something is missing. */
-  agentDeps: { image: string; approvals: ApprovedBases; repoImages: ReturnType<typeof makeRepoImages>; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
+  agentDeps: { egress?: EgressPolicy; image: string; approvals: ApprovedBases; repoImages: ReturnType<typeof makeRepoImages>; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
+}
+
+/** The machine's trace endpoints a stage may reach, `host:port`: only in full mode (the stage exports spans then). */
+export function traceEntriesOf(traces: Config["traces"]): string[] {
+  if (traces.mode !== "full") return [];
+  const host = new URL(traces.laminar.stageBaseUrl).hostname;
+  return [`${host}:${traces.laminar.httpPort}`, `${host}:${traces.laminar.grpcPort}`];
+}
+
+/** The runs' lists of hosts, or undefined with `MACHINE_EGRESS=off` (every run then joins an ordinary bridge, said once). */
+export function buildEgress(config: Pick<Config, "egress" | "runnerImage" | "traces">, policies: PolicyStore): EgressPolicy | undefined {
+  if (!config.egress.enabled) {
+    console.warn("MACHINE_EGRESS=off: every run joins an ordinary network, with no allow-list");
+    return undefined;
+  }
+  return egressPolicy({ policies, proxyImage: config.runnerImage, engineHosts: config.egress.engineHosts, traceEntries: traceEntriesOf(config.traces) });
 }
 
 /** Why the runner image cannot give a run its own network and proxy (it was built before the egress proxy went in), or null. */
@@ -124,7 +141,7 @@ export async function buildRealStages(
     console.warn(`image ${config.runnerImage} is missing (pnpm runner:build): every stage is a stub`);
     return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
   }
-  const noProxy = await egressImageProblem(config.runnerImage);
+  const noProxy = config.egress.enabled ? await egressImageProblem(config.runnerImage) : null;
   if (noProxy) {
     console.warn(`${noProxy}: every stage is a stub`);
     return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
@@ -157,13 +174,24 @@ export async function buildRealStages(
     approvals,
     onEvent: (event) => imageEvents.sink(event),
   });
-  const checksExec = sandboxExecutor({ machine: config.runnerImage, imageOf: async (repoPath) => (await repoImages.ensure(repoPath)).image });
+  const egress = buildEgress(config, policies);
+  const checksExec = sandboxExecutor({
+    machine: config.runnerImage,
+    imageOf: async (repoPath) => (await repoImages.ensure(repoPath)).image,
+    ...(egress ? { egress: (repoPath: string | undefined) => egress.for({ repoPath: repoPath ?? null, kind: "check" }) } : {}),
+    // A check container reads the repository's own size, as a stage does (the limit carried from 11a).
+    limitsOf: async (repoPath) => {
+      const sandbox = repoPath ? (await policies.for(repoPath)).factory.sandbox : { cpu: DEFAULT_SANDBOX_SIZE.cpu, memory_gb: DEFAULT_SANDBOX_SIZE.memoryGb };
+      return { cpu: sandbox.cpu, memoryGb: sandbox.memory_gb };
+    },
+  });
   // Each stage gets only its own engine's credential, read when the stage starts.
   const credentials = engineCredentials;
   // A card waits for its repository's graph before triage or the plan reads it (graph-ready.ts).
   const graphReady = graphs ? (input: Parameters<typeof ensureGraphReady>[1]) => ensureGraphReady({ graph: graphs.graph, policies }, input) : undefined;
   const deps = {
     image: config.runnerImage,
+    ...(egress ? { egress } : {}),
     repoImages,
     imageId,
     qaImage: config.runnerQaImage,
@@ -233,7 +261,7 @@ export async function buildRealStages(
               return { checks: policy.checks, services: policy.services, wholeSuiteMinutes: policy.factory.build.regression_full_suite_minutes };
             },
           },
-          { worktree: task.worktreePath, repoPath: task.repoPath, signal: context.signal, env },
+          { worktree: task.worktreePath, repoPath: task.repoPath, signal: context.signal, env, onBlocked: (_check, rows) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}) },
         );
       },
       checkpoint: async (context, worktree, follows) => {
@@ -359,7 +387,7 @@ export async function buildRealStages(
       }),
     ),
   };
-  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { real, verifyPack, checksExec, agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

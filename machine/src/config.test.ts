@@ -21,6 +21,7 @@ describe("loadConfig", () => {
       host: "127.0.0.1",
       apiToken: null,
       agents: true,
+      egress: { enabled: true, engineHosts: [] },
       maxConcurrentTasks: DEFAULT_MAX_CONCURRENT_TASKS,
       runnerImage: "hardness-runner:dev",
       runnerQaImage: "hardness-runner-qa:dev",
@@ -276,5 +277,20 @@ describe("loadConfig", () => {
     expect(loadConfig({ MACHINE_SLA_GATE: "30m", MACHINE_SLA_CYCLE: "3d" }).sla).toEqual({ gateSecs: 1800, cycleSecs: 259_200 });
     expect(loadConfig({ MACHINE_SLA_GATE: "off" }).sla.gateSecs).toBeNull();
     expect(() => loadConfig({ MACHINE_SLA_GATE: "soon" })).toThrow(/MACHINE_SLA_GATE must be a duration/);
+  });
+});
+
+describe("MACHINE_EGRESS and MACHINE_EGRESS_ENGINE_HOSTS", () => {
+  it("are on and empty by default; off is the owner's switch", () => {
+    expect(loadConfig({ HOME: "/h" }).egress).toEqual({ enabled: true, engineHosts: [] });
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "off" }).egress.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS: "on" }).egress.enabled).toBe(true);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS: "maybe" })).toThrow(/MACHINE_EGRESS/);
+  });
+
+  it("takes a comma list of host patterns, lowercased, and refuses one that is not", () => {
+    expect(loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: " Gateway.Example.net , *.llm.example.com:8443 " }).egress.engineHosts).toEqual(["gateway.example.net", "*.llm.example.com:8443"]);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: "ok.example.com,10.0.0.1" })).toThrow(/MACHINE_EGRESS_ENGINE_HOSTS.*10\.0\.0\.1/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_EGRESS_ENGINE_HOSTS: "*" })).toThrow(/MACHINE_EGRESS_ENGINE_HOSTS/);
   });
 });

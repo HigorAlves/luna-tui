@@ -348,13 +348,15 @@ export function createEgressProxy(options: ProxyOptions): EgressProxy {
     }
     if (url.username || url.password) return reply(400);
     const port = url.port === "" ? 80 : Number(url.port);
-    void authorize(url.hostname, port, "http", 80).then((verdict) => {
+    // Port 80 for a listed name; the machine's own private entry (its trace endpoint, plain HTTP) on the port it names.
+    const own = matchHost(exactPrivate, url.hostname, port);
+    void authorize(url.hostname, port, "http", own ? port : 80).then((verdict) => {
       if ("reason" in verdict) return reply(verdict.reason === "unresolved" ? 502 : 403);
       const headers: Record<string, string | string[]> = {};
       for (const [key, value] of Object.entries(req.headers)) if (value !== undefined && !HOP.has(key)) headers[key] = value;
       headers.host = url.host;
       // No `agent`: with a `createConnection` and no agent the request uses only the socket the proxy checked.
-      const upstream = httpRequest({ method: req.method, path: `${url.pathname}${url.search}`, headers, createConnection: () => options.connect(80, verdict.address) });
+      const upstream = httpRequest({ method: req.method, path: `${url.pathname}${url.search}`, headers, createConnection: () => options.connect(port, verdict.address) });
       upstream.setTimeout(CONNECT_TIMEOUT_MS * 3, () => upstream.destroy());
       upstream.on("response", (response) => {
         const out: Record<string, string | string[]> = {};

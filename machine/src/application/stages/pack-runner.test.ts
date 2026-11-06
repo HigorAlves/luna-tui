@@ -14,6 +14,7 @@ import { HOST_GIT } from "../../adapters/git/worktree.ts";
 import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
 import type { StageContext } from "../ports.ts";
 import type { Graph, GraphStamp } from "../graph.ts";
@@ -1279,5 +1280,54 @@ describe("the engine a stage runs on", () => {
       // The first try and one retry after each of 1 s, 5 s and 25 s.
       expect(hostExec).toHaveBeenCalledTimes(4);
     });
+  });
+});
+
+describe("a stage's own list of hosts", () => {
+  const spec = { allow: ["github.com:443"], allowPrivate: [], proxyImage: "img" };
+  const withEgress = (sandbox: ReturnType<typeof fakeSandbox>) => {
+    const requests: unknown[] = [];
+    const d: AgentDeps = { ...deps(sandbox), egress: { for: async (request) => (requests.push(request), spec) } };
+    return { d, requests };
+  };
+
+  it("asks for the agent list of the run's repository with its engine's owner, and hands it to the sandbox with the machine's image", async () => {
+    const { d, requests } = withEgress(fakeSandbox(output()));
+    await runAgent(d, context("triage"), "triage");
+    expect(requests).toEqual([expect.objectContaining({ repoPath: repo, kind: "agent", owners: expect.arrayContaining(["claude"]), targets: [] })]);
+    expect(seen?.egress).toEqual(spec);
+  });
+
+  it("gives a browser run the hosts of the repository's QA targets", async () => {
+    writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n  - name: local\n    url: http://127.0.0.1:3000\n");
+    const { d, requests } = withEgress(fakeSandbox(output()));
+    await runAgent(d, context("e2e"), "e2e");
+    expect((requests[0] as { targets: string[] }).targets).toEqual(["staging.example.com:443", "127.0.0.1:3000"]);
+  });
+
+  it("runs as before without a policy", async () => {
+    await runAgent(deps(fakeSandbox(output())), context("triage"), "triage");
+    expect(seen?.egress).toBeUndefined();
+  });
+
+  it("emits one row per refused (host, port, via), at most 20 and then one `more`, never from the container", async () => {
+    const rows = Array.from({ length: 25 }, (_, i) => ({ host: `h${i}.example.com`, port: 443, via: "connect" as const, reason: "not_listed", count: 1 }));
+    const inner = fakeSandbox(output());
+    const { d } = withEgress(async (run) => ({ ...(await inner(run)), blocked: rows }));
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    await runAgent(d, { ...context("triage"), emit: async (kind, payload) => void emitted.push([kind, payload]) }, "triage");
+    const blocked = emitted.filter(([k]) => k === "sandbox.egress_blocked");
+    expect(blocked).toHaveLength(21);
+    expect(blocked[0]![1]).toEqual({ step: "stage", host: "h0.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 });
+    expect(blocked[20]![1]).toEqual({ step: "stage", more: 5 });
+  });
+
+  it("ends the stage as env_broken at step network when the daemon cannot make the isolated network", async () => {
+    const { d } = withEgress(async () => {
+      throw new EgressUnsupportedError("old daemon");
+    });
+    const result = await runAgent(d, context("triage"), "triage");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28"), options: expect.any(Array) });
   });
 });

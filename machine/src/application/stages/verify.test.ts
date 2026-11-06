@@ -1,4 +1,5 @@
 import { RepoImageError } from "../repo-images.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -652,5 +653,23 @@ describe("when the repository's image cannot be built while a check runs", () =>
     const runner = verifyRunner({ exec: exec as never, runPack: vi.fn(), stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
     const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
     expect(await runner(context)).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, reason: expect.stringContaining("no such package") } });
+  });
+});
+
+describe("the network a check runs on", () => {
+  const base = { runPack: vi.fn(), stateDir: mkdtempSync(join(tmpdir(), "verify-net-")), detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null };
+  const ctx = (emit?: StageContext["emit"]) => ({ task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal, ...(emit ? { emit } : {}) }) as unknown as StageContext;
+
+  it("escalates as env_broken at step network when the daemon cannot make the isolated one", async () => {
+    const runner = verifyRunner({ ...base, exec: (async () => { throw new EgressUnsupportedError("old daemon"); }) as never });
+    expect(await runner(ctx())).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28") } });
+  });
+
+  it("emits what a check's container was refused, as a check row", async () => {
+    const rows = [{ host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const runner = verifyRunner({ ...base, exec: (async () => ({ code: 0, stdout: "ok", stderr: "", blocked: rows })) as never });
+    await runner(ctx(async (kind, payload) => void emitted.push([kind, payload]))).catch(() => {}); // the stubbed review pack answers nothing; the rows were emitted before
+    expect(emitted).toContainEqual(["sandbox.egress_blocked", { step: "check", host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }]);
   });
 });

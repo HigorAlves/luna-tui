@@ -86,3 +86,24 @@ describe("runPackOnce", () => {
     expect(outputError({ ...result, ok: false, summary: "s" } as never)).toBe("s");
   });
 });
+
+describe("runPackOnce's list", () => {
+  it("asks for the pack list (no repository) of the engine's owner and hands it to the sandbox; without a policy it passes none", async () => {
+    const { seen, released: _ } = setup(JSON.stringify(result));
+    const runDir = mkdtempSync(join(tmpdir(), "run-once-"));
+    const asked: unknown[] = [];
+    const spec = { allow: ["api.anthropic.com:443"], allowPrivate: [], proxyImage: "img" };
+    const sandbox = async (run: SandboxRun): Promise<SandboxResult> => {
+      seen.push(run);
+      mkdirSync(join(run.runDir, "out"), { recursive: true });
+      writeFileSync(join(run.runDir, "out", "result.json"), JSON.stringify(result));
+      return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
+    };
+    const credentials = { prepare: async () => ({ env: {}, mounts: [], release: async () => {} }) };
+    await runPackOnce({ name: "c", image: "img", runDir, worktree: join(runDir, "work"), input, engine: "claude:haiku", labels: {} }, { credentials, sandbox, egress: { for: async (r) => (asked.push(r), spec) } });
+    expect(asked).toEqual([{ repoPath: null, kind: "pack", owners: ["claude"] }]);
+    expect(seen.at(-1)?.egress).toEqual(spec);
+    await runPackOnce({ name: "c", image: "img", runDir, worktree: join(runDir, "work"), input, engine: "claude:haiku", labels: {} }, { credentials, sandbox });
+    expect(seen.at(-1)?.egress).toBeUndefined();
+  });
+});

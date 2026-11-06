@@ -89,3 +89,12 @@ describe("runSweep", () => {
     expect(await runSweep(base({ impact: async () => { throw new Error("no graph"); } }), input)).toMatchObject({ status: "passed" });
   });
 });
+
+describe("runChecks and what a check was refused", () => {
+  it("hands the rows a check's container was refused to onBlocked, with the check's name", async () => {
+    const rows = [{ host: "evil.example.com", port: 443, via: "connect" as const, reason: "not_listed", count: 2 }];
+    const seen: Array<[string, unknown]> = [];
+    await runChecks({ commands: [{ name: "unit", cmd: "t", argv: ["t"] }, { name: "lint", cmd: "l", argv: ["l"] }], exec: async (cmd) => ({ code: 0, stdout: "", stderr: "", ...(cmd === "t" ? { blocked: rows } : {}) }), cwd: "/w", env: {}, stage: "implementing", timeoutMs: 10_000, onBlocked: (name, found) => void seen.push([name, found]) });
+    expect(seen).toEqual([["unit", rows]]);
+  });
+});
