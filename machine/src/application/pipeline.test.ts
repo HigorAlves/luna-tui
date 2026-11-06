@@ -2211,6 +2211,22 @@ describe("awaiting_ship holds a stage or a gate", () => {
     expect((await pipeline.get(second.id)).state).toBe("reviewing_memory");
   });
 
+  it("a shipping run that is not ready hands the card back to the watch; media refresh and the escalation head_moved run e2e", async () => {
+    const task = await newTask();
+    stubs.plan("shipping", { outcome: "fail", detail: { notReady: true, reason: "CI is red" } });
+    await startAndApprove(task.id);
+    await pipeline.decide(task.id, "approved");
+    const ran = await stagesRun(task.id);
+    expect(ran.slice(-4)).toEqual(["awaiting_ship", "shipping", "awaiting_ship", "shipping"]);
+    expect((await pipeline.get(task.id)).state).toBe("reviewing_memory");
+
+    const refresh = await newTask();
+    stubs.plan("awaiting_ship", { outcome: "escalated", detail: { escalation: "head_moved", refresh: "media", reason: "a fix changed a scenario" } });
+    await startAndApprove(refresh.id);
+    await pipeline.decide(refresh.id, "approved");
+    expect((await stagesRun(refresh.id)).filter((st) => st === "e2e")).toHaveLength(2);
+  });
+
   it("abort at awaiting_ship with an open approval is still refused", async () => {
     const task = await newTask();
     await startAndApprove(task.id);

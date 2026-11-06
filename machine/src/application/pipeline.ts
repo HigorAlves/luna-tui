@@ -1712,6 +1712,9 @@ export class Pipeline {
                 ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
                 ...(await this.blockerSet(id, stage, result)),
                 ...(await this.loopCap(id, stage, result)),
+                // The merge that did not happen because the PR is not ready; a fix that changed what a scenario shows (media from a new browser run).
+                ...(stage === "shipping" && result.detail?.notReady === true ? { notReady: true as const } : {}),
+                ...(result.detail?.refresh === "media" ? { refresh: "media" as const } : {}),
                 ...(stage === "evidence" ? { preview: (await this.policyFor((await this.get(id)).repoPath)).factory.ship.preview === "on" } : {}),
               };
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.
