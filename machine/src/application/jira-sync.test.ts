@@ -316,6 +316,16 @@ describe("JiraSync", () => {
   });
 });
 
+describe("JiraSync: a task merged under ship.merged", () => {
+  it("comments the shipped summary for the new kind, once", async () => {
+    const { pipeline, jira, sync } = wire();
+    const task = await pipeline.createTask({ title: "PLAT-123 Login page", repoPath: "/r/a" });
+    await pipeline.record(task.id, "ship.merged", { title: "Login page", prUrl: "https://github.com/o/a/pull/7", number: 7, mergedSha: "9c1f0e2a7b3d4e5f", by: "machine", method: "squash", format: "text", howToVerify: "Log in.", media: [] });
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["Shipped: Login page — https://github.com/o/a/pull/7 (9c1f0e2). How to verify: Log in. Evidence: text."]);
+  });
+});
+
 describe("JiraSync: a merged task", () => {
   const shipped = { title: "Login page", prUrl: "https://github.com/o/a/pull/7", number: 7, mergedSha: "9c1f0e2a7b3d4e5f", by: "person", format: "text", howToVerify: "Log in with a bad password.", media: [] };
 

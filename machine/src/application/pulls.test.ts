@@ -61,6 +61,7 @@ function setup(world: World, over: Partial<ConstructorParameters<typeof GitHubPu
     mergePr: async (repo, number) => {
       calls.push(["merge", repo, String(number)]);
       if (world.mergeError) throw new Error(world.mergeError);
+      return { merged: true as const, sha: null };
     },
   });
   const exec = async (command: string, args: string[]) => {

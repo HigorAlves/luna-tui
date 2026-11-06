@@ -838,7 +838,7 @@ describe("the ship approval (the release question after readiness)", () => {
 describe("the open release question is probed once per poll interval", () => {
   const pack = { summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk: "high" as const, rollback: "revert", howToVerify: "run it", commitSha: "9c1f0e2a7b3d", media: [], at: "2026-11-04T00:00:00.000Z" };
   const learned: string[] = [];
-  const build = async (probe: (t: unknown, g: unknown) => Promise<"merged" | "withdraw" | "keep">, shipProbeMs = 0) => {
+  const build = async (probe: (t: unknown, g: unknown) => Promise<"merged" | "closed" | "withdraw" | "keep">, shipProbeMs = 0) => {
     const truth = new DecisionTruth({ setTruth: async (p, id) => (learned.push(`${p}:${id}`), true), read: async () => ({ answer: {} }) as never }, { told: async () => {} });
     const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, shipGateProbe: probe as never, shipProbeMs, truth });
     stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk: "high", decisions: { finding_classify: ["rec1"] } } });
@@ -858,6 +858,12 @@ describe("the open release question is probed once per poll interval", () => {
     expect(gate).toMatchObject({ decision: "approved", response: { auto: true } });
     expect(learned).toEqual([]);
     expect((await stagesRun(id)).slice(-1)).toEqual(["shipping"]);
+  });
+
+  it("a PR closed on GitHub archives the card with pr_closed", async () => {
+    const { p, id } = await build(async () => "closed");
+    await p.tick();
+    expect(await p.get(id)).toMatchObject({ state: "archived", archiveReason: "pr_closed" });
   });
 
   it("a head that moved or a checklist that no longer passes withdraws the gate, and the watch runs again", async () => {
@@ -3464,20 +3470,58 @@ describe("concurrent transitions on the same task", () => {
 
 
 describe("closing the loop", () => {
-  it("logs task.shipped with the merge and the pack's facts when shipping passes with a merge, and not otherwise", async () => {
+  it("logs ship.merged (not task.shipped) with the merge, its method and the pack's facts when shipping passes with a merge, and not otherwise", async () => {
     const merged = await newTask();
-    stubs.plan("shipping", { outcome: "pass", detail: { merged: { sha: "m".repeat(40), by: "machine" }, prUrl: "https://github.com/o/a/pull/3", number: 3 } });
+    stubs.plan("shipping", { outcome: "pass", detail: { merged: { sha: "m".repeat(40), by: "machine", method: "rebase" }, prUrl: "https://github.com/o/a/pull/3", number: 3 } });
     const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
     await p.start(merged.id);
     for (let i = 0; i < 2; i++) await p.decide(merged.id, "approved");
-    const event = (await p.events(merged.id)).find((e) => e.kind === "task.shipped");
-    expect(event?.payload).toMatchObject({ title: merged.title, prUrl: "https://github.com/o/a/pull/3", number: 3, mergedSha: "m".repeat(40), by: "machine", media: [] });
+    const event = (await p.events(merged.id)).find((e) => e.kind === "ship.merged");
+    expect(event?.payload).toMatchObject({ title: merged.title, prUrl: "https://github.com/o/a/pull/3", number: 3, mergedSha: "m".repeat(40), by: "machine", method: "rebase", media: [] });
+    expect((await p.events(merged.id)).map((e) => e.kind)).not.toContain("task.shipped");
 
     stubs.reset();
     const plain = await newTask();
     await p.start(plain.id);
     for (let i = 0; i < 2; i++) await p.decide(plain.id, "approved");
-    expect((await p.events(plain.id)).map((e) => e.kind)).not.toContain("task.shipped");
+    expect((await p.events(plain.id)).map((e) => e.kind)).not.toContain("ship.merged");
+  });
+});
+
+describe("a PR closed without a merge archives its card", () => {
+  const closed = { outcome: "fail" as const, detail: { prClosed: true } };
+  const reasons = async (p: Pipeline, id: string) => ({ task: await p.get(id), kinds: (await p.events(id)).map((e) => e.kind) });
+
+  it("the watch answering prClosed archives the card with pr_closed and runs the close step", async () => {
+    stubs.plan("awaiting_ship", closed);
+    const closes: string[] = [];
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, releaseKept: async (id) => void closes.push(id) });
+    const task = await newTask();
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await p.decide(task.id, "approved");
+    const out = await reasons(p, task.id);
+    expect(out.task).toMatchObject({ state: "archived", archiveReason: "pr_closed" });
+    expect(closes).toContain(task.id);
+    expect(out.kinds).not.toContain("ship.merged");
+  });
+
+  it("shipping answering prClosed archives it too, and an escalation is not what a closed PR becomes", async () => {
+    stubs.plan("shipping", closed);
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await newTask();
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await p.decide(task.id, "approved");
+    expect(await p.get(task.id)).toMatchObject({ state: "archived", archiveReason: "pr_closed" });
+  });
+
+  it("prClosed from any other stage is just a failure: nothing but those two stages archives on it", async () => {
+    stubs.plan("evidence", closed);
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    expect((await pipeline.get(task.id)).state).not.toBe("archived");
   });
 });
 

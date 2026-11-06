@@ -44,6 +44,7 @@ const FIXTURES: Array<[string, ReturnType<typeof row>, CardEventName[]]> = [
   ["ready to merge", row("stage.ship.ready", {}), ["ship.ready"]],
   ["a person must merge", row("stage.ship.approval_needed", {}), ["ship.approval_needed"]],
   ["merged", row("task.shipped", { number: 3 }), ["ship.merged"]],
+  ["merged, as the pipeline logs it now", row("ship.merged", { number: 3 }), ["ship.merged"]],
   ["closed", row("task.closed", { steps: [] }), ["card.closed"]],
   ["rules applied", row("card.learned", {}), ["card.learned"]],
   ["fast lane taken", row("card.fast_lane", {}), ["card.fast_lane"]],

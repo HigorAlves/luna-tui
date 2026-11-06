@@ -18,7 +18,7 @@ import { carriesSecret, postable } from "../domain/postable.ts";
 import type { JiraPolicy, Policy } from "../domain/policy.ts";
 import type { ArtifactRow, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { type Jira, messageOf } from "./jira.ts";
-import { ShippedEvent, shippedSummary } from "./ship-loop.ts";
+import { ShippedEvent, isShippedKind, shippedSummary } from "./ship-loop.ts";
 import { needsYou } from "./threads.ts";
 
 export interface JiraSyncOptions {
@@ -112,14 +112,14 @@ export class JiraSync {
   }
 
   private async react(event: EventRow): Promise<void> {
-    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder" && event.kind !== "task.reply" && event.kind !== "task.questions" && event.kind !== "task.shipped") return;
+    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder" && event.kind !== "task.reply" && event.kind !== "task.questions" && !isShippedKind(event.kind)) return;
     const task = await this.options.pipeline.get(event.taskId);
     const link = jiraOf(task);
     if (!link) return;
     const policy = (await this.options.pipeline.policyFor(task.repoPath)).jira;
     if (!policy) return;
 
-    if (event.kind === "task.shipped") {
+    if (isShippedKind(event.kind)) {
       // Once per task: the record, not memory, says whether the summary was posted.
       const parsed = ShippedEvent.safeParse(event.payload);
       if (!parsed.success || policy.comments === "none") return;

@@ -35,6 +35,9 @@ describe("shipGateProbe", () => {
   it("says merged for a PR GitHub shows merged", async () => {
     expect(await (await probeWith({ prMerged: async () => ({ ...open, merged: true, state: "closed" as const, mergedSha: "m" }) }))(task, gate())).toBe("merged");
   });
+  it("says closed for a PR GitHub shows closed and not merged", async () => {
+    expect(await (await probeWith({ prMerged: async () => ({ ...open, state: "closed" as const }) }))(task, gate())).toBe("closed");
+  });
   it("withdraws when the head moved", async () => {
     expect(await (await probeWith({ prFacts: async () => node("SUCCESS", MOVED) as never, prHeadSha: async () => MOVED }))(task, gate())).toBe("withdraw");
   });

@@ -14,26 +14,26 @@ const HEAD = "a".repeat(40);
 const MERGE_COMMIT = "b".repeat(40);
 const open = { merged: false, mergedSha: null, state: "open" as const, mergedAt: null };
 const context = { task: { id: "t1", title: "feat", description: "d", criteria: [], branch: "hardness/t1", worktreePath: "/wt", repoPath: "/repo", source: null } as unknown as TaskRow, stage: "shipping", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as StageContext;
-const facts = (canAutoMerge: boolean, head = HEAD, reason = "not ready: CI is red"): ShipFacts => ({ pr: {} as ShipFacts["pr"], head, pack: null, risk: "low", paths: [], releaseOwners: [], readiness: { ready: canAutoMerge, canAutoMerge, blockers: canAutoMerge ? [] : [reason], reason, checklist: [] } as unknown as ShipFacts["readiness"] });
+const facts = (canAutoMerge: boolean, head = HEAD, reason = "not ready: CI is red"): ShipFacts => ({ pr: { title: "Export CSV", headRef: "hardness/t1", fromFork: false } as ShipFacts["pr"], head, pack: null, risk: "low", paths: [], releaseOwners: [], readiness: { ready: canAutoMerge, canAutoMerge, blockers: canAutoMerge ? [] : [reason], reason, checklist: [] } as unknown as ShipFacts["readiness"] });
 
-async function wire(over: { github?: Parameters<typeof fakeGitHub>[0]; facts?: () => Promise<ShipFacts | null>; cursor?: boolean } = {}) {
+async function wire(over: { github?: Parameters<typeof fakeGitHub>[0]; facts?: () => Promise<ShipFacts | null>; cursor?: boolean; merge?: Record<string, unknown>; queuedCursor?: boolean } = {}) {
   const stateDir = await mkdtemp(join(tmpdir(), "merge-"));
-  if (over.cursor !== false) await saveCursor(stateDir, "t1", emptyCursor({ slug: "a/b", number: 3 }));
-  const github = fakeGitHub({ prMerged: async () => open, mergePr: async () => undefined, ...over.github });
+  if (over.cursor !== false) await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "a/b", number: 3 }), ...(over.queuedCursor ? { queued: true } : {}) });
+  const github = fakeGitHub({ prMerged: async () => open, mergePr: async () => ({ merged: true as const, sha: null }), deleteBranch: async () => {}, ...over.github });
   const settle = vi.fn(async () => {});
   const sleep = vi.fn(async () => {});
-  const run = mergeRunner({ github, policies: { for: async () => ({}) as never }, evidence: { load: async () => null }, stateDir, pollMs: 1000, sleep, readFacts: over.facts ?? (async () => facts(true)), settle });
+  const run = mergeRunner({ github, policies: { for: async () => ({ factory: { ship: { merge: { method: "squash", queue: true, delete_branch: true, commit_template: null, ...over.merge } } } }) as never }, evidence: { load: async () => null }, stateDir, pollMs: 1000, sleep, readFacts: over.facts ?? (async () => facts(true)), settle });
   return { run, github, stateDir, settle, sleep };
 }
 
 describe("mergeRunner (shipping)", () => {
   it("records the merge commit GitHub reports, never the PR head, and guards the merge with the head's sha", async () => {
     let merged = false;
-    const { run, github, settle } = await wire({ github: { mergePr: async () => { merged = true; }, prMerged: async () => (merged ? { merged: true, mergedSha: MERGE_COMMIT, state: "closed", mergedAt: "2026-11-06T10:00:00Z" } : open) } });
+    const { run, github, settle } = await wire({ github: { mergePr: async () => { merged = true; return { merged: true as const, sha: null }; }, prMerged: async () => (merged ? { merged: true, mergedSha: MERGE_COMMIT, state: "closed", mergedAt: "2026-11-06T10:00:00Z" } : open) } });
     const result = await run(context);
     expect(result).toMatchObject({ outcome: "pass", detail: { merged: { sha: MERGE_COMMIT, by: "machine" }, number: 3 } });
     expect(MERGE_COMMIT).not.toBe(HEAD);
-    expect(github.mergePr).toHaveBeenCalledWith("a/b", 3, { sha: HEAD });
+    expect(github.mergePr).toHaveBeenCalledWith("a/b", 3, expect.objectContaining({ sha: HEAD }));
     expect(settle).toHaveBeenCalledTimes(1);
   });
 
@@ -59,7 +59,7 @@ describe("mergeRunner (shipping)", () => {
 
   it("records no sha, with a note, when GitHub names no merge commit after three reads", async () => {
     let merged = false;
-    const { run, github } = await wire({ github: { mergePr: async () => { merged = true; }, prMerged: async () => (merged ? { merged: true, mergedSha: null, state: "closed", mergedAt: null } : open) } });
+    const { run, github } = await wire({ github: { mergePr: async () => { merged = true; return { merged: true as const, sha: null }; }, prMerged: async () => (merged ? { merged: true, mergedSha: null, state: "closed", mergedAt: null } : open) } });
     const result = await run(context);
     expect(result).toMatchObject({ outcome: "pass", detail: { merged: { sha: null } } });
     expect(String(result.detail?.note)).toMatch(/merge commit/);
@@ -94,9 +94,51 @@ describe("mergeRunner (shipping)", () => {
     expect(github.mergePr).not.toHaveBeenCalled();
   });
 
-  it("escalates a PR closed without a merge", async () => {
-    const { run } = await wire({ github: { prMerged: async () => ({ merged: false, mergedSha: null, state: "closed", mergedAt: null }) } });
-    expect(await run(context)).toMatchObject({ outcome: "escalated", detail: { reason: "the PR was closed without a merge" } });
+  it("passes ship.merge to the merge: method, queue, delete_branch, and the commit text from the template", async () => {
+    let merged = false;
+    const { run, github } = await wire({
+      merge: { method: "rebase", queue: false, delete_branch: false, commit_template: "{{title}} (#{{number}})\n\nrisk {{risk}}, card {{card}}" },
+      github: { mergePr: vi.fn(async () => { merged = true; return { merged: true as const, sha: MERGE_COMMIT }; }), prMerged: async () => (merged ? { merged: true, mergedSha: "other", state: "closed", mergedAt: "t" } : open) },
+    });
+    const result = await run(context);
+    expect(github.mergePr).toHaveBeenCalledWith("a/b", 3, expect.objectContaining({ sha: HEAD, method: "rebase", queue: false, deleteBranch: false, title: "Export CSV (#3)", message: "risk low, card t1" }));
+    // the merge's own answer is the merge commit; the configured method is recorded
+    expect(result).toMatchObject({ outcome: "pass", detail: { merged: { sha: MERGE_COMMIT, method: "rebase" } } });
+  });
+
+  it("a null template passes no title and no message", async () => {
+    const { run, github } = await wire({ github: { mergePr: vi.fn(async () => ({ merged: true as const, sha: MERGE_COMMIT })) } });
+    await run(context);
+    const options = (github.mergePr as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![2] as Record<string, unknown>;
+    expect(options).not.toHaveProperty("title");
+    expect(options).not.toHaveProperty("message");
+  });
+
+  it("falls back to the merge commit prMerged reports when the merge response names none", async () => {
+    let merged = false;
+    const { run } = await wire({ github: { mergePr: async () => { merged = true; return { merged: true as const, sha: null }; }, prMerged: async () => (merged ? { merged: true, mergedSha: MERGE_COMMIT, state: "closed", mergedAt: "t" } : open) } });
+    expect(await run(context)).toMatchObject({ detail: { merged: { sha: MERGE_COMMIT } } });
+  });
+
+  it("deletes the head branch after a queue merge the machine asked for, when delete_branch is on, and never after a person's merge", async () => {
+    let polls = 0;
+    const queuedMerge = { merged: true, mergedSha: MERGE_COMMIT, state: "closed" as const, mergedAt: "t" };
+    const on = await wire({ queuedCursor: true, github: { prMerged: async () => (++polls > 1 ? queuedMerge : open) } });
+    expect(await on.run(context)).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+    expect(on.github.deleteBranch).toHaveBeenCalledWith("a/b", "hardness/t1");
+    polls = 0;
+    const off = await wire({ queuedCursor: true, merge: { delete_branch: false }, github: { prMerged: async () => (++polls > 1 ? queuedMerge : open) } });
+    await off.run(context);
+    expect(off.github.deleteBranch).not.toHaveBeenCalled();
+    const person = await wire({ github: { prMerged: async () => queuedMerge } });
+    await person.run(context);
+    expect(person.github.deleteBranch).not.toHaveBeenCalled();
+  });
+
+  it("answers prClosed for a PR GitHub shows closed and not merged: the pipeline archives it", async () => {
+    const { run, github } = await wire({ github: { prMerged: async () => ({ merged: false, mergedSha: null, state: "closed", mergedAt: null }) } });
+    expect(await run(context)).toEqual({ outcome: "fail", detail: { prClosed: true } });
+    expect(github.mergePr).not.toHaveBeenCalled();
   });
 
   it("a card restarted at shipping with the old monitor's cursor (a stored literal) finds the PR open and not ready, and hands it to the watch", async () => {
@@ -132,7 +174,7 @@ describe("mergeRunner on a card that needed the release question", () => {
       prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }],
       prFacts: async () => node as never, prHeadSha: async () => HEAD, prFiles: async () => [], fileAtRef: async () => null,
       prMerged: async () => (merged ? { merged: true, mergedSha: MERGE_COMMIT, state: "closed", mergedAt: "t" } : open),
-      mergePr: async () => { merged = true; },
+      mergePr: async () => { merged = true; return { merged: true as const, sha: null }; },
     });
     const run = mergeRunner({ github, policies: { for: async () => policy as never }, evidence: { load: async () => pack as never }, stateDir, pollMs: 1000, sleep: async () => {}, settle: async () => {} });
     return { run: () => run({ ...context, approvals: [approval(head)] } as StageContext), github };

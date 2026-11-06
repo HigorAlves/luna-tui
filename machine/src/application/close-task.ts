@@ -168,7 +168,8 @@ export async function closeTask(task: CloseTarget, deps: CloseDeps): Promise<Clo
 
   const worktree = await attempt("worktree", async () => {
     if (!task.worktreePath || !task.repoPath) return "skipped: the task has no worktree";
-    if (!deps.worktreeRemove) return "kept: remove it from the board with w";
+    // A merged card has nothing left in its workspace to keep (the unpushed-commits guard below still holds); any other close leaves it for the board's `w`.
+    if (!deps.worktreeRemove && !task.merged) return "kept: remove it from the board with w";
     if (isClone(task.worktreePath)) {
       const unpushed = await unpushedCommits(task.worktreePath);
       if (unpushed.length > 0) return `kept: the clone holds ${unpushed.length} unpushed commit(s); push them, or remove it from the board`;

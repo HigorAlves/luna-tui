@@ -215,11 +215,11 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
               'escalation', e.payload->'escalation', 'archiveReason', e.payload->'archiveReason',
               'detail', case when e.kind = 'stage.finished' then jsonb_strip_nulls(jsonb_build_object('rounds', e.payload #> '{detail,rounds}', 'cases', case when e.payload #> '{detail,cases}' is not null then '[]'::jsonb end)) end)) as payload
        from events e join tasks t on t.id = e.task_id
-      where e.kind in ('task.created', 'task.shipped', 'task.closed', 'transition', 'stage.started', 'stage.finished', 'stage.slice.committed', 'stage.pr.opened') and e.at <= $2 and $1::timestamptz is not null and ${inScope}
+      where e.kind in ('task.created', 'task.shipped', 'ship.merged', 'task.closed', 'transition', 'stage.started', 'stage.finished', 'stage.slice.committed', 'stage.pr.opened') and e.at <= $2 and $1::timestamptz is not null and ${inScope}
         -- only tasks with an ending event inside the window: the numbers never need the history of the rest
         and e.task_id in (select w.task_id from events w
                            where w.at >= $1 and w.at <= $2
-                             and (w.kind = 'task.shipped'
+                             and (w.kind in ('task.shipped', 'ship.merged')
                                or (w.kind = 'transition' and w.payload->>'event' = 'approved' and w.payload->>'from' = 'awaiting_approval')
                                or (w.kind = 'stage.finished' and w.payload->>'status' = 'passed' and w.payload->>'stage' in ('test_design', 'implementing'))))`,
     params,

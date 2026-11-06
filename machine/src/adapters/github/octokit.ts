@@ -203,38 +203,64 @@ export class OctokitGitHub implements GitHub {
     await call(`closing ${slug}#${number}`, () => this.octokit.rest.pulls.update({ owner, repo, pull_number: number, state: "closed" }));
   }
 
-  /** Each repo allows its own merge methods: squash when it does, else a merge commit, else a rebase. */
-  private async mergeMethod(owner: string, repo: string): Promise<"squash" | "merge" | "rebase"> {
+  /** Each repo allows its own merge methods: the configured one when it does, else squash, then a merge commit, then a rebase. */
+  private async mergeMethod(owner: string, repo: string, wanted?: "squash" | "merge" | "rebase"): Promise<"squash" | "merge" | "rebase"> {
     try {
       const { data } = await this.octokit.rest.repos.get({ owner, repo });
       const allowed = data as { allow_squash_merge?: boolean; allow_merge_commit?: boolean; allow_rebase_merge?: boolean } | undefined;
+      const ok = { squash: allowed?.allow_squash_merge !== false, merge: allowed?.allow_merge_commit !== false, rebase: allowed?.allow_rebase_merge !== false };
+      if (wanted && ok[wanted]) return wanted;
       if (allowed?.allow_squash_merge === false) {
         if (allowed.allow_merge_commit !== false) return "merge";
         if (allowed.allow_rebase_merge !== false) return "rebase";
       }
+      return "squash";
     } catch {
       // The settings are a hint; GitHub's own answer to the merge is the authority.
     }
-    return "squash";
+    return wanted ?? "squash";
   }
 
-  async mergePr(slug: string, number: number, options: { sha?: string } = {}): Promise<void | { queued: true }> {
+  async mergePr(slug: string, number: number, options: { sha?: string; method?: "squash" | "merge" | "rebase"; queue?: boolean; deleteBranch?: boolean; title?: string; message?: string } = {}): Promise<{ merged: true; sha: string | null } | { queued: true }> {
     const { owner, repo } = repoRef(slug);
     const { data } = await call(`reading ${slug}#${number}`, () => this.octokit.rest.pulls.get({ owner, repo, pull_number: number }));
     const pr = data as { head: { ref: string; repo: { full_name: string } | null }; node_id?: string };
     const head = pr.head;
-    const merge_method = await this.mergeMethod(owner, repo);
+    const merge_method = await this.mergeMethod(owner, repo, options.method);
+    let sha: string | null = null;
     try {
-      await this.octokit.rest.pulls.merge({ owner, repo, pull_number: number, merge_method, ...(options.sha ? { sha: options.sha } : {}) });
+      const merged = await this.octokit.rest.pulls.merge({
+        owner,
+        repo,
+        pull_number: number,
+        merge_method,
+        ...(options.sha ? { sha: options.sha } : {}),
+        ...(options.title ? { commit_title: options.title } : {}),
+        ...(options.message ? { commit_message: options.message } : {}),
+      });
+      const reported = ((merged as { data?: { sha?: unknown } } | undefined)?.data)?.sha;
+      sha = typeof reported === "string" && reported ? reported : null;
     } catch (error) {
       const { status, message = "" } = error as { status?: number; message?: string };
-      // A repo with a merge queue refuses a direct merge; the queue merges it, and its branch is not ours to delete yet.
-      if (status === 405 && /merge queue/i.test(message) && pr.node_id) return this.enqueuePr(pr.node_id, options.sha);
+      // A repo with a merge queue refuses a direct merge; the queue merges it, and its branch is not ours to delete yet. With `queue: false` the refusal is the answer.
+      if (status === 405 && /merge queue/i.test(message) && pr.node_id && options.queue !== false) return this.enqueuePr(pr.node_id, options.sha);
       throw new GitHubError(`merging ${slug}#${number} failed${status ? ` (${status})` : ""}: ${message || String(error)}`);
     }
     // The branch goes with it, as `gh pr merge --delete-branch` did; a fork's branch is not ours to delete.
-    if (head.repo?.full_name.toLowerCase() === slug.toLowerCase()) {
+    if (options.deleteBranch !== false && head.repo?.full_name.toLowerCase() === slug.toLowerCase()) {
       await call(`deleting ${head.ref}`, () => this.octokit.rest.git.deleteRef({ owner, repo, ref: `heads/${head.ref}` }));
+    }
+    return { merged: true, sha };
+  }
+
+  async deleteBranch(slug: string, ref: string): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    try {
+      await this.octokit.rest.git.deleteRef({ owner, repo, ref: `heads/${ref}` });
+    } catch (error) {
+      const { status } = error as { status?: number };
+      if (status === 404 || status === 422) return;
+      throw new GitHubError(`deleting ${ref} of ${slug} failed${status ? ` (${status})` : ""}: ${(error as { message?: string }).message ?? String(error)}`);
     }
   }
 

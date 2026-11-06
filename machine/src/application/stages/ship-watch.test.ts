@@ -128,9 +128,9 @@ describe("shipping after a restart", () => {
     expect(await person.run(person.context)).toMatchObject({ detail: { merged: { by: "person" } } });
   });
 
-  it("escalates a PR closed without a merge, and pushes nothing", async () => {
+  it("answers prClosed for a PR closed without a merge, and pushes nothing", async () => {
     const { run, context, exec } = await wire({ merged: false, mergedSha: null, state: "closed", mergedAt: null });
-    expect(await run(context)).toMatchObject({ outcome: "escalated", detail: { reason: "the PR was closed without a merge" } });
+    expect(await run(context)).toEqual({ outcome: "fail", detail: { prClosed: true } });
     expect(exec).not.toHaveBeenCalled();
   });
 

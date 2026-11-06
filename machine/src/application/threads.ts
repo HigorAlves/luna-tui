@@ -13,7 +13,7 @@ import { fromNotch } from "../domain/jira-link.ts";
 import { type GitHub, messageOf } from "./github.ts";
 import type { EventRow, TaskRow } from "../domain/task.ts";
 import type { Pipeline } from "./pipeline.ts";
-import { ShippedEvent, shippedSummary } from "./ship-loop.ts";
+import { ShippedEvent, isShippedKind, shippedSummary } from "./ship-loop.ts";
 import type { Slack } from "./slack.ts";
 
 export interface SlackOptions {
@@ -91,7 +91,7 @@ export class ThreadReplies {
     }
     // The names stay on the event and the board: nothing outward says who the owners are, or how many.
     if (event.kind === "sla.escalated") return this.reply(event.taskId, "The plan has waited too long for approval and was escalated to the code owners.");
-    if (event.kind === "task.shipped") return this.shipped(event);
+    if (isShippedKind(event.kind)) return this.shipped(event);
     if (event.kind === "stage.finished") {
       const detail = event.payload.detail as { prUrl?: unknown } | undefined;
       const url = typeof detail?.prUrl === "string" ? detail.prUrl : null;

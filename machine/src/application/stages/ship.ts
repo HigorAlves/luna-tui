@@ -2,6 +2,9 @@
 // merge is due; this stage decides again on GitHub's facts at that moment (the readiness script, the head GitHub shows now) and merges
 // with the head's sha as the guard. What it records as merged is the merge commit GitHub reports, never the PR head. A PR that is not
 // ready any more is handed back to the watch (`notReady`), and nothing in a PR comment, a review or a log can reach this stage.
+import { FACTORY_DEFAULTS } from "@hardness/contracts";
+
+import { renderCommitTemplate } from "../../domain/commit-template.ts";
 import { type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type ShipCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
@@ -35,15 +38,22 @@ export function mergeRunner(deps: MergeDeps): StageRunner {
     if (!cursor) return notReady("no PR is being watched");
     const { slug, number } = cursor.pr;
     const url = `https://github.com/${slug}/pull/${number}`;
-    const recorded = async (state: Awaited<ReturnType<GitHub["prMerged"]>>, note?: string): Promise<StageResult> => {
+    // The repository's `ship.merge`, read from the user's checkout (never the card's workspace).
+    const policy = await deps.policies.for(task.repoPath);
+    const config = { ...FACTORY_DEFAULTS.ship.merge, ...(policy.factory?.ship?.merge ?? {}) };
+    const recorded = async (state: Awaited<ReturnType<GitHub["prMerged"]>>, note?: string, made?: { sha: string | null; method: string }): Promise<StageResult> => {
       await settle(task.id, cursor, slug, number).catch(() => {});
-      return { outcome: "pass", detail: { merged: { sha: state.mergedSha ?? null, at: state.mergedAt, by: cursor.mergeRequested || cursor.queued ? "machine" : "person" }, prUrl: url, number, ...(note ? { note } : {}) } };
+      // A queue merge the machine asked for leaves the head branch for the queue; it goes now (never after a person's merge). Already gone is not an error.
+      if (cursor.queued && config.delete_branch && task.branch) await deps.github.deleteBranch(slug, task.branch).catch(() => {});
+      const sha = made?.sha ?? state.mergedSha ?? null;
+      return { outcome: "pass", detail: { merged: { sha, at: state.mergedAt, by: cursor.mergeRequested || cursor.queued ? "machine" : "person", ...(made ? { method: made.method } : {}) }, prUrl: url, number, ...(note ? { note } : {}) } };
     };
     /** The PR's own state, read first and last: a merge a person made, a PR closed. Null when it is still open. */
     const ended = async (): Promise<StageResult | null> => {
       const state = await deps.github.prMerged(slug, number);
       if (state.merged) return recorded(state);
-      if (state.state === "closed") return { outcome: "escalated", detail: { escalation: "other", reason: "the PR was closed without a merge", options: [] } };
+      // GitHub's own `closed` state, never a comment's word: the pipeline archives the card (`pr_closed`).
+      if (state.state === "closed") return { outcome: "fail", detail: { prClosed: true } };
       return null;
     };
     /** Waits for the queue to merge what the machine queued: pass when it does, notReady (queue flag cleared) after the wait. */
@@ -72,16 +82,25 @@ export function mergeRunner(deps: MergeDeps): StageRunner {
       if (!facts) return notReady("GitHub shows no such PR right now");
       // Decided again on what GitHub shows now, at the head it shows now.
       if (!facts.readiness.canAutoMerge || !facts.head) return notReady(facts.readiness.reason);
+      let mergeSha: string | null = null;
       for (let attempt = 1; ; attempt++) {
         try {
           cursor.mergeRequested = true;
           await saveCursor(deps.stateDir, task.id, cursor);
-          const result = await deps.github.mergePr(slug, number, { sha: facts.head });
+          const text = renderCommitTemplate(config.commit_template, { title: facts.pr.title, number, card: task.id.slice(0, 8), risk: facts.risk, url });
+          const result = await deps.github.mergePr(slug, number, {
+            sha: facts.head,
+            method: config.method,
+            queue: config.queue,
+            deleteBranch: config.delete_branch,
+            ...(text ? { title: text.title, message: text.message } : {}),
+          });
           if (result && "queued" in result) {
             cursor.queued = true;
             await saveCursor(deps.stateDir, task.id, cursor);
             return await queued();
           }
+          mergeSha = result && "merged" in result ? result.sha : null;
           break;
         } catch (error) {
           cursor.mergeRequested = false;
@@ -90,14 +109,14 @@ export function mergeRunner(deps: MergeDeps): StageRunner {
           await sleep(deps.pollMs);
         }
       }
-      // The merge commit GitHub reports; GitHub can lag, so a few reads. Never the PR head.
+      // The merge commit GitHub reports (the merge's own answer, else the PR's `merge_commit_sha`); GitHub can lag, so a few reads. Never the PR head.
       let last = await deps.github.prMerged(slug, number);
-      for (let read = 1; !(last.merged && last.mergedSha) && read < MERGE_READS; read++) {
+      for (let read = 1; !mergeSha && !(last.merged && last.mergedSha) && read < MERGE_READS; read++) {
         await sleep(MERGE_READ_PAUSE_MS);
         last = await deps.github.prMerged(slug, number);
       }
-      if (!last.merged) return { outcome: "pass", detail: { merged: { sha: null, at: now().toISOString(), by: "machine" }, prUrl: url, number, note: "GitHub did not report the merge commit" } };
-      return await recorded(last, last.mergedSha ? undefined : "GitHub did not report the merge commit");
+      if (!last.merged) return { outcome: "pass", detail: { merged: { sha: mergeSha, at: now().toISOString(), by: "machine", method: config.method }, prUrl: url, number, ...(mergeSha ? {} : { note: "GitHub did not report the merge commit" }) } };
+      return await recorded(last, mergeSha || last.mergedSha ? undefined : "GitHub did not report the merge commit", { sha: mergeSha, method: config.method });
     } catch (error) {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }

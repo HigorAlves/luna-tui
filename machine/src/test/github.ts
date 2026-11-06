@@ -20,6 +20,7 @@ const METHODS: Array<keyof GitHub> = [
   "prComments",
   "prThreads",
   "mergePr",
+  "deleteBranch",
   "enqueuePr",
   "fileAtRef",
   "prActivity",

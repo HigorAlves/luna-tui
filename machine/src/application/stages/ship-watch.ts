@@ -82,7 +82,8 @@ export function shipWatchRunner(deps: ShipDeps): StageRunner {
           return { outcome: "pass", detail: { merged: { sha: state.mergedSha, at: state.mergedAt, by: cursor!.mergeRequested || cursor!.queued ? "machine" : "person" }, prUrl: url, number: resumed.number } };
         }
         if (state.state === "closed") {
-          return { outcome: "escalated", detail: { escalation: "other", reason: "the PR was closed without a merge", options: [] } };
+          // GitHub's own `closed` state, never a comment's word: the pipeline archives the card (`pr_closed`).
+          return { outcome: "fail", detail: { prClosed: true } };
         }
       } catch (error) {
         return { outcome: "fail", detail: { error: messageOf(error) } };

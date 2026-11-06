@@ -156,6 +156,14 @@ describe("a merged task", () => {
     expect(comments).toEqual([["o/a", "42", summary]]);
   });
 
+  it("is told once for a ship.merged event, the kind the pipeline logs now, as for a stored task.shipped one", async () => {
+    const { pipeline, replies, comments } = wire();
+    const task = await pipeline.createTask({ title: "Export CSV", repoPath: "/r/a", source });
+    await pipeline.record(task.id, "ship.merged", { ...shipped, method: "squash" });
+    await replies.idle();
+    expect(comments).toEqual([["o/a", "42", summary]]);
+  });
+
   it("is posted into the Slack thread it came from, through the user-token port", async () => {
     const slack = fakeSlack({ postMessage: async () => "2.2" });
     const { pipeline, replies } = wire({ slackPort: slack });

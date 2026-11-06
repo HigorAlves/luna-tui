@@ -195,6 +195,52 @@ describe("OctokitGitHub: shipping", () => {
     expect(other.calls.map((c) => c[0])).not.toContain("graphql");
   });
 
+  it("answers the merge commit GitHub reports, and null when it names none", async () => {
+    const withSha = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": { sha: "m".repeat(40), merged: true }, "git.deleteRef": {} });
+    expect(await withSha.github.mergePr("o/a", 7, { sha: "abc123" })).toEqual({ merged: true, sha: "m".repeat(40) });
+    const bare = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": {}, "git.deleteRef": {} });
+    expect(await bare.github.mergePr("o/a", 7)).toEqual({ merged: true, sha: null });
+  });
+
+  it("uses the configured method when the repository allows it, else the fallback order", async () => {
+    const methodOf = async (method: "squash" | "merge" | "rebase", settings: Record<string, unknown>) => {
+      const { github, calls } = stub({ "pulls.get": head, "repos.get": settings, "pulls.merge": {}, "git.deleteRef": {} });
+      await github.mergePr("o/a", 1, { method });
+      return (calls.find((c) => c[0] === "pulls.merge")![1] as { merge_method: string }).merge_method;
+    };
+    expect(await methodOf("rebase", allowed)).toBe("rebase");
+    expect(await methodOf("merge", allowed)).toBe("merge");
+    expect(await methodOf("rebase", { ...allowed, allow_rebase_merge: false })).toBe("squash");
+    expect(await methodOf("squash", { allow_squash_merge: false, allow_merge_commit: false, allow_rebase_merge: true })).toBe("rebase");
+  });
+
+  it("passes the commit title and message, and keeps the head branch unless deleteBranch is on", async () => {
+    const kept = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": {}, "git.deleteRef": {} });
+    await kept.github.mergePr("o/a", 7, { title: "T", message: "M", deleteBranch: false });
+    expect(kept.calls.find((c) => c[0] === "pulls.merge")![1]).toMatchObject({ commit_title: "T", commit_message: "M" });
+    expect(kept.calls.map((c) => c[0])).not.toContain("git.deleteRef");
+    const plain = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": {}, "git.deleteRef": {} });
+    await plain.github.mergePr("o/a", 7, { deleteBranch: true });
+    expect(plain.calls.find((c) => c[0] === "pulls.merge")![1]).not.toHaveProperty("commit_title");
+    expect(plain.calls.map((c) => c[0])).toContain("git.deleteRef");
+  });
+
+  it("with queue off a merge-queue refusal is an error, not an enqueue", async () => {
+    const queue = Object.assign(new Error("Changes must be made through the merge queue"), { status: 405 });
+    const { github, calls } = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": queue, graphql: {} });
+    await expect(github.mergePr("o/a", 7, { queue: false })).rejects.toThrow(/405/);
+    expect(calls.map((c) => c[0])).not.toContain("graphql");
+  });
+
+  it("deletes a head branch by name, and a branch already gone is not an error", async () => {
+    const ok = stub({ "git.deleteRef": {} });
+    await ok.github.deleteBranch("o/a", "feat/x");
+    expect(ok.calls[0]).toEqual(["git.deleteRef", { owner: "o", repo: "a", ref: "heads/feat/x" }]);
+    await expect(stub({ "git.deleteRef": Object.assign(new Error("Reference does not exist"), { status: 422 }) }).github.deleteBranch("o/a", "feat/x")).resolves.toBeUndefined();
+    await expect(stub({ "git.deleteRef": Object.assign(new Error("Not Found"), { status: 404 }) }).github.deleteBranch("o/a", "feat/x")).resolves.toBeUndefined();
+    await expect(stub({ "git.deleteRef": Object.assign(new Error("boom"), { status: 500 }) }).github.deleteBranch("o/a", "feat/x")).rejects.toThrow(GitHubError);
+  });
+
   it("enqueues by node id", async () => {
     const { github, calls } = stub({ graphql: {} });
     expect(await github.enqueuePr("PR_node", "abc123")).toEqual({ queued: true });

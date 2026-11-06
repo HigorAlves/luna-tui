@@ -30,6 +30,21 @@ function worktree(): string {
 
 const task = (worktreePath: string | null) => ({ id: "t1", repoPath: "/repo", worktreePath });
 
+describe("closeTask: a card whose PR merged", () => {
+  it("removes its workspace after the rules step even when removal is not switched on; any other close keeps it", async () => {
+    const path = worktree();
+    const merged = fakeExec();
+    const report = await closeTask({ ...task(path), merged: { prUrl: "https://github.com/o/a/pull/7", number: 7 } }, { exec: merged.exec, worktreeRemove: false });
+    expect(merged.calls).toEqual([{ command: "git", args: [...HOST_GIT, "-C", "/repo", "worktree", "remove", "--force", path], cwd: undefined }]);
+    expect(report.worktreeRemoved).toBe(true);
+    expect(report.steps.map((s) => s.step)).toEqual(["watch-tab", "worktree"]);
+    const other = fakeExec();
+    const kept = await closeTask(task(worktree()), { exec: other.exec, worktreeRemove: false });
+    expect(other.calls).toEqual([]);
+    expect(kept.worktreeRemoved).toBe(false);
+  });
+});
+
 describe("closeTask", () => {
   it("closes the watch tab, and reports a failure to", async () => {
     const closed: string[] = [];
@@ -167,6 +182,8 @@ describe("closeTask after a merge: the rules go to their own branch and a draft 
       "add docs/agents/project-context.md",
       "-c commit.gpgsign=false commit -m docs(context): rules from the memory review",
       "push -u origin luna/memory-0a1b2c3d",
+      // the rules step is first; the merged card's workspace is removed after it
+      `worktree remove --force ${path}`,
     ]);
     expect(readFileSync(join(path, "docs/agents/project-context.md"), "utf8")).toContain("- Run pnpm verify before any commit.");
     expect(opened).toHaveLength(1);
@@ -183,7 +200,8 @@ describe("closeTask after a merge: the rules go to their own branch and a draft 
     expect(refused.opened).toEqual([]);
     const odd = wire({ defaultBranch: "--upload-pack=x" });
     expect((await closeTask(target(worktree()), odd.deps)).steps[0]).toMatchObject({ ok: false, note: expect.stringContaining("default branch") });
-    expect(odd.calls).toEqual([]);
+    // nothing of the rules step ran: only the merged card's workspace removal did
+    expect(odd.calls.map((c) => c[0])).toEqual(["worktree"]);
   });
 });
 

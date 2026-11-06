@@ -63,7 +63,7 @@ function setup(
   answers: Partial<GitHub> = {},
   over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"] } = {},
 ) {
-  const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => {}, ...answers });
+  const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => ({ merged: true as const, sha: null }), ...answers });
   let clock = START.getTime();
   const slept: number[] = [];
   const notes: string[] = [];
@@ -98,7 +98,7 @@ function setup(
 
 /** A fake whose only answers are the ones the default CODEOWNERS reader and a one-poll merge need. */
 function fakeGitHubFrom(fileAtRef: (slug: string, ref: string, path: string) => Promise<string | null>) {
-  return fakeGitHub({ fileAtRef, prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => {} });
+  return fakeGitHub({ fileAtRef, prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => ({ merged: true as const, sha: null }) });
 }
 
 const calls = (github: ReturnType<typeof fakeGitHub>, method: string) => github.calls.filter((c) => c[0] === method);
@@ -276,7 +276,7 @@ describe("the ship monitor", () => {
 
   it("reads CODEOWNERS at the PR's base branch through the port, never from the worktree", async () => {
     const fileAtRef = vi.fn(async (_slug: string, _ref: string, path: string) => (path === "CODEOWNERS" ? "src/ @ana\n" : null));
-    const github = fakeGitHub({ fileAtRef, viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "none" as const }), prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], mergePr: async () => {}, prFiles: async () => [{ path: "src/a.ts", additions: 1, deletions: 0 }], prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }] });
+    const github = fakeGitHub({ fileAtRef, viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "none" as const }), prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], mergePr: async () => ({ merged: true as const, sha: null }), prFiles: async () => [{ path: "src/a.ts", additions: 1, deletions: 0 }], prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }] });
     const result = await shipMonitor({
       github,
       policies: { for: async () => policyWith({ autoMerge: "low" }) },
@@ -345,9 +345,9 @@ describe("the ship monitor", () => {
     expect(calls(github, "mergePr")).toEqual([]);
   });
 
-  it("escalates a PR closed without a merge", async () => {
+  it("answers prClosed for a PR closed without a merge", async () => {
     const { run } = setup({ prMerged: async () => ({ merged: false, mergedSha: null, state: "closed", mergedAt: null }) });
-    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: "the PR was closed without a merge" } });
+    expect(await run()).toEqual({ outcome: "fail", detail: { prClosed: true } });
   });
 
   it("escalates after the longest wait", async () => {

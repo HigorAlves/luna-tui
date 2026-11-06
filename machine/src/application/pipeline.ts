@@ -107,7 +107,7 @@ export interface NewTask {
 
 export interface PipelineOptions {
   /** Looks at an open release question (the ship approval) against GitHub: `merged` closes it as an automatic approval, `withdraw` takes it back so the watch asks again, `keep` leaves it. Nothing polls while a person is asked, so `tick` calls it at most once per `shipProbeMs`. */
-  shipGateProbe?: (task: TaskRow, gate: ApprovalRow) => Promise<"merged" | "withdraw" | "keep">;
+  shipGateProbe?: (task: TaskRow, gate: ApprovalRow) => Promise<"merged" | "closed" | "withdraw" | "keep">;
   /** The shortest time between two probes of one card's release question (the repository's poll interval); 0 probes on every tick. */
   shipProbeMs?: number;
   /** Ends a card's kept sandbox (its extra folders) when the card is resumed or closed. Never throws into the pipeline. */
@@ -1335,6 +1335,7 @@ export class Pipeline {
       try {
         const seen = await probe(task, gate);
         if (seen === "merged") await this.dispatch(task.id, { type: "approved", gate: "ship_approval" }, { decision: { decision: "approved", reason: "merged on GitHub", response: { auto: true } }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+        else if (seen === "closed") await this.archive(task.id, "pr_closed", { onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
         else if (seen === "withdraw") await this.dispatch(task.id, { type: "sent_back", from: "plan", gate: "ship_approval" }, { decision: { decision: "sent_back", reason: "the PR changed: asked again when it is ready" }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
       } catch (error) {
         console.error(`could not probe the release question of task ${task.id}`, error);
@@ -1722,10 +1723,18 @@ export class Pipeline {
         fallback = undefined;
         // An abort already moved the task on; this stage's result no longer applies.
         if (controller.signal.aborted) return;
+        // GitHub shows the PR closed and not merged (the stage read GitHub's own state, never a comment): the card is archived `pr_closed` here, by the loop
+        // that is driving it (`archive()` waits for the loop to end, which would be this one), and the close step runs.
+        if ((stage === "shipping" || stage === "awaiting_ship") && result.outcome === "fail" && result.detail?.prClosed === true) {
+          const archived = await this.apply(id, { type: "archive", reason: "pr_closed" }, {});
+          await this.store.updateTask(id, { queued: false });
+          if (archived.effect.kind === "done") await this.close(id);
+          return;
+        }
         // A merged PR closes the loop: one event the board and the places the task came from react to.
         if (stage === "shipping" && result.outcome === "pass" && result.detail?.merged) {
           const shipped = shippedEvent(await this.get(id), result.detail);
-          if (shipped) await this.log(id, "task.shipped", shipped);
+          if (shipped) await this.log(id, "ship.merged", shipped);
         }
         // A usage limit on one engine: the stage runs again at once on the pack's next fallback
         // that can run, and the task pauses only once there is none.
