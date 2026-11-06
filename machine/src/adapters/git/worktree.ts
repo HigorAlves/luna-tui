@@ -290,6 +290,23 @@ export async function isAncestor(repoPath: string, ancestor: string, descendant:
   return (await exec("git", [...HOST_GIT, "-C", repoPath, "merge-base", "--is-ancestor", ancestor, descendant])).code === 0;
 }
 
+/**
+ * Lines added plus removed in `files` between `commit` and the default branch as the repository last saw it (`git diff --numstat`), on the
+ * user's own repository by its path, never in a workspace; a binary file counts for none. Null when the commit is not a sha, the repository
+ * lacks it, or the path is a card's workspace. Memory's commit anchoring reads this to mark an item stale (RFC 0007).
+ */
+export async function linesChangedSince(repoPath: string, commit: string, files: readonly string[]): Promise<number | null> {
+  if (!/^[0-9a-f]{7,64}$/.test(commit) || files.length === 0 || isUnderWorkspaces(repoPath)) return null;
+  const out = await exec("git", [...HOST_GIT, "--literal-pathspecs", "-C", repoPath, "diff", "--numstat", "--no-ext-diff", `${commit}..${await lastKnownDefault(repoPath)}`, "--", ...files]);
+  if (out.code !== 0) return null;
+  let lines = 0;
+  for (const line of out.stdout.split("\n")) {
+    const [added, removed] = line.split("\t");
+    lines += (Number(added) || 0) + (Number(removed) || 0);
+  }
+  return lines;
+}
+
 /** The default branch as the repo last saw it (`origin/HEAD`, else HEAD); no fetch, so it is cheap to ask per card. */
 async function lastKnownDefault(repoPath: string): Promise<string> {
   const head = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);

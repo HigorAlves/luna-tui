@@ -291,6 +291,18 @@ The video image adds, on top of the QA image, the tools in `/video-tools`: `narr
 
 Inside a stage container the runner sees `/in/stage.json`, `/out`, `/work` (the card's work folder, with a git repository of the agent's own in `.git` that the machine never reads) and `/session` (the task's SDK session dir, `CLAUDE_CONFIG_DIR`). `LUNA_FACTORY=1` marks the run; `LUNA_STAGE_DRY_RUN=1` renders the prompt and the SDK options without a model call (the sandbox smoke uses it); on an eve engine it prints the agent, model, tools and guard policy instead, and for a decision pack the questions and the state it would send to Jev. A repo may keep binding rules for every stage in `docs/agents/project-context.md`; the memory review proposes additions to it.
 
+## Memory in Claude Code (MCP)
+
+A Claude Code session on this host can recall what Luna remembers through a stdio MCP server in this repository, with one read-only tool, `recall` `{ query, repo?, scope? }` (`scope`: `memory` by default, `docs`, `code`, `all`). It returns items (an id, a kind, where it came from, whether it is stale, the text), never an answer: the session is its own model. It calls the running machine's `POST /memory/recall` as the operator, so with memory off it says so.
+
+```
+claude mcp add luna-memory -- pnpm --silent --dir <path to luna-tui> memory:mcp
+```
+
+`--silent` matters: anything pnpm prints on stdout would corrupt the protocol. The server finds the machine as the board does: `HARDNESS_MACHINE_URL` alone when set, else `http://127.0.0.1:4317` (`pnpm dev`), then `http://127.0.0.1:4318` (`pnpm start`), looked up on each call; and the token from `MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`. It adds no dependency and no model call. Its calls carry `X-Luna-Client: mcp`.
+
+`memory.stale_lines` in a repository's luna.yaml (default 200) is how many lines of an item's anchored files may change after its commit before the item is marked stale (see Memory in architecture.md); a machine that does not know the key uses the default.
+
 ## Board
 
 The board uses whichever machine answers: `http://127.0.0.1:4317` (`pnpm dev`) first, then `http://127.0.0.1:4318` (`pnpm start`), checked again on every reconnect. `HARDNESS_MACHINE_URL` pins one address instead. When `MACHINE_API_TOKEN` or `~/.config/hardness/machine-api-token` holds a token, the board sends it on every call. `HARDNESS_REPOS_DIR` is where the board's repo search (`R`) looks for repos (default `~/Developer`). `LUNA_APPROVER` names you on every approval and send-back the board makes (unset: no name is sent); a plan of High risk needs two distinct names, so without it the machine answers `approver_required`. The name is an attestation, not access control: the machine has one bearer token and no per-person identity, so the two-approver rule records who said they approved; it cannot stop one token holder from naming two people.

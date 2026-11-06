@@ -14,6 +14,9 @@ import { toEvent, toTask } from "./adapters/http/serialize.ts";
 import { machineSecrets } from "./bootstrap/machine-secrets.ts";
 import { truthName, useTruthSecrets, writeTruthFile } from "./application/ground-truth.ts";
 import { MemoryService } from "./application/memory-service.ts";
+import { MemoryReverts } from "./application/memory-revert.ts";
+import { sweepStale } from "./application/memory-anchoring.ts";
+import { cardMergedAs } from "./adapters/persistence/merged-cards.ts";
 import { repoSlug } from "./adapters/graph/slug.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
@@ -32,7 +35,7 @@ import { DecisionLog } from "./application/decision-log.ts";
 import { ownCalls } from "./application/pack-runs.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
 import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
-import { commitsSince, headCommit } from "./adapters/git/worktree.ts";
+import { commitsSince, headCommit, linesChangedSince } from "./adapters/git/worktree.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
 import { loadCursor } from "./application/ship-cursor.ts";
@@ -424,6 +427,8 @@ let replies: ThreadReplies;
 let jiraSync: JiraSync;
 /** The ticket clocks, computed whenever a task is serialized. */
 let slaClocks: SlaClocks;
+/** Retires what memory learned from a card whose merged PR a later merged PR reverts; built below, once GitHub and the database are. */
+let memoryReverts: MemoryReverts | null = null;
 
 /** Streams each logged event, plus the whole task whenever its state (or its Jira link) may have changed. */
 function publish(event: EventRow): void {
@@ -432,6 +437,7 @@ function publish(event: EventRow): void {
   if (shipped) bus.publish(shipped);
   void replies.handle(event);
   void jiraSync.handle(event);
+  void memoryReverts?.handle(event);
   if (event.kind === "transition" || event.kind === "task.created" || event.kind === "approval.partial" || event.kind.startsWith("jira.")) {
     pipeline.get(event.taskId).then(
       async (task) =>
@@ -710,6 +716,39 @@ const memoryService = new MemoryService({
   slugOf: repoSlug,
   ...(config.groundTruth ? { onForgotten: async (record) => void (await writeTruthFile(config.stateDir, "memory_forget", truthName(`${record.at}-${record.id}.json`), record)) } : {}),
 });
+// Forgetting (RFC 0007): a merged revert retires the reverted card's items; hourly, items whose anchored files moved on go stale.
+// Idempotent (a second pass changes nothing). `memory.reconcile()` is scheduled by the Cognee bootstrap, not here.
+memoryReverts = new MemoryReverts({
+  memory,
+  pr: async (repo, number) => {
+    const facts = await github.prFacts(repo, number);
+    return facts ? { title: facts.title, body: facts.body ?? null } : null;
+  },
+  cardMergedAs: (target) => cardMergedAs(db, target),
+});
+const memoryRepoPaths = async (): Promise<string[]> => [...new Set([...Object.values(config.repoMap), ...(await repoMap.remembered())])];
+let memoryMaintaining = false;
+async function maintainMemory(): Promise<void> {
+  if (!memory.enabled || memoryMaintaining) return;
+  memoryMaintaining = true;
+  try {
+    const swept = await sweepStale({
+      memory,
+      repoPaths: memoryRepoPaths,
+      slugOf: repoSlug,
+      linesChanged: linesChangedSince,
+      // `memory.stale_lines` in the repository's luna.yaml; absent, the default of 200.
+      staleLines: async (repoPath) => ((await policies.for(repoPath)).factory as { memory?: { stale_lines?: number } }).memory?.stale_lines,
+    });
+    if (swept.staled > 0) console.log(`memory: ${swept.staled} items gone stale of ${swept.checked} checked`);
+  } catch (error) {
+    console.warn("memory: maintenance failed", error);
+  } finally {
+    memoryMaintaining = false;
+  }
+}
+setInterval(() => void maintainMemory(), 60 * MINUTE_MS).unref();
+setTimeout(() => void maintainMemory(), 2 * MINUTE_MS).unref();
 /** Intake's first read of a new issue: triage_signals on Jev through the same PackRuns, recorded
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
 const classifier = packRuns ? createIssueClassifier({ runs: ownCalls(packRuns) }) : null;

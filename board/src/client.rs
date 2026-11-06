@@ -412,9 +412,10 @@ impl Machine {
         Self::json(self.agent.post(self.url(&format!("/memory/items/{}/adopt", path_segment(id)))).send_json(json!({}))).map(|_| ())
     }
 
-    /// Memory's mode and today's usage, for the Floor; `None` from a machine that has no such route or has memory off.
+    /// Memory's mode and today's usage, for the Floor: the plain `GET /metrics` window's optional `memory` object, else `GET /memory/status`; `None` from a machine that reports neither or has memory off.
     pub fn memory_status(&self) -> Option<MemoryStatus> {
-        Self::typed::<MemoryStatus>(self.agent.get(self.url("/memory/status")).call()).ok().filter(|s| s.enabled)
+        let from_metrics = Self::json(self.agent.get(self.url("/metrics?since=7d")).call()).ok().and_then(|v| v.get("memory").cloned()).and_then(|m| serde_json::from_value::<MemoryStatus>(m).ok());
+        from_metrics.or_else(|| Self::typed::<MemoryStatus>(self.agent.get(self.url("/memory/status")).call()).ok()).filter(|s| s.enabled)
     }
 
     /// `bump`, `promote` or `decline` on a backlog item.

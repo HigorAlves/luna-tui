@@ -218,6 +218,9 @@ pub struct MemoryStatus {
     pub cost_usd_today: Option<f64>,
     #[serde(default)]
     pub cognified_today: Option<u64>,
+    /// Items waiting to reach Cognee (`GET /metrics`' `memory.pending`).
+    #[serde(default)]
+    pub pending: Option<u64>,
 }
 
 fn tokens(n: u64) -> String {
@@ -245,6 +248,9 @@ impl MemoryStatus {
         }
         if let Some(n) = self.cognified_today {
             parts.push(format!("{n} cognified today"));
+        }
+        if let Some(n) = self.pending.filter(|n| *n > 0) {
+            parts.push(format!("{n} pending"));
         }
         Some(format!(" {}", parts.join(" · ")))
     }
