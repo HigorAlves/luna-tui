@@ -38,7 +38,7 @@ import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
 import { hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
-import { HOST_GIT, changedPaths, originSlugOf, gitIdentity, commitAll, currentBranch, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
+import { HOST_GIT, changedPaths, diffNameStatus, originSlugOf, gitIdentity, commitAll, currentBranch, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
@@ -277,6 +277,14 @@ export async function buildRealStages(
       headCommit,
       videoImage: async () => videoImage,
       publishing: { github, publish: publishByPolicy, slugOf: originSlugOf },
+      // Host git on a workspace goes through `at()` inside diffNameStatus; a failure means "unknown", which makes the film stale.
+      changedBetween: async (worktreePath, from, to) => {
+        try {
+          return (await diffNameStatus(worktreePath, from, to)).split("\n").flatMap((line) => line.split("\t").slice(1).filter((p) => p !== ""));
+        } catch {
+          return null;
+        }
+      },
       privacy: async (texts, repoPath) => judgePrivacy(verifyDecisions?.decide ?? null, (await policies.for(repoPath)).decisions, texts, repoPath),
       ...(videoImage ? { scanImages: (dir: string, signal: AbortSignal) => scanImages({ sandbox: runSandbox, image: config.runnerVideoImage }, { id: dir.split("/").pop() ?? "shots", dir, signal }) } : {}),
       video: videoImage

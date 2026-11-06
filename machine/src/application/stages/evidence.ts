@@ -18,6 +18,7 @@ import { type PublishEvidence, publishAndReady } from "../evidence-publish.ts";
 import { type GitHub, GitHubError } from "../github.ts";
 import { copyRegularFile, hashRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
 import { screenFindings } from "../../domain/screen-text.ts";
+import { scenariosKeyOf, staleParts } from "../../domain/evidence-stale.ts";
 import { privacyTexts } from "../frame-privacy.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import type { VideoPipeline } from "./video.ts";
@@ -238,6 +239,8 @@ export interface EvidenceStageDeps extends EvidenceDeps {
   videoImage: () => Promise<boolean>;
   /** The video pipeline (stages/video.ts); null or absent when the video image is not on this machine. */
   video?: VideoPipeline | null;
+  /** The paths changed between two commits of the worktree (host git through `at()`); null when they cannot be read. A film is then made again. */
+  changedBetween?: (worktreePath: string, from: string, to: string) => Promise<string[] | null>;
   /** Reads the text on the image files directly in a folder (the video image's `frames --images`); null when it could not run. Absent when there is no video image. */
   scanImages?: (dir: string, signal: AbortSignal) => Promise<{ file: string; text: string }[] | null>;
   /** frame_privacy over the screenshots' text, once, after the pattern check found nothing (`judgePrivacy`); absent, the text is not judged. */
@@ -386,11 +389,30 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     const approvedScenarioList = approvedScenarios(context.approvals);
     const scenarioInputs = facts.scenarios.map((x, i) => ({ text: x.text, criterion: x.criterion, result: packResult(x.result), test: x.test, ...(approvedScenarioList[i]?.id !== undefined ? { id: approvedScenarioList[i]!.id } : {}), layer: approvedScenarioList[i]?.layer ?? null }));
 
+    // 2a. What this head made stale: a pack of another commit keeps what the new commit did not touch (a film above all) and makes the rest again.
+    const approvedList = approvedScenarios(context.approvals);
+    const stepsSha = facts.qaDir ? await hashRegularFile(join(facts.qaDir, "steps.jsonl"), 20 * 1024 * 1024).catch(() => null) : null;
+    const source = { e2eRunId: facts.e2e?.runId ?? null, scenariosKey: scenariosKeyOf(approvedList.map((s) => ({ id: s.id ?? "", title: s.title }))), stepsSha };
+    const previous = task.evidence;
+    let reuse: { video: NonNullable<EvidencePack["video"]>; media: EvidencePack["media"] } | null = null;
+    if (previous && previous.commitSha && previous.commitSha !== commitSha) {
+      const changedPaths = deps.changedBetween && task.worktreePath ? await deps.changedBetween(task.worktreePath, previous.commitSha, commitSha).catch(() => null) : null;
+      const parts = staleParts(previous, { ...source, results: facts.scenarios.map((x) => x.result), changedPaths });
+      await context.emit?.("evidence.stale", { from: previous.commitSha.slice(0, 7), to: commitSha.slice(0, 7), parts }).catch(() => {});
+      // A film that is not stale is copied from the machine's own store of the old commit, never from a container's folder.
+      const oldDir = store.dirFor(task.id, previous.commitSha);
+      const filmFiles = previous.media.filter((m) => (m.kind === "video" || m.kind === "cover" || m.kind === "captions" || m.kind === "audio") && m.url.startsWith(`${oldDir}/`));
+      if (film && !parts.includes("film") && previous.video && previous.format === "video" && filmFiles.some((m) => m.kind === "video")) reuse = { video: previous.video, media: filmFiles };
+    }
+
     // 2b. The film: the pipeline runs on the approved scenarios and the browser run's facts; a person's send-back note re-enters it at the fix.
     let video: EvidencePack["video"] | undefined;
     let filmMedia: EvidencePack["media"] = [];
     let spent: { turns: number; costUsd: number } | undefined;
-    if (film && deps.video) {
+    if (reuse) {
+      video = reuse.video;
+      filmMedia = reuse.media;
+    } else if (film && deps.video) {
       const sentBack = context.approvals.findLast((a) => a.kind === "awaiting_ship" && a.decision === "sent_back");
       const card = task.evidence ? parseNote(sentBack?.reason ?? null) : null;
       const previousRun = card ? await deps.latestFinish(task.id, "evidence") : null;
@@ -506,7 +528,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     });
     // ci_watch's passing finish carries the Verify Report; the pack takes its v2 fields from it when there is one.
     const reported = VerifyReport.safeParse((await deps.latestFinish(task.id, "ci_watch").catch(() => null))?.detail?.report);
-    const assembled = assembleEvidencePack({
+    const assembledBase = assembleEvidencePack({
       task: { title: task.title, description: task.description },
       record: task.record ?? null,
       plan: { rollback: plan?.rollback ?? null, risk: risk.success ? risk.data : null },
@@ -524,6 +546,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       ...(video !== undefined ? { video } : {}),
       now: now(),
     });
+    const assembled: EvidencePack = { ...assembledBase, source };
     // What a script can fix is fixed before the pack is kept (a commit that is not the head is never repaired: this pack's is).
     const checked = packComplete(assembled, commitSha);
     const pack = checked.ok ? assembled : repairPack(assembled, checked.problems).pack;

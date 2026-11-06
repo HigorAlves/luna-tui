@@ -513,6 +513,11 @@ describe("TriageRecord and EvidencePack", () => {
     expect(EvidencePack.parse({ ...evidence, media: [media] }).media[0]).not.toHaveProperty("scanned");
     expect(EvidencePack.parse({ ...evidence, media: [{ ...media, scanned: false }] }).media[0]?.scanned).toBe(false);
   });
+  it("take a source for staleness, optional", () => {
+    expect(EvidencePack.parse(evidence)).not.toHaveProperty("source");
+    const source = { e2eRunId: "run-1", scenariosKey: "k", stepsSha: null };
+    expect(EvidencePack.parse({ ...evidence, source }).source).toEqual(source);
+  });
   it("take a diff summary and a revision, and a pack stored without them still parses", () => {
     const plain = EvidencePack.parse(evidence);
     expect(plain).not.toHaveProperty("diffSummary");

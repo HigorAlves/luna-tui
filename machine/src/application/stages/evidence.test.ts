@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import { type FakeGitHub, fakeGitHub } from "../../test/github.ts";
 import { type GitHub, noTokenGitHub } from "../github.ts";
 import type { EvidencePack } from "@hardness/contracts";
 
+import { scenariosKeyOf } from "../../domain/evidence-stale.ts";
 import { type EvidenceDeps, type EvidenceStageDeps, evidenceRunner, evidenceStage } from "./evidence.ts";
 import { type Learned, tagged } from "../decision-truth.ts";
 import type { VideoInput, VideoOutcome } from "./video.ts";
@@ -359,6 +361,66 @@ describe("evidenceStage", () => {
     await run(taskContext({ record: { ...record, goal } }));
     const pack = (saved[0]![1] as { evidence: { summary: string } }).evidence;
     expect(pack.summary.split(/\s+/).length).toBeLessThanOrEqual(200);
+  });
+
+  describe("when the head moved, only what the new commit made stale is made again", () => {
+    const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+    const failedFilm = { ok: false as const, reason: "no film", degrade: "captures" as const, usage: { turns: 0, costUsd: 0 } };
+    /** A video pack made at an older commit, its film files in the machine's own store for that commit. */
+    function previousFilm() {
+      const dir = join(stateDir, "evidence", "t1", "old1111");
+      mkdirSync(dir, { recursive: true });
+      for (const f of ["walkthrough.mp4", "cover.jpg", "captions.vtt"]) writeFileSync(join(dir, f), `old ${f}`);
+      const video = { file: "walkthrough.mp4", durationS: 60, verdict: "ship" as const, scores: { hook: 9 }, defects: [], rounds: 1 };
+      const media = [
+        { kind: "video" as const, label: "walkthrough.mp4", url: join(dir, "walkthrough.mp4") },
+        { kind: "cover" as const, label: "cover.jpg", url: join(dir, "cover.jpg") },
+        { kind: "captions" as const, label: "captions.vtt", url: join(dir, "captions.vtt") },
+      ];
+      const approved = scenarios.map((x, i) => ({ id: `S${i + 1}`, title: x.title }));
+      return { summary: "s", format: "video", scenarios: scenarios.map((x) => ({ text: x.title, test: null, result: "pass" })), findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "old1111", media, video, at: "2026-11-03T00:00:00.000Z", revision: 1, source: { e2eRunId: "e2e-run", scenariosKey: scenariosKeyOf(approved), stepsSha: sha256("{}\n") } };
+    }
+    const setup = (changed: string[] | null, over: Partial<EvidenceStageDeps> = {}) => {
+      browserRun();
+      const video = vi.fn(async () => failedFilm);
+      const emitted: [string, Record<string, unknown>][] = [];
+      const { run, saved } = stage({ videoImage: async () => true, video, changedBetween: async () => changed, ...over });
+      const ctx = { ...taskContext({ evidence: previousFilm() }), emit: async (k: string, p: Record<string, unknown>) => void emitted.push([k, p]) } as unknown as StageContext;
+      return { run, saved, video, emitted, ctx };
+    };
+
+    it("keeps a film whose scenarios and screens did not change: its files are copied from the old commit's own folder, no video run starts, and evidence.stale says what was remade", async () => {
+      const { run, saved, video, emitted, ctx } = setup(["server/db.ts"]);
+      const result = await run(ctx);
+      expect(result.outcome).toBe("pass");
+      expect(video).not.toHaveBeenCalled();
+      expect(emitted).toEqual([["evidence.stale", { from: "old1111", to: "abc1234", parts: ["text"] }]]);
+      const pack = (saved[0]![1] as { evidence: { format: string; video: { verdict: string }; media: { kind: string; url: string; label: string }[]; source: { e2eRunId: string } } }).evidence;
+      expect(pack.format).toBe("video");
+      expect(pack.video).toMatchObject({ verdict: "ship" });
+      const film = pack.media.find((m) => m.label === "walkthrough.mp4")!;
+      expect(film.url.startsWith(join(stateDir, "evidence", "t1", "abc1234def") + "/")).toBe(true);
+      expect(readFileSync(film.url, "utf8")).toBe("old walkthrough.mp4");
+      expect(pack.source.e2eRunId).toBe("e2e-run");
+    });
+
+    it("makes the film again when a rendered surface changed between the commits, or the paths cannot be read", async () => {
+      for (const changed of [["web/cart.tsx"], null]) {
+        const { run, video, emitted, ctx } = setup(changed);
+        await run(ctx);
+        expect(video).toHaveBeenCalledTimes(1);
+        expect((emitted[0]![1] as { parts: string[] }).parts).toContain("film");
+      }
+    });
+
+    it("entered at the same commit nothing is stale and today's path runs", async () => {
+      browserRun();
+      const emitted: unknown[] = [];
+      const { run } = stage({ videoImage: async () => true, video: vi.fn(async () => failedFilm), changedBetween: async () => [] });
+      const ctx = { ...taskContext({ evidence: { ...previousFilm(), commitSha: "abc1234def" } }), emit: async (k: string) => void emitted.push(k) } as unknown as StageContext;
+      await run(ctx);
+      expect(emitted).toEqual([]);
+    });
   });
 
   describe("publishing and marking ready inside Evidence", () => {
