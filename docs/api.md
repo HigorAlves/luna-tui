@@ -117,3 +117,10 @@ curl -s '127.0.0.1:4317/metrics?groupBy=fingerprint'   # the same, plus one row 
 ```
 
 Give a task a `"repoPath"` so the agents have a repo to work on.
+
+## Change size and stacked cards (wave 15)
+
+- **A task's stack.** `GET /tasks` and `GET /tasks/:id` carry the card's own fields as they are: `splitFrom`, `splitPart` (`{ n, of }`), `splitInto`, `dependsOn`, `base` (`{ card, branch }`), `riskFloor` and `startWhenReady`. They hold ids, numbers and enum values only; a card with none of them shows none. A client's `POST /tasks` cannot set them.
+- **Events** the pipeline alone logs (no container can): `card.split`, `card.child`, `card.held` (`reason`, `waitingOn`, `text`), `card.released`, `size.overridden` and `stack.retargeted`. The ship watch logs `ship.event { kind: "stack", class: "parent_changed" | "parent_merged" }`.
+- **The backlog.** Each entry of `GET /backlog` has `schedulable` and `blockedBy` (`{ id, kind: "card" | "item", state }`). `POST /backlog/:id/promote` of an entry that is not schedulable is `409 not_schedulable` with `blockedBy`; nothing is removed. A promoted card is made with `dependsOn` for its card dependencies, and the other items that named it name the new card.
+- **A ticket's split.** A ticket whose recommendation is `split` gets a draft of kind `split` (`children`, numbered `text`, `created` once approved) and the status `split_proposed`; with no valid split it has no draft, its assessment says `split.failed` and its status is `needs_decision`. `POST /tickets/:key/approve` on the draft creates the child tickets in the origin's own project or repository (a failure partway leaves the draft waiting with `created`; approving again goes on), marks the origin `epic` and posts one comment listing the keys; editing the draft is `409 ticket_refused`. The assessment carries `sizeEstimate` (`estLoc`, `estFiles`, `reviewable`, `confidence`).
