@@ -4,7 +4,7 @@ import { DECISION_ALLOWED, DECISION_DEFAULTS, DecisionDefault, DecisionDefaults,
 
 const allDecisionPacks = Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
 /** Decision packs the host has not measured yet: they run on the built-in engines (`decisionEngines`) and have no entry until a scorecard writes one. */
-const UNMEASURED: string[] = ["ci_failure_class"];
+const UNMEASURED: string[] = [];
 const decisionPacks = allDecisionPacks.filter((id) => !UNMEASURED.includes(id));
 
 describe("decision-defaults.json", () => {

@@ -5,7 +5,7 @@
   "attempt": 1,
   "task": {
     "id": "ci-failure-class",
-    "title": "CI failure: build",
+    "title": "CI failure: e2e (chromium)",
     "description": "",
     "criteria": [],
     "repoPath": "",
@@ -20,8 +20,8 @@
     "check": {
       "kind": "ci",
       "ci": {
-        "job": "build",
-        "log": "error: Your local changes would be overwritten by merge\nsrc/lockfile.yaml: conflict in dependency resolution\nCannot find module './config' imported from src/app.ts"
+        "job": "unit",
+        "log": "Run vitest run --retry=0\n \u00d7 src/search/debounce.test.ts > waits for the user to stop typing 5003ms\n   Error: Test timed out in 5000ms.\n Test Files  1 failed | 211 passed (212)\nTest analytics: this test failed 3 of the last 40 runs on main with the same timeout.\nProcess completed with exit code 1."
       }
     }
   },

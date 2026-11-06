@@ -1,6 +1,6 @@
 # Decision scorecard
 
-Generated 2026-11-05 by `pnpm eval scorecard` from `evals/baselines/<engine>/<pack>.json`. Do not edit by hand: re-run the baselines (docs/runbooks/calibrate-decisions.md).
+Generated 2026-11-06 by `pnpm eval scorecard` from `evals/baselines/<engine>/<pack>.json`. Do not edit by hand: re-run the baselines (docs/runbooks/calibrate-decisions.md).
 
 ## The rule
 
@@ -10,15 +10,18 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 
 | pack | engine | n | accuracy | acted-on accuracy | coverage | Brier | ECE | cost per case | p50 latency | measured at |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ci_failure_class | claude:haiku | 6 | 100% | 100% | 100% | 0.007 | 0.078 | $0.0002 | 1.8s | 2026-11-06 |
+| ci_failure_class | codex:luna | 6 | 100% | 100% | 100% | 0.000 | 0.012 | n/a | 2.7s | 2026-11-06 |
+| ci_failure_class | jev | 6 | 80% | 100% | 83% | 0.040 | 0.110 | $0.0000 | 0.4s | 2026-11-06 |
 | comment_intent | claude:haiku | 4 | 67% | 67% | 100% | 0.222 | 0.193 | $0.0004 | 2.1s | 2026-11-05 |
 | comment_intent | codex:luna | 4 | 67% | 67% | 100% | 0.321 | 0.310 | n/a | 2.5s | 2026-11-05 |
 | comment_intent | jev | 4 | 100% | 100% | 100% | 0.006 | 0.063 | $0.0000 | 0.4s | 2026-11-05 |
 | coverage_check | claude:haiku | 4 | 67% | 67% | 100% | 0.252 | 0.200 | $0.0006 | 3.4s | 2026-11-05 |
 | coverage_check | codex:luna | 4 | 67% | 67% | 100% | 0.325 | 0.318 | n/a | 2.9s | 2026-11-05 |
 | coverage_check | jev | 4 | 33% | 100% | 50% | 0.308 | 0.496 | $0.0000 | 0.4s | 2026-11-05 |
-| e2e_failure_cause | claude:haiku | 4 | 100% | 100% | 75% | 0.020 | 0.130 | $0.0005 | 3.3s | 2026-11-05 |
-| e2e_failure_cause | codex:luna | 4 | 100% | 100% | 75% | 0.000 | 0.010 | n/a | 2.6s | 2026-11-05 |
-| e2e_failure_cause | jev | 4 | 100% | 100% | 50% | 0.161 | 0.257 | $0.0000 | 0.5s | 2026-11-05 |
+| e2e_failure_cause | claude:haiku | 4 | 100% | 100% | 75% | 0.007 | 0.080 | $0.0005 | 3.2s | 2026-11-06 |
+| e2e_failure_cause | codex:luna | 4 | 100% | 100% | 75% | 0.000 | 0.013 | n/a | 2.5s | 2026-11-06 |
+| e2e_failure_cause | jev | 4 | 100% | 100% | 50% | 0.189 | 0.270 | $0.0000 | 0.4s | 2026-11-06 |
 | escalation_reason | claude:haiku | 4 | 100% | 100% | 75% | 0.028 | 0.167 | $0.0004 | 2.2s | 2026-11-05 |
 | escalation_reason | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.017 | n/a | 2.8s | 2026-11-05 |
 | escalation_reason | jev | 4 | 100% | 100% | 75% | 0.006 | 0.050 | $0.0000 | 0.5s | 2026-11-05 |
@@ -31,9 +34,9 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | evidence_valid | claude:haiku | 4 | 100% | 100% | 100% | 0.037 | 0.177 | $0.0005 | 4.2s | 2026-11-05 |
 | evidence_valid | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.017 | n/a | 2.4s | 2026-11-05 |
 | evidence_valid | jev | 4 | 33% | 100% | 25% | 0.036 | 0.180 | $0.0000 | 0.4s | 2026-11-05 |
-| finding_classify | claude:haiku | 4 | 100% | 100% | 75% | 0.006 | 0.073 | $0.0004 | 2.0s | 2026-11-05 |
-| finding_classify | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.010 | n/a | 2.4s | 2026-11-05 |
-| finding_classify | jev | 4 | 67% | 100% | 50% | 0.128 | 0.217 | $0.0000 | 0.4s | 2026-11-05 |
+| finding_classify | claude:haiku | 4 | 100% | 100% | 75% | 0.004 | 0.063 | $0.0005 | 1.9s | 2026-11-06 |
+| finding_classify | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.010 | n/a | 3.4s | 2026-11-06 |
+| finding_classify | jev | 4 | 67% | 100% | 50% | 0.137 | 0.223 | $0.0000 | 0.4s | 2026-11-06 |
 | fix_scope | claude:haiku | 4 | 100% | 100% | 75% | 0.062 | 0.207 | $0.0005 | 2.0s | 2026-11-05 |
 | fix_scope | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.010 | n/a | 2.4s | 2026-11-05 |
 | fix_scope | jev | 4 | 67% | 100% | 50% | 0.013 | 0.083 | $0.0000 | 0.4s | 2026-11-05 |
@@ -60,6 +63,7 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 
 | pack | default | why |
 | --- | --- | --- |
+| ci_failure_class | jev | jev: acted-on accuracy 1.00 at coverage 0.83 (n 6), a tie within 2 points that goes to Jev, the cheapest |
 | comment_intent | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 4) |
 | coverage_check | claude:haiku | claude:haiku: acted-on accuracy 0.67 at coverage 1.00 (n 4), a tie within 2 points settled by cost |
 | e2e_failure_cause | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |

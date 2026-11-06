@@ -4,6 +4,7 @@
   "packs": 41,
   "images": 3,
   "decisionDefaults": {
+    "ci_failure_class": "jev",
     "comment_intent": "jev",
     "coverage_check": "claude:haiku",
     "e2e_failure_cause": "claude:haiku",
