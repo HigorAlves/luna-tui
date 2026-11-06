@@ -3,15 +3,15 @@
   "pack": "red_check",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T20:11:09.706Z",
+  "at": "2026-11-05T22:46:01.865Z",
   "model": "gpt-6-luna-fast",
   "summary": {
     "cases": 6,
-    "passed": 5,
-    "passRate": 0.8333333333333334,
+    "passed": 6,
+    "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2445.3333333333335,
+    "meanDurationMs": 2528,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
@@ -20,9 +20,9 @@
       "accuracy": 1,
       "actedOnAccuracy": 1,
       "coverage": 1,
-      "brier": 0.0008200000000000015,
-      "ece": 0.019999999999999907,
-      "meanConfidence": 0.9733333333333333,
+      "brier": 0.004930000000000002,
+      "ece": 0.039999999999999813,
+      "meanConfidence": 0.9466666666666667,
       "overconfident": 0
     }
   },
@@ -44,12 +44,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2482,
+      "durationMs": 2323,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.985,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     },
@@ -75,12 +75,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2510,
+      "durationMs": 2182,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.985,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     },
@@ -101,7 +101,7 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2579,
+      "durationMs": 2340,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
@@ -112,7 +112,7 @@
     },
     {
       "id": "red-undefined-is-not-a-function",
-      "pass": false,
+      "pass": true,
       "schema": {
         "check": "answer on the red_check schema",
         "pass": true,
@@ -121,18 +121,18 @@
       "checks": [
         {
           "check": "right_reason.p within 0.55..0.95",
-          "pass": false,
-          "detail": "found 0.96"
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2269,
+      "durationMs": 2587,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.94,
+        "confidence": 0.88,
         "verdict": "proceed"
       }
     },
@@ -153,12 +153,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2469,
+      "durationMs": 2997,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.995,
+        "confidence": 0.845,
         "verdict": "proceed"
       }
     },
@@ -179,12 +179,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2363,
+      "durationMs": 2739,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.94,
+        "confidence": 0.98,
         "verdict": "proceed"
       }
     }

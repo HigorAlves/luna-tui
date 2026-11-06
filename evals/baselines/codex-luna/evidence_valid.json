@@ -3,7 +3,7 @@
   "pack": "evidence_valid",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T12:10:24.504Z",
+  "at": "2026-11-05T22:48:01.015Z",
   "model": "gpt-6-luna-fast",
   "summary": {
     "cases": 4,
@@ -11,7 +11,7 @@
     "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2356.5,
+    "meanDurationMs": 2065.5,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
@@ -20,9 +20,9 @@
       "accuracy": 1,
       "actedOnAccuracy": 1,
       "coverage": 1,
-      "brier": 0.0003000000000000005,
-      "ece": 0.016666666666666607,
-      "meanConfidence": 0.9825,
+      "brier": 0.00020000000000000033,
+      "ece": 0.013333333333333308,
+      "meanConfidence": 0.96,
       "overconfident": 0
     }
   },
@@ -44,7 +44,7 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2567,
+      "durationMs": 1986,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
@@ -70,7 +70,7 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2363,
+      "durationMs": 2065,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
@@ -91,17 +91,17 @@
         {
           "check": "validity.confidence within 0..0.85",
           "pass": false,
-          "detail": "found 0.98"
+          "detail": "found 0.88"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2403,
+      "durationMs": 2062,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.98,
+        "confidence": 0.88,
         "verdict": "proceed"
       }
     },
@@ -122,12 +122,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2093,
+      "durationMs": 2149,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.98,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     }

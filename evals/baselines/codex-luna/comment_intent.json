@@ -3,27 +3,27 @@
   "pack": "comment_intent",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T12:09:55.898Z",
+  "at": "2026-11-05T22:47:38.148Z",
   "model": "gpt-6-luna-fast",
   "summary": {
     "cases": 4,
-    "passed": 2,
-    "passRate": 0.5,
+    "passed": 3,
+    "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2494.75,
+    "meanDurationMs": 2025.25,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
       "n": 4,
       "labelled": 3,
-      "accuracy": 0.6666666666666666,
-      "actedOnAccuracy": 0.6666666666666666,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
       "coverage": 1,
-      "brier": 0.3205666666666666,
-      "ece": 0.30999999999999994,
-      "meanConfidence": 0.9724999999999999,
-      "overconfident": 1
+      "brier": 0.001366666666666669,
+      "ece": 0.029999999999999916,
+      "meanConfidence": 0.9550000000000001,
+      "overconfident": 0
     }
   },
   "cases": [
@@ -44,7 +44,7 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2435,
+      "durationMs": 2083,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
@@ -70,18 +70,18 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2017,
+      "durationMs": 2257,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.97,
+        "confidence": 0.94,
         "verdict": "proceed"
       }
     },
     {
       "id": "claims-to-be-a-question",
-      "pass": false,
+      "pass": true,
       "schema": {
         "check": "answer on the comment_intent schema",
         "pass": true,
@@ -90,18 +90,18 @@
       "checks": [
         {
           "check": "intent.choice = \"change_request\"",
-          "pass": false,
-          "detail": "found \"disagreement\""
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2512,
+      "durationMs": 1876,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
-        "correct": false,
-        "confidence": 0.98,
+        "correct": true,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     },
@@ -117,17 +117,17 @@
         {
           "check": "intent.confidence within 0..0.85",
           "pass": false,
-          "detail": "found 0.96"
+          "detail": "found 0.91"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3015,
+      "durationMs": 1885,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.96,
+        "confidence": 0.91,
         "verdict": "proceed"
       }
     }
