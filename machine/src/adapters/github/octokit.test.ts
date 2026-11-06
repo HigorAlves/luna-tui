@@ -285,6 +285,12 @@ describe("OctokitGitHub: shipping", () => {
     expect(all).toHaveLength(1);
   });
 
+  it("reads each thread comment with its author's association", async () => {
+    const { github, calls } = stub({ graphql: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "T1", isResolved: false, path: "a.ts", line: 3, comments: { nodes: [{ author: { login: "bo" }, authorAssociation: "MEMBER", body: "x", createdAt: "t" }, { author: null, body: "y", createdAt: "t2" }] } }] } } } } });
+    expect(await github.prThreads("o/a", 3)).toEqual([{ id: "T1", path: "a.ts", line: 3, comments: [{ author: "bo", body: "x", at: "t", association: "MEMBER" }, { author: "ghost", body: "y", at: "t2", association: null }] }]);
+    expect(String((calls[0]![1] as { query: string }).query)).toContain("authorAssociation");
+  });
+
   it("lists the files of a PR with the previous name of a renamed one", async () => {
     const { github } = stub({ "pulls.listFiles": [{ filename: "src/n.test.ts", previous_filename: ".github/CODEOWNERS", additions: 1, deletions: 0 }, { filename: "src/a.ts", additions: 2, deletions: 1 }] });
     expect(await github.prFiles("o/a", 7)).toEqual([

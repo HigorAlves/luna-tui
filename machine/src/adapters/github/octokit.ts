@@ -70,7 +70,7 @@ export const DIFF_TAIL_CHARS = 200_000;
 const THREADS_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
     reviewThreads(first:100){nodes{ id isResolved path line
-      comments(first:50){nodes{author{login} body createdAt}} }} } } }`;
+      comments(first:50){nodes{author{login} authorAssociation body createdAt}} }} } } }`;
 const REPLY_MUTATION = `mutation($threadId:ID!,$body:String!){
   addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId,body:$body}){comment{id}} }`;
 const ENQUEUE_MUTATION = `mutation($id:ID!,$sha:GitObjectID){ enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha}){ mergeQueueEntry{id} } }`;
@@ -181,7 +181,7 @@ export class OctokitGitHub implements GitHub {
                 isResolved: boolean;
                 path: string | null;
                 line: number | null;
-                comments: { nodes: Array<{ author: { login: string } | null; body: string; createdAt: string }> };
+                comments: { nodes: Array<{ author: { login: string } | null; authorAssociation?: string | null; body: string; createdAt: string }> };
               }>;
             };
           } | null;
@@ -195,7 +195,7 @@ export class OctokitGitHub implements GitHub {
         id: t.id,
         path: t.path ?? null,
         line: t.line ?? null,
-        comments: t.comments.nodes.map((c) => ({ author: c.author?.login ?? "ghost", body: c.body, at: c.createdAt })),
+        comments: t.comments.nodes.map((c) => ({ author: c.author?.login ?? "ghost", body: c.body, at: c.createdAt, association: c.authorAssociation ?? null })),
       }));
   }
 
