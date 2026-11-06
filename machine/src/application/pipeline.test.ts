@@ -399,6 +399,21 @@ describe("what a person does after an escalation", () => {
     expect((await p.events(id)).filter((e) => e.kind === "escalation.corrected")).toEqual([expect.objectContaining({ payload: expect.objectContaining({ from: "flaky_tests", to: "env_broken" }) })]);
   });
 
+  it("a card resumed with no correction confirms the reason the machine gave, as an outcome; a correction first leaves the person's word alone", async () => {
+    learned.length = 0;
+    const plain = make();
+    const id = await escalatedCard(plain);
+    await plain.decide(id, "approved");
+    expect(learned).toEqual([expect.objectContaining({ pack: "escalation_reason", recordId: "rec-9", label: { reason: { choice: "flaky_tests" } }, source: "escalation_resumed", kind: "outcome", taskId: id })]);
+    learned.length = 0;
+    const corrected = make();
+    const other = await escalatedCard(corrected);
+    await corrected.correctEscalationReason(other, "env_broken");
+    learned.length = 0;
+    await corrected.decide(other, "approved");
+    expect(learned).toEqual([]);
+  });
+
   it("takes the enum only, and only at an escalated gate", async () => {
     const p = make();
     const id = await escalatedCard(p);

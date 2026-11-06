@@ -160,6 +160,29 @@ describe("build checks", () => {
     expect(await c.lastJudged()).toEqual(["unrelated_refactor"]);
   });
 
+  it("teaches scope_check from the diff by script: a TODO the diff added says no_todo was false, on the record the check left", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const learned: Learned[] = [];
+    const decide: Decide = async () => tagged({ answer: { planned_or_declared: yes(), no_new_dependency: yes(), no_secret_or_pii: yes(), no_test_removed: yes(), no_todo: yes(), unrelated_refactors: yes() }, recordId: "rec-scope" });
+    const c = checks(out, decide, { truth: { learned: async (fact) => (learned.push(fact), true) }, taskId: "task-1" });
+    await c.onScopeRequest({ diffSummary: "x", outOfMap: [] });
+    expect(learned).toEqual([{ pack: "scope_check", recordId: "rec-scope", label: { no_todo: { value: false } }, kind: "fact", source: "scope_facts", taskId: "task-1" }]);
+  });
+
+  it("teaches nothing when the diff holds no finding, when the check left no record, or when the diff cannot be read", async () => {
+    const clean = { nameStatus: async () => "M\tsrc/a.ts", diff: async () => "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n+const a = 1;" };
+    for (const [over, decide] of [
+      [{ git: clean }, async () => tagged({ answer: {}, recordId: "r" })],
+      [{}, async () => ({ planned_or_declared: yes() })],
+      [{ git: { nameStatus: async () => "", diff: async () => { throw new Error("no git"); } } }, async () => tagged({ answer: {}, recordId: "r" })],
+    ] as const) {
+      const learned: Learned[] = [];
+      const c = checks(mkdtempSync(join(tmpdir(), "build-checks-")), decide as Decide, { ...over, truth: { learned: async (fact) => (learned.push(fact), true) }, taskId: "t" });
+      await c.onScopeRequest({ diffSummary: "x", outOfMap: [] });
+      expect(learned).toEqual([]);
+    }
+  });
+
   it("answers skipped when no decision can run, or the decision throws", async () => {
     for (const decide of [null, (async () => { throw new Error("no jev"); }) as Decide]) {
       const out = mkdtempSync(join(tmpdir(), "build-checks-"));

@@ -28,7 +28,7 @@ import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } 
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
 import { type RunSpan, type Telemetry, noTelemetry } from "./telemetry.ts";
-import { type DecisionTruth, findingTruth, planTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
+import { type DecisionTruth, escalationResumedTruth, findingTruth, planTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
 import { fallbackCandidates } from "../domain/engine-choice.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
@@ -1533,6 +1533,7 @@ export class Pipeline {
     const escalated = before.state === "escalated" && !options.auto ? (await this.approvals(id)).find((a) => a.kind === "escalated" && a.decision === null) : undefined;
     const moved = await this.decideNow(id, wanted, reason, response, options);
     if (escalated) await this.keepEscalationTruth(moved, escalated.id);
+    if (escalated) await this.confirmEscalationReason(id, escalated);
     return moved;
   }
 
@@ -1862,6 +1863,20 @@ export class Pipeline {
       await this.log(task.id, "ground_truth.written", { path: await this.groundTruth(task, approval) });
     } catch (error) {
       await this.log(task.id, "ground_truth.failed", { error: error instanceof Error ? error.message : String(error) }).catch(() => {});
+    }
+  }
+
+  /** A person resumed the card and never corrected the reason the machine decided: that confirms it, as an outcome (a later correction, or a correction already made, outranks it). Never throws. */
+  private async confirmEscalationReason(id: string, gate: ApprovalRow): Promise<void> {
+    try {
+      if (!this.truth) return;
+      const decided = objectOf(gate.requested.escalationDecision);
+      if (typeof decided?.recordId !== "string" || typeof decided.reason !== "string") return;
+      if ((await this.events(id)).some((e) => e.kind === "escalation.corrected" && e.payload.approval === gate.id)) return;
+      const derived = escalationResumedTruth(decided.reason);
+      await this.truth.learned({ pack: "escalation_reason", recordId: decided.recordId, label: derived.label, kind: derived.kind, source: derived.source, taskId: id });
+    } catch {
+      // Ground truth never blocks a resume.
     }
   }
 

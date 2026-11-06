@@ -11,6 +11,7 @@ import { exec } from "../../adapters/process/exec.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type Check, type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import { type CiFact, type TruthSink, ciClassTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import { pushBranch } from "./deliver.ts";
 
@@ -38,6 +39,10 @@ export interface CiDeps {
   rebase?: (exec: GitExec, worktreePath: string, repoPath: string) => Promise<RebaseResult>;
   /** Runs ci_failure_class on a failing job and its log tail; null (or absent) leaves the class to the investigator, as before. Read at call time. */
   decide?: Decide | null;
+  /** Where a fact that settles the class is written (`ci_failure_class`'s truth); absent, nothing is learned. */
+  truth?: TruthSink;
+  /** The last red this card's CI stage judged: its record and the failing job; a green after a Build fix confirms it was a real failure. */
+  lastRed?: (taskId: string) => Promise<{ recordId: string; job: string } | null>;
   /** The repository's `verify.ci_flaky_reruns` and `verify.auto_rebase`, and its decision overrides; one re-run and one rebase when absent. */
   policy?: (repoPath: string | null) => Promise<{ reruns: number; autoRebase: number; decisions?: Record<string, DecisionOverrides> }>;
   pollMs?: number;
@@ -167,6 +172,15 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
         checks,
       },
     });
+    /** Tells the decision log what a later fact says the class should have been; never throws. */
+    const teach = async (recordId: string | undefined, fact: CiFact): Promise<void> => {
+      if (!recordId || !deps.truth) return;
+      const derived = ciClassTruth(fact);
+      await deps.truth.learned({ pack: "ci_failure_class", recordId, label: derived.label, kind: derived.kind, source: derived.source, taskId: task.id }).catch(() => {});
+    };
+    // A rerun or a rebase in this round: a green after one of them is not a Build fix's doing.
+    let acted = false;
+
     let rebased = false;
     /** The checks as they stand: `judge`'s own parameter shadows the variable a rebase refreshes. */
     const current = (): Check[] => checks;
@@ -204,7 +218,12 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
         return { outcome: "pass", detail: { step: "checks", checks, note: "no CI checks are configured on this PR" } };
       }
       const failed = failedOf(checks);
-      if (failed.length === 0) return { outcome: "pass", detail: { step: "checks", checks } };
+      if (failed.length === 0) {
+        // Green after a Build fix: the red the last round named was a real failure, if it was the same job.
+        const before = acted || rebased || !deps.lastRed ? null : await deps.lastRed(task.id).catch(() => null);
+        if (before) await teach(before.recordId, "fixed");
+        return { outcome: "pass", detail: { step: "checks", checks } };
+      }
 
       // Red: what kind of red is a typed decision on the failing job and its log; only a real failure asks the investigator for the fix.
       const ci = await gather(checks, failed);
@@ -215,20 +234,26 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
         : null;
       const choice = (asked?.answer?.class as { choice?: unknown } | undefined)?.choice;
       const kind = asked && (asked.verdict === "proceed" || asked.verdict === "flag") && (choice === "real" || choice === "flake" || choice === "infra" || choice === "drift") ? choice : null;
+      const classFacts = asked?.recordId ? { classRecord: asked.recordId, classJob: safe(failed[0]?.name ?? "").slice(0, 200) } : {};
       const person = (reason: string, escalation: "flaky_tests" | "env_broken" | "other", options: string[]): StageResult => ({
         outcome: "escalated",
-        detail: { step: "checks", verdict: kind === "flake" ? "flake" : "infra", class: kind, summary: reason, reason, options, checks, escalation },
+        detail: { step: "checks", verdict: kind === "flake" ? "flake" : "infra", class: kind, summary: reason, reason, options, checks, escalation, ...classFacts },
       });
       if (kind === "infra") return person("the failure is in the CI infrastructure or its environment, not in the change", "env_broken", ["fix the runner or the service, then re-run CI and approve", "re-run the failed jobs by hand"]);
       if (kind === "drift") {
         if (rebased || settings.autoRebase < 1) return person("the base branch moved under the change and the branch was not rebased automatically", "other", ["rebase the branch by hand and approve", "merge the default branch into the branch and approve"]);
         const failedRebase = await rebaseAndWatch();
         if (failedRebase) return failedRebase;
-        return judge(current());
+        acted = true;
+        const after = await judge(current());
+        // Green after nothing but the rebase: the base had moved.
+        if (after.outcome === "pass") await teach(asked?.recordId, "rebased");
+        return after;
       }
       if (kind === "flake") {
         const runId = failed.map(runIdOf).find(Boolean);
         for (let round = 0; runId && round < settings.reruns; round++) {
+          acted = true;
           try {
             await deps.github.rerunFailedJobs(slug, runId);
           } catch (error) {
@@ -238,8 +263,12 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
           const stoppedNext = stopped(next);
           if (stoppedNext) return stoppedNext;
           checks = (next as { checks: Check[] }).checks;
-          if (failedOf(checks).length === 0) return { outcome: "pass", detail: { step: "checks", verdict: "flake", class: "flake", checks, note: "flake, re-run passed" } };
+          if (failedOf(checks).length === 0) {
+            await teach(asked?.recordId, "rerun_passed");
+            return { outcome: "pass", detail: { step: "checks", verdict: "flake", class: "flake", checks, note: "flake, re-run passed" } };
+          }
         }
+        if (runId && settings.reruns > 0) await teach(asked?.recordId, "rerun_red");
         return person(`a flaky failure that stayed red after ${settings.reruns} re-run${settings.reruns === 1 ? "" : "s"}`, "flaky_tests", ["look at the failing job's log and fix or quarantine the test, then approve", "re-run the failed jobs by hand"]);
       }
       const pack = await deps.runPack(context, ci);
@@ -254,7 +283,7 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
       const fixable = (note?: string): StageResult => ({
         ...base,
         outcome: "fail",
-        detail: { step: "checks", verdict: "fixable", summary, findings, checks, ...(kind ? { class: kind } : {}), ...(note ? { note } : {}) },
+        detail: { step: "checks", verdict: "fixable", summary, findings, checks, ...(kind ? { class: kind } : {}), ...classFacts, ...(note ? { note } : {}) },
         findings,
       });
 

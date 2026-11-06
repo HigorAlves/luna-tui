@@ -6,7 +6,8 @@ import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 
-import { type TruthSink, redCheckTruth } from "../decision-truth.ts";
+import { type TruthSink, redCheckTruth, scopeFactsTruth } from "../decision-truth.ts";
+import { scopeFacts as diffFacts } from "../../domain/scope-facts.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import type { CardHit } from "../../domain/card-search.ts";
 import { type AddedLine, type ScopeFacts, addedLinesOf, removedLinesOf, sanitizeFacts, scopeFacts } from "../../domain/scope.ts";
@@ -323,6 +324,16 @@ export function buildChecks(deps: BuildChecksDeps) {
         ? await judge("scope_check", { kind: "scope", planned: deps.planned, ...facts, declared: request.outOfMap, diffSummary: request.diffSummary })
         : { verdict: "skipped", problems: [] };
       verdict = answer.verdict;
+      // The diff answers four of the six questions by script; a "no" it found says what the answer should have been.
+      const scopeRecord = facts ? lastRecord : undefined;
+      if (scopeRecord && deps.truth) {
+        try {
+          const derived = scopeFactsTruth(diffFacts(await deps.git.diff(deps.inputCommit!, "HEAD")));
+          if (derived) await deps.truth.learned({ pack: "scope_check", recordId: scopeRecord, label: derived.label, kind: derived.kind, source: derived.source, ...(deps.taskId ? { taskId: deps.taskId } : {}) });
+        } catch (error) {
+          log(`build checks: scope truth skipped: ${(error as Error).message}`);
+        }
+      }
       judgedKinds = answer.problems.some((p) => p.includes("unrelated refactor")) ? ["unrelated_refactor"] : [];
       await write("scope.json", { ...answer, ...(facts ? { facts } : {}) });
     },

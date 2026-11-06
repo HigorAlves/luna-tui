@@ -203,7 +203,7 @@ export interface FixInput {
 
 export type FixOutcome =
   | { ok: true; head: string; changed: boolean; textNote?: string; affected?: Array<{ id: string; text: string; result: string }>; replied: number; resolved: number; repliedTo: string[]; resolvedTo: string[]; summary: string; note?: string }
-  | { ok: false; result: StageResult };
+  | { ok: false; result: StageResult; checksFailed?: boolean };
 
 const reasonOf = (result: StageResult): string => {
   const d = result.detail ?? {};
@@ -279,7 +279,9 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   const checked = deps.loop.checks ? await deps.loop.checks(subContext(ctxWork, `checks-${input.label}`), before) : null;
   if (!checked) return stop(escalated("no checks runner is wired to prove the fix"));
   if (checked.outcome !== "pass") {
-    return stop(escalated(`the checks failed after the fix: ${reasonOf(checked)}`, "other", { findings: (checked.detail?.findings as Finding[] | undefined) ?? checked.findings ?? [] }));
+    // `checksFailed` is a fact the caller may teach fix_scope with: the fix was not as local as it was judged.
+    const stopped = await stop(escalated(`the checks failed after the fix: ${reasonOf(checked)}`, "other", { findings: (checked.detail?.findings as Finding[] | undefined) ?? checked.findings ?? [] }));
+    return stopped.ok ? stopped : { ...stopped, checksFailed: true };
   }
   let reviewedFindings: unknown[] | undefined;
   if (input.scope === "re_verify_partial") {

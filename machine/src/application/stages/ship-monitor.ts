@@ -28,7 +28,7 @@ import { buildPr, mergePrSection } from "../../domain/prbody.ts";
 import { approvedPlan } from "../../domain/stage-input.ts";
 import { prExtraOf, pushBranch } from "./deliver.ts";
 import { FACTORY_DEFAULTS } from "@hardness/contracts";
-import { type TruthSink, commentIntentTruth, eventClassTruth } from "../decision-truth.ts";
+import { type TruthSink, commentIntentTruth, eventClassTruth, fixScopeTruth } from "../decision-truth.ts";
 import { type EvidenceHandle, type FixDeps, type ReviewLoop, SECRET_REASON, carriesSecret, escalated, fixRound, headOfWorktree, judgeShip, postable, resetTo, restampPack, subContext } from "./ship-fixes.ts";
 
 const DAY_MS = 86_400_000;
@@ -259,7 +259,12 @@ export async function settleDecisions(deps: Pick<ShipMonitorDeps, "github" | "tr
   const open = await deps.github.prThreads(slug, number).catch(() => null);
   for (const d of pending) {
     if (d.pack === "event_class") await deps.truth.learned({ pack: "event_class", recordId: d.recordId, label: eventClassTruth(d.further === true), kind: "outcome", source: "pr_merged", taskId });
-    else if (open && d.threadId && !(cursor.resolvedByMachine ?? []).includes(d.threadId) && !open.some((t) => t.id === d.threadId)) await deps.truth.learned({ pack: "comment_intent", recordId: d.recordId, label: commentIntentTruth(d.choice as "question" | "change_request"), kind: "outcome", source: "thread_resolved", taskId });
+    else if (d.pack === "fix_scope") {
+      // The round ended as answered and the PR merged: confirmed unless a person reopened the thread (still open now).
+      const reopened = d.threadId !== undefined && d.threadId !== "ci" && open !== null && open.some((t) => t.id === d.threadId);
+      const derived = open === null ? null : fixScopeTruth(d.choice, { merged: true, reopened });
+      if (derived) await deps.truth.learned({ pack: "fix_scope", recordId: d.recordId, label: derived.label, kind: derived.kind, source: derived.source, taskId });
+    } else if (open && d.threadId && !(cursor.resolvedByMachine ?? []).includes(d.threadId) && !open.some((t) => t.id === d.threadId)) await deps.truth.learned({ pack: "comment_intent", recordId: d.recordId, label: commentIntentTruth(d.choice as "question" | "change_request"), kind: "outcome", source: "thread_resolved", taskId });
   }
   cursor.decisions = [];
   await saveCursor(deps.stateDir, taskId, cursor);
@@ -375,14 +380,14 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       if (sized.choice === "re_plan") return { result: replan(thread, ship.comment!.reading?.asks) };
       if (sized.choice !== "in_place" && sized.choice !== "re_verify_partial") return { result: escalated(`a change request needs a person: ${quoted(thread)}`) };
       const scope = sized.choice;
-      const fixed = await fix({ id: thread.id, threads: [instructable], scope, summary: `${thread.path ?? "the PR"}: ${plain(a.body, 120)}`, postReplies: !topLevel, quote: quoted(thread), topLevel, named }, pack);
+      const fixed = await fix({ ...(sized.recordId ? { scopeRecord: sized.recordId } : {}), id: thread.id, threads: [instructable], scope, summary: `${thread.path ?? "the PR"}: ${plain(a.body, 120)}`, postReplies: !topLevel, quote: quoted(thread), topLevel, named }, pack);
       if (fixed.moved && intent.choice === "change_request" && intent.recordId) cursor.decisions = [...(cursor.decisions ?? []), { pack: "comment_intent", recordId: intent.recordId, choice: "change_request", threadId: thread.id }];
       return fixed;
     };
 
     /** One bounded fix round; the counters are spent before it runs, so a crash cannot loop. */
     const fix = async (
-      round: { id: string; threads: Array<NonNullable<Awaited<ReturnType<GitHub["prThreads"]>>>[number]>; scope: "in_place" | "re_verify_partial"; summary: string; postReplies: boolean; quote: string; topLevel?: boolean; named?: string[] },
+      round: { scopeRecord?: string; id: string; threads: Array<NonNullable<Awaited<ReturnType<GitHub["prThreads"]>>>[number]>; scope: "in_place" | "re_verify_partial"; summary: string; postReplies: boolean; quote: string; topLevel?: boolean; named?: string[] },
       pack: EvidencePack | null,
     ): Promise<Outcome> => {
       if ((cursor.threads[round.id]?.fixRounds ?? 0) >= MAX_THREAD_FIX_ROUNDS) return { result: escalated(`third round trip on ${round.quote}`) };
@@ -390,7 +395,14 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       cursor.fixRounds++;
       await bump(round.id, { fixRounds: 1 });
       const out = await fixRound(fixDeps(), context, { slug, number, threads: round.threads, scope: round.scope, threadSummary: round.summary, label: String(cursor.fixRounds), postReplies: round.postReplies, pack, named: round.named ?? [] });
-      if (!out.ok) return { result: out.result };
+      if (!out.ok) {
+        // An in-place fix whose checks failed was wider than judged: a fact about the scope answer.
+        const derived = out.checksFailed && round.scopeRecord ? fixScopeTruth(round.scope, { checksFailed: true }) : null;
+        if (derived && deps.truth) await deps.truth.learned({ pack: "fix_scope", recordId: round.scopeRecord!, label: derived.label, kind: derived.kind, source: derived.source, taskId: task.id }).catch(() => {});
+        return { result: out.result };
+      }
+      // The round ended as answered: the PR's merge, with no reopened thread, is what confirms it.
+      if (round.scopeRecord) cursor.decisions = [...(cursor.decisions ?? []), { pack: "fix_scope", recordId: round.scopeRecord, choice: round.scope, threadId: round.id }];
       if (out.resolvedTo.length > 0) cursor.resolvedByMachine = [...new Set([...(cursor.resolvedByMachine ?? []), ...out.resolvedTo])];
       if (out.replied > 0) await bump(round.id, { replies: out.replied });
       if (out.note) await note(`a reply could not be posted: ${out.note}`);
@@ -484,7 +496,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       if (!sizedCi.ok) return { result: escalated(`a red CI needs a person (${sizedCi.reason}): ${plain(summary, 200)}`) };
       if (sizedCi.choice === "re_plan") return { result: replan(ciShip.comment!.thread) };
       if (sizedCi.choice !== "in_place" && sizedCi.choice !== "re_verify_partial") return { result: escalated(`a red CI needs a person: ${plain(summary, 200)}`) };
-      return fix({ id: "ci", threads: [synthetic], scope: sizedCi.choice, summary: `CI: ${plain(summary || "a failing check", 120)}`, postReplies: false, quote: `CI: ${plain(summary, 200)}` }, pack);
+      return fix({ ...(sizedCi.recordId ? { scopeRecord: sizedCi.recordId } : {}), id: "ci", threads: [synthetic], scope: sizedCi.choice, summary: `CI: ${plain(summary || "a failing check", 120)}`, postReplies: false, quote: `CI: ${plain(summary, 200)}` }, pack);
     };
 
     /**

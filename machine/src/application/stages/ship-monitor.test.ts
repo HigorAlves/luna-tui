@@ -497,6 +497,42 @@ describe("decision truth at the merge", () => {
     expect(told.filter((t) => t.pack === "comment_intent")).toHaveLength(resolve ? 0 : 1);
   });
 
+  describe("fix_scope truth", () => {
+    const taught = (told: Learned[]) => told.filter((t) => t.pack === "fix_scope").map((t) => [t.recordId, t.label, t.source, t.kind, t.taskId]);
+    const tag = (world: ReturnType<typeof loopWorld>) => {
+      const decide = world.loop.decide!;
+      world.loop.decide = async (pack, ship, repo) => tagged({ answer: await decide(pack, ship, repo), recordId: `rec-${pack}` });
+    };
+
+    it("an in-place fix whose checks failed says the scope was wider: re_verify_partial or re_plan, a fact", async () => {
+      const told: Learned[] = [];
+      const world = loopWorld({ choices: { comment_intent: "change_request", fix_scope: "in_place" }, checks: { outcome: "fail", detail: {} } });
+      tag(world);
+      const { run } = review(world, { prThreads: async () => [threadOf()] }, [commentAct()], { truth: { learned: async (fact: Learned) => (told.push(fact), true) } });
+      await run();
+      expect(taught(told)).toEqual([["rec-fix_scope", { scope: { choice: ["re_verify_partial", "re_plan"] } }, "fix_round", "fact", "t1"]]);
+    });
+
+    it("a round that ended as answered and merged with no reopened thread confirms the answer, as an outcome", async () => {
+      const told: Learned[] = [];
+      const world = loopWorld({ choices: { comment_intent: "change_request", fix_scope: "in_place" } });
+      tag(world);
+      let threads = 0;
+      const { run } = review(world, { prThreads: async () => (++threads === 1 ? [threadOf()] : []) }, [commentAct()], { truth: { learned: async (fact: Learned) => (told.push(fact), true) } });
+      await run();
+      expect(taught(told)).toEqual([["rec-fix_scope", { scope: { choice: "in_place" } }, "fix_round", "outcome", "t1"]]);
+    });
+
+    it("says nothing when the thread was reopened, that is still open at the merge", async () => {
+      const told: Learned[] = [];
+      const world = loopWorld({ choices: { comment_intent: "change_request", fix_scope: "in_place" } });
+      tag(world);
+      const { run } = review(world, { prThreads: async () => [threadOf()] }, [commentAct()], { truth: { learned: async (fact: Learned) => (told.push(fact), true) } });
+      await run();
+      expect(taught(told)).toEqual([]);
+    });
+  });
+
   it.each([true, false])("writes %s-activity truth onto event_class at the merge: comment when a person spoke after the event, noise when nobody did", async (later) => {
     const noise = async (pack: string) => tagged({ answer: { event: { choice: "noise", confidence: 0.95 } }, recordId: `rec-${pack}` });
     const told: Learned[] = [];

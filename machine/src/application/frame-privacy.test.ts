@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { type Learned, tagged } from "./decision-truth.ts";
 import { judgePrivacy, privacyTexts } from "./frame-privacy.ts";
 
 const answer = (choice: string, confidence: number) => ({ exposure: { choice, confidence } });
@@ -33,5 +34,34 @@ describe("judgePrivacy", () => {
     const decide = ask(answer("none", 0.9));
     await judgePrivacy(decide, {}, ["Cart"], "/repo");
     expect(decide).toHaveBeenCalledWith("frame_privacy", { kind: "frames", frames: { texts: ["Cart"] } }, "/repo");
+  });
+});
+
+describe("judgePrivacy teaches frame_privacy", () => {
+  // A token-shaped string built at runtime: GitHub's push protection reads source files.
+  const token = ["gh", "p_"].join("") + "d".repeat(36);
+  const sink = () => {
+    const learned: Learned[] = [];
+    return { learned, truth: { learned: async (fact: Learned) => (learned.push(fact), true) } };
+  };
+  const decide = (choice: string) => async () => tagged({ answer: answer(choice, 0.9), recordId: "rec-frames" });
+
+  it("says credential when the secrets redactor matches the text read off the frames, even if the decision said none", async () => {
+    const { learned, truth } = sink();
+    await judgePrivacy(decide("none"), {}, [`the key ${token}`], null, { truth, taskId: "task-1" });
+    expect(learned).toEqual([{ pack: "frame_privacy", recordId: "rec-frames", label: { exposure: { choice: "credential" } }, kind: "fact", source: "frame_redactor", taskId: "task-1" }]);
+  });
+
+  it("labels nothing when the redactor does not match: not matching does not prove none", async () => {
+    const { learned, truth } = sink();
+    await judgePrivacy(decide("none"), {}, ["Sign in", "Welcome back"], null, { truth, taskId: "task-1" });
+    expect(learned).toEqual([]);
+  });
+
+  it("labels nothing when no decision ran, and never throws when the sink does", async () => {
+    const { learned, truth } = sink();
+    await judgePrivacy(null, {}, [`the key ${token}`], null, { truth, taskId: "t" });
+    expect(learned).toEqual([]);
+    await expect(judgePrivacy(decide("none"), {}, [`the key ${token}`], null, { truth: { learned: async () => Promise.reject(new Error("disk")) }, taskId: "t" })).resolves.toBe("clear");
   });
 });

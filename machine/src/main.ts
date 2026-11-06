@@ -255,7 +255,7 @@ const planDecisions: { decide: PlanDeps["decide"]; size: { decide: NonNullable<P
 /** Build's red and scope checks run through PackRuns too: bound once it exists. */
 const buildDecisions: { decide: Decide | null; budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> } = { decide: null };
 /** Verify's finding_classify (and e2e's failure cause) run through PackRuns as the `verify` client: bound once it exists. */
-const verifyDecisions: { decide: Decide | null } = { decide: null };
+const verifyDecisions: { decide: Decide | null; lastRed?: (taskId: string) => Promise<{ recordId: string; job: string } | null> } = { decide: null };
 /** Evidence's format decision runs through PackRuns as the `evidence` client: bound once it exists. */
 const evidenceDecisions: { decide: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null } = { decide: null };
 /** The default branch is GitHub's answer for the repository (never the host's clone): unknown is null, and every rule that needs it fails closed. */
@@ -671,6 +671,11 @@ const packRuns = buildPackRuns(config, {
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });
+// The last red the card's CI stage called a real failure: its decision record and the failing job, read from the stage's own finish.
+verifyDecisions.lastRed = async (taskId) => {
+  const detail = (await pipeline.latestStageFinish(taskId, "ci_watch"))?.detail;
+  return detail?.class === "real" && typeof detail.classRecord === "string" && typeof detail.classJob === "string" ? { recordId: detail.classRecord, job: detail.classJob } : null;
+};
 // A run folder a crash left holds a client's context: never kept.
 await packRuns?.clearLeftovers();
 /** Intake's first read of a new issue: triage_signals on Jev through the same PackRuns, recorded

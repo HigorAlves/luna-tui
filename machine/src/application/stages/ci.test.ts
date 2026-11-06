@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TaskRow } from "../../domain/task.ts";
 import type { Check } from "../github.ts";
 import { fakeGitHub } from "../../test/github.ts";
+import { type Learned, type TruthSink, tagged } from "../decision-truth.ts";
 import type { Decide } from "./check-decide.ts";
 import { ciWatchRunner } from "./ci.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -12,7 +13,7 @@ const checks = (...states: Array<[string, string]>): Check[] =>
 const finding = { path: "a.ts", line: 1, start_line: null, severity: "test", title: "red", body: "", suggestion_code: null, confidence: 1 };
 const pack = (answer: Record<string, unknown>): StageResult => ({ outcome: "pass", detail: { answer } });
 
-function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] }; classOf?: string | null; reruns?: number; autoRebase?: number }) {
+function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] }; classOf?: string | null; reruns?: number; autoRebase?: number; learn?: boolean; lastRed?: { recordId: string; job: string } | null }) {
   let poll = 0;
   let facts = 0;
   const github = fakeGitHub({
@@ -26,11 +27,14 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
   const exec = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
   const runPack = vi.fn(async (_context: StageContext, _ci?: unknown) => opts.pack ?? pack({ verdict: "green" }));
   const sleeps: number[] = [];
-  const decide = vi.fn<Decide>(async () => ({ class: { choice: opts.classOf ?? "real", confidence: 0.9 } }));
+  const decide = vi.fn<Decide>(async () => tagged({ answer: { class: { choice: opts.classOf ?? "real", confidence: 0.9 } }, recordId: "rec-ci" }));
+  const learned: Learned[] = [];
+  const truth: TruthSink = { learned: async (fact) => (learned.push(fact), true) };
   const run = ciWatchRunner({
     github,
     runPack,
     ...("classOf" in opts && opts.classOf === null ? {} : { decide }),
+    ...(opts.learn ? { truth, lastRed: async () => opts.lastRed ?? null } : {}),
     policy: async () => ({ reruns: opts.reruns ?? 1, autoRebase: opts.autoRebase ?? 1 }),
     slugOf: async () => "a/b",
     pollMs: 10,
@@ -52,8 +56,50 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run, context, github, runPack, sleeps, rebase, exec, decide };
+  return { run, context, github, runPack, sleeps, rebase, exec, decide, learned };
 }
+
+describe("ci_failure_class learns from what happened next", () => {
+  const red = (...later: Check[][]) => [checks(["lint", "FAILURE"]), ...later];
+  const taught = (learned: Learned[]) => learned.map((l) => [l.pack, l.recordId, l.label, l.source, l.kind, l.taskId]);
+
+  it("a re-run that passed with no new commit says flake", async () => {
+    const { run, context, learned } = setup({ polls: red(checks(["lint", "SUCCESS"])), classOf: "flake", learn: true });
+    expect((await run(context)).outcome).toBe("pass");
+    expect(taught(learned)).toEqual([["ci_failure_class", "rec-ci", { class: { choice: "flake" } }, "ci_rerun", "fact", "t1"]]);
+  });
+
+  it("a re-run still red rules the flake out: real, infra or drift", async () => {
+    const { run, context, learned } = setup({ polls: red(checks(["lint", "FAILURE"])), classOf: "flake", learn: true });
+    expect((await run(context)).outcome).toBe("escalated");
+    expect(taught(learned)).toEqual([["ci_failure_class", "rec-ci", { class: { choice: ["real", "infra", "drift"] } }, "ci_rerun", "fact", "t1"]]);
+  });
+
+  it("a rebase with nothing else changed, after which it is green, says drift", async () => {
+    const { run, context, learned } = setup({ polls: red(checks(["lint", "SUCCESS"]), checks(["lint", "SUCCESS"])), classOf: "drift", learn: true });
+    expect((await run(context)).outcome).toBe("pass");
+    expect(taught(learned)).toEqual([["ci_failure_class", "rec-ci", { class: { choice: "drift" } }, "ci_rebased", "fact", "t1"]]);
+  });
+
+  it("a Build fix after which the same job is green says real, from the red the last round named", async () => {
+    const { run, context, learned } = setup({ polls: [checks(["lint", "SUCCESS"])], learn: true, lastRed: { recordId: "rec-before", job: "lint" } });
+    expect((await run(context)).outcome).toBe("pass");
+    expect(taught(learned)).toEqual([["ci_failure_class", "rec-before", { class: { choice: "real" } }, "ci_fixed", "fact", "t1"]]);
+  });
+
+  it("labels nothing when nothing was red before, and for an infrastructure escalation", async () => {
+    const green = setup({ polls: [checks(["lint", "SUCCESS"])], learn: true });
+    await green.run(green.context);
+    const infra = setup({ polls: red(), classOf: "infra", learn: true });
+    await infra.run(infra.context);
+    expect([green.learned, infra.learned]).toEqual([[], []]);
+  });
+
+  it("puts the red job and its record in the result, so the next round can name them", async () => {
+    const { run, context } = setup({ polls: red(), classOf: "real", pack: pack({ verdict: "fixable", summary: "s", findings: [finding] }), learn: true });
+    expect(await run(context)).toMatchObject({ detail: { classRecord: "rec-ci", classJob: "lint" } });
+  });
+});
 
 describe("ci_watch after a push", () => {
   const before = checks(["guard", "SUCCESS"], ["lint", "FAILURE"]);

@@ -2,6 +2,8 @@
 // The machine flattens and caps what the model sees; the text is data, rendered as such by the decision's context.
 import type { DecisionOverrides } from "@hardness/contracts";
 
+import { redact } from "../domain/evidence-markdown.ts";
+import { type TruthSink, frameCredentialTruth } from "./decision-truth.ts";
 import { type Decide, judgeCheck } from "./stages/check-decide.ts";
 
 const TEXTS_MAX = 40;
@@ -19,10 +21,13 @@ export function privacyTexts(frames: readonly { text: string }[]): string[] {
 }
 
 /** `clear` only for `none` at the proceed bar; `exposed` for anything else the decision says; `not_judged` when there is no decision to ask or it failed (the pattern check stands). */
-export async function judgePrivacy(decide: Decide | null, overrides: Record<string, DecisionOverrides>, texts: string[], repoPath: string | null): Promise<"clear" | "exposed" | "not_judged"> {
+export async function judgePrivacy(decide: Decide | null, overrides: Record<string, DecisionOverrides>, texts: string[], repoPath: string | null, teach?: { truth: TruthSink | null | undefined; taskId?: string | undefined }): Promise<"clear" | "exposed" | "not_judged"> {
   if (texts.length === 0) return "clear";
-  const { verdict, answer } = await judgeCheck(decide, "frame_privacy", { kind: "frames", frames: { texts } }, repoPath, overrides);
+  const { verdict, answer, recordId } = await judgeCheck(decide, "frame_privacy", { kind: "frames", frames: { texts } }, repoPath, overrides);
   if (verdict === "skipped" || !answer) return "not_judged";
+  // The secrets redactor matching the text is a fact: a credential was on screen. Not matching proves nothing.
+  const derived = frameCredentialTruth(texts.some((text) => redact(text) !== text));
+  if (derived && recordId && teach?.truth) await teach.truth.learned({ pack: "frame_privacy", recordId, label: derived.label, kind: derived.kind, source: derived.source, ...(teach.taskId ? { taskId: teach.taskId } : {}) }).catch(() => {});
   const exposure = answer.exposure as { choice?: unknown } | undefined;
   return exposure?.choice === "none" && verdict === "proceed" ? "clear" : "exposed";
 }

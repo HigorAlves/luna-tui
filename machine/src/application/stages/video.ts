@@ -17,6 +17,7 @@ import { Timeline, checkTimeline } from "../../../runner-video/tools/lib/timelin
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { headCommit as worktreeHead, resetWorktree } from "../../adapters/git/worktree.ts";
 import { copyRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
+import type { TruthSink } from "../decision-truth.ts";
 import { judgePrivacy, privacyTexts } from "../frame-privacy.ts";
 import type { Decide } from "./check-decide.ts";
 import { type VideoTool, readFrames, runVideoTool } from "../video-jobs.ts";
@@ -40,6 +41,8 @@ export interface VideoPipelineDeps {
   config?: (repoPath: string | null) => Promise<FactoryConfig["evidence"]>;
   /** The late-bound decision runner (read at call time) and the repository's bars: frame_privacy judges the on-screen text no pattern decided. */
   decide?: () => Decide | null;
+  /** Where frame_privacy's later fact is written; absent, nothing is learned. */
+  truth?: TruthSink | null;
   overrides?: (repoPath: string | null) => Promise<Record<string, DecisionOverrides>>;
 }
 
@@ -329,7 +332,7 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       // What no pattern decides: asked once per film, only when the patterns found nothing.
       if (hits.length === 0) {
         const repo = context.task.repoPath ?? null;
-        const judgedText = await judgePrivacy(deps.decide?.() ?? null, (await deps.overrides?.(repo).catch(() => ({}))) ?? {}, privacyTexts(read), repo);
+        const judgedText = await judgePrivacy(deps.decide?.() ?? null, (await deps.overrides?.(repo).catch(() => ({}))) ?? {}, privacyTexts(read), repo, { truth: deps.truth, taskId: context.task.id });
         if (judgedText === "exposed") {
           measured.push({ t: null, scene: null, element: null, text: "the on-screen text may show a credential or personal data: do not show it", priority: "P0" });
           hitKinds = ["credential or personal data"];

@@ -112,7 +112,7 @@ export async function buildRealStages(
   /** Build's checks (red_check, scope_check): `decide` is bound late, once PackRuns exists; null runs Build without them. */
   buildDecisions?: { decide: Decide | null; /** Build's budget now, read between a failed sweep's fix runs: bound once the pipeline exists. */ budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> },
   /** Verify's decisions (finding_classify, e2e_failure_cause), bound late like the others; null runs e2e without the failure cause. */
-  verifyDecisions?: { decide: Decide | null },
+  verifyDecisions?: { decide: Decide | null; lastRed?: (taskId: string) => Promise<{ recordId: string; job: string } | null> },
   /** Evidence: the task's latest stage finishes, the pack's save and the format decision (`decide` bound late, once PackRuns exists; null picks captures or text). */
   evidenceDeps: { latestFinish: EvidenceStageDeps["latestFinish"]; reports?: EvidenceStageDeps["reports"]; save: EvidenceStageDeps["save"]; load: (taskId: string) => Promise<EvidencePack | null>; decisions: { decide: EvidenceStageDeps["decideFormat"] } } = {
     latestFinish: async () => null,
@@ -356,6 +356,9 @@ export async function buildRealStages(
       get decide() {
         return verifyDecisions?.decide ?? null;
       },
+      // What the class's later facts are written onto, and the last real red the card's CI stage judged (for a green after a Build fix).
+      truth: truth ?? undefined,
+      lastRed: async (taskId) => (verifyDecisions?.lastRed ? verifyDecisions.lastRed(taskId) : null),
       policy: async (repoPath) => {
         const { factory, decisions } = await policies.for(repoPath);
         return { reruns: factory.verify.ci_flaky_reruns, autoRebase: factory.verify.auto_rebase, decisions };
@@ -399,7 +402,7 @@ export async function buildRealStages(
           return null;
         }
       },
-      privacy: async (texts, repoPath) => judgePrivacy(verifyDecisions?.decide ?? null, (await policies.for(repoPath)).decisions, texts, repoPath),
+      privacy: async (texts, repoPath, taskId) => judgePrivacy(verifyDecisions?.decide ?? null, (await policies.for(repoPath)).decisions, texts, repoPath, { truth, taskId }),
       ...(videoImage ? { scanImages: (dir: string, signal: AbortSignal) => scanImages({ sandbox: runSandbox, image: config.runnerVideoImage }, { id: dir.split("/").pop() ?? "shots", dir, signal }) } : {}),
       video: videoImage
         ? videoPipeline({
@@ -409,6 +412,7 @@ export async function buildRealStages(
             runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, extra),
             config: async (repoPath) => (await policies.for(repoPath)).factory.evidence,
             decide: () => verifyDecisions?.decide ?? null,
+            truth: truth ?? null,
             overrides: async (repoPath) => (await policies.for(repoPath)).decisions,
           })
         : null,

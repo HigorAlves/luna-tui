@@ -245,7 +245,7 @@ export interface EvidenceStageDeps extends EvidenceDeps {
   /** Reads the text on the image files directly in a folder (the video image's `frames --images`); null when it could not run. Absent when there is no video image. */
   scanImages?: (dir: string, signal: AbortSignal) => Promise<{ file: string; text: string; kinds?: FindingKind[]; truncated?: true }[] | null>;
   /** frame_privacy over the screenshots' text, once, after the pattern check found nothing (`judgePrivacy`); absent, the text is not judged. */
-  privacy?: (texts: string[], repoPath: string | null) => Promise<"clear" | "exposed" | "not_judged">;
+  privacy?: (texts: string[], repoPath: string | null, taskId?: string) => Promise<"clear" | "exposed" | "not_judged">;
   now?: () => Date;
 }
 
@@ -505,7 +505,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         if (left.length > 0) addNote(`${left.length} screenshot(s) left out: a ${[...new Set(hits.map((h) => h.kind))].join(", a ")} was on screen`);
         if (unread > 0) addNote(`${unread} screenshot(s) not read whole: they stay local copies until a person approves`);
         if (left.length === 0 && deps.privacy) {
-          const judgedText = await deps.privacy(privacyTexts(frames), task.repoPath).catch(() => "not_judged" as const);
+          const judgedText = await deps.privacy(privacyTexts(frames), task.repoPath, task.id).catch(() => "not_judged" as const);
           if (judgedText === "exposed") {
             const count = shots.length;
             for (const p of shots) picked.splice(picked.indexOf(p), 1);
