@@ -58,7 +58,8 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_DECISIONS` | on | set to `off` to stop the machine keeping a record of every decision pack call the pipeline makes (the context it judged, the validated answer, each question's verdict under the pack's own bars, the engine and model, the span's trace id) as `<MACHINE_STATE_DIR>/decisions/<pack>/<day>/<id>.json` (mode 0600). When a later fact settles what the right answer was (a flake re-run's result, the format a pack finally shipped with, your plan or retro decision, a resolved review thread) the machine writes it onto the record as `truth`. `pnpm eval harvest` turns records into eval cases; see [evals/README.md](../evals/README.md) and [runbooks/calibrate-decisions.md](runbooks/calibrate-decisions.md) |
 | `MACHINE_DECISIONS_RETENTION_DAYS` | 90 | a decision record older than this is removed at start-up |
 | `MACHINE_GROUND_TRUTH` | on | set to `off` to stop the machine keeping each approved plan, with what the proposal said and what was edited before approval (and who approved), as `<MACHINE_STATE_DIR>/ground-truth/plan/<taskId>-<approvalId>.json`; the files stay on your machine, never in a repo, and feed later evals |
-| `MACHINE_SLACK_TOKEN` / `MACHINE_SLACK_CHANNEL` | unset | a bot token (`chat:write`) and a channel id: one Slack thread per task is opened there and every reply above lands in it. Both or neither |
+| `MACHINE_SLACK_TOKEN` / `MACHINE_SLACK_CHANNEL` | unset | a bot token (`chat:write`) and a channel id: one Slack thread per task, for the cards of a repository whose `luna.yaml` sets `conversation.auto: on` and for no other (with it off, a card's updates are drafts in the thread it came from). Both or neither |
+| `MACHINE_SLACK_SCOPE` | `opted_in` | `all` restores the old reading of every mention, DM and channel; the default reads only a channel watched from the board, a channel a repository lists in `conversation.channels`, and a DM you opted in by its id. A machine variable on purpose: a repository's file cannot widen what the machine reads |
 | `MACHINE_SLACK_USER_TOKEN` | unset | your User OAuth Token (`xoxp-…`) from the internal app in `slack/manifest.json`: the inbox reads what you see and replies as you. Unset: the inbox is off and every Slack call says so |
 | `MACHINE_SLACK_APP_TOKEN` | unset | the app-level token (`xapp-…`, `connections:write`) for Socket Mode: reactions and new messages arrive as they happen. Unset: the snapshot's `socket` is `off`; polling still covers everything but reactions |
 | `MACHINE_SLACK_INBOX` | on | `off` stops the scheduled polls, Socket Mode and the digest; the `/slack/*` routes stay up with an empty snapshot, so the board's `S` view shows nothing until you press `R`, which still polls once on demand |
@@ -174,6 +175,26 @@ A check with `coverage` names an lcov report its run writes (vitest, jest, pytes
 Each `services` entry runs as its own container beside every stage that runs the repo's code (implementing, verifying, e2e) and every check run, on a private docker network for that run, reachable by its key as hostname; the `exports` become env in the stage or check container. They are torn down with it, so two tasks of one repo never share a database. A service whose `ready` line does not exit 0 within a minute escalates the stage with the service's log tail.
 
 `PIPELINE.md` (the earlier per-repo file, front matter with the `policy` keys and `qa_target` lines) still works when there is no `luna.yaml`, with a deprecation notice once per repo; `luna.yaml` wins when both exist.
+
+### The `conversation` section (the Conversation Machine)
+
+```yaml
+conversation:
+  channels: [C0123ABCD]   # Slack channel ids this repository claims: opted in, and the repository's docs and cards answer them
+  auto: off               # on: the old slack_triage path, the machine-owned thread and unattended posts for this repository
+  debounce_seconds: 90    # a thread waits this long after its last message
+  draft_expiry_hours: 24  # a waiting draft expires after this long
+  confidence: 0.7         # below it the machine asks you
+  active_minutes: 10      # another person replying inside this window: no draft
+```
+
+Three defaults changed with wave 17, and how to set each back:
+
+| Default now | Set it back with |
+|---|---|
+| The machine reads only what a person opted in. | `MACHINE_SLACK_SCOPE=all` |
+| Nothing reaches Slack without a tap, on any path a person's request did not start. The digest (`MACHINE_SLACK_DIGEST_AT`, your own DM) is the one standing exception, and only when the variable is set. | `conversation.auto: on` in the repository's `luna.yaml` |
+| No machine-owned thread for any card; its paused, "needs you" and reminder lines are not sent to Slack and are on the board. | `conversation.auto: on` (with `MACHINE_SLACK_TOKEN` and `MACHINE_SLACK_CHANNEL`) |
 
 ### The v2.2 diagram's sections
 
