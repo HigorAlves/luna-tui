@@ -140,3 +140,15 @@ describe("JiraWatch", () => {
     expect(warnings.filter((w) => w.includes("expires in"))).toHaveLength(2);
   });
 });
+
+describe("JiraWatch with the ticket machine's events", () => {
+  it("hands each linked issue, as a canonical ticket with its task, to the ticket events, and a failing handler stops nothing", async () => {
+    const jira = fakeJira({ issues: [{ key: "PLAT-123", status: "In Progress", statusCategory: "indeterminate", priority: "High", dueAt: null, issueType: "Bug", assignee: { id: "a1", name: "Ana" } }] });
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: SITE });
+    await pipeline.createTask({ title: "PLAT-123 fix it" });
+    const seen: Array<[string, string | null]> = [];
+    const watch = new JiraWatch({ pipeline, jira, intervalMs: 300_000, now: () => NOW, warn: () => {}, tickets: { handle: async (ticket, task) => { seen.push([ticket.key, ticket.assignee]); void task; throw new Error("boom"); } } });
+    await watch.pollOnce();
+    expect(seen).toEqual([["PLAT-123", "Ana"]]);
+  });
+});

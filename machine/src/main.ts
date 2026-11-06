@@ -69,6 +69,7 @@ import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
 import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
 import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
 import { TicketMachine } from "./application/ticket-machine.ts";
+import { TicketEvents } from "./application/ticket-events.ts";
 import { INTAKE_CLIENT } from "./application/classify.ts";
 import type { DedupAnswer } from "./application/intake-dedup.ts";
 import { PgBacklogStore } from "./adapters/persistence/backlog-store.ts";
@@ -490,6 +491,7 @@ const ticketMachine = new TicketMachine({
   reply: { write: async (c) => (await ticketPack("ticket_reply", c)) as never },
   backlog: { upsertFromSource: (input, options) => backlog.upsertFromSource(input, options) },
 });
+const ticketEvents = new TicketEvents({ store: new PgTicketStore(db), machine: ticketMachine, pipeline, config: async (repoPath) => (await policies.for(repoPath)).factory });
 const app = createApp({
   db,
   pipeline,
@@ -570,6 +572,7 @@ if (config.jira) {
   jiraWatch = new JiraWatch({
     pipeline,
     jira: jiraApi,
+    tickets: ticketEvents,
     intervalMs: 5 * MINUTE_MS,
     expiry: jiraExpiry,
     retryBlocked: (task) => jiraSync.retry(task),

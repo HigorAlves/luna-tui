@@ -18,7 +18,7 @@ import type { TicketRow, TicketStore, Tickets } from "./tickets.ts";
 
 /** What the intakes hand a ticket to. */
 export interface TicketIntake {
-  ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean }): Promise<unknown>;
+  ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean; force?: boolean }): Promise<unknown>;
 }
 
 export class TicketNotFound extends Error {
@@ -90,10 +90,10 @@ export class TicketMachine implements TicketIntake {
   }
 
   /** Reads a ticket and holds its drafts. Writes nothing to the tracker and makes no card. */
-  async ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean }): Promise<void> {
+  async ingest(ticket: CanonicalTicket, ctx: { repoPath: string | null; question: boolean; force?: boolean }): Promise<void> {
     const { store } = this.deps;
     const prev = await store.get(ticket.key);
-    if (prev?.machineStatus && prev.machineStatus !== "validity_failed" && prev.canonical.updatedAt === ticket.updatedAt) return;
+    if (!ctx.force && prev?.machineStatus && prev.machineStatus !== "validity_failed" && prev.canonical.updatedAt === ticket.updatedAt) return;
     await store.read(ticket);
     const at = this.now();
     const done = async (status: string, assessment: Record<string, unknown>, drafts: Draft[]) => {

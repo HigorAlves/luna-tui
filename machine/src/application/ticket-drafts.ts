@@ -12,7 +12,7 @@ import type { AssessmentRecord } from "./ticket-assess.ts";
 export interface Draft {
   id: string;
   ticket: string;
-  kind: "assessment" | "needs_info" | "decline" | "not_ours";
+  kind: "assessment" | "needs_info" | "decline" | "not_ours" | "handover";
   /** `waiting` for a tap; `edited` is still waiting, with the person's text; `ignored` is kept and never posted. */
   status: "waiting" | "edited" | "ignored" | "posted";
   text: string;
@@ -35,6 +35,11 @@ export function needsInfoDraft(ticket: string, missing: string[]): Draft {
 
 export function notOursDraft(ticket: string, where: string | null): Draft {
   return fresh(ticket, "not_ours", `This does not look like ours. It looks like it belongs with ${where ?? "another team"}.`);
+}
+
+/** The note for a ticket reassigned out of the team's scope: a draft, never posted by the machine. */
+export function handoverDraft(ticket: string): Draft {
+  return fresh(ticket, "handover", "This was reassigned away from us, so we are no longer assessing it. Everything we had on it stays on its card.");
 }
 
 export interface ReplyDeps {
