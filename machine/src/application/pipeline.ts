@@ -109,7 +109,7 @@ export interface PipelineOptions {
   /** Looks at an open release question (the ship approval) against GitHub: `merged` closes it as an automatic approval, `withdraw` takes it back so the watch asks again, `keep` leaves it. Nothing polls while a person is asked, so `tick` calls it at most once per `shipProbeMs`. */
   shipGateProbe?: (task: TaskRow, gate: ApprovalRow) => Promise<"merged" | "closed" | "withdraw" | "keep">;
   /** The shortest time between two probes of one card's release question (the repository's poll interval); 0 probes on every tick. */
-  shipProbeMs?: number;
+  shipProbeMs?: number | null;
   /** Ends a card's kept sandbox (its extra folders) when the card is resumed or closed. Never throws into the pipeline. */
   releaseKept?: (taskId: string) => Promise<void>;
   /** Where each stage run is reported as a span; the no-op without a backend. */
@@ -328,7 +328,7 @@ export class Pipeline {
   private readonly owners: PipelineOptions["owners"];
   private readonly truth: DecisionTruth | undefined;
   private readonly shipGateProbe: PipelineOptions["shipGateProbe"];
-  private readonly shipProbeMs: number;
+  private readonly shipProbeMs: number | null;
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
   private readonly policies: Pick<PolicyStore, "for">;
@@ -379,7 +379,7 @@ export class Pipeline {
     this.owners = options.owners;
     this.truth = options.truth;
     this.shipGateProbe = options.shipGateProbe;
-    this.shipProbeMs = options.shipProbeMs ?? 0;
+    this.shipProbeMs = options.shipProbeMs === undefined ? 0 : options.shipProbeMs;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
     this.policies = options.policies ?? new PolicyStore();
@@ -1330,7 +1330,9 @@ export class Pipeline {
         continue;
       }
       const last = this.shipProbedAt.get(task.id);
-      if (last !== undefined && Date.now() - last < (this.shipProbeMs)) continue;
+      // A machine-wide interval (`MACHINE_SHIP_POLL_INTERVAL`) wins; else the repository's `ship.poll_minutes`.
+      const every = this.shipProbeMs ?? (await this.policyFor(task.repoPath)).factory.ship.poll_minutes * 60_000;
+      if (last !== undefined && Date.now() - last < every) continue;
       this.shipProbedAt.set(task.id, Date.now());
       try {
         const seen = await probe(task, gate);

@@ -96,4 +96,12 @@ describe("SlaClocks and the triage gates' reminder", () => {
     expect((await clocks(plan(1)).for(task("awaiting_test_check")))?.gate?.targetSecs).toBe(172_800);
     expect((await clocks(plan(1)).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(172_800);
   });
+
+  it("reminds at the open ship approval after the repo's ship.sla.reminder_days; with no open approval the watch has no gate clock", async () => {
+    const ship = (reminder_days: number) => ({ factory: { ...DEFAULT_POLICY.factory, ship: { ...DEFAULT_POLICY.factory.ship, sla: { reminder_days, escalate_days: 5 } } } });
+    const withGate = (policy: object, open: boolean) => new SlaClocks({ pipeline: { policyFor: async () => ({ ...DEFAULT_POLICY, ...policy }) as never, runningStageStarts: async () => new Map(), approvals: async () => (open ? [{ decision: null }] : []) as never }, defaults: { gate: 172_800, cycle: null }, now: () => new Date("2026-11-01T01:00:00Z") });
+    expect((await withGate(ship(1), true).for(task("awaiting_ship")))?.gate?.targetSecs).toBe(86_400);
+    expect((await withGate(ship(3), true).for(task("awaiting_ship")))?.gate?.targetSecs).toBe(259_200);
+    expect(((await withGate(ship(1), false).for(task("awaiting_ship")))?.gate ?? null)).toBeNull();
+  });
 });

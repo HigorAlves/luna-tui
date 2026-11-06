@@ -30,6 +30,8 @@ export interface MergeReadinessInput {
   dependenciesListed?: number;
   /** The repo's `ship.stale_days` (luna.yaml); absent means STALE_DAYS. */
   staleDays?: number;
+  /** When this head was re-verified for staleness (checks over the change on a current base): the stale clock counts from the later of the commit and this. */
+  reverifiedAt?: string;
   /** Whether the repository requires a review (`reviewRequirement`); absent is read as unknown. */
   review?: ReviewRequirement;
   /** An APPROVED review on the head commit by a collaborator who is not the machine's own account (`approvedOnHead`). */
@@ -112,7 +114,7 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   for (const d of dependencies) if (!d.merged && !d.closed) push("blocked", `blocked by #${d.number}`);
   const staleDays = input.staleDays ?? STALE_DAYS;
   if (pr.headCommittedAt) {
-    const committed = Date.parse(pr.headCommittedAt);
+    const committed = Math.max(Date.parse(pr.headCommittedAt), input.reverifiedAt ? Date.parse(input.reverifiedAt) || 0 : 0);
     const days = Math.floor((now.getTime() - committed) / DAY_MS);
     if (!Number.isNaN(committed) && days > staleDays) push("stale", `the head is ${days} days old (limit ${staleDays})`);
   }

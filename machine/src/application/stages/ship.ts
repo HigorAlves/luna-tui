@@ -17,7 +17,9 @@ const MERGE_READS = 3;
 const MERGE_READ_PAUSE_MS = 1000;
 const MERGE_ATTEMPTS = 2;
 
-export interface MergeDeps extends Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "truth" | "stateDir" | "pollMs" | "sleep" | "now" | "readCodeowners"> {
+export interface MergeDeps extends Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "truth" | "stateDir" | "sleep" | "now" | "readCodeowners"> {
+  /** Milliseconds between the merge's own reads (a queue wait). */
+  pollMs: number;
   /** The facts of one poll; default `readShipFacts`. Tests inject one. */
   readFacts?: (context: StageContext, ref: { slug: string; number: number }, cursor: ShipCursor) => Promise<ShipFacts | null>;
   /** What the merge settles (the decisions waiting on the PR's outcome); default `settleDecisions`. */

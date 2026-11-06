@@ -83,8 +83,9 @@ export class SlaClocks {
 /** The repo's targets, with the plan gate's reminder (`plan.sla.reminder_days`) and the triage gates' reminder (`triage.sla.reminder_days`) where the repo moved it off the diagram's two days and its `sla` block names no gate target. */
 function triageGateTargets(state: string, policy: Policy): Partial<SlaTargets> {
   // The plan gate has its own days (`plan.sla.reminder_days`); the intake gates take triage's.
-  const days = state === "awaiting_approval" ? policy.factory.plan.sla.reminder_days : policy.factory.triage.sla.reminder_days;
-  const standard = state === "awaiting_approval" ? FACTORY_DEFAULTS.plan.sla.reminder_days : FACTORY_DEFAULTS.triage.sla.reminder_days;
-  if (policy.sla.gate !== undefined || !(state === "awaiting_approval" || AUTO_ARCHIVE_GATES.has(state as never)) || days === standard) return policy.sla;
+  // The ship approval has its own (`ship.sla.reminder_days`).
+  const days = state === "awaiting_approval" ? policy.factory.plan.sla.reminder_days : state === "awaiting_ship" ? policy.factory.ship.sla.reminder_days : policy.factory.triage.sla.reminder_days;
+  const standard = state === "awaiting_approval" ? FACTORY_DEFAULTS.plan.sla.reminder_days : state === "awaiting_ship" ? FACTORY_DEFAULTS.ship.sla.reminder_days : FACTORY_DEFAULTS.triage.sla.reminder_days;
+  if (policy.sla.gate !== undefined || !(state === "awaiting_approval" || state === "awaiting_ship" || AUTO_ARCHIVE_GATES.has(state as never)) || days === standard) return policy.sla;
   return { ...policy.sla, gate: days * 86_400 };
 }

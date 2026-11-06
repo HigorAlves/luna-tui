@@ -78,6 +78,13 @@ describe("mergeReadiness", () => {
     expect(out.reason).toContain(blocker);
   });
 
+  it("a head re-verified recently is not stale: the clock counts from the later of the commit and the re-verification", () => {
+    const old = { pr: pr({ headCommittedAt: "2026-10-01T10:00:00Z" }), staleDays: 14 };
+    expect(mergeReadiness(input(old)).blockers).toEqual([expect.stringContaining("days old")]);
+    expect(mergeReadiness(input({ ...old, reverifiedAt: "2026-11-03T10:00:00Z" })).blockers).toEqual([]);
+    expect(mergeReadiness(input({ ...old, reverifiedAt: "2026-10-05T10:00:00Z" })).blockers).toEqual([expect.stringContaining("days old")]);
+  });
+
   it("takes the stale limit from the repo's `ship.stale_days`", () => {
     const old = { pr: pr({ headCommittedAt: "2026-10-20T10:00:00Z" }) };
     expect(mergeReadiness(input({ ...old, staleDays: 20 })).blockers).toEqual([]);

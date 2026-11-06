@@ -85,6 +85,10 @@ export class ThreadReplies {
     }
     // A conversation outcome's answer (approved in one tap) and triage's questions: posted where the card came from, and nowhere else.
     if (event.kind === "task.reply" || event.kind === "task.questions") return typeof event.payload.body === "string" && event.payload.body ? this.toSource(event.taskId, event.payload.body, event.payload.secret === true) : undefined;
+    // The watched PR's clocks: fixed lines with a number of days, no name and no model word.
+    const days = (value: unknown) => Math.max(0, Math.min(365, Math.floor(Number(value) || 0)));
+    if (event.kind === "sla.reminder" && event.payload.gate === "awaiting_ship" && event.payload.quietDays !== undefined) return this.reply(event.taskId, `The PR has been quiet for ${days(event.payload.quietDays)} days.`);
+    if (event.kind === "sla.escalated" && event.payload.gate === "awaiting_ship") return this.reply(event.taskId, `The PR has waited ${days(event.payload.afterDays)} days; its release owners were told.`);
     if (event.kind === "sla.reminder") {
       const gate = event.payload.gate as TaskState;
       return this.reply(event.taskId, `Still waiting on you: ${ASKS[gate] ?? gate}.`);

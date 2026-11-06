@@ -43,7 +43,8 @@ export interface Config {
   /** The PR inbox: poll every open PR involving you. `MACHINE_GITHUB_PRS=off` turns it off. */
   githubPrs: { enabled: boolean; intervalMs: number };
   /** The ship monitor: how often it reads the shipped PR, and how many days it waits for a merge before asking a person. */
-  shipPoll: { intervalMs: number; maxWaitDays: number };
+  /** `intervalMs` is null when `MACHINE_SHIP_POLL_INTERVAL` is unset: each repository's `ship.poll_minutes` (five) applies. */
+  shipPoll: { intervalMs: number | null; maxWaitDays: number };
   /** `owner/name` to the checkout's path, for issues GitHub intake imports. */
   repoMap: Record<string, string>;
   /** Checkouts one level under here are matched to `owner/name` by their origin remote. */
@@ -276,8 +277,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `MACHINE_GITHUB_PRS_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_PRS_INTERVAL}"`,
     );
   }
-  const shipSeconds = env.MACHINE_SHIP_POLL_INTERVAL === undefined ? 60 : Number(env.MACHINE_SHIP_POLL_INTERVAL);
-  if (!Number.isInteger(shipSeconds) || shipSeconds < 1) {
+  const shipSeconds = env.MACHINE_SHIP_POLL_INTERVAL === undefined ? null : Number(env.MACHINE_SHIP_POLL_INTERVAL);
+  if (shipSeconds !== null && (!Number.isInteger(shipSeconds) || shipSeconds < 1)) {
     throw new Error(`MACHINE_SHIP_POLL_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_SHIP_POLL_INTERVAL}"`);
   }
   const shipWaitDays = env.MACHINE_SHIP_MAX_WAIT_DAYS === undefined ? 14 : Number(env.MACHINE_SHIP_MAX_WAIT_DAYS);
@@ -377,7 +378,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     stateDir,
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000 },
-    shipPoll: { intervalMs: shipSeconds * 1000, maxWaitDays: shipWaitDays },
+    shipPoll: { intervalMs: shipSeconds === null ? null : shipSeconds * 1000, maxWaitDays: shipWaitDays },
     graphIntervalSecs: graphIntervalSecs(env),
     githubToken: env.GITHUB_TOKEN?.trim() || env.GH_TOKEN?.trim() || null,
     repoMap,

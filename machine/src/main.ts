@@ -371,7 +371,7 @@ pipeline = new Pipeline(db, runnerFor, {
   closeDeps: { exec, worktreeRemove: false, watcher, github },
   ...(config.groundTruth ? { evidenceFeedback: evidenceFeedbackWriter(config.stateDir), groundTruth: groundTruthWriter(config.stateDir), escalationTruth: escalationTruthWriter(config.stateDir), commitsSince, headOf: headCommit } : {}),
   truth: decisionTruth,
-  ...(shipGateProbe ? { shipGateProbe, shipProbeMs: config.shipPoll.intervalMs ?? FACTORY_DEFAULTS.ship.poll_minutes * 60_000 } : {}),
+  ...(shipGateProbe ? { shipGateProbe, shipProbeMs: config.shipPoll.intervalMs } : {}),
   escalationDecide: buildDecisions,
   policies,
   // The queue's usage windows go by the engine each stage really runs on, credential fallback included.
@@ -606,7 +606,8 @@ const slaTicker = new Ticker(() => {
         const defaultArchive = policy.factory.triage.sla.archive_days > 0 ? policy.factory.triage.sla.archive_days * 86_400 : null;
         const archiving = AUTO_ARCHIVE_GATES.has(task.state) && (targets.archive !== undefined ? typeof targets.archive === "number" : defaultArchive !== null);
         // The plan gate also escalates to a person after the diagram's `plan.sla.escalate_days` (five); 0 turns it off.
-        const escalateAfter = task.state === "awaiting_approval" && policy.factory.plan.sla.escalate_days > 0 ? policy.factory.plan.sla.escalate_days * 86_400 : null;
+        const escalateDays = task.state === "awaiting_approval" ? policy.factory.plan.sla.escalate_days : task.state === "awaiting_ship" ? policy.factory.ship.sla.escalate_days : 0;
+        const escalateAfter = escalateDays > 0 ? escalateDays * 86_400 : null;
         if (!sla?.gate?.overdue && !archiving && escalateAfter === null) continue;
         const events = await pipeline.events(task.id);
         const latest = (kind: string) => {
@@ -614,7 +615,9 @@ const slaTicker = new Ticker(() => {
           return found.length ? new Date(Math.max(...found.map((event) => event.at.getTime()))) : null;
         };
         // Who the escalation names comes from CODEOWNERS (the gate's `ruleOwners`), never from the code map's own `owners`.
-        const ruleOwners = escalateAfter === null ? undefined : ((await pipeline.approvals(task.id)).find((a) => a.decision === null)?.requested.ruleOwners as { state?: unknown; owners?: unknown } | undefined);
+        const open = escalateAfter === null ? undefined : (await pipeline.approvals(task.id)).find((a) => a.decision === null);
+        // The ship approval names the release owners its own request carries (`ship.release_owners`, else CODEOWNERS at the base ref).
+        const ruleOwners = task.state === "awaiting_ship" ? { state: "ok", owners: open?.requested.releaseOwners } : (open?.requested.ruleOwners as { state?: unknown; owners?: unknown } | undefined);
         const owners = ruleOwners?.state === "ok" ? ruleOwners.owners : [];
         rows.push({ task, sla, targets, defaultArchive, escalateAfter, lastReminderAt: latest("sla.reminder"), lastEscalationAt: latest("sla.escalated"), escalateTo: Array.isArray(owners) ? owners.map(String) : [] });
       }

@@ -102,6 +102,19 @@ describe("ThreadReplies", () => {
     expect(comments.at(-1)![2]).toBe("The plan has waited too long for approval and was escalated to the code owners.");
   });
 
+  it("says in fixed words that a watched PR was quiet and that its release owners were told, naming nobody", async () => {
+    const { pipeline, replies, comments } = wire();
+    const task = await pipeline.createTask({ title: "Export CSV", repoPath: "/r/a", source });
+    await pipeline.start(task.id);
+    await pipeline.record(task.id, "sla.reminder", { gate: "awaiting_ship", quietDays: 2 });
+    await replies.idle();
+    expect(comments.at(-1)![2]).toBe("The PR has been quiet for 2 days.");
+    await pipeline.record(task.id, "sla.escalated", { gate: "awaiting_ship", afterDays: 5, to: ["@marta"] });
+    await replies.idle();
+    expect(comments.at(-1)![2]).toBe("The PR has waited 5 days; its release owners were told.");
+    expect(comments.at(-1)![2]).not.toContain("marta");
+  });
+
   it("says why when the task escalates, and that it paused on a usage limit", async () => {
     const { pipeline, replies, comments } = wire();
     stubs.plan("triage", { outcome: "fail" }, { outcome: "fail" }, { outcome: "fail" });

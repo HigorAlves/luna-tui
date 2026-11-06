@@ -55,8 +55,13 @@ describe("slaActions", () => {
       expect(slaActions([plan(6 * DAY, { lastReminderAt: ago(3 * DAY), lastEscalationAt: ago(10 * DAY) })], NOW)).toEqual([expect.objectContaining({ action: "escalate" })]);
     });
 
-    it("escalates only at the plan gate, only when the repo's days are set, and never archives or throws a plan away", () => {
-      expect(slaActions([row("awaiting_ship", 9 * DAY, { escalateAfter: 5 * 86_400, lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([]);
+    it("escalates the open ship approval to the gate's release owners, and archives nothing", () => {
+      expect(slaActions([row("awaiting_ship", 6 * DAY, { escalateAfter: 5 * 86_400, escalateTo: ["bo"], lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([{ taskId: "t1", action: "escalate", gate: "awaiting_ship", to: ["bo"], afterSecs: 5 * 86_400 }]);
+      expect(slaActions([row("awaiting_ship", 9 * DAY, { lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([]);
+    });
+
+    it("escalates only at the plan gate and the ship approval, only when the repo's days are set, and never archives or throws a plan away", () => {
+      expect(slaActions([row("awaiting_test_check", 9 * DAY, { escalateAfter: 5 * 86_400, lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([]);
       expect(slaActions([plan(9 * DAY, { escalateAfter: null, lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([]);
       expect(slaActions([plan(9 * DAY, { lastReminderAt: ago(3 * DAY) })], NOW)).not.toContainEqual(expect.objectContaining({ action: "archive" }));
     });

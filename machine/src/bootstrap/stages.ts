@@ -1,6 +1,7 @@
 // Wires up which StageRunner serves which TaskState: the real agent packs (when a
 // credential and the runner image are available), the host-only runners that always run
 // for real, and the stub fallback.
+import { FACTORY_DEFAULTS } from "@hardness/contracts";
 import type { EvidencePack, ShipContext, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { CoverageSummary, Ledger, RunSummary } from "@hardness/contracts";
@@ -344,7 +345,7 @@ export async function buildRealStages(
     // The merge (decided again on GitHub's facts at that moment). The memory-review gate has no stage of its own yet: the retro pack runs after
     // shipping and its proposal rides on the gate; approving applies it at close.
     shipping: withMemoryReview(
-      mergeRunner({ github, policies, evidence: { load: evidenceDeps.load }, truth: truth ?? null, stateDir: config.stateDir, pollMs: config.shipPoll.intervalMs }),
+      mergeRunner({ github, policies, evidence: { load: evidenceDeps.load }, truth: truth ?? null, stateDir: config.stateDir, pollMs: config.shipPoll.intervalMs ?? FACTORY_DEFAULTS.ship.poll_minutes * 60_000 }),
       memoryReviewRunner({
         runPack: async (context, ship) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}) }),
         stateDir: config.stateDir,

@@ -46,6 +46,15 @@ const ShipCursorSchema = z.object({
   reads: z.number().int().optional(),
   /** The fixes pushed: the commit, the scope, a line, and the scenarios the fix may have changed. */
   fixes: z.array(z.object({ sha: z.string(), scope: z.enum(["in_place", "re_verify_partial"]), summary: z.string(), affected: z.array(z.object({ id: z.string(), text: z.string(), result: z.string() })) })).optional(),
+  /** The last thing that happened on the PR (a new activity item, a new head, a change of the checks' state, a fix): the quiet clock counts from it. Set when the watch starts. */
+  lastActivityAt: z.string().optional(),
+  /** What `lastActivityAt` was last compared with (head, checks, fixes, last activity id): a poll that finds it changed is activity. */
+  activitySig: z.string().optional(),
+  /** When this quiet period was reminded and escalated; both are cleared by activity. */
+  remindedAt: z.string().nullable().optional(),
+  escalatedAt: z.string().nullable().optional(),
+  /** The head that was re-verified for staleness, and when: the stale clock counts from `at` for that head. */
+  reverified: z.object({ sha: z.string(), at: z.string() }).optional(),
   /** `ship.ready` was logged: readiness is announced the first time it is true. */
   readyNoted: z.boolean().optional(),
 });

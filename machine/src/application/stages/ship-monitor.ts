@@ -4,6 +4,7 @@
 // the policy's risk. A PR a person merges ends the wait the same way. The cursor file lets a
 // machine restart resume instead of escalate. Review activity and a red CI are recorded and noted
 // here; acting on them is the maintenance loop's.
+import { shipSla, quietDays } from "../../domain/ship-sla.ts";
 import { PrReplyAnswer, type EvidencePack, type Risk, type ShipContext, type ShipEventClass, type TaskState, eventClassOf } from "@hardness/contracts";
 
 import { HOST_GIT, rebaseOntoDefault } from "../../adapters/git/worktree.ts";
@@ -56,7 +57,8 @@ export interface ShipMonitorDeps {
   /** Told, when the PR merges, what its outcome says about event_class and comment_intent decisions (RFC 0005 wave 7). */
   truth?: TruthSink | null;
   stateDir: string;
-  pollMs: number;
+  /** Milliseconds between polls; null: the repository's `ship.poll_minutes` (the machine-wide `MACHINE_SHIP_POLL_INTERVAL`, when set, is passed here as a number and wins). */
+  pollMs: number | null;
   /** The longest the monitor waits for a merge before asking a person (default 14 days). */
   maxWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -193,6 +195,7 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
     dependenciesListed: listed.length,
     fixApproval,
     staleDays: policy.factory.ship.stale_days,
+    ...(cursor.reverified && head && cursor.reverified.sha === head ? { reverifiedAt: cursor.reverified.at } : {}),
     review,
     approvedOnHead: onHead,
     shipApproval,
@@ -233,6 +236,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
     let cursor: ShipCursor = (await loadCursor(deps.stateDir, task.id)) ?? emptyCursor({ slug, number });
     if (cursor.pr.slug !== slug || cursor.pr.number !== number) cursor = { ...emptyCursor({ slug, number }), published: cursor.published };
     cursor.startedAt ??= now().toISOString();
+    cursor.lastActivityAt ??= now().toISOString();
     await saveCursor(deps.stateDir, task.id, cursor);
 
     // ---- The review loop (only with `deps.loop`): activity judged and answered, fixes in place, CI red and conflicts. ----
@@ -467,6 +471,31 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       return watchConflict(head, pack);
     };
 
+    /** A stale head, proved once: rebase when the base moved and `verify.auto_rebase` allows (the rebase pushes with a lease and re-stamps the pack), run the project's checks, keep `cursor.reverified`. Failing checks, or a moved base with no rebase left, go to a person. */
+    const reverifyStale = async (head: string, pack: EvidencePack | null, baseMoved_: boolean): Promise<Outcome> => {
+      const stale = (why: string, extra: Record<string, unknown> = {}): Outcome => ({ result: escalated(`the head is stale: ${why}`, "other", extra) });
+      let current = head;
+      if (baseMoved_) {
+        const allowed = (await deps.policies.for(task.repoPath)).factory.verify.auto_rebase;
+        if (cursor.rebases >= allowed) return stale("the base branch moved and the rebases allowed are spent, so it cannot be proved on a current base");
+        const out = await watchConflict(head, pack);
+        if (out.result) return out;
+        const wt = task.worktreePath;
+        current = (wt ? await headOfWorktree(runOf(), wt) : null) ?? head;
+      }
+      if (!deps.loop!.checks) return stale("no checks runner is wired to prove it");
+      const checked = await deps.loop!.checks(subContext(context, `stale-${current.slice(0, 7)}`), current);
+      if (checked.outcome !== "pass") {
+        const detail = checked.detail ?? {};
+        const findings = Array.isArray(detail.findings) ? (detail.findings as Array<{ title?: unknown; body?: unknown }>).slice(0, 10).map((f) => ({ title: plain(String(f.title ?? ""), 120), body: plain(String(f.body ?? ""), 300) })) : [];
+        return stale(`the checks failed over the change (${plain(String(detail.error ?? detail.reason ?? checked.outcome), 300)})`, { findings });
+      }
+      cursor.reverified = { sha: current, at: now().toISOString() };
+      await saveCursor(deps.stateDir, task.id, cursor);
+      await note(`the head was ${cursor.reverified.sha.slice(0, 7)} for more than the stale limit: the checks ran over the change and passed`);
+      return { moved: true };
+    };
+
     for (;;) {
       if (signal.aborted) return { outcome: "fail", detail: { error: "aborted" } };
       if (now().getTime() - Date.parse(cursor.startedAt!) > maxWaitMs) {
@@ -545,6 +574,31 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
             }
           }
 
+          // The quiet clock: anything that happened on the PR starts the period again; a reminder and an escalation are said once per period, with fixed words.
+          {
+            const sig = [head ?? "", pr.checks.state, cursor.fixRounds, cursor.seen.at(-1) ?? ""].join("|");
+            if (cursor.activitySig !== undefined && cursor.activitySig !== sig) {
+              cursor.lastActivityAt = now().toISOString();
+              cursor.remindedAt = null;
+              cursor.escalatedAt = null;
+            }
+            cursor.activitySig = sig;
+            const ship = (await deps.policies.for(task.repoPath)).factory.ship;
+            const due = shipSla({ lastActivityAt: cursor.lastActivityAt!, remindedAt: cursor.remindedAt ?? null, escalatedAt: cursor.escalatedAt ?? null, now: now(), reminderDays: ship.sla.reminder_days, escalateDays: ship.sla.escalate_days });
+            if (due === "remind") {
+              cursor.remindedAt = now().toISOString();
+              await context.emit?.("sla.reminder", { gate: "awaiting_ship", quietDays: quietDays(cursor.lastActivityAt!, now()) }).catch(() => {});
+            } else if (due === "escalate") {
+              cursor.escalatedAt = now().toISOString();
+              await context.emit?.("sla.escalated", { gate: "awaiting_ship", afterDays: ship.sla.escalate_days, to: facts.releaseOwners }).catch(() => {});
+            }
+          }
+          // A head older than `ship.stale_days` is proved again once: the base is brought up if it moved (while rebases last), the project's checks run, and the clock starts over.
+          if (deps.loop && !moved && !handled && head && readiness.checklist.some((i) => i.id === "stale" && !i.ok)) {
+            const out = await reverifyStale(head, pack, classes.includes("base_moved") || classes.includes("conflict"));
+            if (out.result) return out.result;
+            moved = out.moved ?? false;
+          }
           if (readiness.ready && !cursor.readyNoted) {
             cursor.readyNoted = true;
             await context.emit?.("ship.ready", {}).catch(() => {});
@@ -597,7 +651,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       } catch (error) {
         await note(`could not read the PR: ${messageOf(error)}`);
       }
-      await sleep(deps.pollMs);
+      await sleep(deps.pollMs ?? (await deps.policies.for(task.repoPath)).factory.ship.poll_minutes * 60_000);
     }
   };
 }

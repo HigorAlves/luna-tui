@@ -61,7 +61,7 @@ function policyWith(over: (Partial<Policy> & { autoMerge?: "off" | "low" | "medi
 
 function setup(
   answers: Partial<GitHub> = {},
-  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"]; freezeSource?: ShipMonitorDeps["freeze"]; buildTests?: ShipMonitorDeps["buildTests"] } = {},
+  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; pollMs?: number | null; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"]; freezeSource?: ShipMonitorDeps["freeze"]; buildTests?: ShipMonitorDeps["buildTests"] } = {},
 ) {
   const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => ({ merged: true as const, sha: null }), ...answers });
   let clock = START.getTime();
@@ -73,7 +73,7 @@ function setup(
     policies: { for: async () => policyWith(over.policy) },
     evidence: { load: async () => (over.pack === undefined ? pack() : over.pack), ...over.evidence },
     stateDir,
-    pollMs: 60_000,
+    pollMs: over.pollMs === undefined ? 60_000 : over.pollMs,
     ...(over.maxWaitMs !== undefined ? { maxWaitMs: over.maxWaitMs } : {}),
     sleep: async (ms) => {
       slept.push(ms);
@@ -1027,5 +1027,94 @@ describe("the read step, fix_scope for every change, and the fix guard", () => {
     const { run } = review(world);
     expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("20 comments read") } });
     expect(world.runPack).not.toHaveBeenCalled();
+  });
+});
+
+describe("the clocks of a watched PR", () => {
+  const DAY = 86_400_000;
+  const red = () => node({ commits: { nodes: [{ commit: { oid: HEAD, committedDate: "2026-11-03T10:00:00Z", statusCheckRollup: { state: "FAILURE", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: null }] } } } }] } });
+  const owners = { ...DEFAULT_POLICY.factory, ship: { ...DEFAULT_POLICY.factory.ship, release_owners: ["bo", "cy"] } };
+  const sla = (emitted: Array<[string, Record<string, unknown>]>) => emitted.filter(([kind]) => kind.startsWith("sla."));
+
+  it("a quiet PR is reminded after two days and escalated to the release owners after five, each once, and the card stays watched", async () => {
+    let polls = 0;
+    const { run, emitted } = setup({ prFacts: async () => red(), prMerged: async () => (++polls < 8 ? open : merged) }, { pollMs: DAY, policy: { factory: owners } });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "person" } } });
+    expect(sla(emitted)).toEqual([
+      ["sla.reminder", { gate: "awaiting_ship", quietDays: 2 }],
+      ["sla.escalated", { gate: "awaiting_ship", afterDays: 5, to: ["bo", "cy"] }],
+    ]);
+  });
+
+  it("activity starts the period again", async () => {
+    let polls = 0;
+    const { run, emitted } = setup(
+      { prFacts: async () => red(), prMerged: async () => (++polls < 5 ? open : merged), prActivity: async () => (polls === 2 ? [{ id: "c1", kind: "comment", actor: "ana", at: "2026-11-04T00:00:00Z" } as never] : []) },
+      { pollMs: DAY, policy: { factory: owners } },
+    );
+    await run();
+    // activity on day 1; two quiet days after it is day 3, but the PR is merged at poll 5 (day 4): one reminder on day 3 only.
+    expect(sla(emitted)).toEqual([["sla.reminder", { gate: "awaiting_ship", quietDays: 2 }]]);
+    expect(polls).toBe(5);
+  });
+
+  it("0 turns the clocks off", async () => {
+    let polls = 0;
+    const off = { ...DEFAULT_POLICY.factory, ship: { ...DEFAULT_POLICY.factory.ship, sla: { reminder_days: 0, escalate_days: 0 } } };
+    const { run, emitted } = setup({ prFacts: async () => red(), prMerged: async () => (++polls < 8 ? open : merged) }, { pollMs: DAY, policy: { factory: off } });
+    await run();
+    expect(sla(emitted)).toEqual([]);
+  });
+});
+
+describe("the poll interval comes from the repository's ship.poll_minutes", () => {
+  const polled = (poll_minutes: number, pollMs: number | null) => {
+    let polls = 0;
+    const policy = { factory: { ...DEFAULT_POLICY.factory, ship: { ...DEFAULT_POLICY.factory.ship, poll_minutes } } };
+    return setup({ prMerged: async () => (++polls < 3 ? open : merged) }, { policy, pollMs });
+  };
+
+  it("sleeps the repository's minutes between polls when no machine-wide interval is set", async () => {
+    const { run, slept } = polled(7, null);
+    await run();
+    expect(slept).toEqual([420_000, 420_000]);
+  });
+
+  it("MACHINE_SHIP_POLL_INTERVAL, when set, wins for every repository", async () => {
+    const { run, slept } = polled(7, 5_000);
+    await run();
+    expect(slept).toEqual([5_000, 5_000]);
+  });
+});
+
+describe("a stale head is re-verified once", () => {
+  const stale = () => node({ commits: { nodes: [{ commit: { oid: HEAD, committedDate: "2026-10-01T10:00:00Z", statusCheckRollup: { state: "SUCCESS", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: null }] } } } }] } });
+  const go = (world: ReturnType<typeof loopWorld>, answers: Partial<GitHub> = {}, over: Parameters<typeof setup>[1] = {}) => {
+    let polls = 0;
+    return setup({ prFacts: async () => stale(), prMerged: async () => (++polls < 6 ? open : merged), prActivity: async () => [], prFiles: async () => [{ path: "src/export.ts" }] as never, ...answers }, { loop: world.loop, evidence: world.evidence, ...over });
+  };
+
+  it("runs the project's checks over the change once, keeps cursor.reverified, and the next poll finds the head fresh", async () => {
+    const world = loopWorld();
+    const { run } = go(world, {}, { policy: { autoMerge: "low" } });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
+    expect(world.checks).toHaveBeenCalledTimes(1);
+    expect(world.rebase).not.toHaveBeenCalled();
+    expect((await loadCursor(stateDir, "t1"))!.reverified).toMatchObject({ sha: HEAD });
+  });
+
+  it("checks that fail go to a person with the findings", async () => {
+    const world = loopWorld({ checks: { outcome: "fail", detail: { findings: [{ title: "lint", body: "x" }], error: "lint failed" } } });
+    const { run } = go(world);
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("stale") } });
+    expect((await loadCursor(stateDir, "t1"))!.reverified).toBeUndefined();
+  });
+
+  it("a moved base with no rebase left goes to a person and runs no checks", async () => {
+    const world = loopWorld();
+    const behind = () => node({ mergeStateStatus: "BEHIND", commits: { nodes: [{ commit: { oid: HEAD, committedDate: "2026-10-01T10:00:00Z", statusCheckRollup: { state: "SUCCESS", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: null }] } } } }] } });
+    const { run } = go(world, { prFacts: async () => behind() }, { policy: { factory: { ...FACTORY_DEFAULTS, verify: { ...FACTORY_DEFAULTS.verify, auto_rebase: 0 } } } });
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("stale") } });
+    expect(world.checks).not.toHaveBeenCalled();
   });
 });

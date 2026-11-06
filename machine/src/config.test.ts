@@ -29,7 +29,7 @@ describe("loadConfig", () => {
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
       githubPrs: { enabled: true, intervalMs: 60_000 },
-      shipPoll: { intervalMs: 60_000, maxWaitDays: 14 },
+      shipPoll: { intervalMs: null, maxWaitDays: 14 },
       githubToken: null,
       graphIntervalSecs: 600,
       retentionDays: DEFAULT_RETENTION_DAYS,

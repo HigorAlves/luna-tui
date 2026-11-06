@@ -838,7 +838,7 @@ describe("the ship approval (the release question after readiness)", () => {
 describe("the open release question is probed once per poll interval", () => {
   const pack = { summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk: "high" as const, rollback: "revert", howToVerify: "run it", commitSha: "9c1f0e2a7b3d", media: [], at: "2026-11-04T00:00:00.000Z" };
   const learned: string[] = [];
-  const build = async (probe: (t: unknown, g: unknown) => Promise<"merged" | "closed" | "withdraw" | "keep">, shipProbeMs = 0) => {
+  const build = async (probe: (t: unknown, g: unknown) => Promise<"merged" | "closed" | "withdraw" | "keep">, shipProbeMs: number | null = 0) => {
     const truth = new DecisionTruth({ setTruth: async (p, id) => (learned.push(`${p}:${id}`), true), read: async () => ({ answer: {} }) as never }, { told: async () => {} });
     const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, shipGateProbe: probe as never, shipProbeMs, truth });
     stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk: "high", decisions: { finding_classify: ["rec1"] } } });
@@ -885,6 +885,14 @@ describe("the open release question is probed once per poll interval", () => {
     expect(probe).toHaveBeenCalledTimes(1);
     expect((await p.get(id)).state).toBe("awaiting_ship");
     expect((await p.approvals(id)).find((a) => a.decision === null)).toBeDefined();
+  });
+
+  it("with no machine-wide interval the repository's ship.poll_minutes sets it (five by default)", async () => {
+    const probe = vi.fn(async () => "keep" as const);
+    const { p } = await build(probe, null);
+    await p.tick();
+    await p.tick();
+    expect(probe).toHaveBeenCalledTimes(1);
   });
 
   it("a probe that throws leaves the gate open", async () => {
