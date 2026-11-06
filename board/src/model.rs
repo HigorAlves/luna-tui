@@ -1711,6 +1711,9 @@ pub struct ImageHealth {
     pub base: Option<String>,
     pub built_at: Option<String>,
     pub last_failure: Option<String>,
+    /// A base the repository names that nobody approved yet; it runs on the machine's image until you approve it.
+    #[serde(default)]
+    pub pending_base: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -1751,6 +1754,11 @@ impl RepoHealth {
             line.push_str(&format!(" · build failed: {}", plain(why, 60)));
         }
         line
+    }
+
+    /// The base waiting for approval, on its own line, with the key: approving trusts that image with the stage's credential.
+    pub fn pending_line(&self) -> Option<String> {
+        self.image.pending_base.as_ref().map(|base| format!("base waiting for you: {} (A approves; it will run with the stage's credential)", plain(base, 80)))
     }
 
     /// The graph in one line: off, building, or its commit, distance, Graphify, age and last failure.

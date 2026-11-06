@@ -40,6 +40,7 @@ describe.skipIf(!ready)("a repository's image, built for real", () => {
       imageOf: async () => ({ base }),
       slugOf: () => "test-11b-integration",
       docker: dockerImages(),
+      approvals: { isApproved: async () => true },
     });
     const { image } = await images.ensure("/anywhere");
     built.push(image);

@@ -31,3 +31,7 @@ the image is not rebuilt. A repository's image tag is derived from this key (`re
 
 `machine/runner/check-layer.sh <image>` checks the entry, the tools and the copy onto a stock `python:3.13-slim`.
 `RUNNER_REPO=hardness-runner-test-x machine/runner/build.sh` builds under another name, leaving `hardness-runner:dev` alone.
+
+## Trust
+
+The layer runs on the base image's own root filesystem: the factory process is started by the base's loader and libc, and the base's `ENV`, `/etc/ld.so.preload` or a replaced `/bin/sh` run before the guards load. So an approved base is trusted with the stage's credential, like code you run yourself: **approve only images you would run with your token.** The machine uses a base only after a person approved that exact reference for that repository (`POST /repos/base/approve`, or `A` on the repository's row on the board's Floor); an unapproved or changed `sandbox.image.base` is not pulled or built, and the repository runs on the machine's image. Approving a setup gate that proposes a base does not approve it. As cheap hardening, every container the machine starts passes `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE` empty, and `luna-stage` and the wrappers call no tool by a bare name (builtins and absolute paths in `/opt/luna` only).

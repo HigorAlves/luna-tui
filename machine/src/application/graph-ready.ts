@@ -17,6 +17,20 @@ export type GraphReadiness = { state: "ready" } | { state: "off" } | { state: "s
 
 const REASON_CAP = 400;
 
+/** One build in flight per repository: two cards, a card and the watch, a rebuild on merge all wait for the same build. The entry goes when it settles. */
+const inflight = new Map<string, Promise<unknown>>();
+function buildOnce(deps: GraphReadyDeps, repoPath: string, signal: AbortSignal): Promise<unknown> {
+  const running = inflight.get(repoPath);
+  if (running) return running;
+  const started = deps.graph.build(repoPath, signal);
+  const entry = started.finally(() => {
+    if (inflight.get(repoPath) === entry) inflight.delete(repoPath);
+  });
+  entry.catch(() => undefined);
+  inflight.set(repoPath, entry);
+  return entry;
+}
+
 /** A person's word on an escalated card: an approval whose response says `{ "graph": "skip" }` lets the card go on without a graph. */
 export const graphSkipped = (approvals: readonly Pick<ApprovalRow, "response">[]): boolean => approvals.some((a) => a.response?.graph === "skip");
 
@@ -59,13 +73,16 @@ export async function ensureGraphReady(
           reject(new Error(`the build did not finish in ${minutes} minutes`));
         }, minutes * 60_000);
       });
-      await Promise.race([deps.graph.build(input.repoPath, inner.signal), timeout]);
+      await Promise.race([buildOnce(deps, input.repoPath, inner.signal), timeout]);
       await input.note?.("the code graph is built").catch(() => {});
       return { state: "ready" };
     } catch (error) {
       last = error instanceof Error ? error.message : String(error);
       if (input.signal.aborted) return { state: "failed", reason: "the card was stopped while it waited for the graph" };
-      if (/did not finish in/.test(last)) return { state: "failed", reason: flat(last) };
+      if (/did not finish in/.test(last)) {
+        inflight.delete(input.repoPath); // a build that outlived its limit does not hold the repository: the next caller starts afresh
+        return { state: "failed", reason: flat(last) };
+      }
     } finally {
       clearTimeout(timer);
       input.signal.removeEventListener("abort", stop);

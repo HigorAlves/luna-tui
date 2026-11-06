@@ -11,16 +11,17 @@ describe("a repository's image and graph health", () => {
       repos: ["/a/shop", "/a/plain", "/a/off"],
       policy: async (r) => ({ graph: r !== "/a/off", factory: { sandbox: { image: { base: r === "/a/shop" ? "python:3.13-slim" : null } } } }),
       machineImage: "hardness-runner:dev",
-      images: { status: (r) => (r === "/a/shop" ? { image: "hardness-runner-shop:1", builtAt: "2026-11-05T09:00:00Z", lastFailure: "step 3 failed" } : null) },
+      images: { pending: async (r) => (r === "/a/plain" ? "attacker/x:1" : null), status: (r) => (r === "/a/shop" ? { image: "hardness-runner-shop:1", builtAt: "2026-11-05T09:00:00Z", lastFailure: "step 3 failed" } : null) },
       graph: { stampOf: async (r) => (r === "/a/off" ? null : stamp), behind: async () => 7 },
       watch: { health: (r) => ({ building: r === "/a/plain", lastFailure: r === "/a/shop" ? "exit code 1" : null }) },
     });
     expect(shop).toEqual({
       repo: "/a/shop",
-      image: { inUse: "hardness-runner-shop:1", base: "python:3.13-slim", builtAt: "2026-11-05T09:00:00Z", lastFailure: "step 3 failed" },
+      image: { inUse: "hardness-runner-shop:1", base: "python:3.13-slim", builtAt: "2026-11-05T09:00:00Z", lastFailure: "step 3 failed", pendingBase: null },
       graph: { on: true, commit: stamp.commit, behind: 7, graphify: "0.9.34", builtAt: stamp.builtAt, building: false, lastFailure: "exit code 1" },
     });
-    expect(plain).toMatchObject({ image: { inUse: "hardness-runner:dev", base: null, builtAt: null, lastFailure: null }, graph: { building: true } });
+    expect(plain).toMatchObject({ image: { inUse: "hardness-runner:dev", base: null, builtAt: null, lastFailure: null, pendingBase: "attacker/x:1" }, graph: { building: true } });
+    expect(shop!.image.pendingBase).toBeNull();
     expect(off).toMatchObject({ graph: { on: false, commit: null, behind: null, graphify: null, builtAt: null } });
   });
 });

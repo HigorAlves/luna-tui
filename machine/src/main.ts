@@ -61,6 +61,7 @@ import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
 import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
+import { imageSpecOf } from "./domain/image-spec.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
@@ -470,14 +471,25 @@ const knownRepos = async (): Promise<string[]> => {
   for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
   return [...new Set(known)];
 };
+/** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now; any other reference is refused. */
+const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
+  if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
+  if (!(await knownRepos()).includes(repo)) return { ok: false, reason: "the machine does not know that repository" };
+  const spec = imageSpecOf((await policies.for(repo)).factory.sandbox.image);
+  if (spec.kind !== "repo" || spec.base !== base) return { ok: false, reason: "that is not the base in the repository's luna.yaml now" };
+  await agentDeps.approvals.approve(repo, base);
+  agentDeps.repoImages.approved(repo);
+  return { ok: true };
+};
 const app = createApp({
+  approveBase,
   repoHealth: () =>
     repoHealthOf({
       repos: [],
       knownRepos,
       policy: (repoPath) => policies.for(repoPath),
       machineImage: config.runnerImage,
-      images: { status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null },
+      images: { status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null },
       graph,
       watch: { health: (repoPath) => graphWatch?.health(repoPath) ?? { building: false, lastFailure: null } },
     }),

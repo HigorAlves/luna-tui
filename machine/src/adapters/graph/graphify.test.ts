@@ -162,6 +162,29 @@ describe("a graph and the image that builds it", () => {
   });
 });
 
+describe("stamp.json written by a build in the repository's image", () => {
+  it("is not followed when it is a link, and a link planted by the build is replaced, not written through", async () => {
+    const outside = join(realpathSync(mkdtempSync(join(tmpdir(), "outside-"))), "target.json");
+    writeFileSync(outside, JSON.stringify(stampFor("a".repeat(40))));
+    const { graph, repo } = setup(0, { imageId: async () => "sha256:x" });
+    // a build that leaves stamp.json as a link out of its folder
+    const planted = setup(0, {
+      imageId: async () => "sha256:x",
+      sandbox: async (run: SandboxRun): Promise<SandboxResult> => {
+        const out = run.mounts!.find((m) => m.container === "/graph")!.host;
+        mkdirSync(join(out, "graphify-out"), { recursive: true });
+        writeFileSync(join(out, "graphify-out", "graph.json"), "{}");
+        symlinkSync(outside, join(out, "stamp.json"));
+        return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
+      },
+    });
+    await expect(planted.graph.build(planted.repo)).rejects.toBeInstanceOf(GraphBuildError);
+    expect(readFileSync(outside, "utf8")).toBe(JSON.stringify(stampFor("a".repeat(40))));
+    expect(graph).toBeDefined();
+    expect(repo).toBeDefined();
+  });
+});
+
 describe("graphifyGraph.isFresh", () => {
   it("is stale only when the graph's commit is a strict ancestor of the base", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "fresh-")));

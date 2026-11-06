@@ -6,6 +6,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
 import { branchBase, changedPaths as hostChangedPaths, diffText, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
+import { RepoImageError } from "../repo-images.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
@@ -210,14 +211,20 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         result = { code: 1, stdout: "", stderr: "skipped: the 30 minute checks budget ran out" };
         timedOut = true;
       } else {
-        result = await checkExec(argv[0]!, argv.slice(1), {
-          cwd,
-          signal,
-          timeoutMs: remaining,
-          env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
-          services,
-          ...(task.repoPath ? { repoPath: task.repoPath } : {}),
-        });
+        try {
+          result = await checkExec(argv[0]!, argv.slice(1), {
+            cwd,
+            signal,
+            timeoutMs: remaining,
+            env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
+            services,
+            ...(task.repoPath ? { repoPath: task.repoPath } : {}),
+          });
+        } catch (error) {
+          // The repository's image could not be built: an environment problem with the reason, not a crashed stage.
+          if (!(error instanceof RepoImageError)) throw error;
+          return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "checks", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
+        }
         timedOut = result.code !== 0 && Date.now() >= deadline;
       }
       if (signal.aborted) return aborted();

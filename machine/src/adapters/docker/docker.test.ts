@@ -163,6 +163,7 @@ describe("sandboxExecArgs", () => {
     expect(envs).toEqual([
       "HOME=/tmp",
       "TMPDIR=/tmp",
+      ...["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"].map((n) => `${n}=`),
       "GIT_CONFIG_COUNT=2",
       "GIT_CONFIG_KEY_0=safe.directory",
       "GIT_CONFIG_VALUE_0=*",
@@ -238,5 +239,17 @@ describe("sandboxExecutor's image", () => {
     await exec("true", [], { cwd: "/wt/same-name/task-2", repoPath: "/b/shop" });
     await exec("true", [], { cwd: "/wt/same-name/task-3" });
     expect(seen).toEqual(["img-of-/a/shop", "img-of-/b/shop", "machine:dev"]);
+  });
+});
+
+describe("the environment a repository's image cannot choose", () => {
+  const NAMES = ["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"];
+  it("is set empty on every stage container and every check container", () => {
+    const stage = sandboxArgs(run(), "/in", "/out");
+    const check = sandboxExecArgs({ name: "c", image: "img", worktree: "/wt", argv: ["true"] } as never);
+    for (const args of [stage, check]) for (const name of NAMES) {
+      const at = args.findIndex((a, i) => args[i - 1] === "-e" && a === `${name}=`);
+      expect(at, name).toBeGreaterThan(-1);
+    }
   });
 });

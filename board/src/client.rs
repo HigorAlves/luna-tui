@@ -245,6 +245,11 @@ impl Machine {
         Self::typed(self.agent.get(self.url("/repos")).call())
     }
 
+    /// Approves the exact base the repository's luna.yaml names now; the machine refuses any other reference.
+    pub fn approve_base(&self, repo: &str, base: &str) -> Result<(), String> {
+        Self::json(self.agent.post(self.url("/repos/base/approve")).send_json(json!({ "repo": repo, "base": base }))).map(|_| ())
+    }
+
     pub fn engines(&self) -> Result<Vec<EngineInfo>, String> {
         Self::typed(self.agent.get(self.url("/engines")).call())
     }

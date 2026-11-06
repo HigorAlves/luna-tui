@@ -2079,7 +2079,7 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
 
     // The per-repo table takes the bottom when there is more than one repo to compare, the
     // per-engine one sits above it once there are numbers.
-    let repo_height = if floor.repos.is_empty() { 0 } else { (floor.repos.len() as u16 + 3 + floor.health.len() as u16 * 2).min(area.height / 2) };
+    let repo_height = if floor.repos.is_empty() { 0 } else { (floor.repos.len() as u16 + 3 + floor.health.len() as u16 * 3).min(area.height / 2) };
     let engine_rows = floor_engine_rows(floor);
     let engine_height = match (&floor.d7, &floor.by_engine) {
         (None, _) => 0,
@@ -2235,11 +2235,14 @@ fn render_floor_repos(frame: &mut Frame, area: Rect, floor: &FloorState, head_st
     // Under the table: each repository's image and graph, and what failed.
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     for h in &floor.health {
-        if out.len() + 2 > area.height as usize {
+        if out.len() + 3 > area.height as usize {
             break;
         }
         out.push(Line::from(Span::from(format!("  {:<16}{}", truncate(h.name(), 15), h.image_line(now))).style(label_style)));
         out.push(Line::from(Span::from(format!("  {:<16}{}", "", h.graph_line(now))).style(label_style)));
+        if let Some(pending) = h.pending_line() {
+            out.push(Line::from(Span::from(format!("  {:<16}{}", "", pending)).style(Style::new().fg(c(ACCENT)).bold())));
+        }
     }
     frame.render_widget(Paragraph::new(out), area);
 }
@@ -2613,6 +2616,19 @@ mod tests {
         assert!(text.contains("image: machine's") && text.contains("graph: off"), "{text}");
         assert!(text.contains("build failed: step 3 [31m failed really"), "{text}");
         assert!(!text.contains('\u{1b}'), "{text}");
+    }
+
+    #[test]
+    fn floor_shows_a_base_waiting_for_approval_on_its_own_line_with_the_key() {
+        let mut state = floor();
+        state.repos = repos();
+        state.health = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","image":{"inUse":"hardness-runner:dev","base":null,"builtAt":null,"lastFailure":null,"pendingBase":"attacker/x:1"},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        let text = render(160, 40, &state);
+        assert!(text.lines().any(|l| l.contains("base waiting for you: attacker/x:1") && l.contains("A approves")), "{text}");
     }
 
     #[test]

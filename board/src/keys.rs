@@ -708,6 +708,7 @@ const DIGEST: &[Binding] = &[
 const FLOOR: &[Binding] = &[
     b("tab / shift+tab", "focus the next / previous repo", Group::Move, Scope::Floor, on, 70),
     b("R", "refresh the numbers", Group::App, Scope::Floor, on, 60),
+    b("A", "approve a waiting base image", Group::App, Scope::Floor, on, 55),
     b("esc / F / q", "close", Group::Move, Scope::Floor, on, 20),
     cmd(b("?", "keys", Group::App, Scope::Floor, on, 100), "help"),
 ];

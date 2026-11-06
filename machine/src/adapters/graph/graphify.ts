@@ -4,7 +4,10 @@
 // entrypoint overridden to `/graph-tools/build.py`, over a clean checkout of the default branch
 // mounted read-only; no model, no credential.
 import { existsSync, readlinkSync, statSync } from "node:fs";
-import { appendFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { appendFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
+
+import { readRegularFile } from "../fs/bounded.ts";
 import { join, sep } from "node:path";
 
 import { FACTORY_DEFAULTS, isPlainRepoPath } from "@hardness/contracts";
@@ -21,6 +24,7 @@ import { repoSlug } from "./slug.ts";
 /** Where a repo's misses file is mounted in the build container. */
 const MISSES_MOUNT = "/graph-misses.jsonl";
 /** The misses file is the machine's own, but a card declares what goes in it: it is read only up to this size, and at most this many paths seed a shortlist. */
+const MAX_STAMP_BYTES = 64 * 1024;
 const MAX_MISSES_BYTES = 2 * 1024 * 1024;
 export const MAX_PAST_MISSES = 20;
 const BUILD_TIMEOUT_MS = 15 * 60_000;
@@ -67,6 +71,17 @@ export interface GraphifyDeps {
   git?: GraphGit;
 }
 
+/** Replaces `stamp.json` without following whatever the build left there: the entry is removed, then created exclusively and without following a link. */
+async function writeStamp(path: string, text: string): Promise<void> {
+  await rm(path, { force: true });
+  const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+  try {
+    await handle.writeFile(text, "utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 export function graphifyGraph(deps: GraphifyDeps): Graph {
   const git: GraphGit = deps.git ?? { ensureCleanCheckout, headCommit };
   const behindOf = git.commitsBehind ?? commitsBehind;
@@ -75,7 +90,8 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
 
   async function readStamp(dir: string): Promise<GraphStamp | null> {
     try {
-      const stamp = JSON.parse(await readFile(join(dir, "stamp.json"), "utf8")) as GraphStamp;
+      // Written by a build that ran in the repository's image: read only a regular file (never a link out of the folder), within a cap.
+      const stamp = JSON.parse(await readRegularFile(join(dir, "stamp.json"), MAX_STAMP_BYTES)) as GraphStamp;
       return typeof stamp?.commit === "string" ? stamp : null;
     } catch {
       return null;
@@ -162,7 +178,7 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       // The image the graph was built in, by its id: the machine records it, the container cannot.
       if (stamp && deps.imageId) {
         stamp = { ...stamp, image: await deps.imageId(image) };
-        await writeFile(join(building, "stamp.json"), JSON.stringify(stamp, null, 2), "utf8");
+        await writeStamp(join(building, "stamp.json"), JSON.stringify(stamp, null, 2));
       }
       if (!stamp) {
         await rm(building, { recursive: true, force: true });

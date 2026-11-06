@@ -43,6 +43,10 @@ export const CACHE_ENV = [
   `UV_CACHE_DIR=${CACHE_DIR}/uv`,
 ];
 
+/** Variables a repository's image must not set for the process the machine starts in it (`ENV NODE_OPTIONS=--require=...` would run its code in the factory before the guards load): every container the machine starts passes them empty. */
+export const BLANKED_ENV = ["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"];
+const blankedEnv = (): string[] => BLANKED_ENV.flatMap((name) => ["-e", `${name}=`]);
+
 /** The docker volume holding one repo's caches: `hardness-cache-<repo>`, from the checkout's name. */
 export function cacheVolumeFor(repoPath: string): string {
   const name = repoPath.replace(/\/+$/, "").split("/").pop() ?? "repo";
@@ -138,6 +142,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     // otherwise hit the now-read-only root filesystem — point HOME at the one writable,
     // throwaway place left: the tmpfs above.
     "-e", "HOME=/tmp",
+    ...blankedEnv(),
     // Temp files live on the tmpfs; the SDK's sessions too, unless a host dir is mounted below.
     "-e", "TMPDIR=/tmp",
     "-e", `CLAUDE_CONFIG_DIR=${run.sessionMount ? "/session" : "/tmp/claude"}`,
@@ -308,7 +313,7 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
   args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
-  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
+  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...blankedEnv(), ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.env ?? {})) args.push("-e", `${key}=${value}`);
   args.push(...cacheArgs(run.cacheVolume));
   args.push(...networkArgs(run.network, run.serviceEnv));

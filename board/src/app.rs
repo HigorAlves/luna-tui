@@ -1982,13 +1982,14 @@ impl App {
 
     /// The keys `handle_floor` matches; the registry's Floor scope must list exactly these.
     #[cfg(test)]
-    pub(crate) const HANDLED_FLOOR: &[&str] = &["esc", "F", "q", "?", "R", "tab", "shift+tab"];
+    pub(crate) const HANDLED_FLOOR: &[&str] = &["esc", "F", "q", "?", "R", "A", "tab", "shift+tab"];
 
     fn handle_floor(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Esc | KeyCode::Char('F') | KeyCode::Char('q') => self.floor = None,
             KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('R') => self.refresh_floor(),
+            KeyCode::Char('A') => self.approve_pending_base(),
             KeyCode::Tab | KeyCode::BackTab => {
                 if let Some(floor) = self.floor.as_mut() {
                     floor.cycle(if key.code == KeyCode::Tab { 1 } else { -1 });
@@ -2000,6 +2001,26 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// A: approves the base the focused repository is waiting on (the machine checks it is the one in its luna.yaml).
+    fn approve_pending_base(&mut self) {
+        let Some(floor) = self.floor.as_ref() else { return };
+        let Some(repo) = floor.repos.get(floor.cursor.wrapping_sub(1)).and_then(|r| r.repo.clone()) else {
+            self.notify("focus a repository (tab) to approve its base".to_string(), true);
+            return;
+        };
+        let Some(base) = floor.health.iter().find(|h| h.repo == repo).and_then(|h| h.image.pending_base.clone()) else {
+            self.notify("that repository has no base waiting".to_string(), false);
+            return;
+        };
+        match self.machine.approve_base(&repo, &base) {
+            Ok(()) => {
+                self.notify(format!("approved base {}", crate::model::plain(&base, 60)), false);
+                self.refresh_floor();
+            }
+            Err(e) => self.notify(format!("approve base: {e}"), true),
+        }
     }
 
     /// The second key of `z…` (fold) and `g…` (group): `zc`/`zo` fold/unfold the focused

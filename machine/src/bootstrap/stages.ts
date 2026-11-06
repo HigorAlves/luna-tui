@@ -30,6 +30,7 @@ import { type ShipDecide } from "../application/stages/ship-fixes.ts";
 import { shipMonitor } from "../application/stages/ship-monitor.ts";
 import { verifyRunner } from "../application/stages/verify.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
+import { type ApprovedBases, approvedBases } from "../adapters/fs/approved-bases.ts";
 import { dockerImages } from "../adapters/docker/image-build.ts";
 import { repoSlug } from "../adapters/graph/slug.ts";
 import { ensureGraphReady } from "../application/graph-ready.ts";
@@ -57,7 +58,7 @@ export interface RealStagesResult {
   checksExec: ReturnType<typeof sandboxExecutor> | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
    *  the credentials, the state dir, the worktrees dir and each repo's luna.yaml; null when agents are off or something is missing. */
-  agentDeps: { image: string; repoImages: ReturnType<typeof makeRepoImages>; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
+  agentDeps: { image: string; approvals: ApprovedBases; repoImages: ReturnType<typeof makeRepoImages>; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
 }
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
@@ -134,11 +135,13 @@ export async function buildRealStages(
   // Each repository's image: the machine's, or one built from the base its own luna.yaml names. Checks are given the repository
   // explicitly (`repoPath` in the exec options), never guess it from a folder.
   const imageEvents: ImageEventSink = { sink: (event) => console.warn(`repository image: ${JSON.stringify(event)}`) };
+  const approvals = approvedBases(config.stateDir);
   const repoImages = makeRepoImages({
     machineImage: config.runnerImage,
     imageOf: async (repoPath) => (await policies.for(repoPath)).factory.sandbox.image,
     slugOf: repoSlug,
     docker: dockerImages(),
+    approvals,
     onEvent: (event) => imageEvents.sink(event),
   });
   const checksExec = sandboxExecutor({ machine: config.runnerImage, imageOf: async (repoPath) => (await repoImages.ensure(repoPath)).image });
@@ -343,7 +346,7 @@ export async function buildRealStages(
       }),
     ),
   };
-  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

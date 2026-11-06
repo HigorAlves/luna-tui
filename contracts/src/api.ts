@@ -510,6 +510,8 @@ export interface RepoHealth {
     /** When its own image was built by this machine; null when unknown or not its own. */
     builtAt: string | null;
     lastFailure: string | null;
+    /** A base the repository's luna.yaml names that no person approved yet (flattened, capped); it runs on the machine's image until `POST /repos/base/approve`. */
+    pendingBase: string | null;
   };
   graph: {
     /** `policy.graph` is on. */

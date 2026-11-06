@@ -40,8 +40,8 @@ export function dockerImages(deps: { exec?: Run } = {}): ImageDocker {
     async exists(tag) {
       return (await run("docker", ["image", "inspect", tag])).code === 0;
     },
-    async checkBase(base) {
-      const pulled = await run("docker", ["pull", "--quiet", base], { timeoutMs: PULL_TIMEOUT_MS });
+    async checkBase(base, signal) {
+      const pulled = await run("docker", ["pull", "--quiet", base], { timeoutMs: PULL_TIMEOUT_MS, ...(signal ? { signal } : {}) });
       // A base that is only local (not in any registry) is used as it is; one that is neither pullable nor local is refused.
       if (pulled.code !== 0 && (await run("docker", ["image", "inspect", base])).code !== 0) return { ok: false, reason: `the base image could not be pulled: ${pulled.stderr || pulled.stdout}` };
       const info = await run("docker", ["image", "inspect", "--format", "{{.Id}}|{{.Os}}|{{.Architecture}}", base]);
@@ -54,7 +54,7 @@ export function dockerImages(deps: { exec?: Run } = {}): ImageDocker {
         "docker",
         ["run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "64", "--memory", "256m",
          "--entrypoint", "sh", base, "-c", "ls /lib64/ld-linux-* /lib/ld-linux-* /lib/*-linux-gnu/ld-linux-* 2>/dev/null | head -1; command -v git"],
-        { timeoutMs: CHECK_TIMEOUT_MS },
+        { timeoutMs: CHECK_TIMEOUT_MS, ...(signal ? { signal } : {}) },
       );
       const lines = probe.stdout.trim().split("\n").map((l) => l.trim());
       if (!lines.some((l) => /ld-linux/.test(l))) return { ok: false, reason: "the base image is not glibc Linux with a shell (the machine's layer needs both)" };

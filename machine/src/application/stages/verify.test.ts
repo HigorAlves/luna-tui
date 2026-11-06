@@ -1,3 +1,4 @@
+import { RepoImageError } from "../repo-images.ts";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -642,5 +643,14 @@ describe("with no sandbox to run the repository's checks in", () => {
     const result = await runner(context);
     expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", reason: expect.stringContaining("never run on the host") } });
     expect(pack).not.toHaveBeenCalled();
+  });
+});
+
+describe("when the repository's image cannot be built while a check runs", () => {
+  it("escalates as an environment problem with the reason, not as an exception", async () => {
+    const exec = async () => { throw new RepoImageError("step 3 failed: no such package"); };
+    const runner = verifyRunner({ exec: exec as never, runPack: vi.fn(), stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    expect(await runner(context)).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, reason: expect.stringContaining("no such package") } });
   });
 });

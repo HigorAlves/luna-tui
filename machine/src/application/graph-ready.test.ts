@@ -77,6 +77,22 @@ describe("a card waits for its repository's graph", () => {
     expect(r).toMatchObject({ state: "failed", reason: expect.stringMatching(/minutes/) });
   });
 
+  it("starts one build for a repository however many callers wait for it", async () => {
+    let started = 0;
+    let release: (s: GraphStamp) => void = () => {};
+    const t = make({ builds: () => { started++; return new Promise<GraphStamp>((r) => (release = r)); } });
+    const a = t.call();
+    const b = t.call();
+    await new Promise((r) => setTimeout(r, 10));
+    release(stamp());
+    expect(await Promise.all([a, b])).toEqual([{ state: "ready" }, { state: "ready" }]);
+    expect(started).toBe(1);
+    // the entry is gone once it settled: the next caller may build again
+    const again = make({ stamp: null });
+    await again.call();
+    expect(again.builds()).toBe(1);
+  });
+
   it("lets the card go on without a graph when a person said so, and says so", async () => {
     const t = make({ builds: async () => { throw new GraphBuildError("x"); } });
     expect(await t.call({ skip: true })).toEqual({ state: "skipped" });

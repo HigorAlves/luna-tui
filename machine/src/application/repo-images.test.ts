@@ -10,7 +10,7 @@ function fakeDocker(over: Partial<ImageDocker> = {}) {
   const have = new Set<string>();
   const docker: ImageDocker = {
     layerKey: async () => "layer-1",
-    checkBase: async (base) => (calls.push(`check ${base}`), { ok: true, digest }),
+    checkBase: async (base, _signal?: AbortSignal) => (calls.push(`check ${base}`), { ok: true, digest }),
     exists: async (tag) => have.has(tag),
     build: async (spec) => {
       calls.push(`build ${spec.tag} from ${spec.base}`);
@@ -23,8 +23,9 @@ function fakeDocker(over: Partial<ImageDocker> = {}) {
   return { docker, calls };
 }
 const events: unknown[] = [];
-const make = (image: { base?: string | null } | undefined, docker: ImageDocker) =>
-  repoImages({ machineImage: MACHINE, imageOf: async () => image, slugOf: (p) => `slug-${p}`, docker, onEvent: (e) => events.push(e) });
+const approveAll = { isApproved: async () => true };
+const make = (image: { base?: string | null } | undefined, docker: ImageDocker, approvals: { isApproved(repoPath: string, base: string): Promise<boolean> } = approveAll, extra: { now?: () => number } = {}) =>
+  repoImages({ machineImage: MACHINE, imageOf: async () => image, slugOf: (p) => `slug-${p}`, docker, approvals, onEvent: (e) => events.push(e), ...extra });
 
 describe("the image a repository's stages run in", () => {
   it("is the machine's image when the repository names no base, and docker is never asked", async () => {
@@ -79,7 +80,8 @@ describe("the image a repository's stages run in", () => {
     let n = 0;
     const log = `${"noise\n".repeat(500)}step 3 failed <b>@alice</b>\nreal reason`;
     const { docker, calls } = fakeDocker({ build: async (s) => (++n === 1 ? { ok: false, log } : (calls.push(`build ${s.tag}`), { ok: true })) });
-    const images = make({ base: "debian:12" }, docker);
+    let clock = 0;
+    const images = make({ base: "debian:12" }, docker, approveAll, { now: () => clock });
     const err = await images.ensure("/r").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(RepoImageError);
     const reason = (err as RepoImageError).reason;
@@ -87,6 +89,7 @@ describe("the image a repository's stages run in", () => {
     expect(reason).not.toMatch(/[<>\n]/);
     expect(reason.length).toBeLessThan(1200);
     expect(JSON.stringify(events)).toContain("real reason");
+    clock += 11 * 60_000;
     expect((await images.ensure("/r")).image).toMatch(/^hardness-runner-/);
   });
 
@@ -115,5 +118,73 @@ describe("the image a repository's stages run in", () => {
     const failing = make({ base: "debian:13" }, fakeDocker({ build: async () => ({ ok: false, log: "no space left" }) }).docker);
     await failing.ensure("/f").catch(() => undefined);
     expect(failing.status("/f")).toMatchObject({ lastFailure: expect.stringContaining("no space left") });
+  });
+
+  it("never pulls or builds a base nobody approved for the repository, runs on the machine's image, and says once that it is waiting", async () => {
+    events.length = 0;
+    const { docker, calls } = fakeDocker();
+    const approved = new Set<string>();
+    const images = make({ base: "attacker/x:1" }, docker, { isApproved: async (r, b) => approved.has(`${r}|${b}`) });
+    expect((await images.ensure("/r", undefined, "c1")).image).toBe(MACHINE);
+    expect((await images.ensure("/r", undefined, "c2")).image).toBe(MACHINE);
+    expect(calls).toEqual([]);
+    expect(events.filter((e) => (e as { kind: string }).kind === "image.base_pending")).toHaveLength(1);
+    expect(await images.pending("/r")).toBe("attacker/x:1");
+    approved.add("/r|attacker/x:1");
+    expect(await images.pending("/r")).toBeNull();
+    expect((await images.ensure("/r")).image).toMatch(/^hardness-runner-slug-/);
+    expect(calls.some((c) => c.startsWith("build"))).toBe(true);
+  });
+
+  it("needs a new approval when the reference changes", async () => {
+    const { docker, calls } = fakeDocker();
+    const approved = new Set(["/r|debian:12"]);
+    const isApproved = async (r: string, b: string) => approved.has(`${r}|${b}`);
+    expect((await make({ base: "debian:12" }, docker, { isApproved }).ensure("/r")).image).toMatch(/^hardness-runner-slug/);
+    calls.length = 0;
+    expect((await make({ base: "debian:13" }, docker, { isApproved }).ensure("/r")).image).toBe(MACHINE);
+    expect(calls).toEqual([]);
+  });
+
+  it("does not pull again for a base that just failed or was refused, until the memory runs out or the repository is approved again", async () => {
+    let clock = 0;
+    const { docker, calls } = fakeDocker({ checkBase: async (b) => (calls.push(`check ${b}`), { ok: false, reason: "unreachable registry" }) });
+    const images = make({ base: "debian:12" }, docker, approveAll, { now: () => clock });
+    await images.ensure("/r");
+    await images.ensure("/r");
+    await images.ensure("/r");
+    expect(calls).toEqual(["check debian:12"]);
+    clock += 11 * 60_000;
+    await images.ensure("/r");
+    expect(calls).toHaveLength(2);
+    images.approved("/r");
+    await images.ensure("/r");
+    expect(calls).toHaveLength(3);
+    const fail = fakeDocker({ build: async () => ({ ok: false, log: "bad" }) });
+    const f = make({ base: "debian:12" }, fail.docker);
+    await f.ensure("/r").catch(() => undefined);
+    const again = await f.ensure("/r").catch((e: unknown) => e);
+    expect(again).toBeInstanceOf(RepoImageError);
+    expect(fail.calls.filter((c) => c.startsWith("check"))).toHaveLength(1);
+  });
+
+  it("stops waiting when the caller is aborted, and passes the signal to the check", async () => {
+    let seen: AbortSignal | undefined;
+    const { docker } = fakeDocker({ checkBase: (_b, signal) => ((seen = signal), new Promise(() => {})) });
+    const ctl = new AbortController();
+    const waiting = make({ base: "debian:12" }, docker).ensure("/r", ctl.signal).catch((e: unknown) => e);
+    setTimeout(() => ctl.abort(), 10);
+    const err = (await waiting) as Error;
+    expect(err.name).toBe("AbortError");
+    expect(seen).toBeDefined();
+  });
+
+  it("does not hold one repository's slow base up behind another's", async () => {
+    const { docker } = fakeDocker({ checkBase: (b) => (b === "slow:1" ? new Promise(() => {}) : Promise.resolve({ ok: true as const, digest })) });
+    const imageOf = async (r: string) => ({ base: r === "/a" ? "slow:1" : "fast:1" });
+    const images = repoImages({ machineImage: MACHINE, imageOf, slugOf: (p) => `slug${p.replace("/", "-")}`, docker, approvals: approveAll });
+    void images.ensure("/a").catch(() => undefined);
+    const b = await Promise.race([images.ensure("/b"), new Promise<"late">((r) => setTimeout(() => r("late"), 500))]);
+    expect(b).not.toBe("late");
   });
 });
