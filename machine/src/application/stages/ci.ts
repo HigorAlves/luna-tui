@@ -189,6 +189,9 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
       return null;
     };
     if (await conflicting()) {
+      // Rebasing and force-pushing is the repository's to allow (`verify.auto_rebase`); off, a person does it.
+      const allowed = deps.policy ? (await deps.policy(task.repoPath ?? null)).autoRebase >= 1 : true;
+      if (!allowed) return stuck("the branch conflicts with the default branch and the repository does not allow an automatic rebase (verify.auto_rebase is 0)");
       const failedRebase = await rebaseAndWatch();
       if (failedRebase) return failedRebase;
       if (await conflicting()) return stuck("the branch still conflicts with the default branch after one rebase");

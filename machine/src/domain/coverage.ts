@@ -101,13 +101,23 @@ export function coverageFinding(summary: CoverageSummary, dropMax: number): Find
 /** The score a mutation run printed: its last line of the form `mutation score: 0.82` or `mutation score: 82%` (case, `-`, `_` and `=` in place of `:` allowed).
  *  A bare number is a fraction and must be 0 to 1; a percentage 0 to 100. Anything else is null: the output is data, never trusted past this. */
 export function parseMutationScore(output: string): number | null {
-  const lines = [...output.matchAll(/^\s*mutation[\s_-]score\s*[:=]\s*(\d+(?:\.\d+)?)\s*(%?)\s*$/gim)];
-  const last = lines.at(-1);
-  if (!last) return null;
-  const n = Number(last[1]);
-  const score = last[2] ? n / 100 : n;
-  return score >= 0 && score <= 1 ? score : null;
+  // The output is whatever the repository's tests chose to print, and this runs on the machine's one thread: only the last 64 KiB, one line at
+  // a time, each line trimmed and capped, against a pattern with no two adjacent runs that can match the same character (linear, never backtracking).
+  const lines = output.slice(-MUTATION_OUTPUT_TAIL).split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim();
+    if (line.length === 0 || line.length > MUTATION_LINE_MAX) continue;
+    const found = MUTATION_LINE.exec(line);
+    if (!found) continue;
+    const n = Number(found[1]);
+    const score = found[2] ? n / 100 : n;
+    return score >= 0 && score <= 1 ? score : null;
+  }
+  return null;
 }
+const MUTATION_OUTPUT_TAIL = 64 * 1024;
+const MUTATION_LINE_MAX = 120;
+const MUTATION_LINE = /^mutation[ _\t-]score[ \t]?[:=][ \t]?(\d{1,3}(?:\.\d{1,6})?)(%?)$/i;
 
 /** A `should_fix` finding when the mutation score is under the repository's minimum. */
 export function mutationFinding(score: number, min: number): Finding | null {

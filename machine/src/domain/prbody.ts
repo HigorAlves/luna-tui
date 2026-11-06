@@ -38,7 +38,8 @@ export interface PrExtra {
   head?: string | null;
 }
 
-const flat = (text: string, cap = LINE_CAP): string => safe(text).slice(0, cap);
+/** A foreign text made safe for the section: flattened, capped, and unable to hold either marker (a forged end marker would let the section grow on every update). */
+const flat = (text: string, cap = LINE_CAP): string => safe(text.replaceAll(PR_START, "").replaceAll(PR_END, "")).slice(0, cap).replaceAll(PR_START, "").replaceAll(PR_END, "");
 const short = (sha: string | null | undefined): string => (sha && /^[0-9a-f]{7,64}$/.test(sha) ? sha.slice(0, 7) : "unknown");
 
 /** Replaces the body's machine section with `section`, or appends it; everything outside the markers stays. */
@@ -55,7 +56,7 @@ const bullets = (text: string): string[] =>
     .split("\n")
     .map((line) => line.replace(/^\s*[-*]\s+/, "").trim())
     .filter(Boolean)
-    .map((line) => `- ${line}`);
+    .map((line) => `- ${flat(line)}`);
 
 export function buildPr({ task, plan, repoSlug, extra }: PrBodyInput): { title: string; body: string } {
   const jira = jiraOf(task);
@@ -63,10 +64,10 @@ export function buildPr({ task, plan, repoSlug, extra }: PrBodyInput): { title: 
   const title = prefix + task.title.trim().slice(0, Math.max(1, TITLE_MAX - prefix.length)).trimEnd();
   const why = [...(extra?.record?.goal ? [`- ${flat(extra.record.goal)}`] : []), ...bullets(plan?.brief || task.description || "")];
   const criteria = criteriaOf((plan?.criteria?.length ? plan.criteria : task.criteria) ?? []);
-  const sections = [task.title.trim()];
+  const sections = [flat(task.title.trim())];
   if (why.length > 0) sections.push(`## Why\n${why.join("\n")}`);
   if (extra?.planVersion != null) sections.push(`Plan version ${extra.planVersion}`);
-  if (criteria.length > 0) sections.push(`## Criteria\n${criteria.map((c) => `- [ ] ${c.text} (${c.id})`).join("\n")}`);
+  if (criteria.length > 0) sections.push(`## Criteria\n${criteria.map((c) => `- [ ] ${flat(c.text)} (${flat(c.id, 20)})`).join("\n")}`);
   if (extra?.scenarios?.length) {
     sections.push(`## Scenarios\n${extra.scenarios.slice(0, LIST_MAX).map((s) => `- ${flat(s.id, 20)}${s.criterion ? ` (${flat(s.criterion, 20)})` : ""}: ${flat(s.title)}, ${s.test ? `test \`${flat(s.test, 200).replace(/`/g, "")}\`` : "no test tagged"}`).join("\n")}`);
   }
@@ -85,6 +86,6 @@ export function buildPr({ task, plan, repoSlug, extra }: PrBodyInput): { title: 
     sections.push(`Closes #${source.number}`);
   }
   if (jira) sections.push(`Jira: ${jira.url}`);
-  const inner = sections.join("\n\n").slice(0, PR_SECTION_CAP - PR_START.length - PR_END.length - 4);
+  const inner = sections.join("\n\n").replaceAll(PR_START, "").replaceAll(PR_END, "").slice(0, PR_SECTION_CAP - PR_START.length - PR_END.length - 4);
   return { title, body: `${PR_START}\n${inner}\n${PR_END}` };
 }

@@ -258,6 +258,14 @@ describe("ci_watch on a conflicting PR", () => {
     expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["push", "--force-with-lease", "origin", "hardness/t1"]));
   });
 
+  it("goes to a person, with no rebase and no push, when verify.auto_rebase is 0", async () => {
+    const { run, context, rebase, exec } = setup({ polls: [green], mergeable: ["CONFLICTING"], autoRebase: 0 });
+    const result = await run(context);
+    expect(result.outcome).toBe("escalated");
+    expect(rebase).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+  });
+
   it("escalates as conflict_unresolvable when the PR still conflicts after the rebase", async () => {
     const { run, context, rebase } = setup({ polls: [green], mergeable: ["CONFLICTING", "CONFLICTING"] });
     const result = await run(context);

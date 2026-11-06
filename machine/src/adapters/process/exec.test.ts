@@ -40,4 +40,10 @@ describe("exec", () => {
     while (alive(grandchild) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
     expect(alive(grandchild)).toBe(false);
   });
+
+  it("keeps only the tail of an output bigger than its cap, so a command cannot fill the machine's memory", async () => {
+    const result = await exec("sh", ["-c", "yes 0123456789abcdef | head -c 6000000; echo THE-END"]);
+    expect(result.stdout.length).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(result.stdout.trimEnd().endsWith("THE-END")).toBe(true);
+  });
 });

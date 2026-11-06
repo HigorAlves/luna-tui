@@ -396,6 +396,13 @@ describe("verifying stage", () => {
       expect(result.detail).toMatchObject({ mutation: { score: 0.4 } });
     });
 
+    it("gives no score for a mutation run that exits non-zero, whatever it printed", async () => {
+      const s = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 2, stdout: "mutation score: 0.1", stderr: "" } } });
+      const result = await s.run(s.context);
+      expect(result.findings).toEqual([]);
+      expect((result.detail as { checks: unknown[] }).checks).toContainEqual({ name: "mutation", note: "the mutation run printed no score" });
+    });
+
     it("raises nothing at or over the minimum, and notes a run that printed no score", async () => {
       const ok = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 0, stdout: "mutation score: 90%", stderr: "" } } });
       expect((await ok.run(ok.context)).findings).toEqual([]);
@@ -533,6 +540,19 @@ describe("verifying stage", () => {
     const { run, context } = setup({ checks: { "pnpm run test": { code: 1, stdout: "boom", stderr: "" } } });
     const result = await run(context);
     expect((result.detail as { error: string }).error).toBe("`pnpm run test` failed:\nboom");
+  });
+
+  it("fails on a confident blocker whatever the verifier's own verdict says, and never runs the suite", async () => {
+    const s = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "pass", summary: "fine", findings: [finding({ severity: "blocker", confidence: 0.95 })] } } } });
+    const result = await s.run(s.context);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ verdict: "fail", step: "review" });
+    expect(s.exec).not.toHaveBeenCalled();
+  });
+
+  it("fails on a confident blocker when the pack only asked a question", async () => {
+    const s = setup({ pack: { outcome: "needs_input", detail: { answer: { findings: [finding({ severity: "security", confidence: 0.9 })] }, questions: [{ q: "?" }] } } });
+    expect((await s.run(s.context)).outcome).toBe("fail");
   });
 
   it("treats a pack that asks questions as a pass with a note", async () => {

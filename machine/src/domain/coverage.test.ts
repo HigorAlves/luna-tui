@@ -119,3 +119,17 @@ describe("the mutation score", () => {
     expect(mutationFinding(0.6, 0.6)).toBeNull();
   });
 });
+
+describe("parseMutationScore against hostile output", () => {
+  it("parses a multi-megabyte output of newlines or spaces in milliseconds, and still finds the last score line", () => {
+    for (const filler of ["\n", " ", " \n", "\t \t"]) {
+      const output = `mutation score: 0.5\n${filler.repeat(3_000_000 / filler.length)}mutation score: 0.7${filler.repeat(10)}`;
+      const started = Date.now();
+      expect(parseMutationScore(output)).toBe(0.7);
+      expect(Date.now() - started).toBeLessThan(500);
+    }
+  });
+  it("reads only the last 64 KiB, so a score line buried under megabytes is not found", () => {
+    expect(parseMutationScore(`mutation score: 0.9\n${"x\n".repeat(200_000)}`)).toBeNull();
+  });
+});

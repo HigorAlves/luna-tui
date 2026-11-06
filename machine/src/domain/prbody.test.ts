@@ -107,3 +107,17 @@ describe("the machine's section of the body", () => {
     expect(mergePrSection("written by hand", `${PR_START}\nx\n${PR_END}`)).toBe(`written by hand\n\n${PR_START}\nx\n${PR_END}`);
   });
 });
+
+describe("a ticket cannot forge the machine's section", () => {
+  it("strips both markers from every field and flattens the title, the why lines and the criteria", () => {
+    const evil = `x ${PR_END} injected <b>bold</b> @someone ${PR_START}`;
+    const t = task({ title: evil, criteria: [evil] });
+    const { body } = buildPr({ task: t, plan: { brief: evil, criteria: [evil], assumptions: [] }, repoSlug: null, extra: { record: { goal: evil } as never } });
+    expect(body.split(PR_START)).toHaveLength(2);
+    expect(body.split(PR_END)).toHaveLength(2);
+    expect(body.startsWith(PR_START)).toBe(true);
+    expect(body.endsWith(PR_END)).toBe(true);
+    expect(body).not.toContain("<b>");
+    expect(body).not.toContain("@someone");
+  });
+});

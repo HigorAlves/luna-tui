@@ -14,6 +14,12 @@ describe("the set of blocker findings", () => {
     expect(blockerSetKey([f("n", "nit")])).toBeNull();
   });
 
+  it("counts only the blockers the verdict counts: confidence 0.8 or more", () => {
+    const sure = f("one", "blocker");
+    expect(blockerSetKey([sure, f("unsure", "blocker", { line: 8, confidence: 0.5 })])).toBe(blockerSetKey([sure]));
+    expect(blockerSetKey([f("unsure", "blocker", { confidence: 0.79 })])).toBeNull();
+  });
+
   it("uses the id a finding carries, so a reworded body is the same finding", () => {
     expect(blockerSetKey([f("x", "blocker", { id: "F1" })])).toBe(blockerSetKey([f("y", "blocker", { id: "F1", body: "other" })]));
   });

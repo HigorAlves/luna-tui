@@ -212,14 +212,15 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       });
       const asked = pack.outcome === "needs_input";
       const resultsFailed = results.some((r) => (r as { outcome?: string }).outcome === "fail");
-      const verdict = !asked && (answer?.verdict === "pass" || answer?.verdict === "fail") ? answer.verdict : verdictOf(findings);
+      // The verifier's own verdict can only tighten what the findings say: a confident blocker fails the stage whatever it answers, and a question is not a pass.
+      const verdict = verdictOf(findings) === "fail" || (!asked && answer?.verdict === "fail") ? "fail" : "pass";
       const summary = typeof answer?.summary === "string" ? answer.summary : String(pack.detail?.summary ?? "");
       return {
         ...pack,
-        outcome: asked || (verdict === "pass" && !resultsFailed) ? "pass" : "fail",
+        outcome: verdict === "pass" && !resultsFailed ? "pass" : "fail",
         detail: {
           step: "review",
-          verdict: asked ? "pass" : resultsFailed ? "fail" : verdict,
+          verdict: resultsFailed ? "fail" : verdict,
           summary,
           findings,
           results,
@@ -387,7 +388,8 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     if (mutationConfig.command) {
       const ran = await checkExec("sh", ["-c", mutationConfig.command], { cwd, signal, timeoutMs: Math.max(deadline - Date.now(), MINUTE), env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" }, services });
       if (signal.aborted) return aborted();
-      const score = parseMutationScore(`${ran.stdout}\n${ran.stderr}`);
+      // A run that failed has no score to trust, whatever it printed.
+      const score = ran.code === 0 ? parseMutationScore(`${ran.stdout}\n${ran.stderr}`) : null;
       if (score === null) reports.push({ name: "mutation", note: "the mutation run printed no score" });
       else {
         mutationDetail = { mutation: { score, min: mutationConfig.min_score } };

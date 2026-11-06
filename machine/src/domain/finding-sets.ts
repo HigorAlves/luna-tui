@@ -2,6 +2,9 @@
 // Pure: the transition function decides from these whether the same set came back.
 import { type Finding, findingId, severityOf } from "@hardness/contracts";
 
+/** The confidence at which a blocker fails the stage: the verdict's own bar. */
+const BLOCKER_CONFIDENCE = 0.8;
+
 export interface FindingSetRounds {
   key: string;
   rounds: number;
@@ -9,7 +12,7 @@ export interface FindingSetRounds {
 
 /** The blocker findings' ids, sorted and joined; null when no blocker stands (the loop cap then applies). The id a finding carries wins over one worked out from its text. */
 export function blockerSetKey(findings: readonly Finding[]): string | null {
-  const ids = [...new Set(findings.filter((f) => severityOf(f.severity) === "blocker").map((f) => f.id ?? findingId(f)))].sort();
+  const ids = [...new Set(findings.filter((f) => f.confidence >= BLOCKER_CONFIDENCE && severityOf(f.severity) === "blocker").map((f) => f.id ?? findingId(f)))].sort();
   return ids.length > 0 ? ids.join(",") : null;
 }
 

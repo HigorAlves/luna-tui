@@ -216,8 +216,9 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     const withFindings = (r: StageResult, causes: ReadonlyMap<string, string> | null): StageResult => {
       if (r.outcome === "pass") return r;
       const d = r.detail as { summary?: unknown } | undefined;
+      // Only what the machine built: whatever findings the container's own answer carried never reach Build, an empty list included.
       const findings = scenarioFindings(failedRows(r), typeof d?.summary === "string" ? d.summary : "", causes ?? null);
-      return findings.length > 0 ? { ...r, findings } : r;
+      return { ...r, findings };
     };
 
     let result = await judged(settle(await deps.runPack(context)));

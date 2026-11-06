@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
 
+/** The most of each stream a command's result keeps. */
+export const OUTPUT_CAP = 4 * 1024 * 1024;
+
 export interface ExecResult {
   code: number;
   stdout: string;
@@ -28,8 +31,13 @@ export function exec(
     let stdout = "";
     let stderr = "";
     let killed = false;
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    // What a command prints is kept up to a cap, tail first: a test run in a sandbox cannot fill the machine's memory, and the end is where the failure is.
+    const keep = (text: string, chunk: Buffer): string => {
+      const joined = text + chunk.toString();
+      return joined.length > OUTPUT_CAP ? joined.slice(-OUTPUT_CAP) : joined;
+    };
+    child.stdout.on("data", (chunk: Buffer) => (stdout = keep(stdout, chunk)));
+    child.stderr.on("data", (chunk: Buffer) => (stderr = keep(stderr, chunk)));
     const killGroup = () => {
       killed = true;
       if (child.pid === undefined) return;
