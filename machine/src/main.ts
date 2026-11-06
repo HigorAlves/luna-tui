@@ -535,6 +535,8 @@ const slackInbox = new SlackInbox({
   ...(triager ? { assessor: { assess: (row) => conversationMachine().assess(row) } } : {}),
   truth: new ConversationTruth(config.stateDir, decisionTruth),
   drafts: conversationDrafts,
+  // The one address a draft about a card may hold whole, read where the drafter reads it.
+  cardAddress: (id) => pipeline.prLinkOf(id),
   // The reply draft: one `conversation_reply` run over the card's state, its evidence and the docs, all as data. Built lazily: `packRuns` is below.
   drafter: new ConversationDrafter({
     card: async (id) => {
