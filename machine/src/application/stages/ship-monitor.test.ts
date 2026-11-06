@@ -1320,7 +1320,8 @@ describe("a stacked card's readiness (wave 15)", () => {
   it("is ready as before for a card that targets the default branch, stacked or not", async () => {
     expect(stackItem(await world("main", { facts: async () => null, defaultBranch: async () => "main" })).ok).toBe(true);
     expect((await world("main", undefined))!.readiness.canAutoMerge).toBe(true);
-    expect(stackItem(await world("main", { facts: async () => parent("merged"), defaultBranch: async () => "main" })).ok).toBe(true);
+    // A merged parent whose base is still set (the unstack has not succeeded) is not ready.
+    expect(stackItem(await world("main", { facts: async () => parent("merged"), defaultBranch: async () => "main" })).ok).toBe(false);
   });
 
   it("fails closed when the parent's facts cannot be read: it waits", async () => {
@@ -1368,6 +1369,17 @@ describe("a card that left its stack needs a new review (wave 15 security pass)"
   });
   it("a review whose time cannot be read does not count once the card left its stack", async () => {
     expect((await readyWith("t", "2026-11-04T06:30:00Z")).readiness.canAutoMerge).toBe(false);
+  });
+});
+
+describe("the stack item while the card still has a base (wave 15 security pass)", () => {
+  it("stays red for a card whose parent merged but whose base is not cleared yet", async () => {
+    const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), prMerged: async () => open, prFacts: async () => node({ baseRefName: "main" }), prHeadSha: async () => HEAD, prFiles: async () => [] });
+    const deps = { github, policies: { for: async () => policyWith({ autoMerge: "low" }) }, evidence: { load: async () => pack() }, stateDir, pollMs: 1, readCodeowners: async () => null, now: () => START, stack: { facts: async () => ({ parent: { id: "p1", branch: "task/p1", number: 2, state: "merged" as const, head: null }, defaultBranch: "main" }), defaultBranch: async () => "main", recordedBase: async () => "a".repeat(40) } };
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" }, approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    const facts = (await readShipFacts(deps as never, context, REF, emptyCursor({ slug: "o/a", number: 3 }), deps.now))!;
+    expect(facts.readiness.checklist.find((i) => i.id === "stack")!.ok).toBe(false);
+    expect(facts.readiness.canAutoMerge).toBe(false);
   });
 });
 
@@ -1500,10 +1512,10 @@ describe("a parent that changed or merged (wave 15)", () => {
     expect(await gone.run()).toMatchObject({ outcome: "pass" });
   });
 
-  it("when moving off a merged parent stops on a conflict: the PR stays retargeted, nothing is pushed or cleared, a person is asked", async () => {
+  it("when moving off a merged parent stops on a conflict: the PR is not retargeted (its stacked head would show the parent's commits against the default branch), nothing is pushed or cleared, a person is asked", async () => {
     const t = stacked({ parent: "merged", unstackOk: false });
     expect(await t.run()).toMatchObject({ outcome: "escalated", detail: { verdict: "conflict_unresolvable", reason: expect.stringContaining("b.ts") } });
-    expect(calls(t.github, "retargetPr")).toEqual([["retargetPr", "o/a", 3, "main"]]);
+    expect(calls(t.github, "retargetPr")).toEqual([]);
     expect(t.world.pushes()).toEqual([]);
     expect(t.cleared).toEqual([]);
     expect(calls(t.github, "deleteBranch")).toEqual([]);

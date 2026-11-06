@@ -224,7 +224,7 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
       stackFacts = { parent: facts.parent, defaultBranch: facts.defaultBranch, recordedBase };
     }
     const defaultBranch = facts !== "unreadable" && facts ? facts.defaultBranch : task.repoPath ? await deps.stack.defaultBranch(task.repoPath).catch(() => null) : null;
-    stack = { stacked: facts === "unreadable" || (facts !== null && facts.parent.state === "open"), baseRef: pr.baseRef, defaultBranch };
+    stack = { stacked: facts === "unreadable" || facts !== null, baseRef: pr.baseRef, defaultBranch };
   }
   const readiness = mergeReadiness({
     ...(stack ? { stack } : {}),
@@ -533,8 +533,6 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         return { moved: true, ...(now2 ? { head: now2 } : {}) };
       };
       if (classes.includes("parent_merged")) {
-        // The PR first: whatever happens to the branch, it no longer targets a branch that is gone.
-        if (defaultBranch && prBase !== defaultBranch) await deps.github.retargetPr(slug, number, defaultBranch);
         const run = runOf();
         const local = await headOfWorktree(run, wt);
         if (!local || local !== head) return { result: escalated("the worktree is not at the PR's head; the branch is not moved off its parent", "head_moved") };
@@ -542,6 +540,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         if (!moved.ok) return stuck(moved.conflicts.length > 0 ? `the parent merged and moving the branch onto the default branch stops on: ${moved.conflicts.join(", ")}` : `the parent merged and the branch could not be moved onto the default branch: ${plain(moved.error, 200)}`);
         const done = await settled(run, local, "the branch is moved onto the default branch");
         if (done.result) return done;
+        // The PR is retargeted only now that the branch no longer carries the parent's commits on its head: a failed move leaves it aimed at the parent.
+        if (defaultBranch && prBase !== defaultBranch) await deps.github.retargetPr(slug, number, defaultBranch);
         // The PR's own section, without the stacked line.
         const current = await deps.github.prFacts(slug, number).catch(() => null);
         if (current) {
