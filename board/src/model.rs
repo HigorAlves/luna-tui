@@ -259,6 +259,35 @@ pub struct Task {
     pub merged_into: Option<String>,
     #[serde(default)]
     pub related: Vec<String>,
+    /// A split and a stack (wave 15): the card this one was split from and its place, what it was split into, what it waits for, the parent it is built on.
+    #[serde(default)]
+    pub split_from: Option<String>,
+    #[serde(default)]
+    pub split_part: Option<SplitPart>,
+    #[serde(default)]
+    pub split_into: Vec<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub base: Option<StackBase>,
+    #[serde(default)]
+    pub risk_floor: Option<String>,
+    #[serde(default)]
+    pub start_when_ready: bool,
+}
+
+/// Part `n` of `of` of a split.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct SplitPart {
+    pub n: u32,
+    pub of: u32,
+}
+
+/// The card a stacked card is built on, and its branch.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct StackBase {
+    pub card: String,
+    pub branch: String,
 }
 
 /// The last declared transition Jira refused, until the next one succeeds.
@@ -663,6 +692,11 @@ impl Approval {
     /// The reply a conversation gate would post on the ticket.
     pub fn reply(&self) -> Option<String> {
         self.requested["reply"].as_str().filter(|r| !r.trim().is_empty()).map(String::from)
+    }
+
+    /// The children a split gate proposes (empty at any other gate).
+    pub fn split_children(&self) -> Vec<&Value> {
+        self.requested["split"]["children"].as_array().map(|a| a.iter().collect()).unwrap_or_default()
     }
 
     pub fn archive_reason(&self) -> Option<String> {

@@ -365,14 +365,14 @@ pub enum PlanPane {
 /// Whether `task` is at the plan gate with its plan already fetched into `detail`, so `e`
 /// opens the two-pane plan editor instead of the plain ticket editor.
 fn has_open_plan(task: &Task, detail: Option<&TaskDetail>) -> bool {
-    task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some())
+    task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some_and(|a| !matches!(a.outcome(), Some("split" | "split_failed"))))
 }
 
 /// Whether the plan may still be edited: at its own gate, or at the test check, before anything
 /// is built. The machine refuses the edit after that.
 fn plan_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
     matches!(task.state.as_str(), "awaiting_approval" | "awaiting_test_check")
-        && detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some())
+        && detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some_and(|a| !(a.decision.is_none() && matches!(a.outcome(), Some("split" | "split_failed")))))
 }
 
 /// Whether the cases may be edited: only while they wait for your check, on the plan gate that
@@ -3835,7 +3835,7 @@ impl App {
     /// The names `run_command` knows, aliases left out.
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
-        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "dismiss", "finding", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "whole", "dismiss", "finding", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
         "help",
     ];
 
@@ -3892,6 +3892,10 @@ impl App {
                     self.act(|m| m.setup_repo(&path), "setup started: approve its luna.yaml when it asks");
                 }
                 Err(error) => self.notify(error, true),
+            },
+            "whole" => match self.selected_id() {
+                None => self.notify("no ticket selected", true),
+                Some(id) => self.act(|m| m.keep_whole(&id), "kept as one card: recorded, and flagged at every later gate"),
             },
             "dismiss" => match (self.selected_id(), parse_dismiss(rest)) {
                 (None, _) => self.notify("no ticket selected", true),

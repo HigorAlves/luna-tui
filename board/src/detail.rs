@@ -414,6 +414,16 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
     let approve_plan = match gate {
         Some(a) if a.outcome() == Some("archive") => "a archive the ticket · r send back (triage again)".to_string(),
         Some(a) if a.outcome() == Some("conversation") => "a post the reply and close · r send back (triage again)".to_string(),
+        Some(a) if a.outcome() == Some("split_failed") => ":whole keep it as one card · r send back · N reject".to_string(),
+        Some(a) if a.outcome() == Some("split") => {
+            let n = a.split_children().len();
+            let what = if a.requested["split"]["via"].as_str() == Some("tickets") { format!("{n} ticket{}", if n == 1 { "" } else { "s" }) } else { format!("{n} card{}", if n == 1 { "" } else { "s" }) };
+            let who = match a.names_needed() {
+                1 => String::new(),
+                needed => format!(" ({} names: two people, not one)", if needed == 2 { "two".to_string() } else { needed.to_string() }),
+            };
+            format!("a approve the split ({what}){who} · r send back · N reject · :whole keep it as one card")
+        }
         Some(a) if a.names_needed() > 1 => {
             let needed = a.names_needed();
             let word = if needed == 2 { "two".to_string() } else { needed.to_string() };
@@ -751,8 +761,9 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     if let Some(stage) = &task.resume_to {
         lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
     }
+    lines.extend(stack_lines(task));
     if let Some(reason) = &task.archive_reason {
-        lines.push(muted(format!("Archived   {reason}")));
+        lines.push(muted(if reason == "split" { "Archived   split into smaller changes".to_string() } else { format!("Archived   {reason}") }));
     } else if let Some(reason) = &task.reason {
         lines.push(Line::from(format!("Why        {reason}")).fg(look_color(look)));
     }
@@ -1016,6 +1027,70 @@ fn gate_facts(approval: &Approval) -> Vec<Line<'static>> {
     }
     if let Some(approvals) = approval.approvals_line() {
         lines.push(Line::from(vec![label("Approvals"), Span::from(approvals)]));
+    }
+    lines.extend(split_facts(approval));
+    lines
+}
+
+/// A split gate: the size against the limit, the reason there is no split, each child (number, title, estimate, what it follows, criteria),
+/// how the approval is made (cards or tickets) and whether the split was judged. Every text is the machine's or a model's and goes through `plain`.
+fn split_facts(approval: &Approval) -> Vec<Line<'static>> {
+    if !matches!(approval.outcome(), Some("split" | "split_failed")) {
+        return Vec::new();
+    }
+    let label = |name: &str| Span::from(format!("{name:<11}")).fg(c(SUBTEXT0));
+    let r = &approval.requested;
+    let mut lines = Vec::new();
+    let size = &r["size"];
+    let loc = size["planned"].as_f64().or_else(|| size["estLoc"].as_f64());
+    if let (Some(loc), Some(hard)) = (loc, size["limit"]["hard"].as_f64()) {
+        lines.push(Line::from(vec![label("Size"), Span::from(format!("about {loc:.0} lines, over the limit of {hard:.0} by {:.0}", (loc - hard).max(0.0))).fg(c(PEACH))]));
+    }
+    if let Some(reason) = r["reason"].as_str() {
+        lines.push(Line::from(vec![label("Reason"), Span::from(plain(reason)).fg(c(RED))]));
+    }
+    for issue in r["split"]["issues"].as_array().into_iter().flatten().filter_map(|i| i.as_str()) {
+        lines.push(Line::from(vec![label("Issue"), Span::from(plain(issue)).fg(c(PEACH))]));
+    }
+    for (i, child) in approval.split_children().iter().enumerate() {
+        let after: Vec<String> = child["depends_on"].as_array().into_iter().flatten().filter_map(|d| d.as_u64()).map(|d| d.to_string()).collect();
+        let criteria = child["acceptance_criteria"].as_array().map_or(0, |a| a.len());
+        let mut text = format!("{}. {} · about {} lines", i + 1, plain(child["title"].as_str().unwrap_or("")), child["est_loc"].as_u64().unwrap_or(0));
+        if !after.is_empty() {
+            text.push_str(&format!(" · after {}", after.join(", ")));
+        }
+        text.push_str(&format!(" · {criteria} criteri{}", if criteria == 1 { "on" } else { "a" }));
+        lines.push(Line::from(vec![label(if i == 0 { "Children" } else { "" }), Span::from(text)]));
+    }
+    if r["outcome"].as_str() == Some("split") {
+        let via = if r["split"]["via"].as_str() == Some("tickets") { "creates tickets in the tracker" } else { "creates cards" };
+        let judged = if r["split"]["judged"].as_bool() == Some(true) { "judged by split_check" } else { "checked by script only" };
+        lines.push(Line::from(vec![label("Approving"), Span::from(format!("{via} · {judged}"))]));
+    }
+    lines
+}
+
+/// A card's place in a split or a stack: where it came from, what it waits for, what it is built on, what it was split into. Nothing for a card with none of them.
+fn stack_lines(task: &Task) -> Vec<Line<'static>> {
+    let short = |id: &str| plain(&id.chars().take(8).collect::<String>());
+    let mut lines = Vec::new();
+    if let (Some(from), Some(part)) = (&task.split_from, &task.split_part) {
+        lines.push(muted(format!("Stack      Part {} of {} of {}", part.n, part.of, short(from))));
+    }
+    for dep in &task.depends_on {
+        lines.push(muted(format!("Stack      Depends on {}", short(dep))));
+    }
+    if let Some(base) = &task.base {
+        lines.push(muted(format!("Stack      Stacked on {} ({})", short(&base.card), plain(&base.branch))));
+    }
+    if let Some(floor) = task.risk_floor.as_deref().filter(|_| task.split_from.is_some()) {
+        lines.push(muted(format!("Stack      Risk floor {} (its origin's: a part is never lower)", plain(floor))));
+    }
+    if task.start_when_ready && task.state == "draft" {
+        lines.push(muted("Stack      Waiting: held until its dependencies have an open PR or have merged".to_string()));
+    }
+    if !task.split_into.is_empty() {
+        lines.push(muted(format!("Stack      Split into {}", task.split_into.iter().map(|i| short(i)).collect::<Vec<_>>().join(", "))));
     }
     lines
 }
@@ -1358,7 +1433,7 @@ pub(crate) fn ship_lines(ship: &crate::model::ShipView, now: u64) -> Vec<Line<'s
     for item in &ship.checklist {
         let (glyph, color) = if item.ok { ("✓", GREEN) } else { ("✗", RED) };
         lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(format!("{:<16}", plain(&item.id).replace('_', " "))), Span::from(plain(&item.detail)).fg(c(SUBTEXT0))]));
-        if !item.ok && matches!(item.id.as_str(), "freeze" | "blocked") {
+        if !item.ok && matches!(item.id.as_str(), "freeze" | "blocked" | "stack") {
             lines.push(muted(format!("    the machine keeps waiting and goes on when it ends: {}", plain(&item.detail))));
         }
     }
@@ -2098,6 +2173,71 @@ mod tests {
         assert!(strip(r#"{"brief":"b","risk":{"level":"high"},"approvalRule":{"needed":3,"text":"t"},"approvers":["ana"]}"#).contains("a approve (next of 3 approvers)"));
         assert!(strip(r#"{"outcome":"archive","archiveReason":"duplicate"}"#).contains("a archive the ticket · r send back"));
         assert!(strip(r#"{"outcome":"conversation","reply":"x"}"#).contains("a post the reply and close · r send back"));
+    }
+
+    const SPLIT_GATE: &str = r#"{"outcome":"split","summary":"over the size limit","size":{"estLoc":4000,"planned":null,"limit":{"hard":2500,"target":[1000,2000]},"verdict":"over","by":"decision"},
+        "split":{"children":[{"title":"Part A","goal":"g","acceptance_criteria":["a works","b works"],"est_loc":900,"depends_on":[],"order":1},{"title":"Part B","goal":"g","acceptance_criteria":["c"],"est_loc":1200,"depends_on":[1],"order":2}],"rounds":1,"judged":true,"via":"tickets"},
+        "risk":{"level":"low"}}"#;
+
+    #[test]
+    fn a_split_gate_names_its_four_answers_and_a_failed_one_has_no_approve() {
+        let strip = |requested: &str| {
+            let (task, detail) = at_gate(requested, "awaiting_approval");
+            gate_strip(&task, Some(&detail)).unwrap().to_string()
+        };
+        let split = strip(SPLIT_GATE);
+        assert!(split.contains("a approve the split (2 tickets) · r send back · N reject · :whole keep it as one card"), "{split}");
+        assert!(!split.contains("e edit"), "{split}");
+        assert!(strip(&SPLIT_GATE.replace("tickets", "cards")).contains("a approve the split (2 cards)"));
+        let failed = strip(r#"{"outcome":"split_failed","reason":"no valid split after 3 rounds","split":{"children":[],"issues":["a"],"rounds":3}}"#);
+        assert!(failed.contains(":whole keep it as one card · r send back · N reject"), "{failed}");
+        assert!(!failed.contains("a approve"), "{failed}");
+        let two = strip(&SPLIT_GATE.replace(r#""risk":{"level":"low"}"#, r#""risk":{"level":"high"},"approvalRule":{"needed":2,"text":"t"}"#));
+        assert!(two.contains("two names") || two.contains("first of two"), "{two}");
+    }
+
+    #[test]
+    fn the_plan_section_of_a_split_gate_shows_the_size_the_children_and_what_each_waits_for() {
+        let (task, detail) = at_gate(SPLIT_GATE, "awaiting_approval");
+        let text = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("about 4000 lines") && text.contains("2500"), "{text}");
+        assert!(text.contains("1. Part A") && text.contains("900") && text.contains("2 criteria"), "{text}");
+        assert!(text.contains("2. Part B") && text.contains("after 1"), "{text}");
+        assert!(text.contains("tickets") && text.contains("judged"), "{text}");
+        let (task, detail) = at_gate(r#"{"outcome":"split_failed","reason":"no valid split after 3 rounds","split":{"children":[],"issues":["child 1 has fewer than 20 words to work from"],"rounds":3}}"#, "awaiting_approval");
+        let failed = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(failed.contains("no valid split after 3 rounds") && failed.contains("fewer than 20 words"), "{failed}");
+    }
+
+    #[test]
+    fn a_machine_text_in_a_split_is_plain() {
+        let (task, detail) = at_gate(&SPLIT_GATE.replace("Part A", "Part \\u001b[31mA"), "awaiting_approval");
+        let text = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+    }
+
+    #[test]
+    fn the_overview_says_what_a_stacked_card_is_and_what_it_waits_for() {
+        let json = TASK.replace("\"state\":\"implementing\"", "\"state\":\"draft\"").replace("\"createdAt\"", "\"splitFrom\":\"aaaaaaaa-0000-4000-8000-000000000000\",\"splitPart\":{\"n\":2,\"of\":3},\"dependsOn\":[\"bbbbbbbb-0000-4000-8000-000000000000\"],\"base\":{\"card\":\"cccccccc-0000-4000-8000-000000000000\",\"branch\":\"task/x\"},\"startWhenReady\":true,\"riskFloor\":\"high\",\"createdAt\"");
+        let task: Task = serde_json::from_str(&json).unwrap();
+        let text = overview_lines(&task, None, 100, 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("Part 2 of 3 of aaaaaaaa"), "{text}");
+        assert!(text.contains("Depends on bbbbbbbb"), "{text}");
+        assert!(text.contains("Stacked on cccccccc (task/x)"), "{text}");
+        assert!(text.contains("Waiting"), "{text}");
+        assert!(text.contains("Risk floor high"), "{text}");
+        let plain: Task = serde_json::from_str(TASK).unwrap();
+        assert!(!overview_lines(&plain, None, 100, 0).iter().any(|l| l.to_string().contains("Stacked") || l.to_string().contains("Part ")), "a card with no stack shows nothing of one");
+    }
+
+    #[test]
+    fn an_old_snapshot_without_the_stack_fields_still_parses_and_a_split_origin_reads_split() {
+        let task: Task = serde_json::from_str(TASK).unwrap();
+        assert!(task.split_from.is_none() && task.depends_on.is_empty() && task.base.is_none());
+        let json = TASK.replace("\"createdAt\"", "\"archiveReason\":\"split\",\"splitInto\":[\"dddddddd-0000-4000-8000-000000000000\"],\"createdAt\"");
+        let origin: Task = serde_json::from_str(&json).unwrap();
+        let text = overview_lines(&origin, None, 100, 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("split into smaller changes") && text.contains("Split into dddddddd"), "{text}");
     }
 
     #[test]

@@ -88,11 +88,11 @@ and a test fails when they drift from the registry.
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
-| `N` | reject the plan, with a comment; reject the release, archive the card |
+| `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
 | `r` | send back with a reason |
 | `x` then `S` | ship: approve and open the PR |
 
@@ -185,6 +185,7 @@ and a test fails when they drift from the registry.
 | `:fold` | fold the focused column |
 | `:unfold` | unfold the focused column |
 | `:setup <repo>` | propose the repo's luna.yaml |
+| `:whole` | keep a split card whole (recorded) |
 | `:dismiss <finding id> [reason]` | dismiss a finding Verify reported |
 | `:finding <blocker\|should_fix\|nit> <title>` | add a finding Verify missed |
 | `:slots <n>` | resize the pool |
@@ -238,11 +239,11 @@ link is the board's `J`):
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
-| `N` | reject the plan, with a comment; reject the release, archive the card |
+| `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 
@@ -581,10 +582,10 @@ What the ticket shows:
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
-| `N` | reject the plan, with a comment; reject the release, archive the card |
+| `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 

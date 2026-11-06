@@ -286,6 +286,15 @@ impl Machine {
         self.post(&format!("/tasks/{id}/decision"), decision_body(approve, reason, approver().as_deref()))
     }
 
+    /// Keeps a split card as one card: the split gate approved with `keepWhole`, recorded with the approver's name. Only a split gate takes it.
+    pub fn keep_whole(&self, id: &str) -> Result<Task, String> {
+        let mut body = json!({ "decision": "approved", "keepWhole": true });
+        if let Some(name) = approver() {
+            body["approver"] = json!(name);
+        }
+        self.post(&format!("/tasks/{id}/decision"), body)
+    }
+
     /// Rejects the plan the task waits on: the card ends archived as rejected and the comment is kept. Only the plan gate takes it.
     pub fn reject(&self, id: &str, comment: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/decision"), reject_body(comment, approver().as_deref()))

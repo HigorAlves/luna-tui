@@ -268,7 +268,7 @@ pub(crate) fn at_gate(t: &Task) -> bool {
 
 /// Whether `task` waits at the plan stage's own gate (not triage's reply or archive): the only gate a plan is rejected at.
 pub(crate) fn rejectable(app: &App, task: &Task) -> bool {
-    (task.state == "awaiting_approval" && app.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome()).is_none()) || open_ship_approval(app, task)
+    (task.state == "awaiting_approval" && app.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome()).is_none_or(|o| matches!(o, "split" | "split_failed"))) || open_ship_approval(app, task)
 }
 
 fn with_task(app: &App, f: fn(&Task) -> Avail) -> Avail {
@@ -389,6 +389,7 @@ const SHARED: &[Binding] = &[
     b("a", "approve the setup", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_setup"]), 90),
     b("a", "answer triage's questions", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_answers"]), 90),
     b("a", "approve the plan", Group::Gate, Scope::Board, |app| plan_gate(app, None), 90),
+    b("a", "approve the split", Group::Gate, Scope::Board, |app| plan_gate(app, Some("split")), 90),
     b("a", "archive the ticket (one click)", Group::Gate, Scope::Board, |app| plan_gate(app, Some("archive")), 90),
     b("a", "post the reply and close the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90),
     b("a", "approve the tests", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_test_check"]), 90),
@@ -416,6 +417,7 @@ const SHARED: &[Binding] = &[
         40,
     ),
     b("N", "reject the plan, with a comment", Group::Gate, Scope::Board, |app| plan_gate(app, None), 80),
+    b("N", "reject the split, with a comment", Group::Gate, Scope::Board, |app| match plan_gate(app, Some("split")) { Avail::On => Avail::On, _ => plan_gate(app, Some("split_failed")) }, 80),
     b("N", "reject the release, archive the card", Group::Gate, Scope::Board, |app| ship_gate(app, true), 80),
     b(
         "r",
@@ -614,6 +616,7 @@ const BOARD: &[Binding] = &[
     cmd(b(":fold", "fold the focused column", Group::Commands, Scope::Board, on, 0), "fold"),
     cmd(b(":unfold", "unfold the focused column", Group::Commands, Scope::Board, on, 0), "unfold"),
     cmd(b(":setup <repo>", "propose the repo's luna.yaml", Group::Commands, Scope::Board, on, 0), "setup"),
+    cmd(b(":whole", "keep a split card whole (recorded)", Group::Commands, Scope::Board, on, 0), "whole"),
     cmd(b(":dismiss <finding id> [reason]", "dismiss a finding Verify reported", Group::Commands, Scope::Board, on, 0), "dismiss"),
     cmd(b(":finding <blocker|should_fix|nit> <title>", "add a finding Verify missed", Group::Commands, Scope::Board, on, 0), "finding"),
     cmd(b(":slots <n>", "resize the pool", Group::Commands, Scope::Board, on, 0), "slots"),
@@ -1286,6 +1289,26 @@ mod tests {
         let running = app_with(vec![task("t1", "implementing", true, true, true)]);
         let a = bindings_for(&running, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
         assert_eq!(a.1, Avail::Off("a stage is running; X aborts it"));
+    }
+
+    #[test]
+    fn a_split_gate_has_approve_the_split_and_reject_and_a_failed_one_has_no_approve() {
+        let at = |outcome: &str| {
+            let mut gate = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
+            let task_json = r#"{"id":"t1","title":"Login page","description":"","criteria":[],"repoPath":"/r/app","branch":null,"worktreePath":"/w/app","state":"awaiting_approval","column":"Build",
+                "waitingOnYou":true,"running":false,"queued":false,"retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+                "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
+            gate.detail = Some(serde_json::from_str(&format!(r#"{{"task":{task_json},"stageRuns":[],"events":[],"approvals":[{{"id":"p","kind":"awaiting_approval","decision":null,"requested":{{"outcome":"{outcome}"}}}}]}}"#)).unwrap());
+            gate
+        };
+        let shown = |app: &App, key: &str| bindings_for(app, Scope::Board).into_iter().filter(|(b, a)| b.keys == key && *a != Avail::Hidden).map(|(b, _)| b.label).collect::<Vec<_>>();
+        assert_eq!(shown(&at("split"), "a"), ["approve the split"]);
+        assert_eq!(shown(&at("split"), "N"), ["reject the split, with a comment"]);
+        assert!(shown(&at("split_failed"), "a").is_empty(), "a failed split has nothing to approve: {:?}", shown(&at("split_failed"), "a"));
+        assert_eq!(shown(&at("split_failed"), "N"), ["reject the split, with a comment"]);
+        assert!(crate::keys::rejectable(&at("split"), &at("split").tasks[0]) && crate::keys::rejectable(&at("split_failed"), &at("split_failed").tasks[0]));
+        assert!(!crate::keys::rejectable(&at("archive"), &at("archive").tasks[0]));
+        assert!(commands().iter().any(|(n, _)| *n == "whole"), ":whole is in the command table");
     }
 
     #[test]
