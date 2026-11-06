@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { previewOn } from "../../test/policies.ts";
 
-import type { DecisionRecord, EngineId, StageOutput } from "@hardness/contracts";
+import { type DecisionRecord, type EngineId, PACKS, type StageOutput, resolveEngine } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -109,14 +109,16 @@ describe("POST /runs", () => {
     expect(await db.query("select 1 from pack_runs")).toEqual([]);
   });
 
-  it("runs a decision pack on claude:haiku when its default engine is off, and accepts the engine by name", async () => {
-    const credentials = gatedCredentials(fixedCredentials({}), [runtimeKillSwitch(["jev"])]);
+  it("runs a decision pack on its fallback when its default engine's runtime is off, and accepts the engine by name", async () => {
+    // The measured default moves when the pack is measured again: the test reads it instead of naming an engine.
+    const engines = PACKS.triage_signals.engines;
+    const credentials = gatedCredentials(fixedCredentials({}), [runtimeKillSwitch([resolveEngine(engines.default).runtime])]);
     const issue = { title: "t", description: "d" };
     const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
     const fell = await post(appWith(output({ answer: labels }), { deps: { credentials } }), { pack: "triage_signals", context: { issue } });
     expect(fell.status).toBe(200);
-    expect(((await fell.json()) as { usage: { engine: string } }).usage.engine).toBe("claude:haiku");
-    const named = await post(appWith(output({ answer: labels })), { pack: "triage_signals", engine: "claude:haiku", context: { issue } });
+    expect(((await fell.json()) as { usage: { engine: string } }).usage.engine).toBe(engines.fallback![0]);
+    const named = await post(appWith(output({ answer: labels })), { pack: "triage_signals", engine: engines.fallback![0], context: { issue } });
     expect(named.status).toBe(200);
   });
 
