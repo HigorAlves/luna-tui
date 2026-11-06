@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { ServiceSpec } from "@hardness/contracts";
 
 import type { CredentialMount, RunCredential } from "../credentials/index.ts";
+import type { CardNetwork } from "./egress.ts";
 import { startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
 
@@ -101,6 +102,10 @@ export interface SandboxRun {
   /** Join no network at all: for a job that needs none (the graph build parses untrusted code). Ignored when a service network is given. */
   networkNone?: boolean;
   serviceEnv?: Record<string, string>;
+  /** The run's card network (egress.ts): joined in place of the plain network, with the proxy as the only way out. */
+  cardNetwork?: CardNetwork;
+  /** More networks to join, by name (the browser run joins the app's). */
+  alsoJoin?: string[];
   /** `uid:gid` the container runs as. The run folder, the session dir and the worktree are bind
    *  mounts owned by the host user, so the stage must be that user to write them (the image's
    *  `node` user is uid 1000, which is not the host user on a Linux host). Defaults to the
@@ -165,8 +170,9 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   args.push(...identityEnv(run.gitIdentity));
   // A trace backend on the host (docs/configuration.md "Observability"): Docker Desktop resolves
   // host.docker.internal by itself, Linux needs the gateway alias.
-  if (Object.values(run.extraEnv ?? {}).some((value) => value.includes("host.docker.internal"))) args.push("--add-host", "host.docker.internal:host-gateway");
-  args.push(...networkArgs(run.network, run.serviceEnv, run.networkNone));
+  // On a card network the host is not reachable at all: a trace endpoint there is the proxy's private entry, never an alias in the stage.
+  if (!run.cardNetwork && Object.values(run.extraEnv ?? {}).some((value) => value.includes("host.docker.internal"))) args.push("--add-host", "host.docker.internal:host-gateway");
+  args.push(...networkArgs(run.network, run.serviceEnv, run.networkNone, run.cardNetwork, run.alsoJoin, Object.keys(run.services ?? {})));
   // The run's own extra env last: docker keeps the last value, so a repo's service exports
   // (luna.yaml) never redirect the trace context the machine set.
   for (const [key, value] of Object.entries(run.extraEnv ?? {})) args.push("-e", `${key}=${value}`);
@@ -177,10 +183,12 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   return args;
 }
 
-/** The service network to join and what the services export, when a run has any. */
-function networkArgs(network: string | null | undefined, serviceEnv: Record<string, string> | undefined, none?: boolean): string[] {
+/** The network to join and what the services export, when a run has any. A card network comes after the service env, so an export cannot take the proxy variables; `alsoJoin` adds networks by name. */
+function networkArgs(network: string | null | undefined, serviceEnv: Record<string, string> | undefined, none?: boolean, card?: CardNetwork, alsoJoin?: string[], aliases: string[] = []): string[] {
+  const env = Object.entries(serviceEnv ?? {}).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+  if (card) return [...env, ...card.containerArgs(aliases), ...(alsoJoin ?? []).flatMap((name) => ["--network", name])];
   if (!network) return none ? ["--network", "none"] : [];
-  return ["--network", network, ...Object.entries(serviceEnv ?? {}).flatMap(([key, value]) => ["-e", `${key}=${value}`])];
+  return ["--network", network, ...env];
 }
 
 export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
@@ -287,6 +295,9 @@ export interface SandboxExec {
   services?: Record<string, ServiceSpec>;
   network?: string | null;
   serviceEnv?: Record<string, string>;
+  /** The check's card network and any more networks to join, as for a stage. */
+  cardNetwork?: CardNetwork;
+  alsoJoin?: string[];
   /** A linked worktree's `.git` file, mounted read-only over `/work/.git` so the check cannot repoint it. */
   gitFile?: string;
 }
@@ -316,7 +327,7 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
   args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...blankedEnv(), ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.env ?? {})) args.push("-e", `${key}=${value}`);
   args.push(...cacheArgs(run.cacheVolume));
-  args.push(...networkArgs(run.network, run.serviceEnv));
+  args.push(...networkArgs(run.network, run.serviceEnv, false, run.cardNetwork, run.alsoJoin, Object.keys(run.services ?? {})));
   // Writable: a test runner writes its cache next to the code (node_modules/.vite, go's are on the tmpfs).
   args.push("-v", `${run.worktree}:/work`);
   // Later mounts shadow earlier ones: the pointer file stays the machine's.

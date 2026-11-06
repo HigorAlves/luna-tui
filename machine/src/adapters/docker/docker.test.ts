@@ -253,3 +253,38 @@ describe("the environment a repository's image cannot choose", () => {
     }
   });
 });
+
+describe("a run on a card network", () => {
+  const cardNetwork = {
+    name: "hardness-card-r1",
+    dns: "172.30.0.2",
+    containerArgs: (aliases: string[] = []) => ["--network", "hardness-card-r1", "--dns", "172.30.0.2", "-e", "HTTPS_PROXY=http://172.30.0.2:3128", "-e", `NO_PROXY=localhost,${aliases.join(",")}`],
+    blocked: async () => [],
+    teardown: async () => {},
+  };
+
+  it("joins it in place of the plain network, with its aliases, and never adds the host alias", () => {
+    const args = sandboxArgs(run({ cardNetwork, alsoJoin: ["hardness-card-app"], extraEnv: { LMNR_BASE_URL: "http://host.docker.internal" } }), "/in", "/out");
+    expect(args).toEqual(expect.arrayContaining(["--network", "hardness-card-r1", "--dns", "172.30.0.2", "-e", "HTTPS_PROXY=http://172.30.0.2:3128"]));
+    expect(args.filter((a, i) => args[i - 1] === "--network")).toEqual(["hardness-card-r1", "hardness-card-app"]);
+    expect(args).not.toContain("--add-host");
+  });
+
+  it("puts the proxy variables after a service's exports, so an export cannot take them", () => {
+    const args = sandboxArgs(run({ cardNetwork, network: "x", serviceEnv: { HTTPS_PROXY: "http://evil" } }), "/in", "/out");
+    expect(args.lastIndexOf("HTTPS_PROXY=http://172.30.0.2:3128")).toBeGreaterThan(args.lastIndexOf("HTTPS_PROXY=http://evil"));
+  });
+
+  it("does the same for a check", () => {
+    const args = sandboxExecArgs({ name: "c1", image: "img", worktree: "/wt", argv: ["sh", "-c", "x"], cardNetwork, alsoJoin: ["other"] });
+    expect(args).toEqual(expect.arrayContaining(["--network", "hardness-card-r1", "--dns", "172.30.0.2"]));
+    expect(args.filter((a, i) => args[i - 1] === "--network")).toEqual(["hardness-card-r1", "other"]);
+    expect(args).not.toContain("--add-host");
+  });
+
+  it("keeps a run with no card network exactly as before", () => {
+    const args = sandboxArgs(run(), "/in", "/out");
+    expect(args).not.toContain("--dns");
+    expect(args).not.toContain("--network");
+  });
+});

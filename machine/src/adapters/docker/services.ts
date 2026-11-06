@@ -33,14 +33,16 @@ export const networkName = (runName: string): string => `hardness-net-${runName}
 export const serviceName = (runName: string, key: string): string => `${runName}-svc-${key}`;
 
 /** The `docker run` argument list for one service. Pure. */
-export function serviceArgs(network: string, runName: string, key: string, spec: ServiceSpec): string[] {
-  const args = ["run", "-d", "--name", serviceName(runName, key), "--label", `${CONTAINER_LABEL}=1`, "--network", network, "--network-alias", key];
+export function serviceArgs(network: string, runName: string, key: string, spec: ServiceSpec, dns?: string): string[] {
+  const args = ["run", "-d", "--name", serviceName(runName, key), "--label", `${CONTAINER_LABEL}=1`, "--network", network, ...(dns ? ["--dns", dns] : []), "--network-alias", key];
   for (const [name, value] of Object.entries(spec.env ?? {})) args.push("-e", `${name}=${value}`);
   args.push(spec.image);
   return args;
 }
 
 export interface StartOptions {
+  /** A card network that already exists (adapters/docker/egress.ts): the services join it, with its resolver, and no network is made or removed here. */
+  network?: { name: string; dns: string };
   exec?: (command: string, args: string[]) => Promise<ExecResult>;
   readyTimeoutMs?: number;
   pollMs?: number;
@@ -52,21 +54,24 @@ export async function startServices(runName: string, services: Record<string, Se
   const exec = options.exec ?? hostExec;
   const keys = Object.keys(services);
   if (keys.length === 0) return { network: null, env: {}, teardown: async () => {} };
-  const network = networkName(runName);
+  const given = options.network;
+  const network = given?.name ?? networkName(runName);
   let torn = false;
   const teardown = async () => {
     if (torn) return;
     torn = true;
     for (const key of keys) await exec("docker", ["rm", "-f", serviceName(runName, key)]);
-    await exec("docker", ["network", "rm", network]);
+    if (!given) await exec("docker", ["network", "rm", network]);
   };
   const env: Record<string, string> = {};
   try {
-    const created = await exec("docker", ["network", "create", network]);
-    if (created.code !== 0) throw new ServiceNotReadyError(`network ${network}: ${created.stderr.trim() || "docker network create failed"}`);
+    if (!given) {
+      const created = await exec("docker", ["network", "create", network]);
+      if (created.code !== 0) throw new ServiceNotReadyError(`network ${network}: ${created.stderr.trim() || "docker network create failed"}`);
+    }
     for (const key of keys) {
       const spec = services[key]!;
-      const started = await exec("docker", serviceArgs(network, runName, key, spec));
+      const started = await exec("docker", serviceArgs(network, runName, key, spec, given?.dns));
       if (started.code !== 0) throw new ServiceNotReadyError(`service ${key} (${spec.image}) did not start: ${started.stderr.trim()}`);
       Object.assign(env, spec.exports ?? {});
     }
