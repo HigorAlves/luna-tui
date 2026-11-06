@@ -26,3 +26,4 @@ Design proposals, numbered in the order they were written. Each one says its sta
 | [0002](./rfcs/0002-native-agent-runtimes.md) | Three native runtimes: Claude through its SDK, Codex through eve, Jev through TypeSafe's SDK |
 | [0003](./rfcs/0003-upgradable-harness.md) | Pinned models, conformance, replay evals and staged rollout, so upgrades are routine |
 | [0004](./rfcs/0004-harness-for-luna-notch.md) | luna-tui as the harness for Luna Notch: the notch owns the ticket, the machine owns the run |
+| [0005](./rfcs/0005-software-factory-v1-5.md) | Software Factory v1.5: typed decisions at every gate, a Plan stage, a video Evidence Pack and a maintenance loop in Ship |
