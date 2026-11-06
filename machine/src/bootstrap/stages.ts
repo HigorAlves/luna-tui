@@ -18,7 +18,7 @@ import { type AgentDeps, type AgentExtra, agentRunners, runAgent } from "../appl
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
 import { type EvidenceDeps, type EvidenceStageDeps, evidenceStage } from "../application/stages/evidence.ts";
-import { type RetroFacts, memoryReviewRunner, withMemoryReview } from "../application/stages/memory.ts";
+import { type RetroFacts, memoryReviewRunner } from "../application/stages/memory.ts";
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
 import { type PlanDeps, planStage } from "../application/stages/plan.ts";
 import { type TriageSignalDeps, withTriageSignals } from "../application/stages/triage-signals.ts";
@@ -342,21 +342,19 @@ export async function buildRealStages(
           maxWaitMs: config.shipPoll.maxWaitDays * 86_400_000,
         }),
     }),
-    // The merge (decided again on GitHub's facts at that moment). The memory-review gate has no stage of its own yet: the retro pack runs after
-    // shipping and its proposal rides on the gate; approving applies it at close.
-    shipping: withMemoryReview(
-      mergeRunner({ github, policies, evidence: { load: evidenceDeps.load }, truth: truth ?? null, stateDir: config.stateDir, pollMs: config.shipPoll.intervalMs ?? FACTORY_DEFAULTS.ship.poll_minutes * 60_000 }),
-      memoryReviewRunner({
-        runPack: async (context, ship) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}) }),
-        stateDir: config.stateDir,
-        ...(retroFacts ? { facts: retroFacts } : {}),
-        // worth_learning binds late, with the other ship decisions.
-        get decide() {
-          return shipDecisions.decide;
-        },
-        overrides: async (repoPath) => (await policies.for(repoPath)).decisions.worth_learning,
-      }),
-    ),
+    // The merge (decided again on GitHub's facts at that moment).
+    shipping: mergeRunner({ github, policies, evidence: { load: evidenceDeps.load }, truth: truth ?? null, stateDir: config.stateDir, pollMs: config.shipPoll.intervalMs ?? FACTORY_DEFAULTS.ship.poll_minutes * 60_000 }),
+    // The retro, after the merge: its proposal waits at the same state for a person, and a card with nothing to learn closes by itself.
+    reviewing_memory: memoryReviewRunner({
+      runPack: async (context, ship) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}) }),
+      stateDir: config.stateDir,
+      ...(retroFacts ? { facts: retroFacts } : {}),
+      // worth_learning binds late, with the other ship decisions.
+      get decide() {
+        return shipDecisions.decide;
+      },
+      overrides: async (repoPath) => (await policies.for(repoPath)).decisions.worth_learning,
+    }),
   };
   return { real, verifyPack, checksExec, shipGateProbe: shipGateProbe({ github, policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { image: config.runnerImage, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }

@@ -778,8 +778,8 @@ describe("the ship approval (the release question after readiness)", () => {
 
   it("needs no name for a low-risk release question, and runs the merge on approval", async () => {
     const id = await atRelease("low");
-    expect((await pipeline.decide(id, "approved")).state).toBe("reviewing_memory");
-    expect((await stagesRun(id)).slice(-1)).toEqual(["shipping"]);
+    expect((await pipeline.decide(id, "approved")).state).toBe("closed");
+    expect((await stagesRun(id)).slice(-2)).toEqual(["shipping", "reviewing_memory"]);
   });
 
   it("refuses a High-risk approval with no name, and leaves the question open", async () => {
@@ -801,7 +801,7 @@ describe("the ship approval (the release question after readiness)", () => {
     await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "dee" })).rejects.toBeInstanceOf(NotReleaseOwnerError);
     expect((await pipeline.get(id)).state).toBe("awaiting_ship");
     const moved = await pipeline.decide(id, "approved", undefined, undefined, { approver: "BO" });
-    expect(moved.state).toBe("reviewing_memory");
+    expect(moved.state).toBe("closed");
   });
 
   it("keeps the approver and the head the question was asked about on the approval", async () => {
@@ -857,7 +857,7 @@ describe("the open release question is probed once per poll interval", () => {
     const gate = (await p.approvals(id)).filter((a) => a.requested.gate === "ship_approval").at(-1)!;
     expect(gate).toMatchObject({ decision: "approved", response: { auto: true } });
     expect(learned).toEqual([]);
-    expect((await stagesRun(id)).slice(-1)).toEqual(["shipping"]);
+    expect((await stagesRun(id)).slice(-2)).toEqual(["shipping", "reviewing_memory"]);
   });
 
   it("a PR closed on GitHub archives the card with pr_closed", async () => {
@@ -1231,7 +1231,7 @@ describe("the whole pipeline with stub stages", () => {
     await startAndApprove(task.id);
     expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
 
-    await pipeline.decide(task.id, "approved");
+    // The retro had nothing to propose: the second approval (the preview gate's) is the last click, the retro closes the card.
     const closed = await pipeline.decide(task.id, "approved");
 
     expect(closed.state).toBe("closed");
@@ -1246,13 +1246,10 @@ describe("the whole pipeline with stub stages", () => {
       "evidence",
       "awaiting_ship",
       "shipping",
-    ]);
-    const approvals = await pipeline.approvals(task.id);
-    expect(approvals.map((a) => a.kind)).toEqual([
-      "awaiting_approval",
-      "awaiting_ship",
       "reviewing_memory",
     ]);
+    const approvals = await pipeline.approvals(task.id);
+    expect(approvals.map((a) => a.kind)).toEqual(["awaiting_approval", "awaiting_ship"]);
     expect(approvals.every((a) => a.decision === "approved" && a.decidedAt)).toBe(true);
   });
 });
@@ -1300,7 +1297,7 @@ describe("closing", () => {
     });
     const created = await closing.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
     await closing.start(created.id);
-    for (let i = 0; i < 3; i++) await closing.decide(created.id, "approved");
+    for (let i = 0; i < 2; i++) await closing.decide(created.id, "approved");
 
     expect((await closing.get(created.id)).state).toBe("closed");
     const event = (await closing.events(created.id)).find((e) => e.kind === "task.closed");
@@ -1321,7 +1318,7 @@ describe("closing", () => {
     });
     const created = await closing.createTask({ title: "Login page", criteria: ["x"] });
     await closing.start(created.id);
-    for (let i = 0; i < 3; i++) await closing.decide(created.id, "approved");
+    for (let i = 0; i < 2; i++) await closing.decide(created.id, "approved");
 
     expect((await closing.get(created.id)).state).toBe("closed");
     const event = (await closing.events(created.id)).find((e) => e.kind === "task.closed");
@@ -1340,8 +1337,8 @@ describe("memory review decision", () => {
     });
 
   async function toMemoryGate(p: Pipeline) {
-    // reviewing_memory is a gate; the retro runs inside shipping and its rules ride on the gate.
-    stubs.plan("shipping", { outcome: "pass", detail: { rules: { markdown: "- r\n" } } });
+    // The retro runs in reviewing_memory; with rules to propose the card waits there for a person.
+    stubs.plan("reviewing_memory", { outcome: "pass", detail: { rules: { markdown: "- r\n" } } });
     const created = await p.createTask({ title: "Login page", criteria: ["x"] });
     await p.start(created.id);
     for (let i = 0; i < 2; i++) await p.decide(created.id, "approved");
@@ -1358,6 +1355,24 @@ describe("memory review decision", () => {
     const event = (await p.events(id)).find((e) => e.kind === "task.closed");
     const steps = (event?.payload as unknown as CloseReport).steps;
     expect(steps[0]).toMatchObject({ step: "rules", note: expect.stringMatching(/^skipped/) });
+  });
+
+  it("a retro with nothing to propose closes the card with no click; a retro that fails closes it too, and the reason is kept", async () => {
+    const p = closing();
+    stubs.plan("reviewing_memory", { outcome: "pass", detail: { rules: null, note: "no retro" } });
+    const quiet = await p.createTask({ title: "Quiet", criteria: ["x"] });
+    await p.start(quiet.id);
+    for (let i = 0; i < 2; i++) await p.decide(quiet.id, "approved");
+    expect((await p.get(quiet.id)).state).toBe("closed");
+    expect((await p.events(quiet.id)).some((e) => e.kind === "task.closed")).toBe(true);
+    expect((await p.approvals(quiet.id)).find((a) => a.kind === "reviewing_memory")).toBeUndefined();
+
+    stubs.plan("reviewing_memory", { outcome: "fail", detail: { reason: "the retro broke" } });
+    const broken = await p.createTask({ title: "Broken", criteria: ["x"] });
+    await p.start(broken.id);
+    for (let i = 0; i < 2; i++) await p.decide(broken.id, "approved");
+    expect((await p.get(broken.id)).state).toBe("closed");
+    expect((await p.events(broken.id)).some((e) => e.kind === "transition" && e.payload.to === "closed" && e.payload.reason === "the retro broke")).toBe(true);
   });
 
   it("offers the rules step by default when the gate carries rules", async () => {
@@ -2292,7 +2307,7 @@ describe("awaiting_ship holds a stage or a gate", () => {
     expect(await pipeline.recover()).toBe(0);
     expect(seen).toEqual(["awaiting_ship"]);
     expect((await pipeline.events(task.id)).some((e) => e.kind === "stage.restarted" && e.payload.stage === "awaiting_ship")).toBe(true);
-    expect((await pipeline.get(task.id)).state).toBe("reviewing_memory");
+    expect((await pipeline.get(task.id)).state).toBe("closed");
   });
 
   it("approving the preview gate starts the watch; the ship approval's own approval starts the merge", async () => {
@@ -2303,8 +2318,8 @@ describe("awaiting_ship holds a stage or a gate", () => {
     await pipeline.decide(task.id, "approved");
     const ran = await stagesRun(task.id);
     expect(ran.filter((s) => s === "awaiting_ship").length).toBe(before + 1);
-    expect(ran.slice(-2)).toEqual(["awaiting_ship", "shipping"]);
-    expect((await pipeline.get(task.id)).state).toBe("reviewing_memory");
+    expect(ran.slice(-2)).toEqual(["shipping", "reviewing_memory"]);
+    expect((await pipeline.get(task.id)).state).toBe("closed");
 
     const second = await newTask();
     stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "abc" } });
@@ -2315,8 +2330,8 @@ describe("awaiting_ship holds a stage or a gate", () => {
     const open = (await pipeline.approvals(second.id)).find((a) => a.decision === null);
     expect(open?.requested.gate).toBe("ship_approval");
     await pipeline.decide(second.id, "approved");
-    expect((await stagesRun(second.id)).slice(-1)).toEqual(["shipping"]);
-    expect((await pipeline.get(second.id)).state).toBe("reviewing_memory");
+    expect((await stagesRun(second.id)).slice(-2)).toEqual(["shipping", "reviewing_memory"]);
+    expect((await pipeline.get(second.id)).state).toBe("closed");
   });
 
   it("a shipping run that is not ready hands the card back to the watch; media refresh and the escalation head_moved run e2e", async () => {
@@ -2325,8 +2340,8 @@ describe("awaiting_ship holds a stage or a gate", () => {
     await startAndApprove(task.id);
     await pipeline.decide(task.id, "approved");
     const ran = await stagesRun(task.id);
-    expect(ran.slice(-4)).toEqual(["awaiting_ship", "shipping", "awaiting_ship", "shipping"]);
-    expect((await pipeline.get(task.id)).state).toBe("reviewing_memory");
+    expect(ran.slice(-4)).toEqual(["shipping", "awaiting_ship", "shipping", "reviewing_memory"]);
+    expect((await pipeline.get(task.id)).state).toBe("closed");
 
     const refresh = await newTask();
     stubs.plan("awaiting_ship", { outcome: "escalated", detail: { escalation: "head_moved", refresh: "media", reason: "a fix changed a scenario" } });

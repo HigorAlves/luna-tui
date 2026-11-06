@@ -160,6 +160,11 @@ export function renderShip(ship: ShipContext): string {
       `Predicted: size ${r.predicted.size ?? "?"}, risk ${r.predicted.risk ?? "?"}, ${r.predicted.estLoc ?? "?"} LOC`,
       `Actual: +${r.actual.added} -${r.actual.removed} LOC, retries ${r.actual.retries.total} (verify ${r.actual.retries.verify}, e2e ${r.actual.retries.e2e}, ci ${r.actual.retries.ci}), ${r.actual.escalations} escalation${r.actual.escalations === 1 ? "" : "s"}, format ${r.actual.format ?? "?"}, ${r.actual.durationMin ?? "?"} min`,
       `Runs: ${r.runs}`,
+      ...(r.predicted.urgency ? [`Urgency: ${r.predicted.urgency}`] : []),
+      ...(r.actual.overrides !== undefined ? [`Person overrides: ${r.actual.overrides}`] : []),
+      ...(r.actual.reviewRounds !== undefined ? [`Review rounds: ${r.actual.reviewRounds}, threads: ${r.actual.reviewThreads ?? 0}`] : []),
+      ...(r.actual.costUsd !== undefined ? [`Cost: $${r.actual.costUsd.toFixed(2)}`] : []),
+      ...(r.actual.declaredFiles !== undefined ? [`Files outside the map: ${r.actual.declaredFiles}`] : []),
     ].join("\n");
   }
   return `(no ${ship.kind} facts)`;

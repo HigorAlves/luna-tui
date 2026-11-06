@@ -4,8 +4,6 @@ import { PACKS, type Pack, type PackId, type PackInfo, type TaskState } from "@h
 
 /** Packs that do not run in the task state of their own name. */
 const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
-  // The retro runs after the push, inside the shipping stage; its proposal waits at reviewing_memory.
-  reviewing_memory: ["shipping"],
   // The plan stage: the planner runs first, then test design, both in the test_design state.
   plan: ["test_design"],
   plan_fast: ["test_design"],

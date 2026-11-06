@@ -45,7 +45,7 @@ async function getMetrics(query = ""): Promise<Metrics> {
 async function seed() {
   const closed = await pipeline.createTask({ title: "closed" });
   await pipeline.start(closed.id);
-  for (let i = 0; i < 3; i++) await pipeline.decide(closed.id, "approved");
+  for (let i = 0; i < 2; i++) await pipeline.decide(closed.id, "approved");
 
   stubs.plan("verifying", fail, fail, fail);
   const escalated = await pipeline.createTask({ title: "escalated" });
@@ -96,7 +96,7 @@ describe("GET /metrics", () => {
     expect((await getMetrics()).flow).toMatchObject({ planCycleMs: { median: null, n: 0 }, buildRuns: { value: null, n: 0 }, mergesPerWeek: { n: 0 }, changeFailureRate: { value: null }, timeToRestoreMs: { value: null } });
     const task = await pipeline.createTask({ title: "flows" });
     await pipeline.start(task.id);
-    for (let i = 0; i < 3; i++) await pipeline.decide(task.id, "approved");
+    for (let i = 0; i < 2; i++) await pipeline.decide(task.id, "approved");
     const { flow } = await getMetrics();
     expect(flow?.planCycleMs.n).toBe(1);
     expect(flow?.planCycleMs.median).toBeGreaterThanOrEqual(0);
@@ -106,16 +106,16 @@ describe("GET /metrics", () => {
   it("counts the gates answered in the window, the share inside the gate SLA and the median wait per gate", async () => {
     const { closed, escalated } = await seed();
     const m = await getMetrics();
-    // The closed task passed three gates (plan, ship, memory); the escalated one answered one and still waits at escalated.
-    expect(m.gates.answered).toBe(4);
+    // The closed task passed three gates (plan, ship: the retro had nothing to propose and closed it); the escalated one answered one and still waits at escalated.
+    expect(m.gates.answered).toBe(3);
     expect(m.gates.withinSla).toBe(1);
-    expect(Object.keys(m.gates.waitMs).sort()).toEqual(["awaiting_approval", "awaiting_ship", "reviewing_memory"]);
+    expect(Object.keys(m.gates.waitMs).sort()).toEqual(["awaiting_approval", "awaiting_ship"]);
     expect(m.gates.waitMs.awaiting_approval!.median).toBeGreaterThanOrEqual(0);
     // An answer older than the SLA counts against it: push the closed task's plan approval back in time.
     await db.query("update events set at = at - interval '3 hours' where task_id = $1 and payload->>'to' = 'awaiting_approval'", [closed.id]);
     const late = await getMetrics();
-    expect(late.gates.answered).toBe(4);
-    expect(late.gates.withinSla).toBeCloseTo(3 / 4);
+    expect(late.gates.answered).toBe(3);
+    expect(late.gates.withinSla).toBeCloseTo(2 / 3);
     expect(late.gates.waitMs.awaiting_approval!.p90).toBeGreaterThan(2.5 * 3600 * 1000);
     expect(escalated.id).toBeTruthy();
   });
@@ -186,7 +186,7 @@ describe("GET /metrics", () => {
   it("filters by repo, and groups by repo with one slim row per checkout", async () => {
     const a = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
     await pipeline.start(a.id);
-    for (let i = 0; i < 3; i++) await pipeline.decide(a.id, "approved");
+    for (let i = 0; i < 2; i++) await pipeline.decide(a.id, "approved");
     stubs.plan("verifying", fail, fail, fail);
     const b = await pipeline.createTask({ title: "b", repoPath: "/r/b" });
     await pipeline.start(b.id);

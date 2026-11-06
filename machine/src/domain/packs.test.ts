@@ -25,8 +25,8 @@ describe("packStates", () => {
     expect(packForState("evidence")).toBe("evidence");
   });
 
-  it("runs the memory review inside shipping, and the inbox and on-demand packs in no task state", () => {
-    expect(packStates("reviewing_memory")).toEqual(["shipping"]);
+  it("runs the memory review in its own state, and the inbox and on-demand packs in no task state", () => {
+    expect(packStates("reviewing_memory")).toEqual(["reviewing_memory"]);
     expect(packStates("slack_triage")).toEqual([]);
     expect(packStates("jira_intake")).toEqual([]);
     expect(packStates("chat_triage")).toEqual([]);

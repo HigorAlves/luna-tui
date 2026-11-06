@@ -1767,6 +1767,8 @@ export class Pipeline {
                 ...(await this.loopCap(id, stage, result)),
                 // The merge that did not happen because the PR is not ready; a fix that changed what a scenario shows (media from a new browser run).
                 ...(stage === "shipping" && result.detail?.notReady === true ? { notReady: true as const } : {}),
+                // The retro has something for a person (rules, prompt updates, graph misses): it waits for an answer; otherwise the card closes.
+                ...(stage === "reviewing_memory" && result.outcome === "pass" && result.detail?.rules != null ? { proposals: true as const } : {}),
                 ...(result.detail?.refresh === "media" ? { refresh: "media" as const } : {}),
                 ...(stage === "evidence" ? { preview: (await this.policyFor((await this.get(id)).repoPath)).factory.ship.preview === "on" } : {}),
               };
@@ -1784,6 +1786,11 @@ export class Pipeline {
               }
             : result.detail;
         const step = await this.apply(id, next, { detail });
+        // A retro with nothing to propose (or one that broke) ends the card here: no click, the close step runs.
+        if (step.effect.kind === "done") {
+          await this.close(id);
+          return;
+        }
         if (step.effect.kind === "pause") {
           this.scheduleResume(id, result.detail?.resetsAt);
           // One usage window is shared by every stage on the same credential: hold the queued

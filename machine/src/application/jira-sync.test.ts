@@ -69,8 +69,7 @@ describe("JiraSync", () => {
     expect(jira.writes.filter((w) => w[0] === "transition").map((w) => w[2])).toEqual(["11", "21"]);
     expect(jira.comments["PLAT-123"]).toContain("PR opened: https://github.com/o/a/pull/7");
 
-    await pipeline.decide(task.id, "approved"); // ship → reviewing_memory
-    await pipeline.decide(task.id, "approved"); // → closed
+    await pipeline.decide(task.id, "approved"); // ship → merge → the retro has nothing to propose → closed
     await sync.idle();
     expect(jira.issues.get("PLAT-123")!.status).toBe("Done");
     const closing = jira.comments["PLAT-123"]!.at(-1)!;
@@ -123,7 +122,6 @@ describe("JiraSync", () => {
     // Someone fixed the workflow and moved the issue along in Jira: the next declared move succeeds and the mark goes.
     jira.transition = perform;
     jira.issues.get("PLAT-123")!.status = "In Review";
-    await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved");
     await sync.idle();
     expect((await pipeline.get(task.id)).jira).toMatchObject({ status: "Done", blocked: null });

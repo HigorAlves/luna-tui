@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "worth.value",
+      "value": true
+    }
+  ],
+  "rubric": "A small change on plan, but a person changed what the machine made six times: the machine's own work was wrong in ways a retro should learn from.",
+  "label": {
+    "worth": {
+      "value": true
+    }
+  }
+}

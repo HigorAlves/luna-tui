@@ -80,7 +80,7 @@ describe("a notch task", () => {
 
     stubs.plan("delivering", { outcome: "pass", detail: { prUrl: "https://github.com/o/a/pull/7", prNumber: 7 } });
     await pipeline.start(task.id);
-    for (let i = 0; i < 3; i++) await pipeline.decide(task.id, "approved");
+    for (let i = 0; i < 2; i++) await pipeline.decide(task.id, "approved");
     expect((await pipeline.get(task.id)).state).toBe("closed");
     await Promise.all([sync.idle(), replies.idle()]);
 

@@ -27,6 +27,7 @@ import { escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter } from
 import { commitsSince, headCommit } from "./adapters/git/worktree.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
+import { loadCursor } from "./application/ship-cursor.ts";
 import { retroFactsOf } from "./application/stages/memory.ts";
 import { shippedStream } from "./application/ship-loop.ts";
 import type { ShipDecide } from "./application/stages/ship-fixes.ts";
@@ -259,7 +260,9 @@ const { real, verifyPack, checksExec, agentDeps, shipGateProbe } = await buildRe
   async (taskId) => {
     const [task, events, runs, finish] = await Promise.all([pipeline.get(taskId), pipeline.events(taskId), pipeline.stageRuns(taskId), pipeline.latestStageFinish(taskId, "implementing")]);
     const ledger = Ledger.safeParse(finish?.detail?.ledger);
-    return retroFactsOf({ task, ledger: ledger.success ? ledger.data : null, events, runs: runs.length });
+    const cursor = await loadCursor(config.stateDir, taskId);
+    const usage = await pipeline.taskUsage(taskId);
+    return retroFactsOf({ task, ledger: ledger.success ? ledger.data : null, events, runs: runs.length, cursor, costUsd: usage.spentUsd });
   },
   decisionTruth,
   // Triage's card_search: the task's own repository's cards, from the board the pipeline keeps.

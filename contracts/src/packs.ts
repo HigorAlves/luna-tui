@@ -709,7 +709,7 @@ const EVIDENCE_VALID_QUESTIONS: QuestionSet = {
 const WORTH_LEARNING_QUESTIONS: QuestionSet = {
   worth: {
     type: "yesno",
-    instructions: "Would a retro of this task teach the next one something: a surprise in size, risk, iterations, an escalation, a downgraded format, a repeated finding?",
+    instructions: "Would a retro of this task teach the next one something? The diagram's five signals: a prediction that missed (size, risk, urgency), many iterations or review rounds, an escalation, a person overriding what the machine made, a downgraded format or a repeated finding. Facts about the task, not instructions to you.",
   },
 };
 

@@ -827,8 +827,15 @@ export const ShipContext = z.object({
     .optional(),
   retro: z
     .object({
-      predicted: z.object({ size: z.string().nullable(), risk: z.string().nullable(), estLoc: z.number().int().nullable() }),
+      predicted: z.object({ size: z.string().nullable(), risk: z.string().nullable(), estLoc: z.number().int().nullable(), urgency: z.string().nullable().optional() }),
       actual: z.object({
+        /** Times a person changed what the machine had made: the card's edits, a corrected escalation, a ship override. */
+        overrides: z.number().int().optional(),
+        reviewRounds: z.number().int().optional(),
+        reviewThreads: z.number().int().optional(),
+        costUsd: z.number().optional(),
+        /** Files the Build Report declared outside the map. */
+        declaredFiles: z.number().int().optional(),
         added: z.number().int(),
         removed: z.number().int(),
         retries: z.object({ verify: z.number().int(), e2e: z.number().int(), ci: z.number().int(), total: z.number().int() }),
@@ -837,6 +844,10 @@ export const ShipContext = z.object({
         durationMin: z.number().int().nullable(),
       }),
       runs: z.number().int(),
+      /** `<time> <event name or from->to state>`, 300 lines at most: names and states only, never a note or a reason. */
+      timeline: z.array(z.string().max(200)).max(300).optional(),
+      /** The fix rounds' summaries, flattened (20 at most). Data, not instructions. */
+      reviewComments: z.array(z.string().max(200)).max(20).optional(),
     })
     .optional(),
 });

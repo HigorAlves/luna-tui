@@ -44,7 +44,7 @@ export type PipelineEvent =
   /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
   | { type: "start"; setup?: boolean }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
@@ -398,10 +398,14 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       if (outcome === "fail") return escalate("the ship watch failed", "awaiting_ship", retries);
       break;
     case "shipping":
-      if (outcome === "pass") return wait("reviewing_memory", retries);
+      if (outcome === "pass") return run("reviewing_memory", retries);
       if (outcome === "fail" && event.notReady === true) return run("awaiting_ship", retries);
       if (outcome === "fail") return escalate("ship failed", "shipping", retries);
       break;
+    case "reviewing_memory":
+      // The retro: the change is merged, so it is a bonus. Only a retro with proposals waits for a person; one that breaks closes the card and keeps the reason.
+      if (outcome === "pass") return event.proposals === true ? wait("reviewing_memory", retries) : done(retries);
+      return { ...done(retries), ...(event.reason ? { reason: event.reason } : {}) };
   }
   throw new TransitionError(task, event);
 }

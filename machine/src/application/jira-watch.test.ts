@@ -78,7 +78,7 @@ describe("JiraWatch", () => {
 
     const closed = await pipeline.createTask({ title: "PLAT-123 y" });
     await pipeline.start(closed.id);
-    for (let i = 0; i < 3; i++) await pipeline.decide(closed.id, "approved");
+    for (let i = 0; i < 2; i++) await pipeline.decide(closed.id, "approved");
     jira.issues.get("PLAT-123")!.status = "Cancelled";
     await watch.pollOnce();
     expect((await pipeline.events(closed.id)).filter((e) => e.kind === "jira.moved")).toEqual([]);

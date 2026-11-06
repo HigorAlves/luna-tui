@@ -603,6 +603,19 @@ describe("awaiting_ship and reviewing_memory hold a running stage or an open gat
     expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "needs_input" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "wait", gate: "awaiting_ship" } });
     expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "fail" })).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship", reason: "the ship watch failed" });
   });
+  it("shipping passes to the retro stage; the retro closes the card, or waits when it has proposals; a failed retro closes it with the reason kept", () => {
+    expect(transition(at("shipping"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "reviewing_memory", effect: { kind: "run", stage: "reviewing_memory" } });
+    expect(transition(at("reviewing_memory"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+    expect(transition(at("reviewing_memory"), { type: "stage_done", outcome: "pass", proposals: true })).toMatchObject({ state: "reviewing_memory", effect: { kind: "wait", gate: "reviewing_memory" } });
+    expect(transition(at("reviewing_memory"), { type: "stage_done", outcome: "fail", reason: "the retro broke" })).toMatchObject({ state: "closed", effect: { kind: "done" }, reason: "the retro broke" });
+  });
+  it("a usage limit during the retro pauses there and resumes there", () => {
+    expect(transition(at("reviewing_memory"), { type: "rate_limited" })).toMatchObject({ state: "paused_rate_limit", resumeTo: "reviewing_memory" });
+    expect(transition(at("paused_rate_limit", { resumeTo: "reviewing_memory" }), { type: "window_reset" })).toMatchObject({ state: "reviewing_memory", effect: { kind: "run", stage: "reviewing_memory" } });
+  });
+  it("approved at the retro gate closes, as before", () => {
+    expect(transition(at("reviewing_memory"), { type: "approved" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+  });
   it("plan_wrong from awaiting_ship runs the plan stage once per card", () => {
     const step = transition(at("awaiting_ship"), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" });
     expect(step).toMatchObject({ state: "test_design", retries: { planWrong: 1 }, escalation: "plan_wrong" });
