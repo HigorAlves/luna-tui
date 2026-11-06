@@ -383,3 +383,27 @@ describe("the ticket_reply pack reads hostile text and has no hands", () => {
     expect(PACKS.ticket_reply).toMatchObject({ maxTurns: 1, access: NO_ACCESS });
   });
 });
+
+describe("the conversation_assess decision pack", () => {
+  it("asks the kind, whether a reply is needed, three knock-outs and five scores in one call", async () => {
+    const { PACKS } = await import("./index.ts");
+    const pack = PACKS.conversation_assess;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["kind", "needs_reply", "production_down", "data_loss", "security", "who", "what", "impact", "time", "demand"]);
+    const answer = {
+      kind: { choice: "incident", confidence: 0.9 }, needs_reply: { value: true, p: 0.9 }, production_down: { value: false, p: 0.1 }, data_loss: { value: false, p: 0.1 }, security: { value: false, p: 0.1 },
+      who: { score: 2, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 0, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 },
+    };
+    expect(pack.answer.safeParse(answer).success).toBe(true);
+    expect(pack.answer.safeParse({ ...answer, kind: { choice: "rant", confidence: 0.9 } }).success).toBe(false);
+    expect(pack.answer.safeParse({ ...answer, who: { score: 3, confidence: 0.8 } }).success).toBe(false);
+  });
+  it("reads a conversation context: a thread of lines, the latest message, the author's profile and at most five candidates", async () => {
+    const { ConversationContext } = await import("./stage.ts");
+    const ok = { channel: "eng", private: false, thread: ["marta: it fails"], latest: "it fails", author: { profile: "member", title: null }, candidates: [{ slot: 1, kind: "open", title: "t", summary: "s" }] };
+    expect(ConversationContext.safeParse(ok).success).toBe(true);
+    expect(ConversationContext.safeParse({ ...ok, thread: Array.from({ length: 21 }, () => "a: b") }).success).toBe(false);
+    expect(ConversationContext.safeParse({ ...ok, author: { profile: "stranger", title: null } }).success).toBe(false);
+    expect(ConversationContext.safeParse({ ...ok, candidates: Array.from({ length: 6 }, (_, i) => ({ slot: 1, kind: "open", title: String(i), summary: "" })) }).success).toBe(false);
+  });
+});

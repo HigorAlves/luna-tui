@@ -193,9 +193,9 @@ export function createSlack(token: string, options: WebApiOptions = {}): Slack {
         cached = call(
           "users.info",
           { user: id },
-          z.object({ user: z.object({ id: z.string(), name: z.string(), real_name: z.string().optional(), is_bot: z.boolean().optional(), profile: z.object({ display_name: z.string().optional() }).optional() }) }),
+          z.object({ user: z.object({ id: z.string(), name: z.string(), real_name: z.string().optional(), is_bot: z.boolean().optional(), is_restricted: z.boolean().optional(), is_ultra_restricted: z.boolean().optional(), profile: z.object({ display_name: z.string().optional(), title: z.string().optional() }).optional() }) }),
         ).then(
-          (a) => ({ id: a.user.id, name: a.user.profile?.display_name || a.user.real_name || a.user.name, isBot: a.user.is_bot ?? false }),
+          (a) => ({ id: a.user.id, name: a.user.profile?.display_name || a.user.real_name || a.user.name, isBot: a.user.is_bot ?? false, isGuest: (a.user.is_restricted ?? false) || (a.user.is_ultra_restricted ?? false), title: a.user.profile?.title || null }),
           (error: unknown) => {
             users.delete(id);
             throw error;

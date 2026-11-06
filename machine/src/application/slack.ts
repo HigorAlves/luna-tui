@@ -67,6 +67,10 @@ export interface UserInfo {
   id: string;
   name: string;
   isBot: boolean;
+  /** A single- or multi-channel guest (`is_restricted`). Absent from a fake that does not say. */
+  isGuest?: boolean;
+  /** `profile.title`; null when none. */
+  title?: string | null;
 }
 
 export interface ChannelInfo {

@@ -1,0 +1,41 @@
+{
+  "schema": 3,
+  "stage": "conversation_assess",
+  "pack": "conversation_assess",
+  "attempt": 1,
+  "task": {
+    "id": "conversation-assess",
+    "title": "How do I enable export",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "conversation": {
+      "channel": "eng",
+      "private": false,
+      "thread": [
+        "marta: how do I turn on the csv export for our workspace? I cannot find the setting"
+      ],
+      "latest": "how do I turn on the csv export for our workspace? I cannot find the setting",
+      "author": {
+        "profile": "member",
+        "title": null
+      },
+      "candidates": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

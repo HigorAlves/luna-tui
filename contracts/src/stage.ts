@@ -167,6 +167,8 @@ export const PackId = z.enum([
   "ticket_validity",
   // A decision at the Ticket Machine: the four typed answers of an assessment (urgency, complexity, blast radius, risk of doing against not doing).
   "ticket_assess",
+  // A decision at the Conversation Machine (a conversation context, run on demand): the kind of a Slack thread, whether it needs a reply, three knock-outs and five scores.
+  "conversation_assess",
   // A decision at the Ticket Machine: what to do with a scored ticket where the scores alone cannot tell (do now, schedule, decline, needs decision).
   "ticket_recommend",
   // Drafts the reply that declines a ticket, from the ticket and its assessment as data; the draft waits for a person.
@@ -900,6 +902,20 @@ export const TicketContext = z.object({
 });
 export type TicketContext = z.infer<typeof TicketContext>;
 
+/** What the conversation packs read: a Slack thread as a stranger wrote it, flattened and capped by script (every text through `maskPii`), and the cards and backlog items its channel can see by slot. */
+export const ConversationContext = z.object({
+  /** The channel's name, no `#`. */
+  channel: z.string().max(120),
+  /** A private channel, a DM or a group DM: a decision record of it is never harvested. */
+  private: z.boolean(),
+  /** At most 20 lines of `author: text`, each text at most 500 characters. */
+  thread: z.array(z.string().max(620)).max(20),
+  latest: z.string().max(500),
+  author: z.object({ profile: z.enum(["bot", "guest", "vip", "member"]), title: z.string().max(120).nullable() }),
+  candidates: z.array(z.object({ slot: z.number().int().min(1).max(5), kind: z.enum(["open", "closed", "backlog"]), title: z.string().max(500), summary: z.string().max(1000) })).max(5),
+});
+export type ConversationContext = z.infer<typeof ConversationContext>;
+
 /** What eval_judge reads: one eval case, what a good answer must contain, and the answer under
  *  test. The JSON fields are text, as the evals runner serialised them (evals/run.ts). */
 export const EvalJudgeContext = z.object({
@@ -1047,6 +1063,8 @@ export const StageInput = z.object({
     dedup: DedupContext.nullable().optional(),
     /** For the Ticket Machine's decisions (ticket_validity): the ticket and its enrichment. */
     ticket: TicketContext.nullable().optional(),
+    /** For the Conversation Machine's decisions (conversation_assess): the thread, its author and the candidates. */
+    conversation: ConversationContext.nullable().optional(),
     /** For the video packs (script, fix, recording, critic): the scenarios, the target, the narration, the film's measurements. */
     video: VideoContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */

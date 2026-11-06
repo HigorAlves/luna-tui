@@ -1074,6 +1074,25 @@ export class Pipeline {
     return this.candidatesFor({ repoPath, sources: [source], operator: false, excludeId: null });
   }
 
+  /**
+   * In a channel a repository claims in `conversation.channels`: that repository's cards whose first source is a ticket (a Jira issue or a
+   * GitHub issue), each marked with where it came from. Never a card whose first source is another Slack conversation, a DM or nothing.
+   * The caller shows the mark before anything is posted.
+   */
+  async claimedRepoCandidates(repoPath: string): Promise<Array<Candidate & { otherSource: { kind: "jira" | "github"; key: string } }>> {
+    const out: Array<Candidate & { otherSource: { kind: "jira" | "github"; key: string } }> = [];
+    const rows = (await this.store.listTasks()).filter((r) => r.repoPath === repoPath && r.state !== "archived").sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 500);
+    for (const r of rows) {
+      const card = cardOf(r);
+      if (card.mergedInto) continue;
+      const first = card.sources[0];
+      const otherSource = first && "kind" in first && first.kind === "jira" ? ({ kind: "jira", key: first.key } as const) : first && "kind" in first && first.kind === "github" ? ({ kind: "github", key: `${first.repo}#${first.number}` } as const) : null;
+      if (!otherSource) continue;
+      out.push({ id: r.id, kind: r.state === "closed" ? "closed" : "open", title: r.title, text: r.description, repo: r.repoPath, closedAt: r.state === "closed" ? (r.stateSince ?? r.updatedAt) : null, otherSource });
+    }
+    return out;
+  }
+
   private async candidatesFor(o: { repoPath: string; sources: ReturnType<typeof cardOf>["sources"]; operator: boolean; excludeId: string | null }): Promise<Candidate[]> {
     const task = { id: o.excludeId, repoPath: o.repoPath };
     const operator = o.operator;

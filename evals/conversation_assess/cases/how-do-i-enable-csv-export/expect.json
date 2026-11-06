@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "kind.choice",
+      "value": "question"
+    },
+    {
+      "kind": "equals",
+      "path": "needs_reply.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "production_down.value",
+      "value": false
+    }
+  ],
+  "rubric": "Someone asks how a feature is switched on and nobody has answered: a question that needs a reply, nothing is broken.",
+  "label": {
+    "kind": {
+      "choice": "question"
+    },
+    "needs_reply": {
+      "value": true
+    },
+    "production_down": {
+      "value": false
+    }
+  }
+}

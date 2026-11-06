@@ -132,6 +132,12 @@ describe("createSlack", () => {
     expect(m!.editedTs).toBe("2.5");
   });
 
+  it("reads whether a user is a guest and what their title is", async () => {
+    const world = fakeSlack({ "users.info": { ok: true, user: { id: "U7", name: "guest.g", is_bot: false, is_restricted: true, profile: { title: "Contractor" } } } });
+    const slack = createSlack("t", { fetch: world.fetch });
+    expect(await slack.userInfo("U7")).toMatchObject({ isGuest: true, title: "Contractor" });
+  });
+
   it("caches users and channels, names them sensibly and finds permalinks", async () => {
     const world = fakeSlack({
       "users.info": { ok: true, user: { id: "U2", name: "marta.s", real_name: "Marta Silva", is_bot: false, profile: { display_name: "marta" } } },
@@ -140,8 +146,8 @@ describe("createSlack", () => {
       "conversations.open": { ok: true, channel: { id: "D9" } },
     });
     const slack = createSlack("t", { fetch: world.fetch });
-    expect(await slack.userInfo("U2")).toEqual({ id: "U2", name: "marta", isBot: false });
-    expect(await slack.userInfo("U2")).toEqual({ id: "U2", name: "marta", isBot: false });
+    expect(await slack.userInfo("U2")).toEqual({ id: "U2", name: "marta", isBot: false, isGuest: false, title: null });
+    expect(await slack.userInfo("U2")).toEqual({ id: "U2", name: "marta", isBot: false, isGuest: false, title: null });
     expect(await slack.channelInfo("D1")).toEqual({ id: "D1", name: "U2", kind: "dm" });
     await slack.channelInfo("D1");
     expect(world.calls.filter((c) => c.method === "users.info")).toHaveLength(1);
