@@ -105,6 +105,8 @@ export const FactoryConfigInput = {
       seed: section({ command: opaque.nullable().optional(), secrets: secrets.optional() }).nullable().optional(),
     }).optional(),
   }).optional(),
+  /** What the machine keeps for this repository: it can only lower what the machine's own switches allow. `full` traces is not a value a repository can write. */
+  learning: section({ records: z.boolean().optional(), context: z.enum(["full", "answers"]).optional(), truth: z.boolean().optional(), traces: z.enum(["off", "metadata", "host"]).optional() }).optional(),
   ship: section({
     preview: z.enum(["off", "on"]).optional(),
     auto_merge: z.enum(["off", "low", "medium_when_review_required", "medium"]).optional(),
@@ -125,6 +127,7 @@ export const EvidenceConfigV22 = {
 };
 
 export interface FactoryConfig {
+  learning: { records: boolean; context: "full" | "answers"; truth: boolean; traces: "off" | "metadata" | "host" };
   tickets: { assignees: string[]; teams: string[]; debounce_seconds: number; auto: "off" | "on"; sla: { acknowledge_hours: number; resolve_days: { P0: number; P1: number; P2: number; P3: number }; stale_days: number; needs_info_reminder_days: number; needs_info_park_days: number } };
   dedup: { duplicate: number; related: number; ask_below: number; lookback_days: number };
   backlog: { stale_days: number };
@@ -144,6 +147,7 @@ export interface FactoryConfig {
 
 /** The diagram's numbers. A `luna.yaml` section is merged over these. */
 export const FACTORY_DEFAULTS: FactoryConfig = {
+  learning: { records: true, context: "full", truth: true, traces: "host" },
   tickets: { assignees: [], teams: [], debounce_seconds: 60, auto: "off", sla: { acknowledge_hours: 24, resolve_days: { P0: 2, P1: 7, P2: 30, P3: 90 }, stale_days: 30, needs_info_reminder_days: 3, needs_info_park_days: 10 } },
   dedup: { duplicate: 0.9, related: 0.7, ask_below: 0.7, lookback_days: 90 },
   backlog: { stale_days: 14 },
@@ -183,6 +187,7 @@ export const CONSUMED_FROM: Readonly<Record<string, number>> = {
   "verify.e2e.seed.command": 11, "verify.e2e.seed.secrets": 11,
   "evidence.video_budget_s": 12, "evidence.regenerate": 12, "evidence.tts.voice": 12, "evidence.tts.language": 12, "evidence.storage": 12, "evidence.retention_days": 12,
   "ship.preview": 12, "ship.auto_merge": 13, "ship.merge.method": 13, "ship.merge.queue": 13, "ship.merge.delete_branch": 13, "ship.merge.commit_template": 13,
+  "learning.records": 18, "learning.context": 18, "learning.truth": 18, "learning.traces": 18,
   "ship.release_owners": 13, "ship.stale_days": 8, "ship.sla.reminder_days": 13, "ship.sla.escalate_days": 13, "ship.poll_minutes": 13,
 };
 

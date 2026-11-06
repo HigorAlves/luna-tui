@@ -57,8 +57,8 @@ export interface Config {
   publicUrl: string | null;
   /** Keep what the person changed or approved in the plan, under the state dir, for evals. `MACHINE_GROUND_TRUTH=off` stops it. */
   groundTruth: boolean;
-  /** Keep each decision pack call's context, answer and verdicts under the state dir, for evals (`MACHINE_DECISIONS=off` stops it) and for how many days (`MACHINE_DECISIONS_RETENTION_DAYS`, 90; 0 keeps them). */
-  decisions: { enabled: boolean; retentionDays: number };
+  /** Keep each decision pack call's context, answer and verdicts under the state dir, for evals (`MACHINE_DECISIONS=off` stops it) and for how many days (`MACHINE_DECISIONS_RETENTION_DAYS`, 365; 0 keeps them) and up to how many megabytes (`MACHINE_DECISIONS_MAX_MB`, 4096; 0 for no cap). */
+  decisions: { enabled: boolean; retentionDays: number; maxMb: number };
   /** A Slack bot token and channel: one thread per task is opened there. Both or neither. */
   slack: { token: string; channel: string } | null;
   /** The Slack inbox: your user token, the optional app-level token for Socket Mode, and its knobs. */
@@ -304,9 +304,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!Number.isInteger(retentionDays) || retentionDays < 0) {
     throw new Error(`MACHINE_RETENTION_DAYS must be a non-negative integer, got "${env.MACHINE_RETENTION_DAYS}"`);
   }
-  const decisionRetentionDays = env.MACHINE_DECISIONS_RETENTION_DAYS === undefined || env.MACHINE_DECISIONS_RETENTION_DAYS === "" ? 90 : Number(env.MACHINE_DECISIONS_RETENTION_DAYS);
+  const decisionRetentionDays = env.MACHINE_DECISIONS_RETENTION_DAYS === undefined || env.MACHINE_DECISIONS_RETENTION_DAYS === "" ? 365 : Number(env.MACHINE_DECISIONS_RETENTION_DAYS);
   if (!Number.isInteger(decisionRetentionDays) || decisionRetentionDays < 0) {
     throw new Error(`MACHINE_DECISIONS_RETENTION_DAYS must be a non-negative integer, got "${env.MACHINE_DECISIONS_RETENTION_DAYS}"`);
+  }
+  const decisionMaxMb = env.MACHINE_DECISIONS_MAX_MB === undefined || env.MACHINE_DECISIONS_MAX_MB === "" ? 4096 : Number(env.MACHINE_DECISIONS_MAX_MB);
+  if (!Number.isInteger(decisionMaxMb) || decisionMaxMb < 0) {
+    throw new Error(`MACHINE_DECISIONS_MAX_MB must be a non-negative integer (megabytes), got "${env.MACHINE_DECISIONS_MAX_MB}"`);
   }
   const worktreeRetentionDays =
     env.MACHINE_WORKTREE_RETENTION_DAYS === undefined ? DEFAULT_WORKTREE_RETENTION_DAYS : Number(env.MACHINE_WORKTREE_RETENTION_DAYS);
@@ -403,7 +407,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     threadReplies: env.MACHINE_THREAD_REPLIES !== "off",
     publicUrl: publicUrlOf(env.MACHINE_PUBLIC_URL),
     groundTruth: env.MACHINE_GROUND_TRUTH !== "off",
-    decisions: { enabled: env.MACHINE_DECISIONS !== "off", retentionDays: decisionRetentionDays },
+    decisions: { enabled: env.MACHINE_DECISIONS !== "off", retentionDays: decisionRetentionDays, maxMb: decisionMaxMb },
     slack: slackToken === "" ? null : { token: slackToken, channel: slackChannel },
     slackInbox: {
       enabled: env.MACHINE_SLACK_INBOX !== "off",

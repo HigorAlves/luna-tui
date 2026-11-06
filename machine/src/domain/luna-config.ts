@@ -182,6 +182,6 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     decisions: (policy.decisions ?? {}) as Policy["decisions"],
     evidenceRetentionDays: evidence?.retention_days ?? null,
     freeze: freeze.map((f) => ({ ...f })),
-    factory: lowerAllow(factoryConfigOf({ backlog: config.backlog, tickets: config.tickets, conversation: conversationOf(config.conversation, warn), dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, ship: shipOf(config, warn) })),
+    factory: lowerAllow(factoryConfigOf({ backlog: config.backlog, tickets: config.tickets, conversation: conversationOf(config.conversation, warn), dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, learning: config.learning, ship: shipOf(config, warn) })),
   };
 }

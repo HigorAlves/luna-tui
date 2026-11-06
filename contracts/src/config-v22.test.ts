@@ -44,7 +44,7 @@ describe("the diagram's config defaults", () => {
     expect(keys.length).toBeGreaterThan(60);
     expect(keys.filter((k) => CONSUMED_FROM[k] === undefined)).toEqual([]);
     expect(Object.keys(CONSUMED_FROM).filter((k) => !keys.includes(k))).toEqual([]);
-    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16, 17]));
+    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]));
   });
 
   it("mark exactly the keys whose default already equals today's constant as wave 8", () => {
@@ -112,6 +112,18 @@ describe("factoryConfigOf", () => {
 
 describe("the sections in a luna.yaml", () => {
   const bad = (raw: unknown) => LunaConfig.safeParse(raw);
+
+  it("take a learning section that can only lower what the machine keeps", () => {
+    expect(FACTORY_DEFAULTS.learning).toEqual({ records: true, context: "full", truth: true, traces: "host" });
+    for (const key of ["records", "context", "truth", "traces"]) expect(CONSUMED_FROM[`learning.${key}`], key).toBe(18);
+    expect(bad({ learning: { records: false, context: "answers", truth: false, traces: "off" } }).success).toBe(true);
+    expect(bad({ learning: { traces: "metadata" } }).success).toBe(true);
+    // `full` hands a container the key: a repository cannot write it.
+    expect(bad({ learning: { traces: "full" } }).success).toBe(false);
+    expect(bad({ learning: { context: "everything" } }).success).toBe(false);
+    expect(bad({ learning: { retention: 5 } }).success).toBe(false);
+    expect(factoryConfigOf({ learning: { truth: false } }).learning).toEqual({ records: true, context: "full", truth: false, traces: "host" });
+  });
   it("take a repo's values", () => {
     const ok = bad({ triage: { confidence: { kind: 0.5 }, max_questions: 2 }, verify: { mutation: { command: "stryker run", min_score: 0.7 }, e2e: { deploy: { command: "make deploy" } } }, ship: { merge: { commit_template: "{{title}}" } } });
     expect(ok.success).toBe(true);

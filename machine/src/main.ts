@@ -19,6 +19,7 @@ import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
 import { AUTO_ARCHIVE_GATES, type SlaRow, applySlaActions } from "./application/sla-actions.ts";
 import { splitDepth } from "./application/split-depth.ts";
+import { openTaskIdsOf, pruneLearning } from "./application/learning-prune.ts";
 import { evidenceRetentionDays, sweepEvidenceStore } from "./application/evidence-store.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
@@ -188,8 +189,8 @@ async function sweep(): Promise<void> {
     return removed > 0 ? `removed ${removed} evidence pack copy(ies) past retention` : null;
   });
   await step("decision records", async () => {
-    const removed = await decisionLog.sweep(config.decisions.retentionDays);
-    return removed > 0 ? `removed ${removed} decision record(s) past ${config.decisions.retentionDays} days` : null;
+    const pruned = await pruneLearning({ stateDir: config.stateDir, retentionDays: config.decisions.retentionDays, maxMb: config.decisions.maxMb, openTaskIds: await openTaskIdsOf(db), now: new Date() });
+    return pruned.records > 0 || pruned.truthFiles > 0 || pruned.skippedLinks.length > 0 ? pruned.line : null;
   });
   await step("slack triage runs", async () => {
     const removed = await sweepSlackTriageRuns(config.stateDir, config.retentionDays);

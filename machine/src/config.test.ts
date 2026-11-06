@@ -48,7 +48,7 @@ describe("loadConfig", () => {
       threadReplies: true,
       publicUrl: null,
       groundTruth: true,
-      decisions: { enabled: true, retentionDays: 90 },
+      decisions: { enabled: true, retentionDays: 365, maxMb: 4096 },
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
       jira: null,
@@ -97,6 +97,13 @@ describe("loadConfig", () => {
     expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS: "off" }).decisions.enabled).toBe(false);
     expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS_RETENTION_DAYS: "7" }).decisions.retentionDays).toBe(7);
     expect(() => loadConfig({ HOME: "/h", MACHINE_DECISIONS_RETENTION_DAYS: "-1" })).toThrow(/MACHINE_DECISIONS_RETENTION_DAYS/);
+    // A year by default (it was 90 days), and a size cap of 4 GB; 0 is no limit.
+    expect(loadConfig({ HOME: "/h" }).decisions).toEqual({ enabled: true, retentionDays: 365, maxMb: 4096 });
+    expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS_RETENTION_DAYS: "0" }).decisions.retentionDays).toBe(0);
+    expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS_MAX_MB: "0" }).decisions.maxMb).toBe(0);
+    expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS_MAX_MB: "512" }).decisions.maxMb).toBe(512);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DECISIONS_MAX_MB: "-1" })).toThrow(/MACHINE_DECISIONS_MAX_MB must be a non-negative integer/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DECISIONS_MAX_MB: "big" })).toThrow(/MACHINE_DECISIONS_MAX_MB/);
     expect(loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb", MACHINE_SLACK_CHANNEL: "C1" }).slack).toEqual({ token: "xoxb", channel: "C1" });
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb" })).toThrow(/MACHINE_SLACK_CHANNEL/);
   });
