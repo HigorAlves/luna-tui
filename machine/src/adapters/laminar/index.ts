@@ -7,13 +7,15 @@
 // here with a dynamic import, so a machine without a key never loads it; tests pass a fake.
 //
 // What is sent: the facts a run row keeps (pack, engine, model, turns, cost, duration, outcome,
-// the fingerprint); never a client's context nor a pack's answer. In `full` mode only, a decision
+// the fingerprint); never a client's context nor a pack's answer. In `host` and `full` modes, a decision
 // call the pipeline made itself also carries its context and answer (`RunEnd.input/output`), and the
-// transcript on the host as well, and the stage container is handed the key and the span
-// (`childEnv`) so its model calls nest under it: a project key reads every trace of the project,
-// so `metadata` keeps it on the host.
+// transcript is kept from the host (redacted). Only in `full` mode is the stage container handed the
+// key and the span (`childEnv`) so its model calls nest under it: a project key reads every trace of
+// the project, so `metadata` and `host` keep it on the host.
 import { readFile } from "node:fs/promises";
 
+import { redact } from "../../domain/evidence-markdown.ts";
+import { maskPii } from "../../domain/secrets-check.ts";
 import type { Datapoint, Evaluation, EvaluationCase, EvaluationStart, QueueItem, RunEnd, RunSpan, RunStart, Telemetry, TracesMode } from "../../application/telemetry.ts";
 
 export interface LaminarOptions {
@@ -67,7 +69,7 @@ const STATUS_ERROR = 2;
 const ATTR_RESPONSE_MODEL = "gen_ai.response.model";
 const ATTR_TOTAL_COST = "gen_ai.usage.cost";
 const ATTR_PROVIDER = "gen_ai.system";
-/** The span's input attribute (`LaminarAttributes.SPAN_INPUT`): a decision call's context, in full mode. */
+/** The span's input attribute (`LaminarAttributes.SPAN_INPUT`): a decision call's context, in host and full modes. */
 const ATTR_SPAN_INPUT = "lmnr.span.input";
 /** A transcript longer than this is cut to its tail: the end of a run is what explains it. */
 export const TRANSCRIPT_MAX_CHARS = 200_000;
@@ -81,7 +83,9 @@ const loadSdk = async (): Promise<LaminarSdk> => (await import("@lmnr-ai/lmnr"))
 async function transcriptText(path: string): Promise<string | null> {
   const text = await readFile(path, "utf8").catch(() => null);
   if (text === null) return null;
-  return text.length > TRANSCRIPT_MAX_CHARS ? CUT_MARK + text.slice(-TRANSCRIPT_MAX_CHARS) : text;
+  // The same redaction a stored record gets: a token shape, an email address, a phone number never reach the trace tool.
+  const clean = maskPii(redact(text));
+  return clean.length > TRANSCRIPT_MAX_CHARS ? CUT_MARK + clean.slice(-TRANSCRIPT_MAX_CHARS) : clean;
 }
 
 /** The run's facts as the span's output: every defined field of `end`, the result's `run` flattened. */
@@ -140,14 +144,15 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
       },
       end: async (end) => {
         const output = outputOf(end);
-        if (options.mode === "full" && end.transcriptPath) {
+        const keeps = options.mode === "host" || options.mode === "full";
+        if (keeps && end.transcriptPath) {
           const transcript = await transcriptText(end.transcriptPath);
           if (transcript !== null) output.transcript = transcript;
         }
         // A decision call of the pipeline's own: its context as the span's input and its answer in the
-        // output, full mode only (the machine's own data; an HTTP client's call never carries them).
-        const spanInput = options.mode === "full" ? end.input : undefined;
-        if (options.mode === "full" && end.output) Object.assign(output, end.output);
+        // output, `host` and `full` modes (the machine's own data; an HTTP client's call never carries them).
+        const spanInput = keeps ? end.input : undefined;
+        if (keeps && end.output) Object.assign(output, end.output);
         // Whatever fails on the way out, the span ends: an unended span leaks in the SDK's batch.
         await safe("span end failed", async () => {
           try {

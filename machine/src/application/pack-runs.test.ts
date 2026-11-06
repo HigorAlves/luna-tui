@@ -410,14 +410,33 @@ describe("decision records", () => {
     expect(result.recordId).toBe(appended[0]!.id);
   });
 
-  it("puts the context and answer on the span for a pipeline call only, never for a call that names no stage", async () => {
+  it("puts the context and answer on the span for the machine's own call only, never for a client's, whatever it names", async () => {
     const { telemetry, spans } = recordingTelemetry();
     const r = runs(fakeSandbox(answered), { telemetry });
-    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro }, stage: "ship" }, "ship");
-    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "someone-else");
+    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "intake", undefined, { own: true });
+    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro }, stage: "ship" }, "someone-else");
     expect(spans[0]!.end).toMatchObject({ input: { context: { ship: retro } }, output: { answer: { worth: { value: true, p: 0.93 } }, verdicts: { worth: "proceed" }, overall: "proceed" } });
     expect(spans[1]!.end).not.toHaveProperty("input");
     expect(spans[1]!.end).not.toHaveProperty("output");
+  });
+
+  it("gives the span the stored context: secrets redacted, email and phone masked, and a private conversation as a mark only", async () => {
+    const token = ["gh", "p_"].join("") + "c".repeat(36);
+    const { telemetry, spans } = recordingTelemetry();
+    const slots = Object.fromEntries(Object.keys(PACKS.intake_dedup.questions).map((slot) => [slot, { choice: "different", confidence: 0.9 }]));
+    const r = runs(fakeSandbox(output({ answer: slots })), { telemetry });
+    await r.run({ pack: "intake_dedup", context: { dedup: { title: "Login fails", text: `${token} mail bob@example.com`, candidates: [] } } }, "intake", undefined, { own: true });
+    const flat = JSON.stringify(spans[0]!.end!.input);
+    expect(flat).not.toContain(token);
+    expect(flat).not.toContain("bob@example.com");
+    expect(flat).toContain("[email]");
+    const answers = { related: { choice: "none", confidence: 0.9 }, new_work: { value: true, p: 0.9 } };
+    const priv = recordingTelemetry();
+    const conversation = { channel: "leadership", private: true, thread: ["marta: fire Bob on friday"], latest: "fire Bob", author: { profile: "member", title: null }, candidates: [] };
+    await runs(fakeSandbox(output({ answer: answers })), { telemetry: priv.telemetry }).run({ pack: "conversation_relation", context: { conversation } }, "intake", undefined, { own: true });
+    expect(priv.spans[0]!.end!.input).toEqual({ private: true });
+    expect(priv.spans[0]!.end).toMatchObject({ output: { answer: answers } });
+    expect(JSON.stringify(priv.spans[0]!.end)).not.toContain("Bob");
   });
 
   describe("whose a record is, and what it keeps", () => {

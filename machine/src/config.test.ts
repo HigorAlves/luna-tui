@@ -228,10 +228,18 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ HOME: "/home/me", MACHINE_ENGINE_BUDGETS: "openai=-1" })).toThrow(/MACHINE_ENGINE_BUDGETS must list/);
   });
 
-  it("turns traces off without a Laminar key, and on (metadata) with one", () => {
+  it("keeps everything on the host by default with a key, and names the four modes in the error", () => {
+    expect(tracesConfig({ LMNR_PROJECT_API_KEY: "k" }, "/home/nobody")).toMatchObject({ mode: "host" });
+    expect(tracesConfig({ LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "host" }, "/home/nobody")).toMatchObject({ mode: "host" });
+    expect(tracesConfig({ LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "metadata" }, "/home/nobody")).toMatchObject({ mode: "metadata" });
+    expect(tracesConfig({}, "/home/nobody")).toEqual({ mode: "off" });
+    expect(() => tracesConfig({ MACHINE_TRACES: "all" }, "/home/nobody")).toThrow("MACHINE_TRACES must be off, metadata, host or full");
+  });
+
+  it("turns traces off without a Laminar key, and on (host) with one", () => {
     expect(loadConfig({ HOME: "/home/me" }).traces).toEqual({ mode: "off" });
     expect(loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: " key-1 " }).traces).toEqual({
-      mode: "metadata",
+      mode: "host",
       laminar: { projectApiKey: "key-1", baseUrl: "http://localhost", stageBaseUrl: "http://host.docker.internal", httpPort: 8000, grpcPort: 8001 },
     });
   });
@@ -243,7 +251,7 @@ describe("loadConfig", () => {
     });
     expect(loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "off" }).traces).toEqual({ mode: "off" });
     expect(() => loadConfig({ HOME: "/home/me", MACHINE_TRACES: "full" })).toThrow(/^MACHINE_TRACES=full needs a Laminar project key: set LMNR_PROJECT_API_KEY/);
-    expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "loud" })).toThrow(/^MACHINE_TRACES must be off, metadata or full, got "loud"/);
+    expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "loud" })).toThrow(/^MACHINE_TRACES must be off, metadata, host or full, got "loud"/);
     expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", LMNR_HTTP_PORT: "x" })).toThrow(/^LMNR_HTTP_PORT must be a port number, got "x"/);
     expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", LMNR_BASE_URL: "localhost:8000" })).toThrow(/^LMNR_BASE_URL must be a scheme and host without a port, like http:\/\/localhost, got "localhost:8000"/);
     expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", LMNR_STAGE_BASE_URL: "host.docker.internal:8001" })).toThrow(/^LMNR_STAGE_BASE_URL must be a scheme and host without a port/);
@@ -253,7 +261,7 @@ describe("loadConfig", () => {
     const home = mkdtempSync(join(tmpdir(), "config-home-"));
     mkdirSync(join(home, ".config", "hardness"), { recursive: true });
     writeFileSync(join(home, ".config", "hardness", "lmnr-project-api-key"), "from-file\n");
-    expect(tracesConfig({}, home)).toEqual({ mode: "metadata", laminar: { projectApiKey: "from-file", baseUrl: "http://localhost", stageBaseUrl: "http://host.docker.internal", httpPort: 8000, grpcPort: 8001 } });
+    expect(tracesConfig({}, home)).toEqual({ mode: "host", laminar: { projectApiKey: "from-file", baseUrl: "http://localhost", stageBaseUrl: "http://host.docker.internal", httpPort: 8000, grpcPort: 8001 } });
     expect(tracesConfig({ LMNR_PROJECT_API_KEY: "from-env" }, home)).toMatchObject({ laminar: { projectApiKey: "from-env" } });
   });
 

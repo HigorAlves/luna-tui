@@ -11,7 +11,7 @@ import { StreamWatcher } from "./adapters/http/watch.ts";
 import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 
-import { buildTelemetry } from "./bootstrap/telemetry.ts";
+import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
@@ -123,7 +123,8 @@ if (applied.length > 0) {
 const policies = new PolicyStore();
 /** Run traces: a local Laminar (`MACHINE_TRACES`, `LMNR_*`); the no-op without a key. Built before
  *  the pipeline so the first stage run after boot is traced. */
-const telemetry = await buildTelemetry(config.traces);
+const telemetry = await buildTelemetry(config.traces, { reachable: (traces) => probeCollector(traces, { timeoutMs: 1500 }) });
+if (config.traces.mode === "off") console.log(process.env.MACHINE_TRACES?.trim() ? "traces off: MACHINE_TRACES=off; decision records and ground truth are still kept" : "traces off: no trace key; decision records and ground truth are still kept");
 /** What each decision pack call leaves (context, answer, verdicts), for evals; off with MACHINE_DECISIONS=off. */
 const decisionLog = new DecisionLog({ stateDir: config.stateDir, enabled: config.decisions.enabled });
 /** What later facts say a decision should have been, written onto its record; each is a `decision.truth` event on the task. */

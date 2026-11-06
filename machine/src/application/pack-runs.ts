@@ -37,6 +37,8 @@ import { type ContextPackId, type PackContext, contextSchema, isContextPack } fr
 import { engineProblem, fallbackCandidates } from "../domain/engine-choice.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { recordContext } from "../domain/record-context.ts";
+import { redactDeep } from "../domain/redact-secrets.ts";
+import { maskPii } from "../domain/secrets-check.ts";
 import { buildContextPackInput } from "../domain/stage-input.ts";
 import { type RunFacts, runFacts } from "../domain/task.ts";
 import { applyPolicy } from "@hardness/contracts";
@@ -325,7 +327,7 @@ export class PackRuns implements PackRunsPort {
         durationMs: usage.durationMs,
         info,
         transcriptPath: join(runDir, "transcript.log"),
-        ...(decided && origin.stage !== undefined ? { input: { context }, output: { answer: answer!, verdicts: decided.verdicts, overall: decided.overall } } : {}),
+        ...(decided && origin.own === true ? { input: this.spanInput(context), output: { answer: answer!, verdicts: decided.verdicts, overall: decided.overall } } : {}),
       });
       await rm(runDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -336,6 +338,14 @@ export class PackRuns implements PackRunsPort {
     this.log(failure ? `run: ${pack} on ${engine}${client ? ` for ${client}` : ""} failed: ${failure.message}` : `run: ${pack} on ${engine}${client ? ` for ${client}` : ""}, ${usage.turns} turn(s)${cost}`);
     if (failure) throw failure;
     return { answer: answer!, usage, ...(recordId ? { recordId } : {}) };
+  }
+
+  /** What a span of the machine's own decision call carries as input: the stored copy of the context (secrets redacted, a private
+   *  conversation's text gone) with email addresses and phone numbers masked. A private conversation's span says only that it was one. */
+  private spanInput(context: PackContext): { context: Record<string, unknown> } | { private: true } {
+    const stored = recordContext(context as Record<string, unknown>, { secrets: this.deps.secrets?.() ?? {} });
+    if ((context as { conversation?: { private?: unknown } }).conversation?.private === true) return { private: true };
+    return { context: redactDeep(stored.context, maskPii) as Record<string, unknown> };
   }
 
   /** Keeps a decision pack's validated answer with its context; the record's id, or undefined when none was kept.

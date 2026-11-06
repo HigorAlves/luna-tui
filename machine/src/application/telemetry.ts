@@ -5,7 +5,7 @@
 import type { EngineId, PackId, RunInfo, TaskState } from "@hardness/contracts";
 
 /** `MACHINE_TRACES`: nothing, the facts of each run, or the facts and the transcript. */
-export type TracesMode = "off" | "metadata" | "full";
+export type TracesMode = "off" | "metadata" | "host" | "full";
 
 /** What is known about a run as it starts. */
 export interface RunStart {

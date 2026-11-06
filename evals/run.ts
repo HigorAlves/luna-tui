@@ -21,7 +21,8 @@ import { loadConfig } from "@hardness/machine/config";
 import { buildEgress } from "@hardness/machine/egress";
 import { PolicyStore } from "@hardness/machine/policy";
 import { outputError, runPackOnce } from "@hardness/machine/run-once";
-import { type Evaluation, buildTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
+import { type Evaluation, buildTelemetry, noTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
+import { collectorGate } from "./src/collector.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,7 +74,11 @@ const credentials = machineCredentials();
 const egress = buildEgress({ egress: loadConfig(process.env).egress, runnerImage: image, traces: tracesFromEnv() }, new PolicyStore());
 
 // Traces and evaluations go to the same local Laminar the machine reports to, when a key is set.
-const telemetry = await buildTelemetry(tracesFromEnv());
+// A collector that is down is one line and a run with no traces; the SDK is not even loaded.
+const gate = await collectorGate(tracesFromEnv());
+if (!gate.ok && values.dataset) fail(gate.line);
+if (!gate.ok) console.log(gate.line);
+const telemetry = gate.ok ? await buildTelemetry(tracesFromEnv()) : noTelemetry();
 if (telemetry.mode !== "off") console.log(`laminar: each case is a trace (${telemetry.mode}); each engine's run an evaluation in group ${pack}`);
 
 let cases: EvalCase[];

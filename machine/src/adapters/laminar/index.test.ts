@@ -215,6 +215,37 @@ describe("createLaminarTelemetry", () => {
     expect(spans[1]!.output).not.toHaveProperty("input");
   });
 
+  it("in host mode keeps the transcript and a decision's context and answer, and hands no container the key", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "laminar-"));
+    const transcript = join(dir, "transcript.log");
+    // A token shape built at runtime (push protection), a phone number and an email: none may reach the trace.
+    const leaked = ["gh", "p_"].join("") + "b".repeat(36);
+    writeFileSync(transcript, `line 1\npushed with ${leaked}\nmail bob@example.com\n`);
+    const host = await createLaminarTelemetry({ ...options, mode: "host" }, fakeSdk());
+    const start = { kind: "pack", pack: "worth_learning", engine: "claude:haiku", client: "ship" } as const;
+    const span = host.run(start);
+    expect(span.childEnv()).toEqual({});
+    await span.end({ outcome: "pass", transcriptPath: transcript, input: { context: { ship: { kind: "retro" } } }, output: { answer: { worth: { value: true, p: 0.9 } }, verdicts: { worth: "proceed" }, overall: "proceed" } });
+    const out = spans[0]!.output as { transcript: string };
+    expect(out.transcript).toContain("line 1");
+    expect(out.transcript).not.toContain(leaked);
+    expect(out.transcript).not.toContain("bob@example.com");
+    expect(JSON.parse(spans[0]!.attributes["lmnr.span.input"] as string)).toEqual({ context: { ship: { kind: "retro" } } });
+    expect(spans[0]!.output).toMatchObject({ answer: { worth: { value: true, p: 0.9 } }, verdicts: { worth: "proceed" }, overall: "proceed" });
+  });
+
+  it("in metadata mode keeps neither transcript nor decision, and in full mode a container gets the key", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "laminar-"));
+    const transcript = join(dir, "transcript.log");
+    writeFileSync(transcript, "line 1\n");
+    const metadata = await createLaminarTelemetry({ ...options, mode: "metadata" }, fakeSdk());
+    await metadata.run({ kind: "pack", pack: "worth_learning", engine: "claude:haiku", client: "ship" }).end({ outcome: "pass", transcriptPath: transcript, input: { context: { a: 1 } }, output: { answer: {} } });
+    expect(spans[0]!.output).not.toHaveProperty("transcript");
+    expect(spans[0]!.attributes).not.toHaveProperty("lmnr.span.input");
+    const full = await createLaminarTelemetry({ ...options, mode: "full" }, fakeSdk());
+    expect(full.run({ kind: "pack", pack: "worth_learning", engine: "claude:haiku", client: "ship" }).childEnv()).toHaveProperty("LMNR_PROJECT_API_KEY", "k");
+  });
+
   it("keeps a transcript to its last 200k characters", async () => {
     const dir = mkdtempSync(join(tmpdir(), "laminar-"));
     const transcript = join(dir, "transcript.log");

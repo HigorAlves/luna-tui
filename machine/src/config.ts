@@ -136,7 +136,7 @@ export type TracesConfig =
       };
     };
 
-const TRACES_MODES: readonly TracesMode[] = ["off", "metadata", "full"];
+const TRACES_MODES: readonly TracesMode[] = ["off", "metadata", "host", "full"];
 /** The Laminar key's file in `~/.config/hardness`, read when `LMNR_PROJECT_API_KEY` is unset. */
 export const LMNR_KEY_FILE = "lmnr-project-api-key";
 
@@ -229,8 +229,8 @@ export const stateDirFrom = (env: NodeJS.ProcessEnv, home: string): string => en
 export function tracesConfig(env: NodeJS.ProcessEnv, home: string): TracesConfig {
   const key = env.LMNR_PROJECT_API_KEY?.trim() || secretFileSync(join(home, ".config", "hardness", LMNR_KEY_FILE));
   const raw = env.MACHINE_TRACES?.trim();
-  if (raw !== undefined && raw !== "" && !TRACES_MODES.includes(raw as TracesMode)) throw new Error(`MACHINE_TRACES must be off, metadata or full, got "${raw}"`);
-  const mode = (raw || (key ? "metadata" : "off")) as TracesMode;
+  if (raw !== undefined && raw !== "" && !TRACES_MODES.includes(raw as TracesMode)) throw new Error(`MACHINE_TRACES must be off, metadata, host or full, got "${raw}"`);
+  const mode = (raw || (key ? "host" : "off")) as TracesMode;
   if (mode === "off") return { mode };
   if (!key) throw new Error(`MACHINE_TRACES=${mode} needs a Laminar project key: set LMNR_PROJECT_API_KEY or put one in ~/.config/hardness/${LMNR_KEY_FILE}`);
   const hostUrl = (name: string, fallback: string): string => {

@@ -9,6 +9,7 @@
 import { DECISION_DEFAULTS, PACKS, PackId, decisionEngines } from "@hardness/contracts";
 import { DecisionLog, machineStateDir } from "@hardness/machine/decisions";
 import { buildTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
+import { collectorGate } from "./src/collector.ts";
 import { writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +38,8 @@ const decisionOf = (raw: string | undefined): PackId => {
 const log = () => new DecisionLog({ stateDir: machineStateDir() });
 
 async function telemetry() {
+  const gate = await collectorGate(tracesFromEnv());
+  if (!gate.ok) fail(gate.line);
   const found = await buildTelemetry(tracesFromEnv());
   if (found.mode === "off") fail("no Laminar: set LMNR_PROJECT_API_KEY (or put the key in ~/.config/hardness/lmnr-project-api-key)");
   return found;
