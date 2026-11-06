@@ -74,6 +74,10 @@ The machine's clients are the board, Luna Notch and scripts; none is a web page.
 - **Token**: when `MACHINE_API_TOKEN` is set (env, else `~/.config/hardness/machine-api-token`), `Authorization: Bearer <token>`, else 401 `unauthorized`. A machine bound beyond loopback with no token refuses to start. The board and the golden scripts read the same variable and file.
 - **Body**: a request that sends a body must say `Content-Type: application/json` (a `; charset=…` is fine), else 415 `unsupported_media_type`. A page can only send that across sites after a CORS preflight, which the machine never allows, so a cross-site form or `no-cors` fetch cannot create, start, merge or close anything.
 
+## What a run was refused
+
+A stage logs `sandbox.egress_blocked` on the card, one row per refused (host, port, via), at most 20 per stage and then one `{ step, more }` row. Payload: `{ step, host, port, via, reason, count }`; `step` is `stage`, `check`, `install`, `app`, `seed` or `deploy`; `via` is `connect`, `http` or `dns`; `reason` is `not_listed`, `address`, `private_address`, `sni_mismatch`, `unresolved` or `head_too_large`. The host is text a container chose: flattened and capped, and a secret's value in it is replaced. A container cannot write this kind (it is reserved); the board shows it as `blocked: host:port (step, via)`.
+
 ## Example session
 
 ```sh
