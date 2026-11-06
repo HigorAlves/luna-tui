@@ -1048,16 +1048,29 @@ export class Pipeline {
   /** The cards a new card could be a report of: those of the same repository only, open ones, closed ones (not merged duplicates) and the backlog's items. */
   private async dedupCandidates(task: TaskRow): Promise<Candidate[]> {
     if (!task.repoPath) return [];
-    const self = { repoPath: task.repoPath, sources: cardOf(task).sources };
     // A card typed in the TUI has no source and is the operator's own: it sees everything of its repository. Any other card sees only what its reporter could already see.
-    const operator = self.sources.length === 0 && !task.jira;
+    const sources = cardOf(task).sources;
+    return this.candidatesFor({ repoPath: task.repoPath, sources, operator: sources.length === 0 && !task.jira, excludeId: task.id });
+  }
+
+  /** The cards and backlog items a ticket (not yet a card) could be a report of: only what its own source could already see (`canSeeKept`), failing closed. The Ticket Machine's enrichment reads this. */
+  async ticketCandidates(repoPath: string | null, source: TaskSource): Promise<Candidate[]> {
+    if (!repoPath) return [];
+    return this.candidatesFor({ repoPath, sources: [source], operator: false, excludeId: null });
+  }
+
+  private async candidatesFor(o: { repoPath: string; sources: ReturnType<typeof cardOf>["sources"]; operator: boolean; excludeId: string | null }): Promise<Candidate[]> {
+    const task = { id: o.excludeId, repoPath: o.repoPath };
+    const operator = o.operator;
+    const self = { repoPath: o.repoPath, sources: o.sources };
+    const cardOfSources = o.sources;
     const cards = (await this.store.listTasks())
       .filter((r) => r.id !== task.id && r.repoPath === task.repoPath && r.state !== "archived" && !cardOf(r).mergedInto)
       .filter((r) => operator || canSeeKept(self, { repoPath: r.repoPath, sources: cardOf(r).sources }))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, 500)
       .map((r): Candidate => ({ id: r.id, kind: r.state === "closed" ? "closed" : "open", title: r.title, text: r.description, repo: r.repoPath, closedAt: r.state === "closed" ? (r.stateSince ?? r.updatedAt) : null }));
-    const slugs = cardOf(task).sources.flatMap((s) => ("kind" in s && (s.kind === "github" || s.kind === "github_pr") ? [s.repo] : []));
+    const slugs = cardOfSources.flatMap((s) => ("kind" in s && (s.kind === "github" || s.kind === "github_pr") ? [s.repo] : []));
     const items = ((await this.dedupDeps?.backlog?.list().catch(() => [])) ?? []).filter((i) => i.repo !== null && (i.repo === task.repoPath || slugs.includes(i.repo)))
       .filter((i) => operator || canSeeKept(self, { repoPath: task.repoPath, sources: i.sources }));
     return [...cards, ...items.map((i): Candidate => ({ id: i.id, kind: "backlog", title: i.title, text: i.text, repo: task.repoPath, closedAt: null }))];

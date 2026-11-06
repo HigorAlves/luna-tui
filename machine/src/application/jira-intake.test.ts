@@ -68,7 +68,7 @@ describe("JiraIntake with the ticket machine's scope", () => {
     const triaged: string[] = [];
     const triager = { triage: async (issue: JiraIssue) => (triaged.push(issue.key), verdicts["PLAT-3"]!) };
     const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: "https://acme.atlassian.net" });
-    const factory = { ...DEFAULT_POLICY.factory, tickets: { assignees: ["ana"], teams: [], debounce_seconds: 60 } };
+    const factory = { ...DEFAULT_POLICY.factory, tickets: { ...DEFAULT_POLICY.factory.tickets, assignees: ["ana"] } };
     const intake = new JiraIntake({ pipeline, jira, policies: { for: async () => ({ ...DEFAULT_POLICY, factory, jira: { ...policy } }) }, repos: async () => ["/r/a"], triager, now: () => new Date("2026-10-28T12:00:00Z"), log: () => {} });
     await intake.tick();
     expect(triaged).toEqual(["PLAT-1"]);

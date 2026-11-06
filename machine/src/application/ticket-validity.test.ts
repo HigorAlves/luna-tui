@@ -11,7 +11,7 @@ const shortlist: Near[] = [{ id: "card-1", kind: "open", score: 0.6 }];
 
 describe("validity, by script over the pack's answers", () => {
   it("calls a ticket workable when it has a goal, criteria, a bounded scope and a project", () => {
-    expect(validityOf(good, shortlist)).toEqual({ outcome: "workable", missing: [], duplicateOf: null, reporterReachable: true });
+    expect(validityOf(good, shortlist)).toEqual({ outcome: "workable", missing: [], duplicateOf: null, reporterReachable: true, criteriaMet: true });
   });
 
   it("says exactly what is missing, in fixed words, when a bar is not met", () => {

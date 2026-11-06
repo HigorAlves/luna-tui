@@ -17,6 +17,7 @@ import { type IssueClassifier, confidentQuestion } from "./classify.ts";
 import { parseChecklist } from "./intake.ts";
 import { type Jira, JiraAuthError, type JiraIssue, type JiraMe, messageOf } from "./jira.ts";
 import type { NewTask } from "./pipeline.ts";
+import type { TicketIntake } from "./ticket-machine.ts";
 import type { JiraTriager } from "./stages/jira-intake-runner.ts";
 
 export interface JiraIntakeOptions {
@@ -34,6 +35,8 @@ export interface JiraIntakeOptions {
   triager: JiraTriager | null;
   /** triage_signals on Jev, before jira_intake; absent or answering null, intake runs as without it. */
   classifier?: IssueClassifier | null;
+  /** The ticket machine. With it, and `tickets.auto` off (the default), an issue is read and held as a ticket with drafts: nothing is posted and no card is made until a person taps. */
+  tickets?: TicketIntake | null;
   /** How often repos are checked for a due poll; each repo polls at its own `every`. */
   tickMs?: number;
   now?: () => Date;
@@ -98,12 +101,14 @@ export class JiraIntake {
       let intake: NonNullable<Policy["jira"]>["intake"];
       let comments: NonNullable<Policy["jira"]>["comments"] = "milestones";
       let scope: ScopeRule | null = null;
+      let route = false;
       try {
         const whole = await this.options.policies.for(repoPath);
         const policy = whole.jira;
         intake = policy?.intake ?? null;
         comments = policy?.comments ?? "milestones";
         const tickets = whole.factory?.tickets;
+        route = Boolean(this.options.tickets) && tickets?.auto !== "on";
         if (tickets && scopeConfigured(tickets)) scope = { tickets, now: this.now() };
       } catch {
         continue;
@@ -114,7 +119,7 @@ export class JiraIntake {
       if (last !== undefined && now - last < intake.everySecs * 1000) continue;
       this.lastPoll.set(repoPath, now);
       try {
-        await this.pollRepo(repoPath, intake.jql, comments, scope);
+        await this.pollRepo(repoPath, intake.jql, comments, scope, route);
       } catch (error) {
         if (error instanceof JiraAuthError) {
           if (!this.warnedAuth) console.warn(`jira intake: ${error.message}`);
@@ -127,7 +132,7 @@ export class JiraIntake {
   }
 
   /** Polls one repo's JQL now, whatever its schedule says (tests, and a refresh). */
-  async pollRepo(repoPath: string, jql: string, comments: "none" | "milestones" | "gates" = "milestones", scope: ScopeRule | null = null): Promise<void> {
+  async pollRepo(repoPath: string, jql: string, comments: "none" | "milestones" | "gates" = "milestones", scope: ScopeRule | null = null, route = false): Promise<void> {
     const page = await this.options.jira.search(jql, { maxResults: INTAKE_PAGE });
     this.warnedAuth = false;
     for (const issue of page.issues) {
@@ -141,6 +146,10 @@ export class JiraIntake {
         continue;
       }
       try {
+        if (route && this.options.tickets) {
+          await this.hold(issue, repoPath);
+          continue;
+        }
         await this.consider(issue, repoPath, comments);
       } catch (error) {
         if (error instanceof JiraAuthError) throw error;
@@ -161,6 +170,14 @@ export class JiraIntake {
     const commented = Date.parse(last.created);
     if (Number.isNaN(updated) || Number.isNaN(commented)) return true;
     return updated <= commented + COMMENT_STAMP_SLACK_MS;
+  }
+
+  /** The ticket machine's path: the issue becomes a ticket object with its drafts. Nothing is written to Jira and no card is made. */
+  private async hold(issue: JiraIssue, repoPath: string): Promise<void> {
+    const classification = (await this.options.classifier?.classify(issueContext(issue)).catch(() => null)) ?? null;
+    const overrides = (await this.options.policies.for(repoPath)).decisions.triage_signals ?? {};
+    await this.options.tickets!.ingest(canonicalTicketOf({ tool: "jira", issue }), { repoPath, question: confidentQuestion(classification, overrides) });
+    this.answered.set(issue.key, issue.updated);
   }
 
   private async consider(issue: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {

@@ -14,11 +14,11 @@ export interface Draft {
   ticket: string;
   kind: "assessment" | "needs_info" | "decline" | "not_ours";
   /** `waiting` for a tap; `edited` is still waiting, with the person's text; `ignored` is kept and never posted. */
-  status: "waiting" | "edited" | "ignored";
+  status: "waiting" | "edited" | "ignored" | "posted";
   text: string;
   /** The machine's own text, kept beside an edit. */
   original?: string;
-  history: Array<{ at: string; did: "edited" | "ignored"; from: string }>;
+  history: Array<{ at: string; did: "edited" | "ignored" | "posted"; from: string }>;
 }
 
 const fresh = (ticket: string, kind: Draft["kind"], text: string): Draft => ({ id: `${ticket}:${kind}`, ticket, kind, status: "waiting", text: postable(text), history: [] });

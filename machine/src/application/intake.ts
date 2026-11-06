@@ -7,7 +7,9 @@ import { classificationLine } from "@hardness/contracts";
 
 import { type IssueClassifier, confidentQuestion } from "./classify.ts";
 import type { GitHub } from "./github.ts";
+import { canonicalTicketOf } from "../domain/ticket.ts";
 import type { Pipeline } from "./pipeline.ts";
+import type { TicketIntake } from "./ticket-machine.ts";
 
 export interface GitHubIntakeOptions {
   pipeline: Pipeline;
@@ -19,6 +21,10 @@ export interface GitHubIntakeOptions {
   resolveRepo?: (repo: string) => Promise<string | null>;
   /** triage_signals on Jev; absent or answering null, every new issue becomes a task as without it. */
   classifier?: IssueClassifier | null;
+  /** The ticket machine. With it, unless `ticketsAuto` says the repo keeps the old behaviour, an issue is held as a ticket with drafts: no comment, no card, until a tap. */
+  tickets?: TicketIntake | null;
+  /** Whether the repo has `tickets.auto: on`; absent, off. */
+  ticketsAuto?: (repoPath: string | null) => Promise<boolean>;
 }
 
 /** The items of an issue body's markdown checklist, e.g. `- [ ] text`. */
@@ -37,6 +43,8 @@ export class GitHubIntake {
   private warnedAuth = false;
   /** Issues declined as questions, `owner/name#n`: not classified nor told again. */
   private readonly declined = new Set<string>();
+  /** Issues already held as tickets, by `updated`-less ref: a re-poll does not read them again. */
+  private readonly held = new Set<string>();
 
   constructor(private readonly options: GitHubIntakeOptions) {}
 
@@ -84,6 +92,13 @@ export class GitHubIntake {
       const ref = `${repo}#${issue.number}`;
       if (this.declined.has(ref) || (await this.options.pipeline.findBySource(repo, issue.number))) continue;
       const body = issue.body ?? "";
+      if (this.options.tickets && !(await this.options.ticketsAuto?.(repoPath).catch(() => false))) {
+        if (this.held.has(ref)) continue;
+        const asked = (await this.options.classifier?.classify({ title: issue.title, description: body, labels: issue.labels ?? [], source: issue.url }).catch(() => null)) ?? null;
+        await this.options.tickets.ingest(canonicalTicketOf({ tool: "github", slug: repo, issue }), { repoPath, question: confidentQuestion(asked) });
+        this.held.add(ref);
+        continue;
+      }
       const classification = (await this.options.classifier?.classify({ title: issue.title, description: body, labels: issue.labels ?? [], source: issue.url })) ?? null;
       if (confidentQuestion(classification)) {
         this.declined.add(ref);

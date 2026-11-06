@@ -27,6 +27,8 @@ export interface TicketValidity {
   duplicateOf: string | null;
   /** Whether the reporter can be asked; null when the pack did not say confidently. Read by the assessment's knock-outs. */
   reporterReachable: boolean | null;
+  /** Whether the pack was sure the ticket has repro steps or acceptance criteria (true), sure it has none (false), or unsure (null). */
+  criteriaMet: boolean | null;
 }
 
 /** The pack's bar: an answer is taken only when its confidence is at least this (the pack's `proceed` policy). */
@@ -38,14 +40,14 @@ export function validityOf(answer: ValidityAnswer, shortlist: Near[], bar = VALI
   const reporterReachable = sure(answer.reporter);
   const slot = /^slot([1-5])$/.exec(answer.duplicate.choice);
   const dup = slot ? shortlist[Number(slot[1]) - 1] : undefined;
-  if (dup && answer.duplicate.confidence >= bar) return { outcome: "duplicate", missing: [], duplicateOf: dup.id, reporterReachable };
-  if (sure(answer.project) === false) return { outcome: "not_ours", missing: [], duplicateOf: null, reporterReachable };
+  if (dup && answer.duplicate.confidence >= bar) return { outcome: "duplicate", missing: [], duplicateOf: dup.id, reporterReachable, criteriaMet: sure(answer.criteria) };
+  if (sure(answer.project) === false) return { outcome: "not_ours", missing: [], duplicateOf: null, reporterReachable, criteriaMet: sure(answer.criteria) };
   const missing: string[] = [];
   if (sure(answer.goal) !== true) missing.push("what outcome is wanted");
   if (sure(answer.criteria) !== true) missing.push("steps to reproduce it, or what done looks like");
   if (sure(answer.scope) !== true) missing.push("a bounded scope: one change a team could finish");
   if (sure(answer.project) !== true) missing.push("which project or repository this is for");
-  return { outcome: missing.length ? "needs_info" : "workable", missing, duplicateOf: null, reporterReachable };
+  return { outcome: missing.length ? "needs_info" : "workable", missing, duplicateOf: null, reporterReachable, criteriaMet: sure(answer.criteria) };
 }
 
 const text = (s: string, max: number) => safe(s).slice(0, max);

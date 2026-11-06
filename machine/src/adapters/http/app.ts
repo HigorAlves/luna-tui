@@ -24,6 +24,9 @@ import {
   CARD_EVENT_NAMES,
   CardEventName,
   BacklogAddInput,
+  TicketApproveInput,
+  TicketEditInput,
+  TicketIgnoreInput,
   ContextInput,
   DedupAnswerInput,
   MergeCardInput,
@@ -45,6 +48,7 @@ import {
 } from "@hardness/contracts";
 import { type Context, Hono } from "hono";
 import { type Backlog, BacklogItemNotFoundError } from "../../application/backlog.ts";
+import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DataSource } from "typeorm";
@@ -95,6 +99,8 @@ export interface AppDeps {
   bus: Bus;
   /** The shared backlog; without it the `/backlog` routes are absent. */
   backlog?: Backlog;
+  /** The Ticket Machine; without it the `/tickets` routes are absent. */
+  tickets?: TicketMachine;
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
@@ -168,7 +174,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ db, pipeline, bus, backlog, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -181,6 +187,8 @@ export function createApp({ db, pipeline, bus, backlog, watcher, stubs, pulls, p
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
+    if (error instanceof TicketNotFound) return fail(c, 404, "not_found", error.message);
+    if (error instanceof TicketRefusal) return fail(c, 409, "ticket_refused", error.message);
     if (error instanceof BacklogItemNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof UnknownRepositoryError) return fail(c, 400, "unknown_repository", error.message);
     if (error instanceof DedupAnswerError) return fail(c, 400, "invalid_candidate", error.message);
@@ -469,6 +477,16 @@ export function createApp({ db, pipeline, bus, backlog, watcher, stubs, pulls, p
       await backlog.decline(id);
       return c.json({ id });
     });
+  }
+
+  if (tickets) {
+    // The taps. Each is a person's request; nothing else in the machine reaches a write on a ticket. `:key` is checked in the machine before any store or adapter sees it.
+    const key = (c: Context): string => c.req.param("key") ?? "";
+    app.get("/tickets", async (c) => c.json(await tickets.list()));
+    app.post("/tickets/:key/approve", async (c) => (await tickets.approve(key(c), await body(c, TicketApproveInput)), c.json(await tickets.view(key(c)))));
+    app.post("/tickets/:key/edit", async (c) => (await tickets.edit(key(c), await body(c, TicketEditInput)), c.json(await tickets.view(key(c)))));
+    app.post("/tickets/:key/ignore", async (c) => (await tickets.ignore(key(c), await body(c, TicketIgnoreInput)), c.json(await tickets.view(key(c)))));
+    app.post("/tickets/:key/card", async (c) => c.json(await tickets.card(key(c)), 201));
   }
 
   /** Intake's dedup gate: "duplicate of one", "related to some" or "neither". */

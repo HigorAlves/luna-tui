@@ -11,7 +11,7 @@ const no = { value: false, p: 0.05 };
 const answer = { who: s, what: s, impact: s, time: s, demand: s, files: s, unknowns: s, cross_team: s, new_infra: s, dependents: s, traffic: s, data_sensitivity: s, reversibility: s, regression: s, compounding: s, production_down: no, data_loss: no, security: no, incident: no, compliance_deadline: no } as AssessAnswer;
 const ticket = { key: "PAY-12", title: "t", description: "d", type: "Bug", priority: null, reporter: { id: "u" }, labels: [], sprint: "S5", dueAt: "2026-12-01", comments: [] } as unknown as CanonicalTicket;
 const enrichment = { linked: [], epic: null, recent: [], files: [], shortlist: [] };
-const workable: TicketValidity = { outcome: "workable", missing: [], duplicateOf: null, reporterReachable: true };
+const workable: TicketValidity = { outcome: "workable", missing: [], duplicateOf: null, reporterReachable: true, criteriaMet: true };
 const config = { scoring: { weights: SCORING_DEFAULTS.weights, bands: SCORING_DEFAULTS.bands } };
 
 describe("assessTicket", () => {

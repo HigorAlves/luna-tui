@@ -1,6 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
-import { FACTORY_DEFAULTS, type BudgetAlert, type EvidenceContext, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, type BudgetAlert, type EvidenceContext, Ledger, PrAction, type PullRequest, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -65,6 +65,10 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { uniqueRepoForProject } from "./application/context-setup.ts";
 import { Backlog } from "./application/backlog.ts";
+import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
+import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
+import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
+import { TicketMachine } from "./application/ticket-machine.ts";
 import { INTAKE_CLIENT } from "./application/classify.ts";
 import type { DedupAnswer } from "./application/intake-dedup.ts";
 import { PgBacklogStore } from "./adapters/persistence/backlog-store.ts";
@@ -468,11 +472,29 @@ if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await packRu
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 /** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
 const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days });
+/** The Ticket Machine: Jira and GitHub tickets in scope are read, checked, assessed and drafted, then held for a person's tap. Every model call is a pack through `packRuns`; the port's writes are reached only from the tap routes. */
+const ticketPack = async (pack: "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply", context: TicketContext): Promise<unknown> => {
+  if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
+  return (await packRuns.run({ pack, context: { ticket: context } }, INTAKE_CLIENT)).answer;
+};
+const ticketMachine = new TicketMachine({
+  store: new PgTicketStore(db),
+  port: (tool) => (tool === "jira" ? new JiraTickets(jiraApi) : new GitHubTickets(github)),
+  candidates: (ticket, repoPath) => pipeline.ticketCandidates(repoPath, ticket.tool === "github" ? { kind: "github", repo: ticket.key.split("#")[0]!, number: Number(ticket.key.split("#")[1]), url: ticket.permalink } : { kind: "jira", key: ticket.key, url: ticket.permalink, issueType: ticket.type }),
+  config: async (repoPath) => (await policies.for(repoPath)).factory,
+  locate: async (repoPath, text) => (repoPath ? ((await graph.locate(repoPath, text))?.files ?? []).map((f: { path?: string } | string) => (typeof f === "string" ? f : (f.path ?? ""))).filter(Boolean) : []),
+  createCard: (input) => pipeline.createTask(input),
+  validity: { decide: async (c) => (await ticketPack("ticket_validity", c)) as never },
+  assess: { decide: async (c) => (await ticketPack("ticket_assess", c)) as never },
+  recommend: { decide: async (c) => (await ticketPack("ticket_recommend", c)) as never },
+  reply: { write: async (c) => (await ticketPack("ticket_reply", c)) as never },
+});
 const app = createApp({
   db,
   pipeline,
   bus,
   backlog,
+  tickets: ticketMachine,
   watcher,
   stubs,
   pulls,
@@ -535,7 +557,7 @@ if (config.slackInbox.enabled && config.slackInbox.userToken) {
 let intake: GitHubIntake | undefined;
 if (config.githubPoll.repos.length > 0) {
   const { repos, intervalMs, label } = config.githubPoll;
-  intake = new GitHubIntake({ pipeline, github, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo), classifier });
+  intake = new GitHubIntake({ pipeline, github, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo), classifier, tickets: ticketMachine, ticketsAuto: async (repoPath) => (await policies.for(repoPath)).factory.tickets.auto === "on" });
   console.log(`github intake: polling ${repos.join(", ")} every ${intervalMs / 1000}s for ${label}`);
   intake.start();
 }
@@ -561,6 +583,7 @@ if (config.jira) {
     policies,
     triager: jiraTriager,
     classifier,
+    tickets: ticketMachine,
     // Every checkout the machine knows: the repo map, the repos dir, and the repos of existing tasks.
     repos: async () => {
       const known = [...Object.values(config.repoMap), ...(await reposUnder(config.reposDir, { readdir, exists: existsSync }))];

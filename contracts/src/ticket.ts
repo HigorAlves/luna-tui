@@ -54,3 +54,11 @@ export const CanonicalTicket = z.object({
   permalink: z.string().max(500),
 });
 export type CanonicalTicket = z.infer<typeof CanonicalTicket>;
+
+/** The taps of the Ticket Machine: what a person sends with a draft they read. `hash` is the draft's hash as `GET /tickets` showed it. */
+export const TicketApproveInput = z.object({ draft: z.string().min(1).max(300), hash: z.string().min(1).max(64), transition: z.string().min(1).max(100).optional() }).strict();
+export type TicketApproveInput = z.infer<typeof TicketApproveInput>;
+export const TicketEditInput = TicketApproveInput.extend({ text: z.string().min(1).max(1500) }).strict();
+export type TicketEditInput = z.infer<typeof TicketEditInput>;
+export const TicketIgnoreInput = z.object({ draft: z.string().min(1).max(300) }).strict();
+export type TicketIgnoreInput = z.infer<typeof TicketIgnoreInput>;

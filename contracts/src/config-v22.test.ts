@@ -17,12 +17,17 @@ describe("the diagram's config defaults", () => {
   });
 
   it("scope the ticket machine to nobody until a repo says whose tickets are its own, and settle a burst of edits for a minute", () => {
-    expect(FACTORY_DEFAULTS.tickets).toEqual({ assignees: [], teams: [], debounce_seconds: 60 });
-    expect(factoryConfigOf({ tickets: { assignees: ["ana"] } }).tickets).toEqual({ assignees: ["ana"], teams: [], debounce_seconds: 60 });
+    expect(FACTORY_DEFAULTS.tickets).toEqual({ assignees: [], teams: [], debounce_seconds: 60, auto: "off" });
+    expect(factoryConfigOf({ tickets: { assignees: ["ana"] } }).tickets).toEqual({ assignees: ["ana"], teams: [], debounce_seconds: 60, auto: "off" });
     expect(LunaConfig.safeParse({ tickets: { teams: ["payments"], debounce_seconds: 30 } }).success).toBe(true);
     expect(LunaConfig.safeParse({ tickets: { debounce_seconds: -1 } }).success).toBe(false);
     expect(LunaConfig.safeParse({ tickets: { assignees: Array(500).fill("x") } }).success).toBe(false);
     expect(LunaConfig.safeParse({ tickets: { nope: 1 } }).success).toBe(false);
+  });
+
+  it("keep the old intake behaviour behind tickets.auto: on, and refuse anything else", () => {
+    expect(LunaConfig.safeParse({ tickets: { auto: "on" } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ tickets: { auto: "maybe" } }).success).toBe(false);
   });
 
   it("carry the scoring module's weights and bands", () => {
