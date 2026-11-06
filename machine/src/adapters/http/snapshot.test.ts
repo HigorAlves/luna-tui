@@ -92,3 +92,24 @@ describe("a task snapshot's classification", () => {
     expect((await all()).map((t) => t.classification)).toEqual([classification, null]);
   });
 });
+
+describe("GET /tasks/:id carries the ship view", () => {
+  const detail = async (id: string, shipView?: (taskId: string) => Promise<unknown>) => {
+    const res = await createApp({ db, pipeline, bus: new Bus(), ...(shipView ? { shipView: shipView as never } : {}) }).request(`/tasks/${id}`);
+    return (await res.json()) as { ship?: unknown };
+  };
+
+  it("is null with no ship reader, and null for a card the reader knows nothing about", async () => {
+    const task = await pipeline.createTask({ title: "Login" });
+    expect((await detail(task.id)).ship).toBeNull();
+    expect((await detail(task.id, async () => null)).ship).toBeNull();
+  });
+
+  it("is what the reader gives for the card's id", async () => {
+    const task = await pipeline.createTask({ title: "Login" });
+    const seen: string[] = [];
+    const out = await detail(task.id, async (id) => (seen.push(id), { pr: { slug: "o/a", number: 3, url: "https://github.com/o/a/pull/3" }, ready: true }));
+    expect(seen).toEqual([task.id]);
+    expect(out.ship).toMatchObject({ ready: true, pr: { number: 3 } });
+  });
+});

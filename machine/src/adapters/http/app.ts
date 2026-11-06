@@ -37,6 +37,7 @@ import {
   SlackWatchInput,
   SlackWatchPatch,
   type StreamMessage,
+  type ShipView,
   StubPlanInput,
   TaskSource,
   TaskState,
@@ -107,6 +108,8 @@ export interface AppDeps {
   jira?: JiraTasksPort;
   /** The ticket's SLA clocks, computed when a task is answered or published; without it every task shows `sla: null`. */
   sla?: (task: TaskRow) => Promise<TaskSla | null>;
+  /** The watched PR's checklist and clocks for `GET /tasks/:id`; without it `ship` is null. */
+  shipView?: (taskId: string) => Promise<ShipView | null>;
   /** The same for a whole list at once (`GET /tasks`); falls back to `sla` per task. */
   slaAll?: (tasks: TaskRow[]) => Promise<Map<string, TaskSla | null>>;
   /** Whether this machine has each engine's credential, for `GET /engines`; defaults to the machine's own. */
@@ -164,7 +167,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -329,6 +332,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       artifacts: artifacts.map(toArtifact),
       reports,
       buildProgress,
+      ship: (await shipView?.(id).catch(() => null)) ?? null,
     });
   });
 

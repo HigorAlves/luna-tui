@@ -5,6 +5,7 @@
 // machine restart resume instead of escalate. Review activity and a red CI are recorded and noted
 // here; acting on them is the maintenance loop's.
 import { shipSla, quietDays } from "../../domain/ship-sla.ts";
+import { viewSnapshot } from "../ship-view.ts";
 import { PrReplyAnswer, type EvidencePack, type Risk, type ShipContext, type ShipEventClass, type TaskState, eventClassOf } from "@hardness/contracts";
 
 import { HOST_GIT, rebaseOntoDefault } from "../../adapters/git/worktree.ts";
@@ -15,7 +16,7 @@ import { type Freeze, type Policy } from "../../domain/policy.ts";
 import { shipEvents } from "../../domain/ship-events.ts";
 import { ownerApprovals, parseCodeownersChecked, requiredOwners } from "../../domain/codeowners.ts";
 import { MAX_DEPENDENCIES, inFreeze, mergeReadiness, parseDependencies } from "../../domain/merge-readiness.ts";
-import { type ReviewRule, approvedOnHead, reviewRequirement } from "../../domain/review-rule.ts";
+import { type ReviewRequirement, type ReviewRule, approvedOnHead, reviewRequirement } from "../../domain/review-rule.ts";
 import { fromGraphQl } from "../../domain/pull-request.ts";
 import { type GitHub, type PrActivity, type PrReview, messageOf } from "../github.ts";
 import type { FreezeSource } from "../freeze.ts";
@@ -83,6 +84,8 @@ export interface ShipFacts {
   pack: EvidencePack | null;
   risk: Risk;
   readiness: ReturnType<typeof mergeReadiness>;
+  /** Whether the repository requires a review, and what says so (`reviewRequirement`). */
+  review: ReviewRequirement;
   paths: string[];
   /** The classes GitHub's facts decided at this poll (`shipEvents`). */
   events: ShipEventClass[];
@@ -204,7 +207,7 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   const fromCodeowners = codeownersText ? [...new Set(requiredOwners(paths, parseCodeownersChecked(codeownersText).rules).flatMap((r) => r.owners))] : [];
   const releaseOwners = (named.length > 0 ? named : fromCodeowners).slice(0, 20);
   const events = shipEvents({ mergeable: pr.mergeable, mergeState: pr.mergeState, frozen: inFreeze(windows, now()) !== null, openDependencies: dependencies.filter((d) => !d.merged && !d.closed).length });
-  return { pr, head, pack, risk, readiness, paths, events, releaseOwners };
+  return { pr, head, pack, risk, readiness, review, paths, events, releaseOwners };
 }
 
 /** The PR merged: the decisions it was waiting on are settled by what happened to their threads. Called wherever a merge is recorded. */
@@ -374,6 +377,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       if (klass !== "review_comment" && klass !== "noise") return { result: escalated(`a review event needs a person: ${label}`) };
       if (cls.recordId) cursor.decisions = [...(cursor.decisions ?? []), { pack: "event_class", recordId: cls.recordId, choice: klass }];
       // One row per classified item, by its kind and class (enum values, never the reviewer's words).
+      cursor.lastEvent = { class: klass, at: now().toISOString() };
       await context.emit?.("ship.event", { kind: a.kind, class: klass }).catch(() => {});
       return klass === "noise" ? {} : handleComment(a, pack);
     };
@@ -397,6 +401,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       if (!cls.ok) return { result: escalated(`a red CI needs a person (${cls.reason}): ${plain(failed[0]!.name, 120)}`) };
       const klass = eventClassOf(cls.choice);
       if (cls.recordId) cursor.decisions = [...(cursor.decisions ?? []), { pack: "event_class", recordId: cls.recordId, choice: klass ?? cls.choice }];
+      cursor.lastEvent = { class: klass ?? "noise", at: now().toISOString() };
       await context.emit?.("ship.event", { kind: "ci", class: klass ?? "noise" }).catch(() => {});
       if (klass === "ci_flaky") {
         const reruns = (await deps.policies.for(task.repoPath)).factory.verify.ci_flaky_reruns;
@@ -533,6 +538,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
           await note("GitHub shows no such PR right now; waiting");
         } else {
           const { pr, head, pack, readiness } = facts;
+          // The board's view of this poll: the checklist and the merge rule's answer, saved with the cursor below.
+          cursor.view = viewSnapshot(facts, now().toISOString());
           if (pack && head && pack.commitSha !== head) {
             return {
               outcome: "escalated",
@@ -542,7 +549,10 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
           // The classes facts decide: one `ship.event` per change; freeze and blocked_by_other_pr are items on the checklist and the watch waits.
           const classes = facts.events;
           const before = cursor.lastEvents ?? [];
-          for (const c of classes) if (!before.includes(c)) await context.emit?.("ship.event", { kind: "poll", class: c }).catch(() => {});
+          for (const c of classes) if (!before.includes(c)) {
+            cursor.lastEvent = { class: c, at: now().toISOString() };
+            await context.emit?.("ship.event", { kind: "poll", class: c }).catch(() => {});
+          }
           cursor.lastEvents = classes;
           // A checks run that left failure and came back is a new red even under the same run id.
           if (deps.loop && pr.checks.state !== "failure") cursor.ciCycled = true;

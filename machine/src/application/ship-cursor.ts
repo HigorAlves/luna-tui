@@ -57,6 +57,21 @@ const ShipCursorSchema = z.object({
   reverified: z.object({ sha: z.string(), at: z.string() }).optional(),
   /** sha256 of the Evidence section as the machine last published it: a different section in the PR body is a person's edit. */
   publishedSection: z.string().optional(),
+  /** The last poll's readiness, for the board (`shipViewOf`): the checklist, the merge rule's answer, the review rule. Facts and fixed words; the details are flattened when the view is built. */
+  view: z
+    .object({
+      head: z.string().nullable(),
+      ready: z.boolean(),
+      checklist: z.array(z.object({ id: z.string(), ok: z.boolean(), detail: z.string() })),
+      canAutoMerge: z.boolean(),
+      reason: z.string(),
+      reviewRequired: z.boolean().nullable(),
+      reviewBy: z.string().nullable(),
+      at: z.string(),
+    })
+    .optional(),
+  /** The last event class the watch logged (an enum value) and when. */
+  lastEvent: z.object({ class: z.string(), at: z.string() }).optional(),
   /** `ship.ready` was logged: readiness is announced the first time it is true. */
   readyNoted: z.boolean().optional(),
 });

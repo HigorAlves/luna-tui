@@ -1637,10 +1637,10 @@ impl App {
                 }
             }
             'S' => {
-                if task.state == "awaiting_ship" {
+                if task.state == "awaiting_ship" && task.waiting_on_you {
                     return self.advance(id);
                 }
-                self.notify("nothing waiting to ship on this ticket", false);
+                self.notify(if task.state == "awaiting_ship" { "the machine is watching the PR; nothing to ship yet" } else { "nothing waiting to ship on this ticket" }, false);
             }
             'e' => {
                 let in_popup = matches!(&self.mode, Mode::Detail(open) if open == id);
@@ -1667,11 +1667,11 @@ impl App {
                 if crate::keys::rejectable(self, &task) {
                     self.mode = Mode::Reject { id: id.to_string(), text: String::new() };
                 } else {
-                    self.notify("only the plan gate rejects", false);
+                    self.notify("only the plan gate and the release question reject", false);
                 }
             }
             'r' => {
-                if crate::keys::sendable_back(&task) {
+                if crate::keys::sendable_back_now(self, &task) {
                     self.mode = Mode::Reason {
                         id: id.to_string(),
                         approve: false,
@@ -3506,7 +3506,7 @@ impl App {
     /// The names `run_command` knows, aliases left out.
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
-        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "slack", "jira",
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "dismiss", "finding", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "slack", "jira",
         "help",
     ];
 
@@ -3563,6 +3563,16 @@ impl App {
                     self.act(|m| m.setup_repo(&path), "setup started: approve its luna.yaml when it asks");
                 }
                 Err(error) => self.notify(error, true),
+            },
+            "dismiss" => match (self.selected_id(), parse_dismiss(rest)) {
+                (None, _) => self.notify("no ticket selected", true),
+                (_, Err(error)) => self.notify(error, true),
+                (Some(id), Ok((finding, reason))) => self.act(|m| m.dismiss_finding(&id, &finding, reason.as_deref()), "finding dismissed"),
+            },
+            "finding" => match (self.selected_id(), parse_finding(rest)) {
+                (None, _) => self.notify("no ticket selected", true),
+                (_, Err(error)) => self.notify(error, true),
+                (Some(id), Ok((severity, title))) => self.act(|m| m.add_finding(&id, &severity, &title), "finding added"),
             },
             "slots" => match rest.parse::<u64>() {
                 Ok(n) if n >= 1 => match self.machine.set_slots(n) {
@@ -3959,6 +3969,29 @@ pub fn looks_like_jira_key(text: &str) -> bool {
         && project[1..].chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
         && !number.is_empty()
         && number.chars().all(|c| c.is_ascii_digit())
+}
+
+/// `:dismiss <finding id> [reason]`: the id the Verify report shows, and an optional reason that stays out of the stream.
+pub(crate) fn parse_dismiss(arg: &str) -> Result<(String, Option<String>), String> {
+    let arg = arg.trim();
+    let (id, reason) = arg.split_once(char::is_whitespace).map_or((arg, ""), |(i, r)| (i, r.trim()));
+    if id.is_empty() {
+        return Err("dismiss takes a finding id, e.g. :dismiss f3 not a bug".to_string());
+    }
+    Ok((id.to_string(), if reason.is_empty() { None } else { Some(reason.chars().take(500).collect()) }))
+}
+
+/// `:finding <blocker|should_fix|nit> <title>`.
+pub(crate) fn parse_finding(arg: &str) -> Result<(String, String), String> {
+    let arg = arg.trim();
+    let (severity, title) = arg.split_once(char::is_whitespace).map_or((arg, ""), |(s, t)| (s, t.trim()));
+    if !matches!(severity, "blocker" | "should_fix" | "nit") {
+        return Err("finding takes blocker, should_fix or nit, then a title, e.g. :finding nit rename x".to_string());
+    }
+    if title.is_empty() {
+        return Err("say what the finding is: :finding nit rename x".to_string());
+    }
+    Ok((severity.to_string(), title.chars().take(200).collect()))
 }
 
 fn setup_repo_path(arg: &str, root: Option<std::path::PathBuf>) -> Result<std::path::PathBuf, String> {
@@ -5792,9 +5825,11 @@ mod workspace_key_tests {
     #[test]
     fn r_at_the_ship_gate_opens_the_note_prompt_for_a_feature_task_and_not_for_a_review() {
         let mut app = open("awaiting_ship");
+        app.tasks[0].waiting_on_you = true;
         press(&mut app, KeyCode::Char('r'));
         assert!(matches!(&app.mode, Mode::Reason { approve: false, text, .. } if text.is_empty()), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
         let mut review = open("awaiting_ship");
+        review.tasks[0].waiting_on_you = true;
         review.tasks[0].route = "review".to_string();
         press(&mut review, KeyCode::Char('r'));
         assert!(!matches!(review.mode, Mode::Reason { .. }), "a review verdict is not sent back");
@@ -6232,5 +6267,4 @@ pub fn record_changes(record: &TriageRecord, picks: &[usize; 5]) -> Vec<(String,
             (record.value_of(key) != Some(value)).then(|| (key.to_string(), value.to_string()))
         })
         .collect()
-
 }

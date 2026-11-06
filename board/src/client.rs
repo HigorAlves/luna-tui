@@ -314,6 +314,16 @@ impl Machine {
         self.post(&format!("/tasks/{id}/evidence/feedback"), evidence_feedback_body(useful, note))
     }
 
+    /// Dismisses a finding the last Verify reported (the card waits at the ship gate, or its PR is watched); the reason is kept as ground truth, out of the stream.
+    pub fn dismiss_finding(&self, id: &str, finding: &str, reason: Option<&str>) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/findings/{}/dismiss", path_segment(finding)), dismiss_body(reason))
+    }
+
+    /// Adds a finding Verify missed, with a severity (`blocker`, `should_fix`, `nit`) and a title.
+    pub fn add_finding(&self, id: &str, severity: &str, title: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/findings"), json!({ "severity": severity, "title": title }))
+    }
+
     /// Corrects the reason an escalation was decided with, to one of `ESCALATION_REASONS`; the card stays where it is.
     pub fn correct_escalation_reason(&self, id: &str, reason: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/escalation-reason"), json!({ "reason": reason }))
@@ -604,6 +614,18 @@ fn decision_body(approve: bool, reason: Option<&str>, approver: Option<&str>) ->
 }
 
 /// The body of an Evidence feedback: the fixed value, and the note only when there is one (trimmed, at most 500 characters, as the machine allows).
+/// One path segment, percent-encoded: a finding id is the machine's, but a typed one is not trusted to keep a `/` or a `?` out of the URL.
+fn path_segment(text: &str) -> String {
+    text.bytes().map(|b| if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.') { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+fn dismiss_body(reason: Option<&str>) -> Value {
+    match reason {
+        Some(r) if !r.trim().is_empty() => json!({ "reason": r.trim() }),
+        _ => json!({}),
+    }
+}
+
 fn evidence_feedback_body(useful: bool, note: Option<&str>) -> Value {
     let mut body = json!({ "useful": useful });
     if let Some(text) = note.map(str::trim).filter(|t| !t.is_empty()) {
@@ -769,5 +791,13 @@ mod pr_tests {
         assert!(matches!(event, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.len() == 3 && snapshot.socket == "connected"));
         let bare = parse_stream_event("slack.items", r#"{"type":"slack.items","snapshot":{"items":[],"watches":[],"me":null,"polledAt":null,"error":null,"socket":"off"}}"#);
         assert!(matches!(bare, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.is_empty()));
+    }
+
+    #[test]
+    fn a_finding_id_travels_as_one_encoded_path_segment() {
+        assert_eq!(path_segment("f-3_a.b"), "f-3_a.b");
+        assert_eq!(path_segment("a/b?c d"), "a%2Fb%3Fc%20d");
+        assert_eq!(dismiss_body(None), json!({}));
+        assert_eq!(dismiss_body(Some(" no ")), json!({"reason":"no"}));
     }
 }

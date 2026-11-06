@@ -391,6 +391,29 @@ export interface BuildProgress {
   lastCheckpoint: { sha: string; follows: "red" | "green"; at: string } | null;
 }
 
+/** What a watched PR looks like from the board: the readiness checklist, why the machine will or will not merge, the clocks. Facts and fixed words only: no reviewer text, no thread. Every field read from a stored view is optional on the way back in. */
+export interface ShipView {
+  pr: { slug: string; number: number; url: string };
+  /** The head the last poll read; null before the first poll. */
+  head: string | null;
+  ready: boolean;
+  /** One entry per checklist item (fixed in code), each with its detail flattened and capped. */
+  checklist: Array<{ id: string; ok: boolean; detail: string }>;
+  /** Whether the machine may merge by itself, and the reason in a sentence. */
+  autoMerge: { allowed: boolean; reason: string };
+  /** Whether the repository requires a review (null: unreadable, so manual) and what requires it. */
+  review: { required: boolean | null; by: string | null };
+  fixRounds: number;
+  /** The PR sits in the merge queue. */
+  queued: boolean;
+  /** When the last activity on the PR was: the quiet clocks count from it. */
+  quietSince: string | null;
+  /** The last event class the watch logged, with its time. */
+  lastEvent: { class: string; at: string } | null;
+  /** When the checklist was read. */
+  at: string | null;
+}
+
 /** `GET /tasks/:id` */
 export interface TaskDetail {
   task: Task;
@@ -402,6 +425,8 @@ export interface TaskDetail {
   reports?: TaskReports;
   /** Build's progress, live; null for a card that has not begun to build. */
   buildProgress?: BuildProgress | null;
+  /** The watched PR's checklist and clocks; null for a card with no ship cursor. */
+  ship?: ShipView | null;
 }
 
 /**

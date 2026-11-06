@@ -405,6 +405,10 @@ fn run_glyph(run: &StageRun) -> (&'static str, ratatui::style::Color) {
 /// The one line that says what the ticket waits on you for and which keys answer, on top
 /// of every section while a gate is open (or the ticket is escalated or paused).
 pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'static>> {
+    // The watch and the retro are not gates: the strip says nothing unless the machine waits on you.
+    if matches!(task.state.as_str(), "awaiting_ship" | "reviewing_memory") && !task.waiting_on_you {
+        return None;
+    }
     let look = task.look();
     let gate = detail.and_then(|d| d.open_approval()).filter(|a| a.kind_or_guess() == "awaiting_approval");
     let approve_plan = match gate {
@@ -422,14 +426,21 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
         }
         _ => "a approve · r send back · e edit the plan".to_string(),
     };
+    let release = detail.and_then(|d| d.open_approval()).filter(|a| a.is_ship_approval());
+    let release_keys = if release.is_some_and(|a| a.requested["risk"].as_str() == Some("high")) || (release.is_some() && ship_risk_is_high(detail)) {
+        "S approve the release · N reject and archive (high risk: a release owner, not one of the plan's approvers)"
+    } else {
+        "S approve the release · N reject and archive"
+    };
     let keys = match task.state.as_str() {
         "awaiting_approval" => approve_plan.as_str(),
         "awaiting_test_check" => "a approve · r send back · e edit the cases",
         "awaiting_setup" => "a write luna.yaml · r send back",
         "awaiting_answers" => "a answer the questions",
         "awaiting_ship" if task.route == "review" => "a post the verdict · r drop it",
-        "awaiting_ship" if ship_risk_is_high(detail) => "S ship (high risk: another approver than the plan's) · r send back",
-        "awaiting_ship" => "S ship · r send back",
+        "awaiting_ship" if release.is_some() => release_keys,
+        "awaiting_ship" if ship_risk_is_high(detail) => "S publish and watch the PR (high risk: a release owner will be asked after the checks) · r send back",
+        "awaiting_ship" => "S publish and watch the PR · r send back",
         "reviewing_memory" => "a apply the rules · A skip them",
         "escalated" => "a retry (guidance optional) · X abort",
         "paused_rate_limit" => "a resume now",
@@ -1165,6 +1176,18 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
         return (vec![heading("Evidence"), Line::default(), muted("  loading…".into())], None);
     };
     let mut lines = vec![heading("Evidence")];
+    // The release question first: the checklist as it was when it was asked, then the pack it is about.
+    if let Some(a) = d.open_approval().filter(|a| a.is_ship_approval()) {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::from(format!("  {}", plain(a.requested["question"].as_str().unwrap_or("safe to release now?")))).bold()));
+        for item in a.requested["checklist"].as_array().into_iter().flatten() {
+            let ok = item["ok"].as_bool().unwrap_or(false);
+            lines.push(Line::from(vec![
+                Span::from(format!("    {} ", if ok { "✓" } else { "✗" })).fg(c(if ok { GREEN } else { RED })),
+                Span::from(plain(item["detail"].as_str().unwrap_or(item["id"].as_str().unwrap_or("")))),
+            ]));
+        }
+    }
     // The pack from the open or last awaiting_ship gate when there is one, else the task's own (Evidence publishes with no gate).
     let verdict = match d.latest_approval("awaiting_ship") {
         Some(a) => evidence_lines(&a.requested["evidence"]),
@@ -1220,8 +1243,54 @@ fn pr_url(detail: &TaskDetail) -> Option<String> {
 }
 
 /// PR: the branch's pull request as the inbox sees it, or what the ship gate said.
+/// The watched PR: the checklist item by item, whether the machine may merge and why not, the review rule, the fix rounds, how long it has been quiet, and a freeze or a blocking PR as its own line.
+/// Every text is the machine's and goes through `plain`.
+pub(crate) fn ship_lines(ship: &crate::model::ShipView, now: u64) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![
+        Span::from("Watching  ").fg(c(SUBTEXT0)),
+        Span::from(if ship.ready { "✓ every item passes" } else { "◐ waiting on the items below" }).fg(c(if ship.ready { GREEN } else { YELLOW })),
+    ])];
+    for item in &ship.checklist {
+        let (glyph, color) = if item.ok { ("✓", GREEN) } else { ("✗", RED) };
+        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(format!("{:<16}", plain(&item.id).replace('_', " "))), Span::from(plain(&item.detail)).fg(c(SUBTEXT0))]));
+        if !item.ok && matches!(item.id.as_str(), "freeze" | "blocked") {
+            lines.push(muted(format!("    the machine keeps waiting and goes on when it ends: {}", plain(&item.detail))));
+        }
+    }
+    lines.push(Line::from(vec![
+        Span::from("Merge      ").fg(c(SUBTEXT0)),
+        Span::from(if ship.auto_merge.allowed { format!("✓ the machine will merge: {}", plain(&ship.auto_merge.reason)) } else { format!("a person merges, or the machine waits: {}", plain(&ship.auto_merge.reason)) }).fg(c(if ship.auto_merge.allowed { GREEN } else { YELLOW })),
+    ]));
+    let review = match (ship.review.required, ship.review.by.as_deref()) {
+        (Some(true), Some(by)) => format!("required by {}", plain(by)),
+        (Some(true), None) => "required".to_string(),
+        (Some(false), _) => "not required here: the machine never merges without one".to_string(),
+        (None, _) => "unreadable: a person merges".to_string(),
+    };
+    lines.push(Line::from(vec![Span::from("Review     ").fg(c(SUBTEXT0)), Span::from(review)]));
+    let mut clocks = vec![format!("{} fix round{}", ship.fix_rounds, if ship.fix_rounds == 1 { "" } else { "s" })];
+    if ship.queued {
+        clocks.push("in the merge queue".to_string());
+    }
+    if let Some(since) = ship.quiet_since.as_deref().and_then(crate::model::unix_secs) {
+        let days = now.saturating_sub(since) / 86_400;
+        clocks.push(format!("quiet {}", if days == 0 { "today".to_string() } else { format!("{days} day{}", if days == 1 { "" } else { "s" }) }));
+    }
+    if let Some(event) = &ship.last_event {
+        clocks.push(format!("last event: {}", plain(&event.class).replace('_', " ")));
+    }
+    lines.push(Line::from(vec![Span::from("Clocks     ").fg(c(SUBTEXT0)), Span::from(clocks.join(" · "))]));
+    lines.push(muted("  a reminder after two quiet days, the release owners named after five; neither merges or archives".to_string()));
+    lines.push(muted("  :dismiss <finding id> [reason] · :finding <blocker|should_fix|nit> <title>".to_string()));
+    lines
+}
+
 fn pr_lines(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], now: u64) -> Vec<Line<'static>> {
     let mut lines = vec![heading("PR"), Line::default()];
+    if let Some(ship) = detail.and_then(|d| d.ship.as_ref()) {
+        lines.extend(ship_lines(ship, now));
+        lines.push(Line::default());
+    }
     match pr_for(task, prs) {
         Some(pr) => {
             lines.extend(pr_widget(pr, now));
@@ -1897,8 +1966,8 @@ mod tests {
             detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":{"evidence":{"risk":risk}}})).unwrap()];
             gate_strip(&task, Some(&detail)).unwrap().to_string()
         };
-        assert!(strip("high").contains("S ship (high risk: another approver than the plan's) · r send back"), "{}", strip("high"));
-        assert!(strip("low").contains("S ship · r send back") && !strip("low").contains("high risk"), "{}", strip("low"));
+        assert!(strip("high").contains("S publish and watch the PR (high risk: a release owner will be asked after the checks) · r send back"), "{}", strip("high"));
+        assert!(strip("low").contains("S publish and watch the PR · r send back") && !strip("low").contains("high risk"), "{}", strip("low"));
     }
 
     #[test]
@@ -2027,5 +2096,34 @@ mod tests {
         assert!(text.contains("sandbox kept at /w/app/task-1"), "{text}");
         assert!(text.contains("until 2026-11-06T12:00:00Z"), "{text}");
         assert!(!text.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn the_ship_approval_strip_has_two_answers_and_the_watch_is_no_gate() {
+        let strip = |requested: serde_json::Value, waiting: bool| {
+            let (mut task, mut detail) = at_gate("{}", "awaiting_ship");
+            task.waiting_on_you = waiting;
+            detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":requested})).unwrap()];
+            gate_strip(&task, Some(&detail)).map(|l| l.to_string())
+        };
+        let low = strip(serde_json::json!({"gate":"ship_approval","risk":"low"}), true).unwrap();
+        assert!(low.contains("S approve the release · N reject and archive") && !low.contains("high risk") && !low.contains("r send back"), "{low}");
+        assert!(strip(serde_json::json!({"gate":"ship_approval","risk":"high"}), true).unwrap().contains("(high risk: a release owner, not one of the plan's approvers)"));
+        assert!(strip(serde_json::json!({"evidence":{"risk":"low"}}), true).unwrap().contains("S publish and watch the PR · r send back"));
+        assert_eq!(strip(serde_json::json!({}), false), None, "a watched PR is not a gate");
+    }
+
+    #[test]
+    fn the_ship_section_lists_the_checklist_and_cleans_every_machine_string() {
+        let ship: crate::model::ShipView = serde_json::from_value(serde_json::json!({
+            "pr":{"number":3,"url":"u"},"ready":false,
+            "checklist":[{"id":"ci","ok":false,"detail":"CI \u{1b}[31mred"},{"id":"freeze","ok":false,"detail":"freeze until Monday"},{"id":"pack","ok":true,"detail":"complete"}],
+            "autoMerge":{"allowed":false,"reason":"not ready\u{7}"},"review":{"required":true,"by":"a ruleset"},"fixRounds":1,"quietSince":"2026-11-01T00:00:00Z"
+        })).unwrap();
+        let text = ship_lines(&ship, crate::model::unix_secs("2026-11-04T00:00:00Z").unwrap()).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(!text.chars().any(|c| c.is_control() && c != '\n'), "{text:?}");
+        for want in ["✗ ", "ci", "✓ ", "required by a ruleset", "1 fix round", "quiet 3 days", "keeps waiting and goes on when it ends"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
     }
 }

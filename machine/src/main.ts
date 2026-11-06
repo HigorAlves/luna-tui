@@ -28,6 +28,7 @@ import { commitsSince, headCommit } from "./adapters/git/worktree.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
 import { loadCursor } from "./application/ship-cursor.ts";
+import { shipViewOf } from "./application/ship-view.ts";
 import { retroFactsOf } from "./application/stages/memory.ts";
 import { shippedStream } from "./application/ship-loop.ts";
 import type { ShipDecide } from "./application/stages/ship-fixes.ts";
@@ -486,6 +487,7 @@ const app = createApp({
   ...(packRuns ? { runs: packRuns } : {}),
   sla: (task) => slaClocks.for(task),
   slaAll: (tasks) => slaClocks.forAll(tasks),
+  shipView: async (taskId) => shipViewOf(await loadCursor(config.stateDir, taskId)),
   taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file),
   credentials,
   engineBudgets,

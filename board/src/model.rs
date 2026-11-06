@@ -647,6 +647,11 @@ impl Approval {
         self.requested["archiveReason"].as_str().map(String::from)
     }
 
+    /// The release question the machine asks after readiness ("safe to release now?"), as against the preview gate that comes first.
+    pub fn is_ship_approval(&self) -> bool {
+        self.requested["gate"].as_str() == Some("ship_approval")
+    }
+
     /// The gate's state name, guessed from what was requested when the machine did not say.
     pub fn kind_or_guess(&self) -> &str {
         if let Some(kind) = &self.kind {
@@ -730,6 +735,79 @@ pub struct TaskDetail {
     /// The reports of the stages that have passed; absent from a machine that predates them.
     #[serde(default)]
     pub reports: Option<TaskReportsView>,
+    /// The watched PR's checklist and clocks; absent from a machine that predates it, and null for a card with no ship cursor.
+    #[serde(default)]
+    pub ship: Option<ShipView>,
+}
+
+/// One checklist item of a watched PR: the machine's fixed id, whether it holds, and a flattened detail.
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipItem {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// What the machine says of the PR it is watching (`GET /tasks/:id`'s `ship`). Every field has a default, so a snapshot from an older machine still parses.
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShipView {
+    #[serde(default)]
+    pub pr: ShipPr,
+    #[serde(default)]
+    pub head: Option<String>,
+    #[serde(default)]
+    pub ready: bool,
+    #[serde(default)]
+    pub checklist: Vec<ShipItem>,
+    #[serde(default)]
+    pub auto_merge: ShipAutoMerge,
+    #[serde(default)]
+    pub review: ShipReview,
+    #[serde(default)]
+    pub fix_rounds: u64,
+    #[serde(default)]
+    pub queued: bool,
+    #[serde(default)]
+    pub quiet_since: Option<String>,
+    #[serde(default)]
+    pub last_event: Option<ShipEvent>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipPr {
+    #[serde(default)]
+    pub number: u64,
+    #[serde(default)]
+    pub url: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipAutoMerge {
+    #[serde(default)]
+    pub allowed: bool,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipReview {
+    /// Null: the machine could not read the rule, so a person merges.
+    #[serde(default)]
+    pub required: Option<bool>,
+    #[serde(default)]
+    pub by: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ShipEvent {
+    #[serde(default)]
+    pub class: String,
+    #[serde(default)]
+    pub at: String,
 }
 
 impl TaskDetail {
@@ -2036,8 +2114,11 @@ impl Task {
             "awaiting_approval" => "approve plan".to_string(),
             "awaiting_test_check" => "check tests".to_string(),
             "awaiting_ship" if self.route == "review" => "post the verdict".to_string(),
+            // Not a gate unless the machine says it waits on you: otherwise it is watching the PR.
+            "awaiting_ship" if !self.waiting_on_you => "watching the PR".to_string(),
             "awaiting_ship" => "choose ship".to_string(),
             "shipping" => "opening PR".to_string(),
+            "reviewing_memory" if !self.waiting_on_you => "retro".to_string(),
             "reviewing_memory" => "review memory".to_string(),
             "escalated" => "escalated".to_string(),
             "paused_rate_limit" => "paused: usage limit".to_string(),
@@ -3288,5 +3369,39 @@ pub(crate) mod engine_tests {
         assert_eq!(choices[1].off, None);
         assert_eq!(choices[2].engine.as_deref(), Some("codex:sol"));
         assert_eq!(choices[2].off.as_deref(), Some("no ~/.codex/auth.json"));
+    }
+
+    #[test]
+    fn a_detail_from_before_the_ship_view_parses_and_a_new_one_carries_it() {
+        let task = tests::task_json("");
+        let old: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        assert_eq!(old.ship, None);
+        let null: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[],"ship":null}}"#)).unwrap();
+        assert_eq!(null.ship, None);
+        let new: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[],"ship":{{"pr":{{"slug":"o/a","number":3,"url":"https://github.com/o/a/pull/3"}},"head":"abc","ready":false,
+            "checklist":[{{"id":"ci","ok":false,"detail":"CI is running"}}],"autoMerge":{{"allowed":false,"reason":"not ready"}},"review":{{"required":null,"by":null}},
+            "fixRounds":2,"queued":false,"quietSince":"2026-11-04T10:00:00.000Z","lastEvent":{{"class":"noise","at":"t"}},"at":"t"}}}}"#
+        ))
+        .unwrap();
+        let ship = new.ship.unwrap();
+        assert_eq!((ship.pr.number, ship.fix_rounds, ship.review.required), (3, 2, None));
+        assert_eq!(ship.checklist, vec![ShipItem { id: "ci".into(), ok: false, detail: "CI is running".into() }]);
+        let sparse: ShipView = serde_json::from_str("{}").unwrap();
+        assert!(!sparse.ready && sparse.checklist.is_empty());
+    }
+
+    #[test]
+    fn awaiting_ship_and_reviewing_memory_are_watching_and_retro_until_the_machine_waits_on_you() {
+        let mut task: Task = serde_json::from_str(&tests::task_json("")).unwrap();
+        task.state = "awaiting_ship".into();
+        assert_eq!(task.status_label(), "watching the PR");
+        task.waiting_on_you = true;
+        assert_eq!(task.status_label(), "choose ship");
+        task.state = "reviewing_memory".into();
+        assert_eq!(task.status_label(), "review memory");
+        task.waiting_on_you = false;
+        assert_eq!(task.status_label(), "retro");
+        assert_eq!(task.look(), Look::Working);
     }
 }

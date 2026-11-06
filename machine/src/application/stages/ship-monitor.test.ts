@@ -364,6 +364,16 @@ describe("the ship monitor", () => {
     expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: expect.anything() } });
   });
 
+  it("keeps the poll's readiness in the cursor for the board: the checklist and why the machine will not merge", async () => {
+    let polls = 0;
+    const { run } = setup({ prMerged: async () => (++polls < 2 ? open : merged) });
+    await run();
+    const view = (await loadCursor(stateDir, "t1"))!.view!;
+    expect(view.head).toBe(HEAD);
+    expect(view.checklist.map((i) => i.id)).toContain("ci");
+    expect(view).toMatchObject({ ready: expect.any(Boolean), canAutoMerge: false, reviewRequired: true });
+  });
+
   it("fails as aborted when the task is aborted", async () => {
     const abort = new AbortController();
     abort.abort();
