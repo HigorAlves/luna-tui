@@ -11,7 +11,7 @@ import type { ServiceSpec } from "@hardness/contracts";
 
 import type { CredentialMount, RunCredential } from "../credentials/index.ts";
 import { startServices } from "./services.ts";
-import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
+import { type ExecResult, exec, execOrThrow, OUTPUT_CAP } from "../process/exec.ts";
 
 /** Label on every stage container, so leftovers can be found and removed. */
 export const CONTAINER_LABEL = "dev.hardness.stage";
@@ -328,7 +328,8 @@ export async function execInSandbox(
 ): Promise<ExecResult> {
   const services = await startServices(run.name, run.services ?? {});
   try {
-    const result = await exec("docker", sandboxExecArgs({ ...run, network: services.network, serviceEnv: services.env }), options);
+    // What the project's own commands print is theirs to choose: only its tail is kept.
+    const result = await exec("docker", sandboxExecArgs({ ...run, network: services.network, serviceEnv: services.env }), { ...options, outputCap: OUTPUT_CAP });
     await exec("docker", ["rm", "-f", run.name]);
     return result;
   } finally {
