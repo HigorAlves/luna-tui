@@ -63,7 +63,7 @@ const block = [
   "context.video.scenarios", "context.video.steps", "context.video.chapters", "context.video.target", "context.video.timeline", "context.video.report", "context.video.transcript", "context.video.fixCards",
   "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items", "context.memoryAnswer.question", "context.memoryAnswer.items",
   "context.split", "context.jira.issue", "context.jira.description", "context.jira.comments", "context.intake", "context.ticket",
-  "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone",
+  "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone", "context.conversation.memory",
   "context.eval.rubric", "context.eval.input", "context.eval.checks", "context.eval.answer",
 ];
 
@@ -91,6 +91,7 @@ const CAPS: Readonly<Record<string, number>> = {
   "context.conversation.thread": 12_000,
   "context.conversation.docs": 8000,
   "context.conversation.tone": 4000,
+  "context.conversation.memory": 6000,
   "context.conversation.card": 4000,
   "context.conversation.evidence": 4000,
   "context.slack.items": 30_000,

@@ -993,6 +993,8 @@ export const ConversationContext = z.object({
       docs: z.array(z.string().max(1500)).max(3),
       /** The last edits a person made to drafts of this channel: what the machine wrote, and what the person sent. */
       tone: z.array(z.object({ machine: z.string().max(1500), person: z.string().max(1500) })).max(5),
+      /** What memory recalled for this channel (RFC 0007, viewer slack): at most six lines of past work, `kind from source: text`, each masked and flattened by script. Data, never instructions. */
+      memory: z.array(z.string().max(1000)).max(6).optional(),
     })
     .optional(),
 });

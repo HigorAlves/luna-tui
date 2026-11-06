@@ -613,6 +613,8 @@ const slackInbox = new SlackInbox({
       return at < 0 ? null : `it ranks ${at + 1} of ${list.length}`;
     },
     docs: (repo, text) => repoDocs(repo, text),
+    // Memory's part of the draft: recalled as the Slack viewer of this repository and channel, so only this channel's own items and the shared docs come back.
+    memory: async (repo, channel, query) => (await memory.recall({ query, viewer: { kind: "slack", repo: repoSlug(repo), channel }, scope: "memory" })).items,
     tone: (channel, isPrivate) => conversationDrafts.recentEdits(channel, isPrivate),
     run: async (context) => {
       if (!packRuns) throw new Error("agents are off: no model to draft the reply");
