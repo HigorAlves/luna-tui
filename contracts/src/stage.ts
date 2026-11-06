@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
-import { MemoryContext } from "./memory.ts";
+import { LessonsContext, MemoryContext } from "./memory.ts";
 import { Scenario } from "./plan.ts";
 import { SizeContext, SplitContext } from "./split.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
@@ -173,6 +173,10 @@ export const PackId = z.enum([
   "fix_scope",
   "evidence_valid",
   "worth_learning",
+  // The memory lessons (RFC 0007), run on demand by the retro: candidate lessons from a card's facts, whether each is worth keeping, whether it contradicts what memory holds.
+  "memory_extract",
+  "memory_worth",
+  "memory_conflict",
   // A decision at Intake (a dedup context, run on demand): is a new report the same problem as one of the five nearest cards.
   "intake_dedup",
   // A decision at the Ticket Machine (a ticket context, run on demand): can this ticket be worked on at all.
@@ -1146,6 +1150,8 @@ export const StageInput = z.object({
     ticket: TicketContext.nullable().optional(),
     /** For the Conversation Machine's decisions (conversation_assess): the thread, its author and the candidates. */
     conversation: ConversationContext.nullable().optional(),
+    /** For the memory lesson packs (memory_extract, memory_worth, memory_conflict): the facts, or one candidate and the items it may contradict. */
+    lessons: LessonsContext.nullable().optional(),
     /** For the video packs (script, fix, recording, critic): the scenarios, the target, the narration, the film's measurements. */
     video: VideoContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */

@@ -79,3 +79,58 @@ export const MemoryContext = z.object({
   note: z.string().max(300).nullable(),
 });
 export type MemoryContext = z.infer<typeof MemoryContext>;
+
+/** A lesson a pack proposes from a finished card (RFC 0007): short, anchored, with the reason it is worth remembering. */
+export const LessonCandidate = z.object({
+  text: z.string().min(1).max(MEMORY_TEXT_MAX),
+  /** What the lesson is about: the kind its item gets once a person approves it. */
+  kind: z.enum(["lesson", "outcome", "finding", "escalation", "review_ask", "decision"]),
+  /** The files it is about; the machine adds the commit. */
+  files: z.array(z.string().max(300)).max(10),
+  reason: z.string().min(1).max(300),
+});
+export type LessonCandidate = z.infer<typeof LessonCandidate>;
+
+/** What `memory_extract` answers: the candidate lessons (the worth and conflict decisions and a person still judge each). */
+export const MemoryExtractAnswer = z.object({ lessons: z.array(LessonCandidate).max(8) });
+export type MemoryExtractAnswer = z.infer<typeof MemoryExtractAnswer>;
+
+/** `context.lessons`: what the three lesson packs read. `extract`: the card's facts and the retro's proposals; `worth`: one candidate; `conflict`: one candidate and the active items recalled for it, by slot. Every text is the machine's template or a pack's capped text, and still data. */
+export const LessonsContext = z.object({
+  kind: z.enum(["extract", "worth", "conflict"]),
+  facts: z.array(z.string().max(MEMORY_TEXT_MAX)).max(60).optional(),
+  proposals: z.array(z.string().max(600)).max(20).optional(),
+  candidate: LessonCandidate.optional(),
+  /** The recalled active items a candidate may contradict, `slot1`... in order (five at most). */
+  recalled: z.array(z.object({ slot: z.number().int().min(1).max(5), id: z.string(), kind: MemoryKind, text: z.string().max(2000) })).max(5).optional(),
+});
+export type LessonsContext = z.infer<typeof LessonsContext>;
+
+/** A lesson on the retro's gate: the candidate that survived `memory_worth`, with the machine's id for the person's answer. */
+export const GateLesson = z.object({
+  id: z.string().min(1).max(40),
+  text: z.string().min(1).max(MEMORY_TEXT_MAX),
+  kind: LessonCandidate.shape.kind,
+  files: z.array(z.string()).max(10),
+  reason: z.string().max(300),
+});
+export type GateLesson = z.infer<typeof GateLesson>;
+
+/** A retirement the retro proposes: an active item a new lesson contradicts (`confident`) or may contradict (`unsure`: a person decides). */
+export const GateRetirement = z.object({
+  /** The item to retire. */
+  itemId: z.string().min(1).max(64),
+  text: z.string().max(2000),
+  /** The lesson that contradicts it. */
+  lesson: z.string().min(1).max(40),
+  certainty: z.enum(["confident", "unsure"]),
+});
+export type GateRetirement = z.infer<typeof GateRetirement>;
+
+/** A person's answer to one lesson or retirement of the gate. For a lesson id: `approve` writes it as written, `edit` writes `text`, `drop` writes nothing. For a retirement's item id: `approve` retires the item, `drop` keeps it. An id left unanswered is dropped. */
+export const LessonAnswer = z.object({
+  id: z.string().min(1).max(64),
+  action: z.enum(["approve", "edit", "drop"]),
+  text: z.string().min(1).max(MEMORY_TEXT_MAX).optional(),
+});
+export type LessonAnswer = z.infer<typeof LessonAnswer>;
