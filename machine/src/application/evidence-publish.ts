@@ -1,20 +1,21 @@
 // Publishing an Evidence Pack: its media as release assets on one `luna-evidence` pre-release, a
 // section in the PR body, one upserted PR comment. It is what Evidence (and Ship, on the other paths) does once the pack is complete
 // and its commit is the PR head. Media go to the repository's storage target (a port). Only regular files under the pack's local dir are uploaded, a HAR
-// never (it can carry cookies and tokens), a text file only after `redact` and within its cap, an image nobody read only after a person approved, and what is written to the PR is flattened by
+// never (it can carry cookies and tokens), a text file only after `redact`, within its cap and with no finding (secret, personal data), an image or a video nobody checked only after a person approved, and what is written to the PR is flattened by
 // `evidence-markdown.ts`. With no GitHub token the pack keeps its local urls and nothing throws.
 import type { EvidencePack } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
-import { basename, extname, sep } from "node:path";
+import { extname, sep } from "node:path";
 
+import { findingKinds } from "../../runner-video/tools/lib/findings.ts";
 import { hashRegularFile, readRegularBytes } from "../adapters/fs/bounded.ts";
 import { releaseAssetStorage, EVIDENCE_TAG as TAG } from "../adapters/evidence-storage/release-asset.ts";
 import { BODY_CAP, COMMENT_MARKER, mergeSection, redact, renderEvidenceComment, renderEvidenceSection, stripSection } from "../domain/evidence-markdown.ts";
 import { type EvidenceStorage, localStorage } from "./evidence-storage.ts";
 import { emptyCursor, loadCursor, saveCursor } from "./ship-cursor.ts";
 import { packComplete, repairPack } from "../domain/evidence-pack.ts";
-import { MAX_MEDIA_BYTES, safeName } from "./evidence-store.ts";
+import { MAX_MEDIA_BYTES } from "./evidence-store.ts";
 import { type GitHub, GitHubError } from "./github.ts";
 
 export const EVIDENCE_TAG = TAG;
@@ -77,8 +78,8 @@ const isWeb = (url: string): boolean => /^https?:\/\//i.test(url);
 const safeUrl = (url: string): boolean => /^https:\/\//.test(url) && !/[\s)<>]/.test(url);
 
 /** A local media file that may be uploaded: a regular file, really under `localDir`, within the size cap, not a HAR. */
-async function uploadable(path: string, localDir: string): Promise<string | null> {
-  if (isWeb(path) || /\.har$/i.test(path)) return null;
+async function uploadable(path: string, localDir: string, kind: string): Promise<string | null> {
+  if (isWeb(path) || kind === "har" || /\.har$/i.test(path)) return null;
   try {
     const [real, root] = await Promise.all([realpath(path), realpath(localDir)]);
     if (!real.startsWith(root + sep)) return null;
@@ -94,17 +95,25 @@ export const publishEvidence: PublishEvidence = async ({ github, slug, number, t
   const notes: string[] = [];
   const files = new Map<number, { real: string; data?: Buffer }>();
   for (const [i, m] of pack.media.entries()) {
-    const real = await uploadable(m.url, localDir);
+    const real = await uploadable(m.url, localDir, m.kind);
     if (!real) continue;
     // Nobody saw an image before it is public: one whose text was not read waits for a person.
     if (m.kind === "screenshot" && m.scanned === false && !approved) {
       notes.push(`${m.label} stays a local copy: its text was not read`);
       continue;
     }
+    // A video is uploaded only when its frames were checked (the film's own check, `scanned: true`) or a person approved; the browser run's raw recording carries neither.
+    if (m.kind === "video" && m.scanned !== true && !approved) {
+      notes.push(`${m.label} stays a local copy: its frames were not checked`);
+      continue;
+    }
     // A text file is test output or a model's words: redacted whole, read through the bounded reader; one that cannot be read is not published.
     if (m.kind === "report" || m.kind === "captions" || TEXT_EXT.has(extname(real).toLowerCase())) {
       try {
-        files.set(i, { real, data: Buffer.from(redact((await readRegularBytes(real, TEXT_MAX_BYTES)).toString("utf8")), "utf8") });
+        const text = (await readRegularBytes(real, TEXT_MAX_BYTES)).toString("utf8");
+        // The same findings check as a picture's text, whatever the approval: a hit stays local, in fixed words.
+        if (findingKinds(text).length > 0) notes.push(`${m.label} stays a local copy: it may hold a secret or personal data`);
+        else files.set(i, { real, data: Buffer.from(redact(text), "utf8") });
       } catch {
         notes.push(`${m.label} stays a local copy: it could not be read within its cap`);
       }
@@ -126,7 +135,9 @@ export const publishEvidence: PublishEvidence = async ({ github, slug, number, t
     for (const [i, file] of files) {
       const digest = file.data ? createHash("sha256").update(file.data).digest("hex") : await hashRegularFile(file.real, MAX_MEDIA_BYTES).catch(() => null);
       if (!digest) continue;
-      const name = `${taskId.slice(0, 8)}-${pack.commitSha.slice(0, 7)}-${digest.slice(0, 8)}-${safeName(basename(file.real))}`;
+      // From the task, the commit, the digest and an extension of letters and digits: nothing a container or a model wrote.
+      const ext = /^\.[a-z0-9]{1,8}$/.exec(extname(file.real).toLowerCase())?.[0] ?? "";
+      const name = `${taskId.slice(0, 8)}-${pack.commitSha.slice(0, 7)}-${digest.slice(0, 8)}${ext}`;
       const put = await storage.put({ slug, name, path: file.real, contentType: contentType(file.real), ...(file.data ? { data: file.data } : {}) });
       if (!put) continue;
       if (!safeUrl(put.url)) {

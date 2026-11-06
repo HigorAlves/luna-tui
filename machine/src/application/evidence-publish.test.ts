@@ -60,20 +60,20 @@ function github(over: Partial<Parameters<typeof fakeGitHub>[0]> = {}, state: { b
 const base = { slug: "o/a", number: 3, taskId: "0123456789abcdef" };
 
 describe("publishEvidence", () => {
-  it("uploads each local file as <task8>-<sha7>-<name> to the luna-evidence pre-release and rewrites the urls", async () => {
+  it("uploads each local file as <task8>-<sha7>-<digest8><ext> to the luna-evidence pre-release and rewrites the urls", async () => {
     const gh = github();
-    const result = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "cart.png", url: put("cart.png", "png") }, { kind: "video", label: "walk.webm", url: put("walk.webm", "vid") }]) });
+    const result = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "cart.png", url: put("cart.png", "png") }, { kind: "video", label: "walk.webm", url: put("walk.webm", "vid"), scanned: true }]) });
     expect(result.assets).toBe(2);
     expect(result.comment).toBe("created");
     expect(gh.ensureRelease).toHaveBeenCalledTimes(1);
     expect(gh.ensureRelease).toHaveBeenCalledWith("o/a", "luna-evidence", { name: "Luna evidence", prerelease: true });
-    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-8f8cbb7d-cart.png", Buffer.from("png"), "image/png");
-    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-1ff838dc-walk.webm", Buffer.from("vid"), "video/webm");
-    expect(result.pack.media.map((m) => m.url)).toEqual(["https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-8f8cbb7d-cart.png", "https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-1ff838dc-walk.webm"]);
+    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-8f8cbb7d.png", Buffer.from("png"), "image/png");
+    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-1ff838dc.webm", Buffer.from("vid"), "video/webm");
+    expect(result.pack.media.map((m) => m.url)).toEqual(["https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-8f8cbb7d.png", "https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-1ff838dc.webm"]);
   });
 
   it("reuses an asset of the same name instead of uploading it again", async () => {
-    const existing = { id: 1, name: "01234567-abc1234-3a6eb079-cart.png", url: "https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-3a6eb079-cart.png" };
+    const existing = { id: 1, name: "01234567-abc1234-3a6eb079.png", url: "https://github.com/o/a/releases/download/luna-evidence/01234567-abc1234-3a6eb079.png" };
     const gh = github({}, { body: "", comments: [], assets: [existing] });
     const result = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "cart.png", url: put("cart.png") }]) });
     expect(gh.uploadReleaseAsset).not.toHaveBeenCalled();
@@ -165,6 +165,15 @@ describe("publishEvidence", () => {
     expect(result.pack.media).toEqual(media);
   });
 
+  it("never uploads a HAR by its kind, whatever its name: one with a 130-character name is refused too", async () => {
+    const gh = github();
+    const long = put("h".repeat(126) + ".har", "{}");
+    const odd = put("capture.dat", "{}");
+    const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "har", label: "long", url: long }, { kind: "har", label: "odd", url: odd }]) });
+    expect(gh.uploadReleaseAsset).not.toHaveBeenCalled();
+    expect(out.pack.media.map((m) => m.url)).toEqual([long, odd]);
+  });
+
   it("never uploads a HAR: it can carry cookies and tokens", async () => {
     const gh = github();
     const har = put("run.har", "{}");
@@ -173,10 +182,18 @@ describe("publishEvidence", () => {
     expect(result.pack.media[0]!.url).toBe(har);
   });
 
-  it("names uploaded files with a safe name", async () => {
+  it("names an asset from the task, the commit, the digest and the extension only: a file named like a token leaks nothing into its name", async () => {
     const gh = github();
-    await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "x", url: put("shot one (1).png") }]) });
-    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-3a6eb079-shot_one__1_.png", expect.any(Buffer), "image/png");
+    const token = "gh" + "p_" + "a".repeat(36);
+    const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "x", url: put(`${token}.png`), scanned: true }]) });
+    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-3a6eb079.png", expect.any(Buffer), "image/png");
+    expect(JSON.stringify(out)).not.toContain(token);
+  });
+
+  it("builds the extension from letters and digits only", async () => {
+    const gh = github();
+    await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: "screenshot", label: "x", url: put("shot.p_n g"), scanned: true }]) });
+    expect(gh.uploadReleaseAsset).toHaveBeenCalledWith("o/a", 5, "01234567-abc1234-3a6eb079", expect.any(Buffer), "application/octet-stream");
   });
 
   it("with no GitHub token the pack keeps its local urls and nothing is thrown", async () => {
@@ -218,7 +235,43 @@ describe("publishEvidence: what may be uploaded", () => {
     expect(open.assets).toBe(2);
   });
 
-  it("passes every text media kind through redact: a token planted in a terminal capture is gone from what is uploaded", async () => {
+  it("keeps a video local unless it was checked (scanned: true) or a person approved: a film withheld for a key does not leave the raw recording of the same pages uploaded", async () => {
+    const raw = { kind: "video" as const, label: "qa-cart.webm", url: put("qa-cart.webm", "raw"), scanned: false };
+    const unmarked = { kind: "video" as const, label: "other.webm", url: put("other.webm", "other") };
+    const held = github();
+    const out = await publishEvidence({ ...base, github: held, localDir, pack: pack([raw, unmarked]) });
+    expect(held.uploadReleaseAsset).not.toHaveBeenCalled();
+    expect(out.pack.media.map((m) => m.url)).toEqual([raw.url, unmarked.url]);
+    expect((out.notes ?? []).join(" ")).toMatch(/qa-cart\.webm stays a local copy/);
+    const approved = github();
+    expect((await publishEvidence({ ...base, github: approved, localDir, pack: pack([raw, unmarked]), approved: true })).assets).toBe(2);
+    const checked = github();
+    expect((await publishEvidence({ ...base, github: checked, localDir, pack: pack([{ ...raw, scanned: true }]) })).assets).toBe(1);
+  });
+
+  it("keeps a text medium local, with a note in fixed words, when it holds a secret or personal data the token shapes do not catch", async () => {
+    const join = (...p: string[]) => p.join("");
+    const dirty: [string, string][] = [
+      ["terminal.txt", join("DATABASE_URL=postgres", "://app:", "hunter2hunter2", "@db:5432/app")],
+      ["checks.txt", join("DB_", "PASSWORD", "=", "correct-horse")],
+      ["meta.json", JSON.stringify({ headers: { Authorization: join("Bearer ", "abcdefghijklmnopqrst") } })],
+      ["c.vtt", join("WEBVTT\n-----BEGIN ", "PRIVATE KEY", "-----")],
+      ["report.json", JSON.stringify({ owner: "jane.roe@acme-corp.io" })],
+    ];
+    for (const [name, text] of dirty) {
+      const gh = github();
+      const path = put(name, text);
+      const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack([{ kind: name === "c.vtt" ? "captions" : "report", label: name, url: path }]), approved: true });
+      expect(gh.uploadReleaseAsset, name).not.toHaveBeenCalled();
+      expect(out.pack.media[0]!.url, name).toBe(path);
+      expect(out.notes, name).toEqual([`${name} stays a local copy: it may hold a secret or personal data`]);
+    }
+    const clean = github();
+    const ok = await publishEvidence({ ...base, github: clean, localDir, pack: pack([{ kind: "report", label: "terminal.txt", url: put("terminal.txt", "3 passed\nGET /health 200") }]) });
+    expect(ok.assets).toBe(1);
+  });
+
+  it("keeps every text media kind with a token in it local: nothing with the token reaches the target", async () => {
     const gh = github();
     const media = [
       { kind: "report" as const, label: "terminal.txt", url: put("terminal.txt", `$ pnpm test\nTOKEN=${token}\nok`) },
@@ -226,14 +279,10 @@ describe("publishEvidence: what may be uploaded", () => {
       { kind: "report" as const, label: "meta.json", url: put("meta.json", JSON.stringify({ k: token })) },
       { kind: "captions" as const, label: "c.vtt", url: put("c.vtt", `WEBVTT\n${token}`) },
     ];
-    await publishEvidence({ ...base, github: gh, localDir, pack: pack(media) });
-    const sent = (gh.uploadReleaseAsset as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-    expect(sent).toHaveLength(4);
-    for (const call of sent) {
-      const text = (call[3] as Buffer).toString("utf8");
-      expect(text).not.toContain(token);
-      expect(text).toContain("[redacted]");
-    }
+    const out = await publishEvidence({ ...base, github: gh, localDir, pack: pack(media) });
+    expect(gh.uploadReleaseAsset).not.toHaveBeenCalled();
+    expect(out.notes).toHaveLength(4);
+    expect(JSON.stringify(out.notes)).not.toContain(token);
   });
 
   it("does not publish a text file it cannot read within its cap", async () => {

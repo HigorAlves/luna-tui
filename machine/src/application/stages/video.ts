@@ -321,7 +321,9 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       // What is on screen and in the narration is checked for what must not be shown. A hit is a measured P0 card (its kind and time, never its text).
       const read = await readFrames(jobDir);
       if (!read) return { shipped: false, answer: null, measured, report: reportRaw, error: "the frame check could not run" };
-      const hits = screenFindings([...read.map((f) => ({ ...(f.t !== undefined ? { t: f.t } : {}), ...(f.file !== undefined ? { file: f.file } : {}), text: f.text })), ...(transcript !== null ? [{ file: "transcript", text: transcript }] : [])]);
+      // A text the tool cut for size was not read whole: the film is not shippable (the kinds it did find are cards below, but never alone enough).
+      if (read.some((f) => f.truncated)) return { shipped: false, answer: null, measured, report: reportRaw, error: "the frame check could not read all the text of a frame" };
+      const hits = screenFindings([...read.map((f) => ({ ...(f.t !== undefined ? { t: f.t } : {}), ...(f.file !== undefined ? { file: f.file } : {}), text: f.text, ...(f.kinds ? { kinds: f.kinds } : {}) })), ...(transcript !== null ? [{ file: "transcript", text: transcript }] : [])]);
       for (const hit of hits) measured.push({ t: null, scene: null, element: null, text: hit.place === "transcript" ? `a ${hit.kind} is in the narration: do not say it` : `a ${hit.kind} is on screen at ${hit.place}: do not show it`, priority: "P0" });
       hitKinds = [...new Set(hits.map((h) => h.kind))];
       // What no pattern decides: asked once per film, only when the patterns found nothing.

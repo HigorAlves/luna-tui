@@ -42,4 +42,15 @@ describe("screenFindings", () => {
     expect(screenFindings(at("Cart total $12.00, 3 items"))).toEqual([]);
     expect(screenFindings(at(`${token} ${token}`))).toHaveLength(1);
   });
+
+  it("counts the kinds the frames tool found in a text it cut, without the text", () => {
+    expect(screenFindings([{ file: "long.png", text: "cut", kinds: ["token"] }])).toEqual([{ place: "long.png", kind: "token" }]);
+  });
+
+  it("finds a connection string with a password, a password assignment and a bearer header", () => {
+    const join = (...p: string[]) => p.join("");
+    expect(kinds(join("postgres", "://app:", "hunter2hunter2", "@db:5432/x"))).toEqual(["credential"]);
+    expect(kinds(join("PASS", "WORD", "=", "swordfish1"))).toEqual(["credential"]);
+    expect(kinds(join("Authorization", ": ", "Bearer ", "abcdefghijklmnopqrst"))).toEqual(["credential"]);
+  });
 });

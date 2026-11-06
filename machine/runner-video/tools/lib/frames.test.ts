@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_FRAMES, MAX_TEXT, clampText, sampleTimes } from "./frames.ts";
+import { MAX_FRAMES, MAX_TEXT, clampText, readFrameText, sampleTimes } from "./frames.ts";
 
 describe("sampleTimes", () => {
   it("takes a frame every 2 s and 0.3 s after each scene start, sorted, none past the end", () => {
@@ -29,5 +29,21 @@ describe("clampText", () => {
     expect(MAX_TEXT).toBe(4000);
     expect(clampText("a".repeat(5000))).toHaveLength(4000);
     expect(clampText("ab\u0000c\u001b[0m\nd")).toBe("abc[0m\nd");
+  });
+});
+
+describe("readFrameText", () => {
+  it("checks the whole text, though the text it keeps is cut: a key after character 4,000 is found", () => {
+    const key = ["gh", "p_", "a".repeat(36)].join("");
+    const read = readFrameText("word ".repeat(1200) + key);
+    expect(read.kinds).toEqual(["token"]);
+    expect(read.text.length).toBeLessThanOrEqual(MAX_TEXT);
+    expect(read.text).not.toContain(key);
+    expect(JSON.stringify(read)).not.toContain(key);
+  });
+
+  it("reports a text cut for size as truncated, and a short one as not", () => {
+    expect(readFrameText("x".repeat(MAX_TEXT + 1)).truncated).toBe(true);
+    expect(readFrameText("short").truncated).toBeUndefined();
   });
 });

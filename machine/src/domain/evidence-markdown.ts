@@ -3,6 +3,8 @@
 // HTML, no `@mention`, no `#123` reference) and a host path is never printed.
 import type { EvidencePack } from "@hardness/contracts";
 
+import { TOKEN_SHAPES } from "../../runner-video/tools/lib/findings.ts";
+
 export const SECTION_START = "<!-- luna-evidence:start -->";
 export const SECTION_END = "<!-- luna-evidence:end -->";
 export const COMMENT_MARKER = "<!-- luna-evidence-comment -->";
@@ -10,15 +12,8 @@ export const COMMENT_MARKER = "<!-- luna-evidence-comment -->";
 /** GitHub's limit is 65 536 characters; a body keeps some room. */
 export const BODY_CAP = 60_000;
 
-/** The token shapes `redact` knows (global, so each replaces every match); `screenFindings` tests the same shapes. */
-export const SECRET_SHAPES = [
-  /sk-ant-[A-Za-z0-9_-]{8,}/g,
-  /gh[pousr]_[A-Za-z0-9]{20,}/g,
-  /github_pat_[A-Za-z0-9_]{20,}/g,
-  /xox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /AKIA[0-9A-Z]{16}/g,
-  /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-];
+/** The token shapes `redact` knows: the shared list, which the frames tool and `screenFindings` use too. */
+export const SECRET_SHAPES = TOKEN_SHAPES;
 
 /** Text with every token-shaped string (API keys, GitHub and Slack tokens, AWS key ids, JWTs) replaced by `[redacted]`. */
 export function redact(text: string): string {

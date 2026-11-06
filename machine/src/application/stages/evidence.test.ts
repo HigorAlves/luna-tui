@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -378,8 +378,16 @@ describe("evidenceStage", () => {
         { kind: "captions" as const, label: "captions.vtt", url: join(dir, "captions.vtt") },
       ];
       const approved = scenarios.map((x, i) => ({ id: `S${i + 1}`, title: x.title }));
-      return { summary: "s", format: "video", scenarios: scenarios.map((x) => ({ text: x.title, test: null, result: "pass" })), findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "old1111", media, video, at: "2026-11-03T00:00:00.000Z", revision: 1, source: { e2eRunId: "e2e-run", scenariosKey: scenariosKeyOf(approved), stepsSha: sha256("{}\n") } };
+      const pack = { summary: "s", format: "video", scenarios: scenarios.map((x) => ({ text: x.title, test: null, result: "pass" })), findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "old1111", media, video, at: "2026-11-03T00:00:00.000Z", revision: 1, source: { e2eRunId: "e2e-run", scenariosKey: scenariosKeyOf(approved), stepsSha: sha256("{}\n") } };
+      // The machine keeps the pack it made beside its media, as the stage does.
+      writeFileSync(join(dir, "pack.json"), JSON.stringify(pack));
+      return pack;
     }
+    /** What the task row holds after a publish: the same pack with release urls in place of the local ones. */
+    const published = () => {
+      const pack = previousFilm();
+      return { ...pack, media: pack.media.map((m) => ({ ...m, url: `https://github.com/o/r/releases/download/luna-evidence/${m.label}` })) };
+    };
     const setup = (changed: string[] | null, over: Partial<EvidenceStageDeps> = {}) => {
       browserRun();
       const video = vi.fn(async () => failedFilm);
@@ -402,6 +410,19 @@ describe("evidenceStage", () => {
       expect(film.url.startsWith(join(stateDir, "evidence", "t1", "abc1234def") + "/")).toBe(true);
       expect(readFileSync(film.url, "utf8")).toBe("old walkthrough.mp4");
       expect(pack.source.e2eRunId).toBe("e2e-run");
+    });
+
+    it("keeps the film after a publish too: the task row's pack holds release urls, so the reuse reads the machine's own local pack of the old commit", async () => {
+      browserRun();
+      const video = vi.fn(async () => failedFilm);
+      const { run, saved } = stage({ videoImage: async () => true, video, changedBetween: async () => ["server/db.ts"] });
+      const result = await run(taskContext({ evidence: published() }));
+      expect(result.outcome).toBe("pass");
+      expect(video).not.toHaveBeenCalled();
+      const pack = (saved[0]![1] as { evidence: { media: { kind: string; url: string; label: string }[] } }).evidence;
+      const film = pack.media.find((m) => m.label === "walkthrough.mp4")!;
+      expect(film.url.startsWith(join(stateDir, "evidence", "t1", "abc1234def") + "/")).toBe(true);
+      expect(readFileSync(film.url, "utf8")).toBe("old walkthrough.mp4");
     });
 
     it("makes the film again when a rendered surface changed between the commits, or the paths cannot be read", async () => {
@@ -501,7 +522,7 @@ describe("evidenceStage", () => {
 
   describe("the text on screenshots is read before they are kept", () => {
     const token = "gh" + "p_" + "a".repeat(36);
-    const shot = async (frames: { file: string; text: string }[] | null) => {
+    const shot = async (frames: { file: string; text: string; kinds?: ("token" | "email")[]; truncated?: true }[] | null) => {
       const seen: string[] = [];
       const { run, saved } = stage({ scanImages: async (dir) => (seen.push(dir), frames) });
       const result = await run(taskContext());
@@ -510,15 +531,15 @@ describe("evidenceStage", () => {
 
     it("copies the screenshots into <runId>-shots and reads that folder, marking the clean ones scanned", async () => {
       browserRun();
-      const { seen, pack } = await shot([{ file: "a.png", text: "Cart" }, { file: "b.png", text: "Total" }]);
+      const { seen, pack } = await shot([{ file: "0.png", text: "Cart" }, { file: "1.png", text: "Total" }]);
       expect(seen).toEqual([join(stateDir, "runs", "ev-shots")]);
-      expect(existsSync(join(stateDir, "runs", "ev-shots", "a.png"))).toBe(true);
+      expect(existsSync(join(stateDir, "runs", "ev-shots", "0.png"))).toBe(true);
       expect(pack.media.filter((m) => m.kind === "screenshot").map((m) => [m.label, m.scanned])).toEqual([["a.png", true], ["b.png", true]]);
     });
 
     it("leaves a screenshot with a hit out, counts it in the note, and never prints the text", async () => {
       browserRun();
-      const { pack, result } = await shot([{ file: "a.png", text: `key ${token}` }, { file: "b.png", text: "Total" }]);
+      const { pack, result } = await shot([{ file: "0.png", text: `key ${token}` }, { file: "1.png", text: "Total" }]);
       expect(pack.media.map((m) => m.label)).not.toContain("a.png");
       expect(pack.media.map((m) => m.label)).toContain("b.png");
       expect(pack.note).toMatch(/1 screenshot.*left out.*token/);
@@ -528,7 +549,7 @@ describe("evidenceStage", () => {
     it("asks frame_privacy once over the screenshots' text; a credential leaves them out with a note", async () => {
       browserRun();
       const asked: string[][] = [];
-      const { run, saved } = stage({ scanImages: async () => [{ file: "a.png", text: "Cart" }, { file: "b.png", text: "Key" }], privacy: async (texts) => (asked.push(texts), "exposed") });
+      const { run, saved } = stage({ scanImages: async () => [{ file: "0.png", text: "Cart" }, { file: "1.png", text: "Key" }], privacy: async (texts) => (asked.push(texts), "exposed") });
       await run(taskContext());
       const pack = (saved[0]![1] as { evidence: { media: { kind: string }[]; note?: string } }).evidence;
       expect(asked).toEqual([["Cart", "Key"]]);
@@ -538,7 +559,7 @@ describe("evidenceStage", () => {
 
     it("says the on-screen text was not judged when there is no decision, and keeps the pattern-checked screenshots", async () => {
       browserRun();
-      const { run, saved } = stage({ scanImages: async () => [{ file: "a.png", text: "Cart" }], privacy: async () => "not_judged" });
+      const { run, saved } = stage({ scanImages: async () => [{ file: "0.png", text: "Cart" }], privacy: async () => "not_judged" });
       await run(taskContext());
       const pack = (saved[0]![1] as { evidence: { media: { kind: string }[]; note?: string } }).evidence;
       expect(pack.media.some((m) => m.kind === "screenshot")).toBe(true);
@@ -559,7 +580,62 @@ describe("evidenceStage", () => {
       const pack = (saved[0]![1] as { evidence: { media: { kind: string; scanned?: boolean }[] } }).evidence;
       expect(pack.media.filter((m) => m.kind === "screenshot").every((m) => m.scanned === false)).toBe(true);
     });
+
+    it("names the scan copies by index: shots/a.png beside shots_a.png are both read, neither is taken for the other", async () => {
+      const dir = browserRun();
+      rmSync(join(dir, "a.png"));
+      rmSync(join(dir, "b.png"));
+      mkdirSync(join(dir, "shots"));
+      writeFileSync(join(dir, "shots", "a.png"), "nested");
+      writeFileSync(join(dir, "shots_a.png"), "flat");
+      const { run, saved } = stage({ scanImages: async (d) => [...(existsSync(join(d, "0.png")) ? [{ file: "0.png", text: "Cart" }] : []), ...(existsSync(join(d, "1.png")) ? [{ file: "1.png", text: `key ${token}` }] : [])] });
+      await run(taskContext());
+      const pack = (saved[0]![1] as { evidence: { media: { kind: string; label: string; scanned?: boolean }[] } }).evidence;
+      const copies = readdirSync(join(stateDir, "runs", "ev-shots")).sort();
+      expect(copies).toEqual(["0.png", "1.png"]);
+      // the one whose copy showed the key is out, whichever it is; the other is kept and scanned
+      expect(pack.media.filter((m) => m.kind === "screenshot")).toHaveLength(1);
+      expect(pack.media.find((m) => m.kind === "screenshot")!.scanned).toBe(true);
+    });
+
+    it("marks a shot scanned: false when the answer has no entry of its own for it", async () => {
+      browserRun();
+      const { pack } = await shot([{ file: "0.png", text: "Cart" }]);
+      expect(pack.media.filter((m) => m.kind === "screenshot").map((m) => [m.label, m.scanned])).toEqual([["a.png", true], ["b.png", false]]);
+    });
+
+    it("marks a shot scanned: false when its copy failed", async () => {
+      const dir = browserRun();
+      const { run, saved } = stage({ headCommit: async () => (rmSync(join(dir, "a.png")), "abc1234def"), scanImages: async () => [{ file: "0.png", text: "Cart" }, { file: "1.png", text: "Total" }] });
+      await run(taskContext());
+      const pack = (saved[0]![1] as { evidence: { media: { kind: string; label: string; scanned?: boolean }[] } }).evidence;
+      expect(pack.media.filter((m) => m.kind === "screenshot").map((m) => [m.label, m.scanned])).toEqual([["b.png", true]]);
+    });
+
+    it("marks a shot whose text the tool cut for size scanned: false, and says so", async () => {
+      browserRun();
+      const { pack } = await shot([{ file: "0.png", text: "Cart", truncated: true }, { file: "1.png", text: "Total" }]);
+      expect(pack.media.filter((m) => m.kind === "screenshot").map((m) => [m.label, m.scanned])).toEqual([["a.png", false], ["b.png", true]]);
+      expect(pack.note).toMatch(/too long|not read whole/);
+    });
+
+    it("counts a kind the tool found in the whole text of a cut text as a hit", async () => {
+      browserRun();
+      const { pack } = await shot([{ file: "0.png", text: "Cart", truncated: true, kinds: ["token"] }, { file: "1.png", text: "Total" }]);
+      expect(pack.media.map((m) => m.label)).not.toContain("a.png");
+    });
+
+    it("keeps the browser run's own recording local: scanned: false, never read, and the HAR keeps its kind", async () => {
+      browserRun();
+      const { run, saved } = stage({ scanImages: async () => [{ file: "0.png", text: "Cart" }, { file: "1.png", text: "Total" }] });
+      await run(taskContext());
+      const pack = (saved[0]![1] as { evidence: { media: { kind: string; label: string; scanned?: boolean }[] } }).evidence;
+      expect(pack.media.find((m) => m.kind === "video")).toMatchObject({ label: "qa-cart.webm", scanned: false });
+      expect(pack.media.find((m) => m.label === "qa-cart.har")!.kind).toBe("har");
+    });
   });
+
+
 
   describe("the format labels and the terminal capture", () => {
     const run2 = (choice: string, over: Partial<EvidenceStageDeps> = {}) => stage({ decideFormat: async () => ({ format: { choice, confidence: 0.9 } }), ...over });
@@ -640,7 +716,7 @@ describe("evidenceStage", () => {
       { text: scenarios[1]!.title, test: "qa-cart.webm#t=0", result: "pass" },
     ]);
     const store = join(stateDir, "evidence", "t1", "abc1234def");
-    expect(pack.media.map((m: { kind: string; label: string }) => [m.kind, m.label]).sort()).toEqual([["report", "qa-cart.har"], ["report", "qa-manifest.json"], ["screenshot", "a.png"], ["screenshot", "b.png"], ["video", "qa-cart.webm"]]);
+    expect(pack.media.map((m: { kind: string; label: string }) => [m.kind, m.label]).sort()).toEqual([["har", "qa-cart.har"], ["report", "qa-manifest.json"], ["screenshot", "a.png"], ["screenshot", "b.png"], ["video", "qa-cart.webm"]]);
     for (const m of pack.media as { url: string }[]) {
       expect(m.url.startsWith(store + "/")).toBe(true);
       expect(existsSync(m.url)).toBe(true);

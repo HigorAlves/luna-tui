@@ -79,6 +79,11 @@ describe("scanImages", () => {
     expect(out).toEqual([{ file: "a.png", text: "Cart" }]);
   });
 
+  it("carries the kinds the tool found in the whole text and whether the text was cut", async () => {
+    const out = await scanImages(deps({ frames: [{ file: "a.png", text: "Cart", kinds: ["token"], truncated: true }, { file: "b.png", text: "x" }] }), { id: "t", dir: folder(), signal });
+    expect(out).toEqual([{ file: "a.png", text: "Cart", kinds: ["token"], truncated: true }, { file: "b.png", text: "x" }]);
+  });
+
   it("is null when the tool failed, wrote nothing, wrote nonsense, or wrote a file over 2 MiB", async () => {
     expect(await scanImages(deps({ frames: [] }, false), { id: "t", dir: folder(), signal })).toBeNull();
     expect(await scanImages(deps(null), { id: "t", dir: folder(), signal })).toBeNull();

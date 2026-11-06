@@ -17,6 +17,7 @@ import { EvidenceStore, MAX_MEDIA_BYTES, safeName } from "../evidence-store.ts";
 import { type PublishEvidence, publishAndReady } from "../evidence-publish.ts";
 import { type GitHub, GitHubError } from "../github.ts";
 import { copyRegularFile, hashRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
+import type { FindingKind } from "../../../runner-video/tools/lib/findings.ts";
 import { screenFindings } from "../../domain/screen-text.ts";
 import { scenariosKeyOf, staleParts } from "../../domain/evidence-stale.ts";
 import { privacyTexts } from "../frame-privacy.ts";
@@ -242,7 +243,7 @@ export interface EvidenceStageDeps extends EvidenceDeps {
   /** The paths changed between two commits of the worktree (host git through `at()`); null when they cannot be read. A film is then made again. */
   changedBetween?: (worktreePath: string, from: string, to: string) => Promise<string[] | null>;
   /** Reads the text on the image files directly in a folder (the video image's `frames --images`); null when it could not run. Absent when there is no video image. */
-  scanImages?: (dir: string, signal: AbortSignal) => Promise<{ file: string; text: string }[] | null>;
+  scanImages?: (dir: string, signal: AbortSignal) => Promise<{ file: string; text: string; kinds?: FindingKind[]; truncated?: true }[] | null>;
   /** frame_privacy over the screenshots' text, once, after the pattern check found nothing (`judgePrivacy`); absent, the text is not judged. */
   privacy?: (texts: string[], repoPath: string | null) => Promise<"clear" | "exposed" | "not_judged">;
   now?: () => Date;
@@ -400,9 +401,11 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       const parts = staleParts(previous, { ...source, results: facts.scenarios.map((x) => x.result), changedPaths });
       await context.emit?.("evidence.stale", { from: previous.commitSha.slice(0, 7), to: commitSha.slice(0, 7), parts }).catch(() => {});
       // A film that is not stale is copied from the machine's own store of the old commit, never from a container's folder.
+      // What was kept is read from the machine's own pack of the old commit: the task row's pack holds release urls once it was published.
       const oldDir = store.dirFor(task.id, previous.commitSha);
-      const filmFiles = previous.media.filter((m) => (m.kind === "video" || m.kind === "cover" || m.kind === "captions" || m.kind === "audio") && m.url.startsWith(`${oldDir}/`));
-      if (film && !parts.includes("film") && previous.video && previous.format === "video" && filmFiles.some((m) => m.kind === "video")) reuse = { video: previous.video, media: filmFiles };
+      const local = await store.readPack(task.id, previous.commitSha);
+      const filmFiles = (local?.media ?? []).filter((m) => (m.kind === "video" || m.kind === "cover" || m.kind === "captions" || m.kind === "audio") && m.url.startsWith(`${oldDir}/`));
+      if (film && !parts.includes("film") && local?.video && local.format === "video" && filmFiles.some((m) => m.kind === "video")) reuse = { video: local.video, media: filmFiles };
     }
 
     // 2b. The film: the pipeline runs on the approved scenarios and the browser run's facts; a person's send-back note re-enters it at the fix.
@@ -444,7 +447,8 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       if (out.ok) {
         if (out.note) addNote(out.note);
         video = out.video;
-        filmMedia = out.media;
+        // The film passed the frame check (a degraded one has no media): its video says so.
+        filmMedia = out.media.map((m) => (m.kind === "video" ? { ...m, scanned: true } : m));
       } else {
         if (out.rateLimited) return { outcome: "fail", rateLimited: true, detail: { step: "evidence", verdict: "missing", artifactCount: 0, error: out.reason }, usage: { ...out.usage } };
         if (out.video) video = out.video;
@@ -455,41 +459,52 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
 
     // 3. The media: the browser run's screenshots, its stitched recording, the manifest and the HAR; none for text.
     const stitched = typeof facts.manifest.video?.file === "string" ? facts.manifest.video.file : null;
-    const picked: { path: string; label: string; kind: EvidencePack["media"][number]["kind"] }[] = [];
+    const picked: { path: string; label: string; kind: EvidencePack["media"][number]["kind"]; scanned?: boolean }[] = [];
     if (format !== "text") {
       let screenshots = 0;
       for (const a of facts.artifacts) {
         if (a.kind === "screenshot" && screenshots++ < MEDIA_SCREENSHOTS) picked.push({ path: a.path, label: a.label, kind: "screenshot" });
-        else if (a.kind === "video" && stitched !== null && a.label === stitched) picked.push({ path: a.path, label: a.label, kind: "video" });
-        else if (a.kind === "qa-manifest" || a.kind === "har") picked.push({ path: a.path, label: a.label, kind: "report" });
+        else if (a.kind === "video" && stitched !== null && a.label === stitched) picked.push({ path: a.path, label: a.label, kind: "video", scanned: false });
+        else if (a.kind === "har") picked.push({ path: a.path, label: a.label, kind: "har" });
+        else if (a.kind === "qa-manifest") picked.push({ path: a.path, label: a.label, kind: "report" });
       }
     }
     // The text on the screenshots is read before anything is kept: a token, a key or personal data leaves the screenshot out. Nobody sees them before they are public.
-    const scanned = new Map<string, boolean>();
     const shots = picked.filter((p) => p.kind === "screenshot");
     if (shots.length > 0) {
       const dir = join(deps.stateDir, "runs", `${context.runId}-shots`);
-      const names = new Map<string, string>();
-      let frames: { file: string; text: string }[] | null = null;
+      // A copy is named by its index and its extension, never by its label: two labels that flatten to one name would be one file read for two.
+      const copies = new Map<(typeof shots)[number], string>();
+      let frames: Awaited<ReturnType<NonNullable<typeof deps.scanImages>>> | null = null;
       if (deps.scanImages) {
         await mkdir(dir, { recursive: true });
-        for (const p of shots) {
-          const name = safeName(p.label);
-          if (await copyRegularFile(p.path, join(dir, name)).then(() => true, () => false)) names.set(p.label, name);
+        for (const [i, p] of shots.entries()) {
+          const name = `${i}${IMAGES.has(extname(p.label).toLowerCase()) ? extname(p.label).toLowerCase() : ".png"}`;
+          if (await copyRegularFile(p.path, join(dir, name)).then(() => true, () => false)) copies.set(p, name);
         }
         frames = await deps.scanImages(dir, context.signal).catch(() => null);
       }
       if (!frames) {
-        for (const p of shots) scanned.set(p.label, false);
+        for (const p of shots) p.scanned = false;
         if (deps.scanImages) addNote("the text on the screenshots was not read");
       } else {
         const hits = screenFindings(frames);
         const bad = new Set(hits.map((h) => h.place));
-        const left = shots.filter((p) => bad.has(names.get(p.label) ?? "\u0000"));
-        for (const p of shots) scanned.set(p.label, true);
+        // Read means: copied, and the answer has exactly one entry of its own for the copy, whose text was not cut.
+        const entryOf = (name: string | undefined) => {
+          const entries = frames!.filter((f) => f.file === name);
+          return name !== undefined && entries.length === 1 ? entries[0]! : null;
+        };
+        for (const p of shots) {
+          const entry = entryOf(copies.get(p));
+          p.scanned = entry !== null && entry.truncated !== true;
+        }
+        const left = shots.filter((p) => bad.has(copies.get(p) ?? "\u0000"));
         for (const p of left) picked.splice(picked.indexOf(p), 1);
+        const unread = shots.filter((p) => !left.includes(p) && p.scanned === false).length;
         if (left.length > 0) addNote(`${left.length} screenshot(s) left out: a ${[...new Set(hits.map((h) => h.kind))].join(", a ")} was on screen`);
-        else if (deps.privacy) {
+        if (unread > 0) addNote(`${unread} screenshot(s) not read whole: they stay local copies until a person approves`);
+        if (left.length === 0 && deps.privacy) {
           const judgedText = await deps.privacy(privacyTexts(frames), task.repoPath).catch(() => "not_judged" as const);
           if (judgedText === "exposed") {
             const count = shots.length;
@@ -499,11 +514,11 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         }
       }
     }
-    for (const m of filmMedia) picked.push({ path: m.url, label: m.label, kind: m.kind });
+    for (const m of filmMedia) picked.push({ path: m.url, label: m.label, kind: m.kind, ...(m.scanned !== undefined ? { scanned: m.scanned } : {}) });
     const kept = await store.keep(task.id, commitSha, picked);
     const media = kept.flatMap((k) => {
-      const kind = picked.find((p) => p.label === k.label)?.kind;
-      return kind ? [{ kind, label: k.label, url: k.path, ...(scanned.has(k.label) ? { scanned: scanned.get(k.label)! } : {}) }] : [];
+      const p = picked[k.index];
+      return p ? [{ kind: p.kind, label: k.label, url: k.path, ...(p.scanned !== undefined ? { scanned: p.scanned } : {}) }] : [];
     });
 
     // A terminal capture or the checks' excerpt: written from the card, listed as a media line and never inline.

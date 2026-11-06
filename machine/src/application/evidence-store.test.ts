@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { EvidenceStore, sweepEvidenceStore } from "./evidence-store.ts";
+import { EvidenceStore, safeName, sweepEvidenceStore } from "./evidence-store.ts";
 
 let stateDir: string;
 let src: string;
@@ -45,8 +45,8 @@ describe("EvidenceStore", () => {
     ]);
     const dir = store.dirFor("t1", "abc");
     expect(kept).toEqual([
-      { label: "shot one.png", path: join(dir, "shot_one.png") },
-      { label: "sub/qa-manifest.json", path: join(dir, "sub_qa-manifest.json") },
+      { label: "shot one.png", path: join(dir, "shot_one.png"), index: 0 },
+      { label: "sub/qa-manifest.json", path: join(dir, "sub_qa-manifest.json"), index: 1 },
     ]);
     expect(readFileSync(kept[0]!.path, "utf8")).toBe("png");
     expect(readdirSync(dir).sort()).toEqual(["shot_one.png", "sub_qa-manifest.json"]);
@@ -132,5 +132,34 @@ describe("sweepEvidenceStore", () => {
     expect(removed).toBe(1);
     expect(existsSync(a)).toBe(true);
     expect(existsSync(b)).toBe(false);
+  });
+});
+
+describe("safeName", () => {
+  it("keeps the extension when it cuts a long name: a 130-character HAR is still a .har", () => {
+    const name = safeName("x".repeat(126) + ".har");
+    expect(name).toHaveLength(120);
+    expect(name.endsWith(".har")).toBe(true);
+  });
+
+  it("leaves a short name and a long one with no extension as they were", () => {
+    expect(safeName("a b.png")).toBe("a_b.png");
+    expect(safeName("y".repeat(200))).toHaveLength(120);
+  });
+});
+
+describe("EvidenceStore.readPack", () => {
+  it("reads the pack the machine kept, and is null for none, for nonsense and for a link", async () => {
+    const store = new EvidenceStore(stateDir);
+    expect(await store.readPack("t1", "abc1234")).toBeNull();
+    const pack = { summary: "s", format: "text", scenarios: [], findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "abc1234", media: [{ kind: "video", label: "w.mp4", url: "/local/w.mp4" }], at: "2026-11-03T00:00:00.000Z" };
+    await store.writePack("t1", "abc1234", pack);
+    expect((await store.readPack("t1", "abc1234"))?.media[0]?.url).toBe("/local/w.mp4");
+    await store.writePack("t1", "bad0000", { nope: 1 });
+    expect(await store.readPack("t1", "bad0000")).toBeNull();
+    const dir = store.dirFor("t1", "link000");
+    mkdirSync(dir, { recursive: true });
+    symlinkSync(join(store.dirFor("t1", "abc1234"), "pack.json"), join(dir, "pack.json"));
+    expect(await store.readPack("t1", "link000")).toBeNull();
   });
 });

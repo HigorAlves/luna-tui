@@ -1,3 +1,5 @@
+import { type FindingKind, findingKinds } from "./findings.ts";
+
 // Which moments of a film are read for text, and how a frame's text is kept. Pure: the tool runs ffmpeg and tesseract.
 
 export const MAX_FRAMES = 150;
@@ -21,8 +23,18 @@ export function sampleTimes(sceneStarts: readonly number[], durationS: number): 
   return Array.from({ length: MAX_FRAMES }, (_, i) => sorted[Math.floor((i * sorted.length) / MAX_FRAMES)]!);
 }
 
+const stripControl = (text: string): string =>
+  // eslint-disable-next-line no-control-regex
+  text.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, "");
+
+/** What the tool writes for one image or frame: the text cut to 4000 characters for the host's reader, the kinds found in the WHOLE text (never the matched text),
+ *  and `truncated` when the text was cut: the host does not count a cut text as read. */
+export function readFrameText(raw: string): { text: string; kinds: FindingKind[]; truncated?: true } {
+  const whole = stripControl(raw);
+  return { text: whole.slice(0, MAX_TEXT), kinds: findingKinds(whole), ...(whole.length > MAX_TEXT ? { truncated: true as const } : {}) };
+}
+
 /** A frame's text as it is written to frames.json: no control characters (a newline stays), at most 4000 characters. */
 export function clampText(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, "").slice(0, MAX_TEXT);
+  return stripControl(text).slice(0, MAX_TEXT);
 }

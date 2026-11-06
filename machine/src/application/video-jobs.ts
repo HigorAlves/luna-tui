@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { z } from "zod";
 
+import { FINDING_KINDS, type FindingKind } from "../../runner-video/tools/lib/findings.ts";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
 import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
 
@@ -59,7 +60,7 @@ export async function runVideoTool(sandbox: (run: SandboxRun) => Promise<Sandbox
 }
 
 const FRAMES_MAX_BYTES = 2 * 1024 * 1024;
-const FramesFile = z.object({ frames: z.array(z.object({ t: z.number().finite().optional(), file: z.string().max(200).optional(), text: z.string().max(4000) })).max(400) });
+const FramesFile = z.object({ frames: z.array(z.object({ t: z.number().finite().optional(), file: z.string().max(200).optional(), text: z.string().max(4000), kinds: z.array(z.enum(FINDING_KINDS)).max(8).optional(), truncated: z.literal(true).optional() })).max(400) });
 export type FramesRead = z.infer<typeof FramesFile>["frames"];
 
 /** `qa/frames.json` as a container wrote it: a regular file of at most 2 MiB that parses; null otherwise (an old image, a link, nonsense). */
@@ -73,9 +74,9 @@ export async function readFrames(dir: string): Promise<FramesRead | null> {
 }
 
 /** Reads the text of the image files directly in `dir` with the frames tool (the folder is the job: it is mounted at /work). Null when the tool could not run. */
-export async function scanImages(deps: { sandbox: (run: SandboxRun) => Promise<SandboxResult>; image: string }, run: { id: string; dir: string; signal: AbortSignal }): Promise<{ file: string; text: string }[] | null> {
+export async function scanImages(deps: { sandbox: (run: SandboxRun) => Promise<SandboxResult>; image: string }, run: { id: string; dir: string; signal: AbortSignal }): Promise<{ file: string; text: string; kinds?: FindingKind[]; truncated?: true }[] | null> {
   const done = await runVideoTool(deps.sandbox, { image: deps.image, id: run.id, jobDir: run.dir, tool: "frames", args: ["--images", "/work", "--out", "/work/qa"], timeoutMs: 15 * 60_000, signal: run.signal });
   if (!done.ok) return null;
   const frames = await readFrames(run.dir);
-  return frames ? frames.flatMap((f) => (f.file !== undefined ? [{ file: f.file, text: f.text }] : [])) : null;
+  return frames ? frames.flatMap((f) => (f.file !== undefined ? [{ file: f.file, text: f.text, ...(f.kinds ? { kinds: f.kinds } : {}), ...(f.truncated ? { truncated: true as const } : {}) }] : [])) : null;
 }

@@ -468,6 +468,23 @@ describe("videoPipeline", () => {
     });
   });
 
+  describe("a frame's text that the tool cut for size", () => {
+    it("is not a clean frame: the film degrades at once, with no critic call", async () => {
+      const h = harness({ frames: [{ t: 1, text: "Cart", truncated: true }] });
+      const out = await h.pipeline(h.context(), h.input());
+      expect(out).toMatchObject({ ok: false, degrade: "captures", reason: expect.stringMatching(/frame check could not read/) });
+      expect(h.calls.map((c) => c.pack)).not.toContain("video_qa");
+      expect("media" in out).toBe(false);
+    });
+
+    it("still turns a kind the tool found in the whole text into a P0 card, never the text", async () => {
+      const h = harness({ frames: [{ t: 1, text: "Cart", kinds: ["token"] }] });
+      await h.pipeline(h.context(), h.input());
+      const fix = h.calls.find((c) => c.pack === "video_fix")!;
+      expect(fix.extra.video!.fixCards).toContainEqual(expect.objectContaining({ priority: "P0", text: "a token is on screen at 1 s: do not show it" }));
+    });
+  });
+
   describe("frame_privacy, after the pattern check found nothing", () => {
     it("asks once per film with the distinct on-screen texts, and ships on none at proceed", async () => {
       const h = harness({ frames: [{ t: 0, text: "Cart" }, { t: 2, text: "Cart" }, { t: 4, text: "Total $12" }] });
