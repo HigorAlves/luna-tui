@@ -37,11 +37,6 @@ export type MemoryViewer =
   | { kind: "operator"; repo: string | null }
   | { kind: "slack"; repo: string | null; channel: string };
 
-/** Whether a pack's answer is posted in public for a card of this source kind: always for `pr_reply`, and for any pack on a GitHub-sourced card; never for slack, jira, tui (no source) or notch. */
-export function publicPostFor(pack: string, source: { kind: string }): boolean {
-  return pack === "pr_reply" || source.kind === "github" || source.kind === "github_pr";
-}
-
 /** The datasets of `known` (the names Cognee holds) this viewer may read. */
 export function datasetsFor(viewer: MemoryViewer, known: readonly string[]): string[] {
   const has = new Set(known);

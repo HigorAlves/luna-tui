@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, type IntakeContext, type RecalledMemory, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, type IntakeContext, type MemoryContext, type RecalledMemory, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -50,11 +50,11 @@ import { checkpointPush } from "./checkpoint.ts";
 import { readScenarioReds } from "./scenario-reds.ts";
 
 import type { TruthSink } from "../decision-truth.ts";
-import { type Decide, buildChecks, buildWatch, cardSearchAnswers } from "./build-watch.ts";
+import { type Decide, buildChecks, buildWatch, cardSearchAnswers, writeMailbox } from "./build-watch.ts";
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
-import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
+import { MEMORY_PACKS, PACK_LIMITS, approvedPlan, buildStageInput } from "../../domain/stage-input.ts";
 import { reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
 import type { Graph } from "../graph.ts";
@@ -130,6 +130,10 @@ export interface AgentDeps {
     similarOutcomes?: (task: TaskRow) => Promise<NonNullable<IntakeContext["similar"]>>;
     /** Implementing (M4): the review asks recalled for the plan's files and their code owners. */
     reviewAsks?: (task: TaskRow, planFiles: string[]) => Promise<RecalledMemory[]>;
+    /** The packs of `MEMORY_PACKS` (M2): `context.memory`, recalled for the card's goal and the plan's files with the card's viewer. Never throws; undefined with memory off. */
+    recall?: (task: TaskRow, pack: PackId, files: string[]) => Promise<MemoryContext | undefined>;
+    /** The `memory_recall` luna tool (M2): the answer for one request, with the same viewer as `recall`. */
+    answer?: (task: TaskRow, pack: PackId, request: { query: string; scope: "memory" | "docs" | "code" }) => Promise<Record<string, unknown>>;
   };
 }
 
@@ -377,10 +381,13 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
 
   // The browser run drives ONE target, chosen here, and holds only that target's credential.
   const e2eTarget = pack === "e2e" ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
+  // MEMORY: the pushed block (RFC 0007, M2), recalled with the card's goal and the plan's files before the input is built; a failed recall is an empty block with a note.
+  const pushedMemory = MEMORY_PACKS.has(pack) && deps.memoryFor?.recall ? await deps.memoryFor.recall(task, pack, plannedFiles(approvedPlan(context.approvals))).catch((): undefined => undefined) : undefined;
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
     pack,
+    ...(pushedMemory ? { memory: pushedMemory } : {}),
     ...(extra.plan ? { plan: extra.plan } : {}),
     engine: choice.engine,
     attempt: context.attempt,
@@ -497,8 +504,13 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     pack === "triage" && deps.cards
       ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, selfSource: sourceKindOf(task), query }) })
       : null;
+  // The `memory_recall` tool: the same mailbox, answered with the card's own viewer (the same one the pushed block used).
+  const memoryTool =
+    MEMORY_PACKS.has(pack) && deps.memoryFor?.answer
+      ? { onMemoryRecall: async (request: { query: string; scope: "memory" | "docs" | "code" }) => writeMailbox(join(runDir, "out"), "memory.json", JSON.stringify(await deps.memoryFor!.answer!(task, pack, request))) }
+      : null;
   const startWatch = (): void => {
-    if ((!checks && !cardSearch) || watch) return;
+    if ((!checks && !cardSearch && !memoryTool) || watch) return;
     const hostExec = deps.hostExec;
     watch = buildWatch({
       outDir: join(runDir, "out"),
@@ -506,6 +518,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       log: (line) => void context.note?.(line).catch(() => {}),
       ...(checks ? { onRed: async (...a: Parameters<typeof checks.onRed>) => (await importer?.sync(), checks.onRed(...a)), onScopeRequest: async (...a: Parameters<typeof checks.onScopeRequest>) => (await importer?.sync(), checks.onScopeRequest(...a)) } : {}),
       ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
+      ...(memoryTool ? { onMemoryRecall: memoryTool.onMemoryRecall } : {}),
       onCommitted: async (slice) => {
         if (!checks) return;
         await importer?.sync();
