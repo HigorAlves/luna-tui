@@ -50,7 +50,7 @@ export type PipelineEvent =
   /** The card is a report of another card (or of a backlog item): it closes, with nothing left to run. */
   | { type: "merged" }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify itself failed without an answer (the run errored, nothing was found in the code): it runs again, and Build is not asked to fix what nobody found. */ unanswered?: boolean; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
@@ -386,6 +386,10 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       break;
     case "verifying":
       if (outcome === "pass") return run("e2e", retries);
+      if (outcome === "fail" && event.unanswered) {
+        const again: Retries = { ...retries, verify: retries.verify + 1 };
+        return again.verify >= LOOP_CAP ? escalate(`verifying could not answer ${again.verify} times`, "verifying", again) : run("verifying", again);
+      }
       if (outcome === "fail") return loopFailed(task, "verify", event.findingSet ? { key: event.findingSet, buildRounds: event.buildRounds ?? FACTORY_DEFAULTS.verify.build_rounds } : undefined);
       break;
     case "e2e":

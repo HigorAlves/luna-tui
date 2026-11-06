@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { exec, OUTPUT_CAP } from "./exec.ts";
+import { exec, OUTPUT_CAP, UNCAPPED_LIMIT } from "./exec.ts";
 
 const alive = (pid: number) => {
   try {
@@ -12,6 +12,14 @@ const alive = (pid: number) => {
 };
 
 describe("exec", () => {
+  it("fails a command whose uncapped output passes the limit instead of crashing the process on a string too long to build", async () => {
+    expect(UNCAPPED_LIMIT).toBeLessThan(0x1fffffe8);
+    const result = await exec("sh", ["-c", "head -c 100000 /dev/zero | tr '\\0' x; sleep 30"], { maxBytes: 4096, timeoutMs: 20_000 });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toMatch(/output over 4096 bytes/);
+  });
+
   it("resolves with the exit code and output instead of throwing", async () => {
     expect(await exec("sh", ["-c", "echo out; echo err >&2; exit 3"])).toEqual({ code: 3, stdout: "out\n", stderr: "err\n" });
   });

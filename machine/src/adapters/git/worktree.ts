@@ -502,12 +502,46 @@ export async function restoreFiles(path: string, ref: string, files: string[]): 
   await execOrThrow("git", [...HOST_GIT, ...at(path), "checkout", ref, "--", ...files]);
 }
 
+/** What files nobody ignored may weigh together before the machine will stage them: 200 MiB. A package manager's store, a build's output or a download in a folder the repo does not ignore is
+ *  far past it, and staging it would put gigabytes into a commit, a diff and a bundle. */
+export const UNTRACKED_LIMIT = 200 * 1024 * 1024;
+const UNTRACKED_FILES_MAX = 300_000;
+
+/** Fails, before anything is staged, when the untracked files the repo does not ignore weigh more than `limit`, naming the folders that hold the weight and what to do about them. */
+export async function refuseHugeUntracked(path: string, limit: number = UNTRACKED_LIMIT): Promise<void> {
+  const listed = await execOrThrow("git", [...HOST_GIT, ...at(path), "ls-files", "--others", "--exclude-standard", "-z"]);
+  if (listed === "") return;
+  const files = listed.split("\0").filter((f) => f !== "");
+  const byTop = new Map<string, number>();
+  let total = 0;
+  for (const [i, file] of files.entries()) {
+    if (i >= UNTRACKED_FILES_MAX) {
+      throw new Error(`more than ${UNTRACKED_FILES_MAX} untracked files that nothing ignores; nothing was staged. Add the folder that holds them to the repository's .gitignore.`);
+    }
+    let size = 0;
+    try {
+      size = lstatSync(join(path, file)).size;
+    } catch {
+      // gone since the listing
+    }
+    total += size;
+    const top = file.split("/")[0]!;
+    byTop.set(top, (byTop.get(top) ?? 0) + size);
+    if (total > limit * 8) break;
+  }
+  if (total <= limit) return;
+  const mib = (n: number) => `${Math.round(n / (1024 * 1024))} MiB`;
+  const biggest = [...byTop].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, size]) => `${name} (${mib(size)})`).join(", ");
+  throw new Error(`the untracked files that nothing ignores weigh over ${mib(limit)}, mostly ${biggest}; nothing was staged. Add that folder to the repository's .gitignore, or point the tool's cache outside the work folder.`);
+}
+
 /**
  * Commits everything the agent changed. Returns the new commit, or null when nothing changed.
  * Commits are not signed: signing needs your passphrase, which a background run cannot ask for.
  */
-export async function commitAll(path: string, message: string): Promise<string | null> {
+export async function commitAll(path: string, message: string, options: { untrackedLimit?: number } = {}): Promise<string | null> {
   assertNoNestedRepository(path);
+  await refuseHugeUntracked(path, options.untrackedLimit);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
   await refuseGitlinks(path, "HEAD");
   const staged = await exec("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--quiet"]);
@@ -535,8 +569,9 @@ function modesOf(raw: string): Record<string, string> {
 }
 
 /** Stages everything a stage left in the worktree (new files too) and reads what that adds to `base`, the commit the run started from: the name-status, the unified diff and each path's new mode. */
-export async function stagePending(path: string, base: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> }> {
+export async function stagePending(path: string, base: string, options: { untrackedLimit?: number } = {}): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> }> {
   assertNoNestedRepository(path);
+  await refuseHugeUntracked(path, options.untrackedLimit);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
   await refuseGitlinks(path, base);
   const [nameStatus, diff, raw] = await Promise.all([

@@ -60,6 +60,17 @@ function checks(out: string, decide: Decide | null, over: Partial<Parameters<typ
   });
 }
 
+describe("the files the implementer declared to scope_check", () => {
+  it("still count as declared when the final answer leaves them out: the machine took the declaration when it was made", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const c = checks(out, null, { planPresent: true });
+    // The final answer declared nothing: src/extra.ts is outside the plan.
+    expect((await c.finalFacts([])).undeclared).toEqual(["src/extra.ts"]);
+    await c.onScopeRequest({ diffSummary: "x", outOfMap: [{ path: "src/extra.ts", reason: "its links broke with the move" }] });
+    expect((await c.finalFacts([])).undeclared).toEqual([]);
+  });
+});
+
 describe("a scenario's red check", () => {
   const scenarioCheck: CheckContext = { kind: "red", scenario: { id: "S1", title: "t" }, exists: true, output: "TypeError: x is not a function" };
 

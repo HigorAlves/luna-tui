@@ -293,6 +293,8 @@ export function buildChecks(deps: BuildChecksDeps) {
     return sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines: removedLinesOf(diff), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}) }));
   };
 
+  /** The files the implementer declared to scope_check, kept here as the verdict is: the machine took them when they were made, so a final answer that leaves them out does not turn them into undeclared files. */
+  let toolDeclared: { path: string; reason: string }[] = [];
   /** The verdict the last scope_check came to, kept here: the answer file lives under /out, which the container can rewrite. */
   let verdict = "skipped";
   /** What the last scope_check's answers found beyond the facts: `unrelated_refactor`. */
@@ -314,6 +316,7 @@ export function buildChecks(deps: BuildChecksDeps) {
       }
     },
     async onScopeRequest(request: ScopeRequest): Promise<void> {
+      toolDeclared = request.outOfMap.filter((f) => typeof f?.path === "string");
       let facts: ScopeFacts | null = null;
       try {
         facts = await factsFor(request.outOfMap);
@@ -338,7 +341,7 @@ export function buildChecks(deps: BuildChecksDeps) {
       await write("scope.json", { ...answer, ...(facts ? { facts } : {}) });
     },
     /** The authoritative facts, over the final diff, with the files the answer declared. */
-    finalFacts: factsFor,
+    finalFacts: (declared: { path: string }[]) => factsFor([...declared, ...toolDeclared]),
     /** What the last scope_check's answers found beyond the facts, for the issues' severities. */
     async lastJudged(): Promise<string[]> {
       return judgedKinds;
