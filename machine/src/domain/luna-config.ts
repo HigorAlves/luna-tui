@@ -1,6 +1,6 @@
 // A repo's `luna.yaml`: everything the machine needs to run that repo, in one file. Pure:
 // parsing and validation only; the store (application/policy.ts) reads it from disk.
-import { FACTORY_DEFAULTS, type JiraConfig, LunaConfig, RUNNING, type SlaConfig, TaskState, factoryConfigOf } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, type JiraConfig, LunaConfig, RUNNING, type SlaConfig, TaskState, factoryConfigOf, hostPatternProblem, normalizeHostPattern } from "@hardness/contracts";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 
 import { stagesProblem } from "./engine-choice.ts";
@@ -16,15 +16,34 @@ export const CONFIG_FILE = "luna.yaml";
 export { LunaConfig };
 
 /** The config as data, validated; a bad value throws naming its path, as does an engine its pack does not allow. */
-export function validateLunaConfig(raw: unknown): LunaConfig {
-  const parsed = LunaConfig.safeParse(raw);
+export function validateLunaConfig(raw: unknown, warn: Warn = quiet): LunaConfig {
+  const parsed = LunaConfig.safeParse(legacyEgress(raw, warn));
   if (!parsed.success) {
     const issue = parsed.error.issues[0]!;
     throw new PolicyParseError(`${issue.path.join(".") || "file"}: ${issue.message}`);
   }
+  // `luna-app` is the machine's own alias for the app it starts for the browser run.
+  if (parsed.data.services && "luna-app" in parsed.data.services) throw new PolicyParseError("services.luna-app: luna-app is the name the machine gives the app it starts; call the service something else");
+  if (parsed.data.checks?.some((check) => check.name === "luna-app")) throw new PolicyParseError("checks: a check may not be named luna-app (the machine's name for the app it starts)");
   const engines = stagesProblem(parsed.data.engines ?? {});
   if (engines) throw new PolicyParseError(`engines.${engines}`);
   return parsed.data;
+}
+
+/** Before this wave `sandbox.egress` was a list nothing read (`[registries, github]`); it is a section now. The two preset
+ *  words are dropped, any other entry that is a valid host pattern becomes an `allow` entry, and the file is told once. */
+function legacyEgress(raw: unknown, warn: Warn): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const sandbox = (raw as Record<string, unknown>).sandbox;
+  if (sandbox === null || typeof sandbox !== "object" || Array.isArray(sandbox)) return raw;
+  const egress = (sandbox as Record<string, unknown>).egress;
+  if (!Array.isArray(egress)) return raw;
+  const allow = egress
+    .filter((entry): entry is string => typeof entry === "string")
+    .map(normalizeHostPattern)
+    .filter((entry) => entry !== "registries" && entry !== "github" && hostPatternProblem(entry) === null);
+  warn("sandbox.egress is now a section (allow, registries); the old list was read as: " + (allow.length ? `allow ${allow.join(", ")}` : "no extra hosts"));
+  return { ...(raw as object), sandbox: { ...(sandbox as object), egress: { allow: [...new Set(allow)] } } };
 }
 
 /** The file text for a config, sections in the order people read them, empty ones left out. */
@@ -50,7 +69,7 @@ export function parseLunaConfig(text: string, warn: Warn = quiet): Policy {
   }
   if (raw === null || raw === undefined) return { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {}, freeze: [], factory: structuredClone(FACTORY_DEFAULTS) };
   if (typeof raw !== "object" || Array.isArray(raw)) throw new PolicyParseError("the file must be a YAML mapping");
-  return policyOf(validateLunaConfig(raw), warn);
+  return policyOf(validateLunaConfig(raw, warn), warn);
 }
 
 const DEFAULT_INTAKE_EVERY_SECS = 300;
@@ -117,6 +136,12 @@ export function slaTargetsOf(sla: SlaConfig, warn: Warn = quiet): Partial<SlaTar
   return targets;
 }
 
+/** The allow list as the proxy compares it: lowercased, no duplicates. */
+function lowerAllow(factory: Policy["factory"]): Policy["factory"] {
+  factory.sandbox.egress.allow = [...new Set(factory.sandbox.egress.allow.map(normalizeHostPattern))];
+  return factory;
+}
+
 /** The policy a validated config means. */
 export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
   const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, budget, evidence, freeze = [] } = config;
@@ -139,6 +164,6 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     evidenceRetentionDays: evidence?.retention_days ?? null,
     autoMerge: policy.auto_merge ?? DEFAULT_POLICY.autoMerge,
     freeze: freeze.map((f) => ({ ...f })),
-    factory: factoryConfigOf({ dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, ship: config.ship }),
+    factory: lowerAllow(factoryConfigOf({ dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, ship: config.ship })),
   };
 }

@@ -26,7 +26,14 @@ describe("selectChecks", () => {
 
 describe("checkCommand", () => {
   it("runs the line through sh in its cwd, so a check can be any shell line a person would type", () => {
-    expect(checkCommand(board)).toEqual({ name: "board tests", cmd: "cargo test (in board)", argv: ["sh", "-c", "cd 'board' && cargo test"] });
-    expect(checkCommand(always)).toEqual({ name: "lint", cmd: "pnpm lint", argv: ["sh", "-c", "pnpm lint"] });
+    expect(checkCommand(board)).toEqual({ name: "board tests", cmd: "cargo test (in board)", argv: ["sh", "-c", "cd 'board' && cargo test"], secrets: [] });
+    expect(checkCommand(always)).toEqual({ name: "lint", cmd: "pnpm lint", argv: ["sh", "-c", "pnpm lint"], secrets: [] });
+  });
+});
+
+describe("checkCommand and secrets", () => {
+  it("carries the names a check declares, and none for a check that declares none", () => {
+    expect(checkCommand({ name: "t", run: "x", secrets: ["DB_URL"] }).secrets).toEqual(["DB_URL"]);
+    expect(checkCommand({ name: "t", run: "x" }).secrets).toEqual([]);
   });
 });

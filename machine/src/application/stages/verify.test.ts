@@ -1,3 +1,6 @@
+import { RepoImageError } from "../repo-images.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { InstallFailedError } from "../install.ts";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -412,6 +415,31 @@ describe("verifying stage", () => {
       expect((result.detail as { checks: unknown[] }).checks).toContainEqual({ name: "mutation", note: "the mutation run printed no score" });
     });
 
+    it("runs in the card's repository: its image, list and install, like every other check (no call on the machine's bare defaults)", async () => {
+      const s = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 0, stdout: "mutation score: 90%", stderr: "" } } });
+      await s.run(s.context);
+      const options = s.exec.mock.calls.map((call) => call[2] as { repoPath?: string });
+      expect(options.map((o) => o.repoPath)).toEqual(["/repo", "/repo"]);
+    });
+
+    it("escalates as env_broken when the install before the mutation run fails, and says what its container was refused", async () => {
+      const detail = { escalation: "env_broken", envBroken: true, step: "install", reason: "x", options: [] };
+      const rows = [{ host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }];
+      const emitted: Array<[string, Record<string, unknown>]> = [];
+      const exec = vi.fn(async (_c: string, args: string[]) => {
+        if (args.join(" ") === "-c m") throw new InstallFailedError(detail);
+        return { code: 0, stdout: "ok", stderr: "", blocked: rows };
+      });
+      const runner = verifyRunner({
+        exec: exec as never, runPack: null, stateDir: mkdtempSync(join(tmpdir(), "verify-mut-")), detect: async () => ({ test: ["t"] }) as never,
+        gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null,
+        policy: async () => ({ checks: lunaChecks, services: {}, verify: mutation("m") }),
+      });
+      const ctx = { task: { id: "t1", worktreePath: "/wt", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal, emit: async (kind: string, payload: Record<string, unknown>) => void emitted.push([kind, payload]) } as unknown as StageContext;
+      expect(await runner(ctx)).toMatchObject({ outcome: "escalated", detail });
+      expect(emitted).toContainEqual(["sandbox.egress_blocked", expect.objectContaining({ step: "check", host: "evil.example.com" })]);
+    });
+
     it("runs nothing when the command is unset, and not at all after a red check", async () => {
       const unset = setup({ lunaChecks, verify: mutation(null) });
       await unset.run(unset.context);
@@ -747,5 +775,45 @@ describe("with no sandbox to run the repository's checks in", () => {
     const result = await runner(context);
     expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", reason: expect.stringContaining("never run on the host") } });
     expect(pack).not.toHaveBeenCalled();
+  });
+});
+
+/** A review that finds nothing: Verify reviews first (12a), so a test of what the checks do needs one that lets the suite run. */
+const passingReview = vi.fn(async () => ({ outcome: "pass" as const, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } }));
+
+describe("when the repository's image cannot be built while a check runs", () => {
+  it("escalates as an environment problem with the reason, not as an exception", async () => {
+    const exec = async () => { throw new RepoImageError("step 3 failed: no such package"); };
+    const runner = verifyRunner({ exec: exec as never, runPack: passingReview, stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    expect(await runner(context)).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, reason: expect.stringContaining("no such package") } });
+  });
+});
+
+describe("the network a check runs on", () => {
+  const base = { runPack: passingReview, stateDir: mkdtempSync(join(tmpdir(), "verify-net-")), detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null };
+  const ctx = (emit?: StageContext["emit"]) => ({ task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal, ...(emit ? { emit } : {}) }) as unknown as StageContext;
+
+  it("escalates as env_broken at step network when the daemon cannot make the isolated one", async () => {
+    const runner = verifyRunner({ ...base, exec: (async () => { throw new EgressUnsupportedError("old daemon"); }) as never });
+    expect(await runner(ctx())).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28") } });
+  });
+
+  it("emits what a check's container was refused, as a check row", async () => {
+    const rows = [{ host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const runner = verifyRunner({ ...base, exec: (async () => ({ code: 0, stdout: "ok", stderr: "", blocked: rows })) as never });
+    await runner(ctx(async (kind, payload) => void emitted.push([kind, payload])));
+    expect(emitted).toContainEqual(["sandbox.egress_blocked", { step: "check", host: "evil.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }]);
+  });
+});
+
+describe("when the install before a check fails", () => {
+  it("escalates as env_broken at step install with the step's own detail", async () => {
+    const detail = { escalation: "env_broken", envBroken: true, step: "install", tool: "npm", lockfile: "package-lock.json", reason: "x", logTail: "boom", options: [] };
+    const exec = async () => { throw new InstallFailedError(detail); };
+    const runner = verifyRunner({ exec: exec as never, runPack: passingReview, stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    expect(await runner(context)).toMatchObject({ outcome: "escalated", detail });
   });
 });

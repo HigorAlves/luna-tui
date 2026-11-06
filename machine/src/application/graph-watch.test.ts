@@ -42,6 +42,27 @@ function setup(opts: { stamps?: Record<string, string>; heads?: Record<string, s
   return { watch, builds, logs, overlap: () => overlap, setHead: (repo: string, head: string) => heads.set(repo, head) };
 }
 
+describe("GraphWatch after a merge", () => {
+  it("rebuilds the repository's graph at once, even when the poll sees nothing new, and leaves graphs-off repositories alone", async () => {
+    const { watch, builds } = setup({ stamps: { "/a": "h1", "/b": "h1" }, heads: { "/a": "h1", "/b": "h1" }, off: ["/b"] });
+    await watch.tick();
+    expect(builds).toEqual([]);
+    watch.requestRebuild("/a");
+    watch.requestRebuild("/b");
+    await watch.idle();
+    expect(builds).toEqual(["/a"]);
+  });
+
+  it("tries again after a failure, since a merge is new news", async () => {
+    const { watch, builds } = setup({ stamps: { "/a": "h1" }, heads: { "/a": "h1" }, failing: ["/a"] });
+    watch.requestRebuild("/a");
+    await watch.idle();
+    watch.requestRebuild("/a");
+    await watch.idle();
+    expect(builds).toEqual(["/a", "/a"]);
+  });
+});
+
 describe("GraphWatch", () => {
   it("builds a repo whose default branch moved, or that has no graph, one at a time", async () => {
     const { watch, builds, overlap } = setup({ stamps: { "/a": "1", "/b": "2" }, heads: { "/a": "1", "/b": "3", "/c": "9" } });

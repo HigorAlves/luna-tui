@@ -52,6 +52,29 @@ describe("the sandbox's size and keep", () => {
   });
 });
 
+describe("the wait for a repository's first graph", () => {
+  it("is ten minutes by default, read from wave 11 (11b), and a repository's value wins; zero is refused", () => {
+    expect(FACTORY_DEFAULTS.graph).toEqual({ stale_commits: 50, first_build_minutes: 10 });
+    expect(CONSUMED_FROM["graph.first_build_minutes"]).toBe(11);
+    expect(factoryConfigOf({ graph: { first_build_minutes: 3 } }).graph).toEqual({ stale_commits: 50, first_build_minutes: 3 });
+    expect(LunaConfig.safeParse({ graph: { first_build_minutes: 0 } }).success).toBe(false);
+  });
+});
+
+describe("the base image a repository names", () => {
+  it("is none by default, read from wave 11 (11b), and a repository's value wins", () => {
+    expect(FACTORY_DEFAULTS.sandbox.image).toEqual({ base: null });
+    expect(CONSUMED_FROM["sandbox.image.base"]).toBe(11);
+    expect(factoryConfigOf({ sandbox: { image: { base: "python:3.13-slim" } } }).sandbox.image.base).toBe("python:3.13-slim");
+  });
+
+  it("is accepted in a luna.yaml as text, and an unknown key under image is refused", () => {
+    expect(LunaConfig.safeParse({ sandbox: { image: { base: "debian:12" } } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ sandbox: { image: { dockerfile: "x" } } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ sandbox: { image: { base: 7 } } }).success).toBe(false);
+  });
+});
+
 describe("factoryConfigOf", () => {
   it("is the defaults for no sections, and merges a section key by key", () => {
     expect(factoryConfigOf({})).toEqual(FACTORY_DEFAULTS);
@@ -62,8 +85,8 @@ describe("factoryConfigOf", () => {
 
   it("never changes the shared defaults", () => {
     const merged = factoryConfigOf({ build: { backoff_minutes: [2, 3] } });
-    merged.sandbox.egress.push("x");
-    expect(FACTORY_DEFAULTS.sandbox.egress).toEqual(["registries", "github"]);
+    merged.sandbox.egress.allow.push("x");
+    expect(FACTORY_DEFAULTS.sandbox.egress.allow).toEqual([]);
     expect(FACTORY_DEFAULTS.build.backoff_minutes).toEqual([1, 30]);
   });
 });
@@ -127,5 +150,72 @@ describe("build.backoff_minutes", () => {
     expect(LunaConfig.safeParse({ build: { backoff_minutes: [0, 30] } }).success).toBe(false);
     expect(LunaConfig.safeParse({ build: { backoff_minutes: [0.5, 30] } }).success).toBe(false);
     expect(LunaConfig.safeParse({ build: { backoff_minutes: [1, 30] } }).success).toBe(true);
+  });
+});
+
+describe("the sandbox's egress and install sections", () => {
+  const ok = (raw: unknown) => LunaConfig.safeParse(raw);
+  it("default to no extra hosts, registries always, an install that runs with scripts off", () => {
+    expect(FACTORY_DEFAULTS.sandbox).toMatchObject({ cpu: 2, memory_gb: 4, keep_hours: 24, egress: { allow: [], registries: "always" }, install: { run: "on", scripts: "off" } });
+    for (const key of ["sandbox.egress.allow", "sandbox.egress.registries", "sandbox.install.run", "sandbox.install.scripts"]) expect(CONSUMED_FROM[key], key).toBe(11);
+    expect(CONSUMED_FROM["sandbox.egress"]).toBeUndefined();
+    expect(factoryConfigOf({ sandbox: { egress: { allow: ["docs.example.com"] } } }).sandbox.egress).toEqual({ allow: ["docs.example.com"], registries: "always" });
+  });
+
+  it("take a repository's allow list and modes, and refuse a bad entry naming it", () => {
+    expect(ok({ sandbox: { egress: { allow: ["docs.example.com", "*.cdn.example.com:443"], registries: "install" }, install: { run: "off", scripts: "on" } } }).success).toBe(true);
+    const bad = ok({ sandbox: { egress: { allow: ["good.example.com", "1.2.3.4"] } } });
+    expect(bad.success).toBe(false);
+    if (!bad.success) expect(JSON.stringify(bad.error.issues)).toContain("1.2.3.4");
+    expect(ok({ sandbox: { egress: { allow: Array.from({ length: 51 }, (_, i) => `h${i}.example.com`) } } }).success).toBe(false);
+    expect(ok({ sandbox: { egress: { registries: "sometimes" } } }).success).toBe(false);
+    expect(ok({ sandbox: { egress: { nope: 1 } } }).success).toBe(false);
+    expect(ok({ sandbox: { install: { scripts: "yes" } } }).success).toBe(false);
+  });
+});
+
+describe("the e2e app, its seed and its preview", () => {
+  const ok = (raw: unknown) => LunaConfig.safeParse(raw);
+  it("default the start's port, readiness path and timeout, an empty seed and a fifteen-minute deploy", () => {
+    expect(FACTORY_DEFAULTS.verify.e2e).toEqual({
+      deploy: { command: null, url_pattern: null, health_check: "/", timeout_minutes: 15, secrets: [] },
+      start: { command: null, port: 3000, ready: "/", ready_timeout_s: 120, secrets: [] },
+      seed: { command: null, secrets: [] },
+    });
+    for (const key of ["verify.e2e.start.command", "verify.e2e.start.port", "verify.e2e.start.ready", "verify.e2e.start.ready_timeout_s", "verify.e2e.start.secrets", "verify.e2e.seed.command", "verify.e2e.seed.secrets", "verify.e2e.deploy.command", "verify.e2e.deploy.url_pattern", "verify.e2e.deploy.health_check", "verify.e2e.deploy.timeout_minutes", "verify.e2e.deploy.secrets"]) {
+      expect(CONSUMED_FROM[key], key).toBe(11);
+    }
+  });
+
+  it("merge a repository's start over the defaults, and a bare `start:` keeps them", () => {
+    expect(factoryConfigOf({ verify: { e2e: { start: { command: "npm start", port: 4000 } } } }).verify.e2e.start).toEqual({ command: "npm start", port: 4000, ready: "/", ready_timeout_s: 120, secrets: [] });
+    expect(factoryConfigOf({ verify: { e2e: { start: null, deploy: null } } }).verify.e2e).toEqual(FACTORY_DEFAULTS.verify.e2e);
+  });
+
+  it("range-check the port, the readiness path and timeout, the health check and the deploy timeout", () => {
+    const start = (s: unknown) => ok({ verify: { e2e: { start: s } } }).success;
+    expect(start({ command: "x", port: 1 })).toBe(true);
+    expect(start({ port: 0 })).toBe(false);
+    expect(start({ port: 65536 })).toBe(false);
+    expect(start({ ready: "health" })).toBe(false);
+    expect(start({ ready: "/healthz" })).toBe(true);
+    expect(start({ ready_timeout_s: 0 })).toBe(false);
+    expect(start({ ready_timeout_s: 901 })).toBe(false);
+    expect(ok({ verify: { e2e: { deploy: { health_check: "up" } } } }).success).toBe(false);
+    expect(ok({ verify: { e2e: { deploy: { timeout_minutes: 0 } } } }).success).toBe(false);
+  });
+
+  it("take a url_pattern only as the plan allows", () => {
+    expect(ok({ verify: { e2e: { deploy: { url_pattern: "https://{branch}.preview.example.com" } } } }).success).toBe(true);
+    expect(ok({ verify: { e2e: { deploy: { url_pattern: "http://{branch}.example.com" } } } }).success).toBe(false);
+    expect(ok({ verify: { e2e: { deploy: { url_pattern: "https://u@{branch}.example.com" } } } }).success).toBe(false);
+  });
+
+  it("take secret names on the start, the seed, the deploy and a check, refusing a reserved or malformed one", () => {
+    expect(ok({ verify: { e2e: { start: { secrets: ["APP_KEY"] }, seed: { command: "x", secrets: ["SEED_KEY"] }, deploy: { secrets: ["DEPLOY_TOKEN"] } } }, checks: [{ name: "t", run: "x", secrets: ["DB_URL"] }] }).success).toBe(true);
+    expect(ok({ verify: { e2e: { start: { secrets: ["ANTHROPIC_API_KEY"] } } } }).success).toBe(false);
+    expect(ok({ verify: { e2e: { seed: { secrets: ["lower"] } } } }).success).toBe(false);
+    expect(ok({ checks: [{ name: "t", run: "x", secrets: ["GIT_DIR"] }] }).success).toBe(false);
+    expect(ok({ checks: [{ name: "t", run: "x", secrets: Array.from({ length: 11 }, (_, i) => `SECRET_${i}`) }] }).success).toBe(false);
   });
 });

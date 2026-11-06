@@ -2287,6 +2287,12 @@ export class Pipeline {
     return { build, verify: ciPassed ? verifyReportOf(task, runs, events) : null };
   }
 
+  /** A repository image's event as a row on the card that needed it: started, built, refused or failed (text already flattened and capped). */
+  async recordImageEvent(taskId: string, event: { kind: string } & Record<string, unknown>): Promise<void> {
+    const { kind, taskId: _t, ...payload } = event;
+    await this.log(taskId, kind, payload);
+  }
+
   private async log(
     taskId: string,
     kind: string,

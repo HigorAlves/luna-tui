@@ -47,6 +47,8 @@ export interface ShipMonitorDeps {
   loop?: ReviewLoop;
   /** Told, when the PR merges, what its outcome says about event_class and comment_intent decisions (RFC 0005 wave 7). */
   truth?: TruthSink | null;
+  /** The PR of this repository merged: the machine asks for a rebuild of its code graph at once (RFC 0006 D8). */
+  onMerged?: (repoPath: string) => void;
   stateDir: string;
   pollMs: number;
   /** The longest the monitor waits for a merge before asking a person (default 14 days). */
@@ -348,6 +350,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       try {
         const state = await deps.github.prMerged(slug, number);
         if (state.merged) {
+          if (task.repoPath) deps.onMerged?.(task.repoPath);
           await settleDecisions().catch(() => {});
           return { outcome: "pass", detail: { merged: { sha: state.mergedSha, at: state.mergedAt, by: cursor.mergeRequested || cursor.queued ? "machine" : "person" }, prUrl: url, number } };
         }
@@ -461,6 +464,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
                 await note("the PR is in the merge queue");
               }
               else {
+                if (task.repoPath) deps.onMerged?.(task.repoPath);
                 await settleDecisions().catch(() => {});
                 return { outcome: "pass", detail: { merged: { sha: head, at: now().toISOString(), by: "machine" }, prUrl: url, number } };
               }

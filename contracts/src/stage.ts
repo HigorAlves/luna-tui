@@ -4,7 +4,7 @@
 import { z } from "zod";
 
 import { EngineBudgets, EngineId } from "./engines.ts";
-import { EvidenceConfigV22, FactoryConfigInput } from "./config-v22.ts";
+import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
 import { Scenario } from "./plan.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
 
@@ -342,6 +342,8 @@ export const CheckSpec = z.object({
   coverage: z.string().min(1).optional(),
   /** How long the check takes, in minutes: a check with no `paths` (the whole suite) runs in Build's regression sweep when this is within `build.regression_full_suite_minutes`. */
   minutes: z.number().positive().optional(),
+  /** Names of secrets this check receives, from the owner's store; the values are never in a luna.yaml. */
+  secrets: z.array(SecretNameSchema).max(10).optional(),
 });
 export type CheckSpec = z.infer<typeof CheckSpec>;
 
