@@ -111,3 +111,17 @@ export function escalationTruthWriter(stateDir: string): (task: TaskRow, approva
     return path;
   };
 }
+
+/** Writes `<stateDir>/ground-truth/ticket/<key>-<draft>-<at>.json`: what a person did to a ticket's draft (sent as drafted, edited with the text before and after, ignored). Answers its path. */
+export function ticketTruthWriter(stateDir: string): (entry: { key: string; draft: string; kind: string; did: string; original: string; final: string | null; at: string }) => Promise<string> {
+  return async (entry) => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const dir = join(stateDir, "ground-truth", "ticket");
+    await mkdir(dir, { recursive: true });
+    const safeName = `${entry.key}-${entry.draft}-${entry.at}`.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 160);
+    const path = join(dir, `${safeName}.json`);
+    await writeFile(path, `${JSON.stringify({ schema: 1, ...entry }, null, 2)}\n`);
+    return path;
+  };
+}

@@ -51,3 +51,18 @@ describe("POST /tasks/:id/archive", () => {
     expect(await archive(id, "rejected")).toMatchObject({ status: 409, body: { error: "invalid_transition" } });
   });
 });
+
+describe("a changed linked ticket at the card's gates", () => {
+  it("is carried by the open gate and by the next gate before Build, as names and a time, and GET /tasks/:id shows it", async () => {
+    const id = await atPlanGate();
+    await pipeline.noteTicketChange(id, { fields: ["scope"], at: "2026-11-05T12:00:00.000Z" });
+    const open = (await pipeline.approvals(id)).find((a) => a.decision === null)!;
+    expect(open.requested.ticketChanged).toEqual({ fields: ["scope"], at: "2026-11-05T12:00:00.000Z" });
+    const shown = (await (await createApp({ db, pipeline, bus }).request(`/tasks/${id}`)).json()) as Record<string, any>;
+    expect(shown.task.ticketChanged).toEqual({ fields: ["scope"], at: "2026-11-05T12:00:00.000Z" });
+    const early = await pipeline.createTask({ title: "Early" });
+    await pipeline.noteTicketChange(early.id, { fields: ["priority"], at: "2026-11-05T13:00:00.000Z" });
+    await pipeline.start(early.id);
+    expect((await pipeline.approvals(early.id)).find((a) => a.decision === null)!.requested.ticketChanged).toEqual({ fields: ["priority"], at: "2026-11-05T13:00:00.000Z" });
+  });
+});

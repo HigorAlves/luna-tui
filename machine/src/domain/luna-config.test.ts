@@ -6,7 +6,8 @@ import { CONSUMED_FROM, FACTORY_DEFAULTS, factoryConfigOf } from "@hardness/cont
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_POLICY, PolicyParseError } from "./policy.ts";
-import { parseLunaConfig, renderLunaConfig, validateLunaConfig } from "./luna-config.ts";
+import { FactoryConfigInput } from "@hardness/contracts";
+import { parseLunaConfig, policyOf, renderLunaConfig, validateLunaConfig } from "./luna-config.ts";
 
 const full = `
 checks:
@@ -342,5 +343,25 @@ describe("the v2.2 diagram's sections", () => {
     }
     const planned = Object.entries(CONSUMED_FROM).filter(([k, w]) => w === 9 && !(k in read)).map(([k]) => k).sort();
     expect(planned).toEqual(["plan.approvers.high", "plan.approvers.low", "plan.approvers.medium", "plan.approvers.outside_owning_team", "plan.coverage_score_min", "plan.sla.escalate_days", "plan.sla.reminder_days"]);
+  });
+});
+
+describe("the sections of the v2.2 config reach the policy", () => {
+  it("takes tickets and backlog from a real luna.yaml, through the path PolicyStore uses", () => {
+    const policy = parseLunaConfig(["tickets:", "  auto: on", "  assignees: [ana]", "  teams: [payments]", "  debounce_seconds: 5", "  sla:", "    stale_days: 11", "backlog:", "  stale_days: 3", ""].join("\n"));
+    expect(policy.factory.tickets).toMatchObject({ auto: "on", assignees: ["ana"], teams: ["payments"], debounce_seconds: 5, sla: { stale_days: 11, acknowledge_hours: 24 } });
+    expect(policy.factory.backlog.stale_days).toBe(3);
+  });
+
+  it("renders a tickets section back into the file", () => {
+    expect(renderLunaConfig(validateLunaConfig({ tickets: { auto: "on" } }))).toContain("tickets:");
+  });
+
+  it("reads every section the FactoryConfig schema has: a section a later wave adds cannot be forgotten", () => {
+    const read = new Set<string>();
+    const spy = new Proxy({}, { get: (_t, key) => (read.add(String(key)), undefined) });
+    policyOf(spy as never);
+    const missed = Object.keys(FactoryConfigInput).filter((k) => !read.has(k));
+    expect(missed).toEqual([]);
   });
 });

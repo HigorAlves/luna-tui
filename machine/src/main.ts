@@ -21,7 +21,7 @@ import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns
 import type { EventRow } from "./domain/task.ts";
 import { DecisionLog } from "./application/decision-log.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
-import { escalationTruthWriter, groundTruthWriter } from "./application/ground-truth.ts";
+import { escalationTruthWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
 import { commitsSince, headCommit } from "./adapters/git/worktree.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
@@ -476,7 +476,8 @@ const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays
 /** The Ticket Machine: Jira and GitHub tickets in scope are read, checked, assessed and drafted, then held for a person's tap. Every model call is a pack through `packRuns`; the port's writes are reached only from the tap routes. */
 const ticketPack = async (pack: "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply", context: TicketContext): Promise<unknown> => {
   if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
-  return (await packRuns.run({ pack, context: { ticket: context } }, INTAKE_CLIENT)).answer;
+  const { answer, recordId } = await packRuns.run({ pack, context: { ticket: context } }, INTAKE_CLIENT);
+  return pack === "ticket_recommend" && recordId ? { ...(answer as object), recordId } : answer;
 };
 const ticketMachine = new TicketMachine({
   store: new PgTicketStore(db),
@@ -490,6 +491,7 @@ const ticketMachine = new TicketMachine({
   recommend: { decide: async (c) => (await ticketPack("ticket_recommend", c)) as never },
   reply: { write: async (c) => (await ticketPack("ticket_reply", c)) as never },
   backlog: { upsertFromSource: (input, options) => backlog.upsertFromSource(input, options) },
+  truth: { learned: (fact) => decisionTruth.learned(fact), draft: async (entry) => void (await ticketTruthWriter(config.stateDir)(entry)) },
 });
 // Ticket clocks: computed and kept on the ticket, drafts only. A clock never posts and never approves.
 setInterval(() => void ticketMachine.sweepClocks().catch((error: unknown) => console.warn("ticket clocks failed", error)), 10 * 60_000).unref();

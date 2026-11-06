@@ -43,8 +43,9 @@ describe("TicketEvents", () => {
     const store = new PgTicketStore(db);
     const records: Array<[string, string, Record<string, unknown>]> = [];
     const ingest = vi.fn(async () => {});
-    const events = new TicketEvents({ store, machine: { ingest }, pipeline: { record: async (id, kind, payload) => void records.push([id, kind, payload]) }, config: async () => ({ ...FACTORY_DEFAULTS, tickets: { ...FACTORY_DEFAULTS.tickets, ...scope } }) });
-    return { store, records, ingest, events };
+    const noted: Array<[string, { fields: string[]; at: string }]> = [];
+    const events = new TicketEvents({ store, machine: { ingest }, pipeline: { record: async (id, kind, payload) => void records.push([id, kind, payload]), noteTicketChange: async (id, change) => void noted.push([id, change]) }, config: async () => ({ ...FACTORY_DEFAULTS, tickets: { ...FACTORY_DEFAULTS.tickets, ...scope } }) });
+    return { store, records, ingest, events, noted };
   };
   const card = (state: string, over = {}) => ({ id: "card-1", state, repoPath: "/r/a", worktreePath: null, branch: null, ...over }) as never;
 
@@ -62,6 +63,22 @@ describe("TicketEvents", () => {
     expect(changes).toEqual(["scope_edited", "priority_changed"]);
     expect(records.map((r) => r[1])).toEqual(["ticket.scope_edited", "ticket.priority_changed", "ticket.gate_recheck"]);
     expect(ingest).toHaveBeenCalledWith(expect.objectContaining({ title: "Refund fails twice" }), expect.objectContaining({ force: true, repoPath: "/r/a" }));
+  });
+
+  it("before Build, a scope or priority change is carried to the card's gate: the field names and the time only", async () => {
+    const { events, noted, store } = mk();
+    await store.read(t());
+    await events.handle(t({ title: "SECRET TITLE", priority: "Low" }), card("awaiting_approval"));
+    expect(noted).toEqual([["card-1", { fields: ["scope", "priority"], at: expect.any(String) }]]);
+    expect(JSON.stringify(noted)).not.toContain("SECRET");
+  });
+
+  it("a comment or a reassignment alone does not mark the gate, and nothing is carried after Build", async () => {
+    const { events, noted, store } = mk();
+    await store.read(t());
+    await events.handle(t({ comments: [c("hi")] }), card("awaiting_approval"));
+    await events.handle(t({ comments: [c("hi")], description: "x" }), card("implementing", { worktreePath: "/w" }));
+    expect(noted).toEqual([]);
   });
 
   it("during or after Build: the card gets a flag and a person decides", async () => {

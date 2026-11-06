@@ -38,7 +38,7 @@ const BEFORE_BUILD = new Set(["draft", "setup", "awaiting_setup", "triage", "awa
 export interface TicketEventsDeps {
   store: TicketStore;
   machine: TicketIntake;
-  pipeline: { record(id: string, kind: string, payload: Record<string, unknown>): Promise<void> };
+  pipeline: { record(id: string, kind: string, payload: Record<string, unknown>): Promise<void>; noteTicketChange(id: string, change: { fields: string[]; at: string }): Promise<void> };
   config(repoPath: string | null): Promise<FactoryConfig>;
 }
 
@@ -69,8 +69,10 @@ export class TicketEvents {
       return changes;
     }
     await this.deps.machine.ingest(next, { repoPath: card.repoPath, question: false, force: true } as never);
-    const beforeBuild = BEFORE_BUILD.has(card.state) && !card.worktreePath && !card.branch;
+    const beforeBuild = BEFORE_BUILD.has(card.state);
     await pipeline.record(card.id, beforeBuild ? "ticket.gate_recheck" : "ticket.flag", { key: next.key, changes });
+    const fields = [...(changes.includes("scope_edited") ? ["scope"] : []), ...(changes.includes("priority_changed") ? ["priority"] : [])];
+    if (beforeBuild && fields.length > 0) await pipeline.noteTicketChange(card.id, { fields, at: new Date().toISOString() });
     if (changes.includes("new_comment") && card.state === "awaiting_answers") await pipeline.record(card.id, "ticket.answered", { key: next.key });
     return changes;
   }

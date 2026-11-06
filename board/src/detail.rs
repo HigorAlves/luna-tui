@@ -523,6 +523,27 @@ fn proposal_heading(text: &str) -> Line<'static> {
     Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold())
 }
 
+/// `Ticket     the ticket changed since this was written: scope edited, priority changed (2026-11-05 12:00)`: the field names and the time the machine kept, through `plain`.
+pub fn ticket_changed_line(requested: &serde_json::Value) -> Option<String> {
+    let changed = requested.get("ticketChanged")?;
+    let words: Vec<String> = changed
+        .get("fields")?
+        .as_array()?
+        .iter()
+        .filter_map(|f| f.as_str())
+        .map(|f| match f {
+            "scope" => "scope edited".to_string(),
+            "priority" => "priority changed".to_string(),
+            other => plain(other),
+        })
+        .collect();
+    if words.is_empty() {
+        return None;
+    }
+    let at = changed.get("at").and_then(|a| a.as_str()).map(|a| format!(" ({})", plain(a))).unwrap_or_default();
+    Some(format!("Ticket     the ticket changed since this was written: {}{at}", words.join(", ")))
+}
+
 fn muted(text: String) -> Line<'static> {
     Line::from(Span::from(text).fg(c(SUBTEXT0)))
 }
@@ -638,6 +659,9 @@ fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> 
     }
     if !task.related.is_empty() {
         lines.push(muted(format!("Related    {}", task.related.iter().take(LISTED).map(|id| short(id)).collect::<Vec<_>>().join(", "))));
+    }
+    if let Some(line) = detail.and_then(|d| d.open_approval()).and_then(|a| ticket_changed_line(&a.requested)) {
+        lines.push(muted(line));
     }
     if let Some(gate) = detail.and_then(|d| d.open_approval()).filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("dedup")) {
         lines.push(muted("Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither".to_string()));
@@ -1994,5 +2018,15 @@ mod tests {
         detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x"},"decision":null}"#).unwrap());
         detail.events.push(serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"escalation.corrected","payload":{"from":"flaky_tests","to":"env_broken"},"at":"2026-10-22T10:20:00Z"}"#).unwrap());
         assert!(lines_text(&escalation_lines(&detail)).contains("corrected to env_broken"));
+    }
+
+    #[test]
+    fn a_gate_that_carries_a_ticket_change_says_which_fields_and_when_through_plain() {
+        let line = ticket_changed_line(&serde_json::json!({"ticketChanged":{"fields":["scope","priority"],"at":"2026-11-05T12:00:00Z"}})).expect("a line");
+        assert_eq!(line, "Ticket     the ticket changed since this was written: scope edited, priority changed (2026-11-05T12:00:00Z)");
+        let dirty = ticket_changed_line(&serde_json::json!({"ticketChanged":{"fields":["x\u{1b}[2J"],"at":"t\u{1b}"}})).expect("a line");
+        assert!(!dirty.contains('\u{1b}'));
+        assert!(ticket_changed_line(&serde_json::json!({})).is_none());
+        assert!(ticket_changed_line(&serde_json::json!({"ticketChanged":{"fields":[]}})).is_none());
     }
 }

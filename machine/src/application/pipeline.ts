@@ -1038,6 +1038,18 @@ export class Pipeline {
     return this.dispatch(id, { type: "start", setup });
   }
 
+  /** A linked ticket\'s scope or priority changed: the card, before Build, keeps the field names and the time, and its open gate shows them ("the ticket changed since this was written"). The next gate it opens before Build carries them too. After Build a flag is the machine's business, not the gate\'s. */
+  async noteTicketChange(id: string, change: { fields: string[]; at: string }): Promise<void> {
+    await this.store.withTaskLock(id, async (task, tx) => {
+      if (!BEFORE_BUILD.has(task.state)) return;
+      const prior = cardOf(task).ticketChanged;
+      const ticketChanged = { fields: [...new Set([...(prior?.fields ?? []), ...change.fields])], at: change.at };
+      await tx.updateTask(id, { card: { ...cardOf(task), ticketChanged } });
+      const open = await tx.findOpenApproval(id);
+      if (open) await tx.updateApprovalRequested(open, { ...open.requested, ticketChanged });
+    });
+  }
+
   /** A card at an Intake gate goes on as a start would: through setup when its repo has no luna.yaml, else to its entry. */
   private async continueFromGate(id: string, decision: DecisionRecord): Promise<TaskRow> {
     const after = await this.get(id);
@@ -2234,7 +2246,7 @@ export class Pipeline {
         await tx.insertApproval({
           taskId: id,
           kind: step.effect.gate,
-          requested: { ...extra.detail, ...(step.reason ? { reason: step.reason } : {}), ...(step.escalation ? { escalation: step.escalation } : {}) },
+          requested: { ...extra.detail, ...(BEFORE_BUILD.has(step.effect.gate as TaskState) && cardOf(task).ticketChanged ? { ticketChanged: cardOf(task).ticketChanged } : {}), ...(step.reason ? { reason: step.reason } : {}), ...(step.escalation ? { escalation: step.escalation } : {}) },
         });
       }
       return { step, logged };

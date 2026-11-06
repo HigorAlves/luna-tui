@@ -34,7 +34,11 @@ const ticket = (over: Partial<CanonicalTicket> = {}): CanonicalTicket => ({
   comments: [], attachments: [], sprint: null, dueAt: null, createdAt: null, updatedAt: "2026-11-05T10:00:00Z", permalink: "https://x/browse/PAY-12", ...over,
 });
 
-function setup(over: { validity?: ValidityAnswer; recommend?: string } = {}) {
+function setup(over: { validity?: ValidityAnswer; recommend?: string; silent?: boolean; noRecord?: boolean } = {}) {
+  const learned: Array<Record<string, any>> = [];
+  const kept: Array<Record<string, any>> = [];
+  const half = { score: 0.5, confidence: 1 };
+  const silentAnswer = { ...assessAnswer, who: half, what: half, impact: half, time: half, demand: half, files: half, unknowns: half, cross_team: half, new_infra: half, dependents: half, traffic: half, data_sensitivity: half, reversibility: half, regression: { score: 1, confidence: 1 }, compounding: { score: 0, confidence: 1 } } as AssessAnswer;
   const writes: unknown[][] = [];
   const port: Tickets = {
     listInScope: async () => [], read: async () => ticket(),
@@ -42,7 +46,7 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string } = {}) {
   };
   const cards: unknown[] = [];
   const items: Array<Record<string, any>> = [];
-  const decide = { validity: vi.fn(async () => over.validity ?? goodValidity), assess: vi.fn(async () => assessAnswer), recommend: vi.fn(async () => ({ action: { choice: over.recommend ?? "schedule", confidence: 0.9 } })), write: vi.fn(async () => ({ reply: "Not planned now.", confidence: 0.9 })) };
+  const decide = { validity: vi.fn(async () => over.validity ?? goodValidity), assess: vi.fn(async () => (over.silent ? silentAnswer : assessAnswer)), recommend: vi.fn(async () => ({ action: { choice: over.recommend ?? "schedule", confidence: 0.9 }, ...(over.noRecord ? {} : { recordId: "rec-1" }) })), write: vi.fn(async () => ({ reply: "Not planned now.", confidence: 0.9 })) };
   const store = new PgTicketStore(db);
   const machine = new TicketMachine({
     store,
@@ -51,10 +55,11 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string } = {}) {
     config: async () => FACTORY_DEFAULTS,
     createCard: async (input) => (cards.push(input), { id: "card-1" }),
     validity: { decide: decide.validity }, assess: { decide: decide.assess }, recommend: { decide: decide.recommend }, reply: { write: decide.write },
+    truth: { learned: async (f) => (learned.push(f), true), draft: async (e) => void kept.push(e) },
     backlog: { upsertFromSource: async (input, o) => { const i = items.findIndex((x) => JSON.stringify(x.sources) === JSON.stringify(input.sources)); if (i >= 0) { items[i] = { ...input, id: "b1" }; return { id: "b1", created: false }; } if (!o.createIfMissing) return null; items.push({ ...input, id: "b1" }); return { id: "b1", created: true }; } },
     now: () => new Date("2026-11-05T12:00:00Z"),
   });
-  return { machine, store, writes, cards, decide, items };
+  return { machine, store, writes, cards, decide, items, learned, kept };
 }
 const ctx = { repoPath: "/r/a", question: false };
 
@@ -239,6 +244,67 @@ describe("clocks", () => {
     expect((await store.get("PAY-12"))!.machineStatus).toBe("parked");
     expect(writes).toHaveLength(1);
     expect(((await store.get("PAY-12"))!.clocks as Record<string, unknown>).acknowledgedAt).toBeTruthy();
+  });
+});
+
+describe("what a tap says about the decisions behind it", () => {
+  const held = async (over = {}) => {
+    const x = setup({ silent: true, ...over });
+    await x.machine.ingest(ticket(), ctx);
+    return x;
+  };
+
+  it("a card tap, when ticket_recommend said do now, confirms its label", async () => {
+    const x = await held({ recommend: "do_now" });
+    await x.machine.card("PAY-12");
+    expect(x.learned).toEqual([expect.objectContaining({ pack: "ticket_recommend", recordId: "rec-1", label: { action: { choice: "do_now" } }, source: "ticket_confirmed" })]);
+  });
+
+  it("a backlog tap against what it recommended is the label of what the person chose: an override", async () => {
+    const x = await held({ recommend: "decline" });
+    await x.machine.schedule("PAY-12");
+    expect(x.learned).toEqual([expect.objectContaining({ recordId: "rec-1", label: { action: { choice: "schedule" } }, source: "ticket_override" })]);
+  });
+
+  it("a tap with no decision record behind it (the rule decided, no engine ran) labels nothing", async () => {
+    const x = await held({ noRecord: true });
+    await x.machine.card("PAY-12");
+    expect(x.learned).toEqual([]);
+    const rule = setup();
+    await rule.machine.ingest(ticket({ id: "PAY-20", key: "PAY-20" }), ctx);
+    await rule.machine.card("PAY-20");
+    expect(rule.learned).toEqual([]);
+  });
+
+  it("keeps an approved draft as sent, an edited one with its difference, and an ignored one, with the draft", async () => {
+    const x = await held();
+    const [d] = (await x.machine.view("PAY-12")).drafts;
+    await x.machine.edit("PAY-12", { draft: d!.id, hash: d!.hash, text: "Later, please." });
+    expect(x.kept).toEqual([expect.objectContaining({ key: "PAY-12", kind: "assessment", did: "edited", original: d!.text, final: "Later, please." })]);
+    const y = setup({ silent: true });
+    await y.machine.ingest(ticket({ id: "PAY-30", key: "PAY-30" }), ctx);
+    const [e] = (await y.machine.view("PAY-30")).drafts;
+    await y.machine.approve("PAY-30", { draft: e!.id, hash: e!.hash });
+    await y.machine.ingest(ticket({ id: "PAY-21", key: "PAY-21" }), ctx);
+    const [g] = (await y.machine.view("PAY-21")).drafts;
+    await y.machine.ignore("PAY-21", { draft: g!.id });
+    expect(y.kept.map((k) => k.did)).toEqual(["sent", "ignored"]);
+  });
+
+  it("an approved decline draft, when it recommended declining, confirms decline; an approved park confirms needs decision", async () => {
+    const x = await held({ recommend: "decline" });
+    const decline = (await x.machine.view("PAY-12")).drafts.find((d) => d.kind === "decline")!;
+    await x.machine.approve("PAY-12", { draft: decline.id, hash: decline.hash });
+    expect(x.learned).toEqual([expect.objectContaining({ label: { action: { choice: "decline" } }, source: "ticket_confirmed" })]);
+  });
+
+  it("card and backlog taps also acknowledge the ticket", async () => {
+    const x = await held();
+    await x.machine.card("PAY-12");
+    expect((await x.store.get("PAY-12"))!.clocks.acknowledgedAt).toBeTruthy();
+    await x.machine.ingest(ticket({ id: "PAY-22", key: "PAY-22" }), ctx);
+    await x.machine.schedule("PAY-22");
+    expect((await x.store.get("PAY-22"))!.clocks.acknowledgedAt).toBeTruthy();
   });
 });
 

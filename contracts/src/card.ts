@@ -91,5 +91,7 @@ export interface CardFields {
   related?: string[];
   /** The card this one was merged into (a card, or a backlog item); the card is `closed`. */
   mergedInto?: string;
+  /** A linked ticket's scope or priority changed while the card was before Build: the field names and when, never the ticket's text. Its open gate and the next one carry it. */
+  ticketChanged?: { fields: string[]; at: string };
   resolved?: { repoPath: string | null; project: string | null; at: string };
 }

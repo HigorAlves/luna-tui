@@ -79,19 +79,19 @@ export function ignoreDraft(draft: Draft, now: Date): Draft {
 
 export interface RecommendDeps {
   /** The one call of the `ticket_recommend` decision pack. */
-  decide(context: TicketContext): Promise<{ action: { choice: string; confidence: number } }>;
+  decide(context: TicketContext): Promise<{ action: { choice: string; confidence: number }; recordId?: string }>;
 }
 
 const DECISION_BAR = 0.7;
 const CHOICES = new Set<string>(["do_now", "schedule", "decline", "needs_decision"]);
 
 /** The rule's answer when it has one; else one typed decision, which a person overrules if it is unsure or fails. */
-export async function recommendWithDecision(deps: RecommendDeps, score: TicketScoreResult, context: TicketContext): Promise<{ action: Recommendation; reason: string }> {
+export async function recommendWithDecision(deps: RecommendDeps, score: TicketScoreResult, context: TicketContext): Promise<{ action: Recommendation; reason: string; recordId?: string }> {
   const ruled = recommend(score);
   if (ruled) return ruled;
   try {
-    const { action } = await deps.decide(context);
-    if (CHOICES.has(action.choice) && action.confidence >= DECISION_BAR) return { action: action.choice as Recommendation, reason: "the scores left it open: decided by the typed decision" };
+    const { action, recordId } = await deps.decide(context);
+    if (CHOICES.has(action.choice) && action.confidence >= DECISION_BAR) return { action: action.choice as Recommendation, reason: "the scores left it open: decided by the typed decision", ...(recordId ? { recordId } : {}) };
   } catch (error) {
     console.warn(`ticket recommend: the decision failed: ${error instanceof Error ? error.message : String(error)}`);
   }

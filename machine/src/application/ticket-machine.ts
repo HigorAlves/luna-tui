@@ -74,6 +74,11 @@ export interface TicketMachineDeps {
   recommend: RecommendDeps;
   reply: ReplyDeps;
   /** The shared backlog, for `schedule` and for keeping an item's rank in step with a re-assessment. */
+  /** Ground truth: what a tap says about the decision `ticket_recommend` made (the decision log's `learned`), and what was done to a draft (a file beside a gate's). Absent: nothing is kept. */
+  truth?: {
+    learned(fact: { pack: "ticket_recommend"; recordId: string; label: Record<string, Record<string, unknown>>; source: string }): Promise<boolean>;
+    draft(entry: { key: string; draft: string; kind: string; did: "sent" | "edited" | "ignored"; original: string; final: string | null; at: string }): Promise<void>;
+  };
   backlog?: { upsertFromSource(input: BacklogAddInput, options: { createIfMissing: boolean }): Promise<{ id: string; created: boolean } | null> };
   now?: () => Date;
 }
@@ -152,6 +157,8 @@ export class TicketMachine implements TicketIntake {
     const placed = await this.deps.backlog.upsertFromSource(backlogInput(row.canonical, repo, last as unknown as AssessmentRecord), { createIfMissing: true });
     if (!placed) throw new TicketRefusal("the backlog did not take the ticket");
     await this.deps.store.setMachine(key, { status: "scheduled" });
+    await this.acknowledge(key);
+    await this.learn(row, "schedule");
     return placed;
   }
 
@@ -187,6 +194,7 @@ export class TicketMachine implements TicketIntake {
     const row = await this.row(key);
     const draft = this.draftOf(row, tap.draft, tap.hash);
     await this.post(row, draft, draft.text, tap.transition);
+    await this.keep(row, draft, "sent", null);
   }
 
   /** Posts the person's own text in place of the draft's, through `postable()`, after the token check. A tap. */
@@ -196,6 +204,7 @@ export class TicketMachine implements TicketIntake {
     const edited = editDraft(draft, tap.text, this.now());
     if (!edited) throw new TicketRefusal("the text carries a token-shaped string and is not posted");
     await this.post(row, edited, edited.text, tap.transition);
+    await this.keep(row, draft, "edited", edited.text);
   }
 
   async ignore(key: string, tap: { draft: string }): Promise<void> {
@@ -205,6 +214,7 @@ export class TicketMachine implements TicketIntake {
     if (!draft) throw new TicketRefusal("no such draft on this ticket");
     await this.deps.store.setDrafts(key, drafts.map((d) => (d.id === draft.id ? ignoreDraft(d, this.now()) : d)) as unknown as Record<string, unknown>[]);
     await this.acknowledge(key);
+    await this.keep(row, draft, "ignored", null);
   }
 
   /** Makes one card from the ticket, with its link as the source and the assessment as lower-confidence hints. A tap. Nothing is written to the ticket. */
@@ -223,6 +233,8 @@ export class TicketMachine implements TicketIntake {
       ...(last ? { hints: { size: String(last.size), urgency: String(last.priority) } } : {}),
     } as NewTask);
     await this.deps.store.setMachine(key, { cardId: card.id, status: "carded" });
+    await this.acknowledge(key);
+    await this.learn(row, "do_now");
     return card;
   }
 
@@ -250,6 +262,30 @@ export class TicketMachine implements TicketIntake {
     await this.deps.store.setDrafts(row.key, drafts as unknown as Record<string, unknown>[]);
     if (draft.kind === "park") await this.deps.store.setMachine(row.key, { status: "parked" });
     await this.acknowledge(row.key);
+  }
+
+  /** What was done to a draft is kept with it (sent as drafted, edited with the text before and after, ignored), and a person's taking or leaving a recommendation is ground truth. Never throws: a truth is a bonus. */
+  private async keep(row: TicketRow, draft: Draft, did: "sent" | "edited" | "ignored", final: string | null): Promise<void> {
+    try {
+      await this.deps.truth?.draft({ key: row.key, draft: draft.id, kind: draft.kind, did, original: draft.original ?? draft.text, final, at: this.now().toISOString() });
+      if (did === "ignored") return;
+      const chosen = draft.kind === "decline" ? "decline" : draft.kind === "park" ? "needs_decision" : null;
+      if (chosen) await this.learn(row, chosen);
+    } catch (error) {
+      console.warn(`ticket truth: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** The label of what the person chose, on the `ticket_recommend` record behind the recommendation: confirmed when it is what was recommended, an override when not. No record (the rule decided, no engine ran) labels nothing. */
+  private async learn(row: TicketRow, chosen: string): Promise<void> {
+    try {
+      const last = [...row.assessments].reverse().find((a) => a.outcome === "workable") as { recommendation?: { action?: string; recordId?: string } } | undefined;
+      const recordId = last?.recommendation?.recordId;
+      if (!recordId || !this.deps.truth) return;
+      await this.deps.truth.learned({ pack: "ticket_recommend", recordId, label: { action: { choice: chosen } }, source: last?.recommendation?.action === chosen ? "ticket_confirmed" : "ticket_override" });
+    } catch (error) {
+      console.warn(`ticket truth: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async mergeClocks(key: string, patch: Record<string, unknown>): Promise<void> {
