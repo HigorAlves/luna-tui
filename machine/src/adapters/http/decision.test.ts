@@ -82,3 +82,31 @@ describe("POST /tasks/:id/decision with an approver", () => {
     expect(await decide(other.id, { decision: "approved" })).toMatchObject({ status: 200, body: { state: "archived" } });
   });
 });
+
+describe("POST /tasks/:id/decision at a split gate", () => {
+  const over = { verdict: "over", estLoc: 4000, planned: null, limit: { target: [1000, 2000], hard: 2500 }, by: "decision" };
+  const child = (n: number) => ({ title: `Part ${n}`, goal: "do part", acceptance_criteria: ["works"], covers: [`C${n}`], files_hint: [], est_loc: 400, depends_on: [], order: n });
+  const atSplit = async (outcome: "split" | "split_failed") => {
+    stubs.plan("test_design", { outcome: "pass", detail: { outcome, summary: "over", ...(outcome === "split" ? { split: { children: [child(1), child(2)], rounds: 1, judged: true, via: "cards" } } : { reason: "no valid split after 3 rounds", split: { children: [], issues: [], rounds: 3 } }), size: over, flagged: ["over the size limit"] } });
+    const task = await pipeline.createTask({ title: "Everything" });
+    await pipeline.start(task.id);
+    return task.id;
+  };
+
+  it("answers 409 split_not_ready to an approval of a split, and 409 split_not_valid when there is none", async () => {
+    expect(await decide(await atSplit("split"), { decision: "approved" })).toMatchObject({ status: 409, body: { error: "split_not_ready" } });
+    expect(await decide(await atSplit("split_failed"), { decision: "approved" })).toMatchObject({ status: 409, body: { error: "split_not_valid" } });
+  });
+
+  it("takes keepWhole as the person's answer: the gate closes approved with it and the plan runs again", async () => {
+    const id = await atSplit("split");
+    const kept = await decide(id, { decision: "approved", keepWhole: true, comment: "one change" });
+    expect(kept.status).toBe(200);
+    const [first] = await pipeline.approvals(id);
+    expect(first).toMatchObject({ decision: "approved", reason: "one change", response: { keepWhole: true } });
+  });
+
+  it("refuses a keepWhole that is not a boolean", async () => {
+    expect((await decide(await atSplit("split"), { decision: "approved", keepWhole: "yes" })).status).toBe(400);
+  });
+});

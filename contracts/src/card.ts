@@ -87,6 +87,8 @@ export interface CardFields {
     /** What a person chose at the gate. */
     chosen?: "duplicate" | "related" | "neither";
   };
+  /** The card this one was split from (an id); only the machine sets it, when a person approves a split. Its chain gives the card's depth. */
+  splitFrom?: string;
   /** Cards linked as related to this one (ids). */
   related?: string[];
   /** The card this one was merged into (a card, or a backlog item); the card is `closed`. */

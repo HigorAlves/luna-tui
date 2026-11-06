@@ -16,6 +16,7 @@ import {
   type DecisionOverrides,
   FACTORY_DEFAULTS,
   type SizeContext,
+  type SplitContext,
   sizeLimits,
   type FactoryConfig,
   PACKS,
@@ -37,6 +38,7 @@ import {
 } from "@hardness/contracts";
 
 import type { RequiredOwners } from "../../domain/codeowners.ts";
+import { decompositionLoop } from "./decompose.ts";
 import { type SizeDecision, sizeAssessment, sizeContextOf, sizeDecisionOf } from "../size-estimate.ts";
 import type { GraphLocation } from "../graph.ts";
 import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
@@ -65,6 +67,13 @@ export interface PlanDeps {
   size?: {
     decide: ((size: SizeContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
     similar?: (repoPath: string | null, card: { title: string; text: string }) => Promise<{ title: string; added: number; removed: number }[]>;
+  };
+  /** The split exit (wave 15): when the size verdict is `over`, the decomposer and split_check propose children for a person to approve. Absent, an over-limit plan only carries the flag. */
+  split?: {
+    decompose: ((context: SplitContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
+    check: ((context: SplitContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
+    /** The card's depth: 1, plus one for each card it was split from, up its chain. Absent, 1. */
+    depthOf?: (task: StageContext["task"]) => Promise<number>;
   };
   /** Each repo's luna.yaml bars for the decisions. */
   policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { size?: FactoryConfig["size"]; fast_lane?: FactoryConfig["fast_lane"]; plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number; approvers?: FactoryConfig["plan"]["approvers"] }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
@@ -125,6 +134,9 @@ function combine(results: StageResult[]): Pick<StageResult, "events" | "artifact
     ...(workspace ? { workspace } : {}),
   };
 }
+
+/** A person's comment as one line, at most 2,000 characters. */
+const flatNote = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 2000);
 
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : []);
 
@@ -273,8 +285,62 @@ export function planStage(deps: PlanDeps): StageRunner {
       }
     }
 
+    // A person's recorded answer, never the machine's: an approved plan gate that carries `keepWhole` lifts the size guard for every later plan of the card.
+    const keptWhole = context.approvals.some((a) => a.kind === "awaiting_approval" && a.decision === "approved" && a.response?.keepWhole === true);
+    // What a person said when they sent a split back, handed to the next set of rounds.
+    const lastGate = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision !== null);
+    const sentBackNote = lastGate && lastGate.decision === "sent_back" && (lastGate.requested.outcome === "split" || lastGate.requested.outcome === "split_failed") && lastGate.reason ? flatNote(lastGate.reason) : undefined;
+    const sizeRecords = (extra: Record<string, string | undefined> = {}) =>
+      Object.fromEntries(Object.entries({ risk_score: riskJudged.recordId, size_estimate: sizeRecordId, ...extra }).filter((e): e is [string, string] => typeof e[1] === "string"));
+    /** The stage ends here: the change is over the hard limit, so the gate gets a split to read (or the reason there is none), and no plan. Nothing is made. */
+    const splitExit = async (size: ReturnType<typeof sizeAssessment>["size"], flags: string[]): Promise<StageResult> => {
+      const split = deps.split!;
+      const depth = (await split.depthOf?.(task)) ?? 1;
+      let reason: string | undefined;
+      if (depth >= sizeLimit.depth) reason = `this card is itself part of a split (depth ${depth} of at most ${sizeLimit.depth - 1}); a part is not split again`;
+      else if (sizeLimit.maxChildren < 2) reason = "the repository's size.max_children leaves no room for a split";
+      else if (sizeLimit.maxRounds < 1) reason = "the repository's size.max_rounds allows no round to look for a split";
+      else if (!split.decompose) reason = "no decomposer can run";
+      const looked =
+        reason === undefined
+          ? await decompositionLoop(
+              {
+                decompose: (c) => split.decompose!(c, task.repoPath),
+                check: split.check ? (c) => split.check!(c, task.repoPath) : null,
+                bars: (await deps.policies.for(task.repoPath)).decisions.split_check,
+              },
+              {
+                origin: { title: task.title, text: task.description, criteria: criteriaOf(task.criteria).map((c) => ({ id: c.id, text: c.text })) },
+                files: map?.files.map((f) => ({ path: f.path, ...(f.role ? { role: f.role } : {}) })) ?? [],
+                limits: sizeLimit,
+                ...(sentBackNote ? { note: sentBackNote } : {}),
+              },
+            )
+          : null;
+      const ok = looked?.ok === true;
+      const detail: Record<string, unknown> = {
+        outcome: ok ? "split" : "split_failed",
+        summary: ok ? `this change is over the size limit: split into ${looked.children.length} changes` : "this change is over the size limit and no valid split was found",
+        ...(!ok ? { reason: reason ?? (looked as { reason: string }).reason } : {}),
+        ...(looked
+          ? { split: looked.ok ? { children: looked.children, rounds: looked.rounds, judged: looked.judged, via: "cards" } : { children: looked.children, issues: looked.issues, rounds: looked.rounds } }
+          : { split: { children: [], issues: [], rounds: 0 } }),
+        size,
+        risk,
+        ...(map ? { map } : {}),
+        ...(mapNote ? { mapNote } : {}),
+        decisions: sizeRecords({ split_check: looked?.ok ? looked.recordId : undefined }),
+        flagged: flags,
+        lane,
+        rounds: { tests: testRuns, plan: planRuns },
+      };
+      return { outcome: "pass", ...combine(results), detail };
+    };
     let lane: "fast" | "full" = task.record?.decision === "fast_lane" ? "fast" : "full";
     let laneNote: string | undefined;
+    // Over the hard limit by the estimate alone: the planner never runs.
+    const earlySize = sizeAssessment({ decision: sizeDecision, planned: null, limits: sizeLimit });
+    if (deps.split && !keptWhole && earlySize.size.verdict === "over") return splitExit(earlySize.size, earlySize.flags);
     /** Planner runs on the current lane: the re-run cap counts from the last switch. */
     let planRunsOnLane = 0;
     /** Why the fast plan's owners could not be checked, when they could not; stays on the gate. */
@@ -463,6 +529,8 @@ export function planStage(deps: PlanDeps): StageRunner {
     const plannedLoc = (extras.steps ?? plan!.slices).reduce((sum, st) => sum + (Number.isFinite(st.est_loc) ? st.est_loc : 0), 0);
     const { size, flags: sizeFlags } = sizeAssessment({ decision: sizeDecision, planned: plannedLoc, limits: sizeLimit });
     for (const f of sizeFlags) flagged.add(f);
+    if (deps.split && !keptWhole && size.verdict === "over") return splitExit(size, sizeFlags);
+    if (keptWhole && size.verdict === "over") flagged.add("over the size limit: kept whole by a person");
     const verdicts = { coverage: coverage.verdict, plan: planCheck.verdict, risk: riskJudged.verdict };
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);
     if (map?.stale) flagged.add("map stale");

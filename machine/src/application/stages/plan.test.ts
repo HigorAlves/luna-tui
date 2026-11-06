@@ -905,3 +905,129 @@ describe("planStage's size guard", () => {
     expect(result.detail).toMatchObject({ size: { estLoc: null, planned: 12, verdict: "within" }, flagged: [] });
   });
 });
+
+describe("planStage's split exit", () => {
+  const sizeAnswer = (loc: number, confidence = 0.95) => ({ est_loc: { score: loc, confidence }, est_files: { score: 1, confidence }, reviewable: { value: true, p: 0.95 } });
+  const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
+  const part = (over: Record<string, unknown> = {}) => ({ title: "Part", goal: words(25), acceptance_criteria: ["it works"], covers: [] as string[], files_hint: [], est_loc: 400, depends_on: [] as number[], order: 1, ...over });
+  const validSplit = () => ({ children: [part({ covers: ["C1"], order: 1 }), part({ covers: ["C2"], depends_on: [1], order: 2 })] });
+  const yes = { covers: { value: true, p: 0.95 }, no_overlap: { value: true, p: 0.95 }, stand_alone: { value: true, p: 0.95 } };
+  const big = planned({ slices: [{ title: "everything", est_loc: 3000, touchpoints: ["a.ts"], acceptance: ["x"] }] });
+  const twoCriteria = { ...task, criteria: ["csv downloads", "pdf downloads"] } as unknown as TaskRow;
+
+  function withSplit(opts: { size?: Record<string, unknown>; plan?: StageResult; split?: Record<string, unknown> | Error; depth?: number; config?: Record<string, unknown> } = {}) {
+    const base = setup({ plan: [opts.plan ?? planned()] });
+    const calls: string[] = [];
+    const runPack = base.deps.runPack;
+    base.deps.runPack = async (pack, ctx, extra) => (calls.push(pack), runPack(pack, ctx, extra));
+    const decomposed: Array<{ context: import("@hardness/contracts").SplitContext; repo: string | null }> = [];
+    const checked: unknown[] = [];
+    base.deps.size = { decide: async () => opts.size ?? sizeAnswer(6) };
+    base.deps.split = {
+      decompose: async (context, repo) => {
+        decomposed.push({ context, repo });
+        if (opts.split instanceof Error) throw opts.split;
+        return opts.split ?? validSplit();
+      },
+      check: async (context) => (checked.push(context), yes),
+      ...(opts.depth !== undefined ? { depthOf: async () => opts.depth! } : {}),
+    };
+    if (opts.config) base.deps.policies = { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2 }, size: { target_loc: [1000, 2000], hard_limit_loc: 2500, max_children: 8, max_rounds: 3, depth: 2, ...opts.config } } }) };
+    return { run: planStage(base.deps), calls, decomposed, checked };
+  }
+  const approved = (response: Record<string, unknown>, requested: Record<string, unknown> = { outcome: "split" }) => ({ id: "a1", taskId: "t1", kind: "awaiting_approval", requested, decision: "approved", reason: null, response, createdAt: new Date(), decidedAt: new Date() }) as never;
+  const sentBack = (reason: string) => ({ id: "a2", taskId: "t1", kind: "awaiting_approval", requested: { outcome: "split" }, decision: "sent_back", reason, response: null, createdAt: new Date(), decidedAt: new Date() }) as never;
+
+  it("when the estimate is over the hard limit, never runs the planner: the stage ends pass with a split proposal and no plan", async () => {
+    const { run, calls } = withSplit();
+    const result = await run(context({ task: twoCriteria }));
+    expect(result.outcome).toBe("pass");
+    expect(calls).not.toContain("plan");
+    expect(calls).not.toContain("test_design");
+    expect(result.detail).toMatchObject({ outcome: "split", split: { rounds: 1, judged: true, via: "cards", children: [expect.any(Object), expect.any(Object)] }, size: { verdict: "over", by: "decision" } });
+    expect(result.detail).not.toHaveProperty("plan");
+    expect(result.detail).not.toHaveProperty("cases");
+    expect(result.detail).toHaveProperty("risk");
+    expect(result.detail).toHaveProperty("decisions");
+  });
+
+  it("when the plan's own steps add up over the limit, drops that plan and proposes the split", async () => {
+    const { run, calls } = withSplit({ size: sizeAnswer(2), plan: big });
+    const result = await run(context({ task: twoCriteria }));
+    expect(calls).toContain("plan");
+    expect(result.detail).toMatchObject({ outcome: "split", size: { verdict: "over", by: "plan", planned: 3000 } });
+    expect(result.detail).not.toHaveProperty("plan");
+    expect(result.detail).not.toHaveProperty("cases");
+  });
+
+  it("gives the decomposer the origin's criteria with ids, the repository path and the limits", async () => {
+    const { run, decomposed } = withSplit();
+    await run(context({ task: twoCriteria }));
+    expect(decomposed[0]).toMatchObject({ repo: "/repo", context: { origin: { title: "Panic", criteria: [{ id: "C1", text: "csv downloads" }, { id: "C2", text: "pdf downloads" }] }, limit: { hard: 2500, maxChildren: 8 }, round: 1 } });
+  });
+
+  it("when no round finds a valid split, ends pass as split_failed with the reason, the last children and the issues", async () => {
+    const { run } = withSplit({ split: { children: [part({ covers: ["C1"] }), part({ covers: [] })] } });
+    const result = await run(context({ task: twoCriteria }));
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ outcome: "split_failed", reason: "no valid split after 3 rounds", split: { rounds: 3, issues: ["criterion C2 is covered by no child"], children: [expect.any(Object), expect.any(Object)] } });
+  });
+
+  it("never splits a card whose depth is not under the limit: a child of a split is not split again", async () => {
+    const { run, decomposed } = withSplit({ depth: 2 });
+    const result = await run(context({ task: twoCriteria }));
+    expect(decomposed).toHaveLength(0);
+    expect(result.detail).toMatchObject({ outcome: "split_failed", reason: expect.stringContaining("depth") });
+    expect(result.detail).not.toHaveProperty("plan");
+  });
+
+  it("asks a person, with the reason, when the repository's limits leave no room to split", async () => {
+    for (const config of [{ max_children: 1 }, { max_rounds: 0 }]) {
+      const { run, decomposed } = withSplit({ config });
+      const result = await run(context({ task: twoCriteria }));
+      expect(decomposed).toHaveLength(0);
+      expect(result.detail, JSON.stringify(config)).toMatchObject({ outcome: "split_failed", reason: expect.any(String) });
+    }
+  });
+
+  it("takes max_rounds from the repository's luna.yaml", async () => {
+    const { run, decomposed } = withSplit({ config: { max_rounds: 1 }, split: { children: [part()] } });
+    const result = await run(context({ task: twoCriteria }));
+    expect(decomposed).toHaveLength(1);
+    expect(result.detail).toMatchObject({ outcome: "split_failed", reason: "no valid split after 1 rounds" });
+  });
+
+  it("with a person's keep-whole on record, skips the guard, plans, and flags the gate with who decided", async () => {
+    const { run, decomposed, calls } = withSplit({ size: sizeAnswer(2), plan: big });
+    const result = await run(context({ task: twoCriteria, approvals: [approved({ keepWhole: true })] }));
+    expect(decomposed).toHaveLength(0);
+    expect(calls).toContain("plan");
+    expect(result.detail).not.toHaveProperty("outcome");
+    expect(result.detail).toHaveProperty("plan");
+    expect((result.detail as { flagged: string[] }).flagged).toContain("over the size limit: kept whole by a person");
+  });
+
+  it("holds a keep-whole for a later plan of the card too, and reads only a person's approved answer", async () => {
+    const a = withSplit({ size: sizeAnswer(6) });
+    const kept = await a.run(context({ task: twoCriteria, approvals: [approved({ keepWhole: true }), approved({}, {})] }));
+    expect(kept.detail).not.toHaveProperty("outcome");
+    // A keepWhole on a gate nobody approved, or on one that is not a plan gate, is no keep-whole.
+    const b = withSplit({ size: sizeAnswer(6) });
+    const notKept = await b.run(context({ task: twoCriteria, approvals: [{ ...(approved({ keepWhole: true }) as object), decision: "sent_back" } as never, { ...(approved({ keepWhole: true }) as object), kind: "awaiting_ship" } as never, approved({ keepWhole: "yes" })] }));
+    expect(notKept.detail).toMatchObject({ outcome: "split" });
+  });
+
+  it("hands a sent-back comment to the loop as a flattened note", async () => {
+    const { run, decomposed } = withSplit();
+    await run(context({ task: twoCriteria, approvals: [sentBack("split by layer\nnot by screen")] }));
+    expect(decomposed[0]!.context.note).toBe("split by layer not by screen");
+  });
+
+  it("with no split wiring the size flag alone stays, as before", async () => {
+    const base = setup({ plan: [big] });
+    base.deps.size = { decide: async () => sizeAnswer(2) };
+    const result = await planStage(base.deps)(context());
+    expect(result.detail).not.toHaveProperty("outcome");
+    expect((result.detail as { flagged: string[] }).flagged).toContain("over the size limit");
+  });
+});

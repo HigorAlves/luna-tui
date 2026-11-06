@@ -104,6 +104,25 @@ export class NoContextGateError extends Error {
   }
 }
 
+/** A person approved a split that makes nothing yet: the gate says so instead of closing on an approval that does nothing. */
+export class SplitNotReadyError extends Error {
+  constructor(id: string) {
+    super(`task ${id} waits at a split proposal: approving a split is not available yet; send it back, reject it, or keep the card whole`);
+    this.name = "SplitNotReadyError";
+  }
+}
+
+/** A person approved a gate that carries no valid split: only sending back, rejecting or keeping the card whole answer it. */
+export class SplitNotValidError extends Error {
+  constructor(id: string) {
+    super(`task ${id} has no valid split to approve: send it back with a comment, reject it, or keep the card whole`);
+    this.name = "SplitNotValidError";
+  }
+}
+
+/** The plan gate's two split outcomes: a proposal a person reads, or the reason there is none. */
+const isSplitOutcome = (outcome: unknown): outcome is "split" | "split_failed" => outcome === "split" || outcome === "split_failed";
+
 /** What the duplicate check needs from outside: the one decision call, and the backlog (to list its items and to bump one). */
 export interface DedupPort {
   decide(context: DedupContext): Promise<{ answer: DedupAnswer; recordId?: string }>;
@@ -847,7 +866,7 @@ export class Pipeline {
       else if (open?.kind === "awaiting_test_check") {
         plan = (await tx.listApprovals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
       }
-      if (!open || !plan) throw new NoPlanToEditError(id);
+      if (!open || !plan || isSplitOutcome(plan.requested.outcome)) throw new NoPlanToEditError(id);
       // What Build may touch is not edited once two names (or one) approved it: only the text beside it moves.
       if (plan.decision === "approved" && (patch.steps !== undefined || patch.risk !== undefined || patch.map !== undefined || patch.rollback !== undefined)) throw new PlanApprovedError(id);
       const requested = plan.requested;
@@ -961,7 +980,7 @@ export class Pipeline {
   async editCases(id: string, cases: TestCase[]): Promise<TaskRow> {
     await this.store.withTaskLock(id, async (_task, tx) => {
       const open = await tx.findOpenApproval(id);
-      const carriesCases = open?.kind === "awaiting_test_check" || (open?.kind === "awaiting_approval" && Array.isArray(open.requested.cases));
+      const carriesCases = open?.kind === "awaiting_test_check" || (open?.kind === "awaiting_approval" && !isSplitOutcome(open.requested.outcome) && Array.isArray(open.requested.cases));
       if (!open || !carriesCases) throw new NoCasesToEditError(id);
       // Kept as a revision like a plan edit, so ground truth can tell the proposed scenarios from the approved ones.
       const revisions = Array.isArray(open.requested.revisions) ? open.requested.revisions : [];
@@ -1357,6 +1376,21 @@ export class Pipeline {
     const gate = this.truth && !options.auto ? (await this.approvals(id)).find((a) => a.decision === null) : undefined;
     const open = task.state === "awaiting_approval" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_approval" && a.decision === null) : undefined;
     const outcome = open?.requested.outcome;
+    // Keeping the card whole is a person's answer at a split gate and nowhere else: on any other gate the word is dropped, so it can never be recorded by riding on an ordinary approval.
+    if (response && "keepWhole" in response && !(decision === "approved" && isSplitOutcome(outcome))) {
+      const { keepWhole: _dropped, ...rest } = response;
+      response = Object.keys(rest).length > 0 ? rest : undefined;
+    }
+    if (decision === "approved" && open && isSplitOutcome(outcome)) {
+      if (response?.keepWhole !== true) throw outcome === "split_failed" ? new SplitNotValidError(id) : new SplitNotReadyError(id);
+      // Kept whole: the gate closes approved with the person's answer, and the plan stage runs again, which now plans without the size guard.
+      const size = (open.requested.size ?? {}) as { estLoc?: unknown; planned?: unknown; by?: unknown; limit?: { hard?: unknown } };
+      const lines = size.by === "plan" && typeof size.planned === "number" ? size.planned : size.estLoc;
+      const kept = await this.dispatch(id, { type: "sent_back", from: "plan" }, { decision: { decision: "approved", reason, response: { keepWhole: true, ...(approver ? { approver } : {}) } }, onlyFrom: new Set<TaskState>(["awaiting_approval"]) });
+      await this.log(id, "size.overridden", { estLoc: typeof lines === "number" ? lines : 0, limit: typeof size.limit?.hard === "number" ? size.limit.hard : 0 });
+      if (gate) await this.learnFromGate(id, gate, "approved", { keepWhole: true });
+      return kept;
+    }
     // The plan needs as many distinct names as its level asks (the repo's `plan.approvers`: two for high by default), at least one from outside
     // the code owners on a high-risk plan whose owners CODEOWNERS names (never a model's word). The rule is computed under the task lock from
     // the gate as it is now (an edit that raised the risk is seen); the names so far are kept on the gate and the last one closes it. The level is
@@ -1439,7 +1473,7 @@ export class Pipeline {
     // A gate that carries triage's outcome came from triage; any other open approval is the plan stage's.
     // The watch's release question says so on its approval; the preview gate (and a gate stored before this wave) has no such word.
     const shipGate = task.state === "awaiting_ship" && (await this.approvals(id)).find((a) => a.kind === "awaiting_ship" && a.decision === null)?.requested.gate === "ship_approval" ? ({ gate: "ship_approval" } as const) : {};
-    const event: PipelineEvent = decision === "approved" ? { type: "approved", ...shipGate } : { type: "sent_back", from: outcome === undefined ? "plan" : "triage", ...shipGate };
+    const event: PipelineEvent = decision === "approved" ? { type: "approved", ...shipGate } : { type: "sent_back", from: outcome === undefined || isSplitOutcome(outcome) ? "plan" : "triage", ...shipGate };
     const moved = await this.dispatch(id, event, { decision: record, ...(guard ? { guard } : {}) });
     if (decision === "approved" && open && outcome === undefined) await this.keepGroundTruth(moved, open.id);
     if (gate) await this.learnFromGate(id, gate, decision, response);
@@ -1462,7 +1496,7 @@ export class Pipeline {
     const gateKind = task.state === "awaiting_approval" || (task.state === "awaiting_ship" && task.route !== "review") ? task.state : null;
     const open = gateKind ? (await this.approvals(task.id)).find((a) => a.kind === gateKind && a.decision === null) : undefined;
     // The plan gate, or the watch's release question; the preview gate and every other gate are not rejectable.
-    if (!open || auto || open.requested.outcome !== undefined || (gateKind === "awaiting_ship" && open.requested.gate !== "ship_approval")) throw new RejectNotAllowedError(task.id, task.state);
+    if (!open || auto || (open.requested.outcome !== undefined && !isSplitOutcome(open.requested.outcome)) || (gateKind === "awaiting_ship" && open.requested.gate !== "ship_approval")) throw new RejectNotAllowedError(task.id, task.state);
     const record = { decision: "rejected" as const, ...(reason ? { reason } : {}) };
     const archived = await this.archive(task.id, "rejected", { onlyFrom: new Set<TaskState>([gateKind!]), decision: record });
     if (this.truth) await this.learnFromGate(task.id, open, "sent_back");
@@ -1497,7 +1531,17 @@ export class Pipeline {
         const verdicts = triageVerdicts(task.classification, policy.factory.triage, { ...(policy.decisions.triage_signals ? { overrides: policy.decisions.triage_signals } : {}) });
         await truth.learned({ pack: "triage_signals", recordId, label: { ...triageConfirmTruth(task.classification, verdicts, edited), ...edits }, source: "plan_approved", taskId });
       }
-      if (gate.kind === "awaiting_approval" && requested.outcome === undefined) {
+      if (gate.kind === "awaiting_approval" && isSplitOutcome(requested.outcome)) {
+        // A split approved as proposed confirms split_check; sent back, rejected or kept whole contradicts it.
+        const recordId = ids.split_check;
+        if (typeof recordId === "string") {
+          const kept = response?.keepWhole === true;
+          const confirmed = decision === "approved" && !kept;
+          const answer = await truth.answerOf("split_check", recordId);
+          const label = answer ? planTruth(PACKS.split_check, answer, confirmed ? "confirmed" : "contradicted") : null;
+          if (label) await truth.learned({ pack: "split_check", recordId, label, source: confirmed ? "split_approved" : kept ? "split_kept_whole" : "split_sent_back", taskId });
+        }
+      } else if (gate.kind === "awaiting_approval" && requested.outcome === undefined) {
         const touched = new Set((Array.isArray(requested.revisions) ? requested.revisions : []).flatMap((r) => Object.keys((r as { after?: object }).after ?? {})));
         const subject: Record<string, string[]> = { coverage_check: ["cases"], plan_check: ["brief", "criteria", "assumptions", "slices", "rollback"], risk_score: ["risk"] };
         for (const [pack, keys] of Object.entries(subject)) {
@@ -1835,6 +1879,8 @@ export class Pipeline {
       if (!open) continue;
       // A reply or an archive waits for a person's tap, whatever else the gate carries: nothing outward is ever sent by a clock.
       if (open.requested.outcome === "conversation" || open.requested.outcome === "archive") continue;
+      // Nor is a split ever approved by a clock: a person reads the children (or the reason there are none) first.
+      if (isSplitOutcome(open.requested.outcome)) continue;
       // Low risk, every check a clear yes, and nothing asked: the plan stage's own findings are the bar.
       // A plan that came back with evidence, or that carries any flag, is a person's to read: the clock never approves it.
       if (open.requested.replan !== undefined || (Array.isArray(open.requested.flagged) && open.requested.flagged.length > 0)) continue;

@@ -18,6 +18,7 @@ import { createDataSource, poolSizeFor } from "./adapters/persistence/data-sourc
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
 import { AUTO_ARCHIVE_GATES, type SlaRow, applySlaActions } from "./application/sla-actions.ts";
+import { splitDepth } from "./application/split-depth.ts";
 import { evidenceRetentionDays, sweepEvidenceStore } from "./application/evidence-store.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
@@ -241,7 +242,7 @@ if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISAB
 /** Triage's signals: the classifier is built after the stages (it needs PackRuns), so it is bound below. */
 const triageSignals: TriageSignalDeps = { classify: null, graph, policy: (repoPath) => policies.for(repoPath), save: (id, patch) => engineSpend.updateTask(id, patch) };
 /** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
-const planDecisions: { decide: PlanDeps["decide"]; size: { decide: NonNullable<PlanDeps["size"]>["decide"] } } = { decide: null, size: { decide: null } };
+const planDecisions: { decide: PlanDeps["decide"]; size: { decide: NonNullable<PlanDeps["size"]>["decide"] }; split: { decompose: NonNullable<PlanDeps["split"]>["decompose"]; check: NonNullable<PlanDeps["split"]>["check"]; depthOf?: NonNullable<PlanDeps["split"]>["depthOf"] } } = { decide: null, size: { decide: null }, split: { decompose: null, check: null } };
 /** Build's red and scope checks run through PackRuns too: bound once it exists. */
 const buildDecisions: { decide: Decide | null; budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> } = { decide: null };
 /** Verify's finding_classify (and e2e's failure cause) run through PackRuns as the `verify` client: bound once it exists. */
@@ -624,6 +625,10 @@ const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
 if (classifier) triageSignals.classify = (issue, _repoPath, options) => classifier.classify(issue, options);
 if (packRuns) planDecisions.decide = async (pack, plan) => tagged(await packRuns.run({ pack, context: { plan }, stage: "plan" }, "plan"));
 if (packRuns) planDecisions.size.decide = async (size) => tagged(await packRuns.run({ pack: "size_estimate", context: { size }, stage: "plan" }, "plan"));
+// The split exit: the decomposer (an agent pack with no tools) and split_check run through PackRuns as the plan stage's own client; the card's depth is read off its chain of splits.
+if (packRuns) planDecisions.split.decompose = async (split) => (await packRuns.run({ pack: "decompose", context: { split }, stage: "plan" }, "plan")).answer as Record<string, unknown>;
+if (packRuns) planDecisions.split.check = async (split) => tagged(await packRuns.run({ pack: "split_check", context: { split }, stage: "plan" }, "plan"));
+planDecisions.split.depthOf = (task) => splitDepth((id) => pipeline.get(id).catch(() => null), task);
 if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "verify" }, "verify"));
 if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await packRuns.run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
 if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await packRuns.run({ pack, context: { ship }, stage: "ship" }, "ship"));

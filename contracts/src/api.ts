@@ -184,6 +184,8 @@ export const DecisionInput = z.object({
   comment: z.string().max(2000).nullable().optional(),
   /** At the memory review gate: false approves without writing the proposed rules. */
   applyRules: z.boolean().optional(),
+  /** At a split gate: true keeps the card whole, which is a person's recorded answer (it lifts the size guard for this card). Dropped at any other gate. */
+  keepWhole: z.boolean().optional(),
   /** Who is deciding, by name. A plan of High risk needs two distinct names; any decision keeps its own. */
   approver: z
     .string()
