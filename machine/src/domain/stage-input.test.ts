@@ -287,9 +287,9 @@ describe("buildStageInput", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "build_tests", "chat_triage", "ci_failure_class", "ci_watch", "code_map", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "size_estimate", "split_check", "decompose", "finding_classify", "frame_privacy", "implementing", "jira_intake", "plan", "plan_check", "plan_fast", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply"].sort(),
+      ["addressing", "build_tests", "chat_triage", "ci_failure_class", "ci_watch", "code_map", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "size_estimate", "split_check", "decompose", "finding_classify", "frame_privacy", "implementing", "jira_intake", "memory_conflict", "memory_extract", "memory_worth", "plan", "plan_check", "plan_fast", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply"].sort(),
     );
-    expect(Object.keys(PACK_LIMITS)).toHaveLength(53);
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(56);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
