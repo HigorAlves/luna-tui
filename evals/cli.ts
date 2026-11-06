@@ -10,6 +10,10 @@
 //   pnpm eval label push --queue <queue id> [--pack <p>] [--since <date>]   the records still waiting for a label, to the local labelling queue
 //   pnpm eval cases [--pack <p>]                              a table of the cases for a person to read: kind, label, the criterion, the twin, the second reading
 //   pnpm eval preflight                                       what a baseline run needs, checked without a model call; exits 1 when a check fails
+//   pnpm eval calibrate --pack <p> [--since <date>] [--target 0.9] [--with-outcome] [--out <file>]   proposes the confidence bars from ground truth, with the evidence; changes nothing
+//   pnpm eval calibrate --weights [--machine triage|ticket|conversation] [--out <file>]   proposes the priority weights and bands from the priority files; changes nothing
+//   pnpm eval baseline-plan [--engines a,b,c]                 prints the baseline commands and runs none
+//   pnpm eval prune-runs [--older-than 30]                    removes run folders under evals/.runs older than that many days
 //   pnpm eval scorecard                       evals/scorecard.md over every decision baseline
 //   pnpm eval defaults [--write] [--except <pack>...]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
 import { DECISION_DEFAULTS, PACKS, PackId, decisionEngines } from "@hardness/contracts";
@@ -26,9 +30,14 @@ import { parseArgs } from "node:util";
 import { decisionPack } from "./src/labels.ts";
 import { labelFor, nextToLabel, renderNext, setLabel } from "./src/label.ts";
 import { runHarvest, runLabelPush, runPull, runPush } from "./src/loop.ts";
+import { baselinePlan } from "./src/baseline-plan.ts";
+import { renderBars } from "./src/propose.ts";
+import { pruneRuns } from "./src/prune-runs.ts";
+import { writeReport } from "./src/report-out.ts";
+import { proposeWeights, readPriorityFiles, renderWeights } from "./src/weights.ts";
 import { casesTable, decisionPackIds, preflight } from "./src/preflight.ts";
 import { folderMegabytes, priorityHints, printable, recordsReport } from "./src/records.ts";
-import { type Proposal, buildDefaultsFile, loadBaselines, proposeDefaults, renderScorecard } from "./src/scorecard.ts";
+import { type Proposal, PINNED, buildDefaultsFile, loadBaselines, proposeDefaults, renderScorecard } from "./src/scorecard.ts";
 
 const EVALS = dirname(fileURLToPath(import.meta.url));
 const DEFAULTS_FILE = resolve(EVALS, "..", "contracts", "src", "decision-defaults.json");
@@ -90,6 +99,33 @@ if (command === "harvest") {
     const state = machineStateDir();
     for (const [name, dir] of [["decisions", join(state, "decisions")], ["ground-truth", join(state, "ground-truth")], ["evals/.runs", join(EVALS, ".runs")]] as const) console.log(`${name}: ${folderMegabytes(dir).toFixed(1)} MB`);
   }
+} else if (command === "calibrate") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, since: { type: "string" }, target: { type: "string" }, "with-outcome": { type: "boolean", default: false }, weights: { type: "boolean", default: false }, machine: { type: "string" }, out: { type: "string" } } });
+  let lines: string[];
+  if (values.weights) {
+    if (values.machine && !["triage", "ticket", "conversation"].includes(values.machine)) fail("--machine must be triage, ticket or conversation");
+    lines = renderWeights(proposeWeights(readPriorityFiles(machineStateDir(), values.machine)));
+  } else {
+    const pack = decisionOf(values.pack);
+    const since = values.since ? new Date(values.since) : undefined;
+    if (since && Number.isNaN(since.getTime())) fail("--since must be a date, like 2026-11-01");
+    const target = values.target === undefined ? undefined : Number(values.target);
+    if (target !== undefined && !(target > 0 && target <= 1)) fail("--target must be a number above 0 and at most 1");
+    const records = (await log().list(pack, { withTruth: true, ...(since ? { since } : {}) })).filter((r) => r.private !== true);
+    lines = renderBars(pack, records, { ...(PINNED[pack] ? { pin: PINNED[pack]! } : {}), ...(target === undefined ? {} : { target }), withOutcome: values["with-outcome"] });
+  }
+  for (const line of lines) console.log(line);
+  const saved = writeReport(values.out, lines);
+  if (saved) console.log(`report written to ${saved}`);
+} else if (command === "baseline-plan") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { engines: { type: "string" } } });
+  for (const line of baselinePlan(values.engines ? { engines: values.engines.split(",").map((e) => e.trim()).filter(Boolean) } : {})) console.log(line);
+} else if (command === "prune-runs") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { "older-than": { type: "string", default: "30" } } });
+  const days = Number(values["older-than"]);
+  if (!Number.isInteger(days) || days < 0) fail("--older-than must be a whole number of days");
+  const out = pruneRuns(join(EVALS, ".runs"), { olderThanDays: days });
+  console.log(`removed ${out.removed.length} run folder(s) older than ${days} days${out.skipped.length > 0 ? `; left alone (not a stamped folder, or a link): ${out.skipped.join(", ")}` : ""}`);
 } else if (command === "cases") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" } } });
   for (const pack of values.pack ? [decisionOf(values.pack)] : decisionPackIds()) {

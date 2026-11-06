@@ -10,7 +10,7 @@ import { scrubContext } from "./scrub.ts";
 export type LabelState = "labelled" | "to_confirm" | "queue" | "local_only" | "not_labelable";
 
 /** The kind each question's label has: the latest history entry that names it, else the truth's own kind (no kind reads as a fact). */
-function kindsOf(truth: NonNullable<DecisionRecord["truth"]>): Map<string, TruthKind> {
+export function kindsOf(truth: NonNullable<DecisionRecord["truth"]>): Map<string, TruthKind> {
   const kinds = new Map<string, TruthKind>();
   for (const question of Object.keys(truth.label)) kinds.set(question, truth.kind ?? "fact");
   for (const entry of truth.history ?? []) for (const question of Object.keys(entry.label)) kinds.set(question, entry.kind);
