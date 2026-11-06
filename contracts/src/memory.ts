@@ -79,3 +79,10 @@ export const MemoryContext = z.object({
   note: z.string().max(300).nullable(),
 });
 export type MemoryContext = z.infer<typeof MemoryContext>;
+
+/** Items of the company folder (`repo: null`) have ids of their own shape, so they are told apart from a repository's at a glance. */
+export const COMPANY_MEMORY_ID_PREFIX = "co_";
+export const companyMemoryId = (suffix: string): string => `${COMPANY_MEMORY_ID_PREFIX}${suffix}`;
+/** The first line of what Cognee is given for an item: `luna:<id>`. */
+export const MEMORY_MARKER_PREFIX = "luna:";
+export const memoryMarker = (id: string): string => `${MEMORY_MARKER_PREFIX}${id}`;

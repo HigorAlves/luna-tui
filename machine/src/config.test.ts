@@ -10,6 +10,7 @@ import {
   DEFAULT_PORT,
   DEFAULT_RETENTION_DAYS,
   loadConfig,
+  memoryConfig,
   tracesConfig,
 } from "./config.ts";
 
@@ -53,7 +54,20 @@ describe("loadConfig", () => {
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
       jira: null,
       sla: { gateSecs: 172_800, cycleSecs: null },
+      memory: { enabled: true, url: "http://127.0.0.1:8010", email: "machine@luna.example.com", password: null, mode: "local", dailyCognifyItems: 200 },
     });
+  });
+
+  it("reads memory's switches, address, user and cap, and the mode from the key file", () => {
+    const home = mkdtempSync(join(tmpdir(), "memcfg-"));
+    mkdirSync(join(home, ".config", "hardness"), { recursive: true });
+    writeFileSync(join(home, ".config", "hardness", "cognee-password"), "pw-from-file\n");
+    expect(memoryConfig({}, home)).toMatchObject({ enabled: true, password: "pw-from-file", mode: "local" });
+    writeFileSync(join(home, ".config", "hardness", "cognee-openai-key"), "sk-test-key-123456\n");
+    expect(memoryConfig({ MACHINE_MEMORY: "off", COGNEE_URL: "http://cognee:8000/", COGNEE_EMAIL: "m@x.example.com", COGNEE_PASSWORD: " env-pw ", MACHINE_MEMORY_DAILY_COGNIFY: "50" }, home)).toEqual({ enabled: false, url: "http://cognee:8000", email: "m@x.example.com", password: "env-pw", mode: "openai", dailyCognifyItems: 50 });
+    expect(() => memoryConfig({ MACHINE_MEMORY: "maybe" }, home)).toThrow(/MACHINE_MEMORY/);
+    expect(() => memoryConfig({ COGNEE_URL: "cognee" }, home)).toThrow(/COGNEE_URL/);
+    expect(() => memoryConfig({ MACHINE_MEMORY_DAILY_COGNIFY: "-1" }, home)).toThrow(/DAILY_COGNIFY/);
   });
 
   it("reads the Slack inbox's tokens and knobs", () => {

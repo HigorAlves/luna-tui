@@ -86,7 +86,28 @@ export interface Config {
   restartPolicy: RestartPolicy;
   /** Run traces to a local Laminar (`MACHINE_TRACES`, `LMNR_*`); `{ mode: "off" }` without a key. */
   traces: TracesConfig;
+  /** Memory on Cognee (RFC 0007): `MACHINE_MEMORY=off` turns it off. */
+  memory: MemoryConfig;
 }
+
+export interface MemoryConfig {
+  enabled: boolean;
+  /** Cognee's API as the machine reaches it (`COGNEE_URL`). */
+  url: string;
+  /** The machine's Cognee user (`COGNEE_EMAIL`); the password is `COGNEE_PASSWORD`, else `~/.config/hardness/cognee-password`. Null until `pnpm start` made one. */
+  email: string;
+  password: string | null;
+  /** `openai` when Cognee has its own key (`~/.config/hardness/cognee-openai-key`), `local` without. */
+  mode: "openai" | "local";
+  /** Items `cognify` may process in a day (`MACHINE_MEMORY_DAILY_COGNIFY`, 200). */
+  dailyCognifyItems: number;
+}
+
+/** Memory's secret files in `~/.config/hardness`. */
+export const COGNEE_PASSWORD_FILE = "cognee-password";
+export const COGNEE_OPENAI_KEY_FILE = "cognee-openai-key";
+export const DEFAULT_COGNEE_URL = "http://127.0.0.1:8010";
+export const DEFAULT_COGNEE_EMAIL = "machine@luna.example.com";
 
 export interface SlackInboxConfig {
   /** `MACHINE_SLACK_INBOX=off` stops polling; the routes still answer the empty snapshot. */
@@ -450,6 +471,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     engineBudgets: engineBudgets(env),
     restartPolicy,
     traces: tracesConfig(env, home),
+    memory: memoryConfig(env, home),
+  };
+}
+
+/** `MACHINE_MEMORY` (on, off), `COGNEE_URL`, `COGNEE_EMAIL`, `COGNEE_PASSWORD` and the secret files; exported for the tests. */
+export function memoryConfig(env: NodeJS.ProcessEnv, home: string): MemoryConfig {
+  const raw = env.MACHINE_MEMORY?.trim();
+  if (raw !== undefined && raw !== "" && raw !== "on" && raw !== "off") throw new Error(`MACHINE_MEMORY must be on or off, got "${raw}"`);
+  const url = (env.COGNEE_URL?.trim() || DEFAULT_COGNEE_URL).replace(/\/+$/, "");
+  if (!/^https?:\/\/[^\s/]+(:\d+)?$/.test(url)) throw new Error(`COGNEE_URL must be a scheme, host and port like ${DEFAULT_COGNEE_URL}, got "${env.COGNEE_URL}"`);
+  const dir = join(home, ".config", "hardness");
+  const cap = env.MACHINE_MEMORY_DAILY_COGNIFY === undefined || env.MACHINE_MEMORY_DAILY_COGNIFY === "" ? 200 : Number(env.MACHINE_MEMORY_DAILY_COGNIFY);
+  if (!Number.isInteger(cap) || cap < 0) throw new Error(`MACHINE_MEMORY_DAILY_COGNIFY must be a non-negative integer, got "${env.MACHINE_MEMORY_DAILY_COGNIFY}"`);
+  return {
+    enabled: raw !== "off",
+    url,
+    email: env.COGNEE_EMAIL?.trim() || DEFAULT_COGNEE_EMAIL,
+    password: env.COGNEE_PASSWORD?.trim() || secretFileSync(join(dir, COGNEE_PASSWORD_FILE)),
+    mode: secretFileSync(join(dir, COGNEE_OPENAI_KEY_FILE)) ? "openai" : "local",
+    dailyCognifyItems: cap,
   };
 }
 

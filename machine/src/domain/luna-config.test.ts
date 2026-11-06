@@ -95,9 +95,20 @@ describe("parseLunaConfig", () => {
       engineBudgets: { "openai:sol": 10, codex: 0 },
       decisions: {},
       evidenceRetentionDays: 30,
+      memory: { on: true, dailyCognifyItems: null, staleLines: 200 },
       freeze: [{ from: "2026-12-24T00:00:00Z", to: "2026-12-27T00:00:00Z", reason: "holiday freeze" }],
       factory: factoryConfigOf({ evidence: { retention_days: 30 } }),
     });
+  });
+
+  it("reads memory: on by default, off as a bare word or a mode, the cap and the stale line optional, an unknown key refused", () => {
+    expect(parseLunaConfig("").memory).toEqual({ on: true, dailyCognifyItems: null, staleLines: 200 });
+    expect(parseLunaConfig("memory: off\n").memory.on).toBe(false);
+    expect(parseLunaConfig("memory: on\n").memory.on).toBe(true);
+    expect(parseLunaConfig("memory:\n  mode: off\n").memory.on).toBe(false);
+    expect(parseLunaConfig("memory:\n  daily_cognify_items: 50\n  stale_lines: 120\n").memory).toEqual({ on: true, dailyCognifyItems: 50, staleLines: 120 });
+    expect(() => parseLunaConfig("memory:\n  stale_lines: 0\n")).toThrow(/memory\.stale_lines/);
+    expect(() => parseLunaConfig("memory:\n  verbose: yes\n")).toThrow(/memory/);
   });
 
   it("refuses a freeze window whose dates do not parse", () => {
