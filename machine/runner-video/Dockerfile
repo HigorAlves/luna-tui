@@ -14,10 +14,14 @@ COPY machine/runner-video/tools /video-tools/tools
 COPY machine/runner-video/cards /video-tools/cards
 
 # kokoro q8 (about 90 MB) and whisper-tiny.en (about 40 MB) land in /models; --warm runs one
-# phrase through each so every file the tools will ask for is there (the voice file included).
+# phrase through each so every file the tools will ask for is there. The tools run with no network, so a voice
+# must be fetched here: the image carries the voices in LUNA_VOICES (a repository's `evidence.tts.voice` or
+# `evidence.tts.language: en-GB` needs its voice in this list; a voice the image lacks fails the narrate job,
+# which degrades the pack to screenshots).
+ARG LUNA_VOICES="af_heart bf_emma"
 ENV LUNA_MODELS=/models
 RUN mkdir -p /models /tmp/warm \
- && node /video-tools/tools/narrate.ts --warm \
+ && for v in ${LUNA_VOICES}; do node /video-tools/tools/narrate.ts --warm --voice "$v"; done \
  && chmod -R a+rX /models /video-tools \
  && rm -rf /tmp/warm /root/.cache
 

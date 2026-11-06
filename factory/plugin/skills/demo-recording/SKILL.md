@@ -22,11 +22,11 @@ await narration.cursorTo(page, "#coupon");
 await page.fill("#coupon", "SAVE10");
 await narration.highlight(page, "#apply", 800);
 await page.click("#apply");
-await page.waitForTimeout(narration.durationFor("add-coupon"));  // ms: the scene lasts as long as its voice
+await page.waitForTimeout(narration.durationFor("add-coupon"));  // ms: the scene lasts as long as the timeline plans (end - start)
 await narration.finish(page);                // closes the page, writes timing.json
 ```
 
-`caption(page, text, ms)` puts an in-world caption on the page for `ms`. The scene ids are the timeline's; `durationFor` reads the narration file named by `LUNA_NARRATION`.
+`caption(page, text, ms)` puts an in-world caption on the page for `ms`. The scene ids are the timeline's; `durationFor` uses the narration file named by `LUNA_NARRATION` when it exists, else the timeline at `LUNA_TIMELINE` (the recorder runs beside the voice, so it usually has only the timeline). `cta(page, text, ms)` is an overlay like `caption`.
 
 ## Environment
 

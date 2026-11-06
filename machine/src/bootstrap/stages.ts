@@ -279,6 +279,7 @@ export async function buildRealStages(
             image: config.runnerVideoImage,
             stateDir: config.stateDir,
             runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, extra),
+            config: async (repoPath) => (await policies.for(repoPath)).factory.evidence,
           })
         : null,
     }),

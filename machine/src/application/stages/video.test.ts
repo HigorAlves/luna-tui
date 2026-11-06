@@ -38,8 +38,9 @@ beforeEach(() => {
   mkdirSync(stateDir);
 });
 
-function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink"; heads?: string[]; answerOnly?: boolean } = {}) {
-  const calls: { pack: string; runId: string; extra: AgentExtra; at: number }[] = [];
+function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink" | "inside-link"; heads?: string[]; answerOnly?: boolean; concurrent?: boolean; narrateFails?: boolean; narrateWaitsForAbort?: boolean; recorderWaitsForAbort?: boolean; config?: { voice?: string | null; language?: string | null } } = {}) {
+  const calls: { pack: string; runId: string; extra: AgentExtra; at: number; signal?: AbortSignal }[] = [];
+  const flags = { recordingBeforeNarrateReturned: false, recorderSawAbort: false, narrateSawAbort: false, recInTimelineAtStart: null as string | null };
   const heads = [...(opts.heads ?? [])];
   const git = { head: async () => heads.length > 1 ? heads.shift()! : (heads[0] ?? "aaa1111"), reset: vi.fn(async () => {}) };
   const tools: { tool: string; run: SandboxRun }[] = [];
@@ -52,7 +53,7 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
     for (const [name, text] of Object.entries(entries)) writeFileSync(join(dir, name), text);
   };
   const runPack = async (pack: string, sub: StageContext, extra: AgentExtra): Promise<StageResult> => {
-    calls.push({ pack, runId: sub.runId, extra, at: calls.length + tools.length });
+    calls.push({ pack, runId: sub.runId, extra, at: calls.length + tools.length, ...(sub.signal ? { signal: sub.signal } : {}) });
     const usage = { turns: 2, costUsd: 0.25 };
     if (pack === "video_script" || pack === "video_fix") {
       const tl = scripts.length > 0 ? scripts.shift() : timeline();
@@ -60,10 +61,19 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
       return { outcome: "pass", usage, detail: { answer: { script: "# script", timeline: tl, facts: [], durationEstimateS: 60 } } };
     }
     if (pack === "recording") {
+      if (opts.recorderWaitsForAbort) {
+        await new Promise<void>((resolve) => (sub.signal?.aborted ? resolve() : sub.signal?.addEventListener("abort", () => resolve(), { once: true })));
+        flags.recorderSawAbort = true;
+        return { outcome: "fail", usage, detail: { error: "aborted" } };
+      }
       if (opts.recorder === "escalated") return { outcome: "escalated", usage, detail: { reason: "the app will not start", answer: { kind: "escalated" } } };
       const marks = [{ scene: "add", t: 1 }, { scene: "total", t: 9 }];
-      files(sub.runId, { ...(opts.recorder === "symlink" ? {} : { "recording.webm": "webm" }), ...(opts.recorder === "no-timing" ? {} : { "timing.json": JSON.stringify({ marks, videoPath: "/out/files/video/recording.webm" }) }) });
+      const mount = extra.mounts?.[0]?.host;
+      if (mount) flags.recInTimelineAtStart = readFileSync(join(mount, "timeline.json"), "utf8");
+      files(sub.runId, { ...(opts.recorder === "symlink" || opts.recorder === "inside-link" ? {} : { "recording.webm": "webm" }), ...(opts.recorder === "no-timing" ? {} : { "timing.json": JSON.stringify({ marks, videoPath: "/out/files/video/recording.webm" }) }) });
       if (opts.recorder === "symlink") symlinkSync(join(root, "state"), join(stateDir, "runs", sub.runId, "files", "video", "recording.webm"));
+      // A link that stays inside the folder is still a link: it is not followed either.
+      if (opts.recorder === "inside-link") symlinkSync(join(stateDir, "runs", sub.runId, "files", "video", "timing.json"), join(stateDir, "runs", sub.runId, "files", "video", "recording.webm"));
       return { outcome: "pass", usage, detail: { answer: { timing: { marks }, recordingPath: "/out/files/video/recording.webm", scenesRecorded: ["add", "total"] } } };
     }
     if (pack === "video_qa") return { outcome: "pass", usage, detail: { answer: critics.length > 1 ? critics.shift() : critics[0] } };
@@ -74,6 +84,16 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
     tools.push({ tool, run });
     const job = run.worktree;
     if (tool === "narrate") {
+      if (opts.concurrent) {
+        for (let i = 0; i < 100 && !calls.some((c) => c.pack === "recording"); i++) await new Promise((r) => setTimeout(r, 5));
+        flags.recordingBeforeNarrateReturned = calls.some((c) => c.pack === "recording");
+      }
+      if (opts.narrateWaitsForAbort) {
+        await new Promise<void>((resolve) => (run.signal?.aborted ? resolve() : run.signal?.addEventListener("abort", () => resolve(), { once: true })));
+        flags.narrateSawAbort = true;
+        return { exitCode: null, timedOut: false, aborted: true, transcriptPath: "" };
+      }
+      if (opts.narrateFails) return { exitCode: 1, timedOut: false, aborted: false, transcriptPath: "" };
       mkdirSync(join(job, "narration"), { recursive: true });
       const tl = JSON.parse(readFileSync(join(job, "timeline.json"), "utf8")) as { scenes: { id: string }[] };
       writeFileSync(join(job, "narration", "narration.json"), JSON.stringify({ voice: "af_heart", scenes: tl.scenes.map((s) => ({ id: s.id, wav: `/work/narration/scene-${s.id}.norm.wav`, durationS: 5, words: [] })), captions: [] }));
@@ -97,7 +117,8 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
     return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
   };
   const notes: string[] = [];
-  const pipeline = videoPipeline({ sandbox, image: "video:1", stateDir, runPack, git, log: () => {} });
+  const config = async () => ({ video_budget_s: 240, regenerate: 1, tts: { voice: opts.config?.voice ?? null, language: opts.config?.language ?? null }, storage: "release_asset" as const, retention_days: 180 });
+  const pipeline = videoPipeline({ sandbox, image: "video:1", stateDir, runPack, git, log: () => {}, ...(opts.config ? { config } : {}) });
   const worktree = join(root, "wt");
   const context = (runId = "run-1"): StageContext =>
     ({ task: { id: "11111111-2222-3333-4444-555555555555", worktreePath: worktree }, stage: "evidence", attempt: 1, runId, approvals: [], signal: new AbortController().signal, note: async (t: string) => void notes.push(t) }) as unknown as StageContext;
@@ -106,7 +127,7 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
   writeFileSync(join(qa, "steps.jsonl"), '{"scenario":"a","step":"click"}\n{"scenario":"a","step":"fill"}\n');
   writeFileSync(join(qa, "qa-manifest.json"), JSON.stringify({ video: { chapters: [{ title: "A", start: 0 }] } }));
   const input = (over: Partial<VideoInput> = {}): VideoInput => ({ scenarios, record: null, pack: { summary: "s", howToVerify: "h", risk: "low" }, e2eDir: qa, target: { name: "local", baseUrl: "http://127.0.0.1:3000", credential: null }, fixCards: [], ...over });
-  return { pipeline, context, input, calls, tools, notes, git, worktree };
+  return { pipeline, context, input, calls, tools, notes, git, worktree, flags };
 }
 
 describe("videoPipeline", () => {
@@ -167,8 +188,9 @@ describe("videoPipeline", () => {
     // the recorder got the target, the narration lengths and the job folder to read
     const rec = h.calls[1]!;
     expect(rec.extra.video!.target).toMatchObject({ name: "local" });
-    expect(rec.extra.video!.narration).toEqual([{ id: "hook", durationS: 5 }, { id: "add", durationS: 5 }, { id: "total", durationS: 5 }, { id: "end", durationS: 5 }]);
-    expect(rec.extra.mounts).toEqual([{ host: out.jobDir, container: "/video-job", readOnly: true }]);
+    // the recorder runs beside the voice: it has no narration, and mounts only a copy of the timeline
+    expect(rec.extra.video!.narration).toBeNull();
+    expect(rec.extra.mounts).toEqual([{ host: join(out.jobDir, "rec-in"), container: "/video-job", readOnly: true }]);
     // the critic reads the job folder read-only, with the report, the transcript and the sheets
     const critic = h.calls[2]!;
     expect(critic.extra.mounts).toEqual([{ host: out.jobDir, container: "/evidence", readOnly: true }]);
@@ -254,5 +276,97 @@ describe("videoPipeline", () => {
     const timing = JSON.parse(readFileSync(join(out.jobDir, "timing.json"), "utf8")) as { videoPath: string };
     // what compose reads is the host's own path inside the container, never what the recorder wrote
     expect(timing.videoPath).toBe("/work/recording.webm");
+  });
+
+  describe("the two lanes at the same time", () => {
+    it("starts the recording before the voice has returned, and awaits both", async () => {
+      const h = harness({ concurrent: true });
+      const out = await h.pipeline(h.context(), h.input());
+      expect(out.ok).toBe(true);
+      expect(h.flags.recordingBeforeNarrateReturned).toBe(true);
+      expect(h.tools.map((t) => t.tool)).toEqual(["narrate", "cards", "compose", "measure"]);
+    });
+
+    it("gives the recorder a copy of the timeline in rec-in, read-only, since narrate rewrites the job's own", async () => {
+      const h = harness();
+      const out = await h.pipeline(h.context(), h.input());
+      expect(out.ok).toBe(true);
+      if (!out.ok) return;
+      expect(JSON.parse(h.flags.recInTimelineAtStart!)).toMatchObject({ meta: { clock: "voice" } });
+      expect(readFileSync(join(out.jobDir, "rec-in", "timeline.json"), "utf8")).toBe(h.flags.recInTimelineAtStart);
+    });
+
+    it("aborts the recording when the voice fails, and degrades with the voice's reason", async () => {
+      const h = harness({ narrateFails: true, recorderWaitsForAbort: true });
+      const out = await h.pipeline(h.context(), h.input());
+      expect(out).toMatchObject({ ok: false, degrade: "captures", reason: expect.stringMatching(/narrate job failed/) });
+      expect(h.flags.recorderSawAbort).toBe(true);
+      expect(h.tools.map((t) => t.tool)).toEqual(["narrate"]);
+    });
+
+    it("aborts the voice when the recorder fails, and degrades with the recorder's reason", async () => {
+      const h = harness({ recorder: "escalated", narrateWaitsForAbort: true });
+      const out = await h.pipeline(h.context(), h.input());
+      expect(out).toMatchObject({ ok: false, reason: expect.stringMatching(/recording.*app will not start/) });
+      expect(h.flags.narrateSawAbort).toBe(true);
+    });
+
+    it("links both lanes to the stage's own signal", async () => {
+      const h = harness({ narrateWaitsForAbort: true, recorderWaitsForAbort: true });
+      const controller = new AbortController();
+      const context = { ...h.context(), signal: controller.signal };
+      const pending = h.pipeline(context, h.input());
+      setTimeout(() => controller.abort(), 30);
+      expect((await pending).ok).toBe(false);
+      expect(h.flags.recorderSawAbort).toBe(true);
+      expect(h.flags.narrateSawAbort).toBe(true);
+    });
+  });
+
+  describe("the voice and the language come from luna.yaml", () => {
+    const narrateArgs = (h: ReturnType<typeof harness>) => h.tools.find((t) => t.tool === "narrate")!.run.entrypoint!.slice(2);
+
+    it("passes a voice that matches the pattern as --voice, an argv element of its own", async () => {
+      const h = harness({ config: { voice: "af_sky" } });
+      await h.pipeline(h.context(), h.input());
+      const args = narrateArgs(h);
+      expect(args.slice(args.indexOf("--voice"), args.indexOf("--voice") + 2)).toEqual(["--voice", "af_sky"]);
+    });
+
+    it("ignores a voice that does not match, with a note, and keeps the default", async () => {
+      for (const voice of ["af_heart; rm -rf /", "../x", "AF_Heart", "a_b", "af_" + "x".repeat(40)]) {
+        const h = harness({ config: { voice } });
+        await h.pipeline(h.context(), h.input());
+        expect(narrateArgs(h), voice).not.toContain("--voice");
+        expect(h.notes.join("\n"), voice).toMatch(/voice.*ignored|default voice/i);
+      }
+    });
+
+    it("takes en, en-US and en-GB, and en-GB with no voice picks bf_emma", async () => {
+      for (const language of [null, "en", "en-US"]) {
+        const h = harness({ config: { language } });
+        expect((await h.pipeline(h.context(), h.input())).ok, String(language)).toBe(true);
+        expect(narrateArgs(h)).not.toContain("--voice");
+      }
+      const gb = harness({ config: { language: "en-GB" } });
+      await gb.pipeline(gb.context(), gb.input());
+      expect(narrateArgs(gb)).toEqual(expect.arrayContaining(["--voice", "bf_emma"]));
+      const own = harness({ config: { language: "en-GB", voice: "bf_isabella" } });
+      await own.pipeline(own.context(), own.input());
+      expect(narrateArgs(own)).toEqual(expect.arrayContaining(["--voice", "bf_isabella"]));
+    });
+
+    it("degrades before any container starts for another language, saying the image speaks English only", async () => {
+      const h = harness({ config: { language: "pt-BR" } });
+      const out = await h.pipeline(h.context(), h.input());
+      expect(out).toMatchObject({ ok: false, degrade: "captures", reason: expect.stringMatching(/English only/) });
+      expect(h.calls).toEqual([]);
+      expect(h.tools).toEqual([]);
+    });
+  });
+
+  it("does not follow a link inside the folder either: a recording that is a link to a sibling file is no recording", async () => {
+    const h = harness({ recorder: "inside-link" });
+    expect(await h.pipeline(h.context(), h.input())).toMatchObject({ ok: false, reason: expect.stringMatching(/no recording/) });
   });
 });
