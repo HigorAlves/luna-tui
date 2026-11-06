@@ -40,6 +40,12 @@ The machine's HTTP API, read straight from `machine/src/adapters/http/app.ts`. S
 | POST | `/backlog` | Adds a candidate: `title`, `text`, `sources`, `repo`, `scores` (five, 1 to 3), `size`, `dependsOn`. 201. |
 | POST | `/backlog/:id/bump` | One more report: demand plus one, assessed now. |
 | POST | `/backlog/:id/promote` | Makes a card of the item (`create_card`, its scores as hints) and removes it. 201 with the task. |
+| GET | `/tickets` | The tickets the ticket machine holds: `canonical`, `status` (assessed, needs_info, not_ours, duplicate, question, parked, scheduled, carded, handed_over), `assessments` (sub-scores kept), `drafts` (each with a `hash`), `cardId`, `clocks`. |
+| POST | `/tickets/:key/approve` | `{draft, hash, transition?}`: posts the draft to the ticket. 409 for a stale hash, a draft already posted or ignored, or a `transition` on a GitHub ticket. `:key` is a Jira key or url-encoded `owner/repo#n`; anything else is 404. |
+| POST | `/tickets/:key/edit` | `{draft, hash, text}`: posts your text instead (flattened, refused with 409 when it carries a token). |
+| POST | `/tickets/:key/ignore` | `{draft}`: keeps the draft, never posts it. |
+| POST | `/tickets/:key/card` | Makes one card from the ticket (source, reporter, assessment as hints); nothing is written to the ticket. 201; 409 when it has one. |
+| POST | `/tickets/:key/backlog` | Places the ticket in the shared backlog by its score, or updates its item. 201; 409 unless it was assessed as workable. |
 | POST | `/backlog/:id/decline` | Removes the item. 404 for an unknown id. |
 | POST | `/tasks/:id/resume` | Re-run the stage a task paused in after a usage limit. |
 | POST | `/tasks/:id/worktree/remove` | Remove the task's worktree from disk. The task, its branch and commits stay. |
