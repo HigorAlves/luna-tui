@@ -191,13 +191,14 @@ describe("the regression sweep in Build", () => {
     sweeps.length = 0;
     sweeps.push(failing, failing, failing);
     const seenMinutes: Array<number | undefined> = [];
-    const states = [{ spent: false, minutesLeft: 40 }, { spent: false, minutesLeft: 25 }, { spent: true, minutesLeft: 0 }];
+    // Read before the writer, before the implementer and before each fix run.
+    const states = [{ spent: false, minutesLeft: 50 }, { spent: false, minutesLeft: 40 }, { spent: false, minutesLeft: 25 }, { spent: true, minutesLeft: 0 }];
     const f = fakes([tagged("S1")], {
       implement: async (c) => (seenMinutes.push(c.budgetMinutes), { outcome: "pass" } as StageResult),
       budget: async () => states.shift()!,
     });
     const result = await buildTestsStep(f.deps)(context([v2]));
-    expect(seenMinutes).toEqual([undefined, 40, 25]);
+    expect(seenMinutes).toEqual([40, 25]);
     expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringMatching(/sweep failed/) } });
   });
 
@@ -360,6 +361,49 @@ describe("Build's tests step", () => {
     const f = fakes([tagged("S1")], { runWriter: async () => ({ outcome: "fail", rateLimited: true }) as StageResult });
     const result = await buildTestsStep(f.deps)(context([v2]));
     expect(result).toMatchObject({ rateLimited: true });
+    expect(f.calls).toEqual([]);
+  });
+});
+
+describe("Build's budget across the tests step", () => {
+  it("hands each writer round and the implementer the minutes that remain of one shared deadline, and stops when none remain", async () => {
+    let clock = 0;
+    const minutes: Array<number | undefined> = [];
+    const f = fakes([tagged("S1")], {
+      now: () => clock,
+      runWriter: async (c) => {
+        minutes.push(c.budgetMinutes);
+        clock += 3 * 60_000;
+        return { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, run: { inputCommit: "base0" }, detail: { scenarioReds: {} } };
+      },
+    });
+    const result = await buildTestsStep(f.deps)(context([v2], { budgetMinutes: 5 }));
+    // The first round gets 5, the second 2, and the third finds the deadline passed: nothing more runs.
+    expect(minutes).toEqual([5, 2]);
+    expect(result).toMatchObject({ outcome: "escalated", detail: { budgetSpent: true } });
+    expect(f.calls).not.toContain("implement");
+  });
+
+  it("clamps the implementer to the minutes the writer left, and reads the store's budget before each run", async () => {
+    let clock = 0;
+    const implementerMinutes: Array<number | undefined> = [];
+    const f = fakes([tagged("S1")], {
+      now: () => clock,
+      budget: async () => ({ spent: false, minutesLeft: 40 }),
+      runWriter: async () => {
+        clock += 4 * 60_000;
+        return { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, run: { inputCommit: "base0" }, detail: { scenarioReds: { S1: "FAIL" } } };
+      },
+      implement: async (c) => (implementerMinutes.push(c.budgetMinutes), { outcome: "pass" } as StageResult),
+    });
+    await buildTestsStep(f.deps)(context([v2], { budgetMinutes: 10 }));
+    expect(implementerMinutes).toEqual([6]);
+  });
+
+  it("escalates instead of running the implementer when the store says the budget is spent", async () => {
+    const f = fakes([tagged("S1")], { budget: async () => ({ spent: true, minutesLeft: 0 }) });
+    const result = await buildTestsStep(f.deps)(context([v2], { budgetMinutes: 10 }));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { budgetSpent: true } });
     expect(f.calls).toEqual([]);
   });
 });

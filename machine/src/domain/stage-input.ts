@@ -154,7 +154,7 @@ export function buildStageInput(opts: {
   const scaled = budgetFor(pack, plan?.slices?.length ?? 0);
   const { maxTurns } = scaled;
   // Build's budget: a run never outlives the minutes the card has left.
-  const timeoutMs = opts.budgetMinutes !== undefined && pack === "implementing" ? Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE) : scaled.timeoutMs;
+  const timeoutMs = opts.budgetMinutes !== undefined && (pack === "implementing" || pack === "build_tests") ? Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE) : scaled.timeoutMs;
   return {
     schema: 3,
     stage,

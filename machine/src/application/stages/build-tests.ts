@@ -29,6 +29,8 @@ export interface BuildTestsDeps {
   /** The regression sweep by script, after the implementer's last slice is green. */
   sweep: (context: StageContext) => Promise<SweepOutcome>;
   /** Build's budget now: whether it is spent and the minutes left, read before each fix run of a failed sweep. */
+  /** The clock, for the step's shared deadline (tests inject one). */
+  now?: () => number;
   budget?: (context: StageContext) => Promise<{ spent: boolean; minutesLeft: number } | undefined>;
   /** The repo's `holdout_cases`: the implementer must not see the scenarios, so no test is written for it to read. */
   holdout: (repoPath: string) => Promise<boolean>;
@@ -79,9 +81,24 @@ const reviewContext = (review: string[]): PlanContext => ({ record: null, brief:
 export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
   return async (context) => {
     const { task } = context;
+    // One absolute deadline for the whole step: the minutes the card had left when it began. Every sub-run (a writer round, the implementer, a sweep fix) is
+    // handed what is left of that and of the budget the store counts now, whichever is smaller; none is handed more than remains.
+    const began = (deps.now ?? Date.now)();
+    const deadlineMinutes = context.budgetMinutes;
+    const spentResult = (): StageResult => ({ outcome: "escalated", detail: { escalation: "other", reason: "Build's budget is spent: the card has no minutes left for the next run; a person decides", budgetSpent: true } });
+    /** The context for the next sub-run with its minutes clamped, or null when the budget is spent. */
+    const budgeted = async (): Promise<StageContext | null> => {
+      const state = await deps.budget?.(context);
+      const own = deadlineMinutes === undefined ? undefined : deadlineMinutes - ((deps.now ?? Date.now)() - began) / 60_000;
+      if (state?.spent || (own !== undefined && own <= 0)) return null;
+      const minutes = [state?.minutesLeft, own].filter((m): m is number => m !== undefined);
+      return minutes.length > 0 ? { ...context, budgetMinutes: Math.min(...minutes) } : context;
+    };
     /** The implementer, and after its last slice the regression sweep: a failing check sends it round again with the check's name and output. */
     const implementSwept = async (extra: Parameters<BuildTestsDeps["implement"]>[1]): Promise<StageResult> => {
-      let result = await deps.implement(context, extra);
+      const first = await budgeted();
+      if (!first) return spentResult();
+      let result = await deps.implement(first, extra);
       let usage = result.usage;
       for (let fixes = 0; ; fixes++) {
         // A fix run that fails still returns what every run before it spent.
@@ -99,11 +116,11 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
         const names = sweep.failed.map((f) => safe(f.name).slice(0, 60));
         await context.emit?.("build.sweep_failed", { checks: names });
         // The budget is read before each fix run, and the run gets the minutes that are left.
-        const state = await deps.budget?.(context);
-        if (fixes >= MAX_SWEEP_FIXES || state?.spent) {
+        const next = fixes >= MAX_SWEEP_FIXES ? null : await budgeted();
+        if (!next) {
           return done({ outcome: "fail", detail: { error: `the regression sweep failed: ${names.join(", ")}`, sweepFailures: names } });
         }
-        result = await deps.implement(state ? { ...context, budgetMinutes: state.minutesLeft } : context, { ...extra, sweepFailures: sweep.failed });
+        result = await deps.implement(next, { ...extra, sweepFailures: sweep.failed });
         usage = addUsage(usage, result.usage);
       }
     };
@@ -145,7 +162,9 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     let redMisses = 0;
     let review: string[] | undefined;
     for (;;) {
-      const written = await deps.runWriter(context, review ? { plan: reviewContext(review) } : {});
+      const round = await budgeted();
+      if (!round) return { ...spentResult(), ...(writerUsage ? { usage: writerUsage } : {}) };
+      const written = await deps.runWriter(round, review ? { plan: reviewContext(review) } : {});
       writerUsage = addUsage(writerUsage, written.usage);
       if (written.outcome !== "pass") return withUsage(written, writerUsage);
       const where = written.workspace?.worktreePath ?? worktree;
