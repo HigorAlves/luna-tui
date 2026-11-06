@@ -43,7 +43,7 @@ import { decompositionLoop } from "./decompose.ts";
 import { type SizeDecision, sizeAssessment, sizeContextOf, sizeDecisionOf } from "../size-estimate.ts";
 import type { GraphLocation } from "../graph.ts";
 import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
-import { type OwnersState, approvalRule, ownersStateOf, ruleFiles } from "../../domain/approvers.ts";
+import { type OwnersState, approvalRule, ownersStateOf, ruleFiles, splitApprovalRule } from "../../domain/approvers.ts";
 import { controlPlaneFiles } from "../../domain/control-plane.ts";
 import { triageVerdicts } from "../../domain/triage-policy.ts";
 import { recordIdOf } from "../decision-truth.ts";
@@ -339,7 +339,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         size,
         risk,
         // Who may approve (to split, or to keep the card whole): the rule of a plan at the origin's level, read again at the tap.
-        approvalRule: approvalRule(level, repoPlan?.approvers ?? FACTORY_DEFAULTS.plan.approvers, { state: "skipped" }),
+        approvalRule: splitApprovalRule(level, repoPlan?.approvers ?? FACTORY_DEFAULTS.plan.approvers),
         ...(map ? { map } : {}),
         ...(mapNote ? { mapNote } : {}),
         decisions: sizeRecords({ split_check: looked?.ok ? looked.recordId : undefined }),

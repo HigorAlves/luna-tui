@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { PgTicketStore } from "../adapters/persistence/ticket-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import type { AssessAnswer } from "../domain/ticket-score.ts";
-import { TicketMachine, TicketNotFound, TicketRefusal, parseTicketKey } from "./ticket-machine.ts";
+import { TicketMachine, TicketNotFound, TicketRefusal, parseTicketKey, splitTargetOf } from "./ticket-machine.ts";
 import { draftHash } from "./ticket-drafts.ts";
 import type { Tickets } from "./tickets.ts";
 import type { ValidityAnswer } from "./ticket-validity.ts";
@@ -480,6 +480,16 @@ describe("a ticket's split (wave 15)", () => {
   };
   const tap = (draft: any) => ({ draft: draft.id, hash: draftHash(draft) });
   const seen = async (x: { machine: TicketMachine }) => ((await x.machine.view("PAY-12")).drafts as any[]).find((d) => d.kind === "split" && d.status !== "posted");
+
+  it("the row a client reads carries each child's goal and criteria and the project the tap creates them in", async () => {
+    const { x } = await proposed();
+    const view = await x.machine.view("PAY-12");
+    expect((view.drafts as any[]).find((d) => d.kind === "split").children[0]).toMatchObject({ title: "Part A", goal: expect.stringContaining("do Part A"), acceptance_criteria: ["Part A works"] });
+    expect(view.splitTarget).toBe("PAY");
+    expect(splitTargetOf("acme/widgets#7")).toBe("acme/widgets");
+    expect(splitTargetOf("PAY-12")).toBe("PAY");
+    expect((await x.machine.view("PAY-12")).splitTarget).toBe("PAY");
+  });
 
   it("a split proposal for a ticket writes nothing before the tap: a draft with the children, the status split_proposed, no create, no comment", async () => {
     const { x, row, draft } = await proposed();

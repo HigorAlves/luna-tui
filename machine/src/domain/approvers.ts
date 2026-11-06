@@ -29,7 +29,7 @@ export interface ApprovalRule {
   /** Distinct names the plan needs before it is approved. */
   needed: number;
   /** `required`: one of the names must not be among the owners; `skipped`: it would be, but CODEOWNERS names no one for these files; `not_checked`: it would be, but the owners could not be read; `off`: not asked. */
-  outside: "required" | "skipped" | "not_checked" | "off";
+  outside: "required" | "skipped" | "not_checked" | "off" | "at_approval";
   /** The rule in the gate's words. */
   text: string;
 }
@@ -49,6 +49,13 @@ export function approvalRule(level: Risk, config: ApproversConfig, owners: Owner
   } else if (outside === "skipped") text = `${base} No CODEOWNERS rule matches the files of this plan, so the outside-the-owning-team condition is skipped.`;
   else if (outside === "not_checked" && owners.state === "not_checked") text = `${base} The outside-the-owning-team condition could not be checked (${safe(owners.reason).slice(0, 100)}), so it is not enforced.`;
   return { needed, outside, text };
+}
+
+/** The rule a split gate shows: CODEOWNERS is read for the files of the change when the split is approved, not when the gate opens, so a High-risk origin says the outside condition applies when it does (`at_approval`). Enforcement is the tap's, with the owners read then. */
+export function splitApprovalRule(level: Risk, config: ApproversConfig): ApprovalRule {
+  const rule = approvalRule(level, config, { state: "skipped" });
+  if (rule.outside !== "skipped") return rule;
+  return { needed: rule.needed, outside: "at_approval", text: `Needs ${rule.needed} different approvers. When CODEOWNERS names owners for the files of this change at the tap, at least one name must be someone outside them. This is an attestation: the machine takes the names as given and does not check them.` };
 }
 
 /** The files the outside rule asks CODEOWNERS about: the map's change and test files and the plan's step files, once each. */

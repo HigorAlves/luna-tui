@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type OwnersState, applyRiskOverride, approvalRule, outsideSatisfied, ownersStateOf, sameName } from "./approvers.ts";
+import { type OwnersState, applyRiskOverride, approvalRule, outsideSatisfied, ownersStateOf, sameName, splitApprovalRule } from "./approvers.ts";
 
 const config = { low: 1, medium: 1, high: 2, outside_owning_team: true };
 
@@ -110,5 +110,22 @@ describe("applyRiskOverride: the machine's level is a floor", () => {
     const first = applyRiskOverride(machine, { level: "high", reason: "r" });
     // The risk now says high; the machine's grade is still medium, so a later lower edit falls to the floor, not to the earlier raise.
     expect(applyRiskOverride(first.risk, { level: "low", reason: "undo" }).risk).toMatchObject({ level: "medium", machine: "medium" });
+  });
+});
+
+describe("splitApprovalRule: the rule a split gate shows before CODEOWNERS is read at the tap", () => {
+  it("says two different people are needed and that one must be outside the owners when CODEOWNERS applies, for a high-risk origin", () => {
+    const rule = splitApprovalRule("high", config);
+    expect(rule).toMatchObject({ needed: 2, outside: "at_approval" });
+    expect(rule.text).toMatch(/2 different approvers/);
+    expect(rule.text).toMatch(/CODEOWNERS/);
+    expect(rule.text).toMatch(/outside/);
+    expect(rule.text).not.toMatch(/skipped|not enforced/);
+  });
+
+  it("is the plain rule for a low or medium origin, and when the repository does not ask for an outside name", () => {
+    expect(splitApprovalRule("low", config)).toEqual(approvalRule("low", config, skipped));
+    expect(splitApprovalRule("medium", config)).toEqual(approvalRule("medium", config, skipped));
+    expect(splitApprovalRule("high", { ...config, outside_owning_team: false })).toEqual(approvalRule("high", { ...config, outside_owning_team: false }, skipped));
   });
 });

@@ -1,7 +1,7 @@
 // The delivering stage: push the task's branch and open a draft PR on the host, so CI starts
 // early. The push is git with your own credentials; the PR is the GitHub port.
 import { at } from "../../adapters/git/machine-repo.ts";
-import { HOST_GIT, type RebaseResult, branchBase, defaultBranch as hostDefaultBranch, originSlugOf, rebaseOntoBase, stackOf, unstack as hostUnstack } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, type RebaseResult, branchBase, originSlugOf, rebaseOntoBase, stackOf, unstack as hostUnstack } from "../../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../../adapters/process/exec.ts";
 import { type PrExtra, buildPr, mergePrSection } from "../../domain/prbody.ts";
 import { approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
@@ -18,8 +18,8 @@ export interface DeliverDeps {
   github: GitHub;
   /** The `owner/name` a worktree pushes to; tests inject one, the default reads the origin remote. */
   slugOf?: (cwd: string) => Promise<string | null>;
-  /** The repo's default branch, for the rebase; tests inject one. */
-  defaultBranch?: (repoPath: string) => Promise<string | null>;
+  /** The repo's default branch, for the rebase: GitHub's answer for the slug (default: `github.defaultBranch`), never the host's guess; null is unknown. */
+  defaultBranch?: (repoPath: string, slug?: string) => Promise<string | null>;
   /** The commit the branch forked from and the one it is at, for the body; absent or null leaves them out. */
   commitsOf?: (worktreePath: string, repoPath: string) => Promise<{ base: string | null; head: string | null } | null>;
   /** A stacked card's parent (`stackFactsOf`), and what to do about it: drop the card's base, rebase, unstack (default: the host git helpers), the base commit the workspace records. Absent, a card's base is not looked at. */
@@ -88,6 +88,9 @@ export async function openTaskPr(github: GitHub, slug: string, context: StageCon
 }
 
 export function deliverRunner(deps: DeliverDeps): StageRunner {
+  /** The default branch for a repository slug, read from GitHub; a failed read is unknown. */
+  const defaultFor = (slug: string) => async (repoPath: string): Promise<string | null> =>
+    deps.defaultBranch ? await deps.defaultBranch(repoPath, slug).catch(() => null) : await deps.github.defaultBranch(slug).catch(() => null);
   const slugOf = deps.slugOf ?? originSlugOf;
   return async (context) => {
     const { task } = context;
@@ -105,7 +108,7 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
       } catch (error) {
         return { outcome: "fail", detail: { error: messageOf(error) } };
       }
-      const defaultOf = deps.defaultBranch ?? hostDefaultBranch;
+      const defaultOf = defaultFor(stackSlug);
       if (parent?.parent.state === "gone") {
         const short = parent.parent.id.slice(0, 8);
         return { outcome: "fail", detail: { error: `the card this one is stacked on (${short}) was archived or its PR closed without merging; its commits are in this branch, so a person decides what happens to it`, escalation: "other" } };
@@ -154,7 +157,8 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
       const facts = await deps.github.prFacts(slug, ref.number).catch(() => null);
       let rebase: Record<string, unknown> = facts?.mergeable === "UNKNOWN" ? { mergeable: "UNKNOWN" } : {};
       if (facts?.mergeable === "CONFLICTING") {
-        const base = deps.defaultBranch ?? hostDefaultBranch;
+        const base = defaultFor(slug);
+        if ((await base(task.repoPath)) === null) return { outcome: "fail", detail: { error: "the default branch is not known from GitHub: nothing was rebased or pushed again", escalation: "other" } };
         const rebased: RebaseResult = await rebaseOntoBase(deps.exec, task.worktreePath, task.repoPath, base);
         if (!rebased.ok) {
           const files = rebased.conflicts.join(", ");

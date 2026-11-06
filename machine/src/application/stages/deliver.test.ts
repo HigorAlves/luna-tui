@@ -175,9 +175,34 @@ describe("delivering a branch that conflicts with the default branch", () => {
       const { run, context, calls } = setup(github, { defaultBranch: base });
       const result = await run(context);
       expect(result.outcome).toBe("fail");
-      expect(String(result.detail?.error)).toMatch(/no usable default branch/);
+      expect(String(result.detail?.error)).toMatch(/no usable default branch|not known from GitHub/);
       expect(calls.filter((c) => c.includes("fetch") || c.includes("rebase"))).toEqual([]);
     }
+  });
+
+  it("rebases onto the default branch GitHub names, not the host's guess", async () => {
+    const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING"), defaultBranch: async () => "trunk" });
+    const calls: string[][] = [];
+    const exec = async (command: string, args: string[]) => (args.includes("update-ref") ? ok() : (calls.push([command, ...args]), ok()));
+    const run = deliverRunner({ exec, github, slugOf: async () => "acme/widgets" });
+    const { context } = setup(github);
+    const result = await run(context);
+    expect(result.outcome).toBe("pass");
+    expect(calls).toContainEqual([...G, "fetch", "--quiet", "--end-of-options", "origin", "trunk"]);
+    expect(calls).toContainEqual([...G, "rebase", "origin/trunk"]);
+    expect(github.calls.some((c) => c.includes("acme/widgets"))).toBe(true);
+  });
+
+  it("fails in fixed words and pushes nothing more when GitHub does not say what the default branch is", async () => {
+    const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING"), defaultBranch: async () => null });
+    const calls: string[][] = [];
+    const exec = async (command: string, args: string[]) => (args.includes("update-ref") ? ok() : (calls.push([command, ...args]), ok()));
+    const run = deliverRunner({ exec, github, slugOf: async () => "acme/widgets" });
+    const { context } = setup(github);
+    const result = await run(context);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ error: "the default branch is not known from GitHub: nothing was rebased or pushed again", escalation: "other" });
+    expect(calls.filter((c) => c.includes("fetch") || c.includes("rebase") || c.includes("--force-with-lease"))).toEqual([]);
   });
 
   it("fails with the push error when the push after the rebase is refused", async () => {

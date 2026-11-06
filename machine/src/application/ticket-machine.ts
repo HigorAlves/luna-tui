@@ -61,6 +61,8 @@ export interface TicketView {
   drafts: DraftView[];
   cardId: string | null;
   clocks: Record<string, unknown>;
+  /** Where approving a split draft creates the child tickets: the Jira project or the GitHub repository of this ticket's own key; null when the key is neither. */
+  splitTarget: string | null;
 }
 
 export interface TicketMachineDeps {
@@ -566,7 +568,14 @@ function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentReco
   };
 }
 
+/** The tracker project children are created in: a Jira key's project, a GitHub key's `owner/repo` (the adapters parse the same from the origin's key). */
+export function splitTargetOf(key: string): string | null {
+  if (JIRA_KEY.test(key)) return key.slice(0, key.lastIndexOf("-"));
+  const gh = GITHUB_KEY.exec(key);
+  return gh ? `${gh[1]}/${gh[2]}` : null;
+}
+
 function viewOf(row: TicketRow): TicketView {
-  return { key: row.key, canonical: row.canonical, status: row.machineStatus, assessments: row.assessments, drafts: (row.drafts as unknown as Draft[]).map((d) => ({ ...d, hash: draftHash(d) })), cardId: row.cardId, clocks: row.clocks };
+  return { key: row.key, canonical: row.canonical, status: row.machineStatus, assessments: row.assessments, drafts: (row.drafts as unknown as Draft[]).map((d) => ({ ...d, hash: draftHash(d) })), cardId: row.cardId, clocks: row.clocks, splitTarget: splitTargetOf(row.key) };
 }
 void (null as unknown as AssessAnswer);
