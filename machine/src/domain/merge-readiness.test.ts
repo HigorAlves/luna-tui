@@ -248,10 +248,37 @@ describe("the checklist and the ship approval (slice 4)", () => {
     const base = { risk: "high" as const, shipApproval: { head: HEAD } };
     expect(mergeReadiness(withMode("medium_when_review_required", base)).canAutoMerge).toBe(true);
     expect(mergeReadiness(withMode("medium_when_review_required", { ...base, approvedOnHead: false })).canAutoMerge).toBe(false);
-    expect(mergeReadiness(withMode("medium_when_review_required", { ...base, approvedOnHead: false, review: { required: false } })).canAutoMerge).toBe(true);
     expect(mergeReadiness(withMode("medium_when_review_required", { ...base, shipApproval: { head: "1111111aaaa" } })).canAutoMerge).toBe(false);
     expect(mergeReadiness(withMode("off", base)).canAutoMerge).toBe(false);
     expect(mergeReadiness(withMode("medium_when_review_required", { risk: "high" })).canAutoMerge).toBe(false);
+  });
+
+  describe("a High-risk merge and the review", () => {
+    const reviews = [
+      ["true", { required: true as const, by: "ruleset" }],
+      ["false", { required: false as const }],
+      ["unknown", { required: null, why: "not read" }],
+    ] as const;
+    const high = { risk: "high" as const, shipApproval: { head: HEAD } };
+    it.each(reviews)("the default mode, review.required %s, no approval on the head: the board answer alone never merges", (_n, review) => {
+      expect(mergeReadiness(withMode("medium_when_review_required", { ...high, approvedOnHead: false, review })).canAutoMerge).toBe(false);
+    });
+    it.each(reviews)("the default mode, review.required %s, approval on the head: merges only where a review is required", (_n, review) => {
+      expect(mergeReadiness(withMode("medium_when_review_required", { ...high, approvedOnHead: true, review })).canAutoMerge).toBe(review.required === true);
+    });
+    it.each(["low", "medium"] as const)("%s mode: a repository with no required review lets the board answer stand in for the review", (mode) => {
+      expect(mergeReadiness(withMode(mode, { ...high, approvedOnHead: false, review: { required: false } })).canAutoMerge).toBe(true);
+      expect(mergeReadiness(withMode(mode, { ...high, approvedOnHead: false, review: { required: null, why: "x" } })).canAutoMerge).toBe(false);
+      expect(mergeReadiness(withMode(mode, { ...high, approvedOnHead: true, review: { required: true, by: "ruleset" } })).canAutoMerge).toBe(true);
+    });
+  });
+
+  it("a trusted reviewer's standing objection blocks the merge whatever GitHub's review decision says", () => {
+    const out = mergeReadiness(withMode("low", { pr: pr({ reviewDecision: null }), objection: "bob" }));
+    expect(out.ready).toBe(false);
+    expect(out.canAutoMerge).toBe(false);
+    expect(out.blockers).toEqual(["changes requested by bob"]);
+    expect(out.checklist.find((c) => c.id === "approvals")?.ok).toBe(false);
   });
 
   it("low and medium merge on a ship approval for the head in place of an approval on the head", () => {

@@ -36,6 +36,8 @@ export interface MergeReadinessInput {
   review?: ReviewRequirement;
   /** An APPROVED review on the head commit by a collaborator who is not the machine's own account (`approvedOnHead`). */
   approvedOnHead?: boolean;
+  /** The login of an owner, member or collaborator whose latest verdict on the PR is "changes requested" (`objectionOnPr`); null when none. Computed by the machine, whatever GitHub's review decision says. */
+  objection?: string | null;
   /** An approved `awaiting_ship` ship approval (`requested.gate === "ship_approval"`) and the head it was asked about; null when there is none. */
   shipApproval?: { head: string } | null;
 }
@@ -104,6 +106,7 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   if (pr.mergeState === "BLOCKED") push("conflicts", "GitHub blocks the merge (BLOCKED)");
   if (pr.reviewDecision === "CHANGES_REQUESTED") push("approvals", "changes requested");
   else if (pr.reviewDecision === "REVIEW_REQUIRED") push("approvals", "approval required");
+  if (input.objection && pr.reviewDecision !== "CHANGES_REQUESTED") push("approvals", `changes requested by ${input.objection}`);
   for (const m of owners?.missing ?? []) push("owners", `no owner of ${m.path} approved (${m.owners.join(", ")})`);
   for (const o of owners?.unresolved ?? []) push("owners", `owner ${o} cannot be resolved`);
   if (input.fixApproval && !input.fixApproval.approved) push("fix_approval", `the fix at ${sha7(pr.headSha ?? "")} has no approval on it`);
@@ -121,8 +124,9 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
 
   const ready = blockers.length === 0;
   // The machine merges nothing it was not allowed to, and nothing nobody looked at: an approval on the head is always needed (the preview gate and
-  // GitHub's reviewDecision alone are not a look at the code), and under the default the repository must itself require a review. High risk is asked
-  // of a person after readiness (the ship approval), never merged here.
+  // GitHub's reviewDecision alone are not a look at the code), and under the default the repository must itself require a review. High risk also
+  // needs a person's ship approval for this head; under the default that answer comes on top of the required review and the approval on the head,
+  // never in place of them (only the explicit `low` / `medium` let a board answer stand in for a review).
   const mode = policy.autoMerge;
   const approved = input.approvedOnHead === true;
   const review = input.review ?? { required: null, why: "not read" };
@@ -133,7 +137,12 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   // A person's ship approval stands in for the approval on the head only in the two explicit modes; the default always wants the review.
   const looked = approved || (shipApproved && (mode === "low" || mode === "medium"));
   const viaPerson = mode !== "off" && (risk === "high" || (coversRisk && (mode === "low" || mode === "medium")));
-  const highOk = risk === "high" && mode !== "off" && shipApproved && (review.required === false || approved);
+  // High risk: the release owner's answer is never a review. The default mode wants a required review and an approval on the head; only the explicit
+  // `low` / `medium` let that answer stand in for a review (a repository that requires none, or an approval on the head).
+  const highOk =
+    risk === "high" &&
+    shipApproved &&
+    (mode === "medium_when_review_required" ? review.required === true && approved : (mode === "low" || mode === "medium") && (review.required === false || approved));
   const canAutoMerge = ready && (risk === "high" ? highOk : coversRisk && reviewOk && looked);
   const needsShipApproval = ready && viaPerson && !shipApproved && (risk === "high" || !approved);
   const reason = !ready
@@ -144,7 +153,9 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
         ? "ready; auto-merge is off, so a person merges it"
         : risk === "high"
           ? shipApproved
-            ? `ready; no approval on ${sha7(pr.headSha ?? "")}`
+            ? mode === "medium_when_review_required" && review.required !== true
+              ? "ready; a high-risk PR needs a required review and an approval on the head, which this repository does not give, so a person merges it"
+              : `ready; no approval on ${sha7(pr.headSha ?? "")}`
             : "ready; a high-risk PR waits for a person's release approval"
           : !coversRisk
             ? `ready; auto-merge is ${mode} for ${risk} risk, so it waits for a person`

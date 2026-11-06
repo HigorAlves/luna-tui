@@ -16,7 +16,7 @@ import { type Freeze, type Policy } from "../../domain/policy.ts";
 import { shipEvents } from "../../domain/ship-events.ts";
 import { ownerApprovals, parseCodeownersChecked, requiredOwners } from "../../domain/codeowners.ts";
 import { MAX_DEPENDENCIES, inFreeze, mergeReadiness, parseDependencies } from "../../domain/merge-readiness.ts";
-import { type ReviewRequirement, type ReviewRule, approvedOnHead, reviewRequirement } from "../../domain/review-rule.ts";
+import { type ReviewRequirement, type ReviewRule, approvedOnHead, objectionOnPr, reviewRequirement } from "../../domain/review-rule.ts";
 import { fromGraphQl } from "../../domain/pull-request.ts";
 import { type GitHub, type PrActivity, type PrReview, messageOf } from "../github.ts";
 import type { FreezeSource } from "../freeze.ts";
@@ -138,13 +138,6 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   let reviewsRead: Promise<PrReview[]> | null = null;
   const reviewsOf = () => (reviewsRead ??= deps.github.prReviews(slug, number));
 
-  /** Whether the latest review of someone is an approval given on `head`: nothing older counts after a fix. */
-  const approvedOn = (onHead: string | null, reviews: PrReview[]): boolean => {
-    const latest = new Map<string, PrReview>();
-    for (const r of reviews) if (r.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED")) latest.set(r.author.toLowerCase(), r);
-    return onHead !== null && [...latest.values()].some((r) => r.state === "APPROVED" && r.commitId === onHead);
-  };
-
   /** What the repo's CODEOWNERS still wants: null when it has none. A team the token cannot read stays unresolved. */
   const ownersOf = async (text: string | null) => {
     if (!text) return null;
@@ -178,14 +171,21 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
     codeownersError = messageOf(error);
   }
   const owners = await (codeownersError ? Promise.reject(new Error(codeownersError)) : ownersOf(codeownersText)).catch((error: unknown) => ({ missing: [], unresolved: [`CODEOWNERS could not be checked: ${messageOf(error)}`] }));
-  // After a fix the loop made, the approval that counts is one on the fix itself: the latest review of each person, on the head.
-  const fixApproval = cursor.fixRounds > 0 ? { approved: approvedOn(head, await reviewsOf().catch(() => [])) } : null;
-  // Is a review required here, and is a good one on the head? Facts only: the repository's rules, GitHub's own answer, CODEOWNERS at the base ref.
-  if (pr.reviewDecision === "REVIEW_REQUIRED") cursor.reviewRequiredSeen = true;
-  const rule: ReviewRule = await deps.github.reviewRule(slug, pr.baseRef).catch((error: unknown): ReviewRule => ({ source: "unreadable", why: messageOf(error) }));
-  const review = reviewRequirement({ rule, seenRequired: cursor.reviewRequiredSeen === true, owners: codeownersText ? parseCodeownersChecked(codeownersText).rules : null, paths });
+  // The token's own login: an approval or an objection by it is never a look. Unreadable: no approval counts (fail closed).
   const me = (await deps.github.viewer().catch(() => null))?.login ?? null;
-  const onHead = approvedOnHead(await reviewsOf().catch(() => []), head, me);
+  const reviewList = await reviewsOf().catch(() => []);
+  const onHead = approvedOnHead(reviewList, head, me);
+  const objection = objectionOnPr(reviewList, me);
+  // After a fix the loop made, the approval that counts is the merge rule's own: an owner, member or collaborator (not the machine) on the head.
+  const fixApproval = cursor.fixRounds > 0 ? { approved: onHead } : null;
+  // Is a review required here, and is a good one on the head? Facts only: the repository's rules, GitHub's own answer, CODEOWNERS at the base ref.
+  // GitHub's REVIEW_REQUIRED is kept with the base it was seen on: a retargeted PR is under another branch's rules, so it is forgotten.
+  const seenOn = cursor.reviewRequiredSeen === true ? pr.baseRef : cursor.reviewRequiredSeen ? cursor.reviewRequiredSeen.base : null;
+  if (pr.reviewDecision === "REVIEW_REQUIRED") cursor.reviewRequiredSeen = { base: pr.baseRef };
+  else if (seenOn === pr.baseRef) cursor.reviewRequiredSeen = { base: pr.baseRef };
+  else delete cursor.reviewRequiredSeen;
+  const rule: ReviewRule = await deps.github.reviewRule(slug, pr.baseRef).catch((error: unknown): ReviewRule => ({ source: "unreadable", why: messageOf(error) }));
+  const review = reviewRequirement({ rule, seenRequired: cursor.reviewRequiredSeen !== undefined, owners: codeownersText ? parseCodeownersChecked(codeownersText).rules : null, paths });
   const readiness = mergeReadiness({
     pr,
     packSha: pack?.commitSha ?? null,
@@ -201,6 +201,7 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
     ...(cursor.reverified && head && cursor.reverified.sha === head ? { reverifiedAt: cursor.reverified.at } : {}),
     review,
     approvedOnHead: onHead,
+    objection,
     shipApproval,
   });
   const named = policy.factory.ship.release_owners;
@@ -373,8 +374,10 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const cls = await judgeShip(fixDeps(), "event_class", event, task.repoPath);
       if (!cls.ok) return { result: escalated(`a review event needs a person (${cls.reason}): ${label}`) };
       // Only two answers are accepted for an activity item; a label read through `eventClassOf` (an old stored one included).
-      const klass = eventClassOf(cls.choice);
+      let klass = eventClassOf(cls.choice);
       if (klass !== "review_comment" && klass !== "noise") return { result: escalated(`a review event needs a person: ${label}`) };
+      // A review that requests changes is never noise, whatever a model says: its words are read and answered (and the machine's own readiness blocks the merge).
+      if (a.kind === "review" && a.state === "CHANGES_REQUESTED" && klass === "noise") klass = "review_comment";
       if (cls.recordId) cursor.decisions = [...(cursor.decisions ?? []), { pack: "event_class", recordId: cls.recordId, choice: klass }];
       // One row per classified item, by its kind and class (enum values, never the reviewer's words).
       cursor.lastEvent = { class: klass, at: now().toISOString() };

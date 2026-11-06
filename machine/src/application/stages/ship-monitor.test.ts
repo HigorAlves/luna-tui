@@ -14,7 +14,8 @@ import type { StageContext } from "../ports.ts";
 import { emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
 import { type Learned, tagged } from "../decision-truth.ts";
 import type { ReviewLoop } from "./ship-fixes.ts";
-import { type ShipMonitorDeps, shipMonitor } from "./ship-monitor.ts";
+import { mergeRunner } from "./ship.ts";
+import { type ShipMonitorDeps, readShipFacts, shipMonitor } from "./ship-monitor.ts";
 
 const HEAD = "9c1f0e2a7b3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f";
 const START = new Date("2026-11-04T12:00:00Z");
@@ -199,7 +200,7 @@ describe("the ship monitor", () => {
     let polls = 0;
     const seen = setup({ ...unreadable, prFacts: async () => node({ reviewDecision: ++polls === 1 ? "REVIEW_REQUIRED" : null }) }, { policy: { autoMerge: "medium_when_review_required" } });
     expect(await seen.run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
-    expect((await loadCursor(stateDir, "t1"))?.reviewRequiredSeen).toBe(true);
+    expect((await loadCursor(stateDir, "t1"))?.reviewRequiredSeen).toEqual({ base: "main" });
   });
 
   it("says ship.ready once, the first poll readiness is true, and ship.approval_needed when a person has to merge", async () => {
@@ -837,6 +838,70 @@ describe("the review loop: what the security pass found", () => {
     const dismissed = setup({ prReviews: async () => [...fresh, { author: "ana", state: "CHANGES_REQUESTED", commitId: HEAD, at: "t2", association: "COLLABORATOR" }] }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
     await dismissed.run();
     expect(calls(dismissed.github, "mergePr")).toEqual([]);
+  });
+
+  const ana = { author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" };
+  const bob = { author: "bob", state: "CHANGES_REQUESTED", commitId: HEAD, at: "t2", association: "COLLABORATOR" };
+
+  it("one approval and one objection from two collaborators does not merge, whatever GitHub's review decision says", async () => {
+    const { run, notes } = setup({ prReviews: async () => [ana, bob], prFacts: async () => node({ reviewDecision: null }) }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
+    expect(await run()).not.toMatchObject({ detail: { ready: expect.anything() } });
+    expect(notes.join("\n")).toMatch(/changes requested by bob/);
+  });
+
+  it("an objection from an outside account does not block, and one the objector later withdrew (an approval after it) does not either", async () => {
+    const stranger = { ...bob, author: "eve", association: "NONE" };
+    expect(await setup({ prReviews: async () => [ana, stranger] }, { policy: { autoMerge: "low" } }).run()).toMatchObject({ detail: { ready: { head: HEAD } } });
+    expect(await setup({ prReviews: async () => [bob, { ...ana, author: "bob" }] }, { policy: { autoMerge: "low" } }).run()).toMatchObject({ detail: { ready: { head: HEAD } } });
+  });
+
+  it("an objection that lands after the watch said ready stops the merge: the merge reads the reviews again", async () => {
+    let objected = false;
+    const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => (objected ? [ana, bob] : [ana]), prMerged: async () => open, prFacts: async () => node({ reviewDecision: null }), prHeadSha: async () => HEAD, prFiles: async () => [], mergePr: async () => ({ merged: true as const, sha: null }) });
+    await saveCursor(stateDir, "t1", emptyCursor({ slug: "o/a", number: 3 }));
+    const deps = { github, policies: { for: async () => policyWith({ autoMerge: "low" }) }, evidence: { load: async () => pack() }, stateDir, pollMs: 1, readCodeowners: async () => null, now: () => START };
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" }, approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    const before = await readShipFacts(deps as never, context, REF, emptyCursor({ slug: "o/a", number: 3 }), deps.now);
+    expect(before?.readiness.canAutoMerge).toBe(true);
+    objected = true;
+    const out = await mergeRunner(deps as never)(context);
+    expect(out).toMatchObject({ outcome: "fail", detail: { notReady: true } });
+    expect(calls(github, "mergePr")).toEqual([]);
+  });
+
+  it("never lets event_class call a review that requests changes noise", async () => {
+    const world = loopWorld({ choices: { event_class: "noise" } });
+    const { run } = review(world, {}, [{ ...commentAct({ id: "review:1", kind: "review", state: "CHANGES_REQUESTED", body: "this deletes the audit trail" }) }] as never);
+    await run();
+    expect((await loadCursor(stateDir, "t1"))!.lastEvent?.class).toBe("review_comment");
+  });
+
+  it("after a fix, an approval on the new head from an outside account leaves fix_approval red", async () => {
+    const outsider = { ...ana, author: "eve", association: "NONE" };
+    const { run, github, notes } = setup({ prReviews: async () => [outsider] }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), fixRounds: 1 });
+    await run();
+    expect(calls(github, "mergePr")).toEqual([]);
+    expect(notes.some((n) => n.includes(`the fix at ${HEAD.slice(0, 7)} has no approval on it`))).toBe(true);
+  });
+
+  it("stores the base a review requirement was seen on, and forgets it when the PR is retargeted", async () => {
+    const unreadable = { reviewRule: async () => ({ source: "unreadable" as const, why: "403" }) };
+    let base = "main";
+    const first = setup({ ...unreadable, prFacts: async () => node({ reviewDecision: "REVIEW_REQUIRED", baseRefName: base }) }, { policy: { autoMerge: "medium_when_review_required" }, maxWaitMs: 1 });
+    await first.run();
+    expect((await loadCursor(stateDir, "t1"))!.reviewRequiredSeen).toEqual({ base: "main" });
+    base = "release";
+    const second = setup({ ...unreadable, prFacts: async () => node({ reviewDecision: null, baseRefName: base }) }, { policy: { autoMerge: "medium_when_review_required" }, maxWaitMs: 1 });
+    await second.run();
+    expect((await loadCursor(stateDir, "t1"))!.reviewRequiredSeen).toBeUndefined();
+  });
+
+  it("an old cursor with the bare flag is read as seen on the current base", async () => {
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), reviewRequiredSeen: true } as never);
+    const { run, notes } = setup({ reviewRule: async () => ({ source: "unreadable" as const, why: "403" }), prFacts: async () => node({ reviewDecision: null }) }, { policy: { autoMerge: "medium_when_review_required" } });
+    expect(await run()).toMatchObject({ detail: { ready: { head: HEAD } } });
+    expect(notes.join("\n")).not.toMatch(/could not be read/);
   });
 
   it("keeps the monitor's reviews for the merge check even when the repo has no CODEOWNERS", async () => {

@@ -38,8 +38,8 @@ const ShipCursorSchema = z.object({
   resolvedByMachine: z.array(z.string()).optional(),
   /** The blockers last noted, so a poll that finds the same ones says nothing. */
   lastBlockers: z.string().optional(),
-  /** GitHub itself answered `reviewDecision: REVIEW_REQUIRED` for this PR at some poll: a review is required here (kept as evidence the rule reader may not see). */
-  reviewRequiredSeen: z.boolean().optional(),
+  /** GitHub itself answered `reviewDecision: REVIEW_REQUIRED` for this PR at some poll: a review is required here (kept as evidence the rule reader may not see), with the base branch it was seen on: it is forgotten when the PR's base changes. An old cursor holds the bare flag, read as seen on the current base. */
+  reviewRequiredSeen: z.union([z.boolean(), z.object({ base: z.string() })]).optional(),
   /** The classes facts decided at the last poll (`conflict`, `base_moved`, `freeze`, `blocked_by_other_pr`): one `ship.event` per change. */
   lastEvents: z.array(z.string()).optional(),
   /** Comments read by the `pr_reply` read step on this PR (at most `MAX_PR_READS`). */

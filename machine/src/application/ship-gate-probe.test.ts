@@ -44,6 +44,12 @@ describe("shipGateProbe", () => {
   it("withdraws when the checklist no longer passes", async () => {
     expect(await (await probeWith({ prFacts: async () => node("FAILURE") as never }))(task, gate())).toBe("withdraw");
   });
+  it("withdraws an open ship approval when a collaborator's objection lands, whatever GitHub's review decision says", async () => {
+    const ana = { author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" };
+    const bob = { author: "bob", state: "CHANGES_REQUESTED", commitId: HEAD, at: "t2", association: "COLLABORATOR" };
+    expect(await (await probeWith({ prReviews: async () => [ana] }))(task, gate())).toBe("keep");
+    expect(await (await probeWith({ prReviews: async () => [ana, bob] }))(task, gate())).toBe("withdraw");
+  });
   it("keeps when there is no cursor or GitHub shows no PR: nothing is withdrawn on a guess", async () => {
     expect(await (await probeWith({}, false))(task, gate())).toBe("keep");
     expect(await (await probeWith({ prFacts: async () => null }))(task, gate())).toBe("keep");

@@ -38,3 +38,11 @@ export function approvedOnHead(reviews: ReviewOf[], head: string | null, me: str
   for (const r of reviews) if (r.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED")) latest.set(r.author.toLowerCase(), r);
   return [...latest.values()].some((r) => r.state === "APPROVED" && r.commitId === head && TRUSTED.has(r.association ?? "") && r.author!.toLowerCase() !== me.toLowerCase());
 }
+
+/** The login of an owner, member or collaborator (not the token's own login) whose latest verdict on the PR is "changes requested"; null when there is none. */
+export function objectionOnPr(reviews: ReviewOf[], me: string | null): string | null {
+  const latest = new Map<string, ReviewOf>();
+  for (const r of reviews) if (r.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED")) latest.set(r.author.toLowerCase(), r);
+  for (const r of latest.values()) if (r.state === "CHANGES_REQUESTED" && TRUSTED.has(r.association ?? "") && r.author!.toLowerCase() !== (me ?? "").toLowerCase()) return r.author;
+  return null;
+}
