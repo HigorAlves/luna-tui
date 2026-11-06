@@ -37,6 +37,24 @@ const pair = async (visible = true, reporter = "U2") => {
   return { kept, dup };
 };
 
+describe("two duplicates merging into one card at once", () => {
+  it("keeps both sources, both followers and both demand increments", async () => {
+    const kept = await pipeline.createTask({ title: "Checkout broken", source: gh, repoPath: "/r/a", reporter: { id: "alice", channel: "github" } });
+    const dups = await Promise.all(
+      ["U2", "U3", "U4", "U5"].map((id, i) =>
+        pipeline.createTask({ title: `Checkout broken ${i}`, source: { kind: "slack", channel: "C1", ts: `1.${i}`, permalink: `https://example.slack.com/archives/C1/p1${i}` }, repoPath: "/r/a", reporter: { id, channel: "slack" } }),
+      ),
+    );
+    await Promise.all(dups.map((d) => pipeline.merge(d.id, kept.id)));
+    const card = cardOf(await pipeline.get(kept.id));
+    expect(card.sources).toHaveLength(5);
+    expect([...card.followers].sort()).toEqual(["U2", "U3", "U4", "U5"]);
+    expect(card.demand).toBe(5);
+    expect((card.merged ?? []).map((m) => m.id).sort()).toEqual(dups.map((d) => d.id).sort());
+    for (const d of dups) expect(cardOf(await pipeline.get(d.id)).mergedInto).toBe(kept.id);
+  });
+});
+
 describe("merging a duplicate", () => {
   it("adds its source, follows its reporter, raises the demand, and closes the duplicate as merged into the kept card", async () => {
     const { kept, dup } = await pair();

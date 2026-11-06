@@ -14,7 +14,8 @@ export type StageOutcome = z.infer<typeof StageOutcome>;
 
 /** Where a task came from: a tracker issue, or an open PR acted on from the PR inbox. */
 export const TaskSource = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string() }),
+  /** `labels` are the issue's own at intake: the card keeps them so a `security` label still knocks the priority out to P0 when triage reads the signals again. */
+  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string(), labels: z.array(z.string()).optional() }),
   z.object({
     kind: z.literal("github_pr"),
     repo: z.string(),
@@ -26,7 +27,7 @@ export const TaskSource = z.discriminatedUnion("kind", [
   /** A ticket made from a Slack message (`t` in the board's Slack inbox). */
   z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string() }),
   /** A ticket imported from a Jira issue by intake. `issueType` is Jira's type name, e.g. `Bug`. */
-  z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable() }),
+  z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable(), labels: z.array(z.string()).optional() }),
   /** A Luna Notch ticket run on the machine: `ref` is its board key (`LUNA-14`), `id` its uuid.
    *  The notch talks to Jira, Slack and Teams about it; `jiraKey` only names the branch. */
   z.object({ kind: z.literal("notch"), ref: z.string().min(1), id: z.string().min(1), jiraKey: z.string().nullable().optional() }),
@@ -769,6 +770,8 @@ export const EvidencePack = z.object({
   fixes: z.array(z.object({ sha: z.string(), scope: z.enum(["in_place", "re_verify_partial"]), summary: z.string(), at: z.string() })).max(20).optional(),
   /** What the pack was made from, so a new head re-makes only what it made stale: the browser run, a hash of the approved scenarios, the sha256 of the run's steps. */
   source: z.object({ e2eRunId: z.string().nullable(), scenariosKey: z.string(), stepsSha: z.string().nullable() }).optional(),
+  /** Set by the publish step, once the section or comment is on the PR: the board shows it as published, whatever media the pack has (a text-only pack has no link to tell). */
+  published: z.boolean().optional(),
 });
 export type EvidencePack = z.infer<typeof EvidencePack>;
 

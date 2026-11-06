@@ -1,12 +1,47 @@
 // The files a run left in its `out/files` can hold a secret a tool typed or a request carried (a HAR, a steps log). The walk follows no link, reads
 // each regular text file within its cap through the bounded reader, and replaces it by rename only when the text changed.
-import { lstat, readdir, rename, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { constants } from "node:fs";
+import { lstat, open, readdir, rename, unlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 import { readRegularFile } from "./bounded.ts";
 
 const TEXT = /\.(json|jsonl|har|log|txt|md|html)$/i;
 const CAP = 20 * 1024 * 1024;
+
+const CREATE = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
+
+/**
+ * Replaces `path` with `text` through a temporary the container cannot have planted: a fresh unguessable name, created exclusively and without following a link
+ * (an existing entry of any kind, a link included, is an error, never written through), then renamed over the file. A rename replaces a link, never follows it.
+ * False (and nothing left behind) when the temporary could not be made.
+ */
+async function replaceFile(path: string, text: string, mode: number): Promise<boolean> {
+  const temp = `${path}.${randomBytes(12).toString("hex")}.redacting`;
+  let handle;
+  try {
+    handle = await open(temp, CREATE, 0o600);
+  } catch {
+    return false;
+  }
+  try {
+    await handle.writeFile(text);
+    await handle.chmod(mode);
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await unlink(temp).catch(() => {});
+    throw error;
+  }
+  await handle.close();
+  try {
+    await rename(temp, path);
+  } catch (error) {
+    await unlink(temp).catch(() => {});
+    throw error;
+  }
+  return true;
+}
 
 /** The paths (relative to `dir`) of the files whose text changed. */
 export async function redactFiles(dir: string, redact: (text: string) => string): Promise<string[]> {
@@ -28,9 +63,7 @@ export async function redactFiles(dir: string, redact: (text: string) => string)
         if (text === null) continue;
         const out = redact(text);
         if (out === text) continue;
-        const temp = `${path}.redacting`;
-        await writeFile(temp, out, { mode: info.mode & 0o777 });
-        await rename(temp, path);
+        if (!(await replaceFile(path, out, info.mode & 0o777))) continue;
         changed.push(relative(dir, path));
       }
     }

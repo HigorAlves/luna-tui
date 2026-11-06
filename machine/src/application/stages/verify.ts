@@ -31,10 +31,10 @@ export interface VerifyDeps {
   exec: ((
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; image?: string },
   ) => Promise<ExecResult>) | null;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
-  runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) => Promise<StageResult>) | null;
+  runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) => Promise<StageResult>) | null;
   stateDir: string;
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** A fresh clone of the card's clone at its head commit, where the checks and the review run; absent, they run in the card's own folder. */
@@ -48,7 +48,9 @@ export interface VerifyDeps {
   /** The environment Build recorded for the task (its passing run's `env`); null when none. */
   buildEnv?: (taskId: string) => Promise<EnvRecord | null>;
   /** The environment as it is in `path` at `commit`: the image id and the lockfiles. */
-  envOf?: (path: string, commit: string, repoPath?: string) => Promise<EnvRecord>;
+  envOf?: (path: string, commit: string, repoPath?: string, image?: string) => Promise<EnvRecord>;
+  /** The repository's image as the stages run in it now. Read once per run: the comparison, the checks and the review all use that one answer, never a second resolution. */
+  imageOf?: (repoPath: string, signal?: AbortSignal) => Promise<string>;
   /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
@@ -159,7 +161,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       return [];
     }
   };
-  const verify = async (context: StageContext, state: { radius: string[] }): Promise<StageResult> => {
+  const verify = async (context: StageContext, state: { radius: string[]; image?: string }): Promise<StageResult> => {
     const { task, signal } = context;
     // No worktree means implementing was stubbed (agents off): behave like the stub, not an escalation.
     if (!task.worktreePath) return { outcome: "pass", detail: { note: "no worktree; implementer was stubbed" } };
@@ -285,7 +287,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     let reviewed: Finding[] = [];
     let classification: Record<string, unknown> = {};
     if (deps.runPack) {
-      pack = await deps.runPack(context, state.radius.length ? { blastRadius: state.radius } : {});
+      pack = await deps.runPack(context, { ...(state.radius.length ? { blastRadius: state.radius } : {}), ...(state.image ? { image: state.image } : {}) });
       if (signal.aborted) return aborted();
       // A deliberate escalation is the pack's own answer, verbatim: it has no findings to compute a verdict from.
       if (pack.outcome === "escalated") return { ...pack, detail: { ...pack.detail, step: "review" } };
@@ -318,6 +320,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
             services,
             ...(task.repoPath ? { repoPath: task.repoPath } : {}),
             ...(declaredSecrets && declaredSecrets.length > 0 ? { secrets: declaredSecrets } : {}),
+            ...(state.image ? { image: state.image } : {}),
           });
         } catch (error) {
           const escalated = escalationOf(error);
@@ -413,7 +416,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       let ran: ExecResult;
       try {
         // As every check: the card's repository names its image, its list and its install; nothing runs on the machine's bare defaults.
-        ran = await checkExec("sh", ["-c", mutationConfig.command], { cwd, signal, timeoutMs: Math.max(deadline - Date.now(), MINUTE), env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" }, services, ...(task.repoPath ? { repoPath: task.repoPath } : {}) });
+        ran = await checkExec("sh", ["-c", mutationConfig.command], { cwd, signal, timeoutMs: Math.max(deadline - Date.now(), MINUTE), env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" }, services, ...(task.repoPath ? { repoPath: task.repoPath } : {}), ...(state.image ? { image: state.image } : {}) });
       } catch (error) {
         const escalated = escalationOf(error);
         if (escalated) return escalated;
@@ -440,8 +443,18 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     return assemble(pack, [...reviewed, ...coverageFindings], { checks: reports, ...coverageDetail, ...classification, ...noTestsNote });
   };
   return async (context) => {
-    const state = { radius: [] as string[] };
+    const state: { radius: string[]; image?: string } = { radius: [] };
     const { task } = context;
+    // The repository's image is chosen once here: the environment compared below, the checks and the review run in this one, so what is recorded
+    // is what ran even when a floating base moves meanwhile. One that cannot be built is an environment problem with the reason.
+    if (deps.imageOf && task.repoPath) {
+      try {
+        state.image = await deps.imageOf(task.repoPath, context.signal);
+      } catch (error) {
+        if (!(error instanceof RepoImageError)) throw error;
+        return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "image", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
+      }
+    }
     const fresh = deps.fresh && task.worktreePath && task.branch ? await deps.fresh.make(task.worktreePath, task.branch, context.runId) : null;
     // Whatever the stage reads and runs is the fresh clone's; the card's folder is only touched to take a fast-forward back.
     const inFresh: StageContext = fresh ? { ...context, task: { ...task, worktreePath: fresh.path } } : context;
@@ -451,7 +464,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     if (fresh && deps.buildEnv && deps.envOf) {
       const recorded = await deps.buildEnv(task.id);
       if (recorded) {
-        const compared = compareEnv(recorded, await deps.envOf(fresh.path, fresh.commit, task.repoPath ?? undefined));
+        const compared = compareEnv(recorded, await deps.envOf(fresh.path, fresh.commit, task.repoPath ?? undefined, state.image));
         envReproduction = compared.matched ? "matched" : compared.differences.join("; ");
         if (!compared.matched) {
           envFinding = { path: "", line: 0, start_line: null, severity: "blocker", category: "env", title: "the environment Verify has is not the one Build ran in", body: compared.differences.join("\n"), suggestion_code: null, confidence: 1 };

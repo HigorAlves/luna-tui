@@ -554,8 +554,8 @@ export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog,
   /** A person dismisses one of the findings the last Verify reported, while the card waits at awaiting_ship. */
   app.post("/tasks/:id/findings/:findingId/dismiss", async (c) => {
     const id = taskId(c);
-    await body(c, DismissFindingInput);
-    await pipeline.dismissFinding(id, c.req.param("findingId").slice(0, 200));
+    const { reason } = await body(c, DismissFindingInput);
+    await pipeline.dismissFinding(id, c.req.param("findingId").slice(0, 200), reason);
     return c.json(await serialize(await pipeline.get(id)));
   });
 
