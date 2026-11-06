@@ -308,6 +308,8 @@ function guardGit(args: string[], ctx: GuardContext): string | null {
     return null;
   }
   if (sub === "commit") return guardCommit(rest, ctx);
+  // `git rm -r .` empties the worktree as `rm -r .` does: the same refusal.
+  if (sub === "rm") return guardRm(rest);
   return null;
 }
 

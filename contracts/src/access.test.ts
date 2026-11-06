@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AGENT_PACKS, NO_ACCESS, access, readOnly } from "./index.ts";
+import { AGENT_PACKS, NO_ACCESS, PACKS, access, readOnly } from "./index.ts";
 
 describe("access", () => {
   it("joins fragments: a capability any fragment grants, every command and luna tool once", () => {
@@ -22,5 +22,9 @@ describe("access", () => {
       const pack = AGENT_PACKS.find((p) => p.id === id)!;
       expect(pack.access.commands, id).toEqual(expect.arrayContaining(verbs));
     }
+  });
+
+  it("lets the implementer move and delete files, because a change that renames or removes one has no other way to", () => {
+    expect(PACKS.implementing.access.commands).toEqual(expect.arrayContaining(["git mv", "git rm", "mv", "rm"]));
   });
 });

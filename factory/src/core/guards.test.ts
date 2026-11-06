@@ -12,6 +12,13 @@ describe("checkCall", () => {
     expect(checkCall({ tool: "bash", input: { command: "pnpm test" } }, READ_ONLY)).toEqual({ allow: true });
   });
 
+  it("lets a writable stage move and remove named files, and refuses a git rm that would empty the worktree", () => {
+    expect(checkCall({ tool: "bash", input: { command: "git mv README.md .github/README.md" } }, WRITABLE)).toEqual({ allow: true });
+    expect(checkCall({ tool: "bash", input: { command: "git rm -q README.md" } }, WRITABLE)).toEqual({ allow: true });
+    expect(checkCall({ tool: "bash", input: { command: "git rm -rf ." } }, WRITABLE)).toEqual({ allow: false, reason: expect.stringMatching(/would empty the worktree/) });
+    expect(checkCall({ tool: "bash", input: { command: "git rm -r --cached ./*" } }, WRITABLE)).toEqual({ allow: false, reason: expect.stringMatching(/would empty the worktree/) });
+  });
+
   it("refuses a shell command with the rule's reason", () => {
     expect(checkCall({ tool: "bash", input: { command: "git push" } }, WRITABLE)).toEqual({ allow: false, reason: expect.stringMatching(/git push is not allowed/) });
   });

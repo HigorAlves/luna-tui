@@ -1001,7 +1001,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     agent: "implementer",
     helpers: [],
     skills: ["tdd", "verification-before-completion", "code-discovery"],
-    access: access(READ_ONLY, { write: true, luna: [...LEDGER_TOOLS, "scope_check"], commands: ["git add", "git commit", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
+    access: access(READ_ONLY, { write: true, luna: [...LEDGER_TOOLS, "scope_check"], commands: ["git add", "git commit", "git mv", "git rm", "mv", "rm", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
     writable: true,
     maxTurns: 80,
     timeoutMs: 30 * MINUTE,
@@ -1018,7 +1018,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     helpers: [],
     skills: ["tdd", "code-discovery"],
     // The implementer's tools without the commit: the machine checks the diff and makes the commit itself.
-    access: access(READ_ONLY, { write: true, luna: ["decision_get", "scenario_red"], commands: ["git add", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
+    access: access(READ_ONLY, { write: true, luna: ["decision_get", "scenario_red"], commands: ["git add", "git mv", "git rm", "mv", "rm", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
     writable: true,
     maxTurns: 40,
     timeoutMs: 15 * MINUTE,
