@@ -35,7 +35,8 @@ import { dockerImages } from "../adapters/docker/image-build.ts";
 import { repoSlug } from "../adapters/graph/slug.ts";
 import { ensureGraphReady } from "../application/graph-ready.ts";
 import { type RepoImageEvent, repoImages as makeRepoImages } from "../application/repo-images.ts";
-import { imageExists, imageId, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { removeLeftoverNetworks } from "../adapters/docker/egress.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
@@ -59,6 +60,11 @@ export interface RealStagesResult {
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
    *  the credentials, the state dir, the worktrees dir and each repo's luna.yaml; null when agents are off or something is missing. */
   agentDeps: { image: string; approvals: ApprovedBases; repoImages: ReturnType<typeof makeRepoImages>; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
+}
+
+/** Why the runner image cannot give a run its own network and proxy (it was built before the egress proxy went in), or null. */
+export async function egressImageProblem(image: string, label: (image: string, name: string) => Promise<string | null> = imageLabel): Promise<string | null> {
+  return (await label(image, "dev.hardness.egress")) === null ? `image ${image} has no egress proxy (label dev.hardness.egress): rebuild it with pnpm runner:build` : null;
 }
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
@@ -118,8 +124,15 @@ export async function buildRealStages(
     console.warn(`image ${config.runnerImage} is missing (pnpm runner:build): every stage is a stub`);
     return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
   }
+  const noProxy = await egressImageProblem(config.runnerImage);
+  if (noProxy) {
+    console.warn(`${noProxy}: every stage is a stub`);
+    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
+  }
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
+  const removedNetworks = await removeLeftoverNetworks();
+  if (removedNetworks > 0) console.log(`removed ${removedNetworks} leftover stage network(s)`);
   // A machine that died mid-write-back left its temp copy of the Codex login beside the real one.
   const temps = await removeStaleCodexTemps();
   if (temps > 0) console.log(`removed ${temps} stale Codex login temp file(s)`);

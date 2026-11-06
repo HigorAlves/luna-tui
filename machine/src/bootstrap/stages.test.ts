@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { buildRunnerFor } from "./stages.ts";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { buildRunnerFor, egressImageProblem } from "./stages.ts";
 
 describe("buildRunnerFor", () => {
   it("routes delivering, verifying and shipping to the always-real runners, everything else to the stub or the real map", () => {
@@ -60,5 +64,20 @@ describe("buildRunnerFor on a PR task", () => {
     await runnerFor("reviewing")(ctx("review", "reviewing"));
     await runnerFor("addressing")(ctx("address", "addressing"));
     expect(calls).toEqual(["checks", "checks", "verify", "follow-up", "deliver", "verdict", "memory-ship", "review", "address"]);
+  });
+});
+
+describe("the runner image's proxy", () => {
+  it("is a reason to run every stage as a stub when the image has no egress label", async () => {
+    expect(await egressImageProblem("img:dev", async () => null)).toMatch(/img:dev.*egress.*runner:build/s);
+    expect(await egressImageProblem("img:dev", async (image, label) => (image === "img:dev" && label === "dev.hardness.egress" ? "1" : null))).toBeNull();
+  });
+
+  it("sweeps leftover networks right after leftover containers", () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "stages.ts"), "utf8");
+    const containers = source.indexOf("await removeLeftoverContainers()");
+    expect(containers).toBeGreaterThan(0);
+    expect(source.indexOf("await removeLeftoverNetworks()")).toBeGreaterThan(containers);
+    expect(source.indexOf("egressImageProblem(config.runnerImage")).toBeLessThan(containers);
   });
 });

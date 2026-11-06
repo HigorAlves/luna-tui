@@ -195,6 +195,33 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
   }
 }
 
+/** A re-attached run's network and proxy, found by name (a restart found the container still running); null when the network is gone. The handle reads and removes them; it cannot put a container on the network. */
+export async function findCardNetwork(runName: string, exec: DockerExec = hostExec): Promise<CardNetwork | null> {
+  const network = cardNetworkName(runName);
+  const proxy = proxyName(runName);
+  if ((await exec("docker", ["network", "inspect", network])).code !== 0) return null;
+  const hasProxy = (await exec("docker", ["inspect", "-f", "{{.State.Running}}", proxy])).code === 0;
+  let torn = false;
+  return {
+    name: network,
+    dns: "",
+    containerArgs: () => {
+      throw new Error("a re-attached network only reads and removes");
+    },
+    async blocked() {
+      if (!hasProxy || torn) return [];
+      const logs = await exec("docker", ["logs", "--tail", String(LOG_TAIL), proxy]);
+      return logs.code === 0 ? blockedRowsOf(`${logs.stdout}\n${logs.stderr}`) : [];
+    },
+    async teardown() {
+      if (torn) return;
+      torn = true;
+      if (hasProxy) await exec("docker", ["rm", "-f", proxy]);
+      await exec("docker", ["network", "rm", network]);
+    },
+  };
+}
+
 /** Waits until the proxy says it listens; fails with its output when it exits or never does. */
 async function waitReady(exec: DockerExec, proxy: string, options: OpenOptions): Promise<void> {
   const deadline = Date.now() + (options.readyTimeoutMs ?? 15_000);

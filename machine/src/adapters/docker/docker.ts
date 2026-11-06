@@ -10,8 +10,8 @@ import { randomUUID } from "node:crypto";
 import type { ServiceSpec } from "@hardness/contracts";
 
 import type { CredentialMount, RunCredential } from "../credentials/index.ts";
-import type { CardNetwork } from "./egress.ts";
-import { startServices } from "./services.ts";
+import { type BlockedRow, type CardNetwork, findCardNetwork, openCardNetwork } from "./egress.ts";
+import { serviceName, startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
 
 /** Label on every stage container, so leftovers can be found and removed. */
@@ -102,6 +102,8 @@ export interface SandboxRun {
   /** Join no network at all: for a job that needs none (the graph build parses untrusted code). Ignored when a service network is given. */
   networkNone?: boolean;
   serviceEnv?: Record<string, string>;
+  /** The list this run may reach (`egressFor`), and the machine's own image the proxy runs from (never a repository's). `runSandbox` opens a card network with a proxy for it, and removes both when the run ends. */
+  egress?: { allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string };
   /** The run's card network (egress.ts): joined in place of the plain network, with the proxy as the only way out. */
   cardNetwork?: CardNetwork;
   /** More networks to join, by name (the browser run joins the app's). */
@@ -129,7 +131,19 @@ export interface SandboxResult {
   /** Why `onLine` stopped the run, when it did. */
   stuck?: string | null;
   transcriptPath: string;
+  /** What the run's proxy refused (untrusted text, flattened); absent for a run with no card network. */
+  blocked?: BlockedRow[];
 }
+
+/** What `runSandbox` and `execInSandbox` call out to; the host's by default, a fake in a test. */
+export interface RunDeps {
+  exec: typeof exec;
+  execOrThrow: typeof execOrThrow;
+  startServices: typeof startServices;
+  openCardNetwork: typeof openCardNetwork;
+  findCardNetwork: typeof findCardNetwork;
+}
+const HOST_DEPS: RunDeps = { exec, execOrThrow, startServices, openCardNetwork, findCardNetwork };
 
 /** The `docker run` argument list for one stage. Pure: the credential's variables are named, never valued. */
 export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): string[] {
@@ -191,29 +205,41 @@ function networkArgs(network: string | null | undefined, serviceEnv: Record<stri
   return ["--network", network, ...env];
 }
 
-export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
-  // A re-attached run's services are still up from before; they are torn down with it below.
-  const services = run.attach
-    ? { network: null, env: {}, teardown: () => startServices(run.name, run.services ?? {}).then((s) => s.teardown(), () => {}) }
-    : await startServices(run.name, run.services ?? {});
+export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}): Promise<SandboxResult> {
+  const deps: RunDeps = { ...HOST_DEPS, ...given };
+  // The run's own card network, when it has a list: opened here and removed in `finally`, whatever the outcome. A card network
+  // it is handed (the browser run's, the app's) is joined and left alone; a re-attached run's is found by name and removed at its end.
+  let own: CardNetwork | null = null;
+  if (run.attach) own = run.cardNetwork ? null : run.egress ? await deps.findCardNetwork(run.name) : null;
+  else if (!run.cardNetwork && run.egress) own = await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage });
+  const card = run.cardNetwork ?? own;
   try {
-    if (!run.attach) {
-      const inDir = join(run.runDir, "in");
-      const outDir = join(run.runDir, "out");
-      await mkdir(inDir, { recursive: true });
-      await mkdir(outDir, { recursive: true });
-      await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
-      await execOrThrow("docker", sandboxArgs({ ...run, network: services.network, serviceEnv: services.env }, inDir, outDir), {
-        env: { ...process.env, ...run.credential.env },
-      });
+    // A re-attached run's services are still up from before; they are torn down with it below.
+    const services = run.attach
+      ? { network: null, env: {}, teardown: async () => void (await Promise.all(Object.keys(run.services ?? {}).map((key) => deps.exec("docker", ["rm", "-f", serviceName(run.name, key)])))) }
+      : await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
+    try {
+      if (!run.attach) {
+        const inDir = join(run.runDir, "in");
+        const outDir = join(run.runDir, "out");
+        await mkdir(inDir, { recursive: true });
+        await mkdir(outDir, { recursive: true });
+        await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
+        await deps.execOrThrow("docker", sandboxArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }, inDir, outDir), {
+          env: { ...process.env, ...run.credential.env },
+        });
+      }
+      const result = await waitSandbox(run, deps.exec);
+      return own ? { ...result, blocked: await own.blocked() } : result;
+    } finally {
+      await services.teardown();
     }
-    return await waitSandbox(run);
   } finally {
-    await services.teardown();
+    await own?.teardown();
   }
 }
 
-async function waitSandbox(run: SandboxRun): Promise<SandboxResult> {
+async function waitSandbox(run: SandboxRun, exec: RunDeps["exec"]): Promise<SandboxResult> {
   run.onStarted?.(run.name);
 
   let timedOut = false;
@@ -295,6 +321,8 @@ export interface SandboxExec {
   services?: Record<string, ServiceSpec>;
   network?: string | null;
   serviceEnv?: Record<string, string>;
+  /** The list the check may reach, as for a stage; `execInSandbox` opens and removes the network. */
+  egress?: { allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string };
   /** The check's card network and any more networks to join, as for a stage. */
   cardNetwork?: CardNetwork;
   alsoJoin?: string[];
@@ -341,14 +369,22 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
 export async function execInSandbox(
   run: SandboxExec,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
-): Promise<ExecResult> {
-  const services = await startServices(run.name, run.services ?? {});
+  given: Partial<RunDeps> = {},
+): Promise<ExecResult & { blocked?: BlockedRow[] }> {
+  const deps: RunDeps = { ...HOST_DEPS, ...given };
+  const own = !run.cardNetwork && run.egress ? await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage }) : null;
+  const card = run.cardNetwork ?? own;
   try {
-    const result = await exec("docker", sandboxExecArgs({ ...run, network: services.network, serviceEnv: services.env }), options);
-    await exec("docker", ["rm", "-f", run.name]);
-    return result;
+    const services = await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
+    try {
+      const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }), options);
+      await deps.exec("docker", ["rm", "-f", run.name]);
+      return own ? { ...result, blocked: await own.blocked() } : result;
+    } finally {
+      await services.teardown();
+    }
   } finally {
-    await services.teardown();
+    await own?.teardown();
   }
 }
 

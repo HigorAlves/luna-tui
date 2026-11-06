@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
-import { EgressUnsupportedError, cardNetworkArgs, egressBridgeArgs, ensureEgressBridge, openCardNetwork, proxyArgs, removeLeftoverNetworks } from "./egress.ts";
+import { EgressUnsupportedError, cardNetworkArgs, egressBridgeArgs, ensureEgressBridge, openCardNetwork, proxyArgs, findCardNetwork, removeLeftoverNetworks } from "./egress.ts";
 
 const IMAGE = "machine-image:dev";
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
@@ -210,5 +210,32 @@ describe("removeLeftoverNetworks", () => {
     expect(calls).toContainEqual(["docker", "network", "rm", "net-free"]);
     expect(calls).not.toContainEqual(["docker", "network", "rm", "net-used"]);
     expect(calls.find((c) => c[1] === "network" && c[2] === "ls")).toEqual(["docker", "network", "ls", "-q", "--filter", "label=dev.hardness.stage=1"]);
+  });
+});
+
+describe("findCardNetwork", () => {
+  it("finds a run's network and proxy by name, and reads and removes them", async () => {
+    const { calls, exec } = dockerFake([], '{"blocked":{"host":"a.example.com","port":443,"via":"connect","reason":"not_listed"}}\n');
+    const net = await findCardNetwork("r1", exec);
+    expect(net).not.toBeNull();
+    expect(net!.name).toBe("hardness-card-r1");
+    expect(await net!.blocked()).toEqual([{ host: "a.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }]);
+    await net!.teardown();
+    await net!.teardown();
+    expect(calls.filter((c) => c[1] === "rm")).toEqual([["docker", "rm", "-f", "hardness-egress-r1"]]);
+    expect(calls.at(-1)).toEqual(["docker", "network", "rm", "hardness-card-r1"]);
+  });
+
+  it("is null when there is no such network", async () => {
+    const { exec } = dockerFake([(a) => (a[0] === "network" && a[1] === "inspect" ? fail("No such network") : undefined)]);
+    expect(await findCardNetwork("r1", exec)).toBeNull();
+  });
+
+  it("has no proxy to read or remove when there is none", async () => {
+    const { calls, exec } = dockerFake([(a) => (a[0] === "inspect" && a.includes("hardness-egress-r1") ? fail("No such container") : undefined)]);
+    const net = await findCardNetwork("r1", exec);
+    expect(await net!.blocked()).toEqual([]);
+    await net!.teardown();
+    expect(calls.filter((c) => c[1] === "rm")).toEqual([]);
   });
 });

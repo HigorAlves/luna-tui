@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 
-import { CACHE_ENV, cacheVolumeFor, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
+import type { ExecResult } from "../process/exec.ts";
+import { CACHE_ENV, type RunDeps, cacheVolumeFor, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
+import { EgressUnsupportedError } from "./egress.ts";
 
 function run(over: Partial<SandboxRun> = {}): SandboxRun {
   return {
@@ -286,5 +291,107 @@ describe("a run on a card network", () => {
     const args = sandboxArgs(run(), "/in", "/out");
     expect(args).not.toContain("--dns");
     expect(args).not.toContain("--network");
+  });
+});
+
+describe("runSandbox and execInSandbox on a run's own network", () => {
+  const dirs: string[] = [];
+  afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+  const tmp = () => {
+    const d = mkdtempSync(join(tmpdir(), "docker-test-"));
+    dirs.push(d);
+    return d;
+  };
+  const rows = [{ host: "evil.example.com", port: 443, via: "connect" as const, reason: "not_listed", count: 1 }];
+  const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
+
+  /** Fake deps: every step lands in `events`, in order. */
+  function fakes(over: { failRun?: boolean; open?: () => Promise<never> } = {}) {
+    const events: string[] = [];
+    const calls: string[][] = [];
+    const network = (label: string) => ({
+      name: `net-${label}`,
+      dns: "172.30.0.2",
+      containerArgs: () => ["--network", `net-${label}`, "--dns", "172.30.0.2"],
+      blocked: async () => (events.push(`blocked ${label}`), rows),
+      teardown: async () => void events.push(`teardown ${label}`),
+    });
+    const deps: RunDeps = {
+      exec: async (_command, args) => {
+        calls.push(args);
+        if (args[0] === "wait") return ok("0\n");
+        if (args[0] === "run") events.push("docker run --rm");
+        return ok();
+      },
+      execOrThrow: async (_command, args) => {
+        calls.push(args);
+        events.push("docker run -d");
+        if (over.failRun) throw new Error("docker run failed");
+        return "";
+      },
+      startServices: async (_name, _services, options) => {
+        events.push(`services on ${options?.network?.name ?? "none"}`);
+        return { network: options?.network?.name ?? null, env: {}, teardown: async () => void events.push("teardown services") };
+      },
+      openCardNetwork: over.open ?? (async (name: string) => (events.push(`open ${name}`), network("own") as never)),
+      findCardNetwork: async (name: string) => (events.push(`find ${name}`), network("found") as never),
+    };
+    return { deps, events, calls, network };
+  }
+
+  it("opens the network, starts the services on it, runs, reads what was blocked, then removes services and network, in that order", async () => {
+    const { deps, events, calls } = fakes();
+    const result = await runSandbox(run({ runDir: tmp(), egress: { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" }, services: { db: { image: "pg" } } }), deps);
+    expect(events).toEqual(["open c1", "services on net-own", "docker run -d", "blocked own", "teardown services", "teardown own"]);
+    expect(result.blocked).toEqual(rows);
+    const started = calls.find((c) => c[0] === "run")!;
+    expect(started).toEqual(expect.arrayContaining(["--network", "net-own", "--dns", "172.30.0.2"]));
+  });
+
+  it("removes the network when the container does not start, and when it is killed by the time limit", async () => {
+    const failing = fakes({ failRun: true });
+    await expect(runSandbox(run({ runDir: tmp(), egress: { allow: ["a.example.com:443"], allowPrivate: [], proxyImage: "m" } }), failing.deps)).rejects.toThrow("docker run failed");
+    expect(failing.events.at(-1)).toBe("teardown own");
+    const slow = fakes();
+    slow.deps.exec = async (_c, args) => (args[0] === "wait" ? (await new Promise((r) => setTimeout(r, 40)), { code: 1, stdout: "", stderr: "" }) : ok());
+    const result = await runSandbox(run({ runDir: tmp(), timeoutMs: 5, egress: { allow: ["a.example.com:443"], allowPrivate: [], proxyImage: "m" } }), slow.deps);
+    expect(result.timedOut).toBe(true);
+    expect(slow.events.at(-1)).toBe("teardown own");
+  });
+
+  it("refuses with the daemon's reason and starts nothing when the network cannot be made", async () => {
+    const { deps, events } = fakes({ open: async () => { throw new EgressUnsupportedError("old daemon"); } });
+    await expect(runSandbox(run({ runDir: tmp(), egress: { allow: ["a.example.com:443"], allowPrivate: [], proxyImage: "m" } }), deps)).rejects.toBeInstanceOf(EgressUnsupportedError);
+    expect(events).toEqual([]);
+  });
+
+  it("joins the card network it is given and tears nothing of it down", async () => {
+    const { deps, events, network } = fakes();
+    const given = network("given") as never;
+    await runSandbox(run({ runDir: tmp(), cardNetwork: given, services: { db: { image: "pg" } } }), deps);
+    expect(events).toEqual(["services on net-given", "docker run -d", "teardown services"]);
+  });
+
+  it("behaves as before for a run with neither: no network opened", async () => {
+    const { deps, events } = fakes();
+    const result = await runSandbox(run({ runDir: tmp() }), deps);
+    expect(events).toEqual(["services on none", "docker run -d", "teardown services"]);
+    expect(result.blocked).toBeUndefined();
+  });
+
+  it("finds a re-attached run's network and proxy by name, runs nothing new and removes them when it ends", async () => {
+    const { deps, events, calls } = fakes();
+    const result = await runSandbox(run({ attach: true, runDir: tmp(), egress: { allow: ["a.example.com:443"], allowPrivate: [], proxyImage: "m" } }), deps);
+    expect(events).toEqual(["find c1", "blocked found", "teardown found"]);
+    expect(calls.some((c) => c[0] === "run")).toBe(false);
+    expect(result.blocked).toEqual(rows);
+  });
+
+  it("does the same for a check: its result carries what was blocked, and the network goes after the container", async () => {
+    const { deps, events, calls } = fakes();
+    const result = await execInSandbox({ name: "chk1", image: "img", worktree: "/wt", argv: ["sh", "-c", "true"], egress: { allow: ["a.example.com:443"], allowPrivate: [], proxyImage: "m" } }, {}, deps);
+    expect(events).toEqual(["open chk1", "services on net-own", "docker run --rm", "blocked own", "teardown services", "teardown own"]);
+    expect(result.blocked).toEqual(rows);
+    expect(calls.find((c) => c[0] === "run")).toEqual(expect.arrayContaining(["--network", "net-own"]));
   });
 });
