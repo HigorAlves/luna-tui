@@ -481,6 +481,8 @@ export const LunaConfig = z.object({
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
   evidence: z.object({ retention_days: z.number().int().min(0).optional(), ...EvidenceConfigV22 }).optional(),
+  /** Memory for this repository (RFC 0007): `memory: off` (or `mode: off`) keeps it out of memory. `daily_cognify_items` caps the items Cognee builds a graph for in a day; `stale_lines` is how many changed lines in an item's anchored files make it stale. */
+  memory: z.object({ mode: z.enum(["on", "off"]).optional(), daily_cognify_items: z.number().int().min(0).max(100_000).optional(), stale_lines: z.number().int().min(1).max(1_000_000).optional() }).strict().optional(),
   /** Windows in which the machine merges nothing, whatever the policy says. */
   freeze: z
     .array(

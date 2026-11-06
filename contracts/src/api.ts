@@ -629,7 +629,29 @@ export interface FingerprintMetrics {
 export const METRICS_GROUP_BY = ["repo", "engine", "fingerprint"] as const;
 export type MetricsGroupBy = (typeof METRICS_GROUP_BY)[number];
 
+/** What the Floor shows of memory (RFC 0007), on `GET /metrics` as `memory`. Absent when the machine has no memory wired. */
+export interface MemoryFloor {
+  /** False when memory is off (`MACHINE_MEMORY=off`) or Cognee was unreachable at boot (then `note` says so). */
+  enabled: boolean;
+  /** `openai`: Cognee builds its graph with its own key; `local`: no key, its local extractor; null when off. */
+  mode: "openai" | "local" | null;
+  /** Items `cognify` processed today, against the machine's daily cap (`memory.daily_cognify_items`). */
+  cognifiedToday: number;
+  dailyCognifyItems: number;
+  /** Tokens and USD Cognee's model calls spent today, when Cognee reports them (null otherwise; always null in local mode). */
+  tokensToday: number | null;
+  costUsdToday: number | null;
+  /** Items written but not yet in Cognee (waiting for a retry). */
+  pending: number;
+  /** Active items in the machine's table. */
+  items: number;
+  /** Why memory is off or degraded (Cognee down, the last cognify error); null when there is nothing to say. */
+  note: string | null;
+}
+
 export interface Metrics {
+  /** Memory's mode and spend, for the Floor. Only on the plain window (not with `groupBy`); absent when the machine has no memory wired. */
+  memory?: MemoryFloor;
   since: string;
   until: string;
   /** Set when the numbers are for one repo (`?repo=<path>`). */

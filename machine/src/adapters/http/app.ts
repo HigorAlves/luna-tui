@@ -50,6 +50,7 @@ import {
   TaskSource,
   TaskState,
   UpdateTaskInput,
+  type MemoryFloor,
   type RepoHealth,
 } from "@hardness/contracts";
 import { type Context, Hono } from "hono";
@@ -101,6 +102,8 @@ const IDEMPOTENCY_KEY_MAX = 200;
 const RECENT_EVENTS = 50;
 
 export interface AppDeps {
+  /** Memory's mode and spend for the Floor (`GET /metrics` `memory`); absent, the field is absent. */
+  memoryFloor?: () => Promise<MemoryFloor>;
   /** Each repository's image and graph health for `GET /repos`; absent, the list is empty. */
   repoHealth?: () => Promise<RepoHealth[]>;
   /** Approves a base for a repository (refused unless it is the one in the repository's luna.yaml on the user's checkout); absent, `POST /repos/base/approve` is absent. */
@@ -187,7 +190,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
+export function createApp({ memoryFloor, repoHealth, approveBase, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -323,15 +326,17 @@ export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog,
     const groupBy = c.req.query("groupBy");
     if (groupBy !== undefined && !(METRICS_GROUP_BY as readonly string[]).includes(groupBy)) throw new BadRequest(`groupBy must be one of ${METRICS_GROUP_BY.join(", ")}, got "${groupBy}"`);
     const repo = c.req.query("repo");
-    return c.json(
-      await computeMetrics(db, {
+    const memory = groupBy === undefined && memoryFloor ? await memoryFloor().catch(() => undefined) : undefined;
+    return c.json({
+      ...(memory ? { memory } : {}),
+      ...(await computeMetrics(db, {
         since,
         slots: pipeline.slots,
         budget,
         ...(repo !== undefined ? { repo: repo === "" ? null : repo } : {}),
         ...(groupBy !== undefined ? { groupBy: groupBy as MetricsGroupBy } : {}),
-      }),
-    );
+      })),
+    });
   });
 
   app.get("/tasks", async (c) => {

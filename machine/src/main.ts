@@ -73,12 +73,13 @@ import { blobAt, exportRepoCommit, treeAt } from "./adapters/git/main-export.ts"
 import { repoSlug } from "./adapters/graph/slug.ts";
 import { CompanyDocs } from "./application/memory-company-docs.ts";
 import { MemorySync } from "./application/memory-sync.ts";
-import { type Memory, noMemory } from "./application/memory.ts";
 import { recallReviewAsks, writeReviewAsks } from "./application/memory-review-asks.ts";
 import type { AgentDeps } from "./application/stages/pack-runner.ts";
 import type { ShipMonitorDeps } from "./application/stages/ship-monitor.ts";
 import type { TaskRow } from "./domain/task.ts";
 import { similarCardIds, similarOutcomes, viewerOfCard } from "./application/memory-similar.ts";
+import type { Memory } from "./application/memory.ts";
+import { memoryBoot } from "./bootstrap/memory.ts";
 import { imageSpecOf } from "./domain/image-spec.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
@@ -246,8 +247,10 @@ let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = as
 const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
 let graphWatch: GraphWatch | null = null;
-// Memory (RFC 0007): the one instance every stage, route and loop reads. Off until the Cognee adapter is wired (wave M1).
-const memory: Memory = noMemory();
+// Memory (RFC 0007): the one instance every stage, route and loop reads. Quiet (`noMemory()`) when off or until Cognee answers; the boot
+// retries the connection, sends writes still pending and lines Cognee up with the table every hour (`start()` below).
+const memoryBoot_ = memoryBoot({ config: config.memory, db });
+const memory: Memory = memoryBoot_.memory;
 /** What memory takes from a repository's default branch (docs, code graph) and from the company folder; both idle while memory is off. */
 const memoryDir = join(config.stateDir, "memory");
 const memorySync = new MemorySync({ memory, git: { head: defaultHead, tree: treeAt, blob: blobAt, exportTo: exportRepoCommit }, slugOf: repoSlug, dir: memoryDir });
@@ -818,6 +821,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
 };
 const app = createApp({
   approveBase,
+  memoryFloor: () => memoryBoot_.floor(),
   repoHealth: () =>
     repoHealthOf({
       repos: [],
@@ -855,6 +859,8 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
     `machine listening on http://${config.host}:${info.port} · real stages: ${agents.join(", ")} · up to ${config.maxConcurrentTasks} task(s) at once${config.apiToken ? " · API token required" : ""}`,
   );
 });
+
+memoryBoot_.start();
 
 if (config.githubPrs.enabled) {
   console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s`);
@@ -1008,6 +1014,7 @@ const slaTicker = new Ticker(() => {
 slaTicker.start();
 
 async function shutdown(): Promise<void> {
+  memoryBoot_.stop();
   intake?.stop();
   jiraWatch?.stop();
   jiraIntake?.stop();

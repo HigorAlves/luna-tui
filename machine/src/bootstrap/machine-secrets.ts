@@ -10,7 +10,7 @@ import type { Config } from "../config.ts";
 
 const ENV_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY"] as const;
 /** The files `~/.config/hardness` may hold a provider credential in (`adapters/credentials/claude.ts`). */
-const CLAUDE_FILES = [["CLAUDE_OAUTH_TOKEN_FILE", "claude-oauth-token"], ["ANTHROPIC_API_KEY_FILE", "anthropic-api-key"]] as const;
+const CLAUDE_FILES = [["CLAUDE_OAUTH_TOKEN_FILE", "claude-oauth-token"], ["ANTHROPIC_API_KEY_FILE", "anthropic-api-key"], ["COGNEE_OPENAI_KEY_FILE", "cognee-openai-key"], ["COGNEE_PASSWORD_FILE", "cognee-password"], ["COGNEE_JWT_SECRET_FILE", "cognee-jwt-secret"]] as const;
 /** A value shorter than this is not a secret worth hunting for: redacting it would mangle ordinary text. */
 const MIN_LENGTH = 8;
 
