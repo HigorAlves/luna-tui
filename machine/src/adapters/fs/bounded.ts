@@ -66,3 +66,21 @@ export async function hashRegularFile(path: string, maxBytes: number): Promise<s
     await handle.close();
   }
 }
+
+/** The bytes of a regular file of at most `maxBytes`; throws for a link, a FIFO or anything else, and for a file that is too big. */
+export async function readRegularBytes(path: string, maxBytes: number): Promise<Buffer> {
+  const { handle, size } = await openRegular(path);
+  try {
+    if (size > maxBytes) throw new Error(`${path} is ${size} bytes, over the ${maxBytes} byte cap`);
+    const buffer = Buffer.alloc(size);
+    let read = 0;
+    while (read < size) {
+      const { bytesRead } = await handle.read(buffer, read, size - read, read);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    return buffer.subarray(0, read);
+  } finally {
+    await handle.close();
+  }
+}

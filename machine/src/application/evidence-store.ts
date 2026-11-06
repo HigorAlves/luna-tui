@@ -10,6 +10,13 @@ import { copyRegularFile } from "../adapters/fs/bounded.ts";
 const MEGABYTE = 1024 * 1024;
 export const MAX_MEDIA_BYTES = 512 * MEGABYTE;
 const DAY_MS = 86_400_000;
+/** Evidence is kept 180 days unless the repository says otherwise; `MACHINE_RETENTION_DAYS` does not apply to it. */
+export const DEFAULT_EVIDENCE_RETENTION_DAYS = 180;
+
+/** The days a pack's local copies are kept: the repository's `evidence.retention_days` (0 keeps them), else 180 for a card whose repository is gone. */
+export function evidenceRetentionDays(policy: { factory: { evidence: { retention_days: number } } } | null): number {
+  return policy ? policy.factory.evidence.retention_days : DEFAULT_EVIDENCE_RETENTION_DAYS;
+}
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** A file name a container chose, made safe: separators and anything odd become `_`, no leading dot. */

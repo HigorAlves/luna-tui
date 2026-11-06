@@ -179,7 +179,7 @@ describe("shipping with an Evidence Pack", () => {
     const { run, context, evidence, saved, published } = withEvidence(pack(), github);
     const result = await run(context);
     expect(result).toMatchObject({ outcome: "pass", detail: { prUrl: "https://x/pull/3", readied: true, published: { comment: "created", assets: 1 } } });
-    expect(evidence.publish).toHaveBeenCalledWith({ github, slug: "a/b", number: 3, taskId: "t1", pack: pack(), localDir: `/state/evidence/t1/${HEAD}` });
+    expect(evidence.publish).toHaveBeenCalledWith({ github, slug: "a/b", number: 3, taskId: "t1", pack: pack(), repoPath: expect.anything(), localDir: `/state/evidence/t1/${HEAD}` });
     expect(saved).toEqual([["t1", published.pack]]);
     expect(github.markPrReady).toHaveBeenCalledWith("a/b", 3);
     // Published before the PR leaves draft.

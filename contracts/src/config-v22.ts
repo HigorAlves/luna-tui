@@ -132,7 +132,7 @@ export const CONSUMED_FROM: Readonly<Record<string, number>> = {
   "sandbox.cpu": 11, "sandbox.memory_gb": 11, "sandbox.keep_hours": 11, "sandbox.egress": 11,
   "verify.coverage_drop_max": 12, "verify.mutation.command": 12, "verify.mutation.min_score": 12, "verify.build_rounds": 12, "verify.e2e_rounds": 12, "verify.ci_rounds": 12,
   "verify.env_flake_retries": 8, "verify.ci_flaky_reruns": 8, "verify.auto_rebase": 8, "verify.e2e.deploy.command": 12, "verify.e2e.start.command": 12,
-  "evidence.video_budget_s": 12, "evidence.regenerate": 12, "evidence.tts.voice": 12, "evidence.tts.language": 12, "evidence.storage": 12, "evidence.retention_days": 13,
+  "evidence.video_budget_s": 12, "evidence.regenerate": 12, "evidence.tts.voice": 12, "evidence.tts.language": 12, "evidence.storage": 12, "evidence.retention_days": 12,
   "ship.preview": 13, "ship.auto_merge": 13, "ship.merge.method": 13, "ship.merge.queue": 13, "ship.merge.delete_branch": 13, "ship.merge.commit_template": 13,
   "ship.release_owners": 13, "ship.stale_days": 8, "ship.sla.reminder_days": 13, "ship.sla.escalate_days": 13, "ship.poll_minutes": 13,
 };

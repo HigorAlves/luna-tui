@@ -18,7 +18,7 @@ import { createDataSource, poolSizeFor } from "./adapters/persistence/data-sourc
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
 import { AUTO_ARCHIVE_GATES, type SlaRow, applySlaActions } from "./application/sla-actions.ts";
-import { sweepEvidenceStore } from "./application/evidence-store.ts";
+import { evidenceRetentionDays, sweepEvidenceStore } from "./application/evidence-store.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { DecisionLog } from "./application/decision-log.ts";
@@ -152,7 +152,7 @@ async function sweep(): Promise<void> {
     const retention = async (taskId: string): Promise<number> => {
       const rows: { repo_path: string | null }[] = await db.query("select repo_path from tasks where id::text = $1", [taskId]);
       const repo = rows[0]?.repo_path ?? null;
-      return (repo ? (await policies.for(repo)).evidenceRetentionDays : null) ?? config.retentionDays;
+      return evidenceRetentionDays(repo ? await policies.for(repo) : null);
     };
     const removed = await sweepEvidenceStore(config.stateDir, retention, new Date());
     return removed > 0 ? `removed ${removed} evidence pack copy(ies) past retention` : null;

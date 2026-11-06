@@ -40,6 +40,7 @@ describe("the loop caps", () => {
   it("default to today's three, are read from wave 12, and a repository's value wins", () => {
     expect(FACTORY_DEFAULTS.verify).toMatchObject({ e2e_rounds: 3, ci_rounds: 3 });
     for (const key of ["verify.e2e_rounds", "verify.ci_rounds"]) expect(CONSUMED_FROM[key], key).toBe(12);
+    expect(CONSUMED_FROM["evidence.retention_days"]).toBe(12);
     expect(factoryConfigOf({ verify: { e2e_rounds: 5 } }).verify).toMatchObject({ e2e_rounds: 5, ci_rounds: 3 });
   });
 });

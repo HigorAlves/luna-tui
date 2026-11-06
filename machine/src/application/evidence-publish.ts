@@ -1,17 +1,21 @@
 // Publishing an Evidence Pack: its media as release assets on one `luna-evidence` pre-release, a
-// section in the PR body, one upserted PR comment. It is what Ship does once the pack is complete
-// and its commit is the PR head. Only regular files under the pack's local dir are uploaded, a HAR
-// never (it can carry cookies and tokens), and what is written to the PR is flattened by
+// section in the PR body, one upserted PR comment. It is what Evidence (and Ship, on the other paths) does once the pack is complete
+// and its commit is the PR head. Media go to the repository's storage target (a port). Only regular files under the pack's local dir are uploaded, a HAR
+// never (it can carry cookies and tokens), a text file only after `redact` and within its cap, an image nobody read only after a person approved, and what is written to the PR is flattened by
 // `evidence-markdown.ts`. With no GitHub token the pack keeps its local urls and nothing throws.
 import type { EvidencePack } from "@hardness/contracts";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { realpath, stat } from "node:fs/promises";
 import { basename, extname, sep } from "node:path";
 
-import { BODY_CAP, COMMENT_MARKER, mergeSection, renderEvidenceComment, renderEvidenceSection, stripSection } from "../domain/evidence-markdown.ts";
+import { hashRegularFile, readRegularBytes } from "../adapters/fs/bounded.ts";
+import { releaseAssetStorage, EVIDENCE_TAG as TAG } from "../adapters/evidence-storage/release-asset.ts";
+import { BODY_CAP, COMMENT_MARKER, mergeSection, redact, renderEvidenceComment, renderEvidenceSection, stripSection } from "../domain/evidence-markdown.ts";
+import { type EvidenceStorage, localStorage } from "./evidence-storage.ts";
 import { MAX_MEDIA_BYTES, safeName } from "./evidence-store.ts";
 import { type GitHub, GitHubError } from "./github.ts";
 
-export const EVIDENCE_TAG = "luna-evidence";
+export const EVIDENCE_TAG = TAG;
 
 const CONTENT_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -40,6 +44,12 @@ export interface PublishInput {
   pack: EvidencePack;
   /** The pack's local store dir: only files under it are uploaded. */
   localDir: string;
+  /** The repository's `evidence.storage`; absent, the draft pre-release of the repository through `github`. */
+  storage?: EvidenceStorage;
+  /** The card's repository: `publishChosen` reads its `evidence.storage`. */
+  repoPath?: string | null;
+  /** A person approved the preview gate: an image nobody read (`scanned: false`) may then be uploaded. */
+  approved?: boolean;
 }
 
 export interface Published {
@@ -48,14 +58,21 @@ export interface Published {
   /** Whether the PR body got the section; `skipped` when the body left no room for it (the comment still carries the pack). */
   body?: "written" | "skipped";
   assets: number;
+  /** What was kept local and why (an unreadable text, a url that did not resolve): ids and names only. */
+  notes?: string[];
 }
 
 /** The section needs at least this much of the body's room, else it goes into the comment alone. */
 const BODY_ROOM_MIN = 2000;
+/** A text media file is read whole to be redacted: over this it is not published. */
+const TEXT_MAX_BYTES = 2 * 1024 * 1024;
+const TEXT_EXT = new Set([".txt", ".log", ".json", ".vtt", ".srt", ".md", ".csv", ".jsonl", ".ndjson"]);
 
 export type PublishEvidence = (input: PublishInput) => Promise<Published>;
 
 const isWeb = (url: string): boolean => /^https?:\/\//i.test(url);
+/** A url a storage target returned that may be printed as a link. */
+const safeUrl = (url: string): boolean => /^https:\/\//.test(url) && !/[\s)<>]/.test(url);
 
 /** A local media file that may be uploaded: a regular file, really under `localDir`, within the size cap, not a HAR. */
 async function uploadable(path: string, localDir: string): Promise<string | null> {
@@ -70,40 +87,62 @@ async function uploadable(path: string, localDir: string): Promise<string | null
   }
 }
 
-export const publishEvidence: PublishEvidence = async ({ github, slug, number, taskId, pack, localDir }) => {
-  const files = new Map<number, string>();
+export const publishEvidence: PublishEvidence = async ({ github, slug, number, taskId, pack, localDir, storage: chosen, approved = false }) => {
+  const storage = chosen ?? releaseAssetStorage(github);
+  const notes: string[] = [];
+  const files = new Map<number, { real: string; data?: Buffer }>();
   for (const [i, m] of pack.media.entries()) {
     const real = await uploadable(m.url, localDir);
-    if (real) files.set(i, real);
+    if (!real) continue;
+    // Nobody saw an image before it is public: one whose text was not read waits for a person.
+    if (m.kind === "screenshot" && m.scanned === false && !approved) {
+      notes.push(`${m.label} stays a local copy: its text was not read`);
+      continue;
+    }
+    // A text file is test output or a model's words: redacted whole, read through the bounded reader; one that cannot be read is not published.
+    if (m.kind === "report" || m.kind === "captions" || TEXT_EXT.has(extname(real).toLowerCase())) {
+      try {
+        files.set(i, { real, data: Buffer.from(redact((await readRegularBytes(real, TEXT_MAX_BYTES)).toString("utf8")), "utf8") });
+      } catch {
+        notes.push(`${m.label} stays a local copy: it could not be read within its cap`);
+      }
+      continue;
+    }
+    files.set(i, { real });
   }
 
-  // The first call to GitHub decides whether there is a token behind the port at all.
-  let release: { id: number } | null = null;
+  // The first call to the target decides whether there is a token behind the port at all.
   let current: Awaited<ReturnType<GitHub["prFacts"]>> | undefined;
-  try {
-    if (files.size > 0) release = await github.ensureRelease(slug, EVIDENCE_TAG, { name: "Luna evidence", prerelease: true });
-    else current = await github.prFacts(slug, number);
-  } catch (error) {
-    if (error instanceof GitHubError) return { pack, comment: "skipped", assets: 0 };
-    throw error;
-  }
-
-  let uploaded = 0;
   const urls = new Map<number, string>();
-  if (release) {
-    const existing = new Map((await github.releaseAssets(slug, release.id)).map((a) => [a.name, a.url]));
-    for (const [i, real] of files) {
-      const name = `${taskId.slice(0, 8)}-${pack.commitSha.slice(0, 7)}-${safeName(basename(real))}`;
-      const known = existing.get(name);
-      if (known) {
-        urls.set(i, known);
+  const fresh = new Set<number>();
+  let started = false;
+  try {
+    if (files.size === 0) current = await github.prFacts(slug, number);
+    // A probe: a target with no token behind it refuses here, before anything is uploaded; a refusal later is a real failure.
+    else await storage.has(slug, "");
+    started = true;
+    for (const [i, file] of files) {
+      const digest = file.data ? createHash("sha256").update(file.data).digest("hex") : await hashRegularFile(file.real, MAX_MEDIA_BYTES).catch(() => null);
+      if (!digest) continue;
+      const name = `${taskId.slice(0, 8)}-${pack.commitSha.slice(0, 7)}-${digest.slice(0, 8)}-${safeName(basename(file.real))}`;
+      const put = await storage.put({ slug, name, path: file.real, contentType: contentType(file.real), ...(file.data ? { data: file.data } : {}) });
+      if (!put) continue;
+      if (!safeUrl(put.url)) {
+        notes.push(`${pack.media[i]!.label} stays a local copy: the target gave no usable link`);
         continue;
       }
-      const { url } = await github.uploadReleaseAsset(slug, release.id, name, await readFile(real), contentType(real));
-      existing.set(name, url);
-      urls.set(i, url);
-      uploaded++;
+      urls.set(i, put.url);
+      if (!put.reused) fresh.add(i);
     }
+    for (const [i, url] of [...urls]) {
+      if (!(await storage.has(slug, url))) {
+        urls.delete(i);
+        notes.push(`${pack.media[i]!.label} stays a local copy: its link does not resolve`);
+      }
+    }
+  } catch (error) {
+    if (error instanceof GitHubError && !started) return { pack, comment: "skipped", assets: 0, notes };
+    throw error;
   }
   const published: EvidencePack = { ...pack, media: pack.media.map((m, i) => (urls.has(i) ? { ...m, url: urls.get(i)! } : m)) };
 
@@ -123,5 +162,9 @@ export const publishEvidence: PublishEvidence = async ({ github, slug, number, t
   const found = me === null ? undefined : (await github.listPrComments(slug, number)).find((c) => c.author === me && c.body.includes(COMMENT_MARKER));
   if (found) await github.updateComment(slug, found.id, comment);
   else await github.commentOnIssue(slug, number, comment);
-  return { pack: published, comment: found ? "updated" : "created", body, assets: uploaded };
+  return { pack: published, comment: found ? "updated" : "created", body, assets: [...fresh].filter((i) => urls.has(i)).length, notes };
 };
+
+/** `publishEvidence` on the target the repository chose (`evidence.storage`: `release_asset`, the default, or `local`). */
+export const publishChosen = (kindOf: (repoPath: string | null) => Promise<"release_asset" | "local">): PublishEvidence => async (input) =>
+  publishEvidence({ ...input, storage: (await kindOf(input.repoPath ?? null).catch(() => "release_asset" as const)) === "local" ? localStorage() : releaseAssetStorage(input.github) });

@@ -35,7 +35,7 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
   const slugOf = deps.slugOf ?? originSlugOf;
   const headOf = deps.headCommit ?? worktreeHead;
   /** The pack's turn at the gate: nothing to do (no pack), a stop (the head moved, the pack is incomplete), or what was published. */
-  const evidencePhase = async (slug: string, number: number, taskId: string, worktreePath: string): Promise<{ stop: StageResult } | { published: Record<string, unknown>; note?: string } | { none: true }> => {
+  const evidencePhase = async (slug: string, number: number, taskId: string, worktreePath: string, repoPath: string | null): Promise<{ stop: StageResult } | { published: Record<string, unknown>; note?: string } | { none: true }> => {
     const evidence = deps.evidence;
     if (!evidence) return { none: true };
     const pack = await evidence.load(taskId);
@@ -54,7 +54,7 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
     }
     const complete = packComplete(pack, head);
     if (!complete.ok) return { stop: { outcome: "fail", detail: { error: `the evidence pack is not complete: ${complete.problems.join("; ")}` } } };
-    const done = await evidence.publish({ github: deps.github, slug, number, taskId, pack, localDir: evidence.store.dirFor(taskId, pack.commitSha) });
+    const done = await evidence.publish({ github: deps.github, slug, number, taskId, pack, repoPath, localDir: evidence.store.dirFor(taskId, pack.commitSha) });
     await evidence.save(taskId, done.pack);
     return { published: { comment: done.comment, assets: done.assets }, ...(note ? { note } : {}) };
   };
@@ -98,7 +98,7 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
       });
       // Delivering was skipped (an older task): open the PR ready, as shipping used to. A resumed run never opens another.
       const pr = existing ?? (resumed ? { url: `https://github.com/${resumed.slug}/pull/${resumed.number}`, number: resumed.number, isDraft: false } : await openTaskPr(deps.github, slug, context, false));
-      const phase: Awaited<ReturnType<typeof evidencePhase>> = already ? { published: { resumed: true } } : await evidencePhase(slug, pr.number, task.id, cwd);
+      const phase: Awaited<ReturnType<typeof evidencePhase>> = already ? { published: { resumed: true } } : await evidencePhase(slug, pr.number, task.id, cwd, task.repoPath ?? null);
       if ("stop" in phase) return phase.stop;
       if (deps.stateDir && "published" in phase && !already) {
         const sha = (await headOf(cwd)).trim();

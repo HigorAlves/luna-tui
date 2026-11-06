@@ -8,7 +8,7 @@ import type { CoverageSummary, Ledger, RunSummary } from "@hardness/contracts";
 import type { Config } from "../config.ts";
 import { type Credentials, machineCredentials, removeStaleCodexTemps } from "../adapters/credentials/index.ts";
 import { EvidenceStore } from "../application/evidence-store.ts";
-import { publishEvidence } from "../application/evidence-publish.ts";
+import { publishChosen } from "../application/evidence-publish.ts";
 import type { Graph } from "../application/graph.ts";
 import type { Watcher } from "../application/ports.ts";
 import type { TruthSink } from "../application/decision-truth.ts";
@@ -150,6 +150,7 @@ export async function buildRealStages(
   const verifyPack = (context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) =>
     runAgent(deps, context, "verifying", { ...(extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}), ...(extra?.coverage ? { coverage: extra.coverage } : {}) });
   const agents = agentRunners(deps);
+  const publishByPolicy = publishChosen(async (repoPath) => (await policies.for(repoPath)).factory.evidence.storage);
   const saveEvidence = (taskId: string, pack: EvidencePack) => evidenceDeps.save(taskId, { evidence: pack });
   const evidenceStore = new EvidenceStore(config.stateDir);
   /** The project's checks over what changed since `since` (a commit the machine read): luna.yaml's list, no review pack. */
@@ -299,14 +300,14 @@ export async function buildRealStages(
         exec,
         github,
         // Ship publishes the task's Evidence Pack once it is complete and its commit is the PR head.
-        evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishEvidence, store: evidenceStore },
+        evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore },
         // Then the PR is watched until it merges: by policy the machine merges it, else a person does.
         stateDir: config.stateDir,
         monitor: shipMonitor({
           github,
           truth: truth ?? null,
           policies,
-          evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishEvidence, store: evidenceStore },
+          evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore },
           // The review loop: the decisions bind late; the sub-runs are the same packs the stages run, on the task's own worktree.
           loop: {
             get decide() {
