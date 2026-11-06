@@ -17,8 +17,8 @@ describe("the diagram's config defaults", () => {
   });
 
   it("scope the ticket machine to nobody until a repo says whose tickets are its own, and settle a burst of edits for a minute", () => {
-    expect(FACTORY_DEFAULTS.tickets).toEqual({ assignees: [], teams: [], debounce_seconds: 60, auto: "off" });
-    expect(factoryConfigOf({ tickets: { assignees: ["ana"] } }).tickets).toEqual({ assignees: ["ana"], teams: [], debounce_seconds: 60, auto: "off" });
+    expect(FACTORY_DEFAULTS.tickets).toEqual({ assignees: [], teams: [], debounce_seconds: 60, auto: "off", sla: { acknowledge_hours: 24, resolve_days: { P0: 2, P1: 7, P2: 30, P3: 90 }, stale_days: 30, needs_info_reminder_days: 3, needs_info_park_days: 10 } });
+    expect(factoryConfigOf({ tickets: { assignees: ["ana"] } }).tickets).toMatchObject({ assignees: ["ana"], teams: [], debounce_seconds: 60, auto: "off" });
     expect(LunaConfig.safeParse({ tickets: { teams: ["payments"], debounce_seconds: 30 } }).success).toBe(true);
     expect(LunaConfig.safeParse({ tickets: { debounce_seconds: -1 } }).success).toBe(false);
     expect(LunaConfig.safeParse({ tickets: { assignees: Array(500).fill("x") } }).success).toBe(false);
@@ -28,6 +28,10 @@ describe("the diagram's config defaults", () => {
   it("keep the old intake behaviour behind tickets.auto: on, and refuse anything else", () => {
     expect(LunaConfig.safeParse({ tickets: { auto: "on" } }).success).toBe(true);
     expect(LunaConfig.safeParse({ tickets: { auto: "maybe" } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ tickets: { sla: { stale_days: 10, resolve_days: { P0: 1 } } } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ tickets: { sla: { stale_days: -1 } } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ tickets: { sla: { nope: 1 } } }).success).toBe(false);
+    expect(factoryConfigOf({ tickets: { sla: { resolve_days: { P0: 1 } } } }).tickets.sla.resolve_days).toEqual({ P0: 1, P1: 7, P2: 30, P3: 90 });
   });
 
   it("carry the scoring module's weights and bands", () => {

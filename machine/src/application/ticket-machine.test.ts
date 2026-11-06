@@ -213,6 +213,35 @@ describe("scheduling into the shared backlog", () => {
   });
 });
 
+describe("clocks", () => {
+  const DAY = 86_400_000;
+  const at = (days: number) => new Date(Date.parse("2026-11-05T12:00:00Z") + days * DAY);
+  it("an overdue clock is a row on the ticket, and a reminder or a park is a draft: a clock writes nothing", async () => {
+    const { machine, writes, store } = setup({ validity: { ...goodValidity, goal: no } });
+    await machine.ingest(ticket(), ctx);
+    const first = await machine.sweepClocks(at(4));
+    expect(first).toEqual([{ key: "PAY-12", overdue: expect.arrayContaining(["acknowledge", "needs_info_reminder"]) }]);
+    expect((await machine.view("PAY-12")).drafts.map((d) => d.kind)).toEqual(["needs_info", "reminder"]);
+    await machine.sweepClocks(at(4));
+    expect((await machine.view("PAY-12")).drafts.filter((d) => d.kind === "reminder")).toHaveLength(1);
+    await machine.sweepClocks(at(11));
+    expect((await machine.view("PAY-12")).drafts.map((d) => d.kind)).toEqual(["needs_info", "reminder", "park"]);
+    expect((await store.get("PAY-12"))!.machineStatus).toBe("needs_info");
+    expect(writes).toEqual([]);
+  });
+
+  it("a person's tap acknowledges the ticket, and approving a park draft is what parks it", async () => {
+    const { machine, writes, store } = setup({ validity: { ...goodValidity, goal: no } });
+    await machine.ingest(ticket(), ctx);
+    await machine.sweepClocks(at(11));
+    const park = (await machine.view("PAY-12")).drafts.find((d) => d.kind === "park")!;
+    await machine.approve("PAY-12", { draft: park.id, hash: park.hash });
+    expect((await store.get("PAY-12"))!.machineStatus).toBe("parked");
+    expect(writes).toHaveLength(1);
+    expect(((await store.get("PAY-12"))!.clocks as Record<string, unknown>).acknowledgedAt).toBeTruthy();
+  });
+});
+
 describe("ticket keys", () => {
   it("accepts a Jira key and a GitHub issue key and nothing else", () => {
     expect(parseTicketKey("PAY-12")).toBe("PAY-12");

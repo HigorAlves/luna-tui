@@ -491,6 +491,8 @@ const ticketMachine = new TicketMachine({
   reply: { write: async (c) => (await ticketPack("ticket_reply", c)) as never },
   backlog: { upsertFromSource: (input, options) => backlog.upsertFromSource(input, options) },
 });
+// Ticket clocks: computed and kept on the ticket, drafts only. A clock never posts and never approves.
+setInterval(() => void ticketMachine.sweepClocks().catch((error: unknown) => console.warn("ticket clocks failed", error)), 10 * 60_000).unref();
 const ticketEvents = new TicketEvents({ store: new PgTicketStore(db), machine: ticketMachine, pipeline, config: async (repoPath) => (await policies.for(repoPath)).factory });
 const app = createApp({
   db,

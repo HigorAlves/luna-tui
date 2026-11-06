@@ -10,7 +10,8 @@ import type { Candidate } from "../domain/similarity.ts";
 import { buildValidityContext } from "./ticket-validity.ts";
 import type { AssessAnswer } from "../domain/ticket-score.ts";
 import { type AssessDeps, type AssessmentRecord, assessTicket } from "./ticket-assess.ts";
-import { type Draft, type RecommendDeps, type ReplyDeps, assessmentDraft, declineDraft, editDraft, ignoreDraft, needsInfoDraft, notOursDraft, recommendWithDecision } from "./ticket-drafts.ts";
+import { type Draft, type RecommendDeps, type ReplyDeps, assessmentDraft, declineDraft, parkDraft, reminderDraft, editDraft, ignoreDraft, needsInfoDraft, notOursDraft, recommendWithDecision } from "./ticket-drafts.ts";
+import { ticketClocks } from "../domain/ticket-sla.ts";
 import { enrichTicket } from "./ticket-enrich.ts";
 import { type ValidityDeps, checkValidity } from "./ticket-validity.ts";
 import type { NewTask } from "./pipeline.ts";
@@ -120,7 +121,9 @@ export class TicketMachine implements TicketIntake {
       if (bug && validity.criteriaMet === false && validity.reporterReachable === false) {
         return done("parked", { outcome: "parked", reason: "a bug that cannot be reproduced, with no reporter to ask" }, []);
       }
-      return done("needs_info", { outcome: "needs_info", missing: validity.missing }, [needsInfoDraft(ticket.key, validity.missing)]);
+      await done("needs_info", { outcome: "needs_info", missing: validity.missing }, [needsInfoDraft(ticket.key, validity.missing)]);
+      await this.mergeClocks(ticket.key, { needsInfoSince: at.toISOString() });
+      return;
     }
     const record = await assessTicket({ decide: this.deps.assess.decide }, ticket, enrichment, validity, config, at, { candidates });
     if (!record) return done("validity_failed", { outcome: "assess_failed" }, []);
@@ -201,6 +204,7 @@ export class TicketMachine implements TicketIntake {
     const draft = drafts.find((d) => d.id === tap.draft);
     if (!draft) throw new TicketRefusal("no such draft on this ticket");
     await this.deps.store.setDrafts(key, drafts.map((d) => (d.id === draft.id ? ignoreDraft(d, this.now()) : d)) as unknown as Record<string, unknown>[]);
+    await this.acknowledge(key);
   }
 
   /** Makes one card from the ticket, with its link as the source and the assessment as lower-confidence hints. A tap. Nothing is written to the ticket. */
@@ -244,6 +248,41 @@ export class TicketMachine implements TicketIntake {
     if (transition !== undefined) await port.transition(row.key, transition);
     const drafts = (row.drafts as unknown as Draft[]).map((d) => (d.id === draft.id ? { ...draft, status: "posted" as const, text, history: [...draft.history, { at: this.now().toISOString(), did: "posted" as const, from: d.text }] } : d));
     await this.deps.store.setDrafts(row.key, drafts as unknown as Record<string, unknown>[]);
+    if (draft.kind === "park") await this.deps.store.setMachine(row.key, { status: "parked" });
+    await this.acknowledge(row.key);
+  }
+
+  private async mergeClocks(key: string, patch: Record<string, unknown>): Promise<void> {
+    const row = await this.deps.store.get(key);
+    if (row) await this.deps.store.setClocks(key, { ...row.clocks, ...patch });
+  }
+
+  /** A person tapped: the acknowledge clock stops. */
+  private async acknowledge(key: string): Promise<void> {
+    const row = await this.deps.store.get(key);
+    if (row && !row.clocks.acknowledgedAt) await this.mergeClocks(key, { acknowledgedAt: this.now().toISOString() });
+  }
+
+  /** Computes every ticket's clocks, keeps them on the ticket (the board shows an overdue one), and drafts what an overdue waiting clock leads to: a reminder, then a park. A clock posts nothing and approves nothing. */
+  async sweepClocks(now: Date = this.now()): Promise<Array<{ key: string; overdue: string[] }>> {
+    const out: Array<{ key: string; overdue: string[] }> = [];
+    for (const row of await this.deps.store.list()) {
+      const repo = row.machineLinks.find((l) => l.kind === "repo")?.target ?? null;
+      const config = (await this.deps.config(repo)).tickets;
+      const last = [...row.assessments].reverse().find((a) => a.outcome === "workable") as { priority?: "P0" | "P1" | "P2" | "P3" } | undefined;
+      const since = typeof row.clocks.needsInfoSince === "string" ? new Date(row.clocks.needsInfoSince) : null;
+      const clocks = ticketClocks({ firstSeenAt: row.createdAt, acknowledgedAt: typeof row.clocks.acknowledgedAt === "string" ? new Date(row.clocks.acknowledgedAt) : null, priority: last?.priority ?? null, status: row.machineStatus, needsInfoSince: since, updatedAt: row.updatedAt }, now, config);
+      const overdue = clocks.filter((c) => c.overdue).map((c) => c.name);
+      const drafts = row.drafts as unknown as Draft[];
+      const missing = ([...row.assessments].reverse().find((a) => a.outcome === "needs_info")?.missing as string[] | undefined) ?? [];
+      const add: Draft[] = [];
+      if (overdue.includes("needs_info_reminder") && !drafts.some((d) => d.kind === "reminder")) add.push(reminderDraft(row.key, missing));
+      if (overdue.includes("needs_info_park") && !drafts.some((d) => d.kind === "park")) add.push(parkDraft(row.key));
+      if (add.length) await this.deps.store.setDrafts(row.key, [...drafts, ...add] as unknown as Record<string, unknown>[]);
+      await this.mergeClocks(row.key, { computed: clocks.map((c) => ({ name: c.name, dueAt: c.dueAt.toISOString(), overdue: c.overdue })), overdue });
+      if (overdue.length) out.push({ key: row.key, overdue });
+    }
+    return out;
   }
 }
 

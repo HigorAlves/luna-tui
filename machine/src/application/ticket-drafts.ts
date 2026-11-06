@@ -12,7 +12,7 @@ import type { AssessmentRecord } from "./ticket-assess.ts";
 export interface Draft {
   id: string;
   ticket: string;
-  kind: "assessment" | "needs_info" | "decline" | "not_ours" | "handover";
+  kind: "assessment" | "needs_info" | "decline" | "not_ours" | "handover" | "reminder" | "park";
   /** `waiting` for a tap; `edited` is still waiting, with the person's text; `ignored` is kept and never posted. */
   status: "waiting" | "edited" | "ignored" | "posted";
   text: string;
@@ -35,6 +35,14 @@ export function needsInfoDraft(ticket: string, missing: string[]): Draft {
 
 export function notOursDraft(ticket: string, where: string | null): Draft {
   return fresh(ticket, "not_ours", `This does not look like ours. It looks like it belongs with ${where ?? "another team"}.`);
+}
+
+export function reminderDraft(ticket: string, missing: string[]): Draft {
+  return fresh(ticket, "reminder", `Reminder: this is still waiting for: ${missing.length ? missing.join("; ") : "the details asked for above"}.`);
+}
+
+export function parkDraft(ticket: string): Draft {
+  return fresh(ticket, "park", "Parking this: no answer after 10 days. Add the missing details and it is picked up again.");
 }
 
 /** The note for a ticket reassigned out of the team's scope: a draft, never posted by the machine. */
