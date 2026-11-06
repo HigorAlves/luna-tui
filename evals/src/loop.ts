@@ -89,7 +89,7 @@ export interface PullReport {
   pending: string[];
 }
 
-const hasPerson = (record: DecisionRecord): boolean => record.truth?.kind === "person" || (record.truth?.history ?? []).some((entry) => entry.kind === "person");
+const hasPerson = (record: DecisionRecord): boolean => record.truth?.kind === "person" || (record.truth?.history ?? []).some((entry) => entry.kind === "person") || Object.values(record.truth?.kinds ?? {}).includes("person");
 
 /** The dataset's labelled datapoints as cases, never overwriting one that exists. A datapoint's record id is trusted only for a record that is here, in the `queue` state
  *  with no person's label; any other keeps the case but drops the id. Writing a label back onto the record (a `queue` truth, below any person's) happens only with `writeLabels`,

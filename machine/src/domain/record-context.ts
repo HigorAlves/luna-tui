@@ -23,18 +23,6 @@ function maskText(value: unknown, key?: string): unknown {
   return value;
 }
 
-/** How many strings (keys included) a redactor changed. */
-function changed(before: unknown, after: unknown): number {
-  if (typeof before === "string") return before === after ? 0 : 1;
-  if (Array.isArray(before) && Array.isArray(after)) return before.reduce<number>((n, item, i) => n + changed(item, after[i]), 0);
-  if (before !== null && typeof before === "object" && after !== null && typeof after === "object") {
-    const a = Object.entries(before as Record<string, unknown>);
-    const b = Object.entries(after as Record<string, unknown>);
-    return a.reduce((n, [key, item], i) => n + (key === b[i]![0] ? 0 : 1) + changed(item, b[i]![1]), 0);
-  }
-  return 0;
-}
-
 /** One call's stored context may not exceed this many bytes of JSON. */
 export const CONTEXT_MAX_BYTES = 200_000;
 const CUT_MARK = "[… cut]";
@@ -73,9 +61,15 @@ export interface RecordedContext {
 /** The context to store and how many strings were redacted. `private` defaults to the conversation's own mark. */
 export function recordContext(context: Record<string, unknown>, options: { secrets: Readonly<Record<string, string>>; private?: boolean }): RecordedContext {
   const secret = secretRedactor(options.secrets);
-  const clean = redactDeep(context, (text) => redact(secret(text))) as Record<string, unknown>;
+  // Counted inside the redactor, for every string and key it changes: nothing compares the two trees afterwards, so two keys that redact to the same string cannot throw.
+  let count = 0;
+  const clean = redactDeep(context, (text) => {
+    const out = redact(secret(text));
+    if (out !== text) count++;
+    return out;
+  }) as Record<string, unknown>;
   const limited = bounded(clean);
-  const redacted = changed(context, clean) + limited.cut;
+  const redacted = count + limited.cut;
   return finish(limited.context, redacted, options.private);
 }
 

@@ -61,4 +61,9 @@ describe("recordContext", () => {
     expect(JSON.stringify(out.context).length).toBeLessThanOrEqual(CONTEXT_MAX_BYTES);
     expect(out.redacted).toBeGreaterThan(0);
   });
+
+  it("counts inside the redactor: two keys that redact to the same string do not throw, and both count", () => {
+    const out = recordContext({ [`a-${token}`]: 1, [`a-${token.replace(/a/g, "b")}`]: 2 }, { secrets: {}, private: false });
+    expect(out.redacted).toBe(2);
+  });
 });

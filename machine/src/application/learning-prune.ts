@@ -63,8 +63,8 @@ interface Listed {
 /** Whether a stored record carries a person's truth: its own kind or any entry of its history. */
 function personTruth(truth: unknown): boolean {
   if (truth === null || typeof truth !== "object") return false;
-  const { kind, history } = truth as { kind?: unknown; history?: unknown };
-  return kind === "person" || (Array.isArray(history) && history.some((entry) => (entry as { kind?: unknown } | null)?.kind === "person"));
+  const { kind, history, kinds } = truth as { kind?: unknown; history?: unknown; kinds?: unknown };
+  return kind === "person" || (Array.isArray(history) && history.some((entry) => (entry as { kind?: unknown } | null)?.kind === "person")) || (kinds !== null && typeof kinds === "object" && Object.values(kinds as object).includes("person"));
 }
 
 async function plainDirs(parent: string, name: RegExp, links: string[], checked = false): Promise<string[]> {

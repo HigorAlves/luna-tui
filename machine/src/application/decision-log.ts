@@ -25,16 +25,20 @@ export function mergeTruth(existing: DecisionTruth | undefined, incoming: Decisi
   const kind = kindOf(incoming);
   const existingKinds = new Map<string, TruthKind>();
   const history = existing ? (existing.history ?? [{ label: existing.label, source: existing.source, kind: kindOf(existing), at: existing.at }]) : [];
-  // The kind a question's label has: the latest history entry that names it, else the truth's own.
+  // The kind a question's label has: the per-question kinds kept beside the truth, else the latest history entry that names it, else the truth's own.
   for (const entry of history) for (const question of Object.keys(entry.label)) existingKinds.set(question, entry.kind);
+  for (const [question, held] of Object.entries(existing?.kinds ?? {})) existingKinds.set(question, held);
   const applied: Record<string, unknown> = {};
   for (const [question, value] of Object.entries(incoming.label)) {
     const held = existing && question in existing.label ? (existingKinds.get(question) ?? kindOf(existing)) : null;
-    if (held === null || RANK[kind] >= RANK[held]) applied[question] = value;
+    if (held === null) applied[question] = value;
+    // The same label from a kind that does not rank higher changes nothing: no entry.
+    else if (RANK[kind] >= RANK[held] && (JSON.stringify(existing!.label[question]) !== JSON.stringify(value) || RANK[kind] > RANK[held])) applied[question] = value;
   }
   if (existing && Object.keys(applied).length === 0) return existing;
   const next = [...history, { label: applied, source: incoming.source, kind, at: incoming.at }].slice(-HISTORY_MAX);
-  return { label: { ...(existing?.label ?? {}), ...applied }, source: incoming.source, at: incoming.at, kind, ...(incoming.note ? { note: incoming.note } : existing?.note ? { note: existing.note } : {}), history: next };
+  const kinds = { ...Object.fromEntries(Object.keys(existing?.label ?? {}).map((question) => [question, existingKinds.get(question) ?? kindOf(existing!)])), ...Object.fromEntries(Object.keys(applied).map((question) => [question, kind])) };
+  return { label: { ...(existing?.label ?? {}), ...applied }, source: incoming.source, at: incoming.at, kind, ...(incoming.note ? { note: incoming.note } : existing?.note ? { note: existing.note } : {}), history: next, kinds };
 }
 
 export interface DecisionAppender {

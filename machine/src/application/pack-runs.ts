@@ -335,6 +335,15 @@ export class PackRuns implements PackRunsPort {
       if (!usage.model) usage.model = resolveEngine(engine).modelId;
       if (usage.durationMs === 0) usage.durationMs = Date.now() - t0;
       if (failure instanceof RunRateLimitedError) span.event("rate_limited", { resetsAt: failure.resetsAt });
+      // What the span carries from the call is worked out first, and a failure there is only a span without it: the span still ends and the run folder still goes.
+      let carried: { input: Record<string, unknown>; output: Record<string, unknown> } | null = null;
+      if (keepsMore && decided && origin.own === true) {
+        try {
+          carried = { input: this.spanInput(context) as Record<string, unknown>, output: redactDeep({ answer: answer!, verdicts: decided.verdicts, overall: decided.overall }, this.scrubber()) as Record<string, unknown> };
+        } catch (thrown) {
+          console.warn(`run: could not prepare the span's input: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
+        }
+      }
       await span.end({
         outcome: failure === null ? "pass" : failure instanceof RunRateLimitedError ? "rate_limited" : "fail",
         engine,
@@ -347,7 +356,7 @@ export class PackRuns implements PackRunsPort {
         // A transcript holds the model's own text (the draft reply to a DM) and a client's context: only the machine's own call, and
         // never a private conversation's, may send it, and what leaves passes the stored copy's redaction and the personal-data masking.
         ...(keepsMore && origin.own === true && !isPrivate(context) ? { transcriptPath: join(runDir, "transcript.log"), scrub: this.scrubber() } : {}),
-        ...(keepsMore && decided && origin.own === true ? { input: this.spanInput(context), output: redactDeep({ answer: answer!, verdicts: decided.verdicts, overall: decided.overall }, this.scrubber()) as Record<string, unknown> } : {}),
+        ...(carried ?? {}),
       });
       await rm(runDir, { recursive: true, force: true }).catch(() => {});
     }

@@ -137,4 +137,18 @@ describe("DecisionLog", () => {
     const held = mergeTruth(undefined, queue);
     expect(mergeTruth(held, { label: { worth: { value: true } }, source: "person_cli", kind: "person", at: "b" }).label).toEqual({ worth: { value: true } });
   });
+
+  it("keeps each question's kind outside the 20-entry history, and a truth that changes nothing adds no entry", () => {
+    let truth = mergeTruth(undefined, { label: { worth: { value: true } }, source: "person_cli", kind: "person", at: "p" });
+    for (let i = 0; i < 30; i++) truth = mergeTruth(truth, { label: { other: { value: i % 2 === 0 } }, source: `fact${i}`, kind: "fact", at: `f${i}` });
+    expect(truth.history).toHaveLength(20);
+    expect(truth.history!.some((entry) => entry.kind === "person")).toBe(false);
+    expect(truth.kinds).toMatchObject({ worth: "person", other: "fact" });
+    // The person's label has fallen out of the history and still outranks a later fact.
+    expect(mergeTruth(truth, { label: { worth: { value: false } }, source: "slice_green", kind: "fact", at: "z" })).toBe(truth);
+    // The same label again changes nothing: the same object, no entry.
+    expect(mergeTruth(truth, { label: { worth: { value: true } }, source: "person_cli", kind: "person", at: "again" })).toBe(truth);
+    const count = truth.history!.length;
+    expect(mergeTruth(truth, { label: { other: truth.label.other }, source: "again", kind: "fact", at: "again" }).history).toHaveLength(count);
+  });
 });

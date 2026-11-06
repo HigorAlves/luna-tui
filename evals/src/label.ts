@@ -54,7 +54,7 @@ export async function setLabel(log: LabelTarget, pack: PackId, id: string, sets:
   return wrote ? { ok: true } : { ok: false, reason: `the record ${id} could not be written` };
 }
 
-const hasPersonLabel = (record: DecisionRecord): boolean => record.truth?.kind === "person" || (record.truth?.history ?? []).some((entry) => entry.kind === "person");
+const hasPersonLabel = (record: DecisionRecord): boolean => record.truth?.kind === "person" || (record.truth?.history ?? []).some((entry) => entry.kind === "person") || Object.values(record.truth?.kinds ?? {}).includes("person");
 
 /** The oldest record with no person truth, given records oldest first or not. */
 export function nextToLabel(records: DecisionRecord[]): DecisionRecord | null {

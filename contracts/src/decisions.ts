@@ -25,6 +25,8 @@ export const DecisionTruth = z.object({
   note: z.string().max(500).optional(),
   /** Every label the truth took, oldest first, at most 20: a second fact adds to the first. */
   history: z.array(z.object({ label: z.record(z.string(), z.unknown()), source: z.string(), kind: TruthKind, at: z.string() })).max(20).optional(),
+  /** The kind each question's label has, kept outside the history so it survives the 20-entry cap. Absent on an older truth: the history, then `kind`, say. */
+  kinds: z.record(z.string(), TruthKind).optional(),
 });
 export type DecisionTruth = z.infer<typeof DecisionTruth>;
 

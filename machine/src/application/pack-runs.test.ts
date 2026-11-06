@@ -472,6 +472,23 @@ describe("decision records", () => {
       expect(ends[0]).toHaveProperty("transcriptPath");
     });
 
+    it("still ends the span and removes the run folder when the span's input cannot be prepared", async () => {
+      const { telemetry, ends } = host();
+      let calls = 0;
+      const dedup = { title: "Login fails", text: "the log", candidates: [] };
+      const slots = Object.fromEntries(Object.keys(PACKS.intake_dedup.questions).map((slot) => [slot, { choice: "different", confidence: 0.9 }]));
+      // The secrets are read for the stored copy too: fail only on the span's read, the second.
+      const secrets = () => {
+        if (++calls >= 1 && calls !== 2) return {};
+        throw new Error("secrets unreadable");
+      };
+      const result = await runs(fakeSandbox(output({ answer: slots })), { telemetry, secrets }).run({ pack: "intake_dedup", context: { dedup } }, "intake", undefined, { own: true });
+      expect(result.answer).toEqual(slots);
+      expect(ends).toHaveLength(1);
+      expect(ends[0]).not.toHaveProperty("input");
+      expect(existsSync(join(stateDir, PACK_RUNS_DIR)) ? readdirSync(join(stateDir, PACK_RUNS_DIR)) : []).toEqual([]);
+    });
+
     it("redacts a secret value in the span's input and output", async () => {
       const secret = ["sec", "ret-value-", "9f8e7d6c"].join("");
       const { telemetry, ends } = host();

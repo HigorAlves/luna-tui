@@ -14,6 +14,7 @@ export function kindsOf(truth: NonNullable<DecisionRecord["truth"]>): Map<string
   const kinds = new Map<string, TruthKind>();
   for (const question of Object.keys(truth.label)) kinds.set(question, truth.kind ?? "fact");
   for (const entry of truth.history ?? []) for (const question of Object.keys(entry.label)) kinds.set(question, entry.kind);
+  for (const [question, kind] of Object.entries(truth.kinds ?? {})) kinds.set(question, kind);
   return kinds;
 }
 
