@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "goal.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "criteria.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "duplicate.choice",
+      "value": "none"
+    }
+  ],
+  "rubric": "A clear bug with steps, an expected and an actual result, and a bounded scope: workable.",
+  "label": {
+    "goal": {
+      "value": true
+    },
+    "criteria": {
+      "value": true
+    },
+    "duplicate": {
+      "choice": "none"
+    }
+  }
+}

@@ -163,6 +163,8 @@ export const PackId = z.enum([
   "worth_learning",
   // A decision at Intake (a dedup context, run on demand): is a new report the same problem as one of the five nearest cards.
   "intake_dedup",
+  // A decision at the Ticket Machine (a ticket context, run on demand): can this ticket be worked on at all.
+  "ticket_validity",
   // Drafts the answer to a reviewer's question on a shipped PR from the Evidence Pack (runs in the shipping state, after the retro in PACKS order).
   "pr_reply",
 ]);
@@ -868,6 +870,28 @@ export const DedupContext = z.object({
 });
 export type DedupContext = z.infer<typeof DedupContext>;
 
+/** What the Ticket Machine's decision packs read: one ticket, flattened and capped by the machine (a ticket is a stranger's words), with its enrichment. */
+export const TicketContext = z.object({
+  key: z.string().max(200),
+  title: z.string().max(500),
+  description: z.string().max(4000),
+  type: z.string().max(120).nullable(),
+  priority: z.string().max(120).nullable(),
+  reporter: z.string().max(120).nullable(),
+  /** Whether the reporter can be asked something: the tool named them. */
+  reachable: z.boolean(),
+  labels: z.array(z.string().max(120)).max(30),
+  sprint: z.string().max(120).nullable(),
+  dueAt: z.string().max(60).nullable(),
+  comments: z.array(z.object({ author: z.string().max(120), text: z.string().max(500) })).max(10),
+  linked: z.array(z.string().max(200)).max(20),
+  epic: z.string().max(200).nullable(),
+  recent: z.array(z.object({ key: z.string().max(200), title: z.string().max(300) })).max(10),
+  files: z.array(z.string().max(300)).max(10),
+  candidates: z.array(z.object({ slot: z.number().int().min(1).max(5), kind: z.enum(["open", "closed", "backlog"]), title: z.string().max(500), summary: z.string().max(1000) })).max(5),
+});
+export type TicketContext = z.infer<typeof TicketContext>;
+
 /** What eval_judge reads: one eval case, what a good answer must contain, and the answer under
  *  test. The JSON fields are text, as the evals runner serialised them (evals/run.ts). */
 export const EvalJudgeContext = z.object({
@@ -1013,6 +1037,8 @@ export const StageInput = z.object({
     ship: ShipContext.nullable().optional(),
     /** For intake_dedup: the new report and the shortlist to judge. */
     dedup: DedupContext.nullable().optional(),
+    /** For the Ticket Machine's decisions (ticket_validity): the ticket and its enrichment. */
+    ticket: TicketContext.nullable().optional(),
     /** For the video packs (script, fix, recording, critic): the scenarios, the target, the narration, the film's measurements. */
     video: VideoContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */

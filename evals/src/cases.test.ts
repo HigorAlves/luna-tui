@@ -150,8 +150,8 @@ describe("the seed cases", () => {
 
   const decisions = Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
 
-  it("has a case for each of the sixteen decision packs' four kinds: two clear, one borderline checked on confidence, one adversarial", () => {
-    expect(decisions).toHaveLength(16);
+  it("has a case for each of the seventeen decision packs' four kinds: two clear, one borderline checked on confidence, one adversarial", () => {
+    expect(decisions).toHaveLength(17);
     for (const pack of decisions) {
       const cases = loadCases(EVALS, pack as "triage");
       expect(cases.length, pack).toBeGreaterThanOrEqual(4);

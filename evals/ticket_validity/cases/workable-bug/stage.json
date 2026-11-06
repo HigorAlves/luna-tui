@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "ticket_validity",
+  "pack": "ticket_validity",
+  "attempt": 1,
+  "task": {
+    "id": "ticket-validity",
+    "title": "Refund fails for EU cards",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ticket": {
+      "key": "PAY-12",
+      "type": "Bug",
+      "priority": "High",
+      "reporter": "Ana",
+      "reachable": true,
+      "labels": [],
+      "sprint": null,
+      "dueAt": null,
+      "comments": [],
+      "linked": [],
+      "epic": null,
+      "recent": [],
+      "files": [
+        "payments/src/refunds/eu.ts"
+      ],
+      "candidates": [],
+      "title": "Refund fails for EU cards",
+      "description": "Steps: pay with an EU card, then refund the order. Expected: the refund is issued. Actual: a 500 from /refunds. Only the refund endpoint in the payments service."
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

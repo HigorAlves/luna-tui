@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "scope.p",
+      "min": 0.2,
+      "max": 0.8
+    }
+  ],
+  "rubric": "A ticket that bundles speed, filters and export: whether its scope is bounded is a judgement call, so the confidence must stay in the middle."
+}

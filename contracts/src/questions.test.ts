@@ -327,3 +327,17 @@ describe("the intake_dedup decision pack", () => {
     expect(DedupContext.safeParse({ title: "t", text: "x", candidates: Array.from({ length: 6 }, (_, i) => ({ slot: i + 1, kind: "open", title: "a", summary: "b" })) }).success).toBe(false);
   });
 });
+
+describe("the ticket_validity decision pack", () => {
+  it("asks six typed questions in one call, has no role or prompt, and names a duplicate by slot", async () => {
+    const { PACKS, TicketContext } = await import("./index.ts");
+    const pack = PACKS.ticket_validity;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["goal", "criteria", "scope", "duplicate", "project", "reporter"]);
+    const yes = { value: true, p: 0.9 };
+    const answer = { goal: yes, criteria: yes, scope: yes, duplicate: { choice: "none", confidence: 0.9 }, project: yes, reporter: yes };
+    expect(pack.answer.safeParse(answer).success).toBe(true);
+    expect(pack.answer.safeParse({ ...answer, duplicate: { choice: "slot6", confidence: 0.9 } }).success).toBe(false);
+    expect(TicketContext.safeParse({ key: "A-1", title: "t", description: "d", type: null, priority: null, reporter: null, reachable: false, labels: [], sprint: null, dueAt: null, comments: [], linked: Array(21).fill("x"), epic: null, recent: [], files: [], candidates: [] }).success).toBe(false);
+  });
+});

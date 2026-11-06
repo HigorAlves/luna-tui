@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "duplicate.choice",
+      "value": "slot1"
+    }
+  ],
+  "rubric": "The same symptom on the same page as an open card: a duplicate of slot 1.",
+  "label": {
+    "duplicate": {
+      "choice": "slot1"
+    }
+  }
+}

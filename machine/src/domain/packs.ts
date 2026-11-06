@@ -44,6 +44,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   evidence_valid: [],
   worth_learning: [],
   intake_dedup: [],
+  ticket_validity: [],
   // Drafts an answer inside the shipping stage's monitor; `reviewing_memory` stays first in PACKS so the state still picks it.
   pr_reply: ["shipping"],
   eval_judge: [],
