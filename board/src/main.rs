@@ -7,6 +7,7 @@
 
 mod app;
 mod backlog;
+mod tickets;
 mod client;
 mod detail;
 mod digest;

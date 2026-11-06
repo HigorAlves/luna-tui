@@ -19,6 +19,7 @@ use ureq::{
 };
 
 use crate::backlog::BacklogEntry;
+use crate::tickets::{TicketEntry, encode_key};
 use crate::model::{
     EngineCatalog, EngineInfo, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
     StreamMessage, Task, TaskDetail, TaskDiff, TestCase, TicketText,
@@ -327,6 +328,16 @@ impl Machine {
     /// The ranked backlog.
     pub fn backlog(&self) -> Result<Vec<BacklogEntry>, String> {
         Self::typed(self.agent.get(self.url("/backlog")).call())
+    }
+
+    /// The tickets the ticket machine holds, with their drafts.
+    pub fn tickets(&self) -> Result<Vec<TicketEntry>, String> {
+        Self::typed(self.agent.get(self.url("/tickets")).call())
+    }
+
+    /// A tap on a ticket: `approve`, `edit`, `ignore`, `card` or `backlog`; `body` carries the draft id and hash (and the text for an edit).
+    pub fn ticket_act(&self, key: &str, action: &str, body: Value) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&format!("/tickets/{}/{action}", encode_key(key)))).send_json(body)).map(|_| ())
     }
 
     /// `bump`, `promote` or `decline` on a backlog item.

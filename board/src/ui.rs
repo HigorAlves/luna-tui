@@ -141,6 +141,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
+    if let Some(state) = app.tickets.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::Command { .. })) {
+        render_tickets(frame, body, app, state);
+        frame.render_widget(footer_line(app), footer);
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
+        }
+        return;
+    }
     if let Some(state) = app.backlog.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_backlog(frame, body, app, state);
         frame.render_widget(footer_line(app), footer);
@@ -419,6 +427,9 @@ fn header_line(app: &App) -> Line<'static> {
     if app.backlog.is_some() {
         spans.push(Span::from("  [backlog]").fg(c(BLUE)).bold());
     }
+    if app.tickets.is_some() {
+        spans.push(Span::from("  [tickets]").fg(c(BLUE)).bold());
+    }
     if app.pulls.is_some() {
         spans.push(Span::from("  [pulls]").fg(c(BLUE)).bold());
     }
@@ -532,6 +543,7 @@ fn view_footer(app: &App) -> Line<'static> {
         Scope::Inbox => hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]),
         Scope::Pulls => hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]),
         Scope::Backlog => hint(&[("j/k", "move"), ("p", "promote"), ("b", "bump"), ("d", "decline"), ("R", "refetch"), ("esc", "close")]),
+        Scope::Tickets => hint(&[("j/k", "move"), ("a", "approve"), ("e", "edit"), ("x", "ignore"), ("c", "card"), ("s", "backlog"), ("R", "refetch"), ("esc", "close")]),
         Scope::Watches => hint(&[("j/k", "move"), ("n", "add"), ("e", "floor"), ("d", "delete"), ("space", "on/off"), ("esc", "close")]),
         Scope::Slack => hint(&[
             ("j/k", "move"),
@@ -1219,6 +1231,32 @@ fn render_backlog(frame: &mut Frame, area: Rect, app: &App, state: &crate::backl
             lines.extend(crate::detail::plain(&item.text).lines().take(12).map(|l| Line::from(l.to_string())));
             lines
         }
+        None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+    };
+    frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
+}
+
+/// The Tickets view: one row per ticket in scope, the selected one's scores, links and waiting draft beside it.
+fn render_tickets(frame: &mut Frame, area: Rect, app: &App, state: &crate::tickets::TicketsState) {
+    let items = &app.ticket_items;
+    let selected = state.cursor.min(items.len().saturating_sub(1));
+    let [list_area, detail_area] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).title(Line::from(format!(" Tickets {} ", items.len())).bold());
+    let inner = block.inner(list_area);
+    let mut lines = Vec::new();
+    if items.is_empty() {
+        lines.push(Line::from(Span::from("  ✓ nothing held").fg(c(GREEN))));
+    }
+    let visible = (inner.height as usize).max(1);
+    let start = selected.saturating_sub(visible / 2).min(items.len().saturating_sub(visible));
+    for (row, item) in items.iter().enumerate().skip(start).take(visible) {
+        let text = truncate(&item.row(), inner.width.saturating_sub(2) as usize);
+        lines.push(if row == selected { Line::from(Span::from(format!("▸ {text}")).fg(c(BASE)).bg(c(ACCENT)).bold()) } else { Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0))) });
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), list_area);
+    let side = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(MUTED))).padding(Padding::horizontal(1)).title(Line::from(" Ticket ").bold());
+    let lines = match items.get(selected) {
+        Some(item) => item.detail_lines().into_iter().map(Line::from).collect(),
         None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
     };
     frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);

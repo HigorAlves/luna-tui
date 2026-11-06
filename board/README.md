@@ -147,6 +147,7 @@ and a test fails when they drift from the registry.
 | `D` | Digest: what changed since last time |
 | `P` | Pulls: every open PR involving you |
 | `B` | Backlog: candidates, not tickets yet |
+| `K` | Tickets: held, assessed, waiting on you |
 | `S` | Slack: mentions, DMs and watches |
 
 **Marks & bulk**
@@ -193,6 +194,8 @@ and a test fails when they drift from the registry.
 | `:digest` | open the Digest |
 | `:prs` | open Pulls |
 | `:backlog` | open the Backlog |
+| `:tickets` | open the Tickets view |
+| `:ticket-edit <text>` | post your text, not the draft's |
 | `:dedup duplicate <n> \| related <ns> \| neither` | answer the duplicate question |
 | `:dup <id>` | close as a duplicate of that ticket |
 | `:undup` | bring a closed duplicate back |

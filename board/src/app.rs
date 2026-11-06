@@ -24,6 +24,7 @@ use crate::keys::{self, Scope};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
 use crate::backlog::{BacklogEntry, BacklogState};
+use crate::tickets::{TicketEntry, TicketsState};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
 use crate::{
@@ -429,6 +430,9 @@ pub struct App {
     /// The Backlog view, open while this is `Some`, and the ranked items it fetched when it opened.
     pub backlog: Option<BacklogState>,
     pub backlog_items: Vec<BacklogEntry>,
+    /// The Tickets view, open while this is `Some`, and the tickets it fetched when it opened.
+    pub tickets: Option<TicketsState>,
+    pub ticket_items: Vec<TicketEntry>,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
     pending_dispatch: Option<(String, PrAction)>,
     /// The Slack inbox as the machine last sent it; empty until the first `slack.items` event.
@@ -536,6 +540,8 @@ impl App {
             pulls: None,
             backlog: None,
             backlog_items: Vec::new(),
+            tickets: None,
+            ticket_items: Vec::new(),
             pending_dispatch: None,
             slack_snapshot: SlackSnapshot::default(),
             slack: None,
@@ -1890,6 +1896,9 @@ impl App {
         if self.backlog.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_backlog(key);
         }
+        if self.tickets.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_tickets(key);
+        }
         if self.slack.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_slack(key);
         }
@@ -2336,6 +2345,102 @@ impl App {
                         self.refresh_backlog();
                     }
                     Err(error) => self.notify(format!("backlog: {error}"), true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The ticket under the Tickets cursor.
+    pub fn ticket_under_cursor(&self) -> Option<TicketEntry> {
+        let state = self.tickets.as_ref()?;
+        self.ticket_items.get(state.cursor.min(self.ticket_items.len().saturating_sub(1))).cloned()
+    }
+
+    /// Fetches the tickets the machine holds; a failure is a toast and the list stays as it was.
+    fn refresh_tickets(&mut self) {
+        match self.machine.tickets() {
+            Ok(items) => {
+                self.ticket_items = items;
+                if let Some(state) = self.tickets.as_mut() {
+                    state.cursor = state.cursor.min(self.ticket_items.len().saturating_sub(1));
+                }
+            }
+            Err(error) => self.notify(format!("tickets: {error}"), true),
+        }
+    }
+
+    fn open_tickets(&mut self) {
+        self.tickets = Some(TicketsState::default());
+        self.refresh_tickets();
+    }
+
+    /// The keys `handle_tickets` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_TICKETS: &[&str] = &["esc", "K", "q", "?", "j", "k", "R", "a", "e", "x", "c", "s"];
+
+    /// `:ticket-edit <text>`: the person's own text is posted in place of the selected ticket's waiting draft. The machine flattens it and refuses a token.
+    fn ticket_edit(&mut self, rest: &str) {
+        let (Some(t), text) = (self.ticket_under_cursor(), rest.trim()) else {
+            self.notify("open the Tickets view and select a ticket first", true);
+            return;
+        };
+        let Some(d) = t.waiting().first().map(|d| (*d).clone()) else {
+            self.notify("no draft waiting on it", true);
+            return;
+        };
+        if text.is_empty() {
+            self.notify("say what to post: :ticket-edit <text>", true);
+            return;
+        }
+        match self.machine.ticket_act(&t.key, "edit", serde_json::json!({"draft": d.id, "hash": d.hash, "text": text})) {
+            Ok(()) => {
+                self.notify("posted your text", false);
+                self.refresh_tickets();
+            }
+            Err(error) => self.notify(format!("tickets: {error}"), true),
+        }
+    }
+
+    /// The Tickets view's keys: move, approve, edit (prefills the command line), ignore, card, schedule, refetch. Each tap sends the draft's hash.
+    fn handle_tickets(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.tickets.clone() else {
+            return Outcome::Continue;
+        };
+        let count = self.ticket_items.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('K') | KeyCode::Char('q') => self.tickets = None,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('j') | KeyCode::Down => self.tickets = Some(TicketsState { cursor: (state.cursor + 1).min(count.saturating_sub(1)) }),
+            KeyCode::Char('k') | KeyCode::Up => self.tickets = Some(TicketsState { cursor: state.cursor.saturating_sub(1) }),
+            KeyCode::Char('R') => self.refresh_tickets(),
+            KeyCode::Char(c @ ('a' | 'e' | 'x' | 'c' | 's')) => {
+                let Some(t) = self.ticket_under_cursor() else {
+                    self.notify("no ticket selected", true);
+                    return Outcome::Continue;
+                };
+                let draft = t.waiting().first().map(|d| (*d).clone());
+                let (action, body, done) = match (c, draft) {
+                    ('c', _) => ("card", serde_json::json!({}), "made a ticket on the board"),
+                    ('s', _) => ("backlog", serde_json::json!({}), "sent to the backlog"),
+                    ('e', Some(_)) => {
+                        self.mode = Mode::Command { text: "ticket-edit ".to_string(), pick: None };
+                        return Outcome::Continue;
+                    }
+                    ('a', Some(d)) => ("approve", serde_json::json!({"draft": d.id, "hash": d.hash}), "posted"),
+                    ('x', Some(d)) => ("ignore", serde_json::json!({"draft": d.id}), "ignored: kept, not posted"),
+                    _ => {
+                        self.notify("no draft waiting on it", true);
+                        return Outcome::Continue;
+                    }
+                };
+                match self.machine.ticket_act(&t.key, action, body) {
+                    Ok(()) => {
+                        self.notify(done, false);
+                        self.refresh_tickets();
+                    }
+                    Err(error) => self.notify(format!("tickets: {error}"), true),
                 }
             }
             _ => {}
@@ -3028,7 +3133,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
         "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "B", "S", "v", "V", "?", ":",
-        "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p",
+        "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "K",
     ];
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -3088,6 +3193,7 @@ impl App {
             KeyCode::Char('D') => self.digest = Some(DigestState::default()),
             KeyCode::Char('P') => self.open_pulls(),
             KeyCode::Char('B') => self.open_backlog(),
+            KeyCode::Char('K') => self.open_tickets(),
             KeyCode::Char('S') => self.open_slack(),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
@@ -3637,7 +3743,7 @@ impl App {
     /// The names `run_command` knows, aliases left out.
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
-        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "context", "dedup", "dup", "undup", "slack", "jira",
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
         "help",
     ];
 
@@ -3721,6 +3827,8 @@ impl App {
             "digest" => self.digest = Some(DigestState::default()),
             "prs" | "pulls" => self.open_pulls(),
             "backlog" => self.open_backlog(),
+            "tickets" => self.open_tickets(),
+            "ticket-edit" => self.ticket_edit(rest),
             "context" => self.give_context(rest),
             "dedup" => self.answer_dedup(rest),
             "dup" => self.merge_selected(rest),
@@ -4052,6 +4160,7 @@ pub(crate) mod handled {
     pub(crate) const INBOX: &[&str] = App::HANDLED_INBOX;
     pub(crate) const PULLS: &[&str] = App::HANDLED_PULLS;
     pub(crate) const BACKLOG: &[&str] = App::HANDLED_BACKLOG;
+    pub(crate) const TICKETS: &[&str] = App::HANDLED_TICKETS;
     pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
     pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
     pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;
