@@ -90,14 +90,14 @@ An adversarial case must be unambiguous apart from its steering text. A borderli
 
 | Command | What it does |
 |---|---|
-| `pnpm eval records [--task <id>] [--pack <p>] [--since <date>] [--sizes]` | one line per decision record (pack, time, engine, what the machine did, its state, where its truth came from) and a count line; prints no context |
+| `pnpm eval records [--task <id>] [--pack <p>] [--since <date>] [--sizes]` | one line per decision record (pack, time, engine, what the machine did, its state, where its truth came from) and a count line. It prints no context |
 | `pnpm eval label --pack <p> --record <id> --set <question>=<value>... [--note <text>]` | a person's truth, source `person_cli`, on this computer; the value must be one of the question's labels |
 | `pnpm eval label --pack <p> --next` | the oldest record with no person's label: stored context (capped, control characters removed), the model's answer, the allowed labels, the command to type |
-| `pnpm eval label push --queue <queue id> [--pack <p>] [--since <date>]` | sends the records that wait for a label to the local labelling queue, scrubbed; it names private and scrub-refused ones and never sends them; the queue id names the queue |
+| `pnpm eval label push --queue <queue id> [--pack <p>] [--since <date>]` | sends the records that wait for a label to the local labelling queue, scrubbed. It names private and scrub-refused ones and never sends them. The queue id names the queue |
 | `pnpm eval cases [--pack <p>]` | a table of the cases for a person to read: kind, label, the criterion quoted, the twin, the second reading |
-| `pnpm eval preflight` | no model call: eight cases (six labelled, an adversarial with its twin, a borderline) per decision pack, every reading, the runner image (reported, never built), each engine's credential, the collector (a warning); exits 1 on a failure |
-| `pnpm eval calibrate --pack <p> [--since <date>] [--target 0.9] [--with-outcome] [--out <file>]` | proposes confidence bars from labelled answers: per question the count, the acted-on accuracy at each bar from 0.50 to 0.95, and a proposal needing 20 answers; prints the `luna.yaml` lines, marked proposed, not applied |
-| `pnpm eval calibrate --weights [--machine <m>] [--out <file>]` | proposes the priority weights and bands from the priority files (30 files, 10 changed by a person, a knock-out card left out) |
+| `pnpm eval preflight` | no model call: eight cases (six labelled, an adversarial with its twin, a borderline) per decision pack, every reading, the runner image (reported, never built), each engine's credential, the collector (a warning). It exits 1 on a failure |
+| `pnpm eval calibrate --pack <p> [--since <date>] [--target 0.9] [--with-outcome] [--out <file>]` | proposes confidence bars from labelled answers: per question the count, the acted-on accuracy at each bar from 0.50 to 0.95, and a proposal needing 20 answers. It prints the `luna.yaml` lines, marked proposed, not applied |
+| `pnpm eval calibrate --weights [--machine <m>] [--out <file>]` | proposes the priority weights and bands from the priority files (30 files, 10 that a person changed, a knock-out card left out) |
 | `pnpm eval baseline-plan [--engines a,b,c]` | prints the baseline commands in order and runs none; `evals/baseline-run.sh` is that output |
 | `pnpm eval prune-runs [--older-than 30]` | removes stamped run folders under `evals/.runs/` older than that |
 

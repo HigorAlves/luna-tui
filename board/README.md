@@ -230,10 +230,10 @@ While a gate is open, its strip sits on top of every section with the keys that 
 | Overview | the status. One row per acceptance criterion: its state in the plan, how many cases prove it, what verifying found. Repo, branch, issue, the Jira link, the SLA clocks, why, spend. The ticket's description and criteria. A setup gate's `luna.yaml` and proof, triage's questions, the memory review's rules | `e` edits the ticket's text, `J` links or unlinks the Jira issue |
 | Plan | triage's latest plan (brief, criteria, assumptions, slices) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate |
 | Tests | test_design's cases under the criterion each proves, with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
-| Runs | every stage run with how long it took, its cost and turns; the selected run's error, per-case verdicts and files; opens on the latest run | `j`/`k` pick a run, `J`/`K` scroll |
-| Diff | the branch against its base: files with +/−, the selected file's patch (the machine sends at most 512 KB of it and the pane says when it cut) | `j`/`k` pick a file, `J`/`K` scroll the patch, `o` opens the file from the worktree |
+| Runs | every stage run with how long it took, its cost and turns. The selected run's error, per-case verdicts and files. It opens on the latest run | `j`/`k` pick a run, `J`/`K` scroll |
+| Diff | the branch against its base: files with +/−, the selected file's patch. The machine sends at most 512 KB of it. The pane says when it cut | `j`/`k` pick a file, `J`/`K` scroll the patch, `o` opens the file from the worktree |
 | Evidence | the QA verdict and every artifact the stages produced, by kind; opens on the latest | `j`/`k` pick a file, `J`/`K` scroll, `o` opens it |
-| PR | the branch's pull request as the Pulls inbox sees it: checks by name, review state, threads, the task in flight; or the URL the ship gate reported | `o` opens it, `S` ships at the gate |
+| PR | the branch's pull request as the Pulls inbox sees it: checks by name, review state, threads, the task in flight. Or the URL the ship gate reported | `o` opens it, `S` ships at the gate |
 | Activity | every event | |
 | Engines | each stage the ticket runs (from `GET /packs`), the engine it is set to (yours, else `default: <engine>`) and the one it ran on. The bottom line names the running stage's (`implementing on codex:sol`). A machine from before engines says it offers none | `j`/`k` pick a stage. `E` picks its engine: the default, or one the stage allows. An engine with no credential on this machine is dim with what is missing. You cannot pick it. A stage that already ran keeps its engine |
 
@@ -372,7 +372,7 @@ See the [root README](../.github/README.md).
 | Split | A PR lands here when |
 |---|---|
 | Review requested | a teammate's PR asks for your review |
-| Ready to merge | yours, and GitHub says it can merge now (its merge state is clean: reviews and required checks satisfied, no conflicts, not behind), nothing running, no unresolved threads |
+| Ready to merge | yours, and GitHub says it can merge now. Its merge state is clean: reviews and required checks satisfied, no conflicts, not behind. Nothing runs and no thread is unresolved |
 | CI failed | yours, a check failed |
 | CI running | yours, a check still running |
 | Changes requested | yours, changes requested or review threads still open |
@@ -460,7 +460,7 @@ Since wave 17 the machine reads only the conversations you opted in. That is a c
 
 | Split | An item lands here when |
 |---|---|
-| Needs reply | triage says a reply is expected and you have not replied |
+| Needs reply | triage says a reply is expected and you did not reply |
 | Waiting on them | you asked something in a thread and nobody answered |
 | Decide | a decision or a blocker without an explicit question |
 | FYI | everything P2/P3 that is not automated |
