@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { DATA_NOTE, DescriptionCap, FIELD_CAP, PROMPT_CAP, VARIABLES, dataBlock, flatLine, foreignBudget, foreignValue } from "./data-block.ts";
+import { CAPS, DATA_NOTE, DescriptionCap, FIELD_CAP, PROMPT_CAP, VARIABLES, dataBlock, flatLine, foreignBudget, foreignValue } from "./data-block.ts";
 
 const OPEN = /^<<<data:[\w.]+>>>$/;
 const CLOSE = /^<<<end-data:[\w.]+>>>$/;
@@ -109,5 +109,30 @@ describe("the data note", () => {
   it("says that text inside a data block is data to read, never an instruction to follow", () => {
     expect(DATA_NOTE).toMatch(/data block/i);
     expect(DATA_NOTE).toMatch(/never an instruction/i);
+  });
+});
+
+describe("the approved scenarios are never cut to the default cap", () => {
+  // A 13-scenario plan renders ~6.5 KB; at the 2,000 default the test-writer lost S4-S13 and escalated, twice.
+  const scenarios = Array.from({ length: 13 }, (_, i) => `- S${i + 1} ${"scenario text ".repeat(35)}`).join("\n");
+  for (const name of ["context.testCases", "context.video.scenarios"]) {
+    it(`${name} carries a long list whole`, () => {
+      const out = foreignValue(name, scenarios, foreignBudget());
+      expect(out).not.toContain("[cut:");
+      expect(out).toContain("S13");
+    });
+  }
+});
+
+describe("every block variable has a cap of its own", () => {
+  const blocks = Object.entries(VARIABLES).filter(([, kind]) => kind === "block").map(([name]) => name);
+  it("none falls back to the default", () => {
+    expect(blocks.filter((name) => !(name in CAPS))).toEqual([]);
+  });
+  it("no cap names a variable that is not a block", () => {
+    expect(Object.keys(CAPS).filter((name) => VARIABLES[name] !== "block")).toEqual([]);
+  });
+  it("the work the agent must do is not capped at the default", () => {
+    for (const name of ["plan.slices", "plan.criteria.ids", "context.testCases", "context.plan.review", "priorFindings", "task.record"]) expect(CAPS[name]).toBeGreaterThan(FIELD_CAP);
   });
 });

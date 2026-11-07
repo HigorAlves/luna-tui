@@ -616,8 +616,8 @@ describe("ticket and model text in a prompt", () => {
     expect(out.some((l) => l.startsWith("# "))).toBe(false);
   });
 
-  it("caps a description at 8,000 characters and a plan's brief at 2,000", () => {
-    const out = render({ description: "d".repeat(20_000) }, { brief: "b".repeat(5000) });
+  it("caps a description at 8,000 characters and a plan's brief at 8,000", () => {
+    const out = render({ description: "d".repeat(20_000) }, { brief: "b".repeat(11_000) });
     expect(out).toContain("[cut: 12000 more characters]");
     expect(out).toContain("[cut: 3000 more characters]");
   });
