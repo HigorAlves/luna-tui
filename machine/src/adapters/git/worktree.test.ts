@@ -271,6 +271,22 @@ describe("graph helpers", () => {
   });
 });
 
+describe("dirtyFiles", () => {
+  it("keeps the status columns of the first line: ` M path` stays ` M path`, so the path starts at the fourth character", async () => {
+    const root = workspaceWith("dirty-", "a\n");
+    writeFileSync(join(root, "a.txt"), "changed\n");
+    writeFileSync(join(root, "new.txt"), "n\n");
+    const lines = await dirtyFiles(root);
+    expect(lines).toContain(" M a.txt");
+    expect(lines).toContain("?? new.txt");
+    // The install restores what it changed from these lines: every one must name a real path.
+    expect(lines.filter((l) => !l.startsWith("??")).map((l) => l.slice(3))).toEqual(["a.txt"]);
+  });
+  it("is empty for a clean worktree", async () => {
+    expect(await dirtyFiles(workspaceWith("clean-", "a\n"))).toEqual([]);
+  });
+});
+
 describe("the tests step's git", () => {
   const repoWith = () => {
     const root = workspaceWith("tests-step-", "a\n");

@@ -619,10 +619,13 @@ export async function commitsSince(path: string, sinceSha: string): Promise<Arra
   return commits;
 }
 
-/** What the worktree has uncommitted or untracked, one `git status --porcelain` line each. */
+/** What the worktree has uncommitted or untracked, one `git status --porcelain` line each: `XY path`, the path from the fourth character.
+ *  The first line keeps its leading space (` M path`): `execOrThrow` trims its output, which would turn it into `M path` and cut a letter off the path. */
 export async function dirtyFiles(path: string): Promise<string[]> {
   assertNoNestedRepository(path);
-  const status = await execOrThrow("git", [...HOST_GIT, ...at(path), "status", "--porcelain"]);
+  const result = await exec("git", [...HOST_GIT, ...at(path), "status", "--porcelain"]);
+  if (result.code !== 0) throw new Error(`git status failed: ${(result.stderr || result.stdout).trim()}`);
+  const status = result.stdout.trimEnd();
   return status === "" ? [] : status.split("\n");
 }
 
