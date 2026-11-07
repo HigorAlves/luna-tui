@@ -522,7 +522,7 @@ Every item that expects a reply carries a due time under the reply SLA for its p
 
 ### Watches
 
-A watch is anything beyond your own handle that the inbox should treat as addressed to you. It can be a user group (`@platform-team`), a broadcast, a keyword, or a whole channel. The broadcasts are `@here`, `@channel` and `@everyone`. They ship on, and you can switch them off but not delete them. `W` opens the watches. `e` cycles the priority floor through none, P0, P1, P2 (an item that matches the watch is at least that). After `n`, type `@` to complete a user group, and `#` to complete a channel. Anything else is a keyword. `enter` saves it. Watches live in the machine, so every board shares them and triage reads them.
+A watch is anything beyond your own handle that the inbox should treat as addressed to you. It can be a user group (`@platform-team`), a broadcast, a keyword, or a whole channel. The broadcasts are `@here`, `@channel` and `@everyone`. They ship on, and you can switch them off but not delete them. `W` opens the watches. `e` cycles the priority floor through none, P0, P1, P2 (an item that matches the watch is at least that). After `n`, type `@` to complete a user group. Type `#` to complete a channel. Anything else is a keyword. `enter` saves it. Watches live in the machine, so every board shares them and triage reads them.
 
 <!-- keys:start watches -->
 **Watch**
