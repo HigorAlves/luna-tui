@@ -11,7 +11,7 @@ describe("renderCogneeEnv", () => {
     const env = parse(renderCogneeEnv({ models, jwtSecret: "j".repeat(64), openaiKey: "sk-test-1234567890\n" }));
     expect(env).toEqual({
       LLM_PROVIDER: "openai",
-      LLM_MODEL: `openai/${MODELS["openai/gpt-6-luna"].id}`,
+      LLM_MODEL: `openai/${MODELS[SERVICE_MODELS.cognee.llm].id}`,
       LLM_API_KEY: "sk-test-1234567890",
       EMBEDDING_PROVIDER: "fastembed",
       EMBEDDING_MODEL: "BAAI/bge-small-en-v1.5",

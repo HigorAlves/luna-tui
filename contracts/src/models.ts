@@ -41,6 +41,9 @@ const CATALOG = {
   "openai/gpt-5.6-terra": { runtime: "eve", id: "gpt-5.6-terra", status: "preview", caps: AGENT },
   // A decision model: typed answers to typed questions, no tools and no effort setting. Billed per
   // input token only, through TypeSafe's API or the Vercel AI Gateway alike.
+  // Cognee's extraction model on an OpenAI API key (memory, RFC 0007): many small structured calls, so a small model. Not an engine's:
+  // `openai/gpt-6-luna` is the Codex login's ID (gpt-6-luna-fast), which an API key does not serve.
+  "openai/gpt-5.4-mini": { runtime: "eve", id: "gpt-5.4-mini", status: "ga", caps: AGENT },
   // The embedder Cognee runs locally (fastembed) for memory: it writes no text, runs offline and holds no credential, so it is
   // not a pack's engine and no engine names it. The one model of `runtime: "local"`, at zero price.
   "local/bge-small-en-v1.5": {
@@ -69,7 +72,7 @@ export const MODELS: Record<ModelKey, ModelEntry> = CATALOG;
  * renders `~/.config/hardness/cognee.env` from these entries, so no model ID is written in `compose.yaml` or anywhere else.
  */
 export const SERVICE_MODELS = {
-  cognee: { llm: "openai/gpt-6-luna", embedder: "local/bge-small-en-v1.5", dimensions: 384, maxInputTokens: 512, llmProvider: "openai", embeddingProvider: "fastembed" },
+  cognee: { llm: "openai/gpt-5.4-mini", embedder: "local/bge-small-en-v1.5", dimensions: 384, maxInputTokens: 512, llmProvider: "openai", embeddingProvider: "fastembed" },
 } as const satisfies Record<string, { llm: ModelKey; embedder: ModelKey; dimensions: number; maxInputTokens: number; llmProvider: string; embeddingProvider: string }>;
 
 /** Whether a model is past its retirement on `today` (YYYY-MM-DD): deprecated, and after retireAfter. */
