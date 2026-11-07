@@ -146,11 +146,36 @@ export const CAPS: Readonly<Record<string, number>> = {
 };
 export const capOf = (name: string): number => CAPS[name] ?? FIELD_CAP;
 
-/** One substituted value, by its variable's declared kind. A variable nobody declared is a bug, not a pass-through. */
-export function foreignValue(name: string, value: string, budget: { take: (text: string) => string }): string {
+/** The blocks that are the work itself: a run on a cut one answers a task it was only half given, so the stage does not run (main.ts). */
+export const WHOLE: ReadonlySet<string> = new Set([
+  "task.criteria", "plan.criteria", "plan.criteria.ids", "plan.slices", "context.plan.cases", "context.testCases", "context.scenarioTests", "context.video.scenarios", "priorFindings",
+]);
+
+/** What a prompt lost of one variable: `chars` characters, to its cap or to what was left of the prompt's budget. */
+export interface Cut { name: string; chars: number; cap: number; whole: boolean }
+
+/** One substituted value, by its variable's declared kind, and what it lost. A variable nobody declared is a bug, not a pass-through. */
+export function foreignValueCut(name: string, value: string, budget: { take: (text: string) => string }): { text: string; cut: Cut | null } {
   const kind = VARIABLES[name];
   if (!kind) throw new Error(`template variable {{${name}}} is not declared in VARIABLES as the machine's own or as foreign`);
-  if (kind === "machine" || EMPTY_VALUES.has(value) || value === "") return value;
-  if (kind === "line") return flatLine(budget.take(value));
-  return dataBlock(name, budget.take(value), capOf(name));
+  if (kind === "machine" || EMPTY_VALUES.has(value) || value === "") return { text: value, cut: null };
+  const cap = kind === "line" ? FIELD_CAP : capOf(name);
+  const taken = budget.take(value);
+  const text = kind === "line" ? flatLine(taken) : dataBlock(name, taken, cap);
+  // Lines are quoted with `| `, so a line that is exactly the marker was written by dataBlock, never by the text.
+  const marked = kind === "block" ? Number(/^\[cut: (\d+) more characters\]$/m.exec(text)?.[1] ?? 0) : 0;
+  const chars = value.length - taken.length + marked;
+  return { text, cut: chars > 0 ? { name, chars, cap, whole: WHOLE.has(name) } : null };
+}
+
+/** One substituted value, by its variable's declared kind. */
+export function foreignValue(name: string, value: string, budget: { take: (text: string) => string }): string {
+  return foreignValueCut(name, value, budget).text;
+}
+
+/** The line a stage ends on when a block it must read whole was cut: what was lost, where, and what to change. */
+export function cutReason(cuts: readonly Cut[]): string | null {
+  const lost = cuts.filter((c) => c.whole);
+  if (lost.length === 0) return null;
+  return `the stage's input was cut, so the agent was never run on a half-read task: ${lost.map((c) => `${c.name} lost ${c.chars} characters (its cap is ${c.cap}; the prompt carries at most ${PROMPT_CAP})`).join("; ")}. Raise the cap in factory/src/core/data-block.ts or split the plan.`;
 }

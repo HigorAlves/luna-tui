@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { DATA_NOTE } from "./data-block.ts";
-import { EVE_TOOL_NAMES, FACTORY_RULES, callLine, escalationLine, factoryRules, renderPrompt as renderQuoted } from "./render.ts";
+import { EVE_TOOL_NAMES, FACTORY_RULES, callLine, escalationLine, factoryRules, renderPrompt as renderQuoted, renderPromptReport } from "./render.ts";
 
 /** What a prompt says with the data notes, the block markers and the quoting taken off: the older tests read the values, not their quoting. */
 const unquote = (prompt: string): string => {
@@ -685,5 +685,24 @@ describe("renderPrompt for decompose", () => {
     const prompt = renderQuoted({ pack: PACKS.decompose, input: { ...input, stage: "decompose", pack: "decompose", context: { projectContext: null } } as unknown as StageInput, template });
     expect(prompt).not.toContain("{{");
     expect(prompt).toContain("(none)");
+  });
+});
+
+describe("renderPromptReport: what a prompt lost", () => {
+  const template = readFileSync(new URL("../../prompts/build_tests.md", import.meta.url), "utf8");
+  const scenarios = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `S${i + 1}`, title: `scenario ${i + 1}`, criterion: "c ".repeat(200), type: "happy", layer: "unit", given: "g", when: "w", then: "t" }));
+  const report = (n: number) => renderPromptReport({ pack: PACKS.build_tests, input: { ...input, pack: "build_tests", stage: "implementing", context: { ...input.context, testCases: scenarios(n) } } as never, template });
+
+  it("a 13-scenario plan reaches the test-writer whole: the run that escalated twice lost S4-S13", () => {
+    const { prompt, cuts } = report(13);
+    expect(cuts).toEqual([]);
+    expect(prompt).toContain("S13 scenario 13");
+  });
+  it("a plan past the cap is reported, as the work that must be whole", () => {
+    const { cuts } = report(60);
+    expect(cuts.map((c: { name: string; whole: boolean }) => [c.name, c.whole])).toEqual([["context.testCases", true]]);
+  });
+  it("renderPrompt is the same prompt", () => {
+    expect(renderQuoted({ pack: PACKS.build_tests, input: { ...input, pack: "build_tests", stage: "implementing" } as never, template })).toBe(renderPromptReport({ pack: PACKS.build_tests, input: { ...input, pack: "build_tests", stage: "implementing" } as never, template }).prompt);
   });
 });

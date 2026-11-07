@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { CAPS, DATA_NOTE, DescriptionCap, FIELD_CAP, PROMPT_CAP, VARIABLES, dataBlock, flatLine, foreignBudget, foreignValue } from "./data-block.ts";
+import { CAPS, DATA_NOTE, WHOLE, cutReason, foreignValueCut, DescriptionCap, FIELD_CAP, PROMPT_CAP, VARIABLES, dataBlock, flatLine, foreignBudget, foreignValue } from "./data-block.ts";
 
 const OPEN = /^<<<data:[\w.]+>>>$/;
 const CLOSE = /^<<<end-data:[\w.]+>>>$/;
@@ -134,5 +134,36 @@ describe("every block variable has a cap of its own", () => {
   });
   it("the work the agent must do is not capped at the default", () => {
     for (const name of ["plan.slices", "plan.criteria.ids", "context.testCases", "context.plan.review", "priorFindings", "task.record"]) expect(CAPS[name]).toBeGreaterThan(FIELD_CAP);
+  });
+});
+
+describe("a cut is reported, and a cut of the work itself says why the stage does not run", () => {
+  it("reports what a cap cut", () => {
+    const { cut } = foreignValueCut("context.testCases", "x".repeat(13_000), foreignBudget());
+    expect(cut).toEqual({ name: "context.testCases", chars: 1000, cap: 12_000, whole: true });
+  });
+  it("reports what the prompt's budget cut, which leaves no marker", () => {
+    const budget = foreignBudget(100);
+    const { cut } = foreignValueCut("context.checks", "x".repeat(300), budget);
+    expect(cut?.chars).toBe(200);
+  });
+  it("reports nothing for a field that fits, or one the machine wrote", () => {
+    expect(foreignValueCut("context.testCases", "- S1 a", foreignBudget()).cut).toBeNull();
+    expect(foreignValueCut("agent", "x".repeat(9000), foreignBudget()).cut).toBeNull();
+  });
+  it("text that looks like the marker is not a cut: its lines are quoted", () => {
+    expect(foreignValueCut("context.testCases", "[cut: 99 more characters]", foreignBudget()).cut).toBeNull();
+  });
+  it("names the blocks that must be whole, and ignores one that may be cut", () => {
+    const whole = { name: "plan.slices", chars: 862, cap: 8000, whole: true };
+    expect(cutReason([whole])).toContain("plan.slices lost 862 characters");
+    expect(cutReason([{ ...whole, name: "context.checks", whole: false }])).toBeNull();
+    expect(cutReason([])).toBeNull();
+  });
+  it("every block that is the work is a declared block with a cap above the default", () => {
+    for (const name of WHOLE) {
+      expect(VARIABLES[name]).toBe("block");
+      expect(CAPS[name]).toBeGreaterThan(FIELD_CAP);
+    }
   });
 });

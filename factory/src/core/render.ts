@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 
 import { CONVERSATION_VARIABLES, conversationText } from "./conversation-text.ts";
 import { renderSplit, renderTicket } from "./decide.ts";
-import { DATA_NOTE, foreignBudget, foreignValue } from "./data-block.ts";
+import { type Cut, DATA_NOTE, foreignBudget, foreignValueCut } from "./data-block.ts";
 import { callText } from "./transcript.ts";
 
 const NONE = "(none)";
@@ -381,7 +381,10 @@ function graphText(graph: StageInput["context"]["graph"]): string {
 }
 
 /** The prompt the model gets. */
-export function renderPrompt({ pack, input, template, projectContext }: RenderInput): string {
+export const renderPrompt = (render: RenderInput): string => renderPromptReport(render).prompt;
+
+/** The prompt the model gets, and what it lost: every block cut to its cap. */
+export function renderPromptReport({ pack, input, template, projectContext }: RenderInput): { prompt: string; cuts: Cut[] } {
   const agent = pack.agent ?? "script";
   const context = input.context.projectContext ?? projectContext ?? null;
   const slack = slackText(input.context.slack);
@@ -495,7 +498,14 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   }
   // Foreign text (a ticket's, a reviewer's, a tool's, a model's) goes in as flattened lines or quoted, capped data blocks.
   const budget = foreignBudget();
-  const quoted = Object.fromEntries(Object.entries(subs).map(([key, value]) => [key, foreignValue(key.slice(2, -2), value, budget)]));
+  const cuts: Cut[] = [];
+  const quoted = Object.fromEntries(
+    Object.entries(subs).map(([key, value]) => {
+      const { text, cut } = foreignValueCut(key.slice(2, -2), value, budget);
+      if (cut) cuts.push(cut);
+      return [key, text];
+    }),
+  );
   // A data block always starts and ends on a line of its own, so its opening marker is never part of a line the machine wrote.
   const body = template.replace(/\{\{[A-Za-z.]+\}\}/g, (key, offset: number, whole: string) => {
     const value = quoted[key] ?? key;
@@ -503,7 +513,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     return `${offset > 0 && whole[offset - 1] !== "\n" ? "\n" : ""}${value}${whole[offset + key.length] !== undefined && whole[offset + key.length] !== "\n" ? "\n" : ""}`;
   });
   const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, DATA_NOTE, ""].join("\n");
-  return header + body;
+  return { prompt: header + body, cuts };
 }
 
 /** A ticket's signals on one line, in the pack's question order: `kind bug (0.90) · area board
