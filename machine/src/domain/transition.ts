@@ -232,6 +232,9 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       if (state === "awaiting_ship") return event.gate === "ship_approval" ? run("awaiting_ship", retries) : run("evidence", retries);
       if (state === "awaiting_approval") return run(event.from === "triage" ? "triage" : "test_design", retries);
       if (state === "awaiting_test_check") return run("test_design", retries);
+      // An escalation a person sends back is a plan they judge wrong: the card is planned again (the reason rides on the decision), rather than
+      // only approved, which reruns the stage that stopped on the same plan.
+      if (state === "escalated") return run("test_design", NO_RETRIES);
       break;
     case "stage_done":
       return stageDone(task, event);
