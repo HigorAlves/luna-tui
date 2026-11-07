@@ -338,8 +338,8 @@ It finds a repo that sits directly under that folder,
 or that sits with others under a
 project folder (`~/Developer/some-project/backend`, `.../frontend`, both
 found).
-Triage's questions (`a` on a ticket awaiting answers) open in place
-too, pre-filled with its recommended answers. `ctrl+s` sends them.
+`a` on a ticket that awaits answers opens triage's questions in place
+too. The board fills in the recommended answers. `ctrl+s` sends them.
 
 A new ticket starts in Backlog. `a` moves it to Intake.
 No stage runs: it is just a deliberate "I'm shaping this one up" step. `a` again starts triage.
@@ -508,7 +508,7 @@ A P0 or P1 entering Needs reply or Decide counts on the Board tab's badge and ra
 
 `r` opens the editor with triage's draft (vim keys, like every editor). `ctrl+s` posts it as you
 in the thread, and `esc` backs out. The board never sends anything without the key. `t` makes a Backlog task
-from the message and its thread, titled with the summary, in the repo that the channel name matches.
+from the message and its thread. The task title is the summary. The task goes in the repo that the channel name matches.
 It asks for one `y` first, and the repo picker follows when the board guessed none. `d` clears the item here at
 once. The board does not touch Slack itself. If the thread moves afterwards, the item comes back,
 re-triaged, with `new since you cleared it` in the pane. `s` snoozes for 1h, 3h, tomorrow 9:00 or
