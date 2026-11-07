@@ -55,9 +55,10 @@ pnpm --filter @hardness/machine runner:build
 pnpm eval --pack triage --engine claude:opus-next --against claude:opus
 ```
 
-An engine outside a pack's `allowed` runs as a candidate, so the pack needs no change for this. Put the scorecard (pass rate, judge score, turns, duration, cost) in the PR description. Keep a laptop awake for the run (`caffeinate -s` on macOS).
+An engine outside a pack's `allowed` runs as a candidate, so the pack needs no change for this. - Put the scorecard (pass rate, judge score, turns, duration, cost) in the PR description.
+- Keep a laptop awake for the run (`caffeinate -s` on macOS).
 
-Only `triage`, `slack_triage` and `triage_signals` have cases (`evals/<pack>/cases/`). For any other pack the alias touches, add cases first ([evals/README.md](../../evals/README.md), "Add a case"). Or run the golden tickets on a branch that already points the alias at the new entry (step 6). Then compare it with the same run on `main`:
+Only `triage`, `slack_triage` and `triage_signals` have cases (`evals/<pack>/cases/`). For any other pack the alias touches, add cases first ([evals/README.md](../../evals/README.md), "Add a case"). Or compare the golden tickets on a branch that already points the alias at the new entry (step 6) with the same run on `main`:
 
 ```sh
 pnpm golden --matrix       # needs a running machine from that branch, a credential and docker
@@ -68,7 +69,7 @@ pnpm golden --matrix       # needs a running machine from that branch, a credent
 Nobody has built shadow (the candidate answering the same input without anyone acting on it) or canary (a share of tasks by hash). The harness has a per-repo and per-task choice of engine. So you run a trial by hand:
 
 1. Add the candidate to the pack's `engines.allowed` in `contracts/src/packs.ts`. The `default` stays as it is. A reviewer reviews this one-line change.
-2. Pick the engine for one repo in that repo's `luna.yaml` (`engines: { triage: claude:opus-next }`). Or pick it for one task with `stages` on `POST /tasks`, `PATCH /tasks/:id/stages`, or the engine picker on the board.
+2. Pick the engine for one repo in that repo's `luna.yaml` (`engines: { triage: claude:opus-next }`), or for one task with `stages` on `POST /tasks`, `PATCH /tasks/:id/stages`, or the engine picker on the board.
 3. Run a few real tickets.
 4. Revert the one-line change from step 1.
 
@@ -89,6 +90,12 @@ To roll back, revert the alias line. A stage already running keeps its engine. T
 
 ## 7. Retire
 
-Mark the old entry `status: "deprecated"` with `retireAfter: "YYYY-MM-DD"`. From the day after, the contract test fails while any pack's engines still reach it. When nothing reaches it, delete the entry.
+- Mark the old entry `status: "deprecated"` with `retireAfter: "YYYY-MM-DD"`.
+- Delete the entry when no pack's engines reach it.
 
-The evals measure a decision pack's engine default. Nobody assumes it. After the upgrade, re-run the baselines of the packs on that model. Then re-take the defaults ([calibrate-decisions](calibrate-decisions.md)).
+From the day after `retireAfter`, the contract test fails while any pack's engines still reach the entry.
+
+The evals measure a decision pack's engine default. Nobody assumes it. After the upgrade, do these steps:
+
+- Re-run the baselines of the packs on that model.
+- Re-take the defaults ([calibrate-decisions](calibrate-decisions.md)).
