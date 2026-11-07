@@ -65,7 +65,9 @@ const proceduralSentences = (text: string): string[] =>
 const PASSIVE = /\b(?:is|are|was|were|be|been|being)\s+(?:\w+ed|built|run|written|given|made|shown|kept|chosen|known|taken|done|seen|found|sent|read|held|stored|picked)\b/i;
 const MULTI = (s: string): boolean => /;\s|,\s+then\b|\bthen\s+[a-z]+\b.*\bthen\b/i.test(s) || /\band then\b/i.test(s);
 
-const inlineCode = (t: string): string[] => [...t.replace(/```[\s\S]*?```/g, "").matchAll(/`[^`\n]+`/g)].map((m) => m[0]);
+// A span opens with a run of backticks and closes with a run of the same length, as in CommonMark.
+// Part 1's /`[^`\n]+`/ pairs the backticks of a double-backtick span wrongly and shifts every span after it.
+const inlineCode = (t: string): string[] => [...t.replace(/```[\s\S]*?```/g, "").matchAll(/(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g)].map((m) => m[0]);
 const fences = (t: string): string[] => [...t.matchAll(/```[\s\S]*?```/g)].map((m) => m[0]);
 const linkTargets = (t: string): string[] => [...t.matchAll(/\]\(([^)\s]+)/g)].map((m) => m[1] as string);
 const htmlTags = (t: string): string[] => [...t.replace(/```[\s\S]*?```/g, "").matchAll(/<\/?[a-zA-Z][^>]*>/g)].map((m) => m[0]);
@@ -215,6 +217,13 @@ describe("core docs STE guard: fixtures", () => {
     expect(missingFacts(base, base)).toEqual([]);
     expect(missingFacts(base, "Wait 30 seconds. Run `pnpm test`.\n").join()).toContain("`pnpm test`");
     expect(missingFacts(base, "Wait. Run `pnpm test` and `pnpm test`.\n").join()).toContain("30");
+  });
+
+  it("S11 a double-backtick span is one fact and does not shift the spans after it", () => {
+    const base = "Write `` `code` ``, then use `branch` and `{id}`.\n";
+    expect(inlineCode(base)).toEqual(["`` `code` ``", "`branch`", "`{id}`"]);
+    expect(missingFacts(base, "Write `` `code` `` first. Use `branch` and `{id}`.\n")).toEqual([]);
+    expect(missingFacts(base, "Write `` `code` `` first. Use `branch`.\n").join()).toContain("`{id}`");
   });
 
   // @scenario:S13
