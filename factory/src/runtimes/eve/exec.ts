@@ -27,7 +27,9 @@ export interface CommandEnvOptions {
 export function commandEnv(command: string, { source = process.env, home, ghToken }: CommandEnvOptions): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(source)) if (value !== undefined && INHERITED.test(key)) env[key] = value;
-  Object.assign(env, { PATH: STAGE_PATH, HOME: home, TMPDIR: home, TERM: "dumb", NO_COLOR: "1" });
+  // TERM=dumb keeps escape codes out of what the model reads. No NO_COLOR: it changes what a program does, not only how it prints
+  // (a TUI's colour tests fail under it), and the repo's CI does not set it, so a check would fail here and pass there.
+  Object.assign(env, { PATH: STAGE_PATH, HOME: home, TMPDIR: home, TERM: "dumb" });
   if (command === "gh" && ghToken) env.GH_TOKEN = ghToken;
   return env;
 }

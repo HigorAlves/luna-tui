@@ -216,6 +216,12 @@ describe("buildStageInput", () => {
     expect(input.env).toEqual({ LUNA_FACTORY: "1" });
   });
 
+  it("gives a whole number of milliseconds when Build's budget has a fraction of a minute left", () => {
+    const input = buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [], budgetMinutes: 12.3456789 });
+    expect(Number.isInteger(input.limits.timeoutMs)).toBe(true);
+    expect(StageInput.safeParse(input).success).toBe(true);
+  });
+
   it("hands Verify the machine's tests commit and its files, and nobody else", () => {
     const testsCommit = { sha: "a7aa421", files: ["contracts/src/readme-ste.test.ts"] };
     const verify = buildStageInput({ task, stage: "verifying", attempt: 1, approvals, priorFindings: [], baseCommit: "9c1f0e2a", testsCommit });

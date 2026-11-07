@@ -171,7 +171,8 @@ export function buildStageInput(opts: {
   const scaled = budgetFor(pack, plan?.slices?.length ?? 0);
   const { maxTurns } = scaled;
   // Build's budget: a run never outlives the minutes the card has left.
-  const timeoutMs = opts.budgetMinutes !== undefined && (pack === "implementing" || pack === "build_tests") ? Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE) : scaled.timeoutMs;
+  const timeoutMs = opts.budgetMinutes !== undefined && (pack === "implementing" || pack === "build_tests") ? Math.floor(Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE)) : scaled.timeoutMs;
+  // A budget left in fractions of a minute gives a fraction of a millisecond: the stage input takes whole ones (`invalid stage input: limits.timeoutMs`).
   return {
     schema: 3,
     stage,
