@@ -68,7 +68,7 @@ By hand, run `pnpm start`. It builds the stage images, then starts Postgres and 
 | [docs/api.md](../docs/api.md) | HTTP routes and an example session |
 | [docs/contributing.md](../docs/contributing.md) | Running the checks, opening a PR |
 
-Packages (`@hardness/*`), env vars (`HARDNESS_MACHINE_URL`) and `~/.config/hardness/` still say `hardness`. A separate change will rename them. The product name is Luna TUI.
+Packages (`@hardness/*`), env vars (`HARDNESS_MACHINE_URL`) and `~/.config/hardness/` still say `hardness`. Renaming them is a separate change. The product name is Luna TUI.
 
 ## Contributing
 

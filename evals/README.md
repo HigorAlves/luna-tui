@@ -131,4 +131,4 @@ A selector value cannot hold a `.`. Keep checks to what any good answer must con
 
 ## What is scrubbed
 
-Cases live in this repository. So you scrub a case that comes from a real run before you commit it. People, channels and companies become `.example` names. Ids become fake ones (`U0EVAL0001`, `C0EVAL01:1`). You remove tokens, URLs to private systems and any message text the graders do not need. The unit tests refuse a case that carries something shaped like a token or a non-`.example` address. A fixture's `.golden/` never reaches a container.
+Cases live in this repository. Scrub a case that comes from a real run before you commit it. Replace people, channels and companies with `.example` names. Replace ids with fake ones (`U0EVAL0001`, `C0EVAL01:1`). Remove tokens, URLs to private systems and any message text the graders do not need. The unit tests refuse a case that carries something shaped like a token or a non-`.example` address. A fixture's `.golden/` never reaches a container.
