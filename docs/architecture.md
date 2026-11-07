@@ -160,7 +160,7 @@ What the security pass checked and what it leaves to you, in plain words.
 ### Defaults that changed
 
 - Reading is opt-in per channel. Set `MACHINE_SLACK_SCOPE=all` for the old reading.
-- With `conversation.auto` off (the default) nothing reaches Slack without a tap. The one standing exception is the digest, and only when `MACHINE_SLACK_DIGEST_AT` is set.
+- With `conversation.auto` off (the default) nothing reaches Slack without a tap. The one standing exception is the digest, and only when you set `MACHINE_SLACK_DIGEST_AT`.
 - The machine-owned thread no longer posts for any card. The machine no longer sends its paused, "needs you" and reminder lines to Slack. They are on the board.
 
 ### Not built
@@ -457,7 +457,7 @@ The agent stages run as stage packs inside the stage container, through `factory
 
 - `claude` (`factory/src/runtimes/claude/`) uses the Claude Agent SDK. It serves Claude models only. It uses the subscription token first and `ANTHROPIC_API_KEY` as the fallback.
 - `eve` (`runtimes/eve/`) uses Vercel's eve, for every other agent model. `codex:*` engines run on the Codex login through `chatgpt()`. `openai:*` engines run on `OPENAI_API_KEY` through `openai()`.
-- `jev` (`runtimes/jev/`) serves decision packs only. It is opt-in and metered. It goes through the Vercel AI Gateway with the AI SDK's `experimental_decide` when `AI_GATEWAY_API_KEY` is set. Otherwise it uses TypeSafe's `@typesafe-ai/sdk` with `TYPESAFE_API_KEY`.
+- `jev` (`runtimes/jev/`) serves decision packs only. It is opt-in and metered. It goes through the Vercel AI Gateway with the AI SDK's `experimental_decide` when you set `AI_GATEWAY_API_KEY`. Otherwise it uses TypeSafe's `@typesafe-ai/sdk` with `TYPESAFE_API_KEY`.
 
 `runtimes/index.ts` is the only file that imports a runtime. Each SDK has imports only inside the folder of its runtime.
 
@@ -568,7 +568,7 @@ The Claude runtime has `run.ts` (it builds the SDK options and follows `query()`
 
 The Jev runtime has these files:
 
-- `run.ts` holds the runtime and the `JevTransport` that it calls through. The key that is set picks the transport.
+- `run.ts` holds the runtime and the `JevTransport` that it calls through. The key that you set picks the transport.
 - `gateway.ts` and `typesafe.ts` are the two transports.
 - `questions.ts` puts the questions in the words of each wire and the answers back in the words of the pack.
 
@@ -683,7 +683,7 @@ The browser run never gets the secrets of the app, the seed and the deploy, but 
 
 The browser run (e2e) has four modes, from the config of the repository:
 
-- **deploy** when `verify.e2e.deploy.url_pattern` is set. The machine fills the pattern from the card's branch, head commit and id. It runs `deploy.command` when there is one, in the image of the repository with its own secrets and no credential. It waits for `health_check` through the proxy. The machine never reads the URL from the output of the command. It adds the host of the preview to the list of the browser.
+- **deploy** when you set `verify.e2e.deploy.url_pattern`. The machine fills the pattern from the card's branch, head commit and id. It runs `deploy.command` when there is one, in the image of the repository with its own secrets and no credential. It waits for `health_check` through the proxy. The machine never reads the URL from the output of the command. It adds the host of the preview to the list of the browser.
 - **start** when `verify.e2e.start.command` is set. The machine installs, opens a network with the `check` list, starts the services and runs `verify.e2e.seed.command`. It starts the app in its own container, reachable as `luna-app` with no published port. It waits until `ready` answers below 400 from inside it. The network of the browser run joins the network of the app, so the app never reaches the API of the engine. Each attempt, the re-run after an environment flake included, gets a fresh app. The machine removes the app with its network and proxy in a `finally`.
 - **target** when the repository declares `qa_targets`. The machine hands the browser run the first one, and only the credential of that target.
 - Otherwise the agent boots its own server, as before.
