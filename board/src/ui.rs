@@ -225,6 +225,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     viewport: &app.detail_viewport,
                     follow: &app.detail_follow,
                     engines: app.engine_catalog.as_ref(),
+                    tasks: &app.tasks,
                 };
                 detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
             }
@@ -806,6 +807,9 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     }
     if let Some(key) = task.jira_key() {
         ids.push_str(&format!(" · {key}"));
+    }
+    if let Some(part) = &task.split_part {
+        ids.push_str(&format!(" · part {}/{}", part.n, part.of));
     }
     let ids = Line::from(Span::from(ids).fg(c(SUBTEXT0)));
 

@@ -115,6 +115,8 @@ pub struct DetailView<'a> {
     pub follow: &'a Cell<bool>,
     /// `GET /packs` and `GET /engines`, for the Engines section; None until first asked.
     pub engines: Option<&'a Result<EngineCatalog, String>>,
+    /// The board's current cards, to name a split's origin and children by title.
+    pub tasks: &'a [Task],
 }
 
 /// A terminal this wide or wider lays the rail beside the pane; narrower, the rail becomes a
@@ -201,7 +203,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     }
 
     let (section_lines, cursor_row) = match view.section {
-        Section::Overview => (overview_lines(task, detail, width, now), None),
+        Section::Overview => (overview_lines(task, detail, width, now, view.tasks), None),
         Section::Plan => (plan_lines(task, detail, now), None),
         Section::Tests => (tests_lines(task, detail, width, now), None),
         Section::Runs => runs_lines(task, detail, view.cursor, width, now),
@@ -721,7 +723,7 @@ fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> 
     lines
 }
 
-fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64) -> Vec<Line<'static>> {
+fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64, tasks: &[Task]) -> Vec<Line<'static>> {
     let look = task.look();
     let mut status = vec![Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(c(look_color(look))).bold()];
     if let Some(run) = detail.and_then(|d| d.stage_runs.last()) {
@@ -765,7 +767,7 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     if let Some(stage) = &task.resume_to {
         lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
     }
-    lines.extend(stack_lines(task, detail));
+    lines.extend(stack_lines(task, detail, tasks));
     if let Some(reason) = &task.archive_reason {
         lines.push(muted(if reason == "split" { "Archived   split into smaller changes".to_string() } else { format!("Archived   {reason}") }));
     } else if let Some(reason) = &task.reason {
@@ -1084,11 +1086,13 @@ fn held_text(detail: Option<&TaskDetail>) -> Option<String> {
 }
 
 /// A card's place in a split or a stack: where it came from, what it waits for, what it is built on, what it was split into. Nothing for a card with none of them.
-fn stack_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
+fn stack_lines(task: &Task, detail: Option<&TaskDetail>, tasks: &[Task]) -> Vec<Line<'static>> {
     let short = |id: &str| plain(&id.chars().take(8).collect::<String>());
+    let find = |id: &str| tasks.iter().find(|t| t.id == id);
     let mut lines = Vec::new();
     if let (Some(from), Some(part)) = (&task.split_from, &task.split_part) {
-        lines.push(muted(format!("Stack      Part {} of {} of {}", part.n, part.of, short(from))));
+        let title = find(from).map(|o| format!(" {}", plain(&o.title))).unwrap_or_default();
+        lines.push(muted(format!("Stack      Part {} of {} of {}{}", part.n, part.of, short(from), title)));
     }
     for dep in &task.depends_on {
         lines.push(muted(format!("Stack      Depends on {}", short(dep))));
@@ -1105,8 +1109,14 @@ fn stack_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
             None => lines.push(muted("Stack      Waiting: held until its dependencies have an open PR or have merged".to_string())),
         }
     }
-    if !task.split_into.is_empty() {
-        lines.push(muted(format!("Stack      Split into {}", task.split_into.iter().map(|i| short(i)).collect::<Vec<_>>().join(", "))));
+    let (known, missing): (Vec<&String>, Vec<&String>) = task.split_into.iter().partition(|i| find(i).is_some());
+    for id in known {
+        let kid = find(id).expect("partitioned as present");
+        let part = kid.split_part.as_ref().map(|p| format!("part {}/{} ", p.n, p.of)).unwrap_or_default();
+        lines.push(muted(format!("Stack      Split into {} {}{} ({})", short(id), part, plain(&kid.title), kid.status_label())));
+    }
+    if !missing.is_empty() {
+        lines.push(muted(format!("Stack      Split into {}", missing.iter().map(|i| short(i)).collect::<Vec<_>>().join(", "))));
     }
     lines
 }
