@@ -187,6 +187,32 @@ describe("Rust's inline tests", () => {
   });
 });
 
+describe("a scenario that only runs one of the repo's commands", () => {
+  const withCheck = gate({
+    plan: { goal: "g", steps: [], acceptance_criteria: [{ id: "C1", text: "c1" }, { id: "C9", text: "board:test and board:lint are clean" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: [
+      { id: "S1", title: "one", criterion: "c1", criterion_ref: "C1", approach: "a" },
+      // S13 of the split-card ticket, as its plan wrote it.
+      { id: "S13", title: "Both exit 0 with no warnings", criterion: null, criterion_ref: null, given: "The finished change", when: "pnpm board:test and pnpm board:lint run", then: "Both exit 0 with no warnings", approach: "a" },
+    ],
+  });
+
+  it("needs no test: the step commits S1's and goes on, and says S13 is a check", async () => {
+    const asked: string[] = [];
+    const f = fakes([tagged("S1")], { repoCommands: async () => ["pnpm board:test"], judgeRed: async (c) => (asked.push(c.scenario!.id), { verdict: "proceed", problems: [] }) }, [{ S1: "FAIL: no part marker" }]);
+    const result = await buildTestsStep(f.deps)(context([withCheck]));
+    expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(asked).toEqual(["S1"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed", commandChecks: ["S13"] } });
+  });
+
+  it("still asks for a test when the repo has no such command", async () => {
+    const f = fakes([tagged("S1")], { repoCommands: async () => [] }, [{ S1: "FAIL" }]);
+    const result = await buildTestsStep(f.deps)(context([withCheck]));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringMatching(/S13/) } });
+  });
+});
+
 describe("scenario.green", () => {
   const emitted = () => {
     const rows: Array<[string, Record<string, unknown>]> = [];

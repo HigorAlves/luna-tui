@@ -3,6 +3,7 @@
 import { type CheckContext, Plan, type PlanContext } from "@hardness/contracts";
 
 import { approvedScenarios } from "../../domain/stage-input.ts";
+import { isCommandCheck } from "../../domain/command-check.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { isPlainRepoPath } from "@hardness/contracts";
 import { type ScenarioTagFacts, scenarioTags } from "../../domain/scenario-tags.ts";
@@ -18,6 +19,8 @@ export interface TestsDiff {
   modes?: Record<string, string>;
   /** Per `.rs` file, the line ranges of its `#[cfg(test)]` modules in the new file: Rust's inline tests. */
   testRegions?: Record<string, Array<[number, number]>>;
+  /** The same, in each file before the change. */
+  testRegionsBefore?: Record<string, Array<[number, number]>>;
 }
 
 export interface BuildTestsDeps {
@@ -37,6 +40,8 @@ export interface BuildTestsDeps {
   /** The clock, for the step's shared deadline (tests inject one). */
   now?: () => number;
   budget?: (context: StageContext) => Promise<{ spent: boolean; minutesLeft: number } | undefined>;
+  /** The repo's own commands (package scripts, luna.yaml checks, the toolchains' test and lint): a scenario that only runs one and expects it to pass needs no test. */
+  repoCommands?: (repoPath: string) => Promise<string[]>;
   /** The repo's `holdout_cases`: the implementer must not see the scenarios, so no test is written for it to read. */
   holdout: (repoPath: string) => Promise<boolean>;
   git: {
@@ -130,9 +135,15 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
         usage = addUsage(usage, result.usage);
       }
     };
-    const scenarios = approvedScenarios(context.approvals);
+    const approvedAll = approvedScenarios(context.approvals);
+    // A scenario that only runs one of the repo's commands and expects it to pass is a check: no test can fail for it before the code
+    // exists, so none is asked for; the sweep and Verify run the command once the code is there.
+    const commands = task.repoPath && deps.repoCommands ? await deps.repoCommands(task.repoPath).catch(() => []) : [];
+    const commandChecks = approvedAll.filter((s) => isCommandCheck(s, commands)).map((s) => s.id!).filter(Boolean);
+    const scenarios = approvedAll.filter((s) => !commandChecks.includes(s.id!));
     if (task.route !== "feature") return deps.implement(context, {});
     if (!task.repoPath || scenarios.length === 0) return implementSwept({});
+    const checksNote = commandChecks.length ? { commandChecks } : {};
 
     /** What the writer's runs cost: added to the run the stage reports, so the budget counts them. */
     let writerUsage: StageResult["usage"];
@@ -154,7 +165,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       if (!read) return headMoved("the tests commit the machine made is no longer on the branch: the branch was moved, so nothing is written on it");
       const facts = scenarioTags({ ...read, scenarios });
       if (!context.firstInputCommit || read.parent !== context.firstInputCommit || !facts.ok) return headMoved("the recorded tests commit does not check out against the commit the card's first run started from");
-      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: protectedOf(read.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) }), { status: "committed", commit: context.testsCommit, resumed: true, scenarioTests: testsOf(facts) });
+      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: protectedOf(read.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) }), { status: "committed", commit: context.testsCommit, resumed: true, ...checksNote, scenarioTests: testsOf(facts) });
     }
     if (context.resume) return implementSwept({});
     if (await deps.holdout(task.repoPath)) return withStep(await implementSwept({}), { status: "skipped", why: "holdout_cases" });
@@ -224,7 +235,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       await deps.checkpoint(context, where, "red").catch(() => {});
       const result = await implementSwept({ scenarioTests: testsOf(facts), scopeBase: sha, testsFiles: protectedOf(pending.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) });
       const skipped = judged.some((j) => j.verdict === "skipped");
-      return withStep(result, { status: "committed", commit: sha, tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
+      return withStep(result, { status: "committed", commit: sha, ...checksNote, tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
     }
   };
 }

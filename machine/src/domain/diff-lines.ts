@@ -35,6 +35,33 @@ export function addedWithNumbers(diff: string): NumberedLine[] {
   return added;
 }
 
+/** The removed lines of `git diff`/`git show` output, each with its line number in the old file (by the old path). */
+export function removedWithNumbers(diff: string): NumberedLine[] {
+  const removed: NumberedLine[] = [];
+  let path = "";
+  let header = false;
+  let no = 0;
+  for (const raw of diff.split("\n")) {
+    if (raw.startsWith("diff --git ")) {
+      header = true;
+      path = "";
+    } else if (header && raw.startsWith("--- ")) {
+      path = raw.slice(4).replace(/^a\//, "");
+    } else if (raw.startsWith("@@")) {
+      header = false;
+      no = Number(/^@@ -(\d+)/.exec(raw)?.[1] ?? 0);
+    } else if (header) {
+      continue;
+    } else if (path && raw.startsWith("-")) {
+      removed.push({ path, line: raw.slice(1), no });
+      no++;
+    } else if (path && raw.startsWith(" ")) {
+      no++;
+    }
+  }
+  return removed;
+}
+
 /** The paths that lost a line (or whole file content) in the diff. */
 export function pathsWithRemovals(diff: string): Set<string> {
   const paths = new Set<string>();

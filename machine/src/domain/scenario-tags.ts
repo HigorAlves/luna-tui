@@ -2,7 +2,7 @@
 // test files and fixtures beside them, and no test file is removed. The tag is `@scenario:<id>` in a test's name or in the comment above it, one
 // per line. The writer can run any code in its container, so nothing here trusts it: a deleted or renamed-away file, a control-plane path, a
 // symlink or a nested repository is never a test. Pure.
-import { addedWithNumbers, pathsWithRemovals } from "./diff-lines.ts";
+import { addedWithNumbers, removedWithNumbers } from "./diff-lines.ts";
 import { inTestDir, looksLikeTestPath } from "./locked-files.ts";
 import { isControlPlane } from "./control-plane.ts";
 
@@ -35,7 +35,7 @@ function controlPlaneAnywhere(path: string): boolean {
   return parts.some((_, i) => isControlPlane(parts.slice(i).join("/")));
 }
 
-export function scenarioTags(input: { nameStatus: string; diff: string; scenarios: readonly { id?: string }[]; testFiles?: readonly string[]; /** The new mode of each added or changed path (`git diff --raw`); a symlink or a gitlink is never a test. */ modes?: Readonly<Record<string, string>>; /** Per `.rs` file the step changed, the line ranges of its `#[cfg(test)]` modules in the new file (rust-test-regions.ts): added lines inside one are test lines. */ testRegions?: Readonly<Record<string, ReadonlyArray<readonly [number, number]>>> }): ScenarioTagFacts {
+export function scenarioTags(input: { nameStatus: string; diff: string; scenarios: readonly { id?: string }[]; testFiles?: readonly string[]; /** The new mode of each added or changed path (`git diff --raw`); a symlink or a gitlink is never a test. */ modes?: Readonly<Record<string, string>>; /** Per `.rs` file the step changed, the line ranges of its `#[cfg(test)]` modules in the new file (rust-test-regions.ts): added lines inside one are test lines. */ testRegions?: Readonly<Record<string, ReadonlyArray<readonly [number, number]>>>; /** The same, in each file as it was before the change: a line removed inside one is a test line edited (a call updated, a test tagged). */ testRegionsBefore?: Readonly<Record<string, ReadonlyArray<readonly [number, number]>>> }): ScenarioTagFacts {
   const mapTests = new Set(input.testFiles ?? []);
   const modes = input.modes ?? {};
   const plain = (path: string) => !controlPlaneAnywhere(path) && modes[path] !== SYMLINK && modes[path] !== GITLINK;
@@ -62,9 +62,11 @@ export function scenarioTags(input: { nameStatus: string; diff: string; scenario
       tagged[ids[0]!] ??= added.path;
     }
   }
-  // A source file is a test change when the step only added lines to it and every one is inside a test module; a line outside one, or any removal, makes it a production change.
-  const removals = pathsWithRemovals(input.diff);
-  const inline = [...addedByPath].filter(([path, n]) => n.inside > 0 && n.outside === 0 && !removals.has(path)).map(([path]) => path);
+  // A source file is a test change when every line the step added to it is inside a test module and every line it removed was inside one
+  // before (an existing test updated to a new call, or tagged): a line added or removed outside one makes it a production change.
+  const before = input.testRegionsBefore ?? {};
+  const removedOutside = new Set(removedWithNumbers(input.diff).filter((r) => !(before[r.path] ?? []).some(([from, to]) => r.no >= from && r.no <= to)).map((r) => r.path));
+  const inline = [...addedByPath].filter(([path, n]) => n.inside > 0 && n.outside === 0 && !removedOutside.has(path)).map(([path]) => path);
   const taggedDirs = [...new Set(Object.values(tagged).map((p) => p.split("/").slice(0, -1).join("/")))];
   // A fixture is taken only as an added file under a test directory or beside a tagged test; a modified or deleted one elsewhere (a mock production imports) is a production change.
   const fixtureOk = (path: string, status: string) => {

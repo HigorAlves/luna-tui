@@ -105,4 +105,24 @@ describe("scenarioTags: Rust's inline tests", () => {
     const facts = scenarioTags({ nameStatus: "A\tweb/cart.test.ts", diff: diff("web/cart.test.ts", "// @scenario:S1", "// @scenario:S2"), scenarios });
     expect(facts).toMatchObject({ ok: true, inline: [] });
   });
+  it("takes an existing test edited inside the module (a call updated to a new argument, a tag added), as the writer of the split-card ticket did", () => {
+    const text = [
+      "diff --git a/board/src/detail.rs b/board/src/detail.rs",
+      "--- a/board/src/detail.rs",
+      "+++ b/board/src/detail.rs",
+      "@@ -2000,2 +2000,3 @@",
+      "+    // @scenario:S1",
+      "     #[test]",
+      "-    fn t() { overview_lines(&task, None, 100, 0); }",
+      "+    fn t() { overview_lines(&task, None, 100, 0, &[]); }",
+      "@@ -2100,0 +2101 @@",
+      "+    // @scenario:S2",
+    ].join("\n");
+    const after = { "board/src/detail.rs": [[1590, 2500]] as Array<[number, number]> };
+    const ok = scenarioTags({ nameStatus: "M\tboard/src/detail.rs", diff: text, scenarios, testRegions: after, testRegionsBefore: { "board/src/detail.rs": [[1590, 2497]] } });
+    expect(ok).toMatchObject({ ok: true, nonTest: [], inline: ["board/src/detail.rs"] });
+    // The same removed line, when it was outside the module before, is a production change.
+    const outside = scenarioTags({ nameStatus: "M\tboard/src/detail.rs", diff: text, scenarios, testRegions: after, testRegionsBefore: { "board/src/detail.rs": [[2050, 2497]] } });
+    expect(outside).toMatchObject({ ok: false, nonTest: ["board/src/detail.rs"] });
+  });
 });
