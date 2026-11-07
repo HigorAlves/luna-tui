@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type EngineBudgets, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem, hostPatternProblem, normalizeHostPattern } from "@hardness/contracts";
@@ -42,6 +42,8 @@ export interface Config {
   githubToken: string | null;
   /** Seconds between checks of each repo's default branch for a graph rebuild; null (`MACHINE_GRAPH_INTERVAL=off`) turns the watch off. */
   graphIntervalSecs: number | null;
+  /** The company folder (RFC 0007): absolute host folders (`MACHINE_MEMORY_DOCS`, `:`-separated) whose md, txt and pdf files memory reads, polled every `intervalSecs` (`MACHINE_MEMORY_DOCS_INTERVAL`, default 600; null for `off`). Never from luna.yaml. */
+  memoryDocs: { dirs: string[]; intervalSecs: number | null };
   /** The PR inbox: poll every open PR involving you. `MACHINE_GITHUB_PRS=off` turns it off. */
   githubPrs: { enabled: boolean; intervalMs: number };
   /** The ship monitor: how often it reads the shipped PR, and how many days it waits for a merge before asking a person. */
@@ -86,7 +88,28 @@ export interface Config {
   restartPolicy: RestartPolicy;
   /** Run traces to a local Laminar (`MACHINE_TRACES`, `LMNR_*`); `{ mode: "off" }` without a key. */
   traces: TracesConfig;
+  /** Memory on Cognee (RFC 0007): `MACHINE_MEMORY=off` turns it off. */
+  memory: MemoryConfig;
 }
+
+export interface MemoryConfig {
+  enabled: boolean;
+  /** Cognee's API as the machine reaches it (`COGNEE_URL`). */
+  url: string;
+  /** The machine's Cognee user (`COGNEE_EMAIL`); the password is `COGNEE_PASSWORD`, else `~/.config/hardness/cognee-password`. Null until `pnpm start` made one. */
+  email: string;
+  password: string | null;
+  /** `openai` when Cognee has its own key (`~/.config/hardness/cognee-openai-key`), `local` without. */
+  mode: "openai" | "local";
+  /** Items `cognify` may process in a day (`MACHINE_MEMORY_DAILY_COGNIFY`, 200). */
+  dailyCognifyItems: number;
+}
+
+/** Memory's secret files in `~/.config/hardness`. */
+export const COGNEE_PASSWORD_FILE = "cognee-password";
+export const COGNEE_OPENAI_KEY_FILE = "cognee-openai-key";
+export const DEFAULT_COGNEE_URL = "http://127.0.0.1:8010";
+export const DEFAULT_COGNEE_EMAIL = "machine@luna.example.com";
 
 export interface SlackInboxConfig {
   /** `MACHINE_SLACK_INBOX=off` stops polling; the routes still answer the empty snapshot. */
@@ -158,6 +181,20 @@ function graphIntervalSecs(env: NodeJS.ProcessEnv): number | null {
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1) throw new Error(`MACHINE_GRAPH_INTERVAL must be a positive integer (seconds) or off, got "${raw}"`);
   return value;
+}
+
+/** `MACHINE_MEMORY_DOCS`: absolute folders separated by `:`; a relative one is an error (the machine reads only places you named in full). */
+function memoryDocs(env: NodeJS.ProcessEnv): Config["memoryDocs"] {
+  const dirs = (env.MACHINE_MEMORY_DOCS ?? "").split(":").map((d) => d.trim()).filter(Boolean);
+  for (const dir of dirs) if (!isAbsolute(dir)) throw new Error(`MACHINE_MEMORY_DOCS must list absolute folders, got "${dir}"`);
+  const raw = env.MACHINE_MEMORY_DOCS_INTERVAL;
+  let intervalSecs: number | null = 600;
+  if (raw === "off") intervalSecs = null;
+  else if (raw !== undefined && raw !== "") {
+    intervalSecs = Number(raw);
+    if (!Number.isInteger(intervalSecs) || intervalSecs < 1) throw new Error(`MACHINE_MEMORY_DOCS_INTERVAL must be a positive integer (seconds) or off, got "${raw}"`);
+  }
+  return { dirs: [...new Set(dirs)], intervalSecs };
 }
 
 /** The runtimes a kill switch may turn off: every pack's default runs on claude, so it stays on. */
@@ -420,6 +457,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000 },
     shipPoll: { intervalMs: shipSeconds === null ? null : shipSeconds * 1000 },
     graphIntervalSecs: graphIntervalSecs(env),
+    memoryDocs: memoryDocs(env),
     githubToken: env.GITHUB_TOKEN?.trim() || env.GH_TOKEN?.trim() || null,
     repoMap,
     reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),
@@ -450,6 +488,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     engineBudgets: engineBudgets(env),
     restartPolicy,
     traces: tracesConfig(env, home),
+    memory: memoryConfig(env, home),
+  };
+}
+
+/** `MACHINE_MEMORY` (on, off), `COGNEE_URL`, `COGNEE_EMAIL`, `COGNEE_PASSWORD` and the secret files; exported for the tests. */
+export function memoryConfig(env: NodeJS.ProcessEnv, home: string): MemoryConfig {
+  const raw = env.MACHINE_MEMORY?.trim();
+  if (raw !== undefined && raw !== "" && raw !== "on" && raw !== "off") throw new Error(`MACHINE_MEMORY must be on or off, got "${raw}"`);
+  const url = (env.COGNEE_URL?.trim() || DEFAULT_COGNEE_URL).replace(/\/+$/, "");
+  if (!/^https?:\/\/[^\s/]+(:\d+)?$/.test(url)) throw new Error(`COGNEE_URL must be a scheme, host and port like ${DEFAULT_COGNEE_URL}, got "${env.COGNEE_URL}"`);
+  const dir = join(home, ".config", "hardness");
+  const cap = env.MACHINE_MEMORY_DAILY_COGNIFY === undefined || env.MACHINE_MEMORY_DAILY_COGNIFY === "" ? 200 : Number(env.MACHINE_MEMORY_DAILY_COGNIFY);
+  if (!Number.isInteger(cap) || cap < 0) throw new Error(`MACHINE_MEMORY_DAILY_COGNIFY must be a non-negative integer, got "${env.MACHINE_MEMORY_DAILY_COGNIFY}"`);
+  return {
+    enabled: raw !== "off",
+    url,
+    email: env.COGNEE_EMAIL?.trim() || DEFAULT_COGNEE_EMAIL,
+    password: env.COGNEE_PASSWORD?.trim() || secretFileSync(join(dir, COGNEE_PASSWORD_FILE)),
+    mode: secretFileSync(join(dir, COGNEE_OPENAI_KEY_FILE)) ? "openai" : "local",
+    dailyCognifyItems: cap,
   };
 }
 

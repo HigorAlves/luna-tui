@@ -59,7 +59,7 @@ export const FactoryConfigInput = {
     weights: section({ who: z.number().min(0).max(100).optional(), what: z.number().min(0).max(100).optional(), impact: z.number().min(0).max(100).optional(), time: z.number().min(0).max(100).optional(), demand: z.number().min(0).max(100).optional() }).optional(),
     bands: section({ P0: z.number().min(0).max(1000).optional(), P1: z.number().min(0).max(1000).optional(), P2: z.number().min(0).max(1000).optional() }).optional(),
   }).optional(),
-  graph: section({ stale_commits: count(100_000).optional(), first_build_minutes: minutes(1440).optional() }).optional(),
+  graph: section({ stale_commits: count(100_000).optional(), first_build_minutes: minutes(1440).optional(), branch_build_minutes: minutes(1440).optional() }).optional(),
   fast_lane: section({ max_risk: Risk3.optional(), max_size: SizeBucket.optional(), excluded_types: z.array(z.string().max(40)).max(20).optional(), cross_team: z.boolean().optional() }).optional(),
   plan: section({
     coverage_score_min: unit.optional(),
@@ -134,7 +134,7 @@ export interface FactoryConfig {
   conversation: { channels: string[]; auto: "off" | "on"; debounce_seconds: number; draft_expiry_hours: number; confidence: number; active_minutes: number };
   triage: { confidence: { kind: number; size: number; urgency: number; risk: number; archive: number }; flag_band: number; hint_weight: number; max_questions: number; max_rounds: number; sla: { reminder_days: number; archive_days: number } };
   scoring: { weights: { who: number; what: number; impact: number; time: number; demand: number }; bands: { P0: number; P1: number; P2: number } };
-  graph: { stale_commits: number; first_build_minutes: number };
+  graph: { stale_commits: number; first_build_minutes: number; branch_build_minutes: number };
   fast_lane: { max_risk: "low" | "medium" | "high"; max_size: "XS" | "S" | "M" | "L" | "XL"; excluded_types: string[]; cross_team: boolean };
   plan: { coverage_score_min: number; coverage_rounds: number; plan_check_retries: number; approvers: { low: number; medium: number; high: number; outside_owning_team: boolean }; sla: { reminder_days: number; escalate_days: number } };
   size: { target_loc: [number, number]; hard_limit_loc: number; max_children: number; max_rounds: number; depth: number };
@@ -154,7 +154,7 @@ export const FACTORY_DEFAULTS: FactoryConfig = {
   conversation: { channels: [], auto: "off", debounce_seconds: 90, draft_expiry_hours: 24, confidence: 0.7, active_minutes: 10 },
   triage: { confidence: { kind: 0.8, size: 0.6, urgency: 0.7, risk: 0.85, archive: 0.9 }, flag_band: 0.15, hint_weight: 0.5, max_questions: 3, max_rounds: 2, sla: { reminder_days: 2, archive_days: 5 } },
   scoring: { weights: { who: 3, what: 3, impact: 2, time: 2, demand: 1 }, bands: { P0: 28, P1: 22, P2: 16 } },
-  graph: { stale_commits: 50, first_build_minutes: 10 },
+  graph: { stale_commits: 50, first_build_minutes: 10, branch_build_minutes: 3 },
   fast_lane: { max_risk: "low", max_size: "S", excluded_types: ["infra", "data"], cross_team: false },
   plan: { coverage_score_min: 0.85, coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 2, outside_owning_team: true }, sla: { reminder_days: 2, escalate_days: 5 } },
   size: { target_loc: [1000, 2000], hard_limit_loc: 2500, max_children: 8, max_rounds: 3, depth: 2 },
@@ -173,7 +173,7 @@ export const CONSUMED_FROM: Readonly<Record<string, number>> = {
   "triage.confidence.kind": 9, "triage.confidence.size": 9, "triage.confidence.urgency": 9, "triage.confidence.risk": 9, "triage.confidence.archive": 9,
   "triage.flag_band": 9, "triage.hint_weight": 9, "triage.max_questions": 9, "triage.max_rounds": 9, "triage.sla.reminder_days": 9, "triage.sla.archive_days": 9,
   "scoring.weights": 9, "scoring.bands": 9,
-  "graph.stale_commits": 9, "graph.first_build_minutes": 11,
+  "graph.stale_commits": 9, "graph.first_build_minutes": 11, "graph.branch_build_minutes": 11,
   "fast_lane.max_risk": 9, "fast_lane.max_size": 9, "fast_lane.excluded_types": 9, "fast_lane.cross_team": 9,
   "plan.coverage_score_min": 9, "plan.coverage_rounds": 8, "plan.plan_check_retries": 8,
   "plan.approvers.low": 9, "plan.approvers.medium": 9, "plan.approvers.high": 9, "plan.approvers.outside_owning_team": 9, "plan.sla.reminder_days": 9, "plan.sla.escalate_days": 9,

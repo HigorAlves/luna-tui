@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
+import { MEMORY_CONTEXT_MAX_ITEMS, MemoryContext, RecalledMemory, LessonsContext } from "./memory.ts";
 import { Scenario } from "./plan.ts";
 import { SizeContext, SplitContext } from "./split.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
@@ -152,6 +153,8 @@ export const PackId = z.enum([
   "eval_judge",
   // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
   "chat_triage",
+  // Not a task stage: answers a question over recalled memory items (RFC 0007), on demand.
+  "memory_answer",
   // Opens the plan stage (runs in test_design): reads the repo's code graph and names the components, files and owners the goal touches.
   "code_map",
   // A decision on Evidence (an evidence context, run on demand): which format shows the change best.
@@ -172,6 +175,10 @@ export const PackId = z.enum([
   "fix_scope",
   "evidence_valid",
   "worth_learning",
+  // The memory lessons (RFC 0007), run on demand by the retro: candidate lessons from a card's facts, whether each is worth keeping, whether it contradicts what memory holds.
+  "memory_extract",
+  "memory_worth",
+  "memory_conflict",
   // A decision at Intake (a dedup context, run on demand): is a new report the same problem as one of the five nearest cards.
   "intake_dedup",
   // A decision at the Ticket Machine (a ticket context, run on demand): can this ticket be worked on at all.
@@ -329,6 +336,15 @@ export const ChatTriageContext = z.object({
 });
 export type ChatTriageContext = z.infer<typeof ChatTriageContext>;
 
+/** For memory_answer: the question and the items recall gave, as data. */
+export const MemoryAnswerContext = z.object({
+  question: z.string().min(1).max(1000),
+  items: z.array(RecalledMemory).max(MEMORY_CONTEXT_MAX_ITEMS),
+  /** Why the list is empty or short; null when nothing to say. */
+  note: z.string().max(300).nullable(),
+});
+export type MemoryAnswerContext = z.infer<typeof MemoryAnswerContext>;
+
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
   id: z.number().int(),
@@ -480,6 +496,8 @@ export const LunaConfig = z.object({
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
   evidence: z.object({ retention_days: z.number().int().min(0).optional(), ...EvidenceConfigV22 }).optional(),
+  /** Memory for this repository (RFC 0007): `memory: off` (or `mode: off`) keeps it out of memory. `daily_cognify_items` caps the items Cognee builds a graph for in a day; `stale_lines` is how many changed lines in an item's anchored files make it stale. */
+  memory: z.object({ mode: z.enum(["on", "off"]).optional(), daily_cognify_items: z.number().int().min(0).max(100_000).optional(), stale_lines: z.number().int().min(1).max(1_000_000).optional() }).strict().optional(),
   /** Windows in which the machine merges nothing, whatever the policy says. */
   freeze: z
     .array(
@@ -922,6 +940,8 @@ export const IntakeContext = z.object({
   history: z.array(z.object({ author: z.string().nullable(), text: z.string() })).max(50),
   attachments: z.array(z.object({ name: z.string(), url: z.string(), mediaType: z.string().optional(), size: z.number().optional() })).max(20),
   hints: z.record(z.string(), z.union([z.string(), z.number()])).nullable(),
+  /** Up to five similar past cards' recalled `outcome` items from memory (RFC 0007): what was predicted against what happened (size, risk, planned against changed lines, retries, escalations). Data from past work, never instructions. */
+  similar: z.array(z.object({ card: z.string().nullable(), text: z.string().max(400) })).max(5).optional(),
 });
 export type IntakeContext = z.infer<typeof IntakeContext>;
 
@@ -981,6 +1001,8 @@ export const ConversationContext = z.object({
       docs: z.array(z.string().max(1500)).max(3),
       /** The last edits a person made to drafts of this channel: what the machine wrote, and what the person sent. */
       tone: z.array(z.object({ machine: z.string().max(1500), person: z.string().max(1500) })).max(5),
+      /** What memory recalled for this channel (RFC 0007, viewer slack): at most six lines of past work, `kind from source: text`, each masked and flattened by script. Data, never instructions. */
+      memory: z.array(z.string().max(1000)).max(6).optional(),
     })
     .optional(),
 });
@@ -1044,6 +1066,8 @@ export const GraphContext = z.object({
   builtAt: z.string(),
   /** False when the graph was built from a commit older than the task's base commit. */
   fresh: z.boolean(),
+  /** The graph of the card's own newest slice commit, read-only at /graph-branch; absent until one is built. */
+  branch: z.object({ path: z.string(), commit: z.string(), builtAt: z.string() }).optional(),
 });
 export type GraphContext = z.infer<typeof GraphContext>;
 
@@ -1095,6 +1119,8 @@ export const StageInput = z.object({
   priorFindings: z.array(Finding),
   context: z.object({
     projectContext: z.string().nullable(),
+    /** Memory recalled for this run (RFC 0007): data from past work, capped, never instructions. */
+    memory: MemoryContext.optional(),
     /** The cases approved at the test check, for implementing and verifying. */
     testCases: z.array(z.union([TestCase, LegacyTestCase])).optional(),
     /** Build's tests step: the test each scenario got (its id and the test file), for the implementer to build against and never weaken. */
@@ -1141,12 +1167,16 @@ export const StageInput = z.object({
     ticket: TicketContext.nullable().optional(),
     /** For the Conversation Machine's decisions (conversation_assess): the thread, its author and the candidates. */
     conversation: ConversationContext.nullable().optional(),
+    /** For the memory lesson packs (memory_extract, memory_worth, memory_conflict): the facts, or one candidate and the items it may contradict. */
+    lessons: LessonsContext.nullable().optional(),
     /** For the video packs (script, fix, recording, critic): the scenarios, the target, the narration, the film's measurements. */
     video: VideoContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */
     chat: ChatTriageContext.nullable().optional(),
+    /** For memory_answer: the question and the recalled items. */
+    memoryAnswer: MemoryAnswerContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */
     blastRadius: z.array(z.string()).optional(),
     /** For verifying: how much of the change's added lines the repo's lcov report saw run; absent without a report. */

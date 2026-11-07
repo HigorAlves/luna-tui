@@ -3,6 +3,7 @@
 import { z } from "zod";
 
 import type { Column, TaskState } from "./index.ts";
+import type { RecalledMemory } from "./memory.ts";
 import type { PrSnapshot } from "./github.ts";
 import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
@@ -10,6 +11,7 @@ import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
 import type { ModelEntry, RuntimeId } from "./models.ts";
 import { type CardFields, CardEntryFields } from "./card.ts";
+import { LessonAnswer } from "./memory.ts";
 import type { CardEventName } from "./card-events.ts";
 import type { TaskReports } from "./reports.ts";
 import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, ArchiveReason, type EvidencePack, type TriageRecord } from "./stage.ts";
@@ -186,6 +188,8 @@ export const DecisionInput = z.object({
   comment: z.string().max(2000).nullable().optional(),
   /** At the memory review gate: false approves without writing the proposed rules. */
   applyRules: z.boolean().optional(),
+  /** At the memory review gate: a person's answer to each lesson and retirement the retro proposed (`approve`, `edit` with the new text, or `drop`). Absent, no lesson is written and nothing is retired; `applyRules` is about the rules file alone. */
+  lessons: z.array(LessonAnswer).max(60).optional(),
   /** At a split gate: true keeps the card whole, which is a person's recorded answer (it lifts the size guard for this card). Dropped at any other gate. */
   keepWhole: z.boolean().optional(),
   /** Who is deciding, by name. A plan of High risk needs two distinct names; any decision keeps its own. */
@@ -579,6 +583,8 @@ export interface RepoHealth {
     building: boolean;
     lastFailure: string | null;
   };
+  /** What memory (RFC 0007) takes from the default branch: its docs and code graph. A failure here never blocks a card. Absent when memory is off. */
+  memory?: { lastFailure: string | null };
 }
 
 /** One repo's slice of the window, for `GET /metrics?groupBy=repo`. */
@@ -627,7 +633,29 @@ export interface FingerprintMetrics {
 export const METRICS_GROUP_BY = ["repo", "engine", "fingerprint"] as const;
 export type MetricsGroupBy = (typeof METRICS_GROUP_BY)[number];
 
+/** What the Floor shows of memory (RFC 0007), on `GET /metrics` as `memory`. Absent when the machine has no memory wired. */
+export interface MemoryFloor {
+  /** False when memory is off (`MACHINE_MEMORY=off`) or Cognee was unreachable at boot (then `note` says so). */
+  enabled: boolean;
+  /** `openai`: Cognee builds its graph with its own key; `local`: no key, its local extractor; null when off. */
+  mode: "openai" | "local" | null;
+  /** Items `cognify` processed today, against the machine's daily cap (`memory.daily_cognify_items`). */
+  cognifiedToday: number;
+  dailyCognifyItems: number;
+  /** Tokens and USD Cognee's model calls spent today, when Cognee reports them (null otherwise; always null in local mode). */
+  tokensToday: number | null;
+  costUsdToday: number | null;
+  /** Items written but not yet in Cognee (waiting for a retry). */
+  pending: number;
+  /** Active items in the machine's table. */
+  items: number;
+  /** Why memory is off or degraded (Cognee down, the last cognify error); null when there is nothing to say. */
+  note: string | null;
+}
+
 export interface Metrics {
+  /** Memory's mode and spend, for the Floor. Only on the plain window (not with `groupBy`); absent when the machine has no memory wired. */
+  memory?: MemoryFloor;
   since: string;
   until: string;
   /** Set when the numbers are for one repo (`?repo=<path>`). */
@@ -698,4 +726,46 @@ export interface ApiError {
   taskId?: string;
   /** `POST /runs`' 429: when the engine's usage window resets (ISO), when the run said. */
   resetsAt?: string | null;
+}
+
+/** `POST /memory/ask`; `?via=cognee` asks the graph completion of Cognee in place of the memory_answer pack. */
+export const MemoryAskInput = z.object({ question: z.string().trim().min(1).max(1000), repo: z.string().trim().min(1).optional() });
+export type MemoryAskInput = z.infer<typeof MemoryAskInput>;
+
+/** `POST /memory/recall`: what the host MCP server's `recall` tool calls. Items, never an answer. */
+export const MemoryRecallInput = z.object({
+  query: z.string().trim().min(1).max(1000),
+  repo: z.string().trim().min(1).optional(),
+  scope: z.enum(["memory", "docs", "code", "all"]).optional(),
+});
+export type MemoryRecallInput = z.infer<typeof MemoryRecallInput>;
+
+/** `POST /memory/items/:id/forget`. */
+export const MemoryForgetInput = z.object({ reason: z.string().trim().max(500).optional() });
+export type MemoryForgetInput = z.infer<typeof MemoryForgetInput>;
+
+/** What `POST /memory/ask` answers, whichever way it was asked. */
+export interface MemoryAskResult {
+  /** `pack`: the memory_answer pack over recalled items; `cognee`: the graph completion. */
+  via: "pack" | "cognee";
+  answer: string;
+  citations: Array<{ kind: "item" | "doc" | "code"; ref: string }>;
+  /** False when the items did not answer the question. */
+  grounded: boolean;
+  note: string | null;
+}
+
+/** What `POST /memory/recall` answers. */
+export interface MemoryRecallResult {
+  items: RecalledMemory[];
+  note: string | null;
+}
+
+/** `GET /memory/status`: memory's mode and today's usage, for the board's Floor. */
+export interface MemoryStatusView {
+  enabled: boolean;
+  mode: "openai" | "local" | null;
+  tokensToday: number | null;
+  costUsdToday: number | null;
+  cognifiedToday: number;
 }

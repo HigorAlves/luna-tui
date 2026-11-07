@@ -24,6 +24,7 @@ use crate::keys::{self, Scope};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
 use crate::backlog::{BacklogEntry, BacklogState};
+use crate::memory::{AskPane, AskPhase, MemoryItem, MemoryState, MemoryStatus};
 use crate::tickets::{TicketEntry, TicketsState};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
@@ -115,6 +116,8 @@ pub struct FloorState {
     pub by_engine: Option<Vec<EngineMetrics>>,
     /// Each engine's month against its cap (`GET /engines`); empty from a machine without it.
     pub engines: Vec<EngineInfo>,
+    /// Memory's mode and today's usage (`GET /memory/status`); None while memory is off or the machine does not report it.
+    pub memory: Option<MemoryStatus>,
 }
 
 impl FloorState {
@@ -309,6 +312,10 @@ pub enum Mode {
     EscalationReason { id: String, cursor: usize },
     /// `T`: correct the Triage Record. `field` is the row, `picks` the value index of each `RECORD_FIELDS` row.
     RecordEdit { id: String, field: usize, picks: [usize; 5] },
+    /// `Q`: the ask pane, a question about what the machine remembers and its answer with citations.
+    Ask(Box<AskPane>),
+    /// `f` in the memory view: one yes, then the machine forgets the item and records that a person did.
+    ConfirmForget(String),
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
@@ -473,6 +480,9 @@ pub struct App {
     /// The Tickets view, open while this is `Some`, and the tickets it fetched when it opened.
     pub tickets: Option<TicketsState>,
     pub ticket_items: Vec<TicketEntry>,
+    /// The memory view, open while this is `Some`, and the items it fetched when it opened.
+    pub memory: Option<MemoryState>,
+    pub memory_items: Vec<MemoryItem>,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
     pending_dispatch: Option<(String, PrAction)>,
     /// The Slack inbox as the machine last sent it; empty until the first `slack.items` event.
@@ -582,6 +592,8 @@ impl App {
             backlog_items: Vec::new(),
             tickets: None,
             ticket_items: Vec::new(),
+            memory: None,
+            memory_items: Vec::new(),
             pending_dispatch: None,
             slack_snapshot: SlackSnapshot::default(),
             slack: None,
@@ -768,6 +780,18 @@ impl App {
                             self.notify("polled Slack", false);
                         }
                         Err(error) => self.notify(error, true),
+                    }
+                }
+                Incoming::MemoryAnswered(result) => {
+                    // An answer for a pane still waiting on it; a pane closed since drops it.
+                    if let Mode::Ask(pane) = &mut self.mode
+                        && matches!(pane.phase, AskPhase::Waiting)
+                    {
+                        pane.scroll = 0;
+                        pane.phase = match result {
+                            Ok(answer) => AskPhase::Answered(answer),
+                            Err(error) => AskPhase::Failed(error),
+                        };
                     }
                 }
                 Incoming::JiraHits { query, hits } => {
@@ -1948,10 +1972,15 @@ impl App {
         if self.tickets.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_tickets(key);
         }
+        if self.memory.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_memory(key);
+        }
         if self.slack.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_slack(key);
         }
         match &self.mode {
+            Mode::Ask(_) => self.handle_ask(key),
+            Mode::ConfirmForget(_) => self.handle_confirm_forget(key),
             Mode::Normal => self.handle_normal(key),
             Mode::Detail(id) => {
                 let id = id.clone();
@@ -2012,6 +2041,8 @@ impl App {
         // Engines are a bonus too: a machine from before them answers groupBy=engine with a 400.
         let by_engine = self.machine.metrics_for("7d", repo.as_ref().map(|r| r.as_deref()), Some("engine")).ok().and_then(|m| m.by_engine);
         let health = self.machine.repo_health().unwrap_or_default();
+        // Memory is a bonus too: a machine without the route, or with memory off, leaves the line out.
+        let memory = self.machine.memory_status();
         let engines = self.machine.engines().ok().filter(|e| e.iter().any(|e| e.spent_this_month_usd.is_some()));
         // The Slack block is a bonus: a machine without the inbox leaves it out, nothing else changes.
         let slack = self.machine.slack_metrics("7d").and_then(|d7| self.machine.slack_metrics("30d").map(|d30| (d7, d30))).ok();
@@ -2022,6 +2053,7 @@ impl App {
         floor.by_engine = by_engine;
         floor.health = health;
         floor.engines = engines.unwrap_or_default();
+        floor.memory = memory;
         match d7 {
             Ok(m) => {
                 if let Some(by_repo) = m.by_repo.clone() {
@@ -2518,6 +2550,150 @@ impl App {
                     Err(error) => self.notify(format!("tickets: {error}"), true),
                 }
             }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The repository a memory question or view is about: the selected card's, else the one this board sits in, else every repository.
+    fn memory_repo(&self) -> Option<String> {
+        self.selected_task().and_then(|t| t.repo_path.clone()).or_else(|| self.home_repo.clone())
+    }
+
+    /// The memory item under the memory view's cursor.
+    pub fn memory_under_cursor(&self) -> Option<MemoryItem> {
+        let state = self.memory.as_ref()?;
+        self.memory_items.get(state.cursor.min(self.memory_items.len().saturating_sub(1))).cloned()
+    }
+
+    /// Fetches the items of the view's repository; a failure is a toast and the list stays as it was.
+    fn refresh_memory(&mut self) {
+        let Some(state) = self.memory.as_ref() else {
+            return;
+        };
+        match self.machine.memory_items(state.repo.as_deref(), state.outside_only) {
+            Ok(items) => {
+                self.memory_items = items;
+                if let Some(state) = self.memory.as_mut() {
+                    state.cursor = state.cursor.min(self.memory_items.len().saturating_sub(1));
+                }
+            }
+            Err(error) => self.notify(format!("memory: {error}"), true),
+        }
+    }
+
+    fn open_memory(&mut self) {
+        self.memory = Some(MemoryState { repo: self.memory_repo(), ..MemoryState::default() });
+        self.memory_items.clear();
+        self.refresh_memory();
+    }
+
+    /// The ask pane, with `text` already typed (`:ask <question>` sends it at once when it is not empty).
+    fn open_ask(&mut self, text: String) {
+        let repo = self.memory.as_ref().map(|m| m.repo.clone()).unwrap_or_else(|| self.memory_repo());
+        let ask_now = !text.trim().is_empty();
+        self.mode = Mode::Ask(Box::new(AskPane::new(repo, text.trim().to_string())));
+        if ask_now {
+            self.send_ask();
+        }
+    }
+
+    /// Sends the pane's question off the UI thread: a pack run takes seconds.
+    fn send_ask(&mut self) {
+        let Mode::Ask(pane) = &mut self.mode else {
+            return;
+        };
+        let question = pane.text.trim().to_string();
+        if question.is_empty() {
+            return;
+        }
+        pane.phase = AskPhase::Waiting;
+        let repo = pane.repo.clone();
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let _ = tx.send(Incoming::MemoryAnswered(machine.memory_ask(&question, repo.as_deref())));
+        });
+    }
+
+    /// The ask pane's keys: type the question and enter sends it; once answered, j/k scroll, `Q` asks again, esc closes.
+    fn handle_ask(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::Ask(pane) = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match (&pane.phase, key.code) {
+            (_, KeyCode::Esc) => self.mode = Mode::Normal,
+            (AskPhase::Typing, KeyCode::Enter) => self.send_ask(),
+            (AskPhase::Typing, KeyCode::Backspace) => {
+                pane.text.pop();
+            }
+            (AskPhase::Typing, KeyCode::Char(c)) => pane.text.push(c),
+            (AskPhase::Answered(_) | AskPhase::Failed(_), KeyCode::Char('q')) => self.mode = Mode::Normal,
+            (AskPhase::Answered(_) | AskPhase::Failed(_), KeyCode::Char('Q') | KeyCode::Char('i')) => pane.phase = AskPhase::Typing,
+            (AskPhase::Answered(_), KeyCode::Char('j') | KeyCode::Down) => pane.scroll = pane.scroll.saturating_add(1),
+            (AskPhase::Answered(_), KeyCode::Char('k') | KeyCode::Up) => pane.scroll = pane.scroll.saturating_sub(1),
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The keys `handle_memory` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_MEMORY: &[&str] = &["esc", "M", "q", "?", "j", "k", "R", "f", "a", "o", "Q"];
+
+    /// The memory view's keys: move, forget (asks first), adopt an `outside` item, only the outside ones, ask, refetch.
+    fn handle_memory(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.memory.clone() else {
+            return Outcome::Continue;
+        };
+        let count = self.memory_items.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('M') | KeyCode::Char('q') => self.memory = None,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('j') | KeyCode::Down => self.memory = Some(MemoryState { cursor: (state.cursor + 1).min(count.saturating_sub(1)), ..state }),
+            KeyCode::Char('k') | KeyCode::Up => self.memory = Some(MemoryState { cursor: state.cursor.saturating_sub(1), ..state }),
+            KeyCode::Char('R') => self.refresh_memory(),
+            KeyCode::Char('o') => {
+                self.memory = Some(MemoryState { outside_only: !state.outside_only, cursor: 0, ..state });
+                self.refresh_memory();
+            }
+            KeyCode::Char('Q') => self.open_ask(String::new()),
+            KeyCode::Char('f') => match self.memory_under_cursor() {
+                Some(item) if !item.is_retired() => self.mode = Mode::ConfirmForget(item.id),
+                Some(_) => self.notify("already retired", true),
+                None => self.notify("no item selected", true),
+            },
+            KeyCode::Char('a') => match self.memory_under_cursor() {
+                Some(item) if item.is_outside() => match self.machine.memory_adopt(&item.id) {
+                    Ok(()) => {
+                        self.notify("adopted: it is a lesson now", false);
+                        self.refresh_memory();
+                    }
+                    Err(error) => self.notify(format!("memory: {error}"), true),
+                },
+                Some(_) => self.notify("only an outside item can be adopted", true),
+                None => self.notify("no item selected", true),
+            },
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    fn handle_confirm_forget(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                let Mode::ConfirmForget(id) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                match self.machine.memory_forget(&id) {
+                    Ok(()) => {
+                        self.notify("forgotten", false);
+                        self.refresh_memory();
+                    }
+                    Err(error) => self.notify(format!("memory: {error}"), true),
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
             _ => {}
         }
         Outcome::Continue
@@ -3288,7 +3464,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
         "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "B", "S", "v", "V", "?", ":",
-        "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "K",
+        "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "K", "M", "Q",
     ];
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -3349,6 +3525,8 @@ impl App {
             KeyCode::Char('P') => self.open_pulls(),
             KeyCode::Char('B') => self.open_backlog(),
             KeyCode::Char('K') => self.open_tickets(),
+            KeyCode::Char('M') => self.open_memory(),
+            KeyCode::Char('Q') => self.open_ask(String::new()),
             KeyCode::Char('S') => self.open_slack(),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
@@ -3899,7 +4077,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
         "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "whole", "dismiss", "finding", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
-        "help",
+        "memory", "ask", "help",
     ];
 
     /// Runs one palette command: `name` and whatever follows it.
@@ -3997,6 +4175,8 @@ impl App {
             "prs" | "pulls" => self.open_pulls(),
             "backlog" => self.open_backlog(),
             "tickets" => self.open_tickets(),
+            "memory" => self.open_memory(),
+            "ask" => self.open_ask(rest.to_string()),
             "ticket-edit" => self.ticket_edit(rest),
             "context" => self.give_context(rest),
             "dedup" => self.answer_dedup(rest),
@@ -4351,6 +4531,7 @@ pub(crate) mod handled {
     pub(crate) const PULLS: &[&str] = App::HANDLED_PULLS;
     pub(crate) const BACKLOG: &[&str] = App::HANDLED_BACKLOG;
     pub(crate) const TICKETS: &[&str] = App::HANDLED_TICKETS;
+    pub(crate) const MEMORY: &[&str] = App::HANDLED_MEMORY;
     pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
     pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
     pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;
