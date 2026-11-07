@@ -1,0 +1,18 @@
+# Cognee's UI image has its API's address compiled in as http://localhost:8000, which is Laminar's port on this machine. The UI runs in
+# the network namespace of `cognee-gate`, so its own server reaches Cognee at that address; this proxy rewrites the same address in what
+# the browser loads to the API as it is published here (COGNEE_PORT). The images stay Cognee's own, unchanged.
+server {
+  listen 3000;
+  location / {
+    proxy_pass http://cognee-gate:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    # sub_filter only reads uncompressed bodies.
+    proxy_set_header Accept-Encoding "";
+    sub_filter_types application/javascript text/javascript text/html application/json;
+    sub_filter "http://localhost:8000" "http://localhost:${COGNEE_PORT}";
+    sub_filter_once off;
+  }
+}

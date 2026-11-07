@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "slot1.choice",
+      "value": "consistent"
+    }
+  ],
+  "rubric": "A lesson that says the same thing in other words.",
+  "label": {
+    "slot1": {
+      "choice": "consistent"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "slot1": "they agree, overlap, or are about different things"
+    },
+    "why": "Both say the README stays where it is; they overlap and agree.",
+    "ruledOut": [
+      {
+        "question": "slot1",
+        "label": "contradicts",
+        "why": "Both keep the README in place, so following one never breaks the other."
+      },
+      {
+        "question": "slot1",
+        "label": "unsure",
+        "why": "The texts agree plainly: nothing about them might conflict."
+      }
+    ],
+    "second": {
+      "label": {
+        "slot1": {
+          "choice": "consistent"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

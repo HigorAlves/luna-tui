@@ -1,0 +1,45 @@
+{
+  "schema": 3,
+  "stage": "memory_conflict",
+  "pack": "memory_conflict",
+  "attempt": 1,
+  "task": {
+    "id": "memory-conflict",
+    "title": "Memory lessons: conflict",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "lessons": {
+      "kind": "conflict",
+      "candidate": {
+        "text": "Keep the README at the repository root so links to it keep working.",
+        "kind": "lesson",
+        "files": [],
+        "reason": "Verify raised it twice on this card."
+      },
+      "recalled": [
+        {
+          "slot": 1,
+          "id": "mem_0001",
+          "kind": "lesson",
+          "text": "Never move the README: other repositories link to its path."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -50,6 +50,15 @@ describe("what triage receives of what Intake gathered", () => {
       hints: { urgency: "high" },
     });
   });
+  it("carries similar past cards' recalled outcomes to triage only, as capped flattened data, at most five", () => {
+    const similarOutcomes = Array.from({ length: 7 }, (_, i) => ({ card: `c${i}`, text: `<b>predicted size M, changed ${i}</b>\n${"x".repeat(600)}` }));
+    const intake = StageInput.parse(buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [], similarOutcomes })).context.intake!;
+    expect(intake.similar).toHaveLength(5);
+    expect(intake.similar![0]!.text.length).toBeLessThanOrEqual(400);
+    expect(intake.similar![0]!.text).not.toMatch(/[<>\n]/);
+    expect(buildStageInput({ task, stage: "test_design", attempt: 1, approvals: [], priorFindings: [], similarOutcomes }).context.intake).toBeUndefined();
+    expect(build("triage", task).context.intake).not.toHaveProperty("similar");
+  });
   it("gives it to no other pack, and a card from before has empty lists", () => {
     expect(build("test_design").context.intake).toBeUndefined();
     expect(build("triage", task).context.intake).toEqual({ project: null, owners: [], reporter: null, history: [], attachments: [], hints: null });
@@ -278,9 +287,9 @@ describe("buildStageInput", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "build_tests", "chat_triage", "ci_failure_class", "ci_watch", "code_map", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "size_estimate", "split_check", "decompose", "finding_classify", "frame_privacy", "implementing", "jira_intake", "plan", "plan_check", "plan_fast", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply"].sort(),
+      ["addressing", "build_tests", "chat_triage", "ci_failure_class", "ci_watch", "code_map", "coverage_check", "e2e", "e2e_failure_cause", "escalation_reason", "eval_judge", "evidence", "evidence_format", "size_estimate", "split_check", "decompose", "finding_classify", "frame_privacy", "implementing", "jira_intake", "memory_conflict", "memory_extract", "memory_worth", "plan", "plan_check", "plan_fast", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "intake_dedup", "ticket_validity", "ticket_assess", "ticket_recommend", "ticket_reply", "pr_reply", "conversation_assess", "conversation_relation", "conversation_reply", "memory_answer"].sort(),
     );
-    expect(Object.keys(PACK_LIMITS)).toHaveLength(53);
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(57);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
@@ -362,7 +371,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "escalation_reason" | "build_tests" | "plan" | "code_map" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy" | "evidence_format" | "size_estimate" | "split_check" | "decompose" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "intake_dedup" | "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage" | "conversation_assess" | "conversation_relation" | "conversation_reply">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "escalation_reason" | "build_tests" | "plan" | "code_map" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy" | "evidence_format" | "size_estimate" | "split_check" | "decompose" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "memory_extract" | "memory_worth" | "memory_conflict" | "intake_dedup" | "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage" | "memory_answer" | "conversation_assess" | "conversation_relation" | "conversation_reply">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();

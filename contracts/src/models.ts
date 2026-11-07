@@ -3,7 +3,7 @@
 // under an alias and an upgrade is one reviewed line. See RFC 0003.
 
 /** The harness that runs a model, one per vendor SDK: factory/src/runtimes/<runtime>/. */
-export type RuntimeId = "claude" | "eve" | "jev";
+export type RuntimeId = "claude" | "eve" | "jev" | "local";
 
 /** How hard the model thinks: the pack asks for one, the model must support it. */
 export type Effort = "low" | "medium" | "high";
@@ -41,6 +41,18 @@ const CATALOG = {
   "openai/gpt-5.6-terra": { runtime: "eve", id: "gpt-5.6-terra", status: "preview", caps: AGENT },
   // A decision model: typed answers to typed questions, no tools and no effort setting. Billed per
   // input token only, through TypeSafe's API or the Vercel AI Gateway alike.
+  // Cognee's extraction model on an OpenAI API key (memory, RFC 0007): many small structured calls, so a small model. Not an engine's:
+  // `openai/gpt-6-luna` is the Codex login's ID (gpt-6-luna-fast), which an API key does not serve.
+  "openai/gpt-5.4-mini": { runtime: "eve", id: "gpt-5.4-mini", status: "ga", caps: AGENT },
+  // The embedder Cognee runs locally (fastembed) for memory: it writes no text, runs offline and holds no credential, so it is
+  // not a pack's engine and no engine names it. The one model of `runtime: "local"`, at zero price.
+  "local/bge-small-en-v1.5": {
+    runtime: "local",
+    id: "BAAI/bge-small-en-v1.5",
+    status: "ga",
+    pricing: { inputPerMTokUsd: 0 },
+    caps: { tools: false, structured: false, effort: [] },
+  },
   "typesafe/jev": {
     runtime: "jev",
     id: "jev-latest",
@@ -52,6 +64,16 @@ const CATALOG = {
 } as const satisfies Record<string, ModelEntry>;
 export type ModelKey = keyof typeof CATALOG;
 export const MODELS: Record<ModelKey, ModelEntry> = CATALOG;
+
+/**
+ * The models services use outside any pack (RFC 0007). Cognee, the memory service, calls OpenAI itself with its own opt-in key to
+ * build its graph and write answers (`llm`), and embeds with a local model (`embedder`, `dimensions` its vector size, `maxInputTokens` the most it reads at once, which Cognee's
+ * chunks are cut to: its default follows an 8191-token limit, and GLiNER on chunks that big runs it out of memory). `pnpm start`
+ * renders `~/.config/hardness/cognee.env` from these entries, so no model ID is written in `compose.yaml` or anywhere else.
+ */
+export const SERVICE_MODELS = {
+  cognee: { llm: "openai/gpt-5.4-mini", embedder: "local/bge-small-en-v1.5", dimensions: 384, maxInputTokens: 512, llmProvider: "openai", embeddingProvider: "fastembed" },
+} as const satisfies Record<string, { llm: ModelKey; embedder: ModelKey; dimensions: number; maxInputTokens: number; llmProvider: string; embeddingProvider: string }>;
 
 /** Whether a model is past its retirement on `today` (YYYY-MM-DD): deprecated, and after retireAfter. */
 export function retired(model: ModelEntry, today: string): boolean {

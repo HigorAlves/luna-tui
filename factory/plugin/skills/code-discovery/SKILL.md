@@ -9,7 +9,7 @@ Discovery — finding the code relevant to a task before changing it — is the 
 
 ## The protocol
 
-1. **Detect.** The `Code graph:` line of your prompt names the graph file (`/graph/graphify-out/graph.json`) and says whether it is fresh; `LUNA_GRAPH` holds the same path. `(none…)`, an unset `LUNA_GRAPH` or a missing file → step 4. A stage never builds or updates a graph: `/graph` is read-only, and the machine rebuilds it when the default branch moves.
+1. **Detect.** The `Code graph:` line of your prompt names the graph file (`/graph/graphify-out/graph.json`) and says whether it is fresh; `LUNA_GRAPH` holds the same path. `(none…)`, an unset `LUNA_GRAPH` or a missing file → step 4. When a `Branch graph:` line follows it (`LUNA_GRAPH_BRANCH`, read-only at `/graph-branch`), that graph holds this card's own commits: pass its path to `--graph` first (`--graph branch`) and the main graph's path for the rest (`--graph main`). A stage never builds or updates a graph: `/graph` is read-only, and the machine rebuilds it when the default branch moves.
 2. **Freshness comes from the prompt.** `(fresh)`: trust it for where things are. `(stale: …)`: the base commit is newer than the graph, so use it for leads only and `Grep` the areas the task changes.
 3. **Query-first.** Answer structural questions by traversal, most-specific verb first, always with `--graph` and the literal path (the bash tool does not expand variables):
    ```bash
