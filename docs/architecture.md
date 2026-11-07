@@ -315,10 +315,10 @@ flowchart TD
 |---|---|
 | `board/` | The Luna TUI board, the Rust TUI and herdr plugin. A client of the machine. |
 | `machine/` | The orchestrator: TypeScript on Node 24+, HTTP API plus an SSE stream, Postgres for state. |
-| `factory/` | What runs inside a stage container: the runner and its three runtimes (`claude` on the Claude Agent SDK, `eve` on Vercel's eve, `jev` on TypeSafe's SDK or the AI SDK's decision API through the Vercel AI Gateway), the roles, the prompt templates, the skills plugin, the guards and the `luna` tools; with a Laminar key from the machine, the runner continues the machine's trace inside the container (`factory/src/core/telemetry.ts`, `runtimes/eve/agent/laminar.ts`). |
+| `factory/` | What runs inside a stage container. It holds the runner and its three runtimes. `claude` runs on the Claude Agent SDK, and `eve` on Vercel's eve. `jev` runs on TypeSafe's SDK, or on the AI SDK's decision API through the Vercel AI Gateway. It also holds the roles, the prompt templates, the skills plugin, the guards and the `luna` tools. With a Laminar key from the machine, the runner continues the machine's trace inside the container (`factory/src/core/telemetry.ts`, `runtimes/eve/agent/laminar.ts`). |
 | `contracts/` | Types shared by the machine, the factory and the board, including the pack registry. |
 | `fixtures/` | Fixture repos used by `pnpm golden` (one seeded bug or feature each). |
-| `evals/` | Replay evals (`pnpm eval`): eval cases per pack, graded by schema, checks and the `eval_judge` pack (an agent pack) or by label and confidence (a decision pack), with a scorecard per engine; `harvest`, `dataset push`/`pull`, `scorecard` and `defaults` close the loop from recorded decisions to a default engine per slot. See [evals/README.md](../evals/README.md) and [Evals and calibration](#evals-and-calibration). |
+| `evals/` | Replay evals (`pnpm eval`): eval cases per pack, with a scorecard per engine. Schema, checks and the `eval_judge` pack grade the cases of an agent pack. Label and confidence grade the cases of a decision pack. `harvest`, `dataset push`/`pull`, `scorecard` and `defaults` close the loop from recorded decisions to a default engine per slot. See [evals/README.md](../evals/README.md) and [Evals and calibration](#evals-and-calibration). |
 | `observe/` | ClickHouse config for the `observe` compose profile (Laminar, the local trace and eval UI; see [configuration](configuration.md#observability-laminar)). |
 | `docs/` | This folder. |
 | `compose.yaml` | Postgres and the machine (`docker compose up`); `pnpm dev` starts only Postgres; `--profile observe` adds Laminar. |
@@ -347,7 +347,7 @@ RFC 0006 aligns the machine with the v2.2 flow diagram. Wave 8 gives the machine
 | `Criterion`, `Scenario`, `PlanStep`, `Plan` | `contracts/src/plan.ts` | `criteriaOf`, `scenarioOf`, `stepOf`, `planOf`; `TestCase` is the same schema as `Scenario` |
 | `Finding` v2 (id, category, resolution, merged) | `contracts/src/stage.ts`, helpers in `finding.ts` | `normaliseFinding`, `severityOf`, `findingId`, `mergeDuplicateFindings` |
 | `TriageRecord` v2 (summary, typeOfWork, urgencyDetail, riskPrelim, ...) | `contracts/src/stage.ts` | all new fields optional |
-| `CreateCardInput` (sources, reporter, hints, originMachine, attachments), `HINT_WEIGHT` | `contracts/src/card.ts`, `api.ts` | accepted and ignored until wave 14 stores them |
+| `CreateCardInput` (sources, reporter, hints, originMachine, attachments), `HINT_WEIGHT` | `contracts/src/card.ts`, `api.ts` | the machine accepts and ignores them until wave 14 stores them |
 | `BuildReport`, `VerifyReport` | `contracts/src/reports.ts` | `buildReportOf`, `verifyReportOf` (`machine/src/application/reports.ts`) from stage runs and logged details |
 | `EvidencePack` v2 (results, findingsDetail, previewUrl, media localPath) | `contracts/src/stage.ts` | `assembleEvidencePack` fills them from the Verify Report when one exists |
 | `FactoryConfig` and `CONSUMED_FROM` | `contracts/src/config-v22.ts` | `luna.yaml` sections over the diagram's defaults, in `Policy.factory` |
@@ -361,7 +361,7 @@ The Build Report rides on the passing `implementing` finish (`detail.report`). T
 - Plan: `card.planned`, `card.tests_designed`, `card.approval_needed`, `card.approved`, `card.rejected`
 - Build: `build.started`, `build.checkpoint`, `build.paused`, `build.escalated`, `build.done`
 - Verify: `verify.started`, `verify.findings`, `verify.e2e_done`, `pr.opened`, `ci.status`, `verify.done`
-- Evidence: `evidence.started`, `evidence.media_ready`, `evidence.published` (from Evidence itself when it publishes: `{ number, assets, revision }`, and from Ship on the other paths), `evidence.stale` (`{ from, to, parts }`, seven-character shas and part names). A person's thumbs on a pack is a row of the pipeline's own, `evidence.feedback` (`{ useful, format, sha }`, no text): no container can write that kind
+- Evidence: `evidence.started`, `evidence.media_ready`, `evidence.published` and `evidence.stale`. Evidence itself logs `evidence.published` when it publishes (`{ number, assets, revision }`), and Ship logs it on the other paths. `evidence.stale` carries `{ from, to, parts }`: seven-character shas and part names. A person's thumbs on a pack is a row of the pipeline's own, `evidence.feedback` (`{ useful, format, sha }`, no text): no container can write that kind
 - Ship: `ship.event`, `ship.ready`, `ship.approval_needed`, `ship.merged`, `card.closed`, `card.learned`
 
 The machine reads `build.paused` and `build.escalated` from a transition out of `implementing` only. The machine computes the metrics (`Metrics.flow`) from this log through `namesOf`, with no new columns.
@@ -590,7 +590,7 @@ A runtime ends its stage itself a little before the time limit of the pack (`dea
 - a ledger tool call
 - `delegate`: a child's answer, its events and cost, depth 1, a child's failure and a missing credential as the call's error
 
-A runtime reports its run as one event stream (`RunEvent`, `contracts/src/events.ts`: `session`, `text`, `tool_call`, `tool_result`, `step`, `usage`, `rate_limit`, the luna ledger's events, `note`, and `child` for a delegated helper's run) through `emit`. It writes no line itself. `core/transcript.ts` prints the readable transcript from it. The watch pane of the board follows it with `docker logs -f`. The stuck detector of the machine counts its `→ <Tool> <target>` lines. `core/output.ts` writes every event in order to `/out/events.jsonl`. The machine puts only the task-level ones (`step`, the ledger, notes) on the task's log.
+A runtime reports its run as one event stream through `emit` (`RunEvent`, `contracts/src/events.ts`). The stream has `session`, `text`, `tool_call`, `tool_result`, `step`, `usage`, `rate_limit`, the luna ledger's events and `note`. It also has `child` for a delegated helper's run. It writes no line itself. `core/transcript.ts` prints the readable transcript from it. The watch pane of the board follows it with `docker logs -f`. The stuck detector of the machine counts its `→ <Tool> <target>` lines. `core/output.ts` writes every event in order to `/out/events.jsonl`. The machine puts only the task-level ones (`step`, the ledger, notes) on the task's log.
 
 Every guard decision is a `tool_call` with `allowed` and, when refused, its `reason`. For Claude, the decision comes from the `PreToolUse` hooks. For eve, it comes from the approvals as the session reports them (`core/events.ts` joins a call with its decision). So the file is the audit trail of allowed and denied calls.
 
@@ -628,7 +628,7 @@ So every host-side git call on a workspace goes through one helper (`at(path)` i
 - no `ext::` transport
 - no replace refs
 
-A workspace with no `M` makes git fail. It never falls back to a `.git` in the folder. A test scans every source file and fails on a git call that does not pin its folder. Another test plants a hostile `.git` in the folder. The hostile `.git` has a `commondir` naming a directory with a clean filter and an ssh command, hooks, and then a file in place of the `.git` folder. The test shows that the host's `add`, `commit`, `status`, `diff` and push behave as with a clean folder.
+A workspace with no `M` makes git fail. It never falls back to a `.git` in the folder. A test scans every source file and fails on a git call that does not pin its folder. Another test plants a hostile `.git` in the folder. The hostile `.git` has a `commondir` that names a directory with a clean filter and an ssh command. It also has hooks. Then the test puts a file in place of the `.git` folder. The test shows that the host's `add`, `commit`, `status`, `diff` and push behave as with a clean folder.
 
 Before every run the machine deletes `W/.git` (plain file removal). It makes the agent a repository of its own there. That repository is a shallow clone (depth 50, nothing shared, remote removed) of the card's branch from `M`. It is the agent's scratch space. The host never reads it again.
 
