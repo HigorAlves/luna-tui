@@ -51,6 +51,7 @@ check "many: y, n, and Enter on a preselected one" $'a\nc' "$(printf 'y\nn\n\n' 
 check "a secret reads whole" 'xoxp-1/2=3' "$(printf 'xoxp-1/2=3\n' | ui_secret k 2>/dev/null)"
 
 echo "company_docs_path"
+# shellcheck disable=SC2088  # the literal ~ a person types is the input under test
 check "a home-relative folder is made absolute" "$HOME/company-docs" "$(company_docs_path '~/company-docs')"
 check "an absolute folder stays, its trailing slash dropped" "/srv/handbook" "$(company_docs_path /srv/handbook/)"
 check "a relative folder is refused" "refused" "$(company_docs_path docs 2>/dev/null || echo refused)"
