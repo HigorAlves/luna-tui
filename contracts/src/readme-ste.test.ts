@@ -159,8 +159,9 @@ describe("README STE rewrite", () => {
   it("S6 @scenario:S6 the diff lists only the four README paths", () => {
     const changed = git("diff", "--name-only", BASE).split("\n").filter((l) => l !== "");
     // This test file itself is a test file; the rewrite is judged on the rest.
-    const rest = changed.filter((c) => !/^contracts\/src\/readme-ste\.test\.ts$/.test(c));
-    expect(rest.filter((c) => !(FILES as readonly string[]).includes(c))).toEqual([]);
+    // The core-docs rewrite (part 2) adds docs/*.md paths and its own guard test.
+    const rest = changed.filter((c) => !/^contracts\/src\/(readme-ste|core-docs-ste)\.test\.ts$/.test(c));
+    expect(rest.filter((c) => !(FILES as readonly string[]).includes(c) && !/^docs\/[^/]+\.md$/.test(c))).toEqual([]);
     for (const f of FILES) expect(rest, `${f} not rewritten`).toContain(f);
   });
 
@@ -201,7 +202,7 @@ describe("README STE rewrite", () => {
     const f = "board/README.md";
     rewritten(f);
     expect(newText(f).match(KEYS_RE) ?? []).toEqual(oldText(f).match(KEYS_RE) ?? []);
-    const changed = git("diff", "--name-only", BASE).split("\n").filter((l) => l !== "" && l !== "contracts/src/readme-ste.test.ts");
+    const changed = git("diff", "--name-only", BASE).split("\n").filter((l) => l !== "" && l !== "contracts/src/readme-ste.test.ts" && l !== "contracts/src/core-docs-ste.test.ts");
     expect(changed.filter((c) => !c.endsWith(".md"))).toEqual([]);
   });
 
@@ -230,7 +231,7 @@ describe("README STE rewrite", () => {
   // @scenario:S13
   it("S13 @scenario:S13 the branch changes only markdown, so board clippy has nothing new to flag", () => {
     for (const f of FILES) rewritten(f);
-    const changed = git("diff", "--name-only", BASE).split("\n").filter((l) => l !== "" && l !== "contracts/src/readme-ste.test.ts");
+    const changed = git("diff", "--name-only", BASE).split("\n").filter((l) => l !== "" && l !== "contracts/src/readme-ste.test.ts" && l !== "contracts/src/core-docs-ste.test.ts");
     expect(changed.filter((c) => !c.endsWith(".md"))).toEqual([]);
     expect(changed.filter((c) => c.startsWith("board/src/") || c.endsWith(".rs"))).toEqual([]);
   });
