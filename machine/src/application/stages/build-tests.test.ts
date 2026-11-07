@@ -27,7 +27,7 @@ function fakes(trees: Array<{ nameStatus: string; diff: string }>, over: Partial
   let headValue = "base0";
   const headNow = () => headValue;
   const reviews: Array<string[] | undefined> = [];
-  const implemented: Array<{ scenarioTests?: { scenario: string; file: string }[] }> = [];
+  const implemented: Array<{ scenarioTests?: { scenario: string; file: string }[]; testsFiles?: string[] }> = [];
   let tree = trees[0]!;
   let commit: { subject: string; body: string } | null = null;
   const deps: BuildTestsDeps = {
@@ -85,12 +85,49 @@ describe("the red check, per scenario", () => {
     expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
   });
 
-  it("sends the writer back with the problems of a scenario whose test fails for the wrong reason", async () => {
+  it("sends the writer back with the problems of a scenario whose test two askings say fails for the wrong reason", async () => {
     let n = 0;
-    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (c.scenario?.id === "S2" && n++ === 0 ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (c.scenario?.id === "S2" && n++ < 2 ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
     await buildTestsStep(f.deps)(context([v1]));
     expect(f.calls).toEqual(["writer", "writer", "commit", "checkpoint:red", "implement", "sweep"]);
     expect(f.reviews[1]!.join(" ")).toMatch(/S2.*import/);
+  });
+
+  it("does not send the writer back for one stray no: the judge is asked again and the majority stands", async () => {
+    const asked: string[] = [];
+    let n = 0;
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (asked.push(c.scenario!.id), c.scenario?.id === "S2" && n++ === 0 ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
+    const e = emitted();
+    await buildTestsStep(f.deps)({ ...context([v1]), emit: e.emit } as never);
+    expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(asked.filter((id) => id === "S2")).toHaveLength(3);
+    expect(asked.filter((id) => id === "S1")).toHaveLength(1);
+    expect(e.rows).toContainEqual(["scenario.red_check", expect.objectContaining({ scenario: "S2", verdict: "proceed", asked: 3, flagged: 1 })]);
+  });
+
+  it("puts each scenario's verdict on the stream, and on the escalation when the step gives up", async () => {
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (c.scenario?.id === "S2" ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
+    const e = emitted();
+    const result = await buildTestsStep(f.deps)({ ...context([v1]), emit: e.emit } as never);
+    expect(e.rows.filter(([k]) => k === "scenario.red_check").map(([, p]) => [p.scenario, p.verdict, p.asked, p.flagged])).toEqual(expect.arrayContaining([["S1", "proceed", 1, 0], ["S2", "flag", 2, 2]]));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { testsStep: { status: "failed", redChecks: [{ scenario: "S1", verdict: "proceed" }, { scenario: "S2", verdict: "flag" }] } } });
+  });
+
+  it("gives the judge the test's source, read by the machine, beside the writer's report", async () => {
+    const seen: Array<string | undefined> = [];
+    const f = fakes([tagged("S1")], {
+      readTest: async (_w, file, id) => `// ${file} ${id}\nit("x", () => {});`,
+      judgeRed: async (c) => (seen.push(c.test), { verdict: "proceed", problems: [] }),
+    });
+    await buildTestsStep(f.deps)(context([v2]));
+    expect(seen).toEqual([expect.stringContaining("it(\"x\"")]);
+  });
+
+  it("asks without the source when it cannot be read", async () => {
+    const seen: Array<string | undefined> = [];
+    const f = fakes([tagged("S1")], { readTest: async () => Promise.reject(new Error("EISDIR")), judgeRed: async (c) => (seen.push(c.test), { verdict: "proceed", problems: [] }) });
+    await buildTestsStep(f.deps)(context([v2]));
+    expect(seen).toEqual([undefined]);
   });
 
   it("sends the writer back for a scenario with no red reported, twice at most, and escalates the third time", async () => {
@@ -106,6 +143,103 @@ describe("the red check, per scenario", () => {
     const result = await buildTestsStep(f.deps)(context([v2]));
     expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
     expect(result.detail).toMatchObject({ testsStep: { status: "committed", redCheck: "skipped" } });
+  });
+});
+
+describe("Rust's inline tests", () => {
+  const rustTree = (outside = false) => ({
+    nameStatus: "M\tboard/src/ui.rs\nA\tboard/tests/extra.rs",
+    diff: [
+      "diff --git a/board/src/ui.rs b/board/src/ui.rs",
+      "--- a/board/src/ui.rs",
+      "+++ b/board/src/ui.rs",
+      ...(outside ? ["@@ -20,0 +20 @@", "+fn sneaky() {}"] : []),
+      "@@ -100,0 +101,5 @@",
+      "+#[cfg(test)]",
+      "+mod tests {",
+      "+    // @scenario:S1",
+      "+    // @scenario:S2",
+      "+}",
+      "diff --git a/board/tests/extra.rs b/board/tests/extra.rs",
+      "--- /dev/null",
+      "+++ b/board/tests/extra.rs",
+      "@@ -0,0 +1 @@",
+      "+// helper",
+    ].join("\n"),
+    testRegions: { "board/src/ui.rs": [[101, 105]] as Array<[number, number]> },
+  });
+
+  it("writes the tests in the source file, commits them, and leaves that file to the implementer: it holds production code", async () => {
+    const f = fakes([rustTree()]);
+    const result = await buildTestsStep(f.deps)(context([v1]));
+    expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(f.implemented[0]!.scenarioTests).toEqual([{ scenario: "S1", file: "board/src/ui.rs" }, { scenario: "S2", file: "board/src/ui.rs" }]);
+    // The test file beside it stays protected; the source file with inline tests does not.
+    expect(f.implemented[0]!.testsFiles).toEqual(["board/tests/extra.rs"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed" } });
+  });
+
+  it("sends the writer back when a line outside the test module was added", async () => {
+    const f = fakes([rustTree(true), rustTree()]);
+    await buildTestsStep(f.deps)(context([v1]));
+    expect(f.calls).toEqual(["writer", "writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(f.reviews[1]!.join(" ")).toMatch(/board\/src\/ui\.rs/);
+  });
+});
+
+describe("a scenario that only runs one of the repo's commands", () => {
+  const withCheck = gate({
+    plan: { goal: "g", steps: [], acceptance_criteria: [{ id: "C1", text: "c1" }, { id: "C9", text: "board:test and board:lint are clean" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: [
+      { id: "S1", title: "one", criterion: "c1", criterion_ref: "C1", approach: "a" },
+      // S13 of the split-card ticket, as its plan wrote it.
+      { id: "S13", title: "Both exit 0 with no warnings", criterion: null, criterion_ref: null, given: "The finished change", when: "pnpm board:test and pnpm board:lint run", then: "Both exit 0 with no warnings", approach: "a" },
+    ],
+  });
+
+  it("needs no test: the step commits S1's and goes on, and says S13 is a check", async () => {
+    const asked: string[] = [];
+    const f = fakes([tagged("S1")], { repoCommands: async () => ["pnpm board:test"], judgeRed: async (c) => (asked.push(c.scenario!.id), { verdict: "proceed", problems: [] }) }, [{ S1: "FAIL: no part marker" }]);
+    const result = await buildTestsStep(f.deps)(context([withCheck]));
+    expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(asked).toEqual(["S1"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed", commandChecks: ["S13"] } });
+  });
+
+  it("still asks for a test when the repo has no such command", async () => {
+    const f = fakes([tagged("S1")], { repoCommands: async () => [] }, [{ S1: "FAIL" }]);
+    const result = await buildTestsStep(f.deps)(context([withCheck]));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringMatching(/S13/) } });
+  });
+});
+
+describe("a plan that only rewrites documentation", () => {
+  const docsPlan = gate({
+    plan: { goal: "g", steps: [{ title: "Rewrite the READMEs", est_loc: 40, touchpoints: ["board/README.md", "docs/README.md", "contracts/src/readme-ste.test.ts"], acceptance: ["short sentences"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: [{ id: "S1", title: "No sentence over 25 words", criterion: "c1", criterion_ref: "C1", approach: "count the words" }],
+  });
+
+  it("runs the implementer without the tests step: no failing test is written for prose, and nothing is locked", async () => {
+    const f = fakes([tagged("S1")]);
+    const result = await buildTestsStep(f.deps)(context([docsPlan]));
+    expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(f.implemented[0]).toEqual({});
+    expect(result.detail).toMatchObject({ testsStep: { status: "skipped", why: "docs_only" } });
+  });
+
+  it("unlocks a card whose tests step already committed: the scope still starts there, the tests are the change's to fix", async () => {
+    const f = fakes([tagged("S1")]);
+    const result = await buildTestsStep(f.deps)(context([docsPlan], { testsCommit: "a7aa421" }));
+    expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(f.implemented[0]).toEqual({ scopeBase: "a7aa421" });
+    expect(result.detail).toMatchObject({ testsStep: { status: "skipped", why: "docs_only", commit: "a7aa421", unlocked: true } });
+  });
+
+  it("still runs the tests step for a plan that touches code", async () => {
+    const codePlan = gate({ ...JSON.parse(JSON.stringify(docsPlan.requested)), plan: { ...(docsPlan.requested.plan as object), steps: [{ title: "x", est_loc: 5, touchpoints: ["web/cart.ts", "docs/api.md"], acceptance: ["a"] }] } });
+    const f = fakes([tagged("S1")], {}, [{ S1: "FAIL: cart.export is not a function" }]);
+    await buildTestsStep(f.deps)(context([codePlan]));
+    expect(f.calls[0]).toBe("writer");
   });
 });
 

@@ -61,6 +61,10 @@ import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dir
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
+import { resolve, sep } from "node:path";
+import { readRegularFile } from "../adapters/fs/bounded.ts";
+import { testExcerpt } from "../domain/test-excerpt.ts";
+import { repoCommandsOf } from "../domain/command-check.ts";
 import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
@@ -271,6 +275,25 @@ export async function buildRealStages(
       judgeRed: async (check, repoPath) => {
         const policy = repoPath ? await policies.for(repoPath) : null;
         return judgeRedCheck(buildDecisions?.decide ?? null, check, repoPath, policy?.decisions ?? {});
+      },
+      repoCommands: async (repoPath) => {
+        // The user's checkout is the source, never the card's folder: a card cannot turn its own scenario into a check.
+        const pkg = await readRegularFile(resolve(repoPath, "package.json"), 1024 * 1024).catch(() => "");
+        let scripts: string[] = [];
+        try {
+          const parsed = JSON.parse(pkg) as { scripts?: Record<string, unknown> };
+          scripts = Object.keys(parsed.scripts ?? {});
+        } catch {
+          // no package.json, or not JSON: no scripts
+        }
+        const policy = await policies.for(repoPath);
+        return repoCommandsOf(scripts, (policy.checks ?? []).map((c) => c.run));
+      },
+      readTest: async (worktree, file, scenario) => {
+        // The path is a tagged file git named in the diff: it stays inside the worktree, and a link or a big file is never read.
+        const path = resolve(worktree, file);
+        if (path !== worktree && !path.startsWith(`${worktree}${sep}`)) return null;
+        return testExcerpt(await readRegularFile(path, 512 * 1024), scenario);
       },
       budget: async (context) => (buildDecisions?.budget ? buildDecisions.budget(context.task.id) : undefined),
       sweep: async (context) => {

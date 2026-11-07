@@ -22,8 +22,10 @@ import {
   lockfilesAt,
   repoHead,
   defaultBranch,
+  onDefaultBranch,
   dirtyFiles,
   ownedWorkspace,
+  readCommitDiff,
   resetWorktree,
   restoreFiles,
   stackOf,
@@ -170,6 +172,8 @@ export interface AgentExtra {
   ship?: ShipContext;
   /** implementing: every path of the tests commit, protected from change. */
   testsFiles?: string[];
+  /** implementing: the source files that hold Rust's inline tests, which the implementer may change. */
+  inlineTests?: string[];
   /** implementing, feature route: the commit the scope is measured from (the tests commit the machine made); absent, the branch's base. */
   scopeBase?: string;
   /** implementing: the tests Build's tests step made, one per scenario. */
@@ -358,6 +362,11 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
 
   // The browser run drives ONE target, chosen here, and holds only that target's credential.
   const e2eTarget = pack === "e2e" ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
+  // Verify is told which files the machine's own tests commit added, so a "which files change" criterion is judged without them.
+  const testsRead = pack === "verifying" && context.testsCommit ? await readCommitDiff(workspace.path, context.testsCommit).catch(() => null) : null;
+  const testsCommit = testsRead
+    ? { sha: context.testsCommit!, files: testsRead.nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => /^[AMCR]/.test(status)).map((cols) => cols[cols.length - 1] ?? "").filter(Boolean) }
+    : null;
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -368,6 +377,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     approvals: context.approvals,
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
     baseCommit,
+    ...(testsCommit ? { testsCommit } : {}),
     graph: graphContext,
     ci: extra.ci ?? null,
     review: extra.review ?? null,
@@ -444,6 +454,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           planPresent: input.plan != null,
           ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
           ...(extra.testsFiles?.length ? { protectedPaths: extra.testsFiles } : {}),
+          ...(extra.inlineTests?.length ? { inlineTests: extra.inlineTests } : {}),
+          ...(task.repoPath ? { repoFiles: (paths: string[]) => onDefaultBranch(task.repoPath!, paths) } : {}),
           get decide() {
             return deps.decide ?? null;
           },
@@ -745,7 +757,12 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     // Tests present at the start of the run are locked; implementing has a test_change
     // escape hatch, verifying has none — it may only ever add a new test file.
     const nameStatus = await diffNameStatus(workspace.path, inputCommit, "HEAD");
-    const locked = lockedFilesTouched(nameStatus);
+    // Locked are the repo's own tests (on its default branch). A test only a card's branch has was written for that work by the harness
+    // (a tests step, an earlier card it builds on): the card may fix it. A README card's git-history test failed CI with the implementer
+    // forbidden to touch it. Scenario tests stay protected by the scope check (a weakened test is a blocker).
+    const touchedTests = lockedFilesTouched(nameStatus);
+    const repoTests = touchedTests.length && task.repoPath ? await onDefaultBranch(task.repoPath, touchedTests).catch(() => new Set(touchedTests)) : new Set(touchedTests);
+    const locked = touchedTests.filter((path) => repoTests.has(path));
     let replayed = false;
     let replayError: string | null = null;
     if (locked.length > 0) {
@@ -753,7 +770,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       // tests that were there must still pass against the new code, unchanged. Put the
       // originals back, run the project's test command, then restore the agent's versions.
       // A deleted or renamed-away test file has nothing to replay and stays a hard fail.
-      const removed = lockedFilesRemoved(nameStatus);
+      const removed = lockedFilesRemoved(nameStatus).filter((path) => repoTests.has(path));
       const found = removed.length === 0 ? await (deps.detect ?? detectChecks)(workspace.path) : null;
       if (found?.test) {
         await restoreFiles(workspace.path, inputCommit, locked);

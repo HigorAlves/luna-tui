@@ -353,3 +353,31 @@ describe("the mailbox is read and written as the container's, not the machine's"
     expect(readFileSync(join(dir, "checks", "scope.json"), "utf8")).toBe('{"verdict":"flag"}');
   });
 });
+
+describe("a deleted test the card's own branch wrote", () => {
+  const nameStatus = "M\tdocs/README.md\nD\tcontracts/src/readme-ste.test.ts\nD\tcontracts/src/readme.test.ts";
+  // The prose test carried scenario tags: its deletion removes them.
+  const diff = ["diff --git a/contracts/src/readme-ste.test.ts b/contracts/src/readme-ste.test.ts", "deleted file mode 100644", "--- a/contracts/src/readme-ste.test.ts", "+++ /dev/null", "@@ -1,2 +0,0 @@", "-// @scenario:S1", "-it('x', () => {})"].join("\n");
+  const repoFiles = async () => new Set(["contracts/src/readme.test.ts"]);
+
+  it("on a docs-only run is neither a removed test, a lost scenario tag nor an undeclared change; a deleted test of the repo's stays all of those", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const c = checks(out, null, { planPresent: true, planned: ["docs/README.md"], git: { nameStatus: async () => nameStatus, diff: async () => diff }, repoFiles });
+    const facts = await c.finalFacts([]);
+    expect(facts.removedTests).toEqual(["contracts/src/readme.test.ts"]);
+    expect(facts.undeclared).toEqual(["contracts/src/readme.test.ts"]);
+    expect(facts.weakened).toEqual([]);
+  });
+  it("on a run that protects scenario tests keeps every check: a feature card's scenario test may not be deleted", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const c = checks(out, null, { planPresent: true, planned: ["docs/README.md"], scenarioTests: [{ scenario: "S1", file: "contracts/src/readme-ste.test.ts" }], git: { nameStatus: async () => nameStatus, diff: async () => diff }, repoFiles });
+    const facts = await c.finalFacts([]);
+    expect(facts.removedTests).toContain("contracts/src/readme-ste.test.ts");
+    expect(facts.weakened).toContain("S1");
+  });
+  it("counts every deleted test when the machine cannot tell whose it is", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const c = checks(out, null, { planPresent: true, planned: ["docs/README.md"], git: { nameStatus: async () => nameStatus, diff: async () => diff } });
+    expect((await c.finalFacts([])).removedTests).toEqual(["contracts/src/readme-ste.test.ts", "contracts/src/readme.test.ts"]);
+  });
+});

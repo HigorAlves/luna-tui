@@ -245,6 +245,8 @@ fn task_of(app: &App) -> Option<&Task> {
 pub(crate) fn sendable_back(t: &Task) -> bool {
     match t.state.as_str() {
         "awaiting_setup" | "awaiting_approval" | "awaiting_test_check" => true,
+        // An escalated feature card sent back is planned again (`a` retries the stage that stopped, on the same plan).
+        "escalated" => t.route == "feature",
         // Only while the machine waits on you: otherwise it is watching the PR, and a send-back has nothing to stop.
         "awaiting_ship" => t.route != "review" && t.waiting_on_you,
         _ => false,
@@ -429,7 +431,7 @@ const SHARED: &[Binding] = &[
                 None => Avail::Off("no ticket selected"),
                 Some(t) if sendable_back_now(app, t) => Avail::On,
                 Some(t) if open_ship_approval(app, t) => Avail::Off("the release question is approved or rejected"),
-                Some(_) => Avail::Off("only a setup, plan or tests go back"),
+                Some(_) => Avail::Off("only a setup, plan, tests or escalation go back"),
             }
         },
         85,
@@ -1338,7 +1340,7 @@ mod tests {
     fn off_reasons_mirror_the_handlers_refusals() {
         let running = app_with(vec![task("t1", "implementing", true, true, true)]);
         let find = |app: &App, key: &str| bindings_for(app, Scope::Board).into_iter().find(|(b, _)| b.keys == key).map(|(_, a)| a).unwrap();
-        assert_eq!(find(&running, "r"), Avail::Off("only a setup, plan or tests go back"));
+        assert_eq!(find(&running, "r"), Avail::Off("only a setup, plan, tests or escalation go back"));
         assert_eq!(find(&running, "w"), Avail::Off("a stage runs on it; X aborts first"));
         assert_eq!(find(&running, "X"), Avail::On);
         assert_eq!(find(&running, "A"), Avail::Off("no memory review waiting"));
@@ -1372,8 +1374,10 @@ mod tests {
         assert_eq!(find(&ship, "r"), Avail::On);
         let mut review = task("t2", "awaiting_ship", true, false, true);
         review.route = "review".to_string();
-        assert_eq!(find(&app_with(vec![review]), "r"), Avail::Off("only a setup, plan or tests go back"));
-        assert_eq!(find(&app_with(vec![task("t3", "implementing", true, true, true)]), "r"), Avail::Off("only a setup, plan or tests go back"));
+        assert_eq!(find(&app_with(vec![review]), "r"), Avail::Off("only a setup, plan, tests or escalation go back"));
+        assert_eq!(find(&app_with(vec![task("t3", "implementing", true, true, true)]), "r"), Avail::Off("only a setup, plan, tests or escalation go back"));
+        // An escalated feature card goes back to be planned again; `a` would only retry the stage on the same plan.
+        assert_eq!(find(&app_with(vec![task("t4", "escalated", true, false, true)]), "r"), Avail::On);
     }
 
     #[test]

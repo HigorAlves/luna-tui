@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { branchLinkOf, jiraBranch, slug } from "../../domain/jira-link.ts";
 import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
+import { rustTestRegions } from "../../domain/rust-test-regions.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
 import { assertNoNestedRepository, at, isUnderWorkspaces, machineGitDir } from "./machine-repo.ts";
 
@@ -271,6 +272,18 @@ export async function isAncestor(repoPath: string, ancestor: string, descendant:
 async function lastKnownDefault(repoPath: string): Promise<string> {
   const head = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
   return head.code === 0 ? head.stdout.trim().replace(/^refs\/remotes\//, "") : "HEAD";
+}
+
+/** The paths of `paths` that exist on the repository's default branch (`origin/HEAD`, read in the user's checkout, never a card's folder):
+ *  the repo's own files, as opposed to ones only a card's branch has. With no known default branch, every path counts as the repo's. */
+export async function onDefaultBranch(repoPath: string, paths: readonly string[]): Promise<Set<string>> {
+  const ref = await lastKnownDefault(repoPath);
+  if (ref === "HEAD") return new Set(paths);
+  const found = new Set<string>();
+  for (const path of paths) {
+    if ((await exec("git", [...HOST_GIT, "-C", repoPath, "cat-file", "-e", `${ref}:${path}`])).code === 0) found.add(path);
+  }
+  return found;
 }
 
 /** How many commits the default branch has that `commit` lacks; null when either is unknown. */
@@ -568,8 +581,26 @@ function modesOf(raw: string): Record<string, string> {
   return modes;
 }
 
+/** The `.rs` files a name-status lists, as they are after the change (added or changed, by the new path) or before it (changed, by the old path). */
+function rustFilesOf(nameStatus: string, side: "after" | "before"): string[] {
+  const rows = nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => (side === "after" ? /^[AMCR]/ : /^[MCR]/).test(status));
+  return rows.map((cols) => (side === "after" ? cols[cols.length - 1] : cols[1]) ?? "").filter((f) => f.endsWith(".rs"));
+}
+
+/** The `#[cfg(test)]` line ranges of each of `files` as it is at `rev` (`""` is the index). A file over 1 MB or unreadable has none. */
+async function rustRegionsOf(path: string, files: readonly string[], rev: string): Promise<Record<string, Array<[number, number]>>> {
+  const regions: Record<string, Array<[number, number]>> = {};
+  for (const file of files) {
+    const shown = await exec("git", [...HOST_GIT, ...at(path), "show", `${rev}:${file}`]);
+    if (shown.code !== 0 || shown.stdout.length > 1_000_000) continue;
+    const found = rustTestRegions(shown.stdout);
+    if (found.length > 0) regions[file] = found;
+  }
+  return regions;
+}
+
 /** Stages everything a stage left in the worktree (new files too) and reads what that adds to `base`, the commit the run started from: the name-status, the unified diff and each path's new mode. */
-export async function stagePending(path: string, base: string, options: { untrackedLimit?: number } = {}): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> }> {
+export async function stagePending(path: string, base: string, options: { untrackedLimit?: number } = {}): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; testRegions: Record<string, Array<[number, number]>>; testRegionsBefore: Record<string, Array<[number, number]>> }> {
   assertNoNestedRepository(path);
   await refuseHugeUntracked(path, options.untrackedLimit);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
@@ -579,11 +610,11 @@ export async function stagePending(path: string, base: string, options: { untrac
     execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--no-color", "--no-ext-diff", base]),
     execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--raw", base]),
   ]);
-  return { nameStatus, diff, modes: modesOf(raw) };
+  return { nameStatus, diff, modes: modesOf(raw), testRegions: await rustRegionsOf(path, rustFilesOf(nameStatus, "after"), ""), testRegionsBefore: await rustRegionsOf(path, rustFilesOf(nameStatus, "before"), base) };
 }
 
 /** What the commit `sha` changed, only when it is an ancestor of HEAD (the machine's own tests commit, never one found by its subject); null otherwise. */
-export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; parent: string } | null> {
+export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; testRegions: Record<string, Array<[number, number]>>; testRegionsBefore: Record<string, Array<[number, number]>>; parent: string } | null> {
   if (!/^[0-9a-f]{7,64}$/.test(sha)) return null;
   if ((await exec("git", [...HOST_GIT, ...at(path), "merge-base", "--is-ancestor", sha, "HEAD"])).code !== 0) return null;
   const [nameStatus, diff, raw, parent] = await Promise.all([
@@ -592,7 +623,7 @@ export async function readCommitDiff(path: string, sha: string): Promise<{ nameS
     execOrThrow("git", [...HOST_GIT, ...at(path), "show", "--raw", "--format=", sha]),
     execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", `${sha}^`]).catch(() => ""),
   ]);
-  return { nameStatus, diff, modes: modesOf(raw), parent };
+  return { nameStatus, diff, modes: modesOf(raw), testRegions: await rustRegionsOf(path, rustFilesOf(nameStatus, "after"), sha), testRegionsBefore: parent ? await rustRegionsOf(path, rustFilesOf(nameStatus, "before"), parent) : {}, parent };
 }
 
 /** The branch the worktree is on (`HEAD` when detached). */
@@ -619,10 +650,13 @@ export async function commitsSince(path: string, sinceSha: string): Promise<Arra
   return commits;
 }
 
-/** What the worktree has uncommitted or untracked, one `git status --porcelain` line each. */
+/** What the worktree has uncommitted or untracked, one `git status --porcelain` line each: `XY path`, the path from the fourth character.
+ *  The first line keeps its leading space (` M path`): `execOrThrow` trims its output, which would turn it into `M path` and cut a letter off the path. */
 export async function dirtyFiles(path: string): Promise<string[]> {
   assertNoNestedRepository(path);
-  const status = await execOrThrow("git", [...HOST_GIT, ...at(path), "status", "--porcelain"]);
+  const result = await exec("git", [...HOST_GIT, ...at(path), "status", "--porcelain"]);
+  if (result.code !== 0) throw new Error(`git status failed: ${(result.stderr || result.stdout).trim()}`);
+  const status = result.stdout.trimEnd();
   return status === "" ? [] : status.split("\n");
 }
 

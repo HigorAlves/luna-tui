@@ -110,6 +110,13 @@ describe("checkCall", () => {
       expect(exec("git push origin HEAD", listed)).toEqual({ allow: false, reason: expect.stringMatching(/git push is not allowed/) });
       expect(exec("env git push", listed)).toEqual({ allow: false, reason: expect.stringMatching(/git push is not allowed/) });
       expect(exec("git commit -m 'Co-authored-by: Claude <x>'", listed)).toEqual({ allow: false, reason: expect.stringMatching(/AI attribution/) });
+      // Any model or its vendor, from either runtime: the commits are the person's alone.
+      for (const trailer of ["Co-Authored-By: Codex <codex@openai.com>", "Co-authored-by: ChatGPT <x>", "Co-Authored-By: gpt-5.6-terra <x>", "Co-authored-by: Copilot <x>", "Co-Authored-By: Luna bot <x>"]) {
+        expect(exec(`git commit -m 'fix: x' -m '${trailer}'`, listed)).toEqual({ allow: false, reason: expect.stringMatching(/AI attribution/) });
+      }
+      expect(exec("git commit -m 'docs: generated with Codex'", listed)).toEqual({ allow: false, reason: expect.stringMatching(/AI attribution/) });
+      // A person co-author stays allowed.
+      expect(exec("git commit -m 'fix: x' -m 'Co-Authored-By: Marta Silva <marta@example.com>'", listed).allow).toBe(true);
     });
 
     it("refuses a malformed input", () => {

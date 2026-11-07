@@ -13,7 +13,7 @@ import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 import type { StageOutcome } from "../domain/transition.ts";
 
 /** The rows a running stage may log through `emit`: the diagram's names for facts only it knows. Never a kind other code acts on (`transition`, `task.reply`...). */
-export const EMITTABLE = ["ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "evidence.stale", "scenario.red", "build.checkpoint", "build.sweep_failed", "scenario.green", "sla.reminder", "sla.escalated", "evidence.edited", "ship.override", "sandbox.egress_blocked"] as const;
+export const EMITTABLE = ["ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "evidence.stale", "scenario.red", "scenario.red_check", "build.checkpoint", "build.sweep_failed", "scenario.green", "sla.reminder", "sla.escalated", "evidence.edited", "ship.override", "sandbox.egress_blocked"] as const;
 export type EmittableKind = (typeof EMITTABLE)[number];
 
 export interface StageContext {
@@ -29,7 +29,7 @@ export interface StageContext {
   replan?: NonNullable<PlanContext["replan"]>;
   /** For implementing: the commit the card's first implementing run started from, read from the machine's own `stage_runs` rows (never an event row, never a ref): the scope base when there is no tests commit. */
   firstInputCommit?: string;
-  /** For implementing: the sha of the tests commit the machine itself made on an earlier run of this card (kept on that run's finish row); the tests step trusts no other. */
+  /** For implementing and verifying: the sha of the tests commit the machine itself made on an earlier run of this card (kept on that run's finish row); the tests step trusts no other, and Verify is told its files are the harness's. */
   testsCommit?: string;
   /** For implementing: the minutes Build's budget has left; a run's time limit is the smaller of its own and this. */
   budgetMinutes?: number;

@@ -211,6 +211,11 @@ describe("gates", () => {
     expect(transition(at("awaiting_approval"), sentBack).state).toBe("test_design");
   });
 
+  it("plans an escalated feature card again when a person sends it back, with a fresh retry budget (approving reruns the stage on the same plan)", () => {
+    const moved = transition(at("escalated", { resumeTo: "verifying", retries: { ...NO_RETRIES, total: 3 } }), sentBack);
+    expect(moved).toMatchObject({ state: "test_design", effect: { kind: "run", stage: "test_design" }, retries: NO_RETRIES });
+  });
+
   it("asks the plan stage's questions at awaiting_answers and returns to that stage when they are answered", () => {
     const steps = play(at("test_design"), [{ type: "stage_done", outcome: "needs_input" }, { type: "answered" }]);
     expect(steps[0]).toMatchObject({ state: "awaiting_answers", resumeTo: "test_design" });

@@ -10,6 +10,7 @@ import { type TruthSink, redCheckTruth, scopeFactsTruth } from "../decision-trut
 import { scopeFacts as diffFacts } from "../../domain/scope-facts.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import type { CardHit } from "../../domain/card-search.ts";
+import { looksLikeTestPath } from "../../domain/locked-files.ts";
 import { type AddedLine, type ScopeFacts, addedLinesOf, removedLinesOf, sanitizeFacts, scopeFacts } from "../../domain/scope.ts";
 
 /** The most a request file the container writes may hold: a request is a few lines of JSON. */
@@ -228,6 +229,11 @@ export interface BuildChecksDeps {
   scenarioTests?: { scenario: string; file: string }[];
   /** Every path of the tests commit: none may change without a person. */
   protectedPaths?: string[];
+  /** Which of `paths` are the repo's own files (on its default branch). A deleted test only a card's branch had (one the harness wrote, such as a
+   *  prose test on a docs card) is neither a removed test nor an undeclared change. Absent, every deleted test counts. */
+  repoFiles?: (paths: string[]) => Promise<Set<string>>;
+  /** Source files that hold Rust's inline tests (the tests step took them as test changes): changing one is not a weakened test. */
+  inlineTests?: string[];
   /** Null when no decision can run: every check is skipped. Read at call time. */
   decide: Decide | null;
   overrides: Record<string, DecisionOverrides>;
@@ -290,7 +296,17 @@ export function buildChecks(deps: BuildChecksDeps) {
     if (deps.inputCommit === null) throw new Error("there is no commit the card's change can be measured from");
     const [nameStatus, diff] = await Promise.all([deps.git.nameStatus(deps.inputCommit, "HEAD"), deps.git.diff(deps.inputCommit, "HEAD")]);
     const addedLines: AddedLine[] = addedLinesOf(diff);
-    return sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines: removedLinesOf(diff), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}) }));
+    // A docs-only run protects no scenario test (Build ran no tests step, or unlocked its commit): a test the card's own branch wrote, and the
+    // repo's default branch does not have, is the card's to change or delete. Its removal is not a removed test, a lost scenario tag or an
+    // undeclared change. A run that protects scenario tests (scenarioTests, protectedPaths) keeps every one of those checks.
+    const protects = (deps.scenarioTests?.length ?? 0) > 0 || (deps.protectedPaths?.length ?? 0) > 0;
+    const touchedTests = nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => /^[DM]/.test(status)).map((cols) => cols[1] ?? "").filter((p) => p && looksLikeTestPath(p));
+    const repo = !protects && deps.repoFiles && touchedTests.length ? await deps.repoFiles(touchedTests).catch(() => new Set(touchedTests)) : new Set(touchedTests);
+    const harness = new Set(touchedTests.filter((p) => !repo.has(p)));
+    const removedLines = removedLinesOf(diff).filter((l) => !harness.has(l.path));
+    const facts = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines, planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
+    if (harness.size === 0) return facts;
+    return { ...facts, removedTests: facts.removedTests.filter((p) => !harness.has(p)), undeclared: facts.undeclared.filter((p) => !harness.has(p)) };
   };
 
   /** The files the implementer declared to scope_check, kept here as the verdict is: the machine took them when they were made, so a final answer that leaves them out does not turn them into undeclared files. */

@@ -80,6 +80,8 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: FACTORY_RULES },
     plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
     settingSources: [] as [],
+    // Commits and PRs are the person's: the SDK adds no Co-Authored-By trailer and no "Generated with" line (the guard still refuses one).
+    settings: NO_ATTRIBUTION,
     tools: [...tools, ...delegating],
     allowedTools: [...allowedTools, ...delegating],
     permissionMode: "dontAsk" as const,
@@ -104,6 +106,9 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   return drive(ctx, transport, prompt, options, calls);
 }
 
+/** No attribution on a commit or a PR, from any run: they are the person's work. */
+const NO_ATTRIBUTION = { attribution: false, includeCoAuthoredBy: false };
+
 /** Turns a decision may take on Claude. The answer is one model call, but the SDK delivers a
  *  structured output through its own tool turn, so a cap of one ends the run before the JSON
  *  arrives (seen on the triage_signals evals: "Reached maximum number of turns (1)"); the third
@@ -126,6 +131,7 @@ async function decide(ctx: RunContext, transport?: Transport): Promise<RunOutcom
     model: engine.modelId,
     effort: "low",
     settingSources: [],
+    settings: NO_ATTRIBUTION,
     env: { ...env, LUNA_FACTORY: "1" },
   };
   if (dry) return dryRun(ctx, JSON.stringify({ ...options, env: undefined }, null, 2));

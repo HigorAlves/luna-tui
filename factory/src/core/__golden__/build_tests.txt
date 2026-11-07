@@ -12,6 +12,8 @@ Brief: (none)
 
 ## Scenarios (each needs a test tagged with its id)
 Tag each test `@scenario:<id>` in its name or in a comment on the line directly above it.
+A scenario that only runs one of the repo's commands and expects it to pass (a test suite, a lint, a build: "when `pnpm board:test` runs, then it exits 0") needs no test: the machine runs the command once the code exists. Write no tag for it and report no red.
+In a language that keeps unit tests in the source file (Rust's `#[cfg(test)] mod tests`), put the tests inside that module: a line you add or change outside it is production code, and the machine refuses it here.
 
 (none)
 

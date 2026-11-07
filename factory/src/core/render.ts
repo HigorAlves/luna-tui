@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 
 import { CONVERSATION_VARIABLES, conversationText } from "./conversation-text.ts";
 import { renderSplit, renderTicket } from "./decide.ts";
-import { DATA_NOTE, foreignBudget, foreignValue } from "./data-block.ts";
+import { type Cut, DATA_NOTE, foreignBudget, foreignValueCut } from "./data-block.ts";
 import { callText } from "./transcript.ts";
 
 const NONE = "(none)";
@@ -266,7 +266,7 @@ function coverageText(coverage: StageInput["context"]["coverage"]): string {
   return [...rows, `Total: ${coverage.total.covered}/${coverage.total.added} added lines covered (${coverage.report})`].join("\n");
 }
 
-const JSON_CAP = 20_000;
+const JSON_CAP = 80_000;
 const jsonText = (value: unknown): string => {
   if (value == null) return NONE;
   const text = JSON.stringify(value, null, 2);
@@ -380,8 +380,21 @@ function graphText(graph: StageInput["context"]["graph"]): string {
   return `Code graph: ${graph.path}, ${built} (${graph.fresh ? "fresh" : "stale: the base commit is newer; prefer Grep for changed areas"})`;
 }
 
+/** Said to the implementer and Verify when every file the approved plan touches is documentation. */
+const DOCS_ONLY =
+  "This change touches only documentation (the machine read it off the plan's files). Write no new test and no test file for it: a test of a markdown file measures the prose, not behaviour. Check each scenario by reading the files and the diff, and run only the repo's existing checks. A test file this branch added that only checks the prose (written before this rule) is not the repo's: delete it.";
+/** Said to the test designer when every file the plan touches is documentation. */
+const DOCS_ONLY_SCENARIOS =
+  "This plan touches only documentation (the machine read it off the plan's files). Every scenario is a check a reviewer makes by reading the files or the diff, or the repo's existing command that already covers them: never a new test or test file, and never a command the repo does not have.";
+
+/** Criteria with the ids the machine gives them (C1, C2, ... in order), one per line. */
+const criteriaIdsText = (criteria: readonly string[] | undefined): string => (criteria?.length ? criteriaOf(criteria).map((c) => `${c.id}: ${c.text}`).join("\n") : NONE);
+
 /** The prompt the model gets. */
-export function renderPrompt({ pack, input, template, projectContext }: RenderInput): string {
+export const renderPrompt = (render: RenderInput): string => renderPromptReport(render).prompt;
+
+/** The prompt the model gets, and what it lost: every block cut to its cap. */
+export function renderPromptReport({ pack, input, template, projectContext }: RenderInput): { prompt: string; cuts: Cut[] } {
   const agent = pack.agent ?? "script";
   const context = input.context.projectContext ?? projectContext ?? null;
   const slack = slackText(input.context.slack);
@@ -417,7 +430,9 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{plan.fallback}}": input.plan ? "" : "No plan (a PR task fixing CI or a review thread): the ticket and the prior findings are the plan. Seed the ledger with one slice per prior finding, in order, and stay on the current branch, which is the PR's own.",
     "{{plan.brief}}": txt(input.plan?.brief),
     "{{plan.criteria}}": bullets(input.plan?.criteria),
-    "{{plan.criteria.ids}}": input.plan?.criteria?.length ? criteriaOf(input.plan.criteria).map((c) => `${c.id}: ${c.text}`).join("\n") : NONE,
+    // The ids the machine checks coverage against: the plan under design (context.plan) when there is one, else the approved plan. The top-level
+    // plan of a re-plan is the earlier approved one; a list one criterion longer shifted every id, and the last criterion was never covered.
+    "{{plan.criteria.ids}}": criteriaIdsText(input.context.plan?.criteria?.length ? input.context.plan.criteria : input.plan?.criteria),
     "{{task.goal}}": txt(input.task.record?.goal),
     "{{plan.assumptions}}": bullets(input.plan?.assumptions),
     "{{plan.slices}}": bullets(
@@ -433,6 +448,14 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
       (input.context.testCases ?? []).map((c) => scenarioLine("approach" in c ? c : { ...c, approach: c.test })),
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
+    // The machine's fact, from the plan's files: a documentation change is checked by reading it, never by a new test.
+    "{{context.docsOnly}}": input.context.docsOnly ? DOCS_ONLY : "",
+    "{{context.plan.docsOnly}}": input.context.plan?.docsOnly ? DOCS_ONLY_SCENARIOS : "",
+    // The machine's own words around a hex sha it checked; the files are the writer's, so they go in as data.
+    "{{context.testsCommit}}": input.context.testsCommit
+      ? `The machine made commit \`${input.context.testsCommit.sha}\` itself, for the approved scenarios' tests, before the implementer ran (Build's tests step). Its files, listed below, are the harness's, not the change the ticket asks for: when a criterion or a scenario limits which files the change touches, judge it on the change without these files (\`git diff --name-only ${input.context.baseCommit ?? "<base>"}..HEAD\`, minus them). They are tests like any other: run them, and judge them as tests.`
+      : "This card has no tests commit of the machine's: every file the branch changed is the change's.",
+    "{{context.testsCommit.files}}": input.context.testsCommit?.files.length ? input.context.testsCommit.files.map((f) => `- ${f}`).join("\n") : "",
     "{{context.graph}}": graphText(input.context.graph),
     "{{context.intake}}": intakeText(input.context.intake),
     "{{context.blastRadius}}": bullets(input.context.blastRadius),
@@ -495,7 +518,14 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   }
   // Foreign text (a ticket's, a reviewer's, a tool's, a model's) goes in as flattened lines or quoted, capped data blocks.
   const budget = foreignBudget();
-  const quoted = Object.fromEntries(Object.entries(subs).map(([key, value]) => [key, foreignValue(key.slice(2, -2), value, budget)]));
+  const cuts: Cut[] = [];
+  const quoted = Object.fromEntries(
+    Object.entries(subs).map(([key, value]) => {
+      const { text, cut } = foreignValueCut(key.slice(2, -2), value, budget);
+      if (cut) cuts.push(cut);
+      return [key, text];
+    }),
+  );
   // A data block always starts and ends on a line of its own, so its opening marker is never part of a line the machine wrote.
   const body = template.replace(/\{\{[A-Za-z.]+\}\}/g, (key, offset: number, whole: string) => {
     const value = quoted[key] ?? key;
@@ -503,7 +533,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     return `${offset > 0 && whole[offset - 1] !== "\n" ? "\n" : ""}${value}${whole[offset + key.length] !== undefined && whole[offset + key.length] !== "\n" ? "\n" : ""}`;
   });
   const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, DATA_NOTE, ""].join("\n");
-  return header + body;
+  return { prompt: header + body, cuts };
 }
 
 /** A ticket's signals on one line, in the pack's question order: `kind bug (0.90) · area board
@@ -575,13 +605,16 @@ export function callTarget(name: string, input: Record<string, unknown>): { targ
   const target = input.file_path ?? input.filePath ?? search ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? input.helper ?? "";
   // A paged read is a different call per page: a long file read in four pages is not a loop.
   const page = (name === "Read" || name === "read_file") && (input.offset !== undefined || input.limit !== undefined) ? `:${input.offset ?? 0}+${input.limit ?? ""}` : "";
+  const whole = `${String(target)}${page}`;
   const first = `${String(target).split("\n")[0]!}${page}`.slice(0, CALL_TARGET_MAX);
   const change = name === "Edit" || name === "MultiEdit" ? `${input.old_string ?? ""}\u0000${input.new_string ?? ""}${JSON.stringify(input.edits ?? "")}` : name === "Write" || name === "write_file" ? String(input.content ?? "") : null;
   // A luna tool (`mcp__luna__scenario_red`, `slice_set`, `decision_get`, ...) names no file: its arguments are what tell one call from the next, so five
   // reports for five scenarios are five calls. The same arguments four times in a row are still a loop. `step` has its label as the target.
   const byArguments = change === null && name.startsWith("mcp__luna__") && input.label === undefined && Object.keys(input).length > 0 ? JSON.stringify(input) : null;
   const shown = first === "" ? String(input.scenario ?? input.key ?? input.query ?? "").split("\n")[0]!.slice(0, CALL_TARGET_MAX) : first;
-  const basis = change ?? byArguments;
+  // A target too long to show whole (a long grep pattern pushes its ` in <path>` past the cut) is told apart by a fingerprint of all of it:
+  // four greps over four files were read as the same call four times, and Verify was stopped as stuck.
+  const basis = change ?? byArguments ?? (whole.length > first.length ? whole : null);
   return basis === null ? { target: shown } : { target: shown, fingerprint: createHash("sha1").update(basis).digest("hex").slice(0, 8) };
 }
 

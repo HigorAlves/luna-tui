@@ -216,6 +216,28 @@ describe("buildStageInput", () => {
     expect(input.env).toEqual({ LUNA_FACTORY: "1" });
   });
 
+  it("tells the implementer and Verify, and nobody else, that an approved plan touching only documentation gets no test", () => {
+    const docsGate = { ...approvals.at(-1)!, kind: "awaiting_approval" as const, decision: "approved" as const, requested: { brief: "b", criteria: ["c1"], assumptions: [], slices: [{ title: "Rewrite", est_loc: 20, touchpoints: ["docs/README.md", "board/README.md"], acceptance: ["a"] }] } };
+    for (const stage of ["implementing", "verifying"] as const) expect(buildStageInput({ task, stage, attempt: 1, approvals: [docsGate], priorFindings: [] }).context.docsOnly).toBe(true);
+    expect(buildStageInput({ task, stage: "reviewing", attempt: 1, approvals: [docsGate], priorFindings: [] }).context).not.toHaveProperty("docsOnly");
+    const codeGate = { ...docsGate, requested: { ...docsGate.requested, slices: [{ title: "x", est_loc: 5, touchpoints: ["web/cart.ts", "docs/api.md"], acceptance: ["a"] }] } };
+    expect(buildStageInput({ task, stage: "verifying", attempt: 1, approvals: [codeGate], priorFindings: [] }).context).not.toHaveProperty("docsOnly");
+  });
+
+  it("gives a whole number of milliseconds when Build's budget has a fraction of a minute left", () => {
+    const input = buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [], budgetMinutes: 12.3456789 });
+    expect(Number.isInteger(input.limits.timeoutMs)).toBe(true);
+    expect(StageInput.safeParse(input).success).toBe(true);
+  });
+
+  it("hands Verify the machine's tests commit and its files, and nobody else", () => {
+    const testsCommit = { sha: "a7aa421", files: ["contracts/src/readme-ste.test.ts"] };
+    const verify = buildStageInput({ task, stage: "verifying", attempt: 1, approvals, priorFindings: [], baseCommit: "9c1f0e2a", testsCommit });
+    expect(StageInput.safeParse(verify).success).toBe(true);
+    expect(verify.context.testsCommit).toEqual(testsCommit);
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [], testsCommit }).context).not.toHaveProperty("testsCommit");
+  });
+
   it("carries the coverage summary to verifying only", () => {
     const coverage = { files: [{ path: "src/a.ts", added: 4, covered: 3, uncovered: [12] }], total: { added: 4, covered: 3 }, report: "coverage/lcov.info" };
     const build = (stage: "verifying" | "implementing") => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], coverage });
