@@ -39,6 +39,29 @@ export class GraphBuildError extends Error {
   }
 }
 
+/** The graph of a card's newest slice commit: the host folder (`graphify-out/`, `stamp.json`) and its stamp. */
+export interface BranchGraph {
+  dir: string;
+  stamp: GraphStamp;
+}
+
+/** What a branch build came to. Never an error: a card goes on with the previous branch graph or the main one. */
+export type BranchBuild =
+  | { state: "built"; stamp: GraphStamp; mode: "full" | "incremental" }
+  | { state: "skipped"; reason: string }
+  | { state: "failed"; reason: string };
+
+export interface BranchBuildInput {
+  repoPath: string;
+  taskId: string;
+  /** The card's workspace folder `W`: it only names the card's machine-owned repository `M`; nothing is read from it. */
+  workspacePath: string;
+  /** The slice commit the machine accepted. */
+  commit: string;
+  /** `graph.branch_build_minutes`: a build running longer is stopped. */
+  minutes: number;
+}
+
 export interface Graph {
   /** The stamp of the repo's current graph; null when it has none. */
   stampOf(repoPath: string): Promise<GraphStamp | null>;
@@ -60,6 +83,16 @@ export interface Graph {
   impact(repoPath: string, files: string[]): Promise<Impact | null>;
   /** The files earlier cards declared outside the map and the machine accepted, most frequent first, at most twenty, plain repository paths. */
   pastMisses?(repoPath: string): Promise<string[]>;
+  /**
+   * Builds the graph of a card's accepted slice commit from a clean export of it out of the card's own repository (never from `W`),
+   * under `<graphs>/<repo>/cards/<task>/<commit>/`, incrementally from the previous commit's graph when there is one. Only when the
+   * repository has a main graph. Commits queued for one card build only the newest. Resolves; a failure leaves the previous graph.
+   */
+  buildBranch?(input: BranchBuildInput): Promise<BranchBuild>;
+  /** The card's newest branch graph; null when it has none. */
+  branchGraph?(repoPath: string, taskId: string): Promise<BranchGraph | null>;
+  /** Deletes every branch graph of a card (it was closed or removed); a build still running for it leaves nothing behind. */
+  dropBranch?(repoPath: string, taskId: string): Promise<void>;
   /** Appends the files a task changed that its plan and the code map did not name (accepted by scope_check), one JSON line per call. */
   recordMisses(repoPath: string, miss: GraphMiss): Promise<void>;
 }

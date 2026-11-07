@@ -14,6 +14,10 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   build_tests: ["implementing"],
   // The inboxes' packs and the decision pack callers run on demand: no task, so no task state.
   slack_triage: [],
+  // Memory's lessons (RFC 0007): run on demand by the retro.
+  memory_extract: [],
+  memory_worth: [],
+  memory_conflict: [],
   jira_intake: [],
   triage_signals: [],
   // Decisions on a plan context, run on demand by the plan stage.
@@ -59,6 +63,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   pr_reply: ["awaiting_ship"],
   eval_judge: [],
   chat_triage: [],
+  memory_answer: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

@@ -47,6 +47,10 @@ When it is fresh, follow the `code-discovery` skill: query it with `graphify <ve
 ## Project context
 {{context.projectContext}}
 
+## Memory from past work
+{{memory.framing}}
+{{context.memory}}
+
 ## Repo checks (from luna.yaml)
 {{context.checks}}
 

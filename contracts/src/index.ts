@@ -3,6 +3,7 @@ import { z } from "zod";
 
 export * from "./api.ts";
 export * from "./stage.ts";
+export * from "./memory.ts";
 export * from "./coverage.ts";
 export * from "./plan-check.ts";
 export * from "./plan.ts";

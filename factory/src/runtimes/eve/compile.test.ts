@@ -22,8 +22,8 @@ describe("eveTools", () => {
   it("maps a pack's access to eve's tool names: no bash without commands, no write_file without write", () => {
     expect(eveTools(PACKS.slack_triage.access)).toEqual([]);
     expect(eveTools(PACKS.jira_intake.access)).toEqual(["read_file", "glob", "grep"]);
-    expect(eveTools(PACKS.triage.access)).toEqual(["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search"]);
-    expect(eveTools(PACKS.implementing.access)).toEqual(["bash", "read_file", "glob", "grep", "write_file", "step", "slice_init", "slice_set", "slice_list", "decision_get", "scope_check"]);
+    expect(eveTools(PACKS.triage.access)).toEqual(["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search", "memory_recall"]);
+    expect(eveTools(PACKS.implementing.access)).toEqual(["bash", "read_file", "glob", "grep", "write_file", "step", "slice_init", "slice_set", "slice_list", "decision_get", "scope_check", "memory_recall"]);
   });
 });
 
@@ -56,7 +56,7 @@ describe("agentFiles", () => {
 
   it("gives one tool file per tool the access grants, the guarded ones from the runtime, and the channel and sandbox", () => {
     expect(Object.keys(files).filter((f) => f.startsWith("agent/tools/")).sort()).toEqual(
-      ["bash", "card_search", "decision_get", "glob", "grep", "read_file", "step", "web_fetch"].map((t) => `agent/tools/${t}.ts`),
+      ["bash", "card_search", "decision_get", "glob", "grep", "memory_recall", "read_file", "step", "web_fetch"].map((t) => `agent/tools/${t}.ts`),
     );
     expect(files["agent/tools/bash.ts"]).toBe('export { bash as default } from "../../../../src/runtimes/eve/agent/tools.ts";\n');
     expect(files["agent/tools/step.ts"]).toContain('export default lunaTool("step");');

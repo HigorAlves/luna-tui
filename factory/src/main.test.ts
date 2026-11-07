@@ -70,7 +70,7 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
 }
 
 // slack_triage, chat_triage and eval_judge have no worktree and read no project context; their dry runs are below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "eval_judge").map((p) => p.id);
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "memory_extract" && p.id !== "chat_triage" && p.id !== "memory_answer" && p.id !== "eval_judge").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -98,6 +98,21 @@ describe("factory main (dry run)", () => {
     expect(events.map((e) => e.kind)).toEqual(["session", "note"]);
     expect(events.every((e) => RunEvent.safeParse(e).success)).toBe(true);
     expect(events[1].payload).toMatchObject({ phase: "stage_end" });
+  });
+
+  it("memory_extract: runs over an empty /work with no tools, renders the facts and the proposals as data and leaves a valid result", () => {
+    const task = { id: "memory-lessons", title: "Memory lessons: extract", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const lessons = { kind: "extract", facts: ["Verify found a high finding in README.md: broken relative link."], proposals: ["runbook: check links after a move"] };
+    const { code, stdout, out, result } = run(stageInput("memory_extract", { engine: "claude:haiku", task, plan: null, context: { projectContext: null, lessons } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`memory-extractor` role running the `memory_extract` stage");
+    expect(prompt).toContain("<<<data:context.lessons.facts>>>\n| - Verify found a high finding in README.md: broken relative link.");
+    expect(prompt).toContain("<<<data:context.lessons.proposals>>>\n| - runbook: check links after a move");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "memory-extractor", agents: ["memory-extractor"], tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
   });
 
   it("slack_triage: runs over an empty /work with no tools, renders the batch and leaves a valid result", () => {
@@ -236,8 +251,8 @@ describe("factory main (dry run)", () => {
       agent: expect.stringMatching(/\.eve-agents\/triage$/),
       model: "chatgpt(gpt-5.6-terra)",
       reasoning: "high",
-      tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search", "delegate"],
-      guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), roots: { scratch: expect.stringMatching(/luna-scratch-/), read: [expect.stringMatching(/\/in$/), "/graph"] } },
+      tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search", "memory_recall", "delegate"],
+      guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), roots: { scratch: expect.stringMatching(/luna-scratch-/), read: [expect.stringMatching(/\/in$/), "/graph", "/graph-branch"] } },
     });
     expect(result).toMatchObject({ ok: true, summary: "dry-run" });
   });

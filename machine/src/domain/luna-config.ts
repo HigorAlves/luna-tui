@@ -5,7 +5,7 @@ import { parse as parseYaml, stringify as toYaml } from "yaml";
 
 import { stagesProblem } from "./engine-choice.ts";
 import { branchPatternProblem } from "./jira-link.ts";
-import { DEFAULT_JIRA_BRANCH, DEFAULT_JIRA_COMMENTS, DEFAULT_POLICY, type JiraPolicy, type Policy, PolicyParseError } from "./policy.ts";
+import { DEFAULT_JIRA_BRANCH, DEFAULT_JIRA_COMMENTS, DEFAULT_POLICY, DEFAULT_STALE_LINES, type JiraPolicy, type Policy, PolicyParseError } from "./policy.ts";
 import { type SlaTargets, parseDuration } from "./sla.ts";
 
 /** Said about a key the machine drops rather than refuse the whole file; the store says it once per version. */
@@ -17,7 +17,7 @@ export { LunaConfig };
 
 /** The config as data, validated; a bad value throws naming its path, as does an engine its pack does not allow. */
 export function validateLunaConfig(raw: unknown, warn: Warn = quiet): LunaConfig {
-  const parsed = LunaConfig.safeParse(legacyEgress(raw, warn));
+  const parsed = LunaConfig.safeParse(bareMemory(legacyEgress(raw, warn)));
   if (!parsed.success) {
     const issue = parsed.error.issues[0]!;
     throw new PolicyParseError(`${issue.path.join(".") || "file"}: ${issue.message}`);
@@ -46,10 +46,18 @@ function legacyEgress(raw: unknown, warn: Warn): unknown {
   return { ...(raw as object), sandbox: { ...(sandbox as object), egress: { allow: [...new Set(allow)] } } };
 }
 
+/** `memory: off` (or `on`) as a bare word means `memory: { mode: off }`. */
+function bareMemory(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const memory = (raw as Record<string, unknown>).memory;
+  if (memory === "on" || memory === "off" || memory === false) return { ...(raw as object), memory: { mode: memory === false ? "off" : memory } };
+  return raw;
+}
+
 /** The file text for a config, sections in the order people read them, empty ones left out. */
 export function renderLunaConfig(config: LunaConfig): string {
   const ordered: Record<string, unknown> = {};
-  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "budget", "evidence", "freeze", "dedup", "backlog", "tickets", "conversation", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship"] as const) {
+  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "budget", "evidence", "freeze", "dedup", "backlog", "tickets", "conversation", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship", "memory"] as const) {
     const value = config[key];
     if (value === undefined) continue;
     if (Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0) continue;
@@ -181,6 +189,7 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     engineBudgets: budget?.engines ?? {},
     decisions: (policy.decisions ?? {}) as Policy["decisions"],
     evidenceRetentionDays: evidence?.retention_days ?? null,
+    memory: { on: config.memory?.mode !== "off", dailyCognifyItems: config.memory?.daily_cognify_items ?? null, staleLines: config.memory?.stale_lines ?? DEFAULT_STALE_LINES },
     freeze: freeze.map((f) => ({ ...f })),
     factory: lowerAllow(factoryConfigOf({ backlog: config.backlog, tickets: config.tickets, conversation: conversationOf(config.conversation, warn), dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, learning: config.learning, ship: shipOf(config, warn) })),
   };

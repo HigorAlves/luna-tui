@@ -1,7 +1,7 @@
 // The reply draft of a thread, written after the relation: the card's state, its Evidence Pack summary and the repository's docs as data, one run of the
 // `conversation_reply` pack (no tools, one answer). Nothing here posts: the text is stored as the draft and a person's tap sends it.
 // A card's part is built only when the relation's target is a card in the thread's own stored shortlist (what its channel could see), never from a message.
-import type { ConversationContext } from "@hardness/contracts";
+import type { ConversationContext, RecalledMemory } from "@hardness/contracts";
 
 import { domainTokens } from "../domain/address-rule.ts";
 import { carriesSecret, postableDraft } from "../domain/postable.ts";
@@ -25,6 +25,8 @@ export interface DraftDeps {
   docs(repo: string, text: string): Promise<string[]>;
   /** The channel's notes for tone (the rules file's Notes), and later its past edits. */
   tone(channel: string, isPrivate: boolean): Promise<Array<{ machine: string; person: string }>>;
+  /** What memory recalls for this thread (RFC 0007), as the viewer `{kind: "slack", repo, channel}`: the channel's own dataset, the repository's docs and the company folder, never another channel's. Absent with memory off. */
+  memory?(repo: string, channel: string, query: string): Promise<RecalledMemory[]>;
   /** The one run of the `conversation_reply` pack. */
   run(context: ConversationContext): Promise<{ reply: string; confidence: number }>;
 }
@@ -61,6 +63,9 @@ export class ConversationDrafter {
     }
     const docs = c.repo ? await this.deps.docs(c.repo, history.map((m) => m.text).join(" ")).catch(() => []) : [];
     const tone = await this.deps.tone(row.channel.id, c.private).catch(() => []);
+    // Recalled work of this channel, as data: a failed recall is no memory, never a failed draft.
+    const recalled = c.repo && this.deps.memory ? await this.deps.memory(c.repo, row.channel.id, history.map((m) => m.text).join(" ").slice(-1000)).catch(() => []) : [];
+    const memory = recalled.slice(0, 6).map((i) => flat(`${i.kind} from ${i.source}${i.stale ? " (stale: its files changed a lot since)" : ""}: ${i.text}`, 900));
     const context: ConversationContext = {
       channel: flat(row.channel.name, 120),
       private: c.private,
@@ -68,7 +73,7 @@ export class ConversationDrafter {
       latest: flat(history.at(-1)?.text ?? row.text, 500),
       author: { profile: row.author.isBot ? "bot" : "member", title: null },
       candidates: [],
-      reply: { relation: relation.type, card, evidence, docs: docs.map((d) => flat(d, 1500)).slice(0, 3), tone: tone.slice(0, 5).map((t) => ({ machine: flat(t.machine, 1500), person: flat(t.person, 1500) })) },
+      reply: { relation: relation.type, card, evidence, docs: docs.map((d) => flat(d, 1500)).slice(0, 3), tone: tone.slice(0, 5).map((t) => ({ machine: flat(t.machine, 1500), person: flat(t.person, 1500) })), ...(memory.length > 0 ? { memory } : {}) },
     };
     const answer = await this.deps.run(context);
     if (carriesSecret(answer.reply)) return null;
