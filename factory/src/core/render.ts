@@ -266,7 +266,7 @@ function coverageText(coverage: StageInput["context"]["coverage"]): string {
   return [...rows, `Total: ${coverage.total.covered}/${coverage.total.added} added lines covered (${coverage.report})`].join("\n");
 }
 
-const JSON_CAP = 20_000;
+const JSON_CAP = 80_000;
 const jsonText = (value: unknown): string => {
   if (value == null) return NONE;
   const text = JSON.stringify(value, null, 2);

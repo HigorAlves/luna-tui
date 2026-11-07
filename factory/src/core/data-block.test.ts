@@ -50,11 +50,11 @@ describe("dataBlock: a multi-line foreign field", () => {
   });
 
   it("is capped per field and says how much it cut", () => {
-    const out = dataBlock("task.description", "x".repeat(9000), DescriptionCap);
-    expect(DescriptionCap).toBe(8000);
-    expect(out.split("\n").slice(1, -1).join("").replace(/^\| /, "").length).toBeLessThan(8200);
+    const out = dataBlock("task.description", "x".repeat(41_000), DescriptionCap);
+    expect(DescriptionCap).toBe(40_000);
+    expect(out.split("\n").slice(1, -1).join("").replace(/^\| /, "").length).toBeLessThan(40_200);
     expect(out).toContain("[cut: 1000 more characters]");
-    expect(dataBlock("x", "y".repeat(2500), FIELD_CAP)).toContain("[cut: 500 more characters]");
+    expect(dataBlock("x", "y".repeat(8500), FIELD_CAP)).toContain("[cut: 500 more characters]");
   });
 
   it("is nothing for empty text", () => {
@@ -139,8 +139,8 @@ describe("every block variable has a cap of its own", () => {
 
 describe("a cut is reported, and a cut of the work itself says why the stage does not run", () => {
   it("reports what a cap cut", () => {
-    const { cut } = foreignValueCut("context.testCases", "x".repeat(13_000), foreignBudget());
-    expect(cut).toEqual({ name: "context.testCases", chars: 1000, cap: 12_000, whole: true });
+    const { cut } = foreignValueCut("context.testCases", "x".repeat(201_000), foreignBudget());
+    expect(cut).toEqual({ name: "context.testCases", chars: 1000, cap: 200_000, whole: true });
   });
   it("reports what the prompt's budget cut, which leaves no marker", () => {
     const budget = foreignBudget(100);

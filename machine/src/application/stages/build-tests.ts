@@ -4,6 +4,7 @@ import { type CheckContext, Plan, type PlanContext } from "@hardness/contracts";
 
 import { approvedScenarios } from "../../domain/stage-input.ts";
 import { isCommandCheck } from "../../domain/command-check.ts";
+import { isDocsOnly } from "../../domain/docs-only.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { isPlainRepoPath } from "@hardness/contracts";
 import { type ScenarioTagFacts, scenarioTags } from "../../domain/scenario-tags.ts";
@@ -151,6 +152,16 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       const usage = addUsage(writerUsage, result.usage);
       return { ...result, ...(usage ? { usage } : {}), detail: { ...result.detail, testsStep } };
     };
+    // A plan that only rewrites documentation has nothing to test first: Build runs it without the tests step (domain/docs-only.ts). A card
+    // whose tests step already committed keeps the scope measured from that commit, but nothing in it is locked: its tests are the change's
+    // to fix (a test that read git history CI does not have kept a README card failing CI with the implementer forbidden to touch it).
+    const gate = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
+    const gatePlan = Plan.safeParse(gate?.requested.plan);
+    const touchpoints = gatePlan.success ? gatePlan.data.steps.flatMap((s) => s.touchpoints) : (Array.isArray(gate?.requested.slices) ? (gate!.requested.slices as Array<{ touchpoints?: unknown }>) : []).flatMap((s) => (Array.isArray(s.touchpoints) ? s.touchpoints.map(String) : []));
+    if (isDocsOnly(touchpoints)) {
+      const result = await implementSwept(context.testsCommit ? { scopeBase: context.testsCommit } : {});
+      return withStep(result, { status: "skipped", why: "docs_only", ...(context.testsCommit ? { commit: context.testsCommit, unlocked: true } : {}) });
+    }
     const subject = `test(${task.id.slice(0, 8)}): scenarios`;
     const testsOf = (facts: ScenarioTagFacts) => Object.entries(facts.tagged).map(([scenario, file]) => ({ scenario, file }));
     // A source file that holds Rust's inline tests holds production code too: the implementer changes it, so it is not a protected test file.

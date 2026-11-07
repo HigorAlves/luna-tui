@@ -1,11 +1,11 @@
 // What the red_check judge reads of a scenario's test: the test's own source, cut around its tag. The test is the writer's text, so it
 // reaches the judge as data (core/decide.ts quotes the whole check). Pure.
-export const EXCERPT_LINES = 80;
-export const EXCERPT_CHARS = 4000;
+export const EXCERPT_LINES = 300;
+export const EXCERPT_CHARS = 16_000;
 
 const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** The lines of `source` from the one tagged `@scenario:<id>` (the tag on its own, never `S1` inside `S10`) down to the next tag, at most 80 lines and 4,000 characters; the head of the file when nothing carries the tag. */
+/** The lines of `source` from the one tagged `@scenario:<id>` (the tag on its own, never `S1` inside `S10`) down to the next tag, at most 300 lines and 16,000 characters; the head of the file when nothing carries the tag. */
 export function testExcerpt(source: string, id: string): string {
   const lines = source.split("\n");
   const tag = new RegExp(`@scenario:${escape(id)}(?![A-Za-z0-9_-])`);

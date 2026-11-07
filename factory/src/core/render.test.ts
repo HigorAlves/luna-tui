@@ -617,8 +617,8 @@ describe("ticket and model text in a prompt", () => {
     expect(out.some((l) => l.startsWith("# "))).toBe(false);
   });
 
-  it("caps a description at 8,000 characters and a plan's brief at 8,000", () => {
-    const out = render({ description: "d".repeat(20_000) }, { brief: "b".repeat(11_000) });
+  it("caps a description at 40,000 characters and a plan's brief at 32,000", () => {
+    const out = render({ description: "d".repeat(52_000) }, { brief: "b".repeat(35_000) });
     expect(out).toContain("[cut: 12000 more characters]");
     expect(out).toContain("[cut: 3000 more characters]");
   });
@@ -700,7 +700,8 @@ describe("renderPromptReport: what a prompt lost", () => {
     expect(prompt).toContain("S13 scenario 13");
   });
   it("a plan past the cap is reported, as the work that must be whole", () => {
-    const { cuts } = report(60);
+    // Past 200,000 characters (about 450 scenarios here); the 23aa189b plan, 192 characters over the old 12,000, renders whole.
+    const { cuts } = report(600);
     expect(cuts.map((c: { name: string; whole: boolean }) => [c.name, c.whole])).toEqual([["context.testCases", true]]);
   });
   it("renderPrompt is the same prompt", () => {

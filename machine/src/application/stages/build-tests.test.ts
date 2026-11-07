@@ -213,6 +213,36 @@ describe("a scenario that only runs one of the repo's commands", () => {
   });
 });
 
+describe("a plan that only rewrites documentation", () => {
+  const docsPlan = gate({
+    plan: { goal: "g", steps: [{ title: "Rewrite the READMEs", est_loc: 40, touchpoints: ["board/README.md", "docs/README.md", "contracts/src/readme-ste.test.ts"], acceptance: ["short sentences"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: [{ id: "S1", title: "No sentence over 25 words", criterion: "c1", criterion_ref: "C1", approach: "count the words" }],
+  });
+
+  it("runs the implementer without the tests step: no failing test is written for prose, and nothing is locked", async () => {
+    const f = fakes([tagged("S1")]);
+    const result = await buildTestsStep(f.deps)(context([docsPlan]));
+    expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(f.implemented[0]).toEqual({});
+    expect(result.detail).toMatchObject({ testsStep: { status: "skipped", why: "docs_only" } });
+  });
+
+  it("unlocks a card whose tests step already committed: the scope still starts there, the tests are the change's to fix", async () => {
+    const f = fakes([tagged("S1")]);
+    const result = await buildTestsStep(f.deps)(context([docsPlan], { testsCommit: "a7aa421" }));
+    expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(f.implemented[0]).toEqual({ scopeBase: "a7aa421" });
+    expect(result.detail).toMatchObject({ testsStep: { status: "skipped", why: "docs_only", commit: "a7aa421", unlocked: true } });
+  });
+
+  it("still runs the tests step for a plan that touches code", async () => {
+    const codePlan = gate({ ...JSON.parse(JSON.stringify(docsPlan.requested)), plan: { ...(docsPlan.requested.plan as object), steps: [{ title: "x", est_loc: 5, touchpoints: ["web/cart.ts", "docs/api.md"], acceptance: ["a"] }] } });
+    const f = fakes([tagged("S1")], {}, [{ S1: "FAIL: cart.export is not a function" }]);
+    await buildTestsStep(f.deps)(context([codePlan]));
+    expect(f.calls[0]).toBe("writer");
+  });
+});
+
 describe("scenario.green", () => {
   const emitted = () => {
     const rows: Array<[string, Record<string, unknown>]> = [];

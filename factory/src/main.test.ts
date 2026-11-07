@@ -290,7 +290,7 @@ describe("factory main (dry run)", () => {
     const scenarios = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `S${i + 1}`, title: `scenario ${i + 1}`, criterion: "c ".repeat(200), approach: "run it", type: "happy", layer: "unit", given: "g", when: "w", then: "t" }));
 
     it("does not run the stage when the scenarios it must write tests for were cut: the result says what was lost", () => {
-      const { result, out } = run(stageInput("build_tests", { stage: "implementing", context: { projectContext: null, testCases: scenarios(80) } }));
+      const { result, out } = run(stageInput("build_tests", { stage: "implementing", context: { projectContext: null, testCases: scenarios(600) } }));
       expect(result).toMatchObject({ ok: false, outcome: "fail", error: expect.stringMatching(/the stage's input was cut.*context\.testCases lost \d+ characters/) });
       const events = readFileSync(join(out, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
       expect(events).toContainEqual({ kind: "note", payload: expect.objectContaining({ phase: "prompt_cut", pack: "build_tests", cuts: [expect.objectContaining({ name: "context.testCases", whole: true })] }) });

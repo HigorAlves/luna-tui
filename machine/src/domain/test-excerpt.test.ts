@@ -16,6 +16,6 @@ describe("testExcerpt", () => {
     expect(testExcerpt(file, "S7")).toBe(file);
   });
   it("is capped", () => {
-    expect(testExcerpt(`// @scenario:S1\n${"x".repeat(9000)}`, "S1")).toHaveLength(EXCERPT_CHARS);
+    expect(testExcerpt(`// @scenario:S1\n${"x".repeat(EXCERPT_CHARS + 1000)}`, "S1")).toHaveLength(EXCERPT_CHARS);
   });
 });
