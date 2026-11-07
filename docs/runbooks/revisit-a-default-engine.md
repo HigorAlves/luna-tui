@@ -13,7 +13,7 @@ The owner pins a decision on Jev (`PINNED` in `evals/src/scorecard.ts`). These s
 
 1. **See what exists.**
    - Run `pnpm eval records --pack <p> --since <date>`.
-   - The output shows how many records are labelled, to confirm, waiting for a label, or local only.
+   - The output counts the records in each state: labelled, to confirm, waiting for a label, or local only.
 2. **Label what has no truth.**
    - Run `pnpm eval label --pack <p> --next`.
    - Other ways to label: `pnpm eval label push --queue <id>`, the trace tool, or `pnpm eval dataset pull --pack <p>`.

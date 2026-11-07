@@ -52,4 +52,4 @@ Read overconfidence (wrong at or above the bar) and ECE when two numbers look al
   - Run `scorecard`.
   - Run `defaults`.
 - After you upgrade a model ([upgrade-a-model](upgrade-a-model.md)), re-run every pack on the engines that use the model. A baseline measures one model ID on one set of questions. The diff that `pnpm eval` prints against the saved baseline is the regression check (RFC 0003 section 3).
-- After you add cases (a harvest, or a labelled dataset pulled back), re-run the packs that gained cases on all their engines. The numbers then still compare.
+- A harvest, or a labelled dataset that you pull back, adds cases. Re-run the packs that gained cases on all their engines. The numbers then still compare.

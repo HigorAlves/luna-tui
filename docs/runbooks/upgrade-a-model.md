@@ -47,7 +47,8 @@ The conformance table (`factory/src/runtimes/conformance/table.ts`) is the bar. 
 
 ## 4. Replay
 
-Build the stage image from your branch, because the evals run in it. Then run the cases of every pack that uses the engine being replaced. Run the candidate against today's engine:
+- Build the stage image from your branch. The evals run in that image.
+- Run the candidate against today's engine on the cases of every pack that uses the engine you replace:
 
 ```sh
 pnpm --filter @hardness/machine runner:build
@@ -66,9 +67,10 @@ pnpm golden --matrix       # needs a running machine from that branch, a credent
 
 Nobody has built shadow (the candidate answering the same input without anyone acting on it) or canary (a share of tasks by hash). The harness has a per-repo and per-task choice of engine. So you run a trial by hand:
 
-1. Add the candidate to the pack's `engines.allowed` in `contracts/src/packs.ts`. The `default` stays as it is. A reviewer reviews this one-line change. You revert it after the trial.
+1. Add the candidate to the pack's `engines.allowed` in `contracts/src/packs.ts`. The `default` stays as it is. A reviewer reviews this one-line change.
 2. Pick the engine for one repo in that repo's `luna.yaml` (`engines: { triage: claude:opus-next }`). Or pick it for one task with `stages` on `POST /tasks`, `PATCH /tasks/:id/stages`, or the engine picker on the board.
 3. Run a few real tickets.
+4. Revert the one-line change from step 1.
 
 Every stage run records the engine it started on (`GET /tasks/:id`). `/metrics` does not split by engine yet. So compare the runs by hand: approved plans, first-pass verifying, cost, escalations.
 
