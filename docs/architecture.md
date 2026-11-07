@@ -429,7 +429,7 @@ A person turns the loop, one step at a time, today. Nothing below runs by itself
 
 #### The automatic loop: TBD
 
-**It is not built and not designed.** No scheduled harvest, re-measure, bar change or engine change exists. No document should say one does. It would need these things. It needs a scheduled harvest and re-measure. It needs enough ground truth from real cards to know what to optimise. The own floors of the tools are 20 labelled answers per question and 30 priority files. Most packs have far fewer today. It needs a rule for when the evidence is enough to propose a change of engine or bar. It needs a rule for which changes a person must approve. It needs a way to undo a change that made things worse. It needs a budget for the metered engine.
+**Nobody has built or designed it.** No scheduled harvest, re-measure, bar change or engine change exists. No document should say one does. It would need these things. It needs a scheduled harvest and re-measure. It needs enough ground truth from real cards to know what to optimise. The own floors of the tools are 20 labelled answers per question and 30 priority files. Most packs have far fewer today. It needs a rule for when the evidence is enough to propose a change of engine or bar. It needs a rule for which changes a person must approve. It needs a way to undo a change that made things worse. It needs a budget for the metered engine.
 
 #### Not built (waves 18 and before: what the improvement loop does not yet gather or do)
 
