@@ -39,6 +39,4 @@ Keep a PR under about 300 changed lines where you can. Copied prompts and skills
 - Write in the active voice. Name who does the action.
 - Do not change a heading, a fenced block, a link target or a table's column count in a rewrite.
 
-`contracts/src/core-docs-ste.test.ts` checks these rules for the five core docs.
-
 This repository has no license file yet. The maintainers must choose one.
