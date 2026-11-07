@@ -22,6 +22,7 @@ import {
   lockfilesAt,
   repoHead,
   defaultBranch,
+  onDefaultBranch,
   dirtyFiles,
   ownedWorkspace,
   readCommitDiff,
@@ -755,7 +756,12 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     // Tests present at the start of the run are locked; implementing has a test_change
     // escape hatch, verifying has none — it may only ever add a new test file.
     const nameStatus = await diffNameStatus(workspace.path, inputCommit, "HEAD");
-    const locked = lockedFilesTouched(nameStatus);
+    // Locked are the repo's own tests (on its default branch). A test only a card's branch has was written for that work by the harness
+    // (a tests step, an earlier card it builds on): the card may fix it. A README card's git-history test failed CI with the implementer
+    // forbidden to touch it. Scenario tests stay protected by the scope check (a weakened test is a blocker).
+    const touchedTests = lockedFilesTouched(nameStatus);
+    const repoTests = touchedTests.length && task.repoPath ? await onDefaultBranch(task.repoPath, touchedTests).catch(() => new Set(touchedTests)) : new Set(touchedTests);
+    const locked = touchedTests.filter((path) => repoTests.has(path));
     let replayed = false;
     let replayError: string | null = null;
     if (locked.length > 0) {
@@ -763,7 +769,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       // tests that were there must still pass against the new code, unchanged. Put the
       // originals back, run the project's test command, then restore the agent's versions.
       // A deleted or renamed-away test file has nothing to replay and stays a hard fail.
-      const removed = lockedFilesRemoved(nameStatus);
+      const removed = lockedFilesRemoved(nameStatus).filter((path) => repoTests.has(path));
       const found = removed.length === 0 ? await (deps.detect ?? detectChecks)(workspace.path) : null;
       if (found?.test) {
         await restoreFiles(workspace.path, inputCommit, locked);

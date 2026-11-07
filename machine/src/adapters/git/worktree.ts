@@ -274,6 +274,18 @@ async function lastKnownDefault(repoPath: string): Promise<string> {
   return head.code === 0 ? head.stdout.trim().replace(/^refs\/remotes\//, "") : "HEAD";
 }
 
+/** The paths of `paths` that exist on the repository's default branch (`origin/HEAD`, read in the user's checkout, never a card's folder):
+ *  the repo's own files, as opposed to ones only a card's branch has. With no known default branch, every path counts as the repo's. */
+export async function onDefaultBranch(repoPath: string, paths: readonly string[]): Promise<Set<string>> {
+  const ref = await lastKnownDefault(repoPath);
+  if (ref === "HEAD") return new Set(paths);
+  const found = new Set<string>();
+  for (const path of paths) {
+    if ((await exec("git", [...HOST_GIT, "-C", repoPath, "cat-file", "-e", `${ref}:${path}`])).code === 0) found.add(path);
+  }
+  return found;
+}
+
 /** How many commits the default branch has that `commit` lacks; null when either is unknown. */
 export async function commitsBehind(repoPath: string, commit: string): Promise<number | null> {
   if (!/^[0-9a-f]{7,40}$/.test(commit)) return null;
