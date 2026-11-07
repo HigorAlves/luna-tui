@@ -31,6 +31,8 @@ export interface MemoryStore {
   withData(datasets?: readonly string[]): Promise<MemoryItem[]>;
   /** Live rows of these datasets Cognee has not built a graph for yet. */
   uncognified(datasets: readonly string[]): Promise<number>;
+  /** The datasets holding items Cognee has but whose graph was never built (a cognify that failed or never ran). */
+  uncognifiedDatasets(): Promise<string[]>;
   markCognified(datasets: readonly string[]): Promise<void>;
   cognifiedOn(day: string): Promise<number>;
   addCognified(day: string, items: number): Promise<void>;

@@ -139,6 +139,11 @@ export class PgMemoryStore implements MemoryStore {
     return row?.n ?? 0;
   }
 
+  async uncognifiedDatasets(): Promise<string[]> {
+    const rows = (await this.db.query(`select distinct dataset_name from memory_items where status in ('active','stale') and cognee_data_id is not null and cognified_at is null order by dataset_name`)) as Array<{ dataset_name: string }>;
+    return rows.map((r) => r.dataset_name);
+  }
+
   async markCognified(datasets: readonly string[]): Promise<void> {
     await this.db.query(`update memory_items set cognified_at = now() where dataset_name = any($1::text[]) and status in ('active','stale') and cognee_data_id is not null and cognified_at is null`, [[...datasets]]);
   }

@@ -221,6 +221,29 @@ describe("cognify", () => {
   });
 });
 
+describe("cognify again", () => {
+  it("builds the graph of a dataset whose cognify failed on the retry loop, but not again within 15 minutes of a failure", async () => {
+    const memory = make();
+    await memory.write([draft("checkout retries the payment twice")]);
+    const cognify = cognee.cognify;
+    cognee.cognify = async () => {
+      throw new Error("worker was killed");
+    };
+    await memory.cognify(["acme-app:github"]);
+    expect(cognee.calls.cognify).toEqual([]);
+    cognee.cognify = cognify;
+    clock = new Date(clock.getTime() + 5 * 60_000);
+    await memory.retryPending();
+    expect(cognee.calls.cognify).toEqual([]);
+    clock = new Date(clock.getTime() + 11 * 60_000);
+    await memory.retryPending();
+    expect(cognee.calls.cognify).toEqual([["acme-app:github"]]);
+    expect((await memory.recall({ query: "payment retries", viewer: { kind: "operator", repo: null } })).items).toHaveLength(1);
+    await memory.retryPending();
+    expect(cognee.calls.cognify).toHaveLength(1);
+  });
+});
+
 describe("documents", () => {
   it("uploads a file to the dataset its repository and kind give: the company folder, or the repository's docs", async () => {
     const memory = make();

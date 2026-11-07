@@ -20,6 +20,8 @@ const USAGE_TTL_MS = 60_000;
 const SEARCH_TOP_K = 30;
 const DOC_CHUNK_MAX = 600;
 const RETRY_BATCH = 50;
+/** How long a dataset whose cognify failed waits before the retry loop builds it again. */
+const COGNIFY_RETRY_MS = 15 * 60_000;
 
 export interface MemoryServiceOptions {
   client: CogneeClient;
@@ -208,6 +210,10 @@ export function cogneeMemory(options: MemoryServiceOptions): MemoryService {
     try {
       const rows = (await store.pending(RETRY_BATCH)).filter((r) => r.kind !== "doc" && r.kind !== "code");
       if (rows.length > 0) await flush(rows.map((r) => r.id));
+      // A graph that was never built (its cognify failed, Cognee restarted) is built again here, each dataset at most every
+      // COGNIFY_RETRY_MS after a failure, so one that keeps failing cannot hammer Cognee. The code graph has its own retry (the sync).
+      const due = (await store.uncognifiedDatasets()).filter((name) => !name.startsWith("code:") && now().getTime() - (cognifyFailedAt.get(name) ?? 0) >= COGNIFY_RETRY_MS);
+      if (due.length > 0) await cognify(due);
       const left = (await store.counts()).pending;
       return { sent: rows.length === 0 ? 0 : rows.length - (await store.getMany(rows.map((r) => r.id))).filter((r) => r.status === "pending").length, pending: left };
     } catch (error) {
@@ -215,6 +221,9 @@ export function cogneeMemory(options: MemoryServiceOptions): MemoryService {
       return { sent: 0, pending: 0 };
     }
   }
+
+  /** When each dataset's cognify last failed (ms), for the retry's pause. */
+  const cognifyFailedAt = new Map<string, number>();
 
   function cognify(datasets: string[]): Promise<void> {
     return cognifyExclusive(async () => {
@@ -235,9 +244,11 @@ export function cogneeMemory(options: MemoryServiceOptions): MemoryService {
         await store.addCognified(day, items);
         lastCognifyError = null;
         usageCache = null;
+        for (const name of names) cognifyFailedAt.delete(name);
         log({ event: "memory.cognify", datasets: names, items, durationMs: Date.now() - started });
       } catch (error) {
         lastCognifyError = message(error);
+        for (const name of new Set(datasets)) cognifyFailedAt.set(name, now().getTime());
         log({ event: "memory.cognify_failed", datasets, error: lastCognifyError });
       }
     });
