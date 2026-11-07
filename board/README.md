@@ -227,7 +227,7 @@ While a gate is open, its strip sits on top of every section with the keys that 
 
 | Section | Shows | Keys inside |
 |---|---|---|
-| Overview | the status, then one row per acceptance criterion with its state in the plan, how many cases prove it and what verifying found; repo, branch, issue, the Jira link and the SLA clocks, why, spend; the ticket's description and criteria; a setup gate's `luna.yaml` and proof, triage's questions, the memory review's rules | `e` edits the ticket's text, `J` links or unlinks the Jira issue |
+| Overview | the status. One row per acceptance criterion: its state in the plan, how many cases prove it, what verifying found. Repo, branch, issue, the Jira link, the SLA clocks, why, spend. The ticket's description and criteria. A setup gate's `luna.yaml` and proof, triage's questions, the memory review's rules | `e` edits the ticket's text, `J` links or unlinks the Jira issue |
 | Plan | triage's latest plan (brief, criteria, assumptions, slices) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate |
 | Tests | test_design's cases under the criterion each proves, with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
 | Runs | every stage run with how long it took, its cost and turns; the selected run's error, per-case verdicts and files; opens on the latest run | `j`/`k` pick a run, `J`/`K` scroll |
