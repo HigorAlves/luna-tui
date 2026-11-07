@@ -207,11 +207,11 @@ flowchart TD
   task --> start(["You press Start on the board"])
 ```
 
-With agents off, the issue is imported as written. A repo with no `luna.yaml` runs `setup` and its `awaiting_setup` gate before triage.
+With agents off, the machine imports the issue as written. A repo with no `luna.yaml` runs `setup` and its `awaiting_setup` gate before triage.
 
 ### Through the stages
 
-Each box is a task state, labelled with its board column and the engine its pack runs on by default; `you` marks a gate the board (or the notch) answers.
+Each box is a task state. A label gives its board column and the default engine of its pack. `you` marks a gate that the board (or the notch) answers.
 
 ```mermaid
 stateDiagram-v2
@@ -270,11 +270,19 @@ stateDiagram-v2
   archived --> [*]
 ```
 
-Every loop back to `implementing` counts against its own loop (verify, e2e, CI); the third failure of one escalates, and so does a task that has used all six implementer runs. A stage that fails outright (triage, test design, deliver, ship) escalates at once. A rate limit with no fallback engine left pauses the task in `paused_rate_limit` (Build) until the window resets.
+Every loop back to `implementing` counts against its own loop (verify, e2e, CI). The third failure of one loop escalates. A task that has used all six implementer runs also escalates. A stage that fails outright (triage, test design, deliver, ship) escalates at once. A rate limit with no fallback engine left pauses the task in `paused_rate_limit` (Build) until the window resets.
 
-An agent that stops on purpose answers `escalated` with a typed `escalation`: `plan_wrong`, `env_broken`, `flaky_tests`, `too_complex`, `undeclared_scope` or `other` (the default); the reason rides on the transition event and the `escalated` approval's `requested`. `plan_wrong` is the one that does not wait for you: on a feature task past triage, the plan cannot be built as written, so triage runs again with the retries kept (a PR route has no plan to redo, so it escalates). Any state that has not ended can also go to `archived` (`POST /tasks/:id/archive`, or `Z` on the board) with one of `duplicate`, `sla_expired`, `rejected`, `not_for_agent`, `pr_closed`, `no_setup`, `no_answer`: the running stage stops, the close steps run (the worktree is removed) and the task keeps `archiveReason`. A ticket left at `awaiting_setup` or `awaiting_answers` past the repo's `sla.archive` (five days when it says nothing; `off` keeps it waiting) is archived this way as `no_setup` or `no_answer` (`sla_expired` is what older cards carry), with a notice at its own source; any gate past its clock (two days by default) gets one `sla.reminder` event per visit (a line in its thread, a Jira comment with `comments: gates`), and the later gates are reminded, never archived. A task also carries `record` (triage's `TriageRecord`: what it understood, each signal with its confidence, the route taken and why) and `evidence` (the `EvidencePack`: scenarios and their results, risk, rollback, how to verify), null until a stage writes them, and both ride in every stage input's `task`.
+An agent that stops on purpose answers `escalated` with a typed `escalation`. The types are `plan_wrong`, `env_broken`, `flaky_tests`, `too_complex`, `undeclared_scope` or `other` (the default). The reason goes on the transition event and on the `requested` field of the `escalated` approval.
 
-While the task moves, Jira follows it: JiraSync performs the transition the repo's `luna.yaml` maps under `jira.on` for each state it enters (`escalated: Blocked` moves it back on resume) and comments per `jira.comments`; JiraWatch refreshes the link every five minutes and notes it when Jira closes the issue first. The branch is the repo's `jira.branch` pattern (`bug/PLAT-123`), so Jira files the PR under the issue. A notch task skips all of this: the notch talks to Jira.
+`plan_wrong` is the one type that does not wait for you. On a feature task past triage, the plan fails as written. Triage then runs again and keeps the retries. A PR route has no plan to redo, so it escalates.
+
+Any state that has not ended can also go to `archived` (`POST /tasks/:id/archive`, or `Z` on the board). It takes one of these reasons: `duplicate`, `sla_expired`, `rejected`, `not_for_agent`, `pr_closed`, `no_setup`, `no_answer`. The running stage stops. The close steps run and remove the worktree. The task keeps `archiveReason`.
+
+The machine archives a ticket left at `awaiting_setup` or `awaiting_answers` past the repo's `sla.archive`. The default is five days when the repo says nothing. `off` keeps the ticket waiting. The machine archives it as `no_setup` or `no_answer`, with a notice at its own source. Older cards carry `sla_expired` for this. Any gate past its clock (two days by default) gets one `sla.reminder` event per visit. The event is a line in its thread and a Jira comment with `comments: gates`. The machine reminds the later gates and never archives them.
+
+A task also carries `record` and `evidence`. `record` is the `TriageRecord` of triage: what it understood, each signal with its confidence, the route taken and why. `evidence` is the `EvidencePack`: scenarios and their results, risk, rollback, how to verify. Both are null until a stage writes them. Both ride in every stage input's `task`.
+
+While the task moves, Jira follows it. JiraSync performs the transition that the repo's `luna.yaml` maps under `jira.on` for each state it enters. The mapping `escalated: Blocked` moves the issue back on resume. JiraSync also comments per `jira.comments`. JiraWatch refreshes the link every five minutes. It notes the link when Jira closes the issue first. The branch follows the repo's `jira.branch` pattern (`bug/PLAT-123`), so Jira files the PR under the issue. A notch task skips all of this. The notch talks to Jira.
 
 ### Inside every stage box
 
