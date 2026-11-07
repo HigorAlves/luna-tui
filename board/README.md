@@ -212,12 +212,17 @@ generates the tables below. A test fails when they drift from the registry.
 
 ## Tickets
 
-`enter` opens a ticket in a popup over the board. Inside it, a rail of nine sections on the
-left (a tab strip on a terminal under 100 columns) and one pane on the right; `h`/`l` or `1`…`9`
-switch, `j`/`k` scroll the pane or pick a row where the section lists some (`J`/`K` scroll a line
-there, `ctrl+d`/`ctrl+u` and PgDn/PgUp half a page anywhere; picking a row brings it into view),
-`+` toggles the popup between most of the screen and all of it. A ticket Luna Notch sent wears `notch LUNA-14` (its work order's ref), dim, on its card and in the popup's title, as an issue's `#42` or a Jira issue's `PLAT-123` does on the card. Every section draws from everything the machine knows
-about the ticket, whether or not a gate was decided: the approved plan stays readable after `a`.
+`enter` opens a ticket in a popup over the board. Inside it, a rail of nine sections sits on the
+left. On a terminal under 100 columns, a tab strip replaces the rail. One pane sits on the right.
+`h`/`l` or `1`…`9` switch sections.
+`j`/`k` scroll the pane or pick a row where the section lists some.
+`J`/`K` scroll a line there. `ctrl+d`/`ctrl+u` and PgDn/PgUp scroll half a page anywhere.
+Picking a row brings it into view.
+`+` toggles the popup between most of the screen and all of it.
+A ticket that Luna Notch sent wears `notch LUNA-14` (its work order's ref), dim, on its card and in the popup's title.
+An issue's `#42` or a Jira issue's `PLAT-123` appears the same way on the card.
+Every section draws from everything the machine knows
+about the ticket, whether or not someone decided a gate. The approved plan stays readable after `a`.
 While a gate is open, its strip sits on top of every section with the keys that answer it.
 
 | Section | Shows | Keys inside |
@@ -232,8 +237,8 @@ While a gate is open, its strip sits on top of every section with the keys that 
 | Activity | every event | |
 | Engines | each stage the ticket runs (from `GET /packs`), the engine it is set to (yours, else `default: <engine>`) and the one it ran on; the bottom line names the running stage's (`implementing on codex:sol`). A machine from before engines says it offers none | `j`/`k` pick a stage, `E` picks its engine: the default, or one the stage allows; one this machine has no credential for is dim with what is missing and cannot be picked. A stage that already ran keeps its engine |
 
-The popup's keys (`?` inside it lists them with the ticket's state; `J` scrolls here, so the Jira
-link is the board's `J`):
+These are the popup's keys. `?` inside it lists them with the ticket's state.
+`J` scrolls here, so the Jira link is the board's `J`:
 
 <!-- keys:start detail -->
 **Gate**
@@ -287,16 +292,16 @@ link is the board's `J`):
 
 <!-- keys:end -->
 
-The popup opens on the section the open gate concerns: the Plan at `approve plan`, the Tests
-at `check tests`, the Runs when escalated. `e` on the board (outside the popup) keeps its old
-meaning: the two-pane plan editor at the plan gate, the ticket's text otherwise.
+The popup opens on the section that the open gate concerns. At `approve plan` it opens the Plan.
+At `check tests` it opens the Tests. When escalated, it opens the Runs. `e` on the board (outside the popup) keeps its old
+meaning. At the plan gate it opens the two-pane plan editor. Otherwise it opens the ticket's text.
 
-The plan editor splits into two columns: triage's plan on the left (brief, criteria to build,
-assumptions; slices stay as triage wrote them), the ticket's own description and criteria on the
-right. `tab` moves between the two while editing; `ctrl+s` saves whichever side changed. The plan
-may be edited through the test check too, since nothing is built yet; each edit is kept as a
-revision the Plan section's history shows. On a terminal narrower than 110 columns the two stack
-instead, plan first. `n` fills a new ticket in as the same markdown `e` edits:
+The plan editor splits into two columns. Triage's plan is on the left (brief, criteria to build,
+assumptions). Slices stay as triage wrote them. The ticket's own description and criteria are on the
+right. `tab` moves between the two while you edit. `ctrl+s` saves whichever side changed. You can
+edit the plan through the test check too, since the team has built nothing yet. The editor keeps each edit as a
+revision that the Plan section's history shows. On a terminal narrower than 110 columns, the two columns stack
+instead, plan first. `n` fills in a new ticket as the same markdown that `e` edits:
 
 ```markdown
 # Login page
@@ -311,36 +316,42 @@ Users can sign in with email and password.
 - Successful login redirects to /home
 ```
 
-Editing is vim-style modal, not a plain text box: it opens in normal mode
-(`hjkl` to move, `dd`/`x` to delete, `u`/`ctrl+r` undo/redo), `i`/`a`/`o`/…
-enter insert mode, `esc` goes back to normal. `ctrl+s` saves from either
-mode; `esc` or `q` in normal mode cancels. Nothing opens outside the board
-for this anymore — no `$EDITOR`, no second window to switch to.
+Editing is vim-style modal, not a plain text box. It opens in normal mode
+(`hjkl` to move, `dd`/`x` to delete, `u`/`ctrl+r` undo/redo).
+`i`/`a`/`o`/… enter insert mode. `esc` goes back to normal. `ctrl+s` saves from either
+mode. `esc` or `q` in normal mode cancels. Nothing opens outside the board
+for this anymore. There is no `$EDITOR` and no second window to switch to.
 
-The repo isn't part of this text — it's never typed freely, only set through
-the repo search, so a stray edit can't silently blank it or point it somewhere
-wrong. A new ticket's repo defaults to herdr's workspace, or the board's own
-working directory when it runs standalone — either way, the nearest repo
-root above it. `a` on a backlog or intake ticket with no repo set opens the
-repo search instead of advancing, so you fix it before a stage runs. `R`
-opens the same search on a ticket without a repo (on one with a repo it points
+The repo is not part of this text. You never type it freely. You only set it through
+the repo search, so a stray edit cannot silently blank it or point it somewhere
+wrong. A new ticket's repo defaults to herdr's workspace, or to the board's own
+working directory when it runs standalone. Either way, it is the nearest repo
+root above that directory.
+`a` on a backlog or intake ticket with no repo set opens the
+repo search instead of advancing. So you fix the repo before a stage runs.
+`R` opens the same search on a ticket without a repo.
+On a ticket with a repo, it points
 you to `:repo <name>` or the `x` menu's "set the repo", so a stray `R` never
-re-points a ticket): type to filter, enter to set it — no path to type or get
-wrong. It lists every repo under `HARDNESS_REPOS_DIR` (default `~/Developer`),
-whether a repo sits directly under it or is grouped with others under a
+re-points a ticket. Type to filter. Press enter to set the repo. There is no path to type or get
+wrong. The search lists every repo under `HARDNESS_REPOS_DIR` (default `~/Developer`).
+It finds a repo that sits directly under that folder,
+or that sits with others under a
 project folder (`~/Developer/some-project/backend`, `.../frontend`, both
-found). Triage's questions (`a` on a ticket awaiting answers) open in place
-too, pre-filled with its recommended answers; `ctrl+s` sends them.
+found).
+Triage's questions (`a` on a ticket awaiting answers) open in place
+too, pre-filled with its recommended answers. `ctrl+s` sends them.
 
-A new ticket starts in Backlog. `a` moves it to Intake (no stage runs, it's
-just a deliberate "I'm shaping this one up" step); `a` again starts triage.
+A new ticket starts in Backlog. `a` moves it to Intake.
+No stage runs: it is just a deliberate "I'm shaping this one up" step. `a` again starts triage.
 
-Press `f` on a ticket with a running stage to open a herdr tab following its
-agent (`docker logs -f` on its container), whether the machine runs in Docker or
-on your host; `f` again focuses that tab. Nothing opens by itself: once the tab
-exists, later stages of the ticket re-point it, and the board closes it once the
-ticket is closed. Approving the Ship gate (`a` on `awaiting_ship`)
-pushes the task's branch and opens a real PR through the GitHub API — see the [architecture doc](../docs/architecture.md)'s "Shipping" section for what that needs.
+Press `f` on a ticket with a running stage to open a herdr tab that follows its
+agent (`docker logs -f` on its container). This works whether the machine runs in Docker or
+on your host. `f` again focuses that tab. Nothing opens by itself.
+Once the tab exists, later stages of the ticket re-point it.
+The board closes it when the ticket closes.
+When you approve the Ship gate (`a` on `awaiting_ship`), the machine
+pushes the task's branch and opens a real PR through the GitHub API.
+See the [architecture doc](../docs/architecture.md)'s "Shipping" section for what that needs.
 
 ## Tests
 
@@ -348,14 +359,14 @@ pushes the task's branch and opens a real PR through the GitHub API — see the 
 cargo test
 ```
 
-Most of the board's logic only shows up when it is actually talking to a
+Most of the board's logic only shows up when it talks to a
 running machine, so unit tests here are light (markdown parsing, timestamp
-math). The real check is running it against the machine — see
-the [root README](../.github/README.md).
+math). The real check is to run the board against the machine.
+See the [root README](../.github/README.md).
 
 ## Pulls
 
-`P` opens the PR inbox: every open pull request on GitHub where your review is requested or that you authored, as the machine polls it every minute (`:prs` opens it too). Six splits, `h`/`l` or `1`–`6` between them, `j`/`k` down the rows, oldest first:
+`P` opens the PR inbox. It shows every open pull request on GitHub where someone requests your review or that you authored. The machine polls GitHub every minute (`:prs` opens the inbox too). The inbox has six splits. Use `h`/`l` or `1`–`6` to move between the splits. Use `j`/`k` to go down the rows, oldest first:
 
 | Split | A PR lands here when |
 |---|---|
@@ -366,7 +377,7 @@ the [root README](../.github/README.md).
 | Changes requested | yours, changes requested or review threads still open |
 | Mine | everything else you authored, drafts included |
 
-Review requested, Ready to merge, CI failed and Changes requested count on the Board tab's badge and raise a herdr notice when a PR moves into them.
+Review requested, Ready to merge, CI failed and Changes requested count on the Board tab's badge. They also raise a herdr notice when a PR moves into them.
 
 <!-- keys:start pulls -->
 **Pull request**
