@@ -193,7 +193,10 @@ services:
   cognee-gate:
     image: alpine/socat:1.8.0.1
     restart: unless-stopped
-    command: ["TCP-LISTEN:8000,fork,reuseaddr", "TCP:cognee:8000"]
+    # IPv4 and IPv6: the UI, in this network namespace, calls http://localhost:8000, which Node resolves to ::1 first. The IPv6 listener
+    # may fail where the host has IPv6 off; the IPv4 one carries on.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["socat TCP6-LISTEN:8000,ipv6only=1,fork,reuseaddr TCP:cognee:8000 & exec socat TCP4-LISTEN:8000,fork,reuseaddr TCP:cognee:8000"]
     depends_on:
       cognee:
         condition: service_healthy
@@ -204,13 +207,24 @@ services:
 
   # Cognee's own UI, to look at the graph. Sign in with machine@luna.example.com and the password in ~/.config/hardness/cognee-password.
   # What you add or delete there is reconciled by the machine; the board's memory view is where memory is changed with a record.
+  # The image has its API's address compiled in as http://localhost:8000 (Laminar's port here) and reads no setting for it: the UI shares
+  # `cognee-gate`'s network, so its own server finds Cognee there, and `cognee-ui-proxy` rewrites that address in what the browser loads.
   cognee-ui:
     image: cognee/cognee-ui:${COGNEE_UI_TAG:-latest}
     profiles: ["memory-ui"]
     restart: unless-stopped
+    network_mode: "service:cognee-gate"
+    depends_on: [cognee-gate]
+
+  cognee-ui-proxy:
+    image: nginx:1.27-alpine
+    profiles: ["memory-ui"]
+    restart: unless-stopped
+    depends_on: [cognee-ui]
     environment:
-      # The address as the browser sees it: the browser talks to the API directly.
-      COGNEE_BACKEND_URL: http://127.0.0.1:${COGNEE_PORT:-8010}
+      COGNEE_PORT: ${COGNEE_PORT:-8010}
+    volumes:
+      - ./memory/cognee-ui.conf.template:/etc/nginx/templates/default.conf.template:ro
     ports:
       - "127.0.0.1:3000:3000"
 
