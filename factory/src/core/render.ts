@@ -380,6 +380,13 @@ function graphText(graph: StageInput["context"]["graph"]): string {
   return `Code graph: ${graph.path}, ${built} (${graph.fresh ? "fresh" : "stale: the base commit is newer; prefer Grep for changed areas"})`;
 }
 
+/** Said to the implementer and Verify when every file the approved plan touches is documentation. */
+const DOCS_ONLY =
+  "This change touches only documentation (the machine read it off the plan's files). Write no new test and no test file for it: a test of a markdown file measures the prose, not behaviour. Check each scenario by reading the files and the diff, and run only the repo's existing checks.";
+/** Said to the test designer when every file the plan touches is documentation. */
+const DOCS_ONLY_SCENARIOS =
+  "This plan touches only documentation (the machine read it off the plan's files). Every scenario is a check a reviewer makes by reading the files or the diff, or the repo's existing command that already covers them: never a new test or test file, and never a command the repo does not have.";
+
 /** Criteria with the ids the machine gives them (C1, C2, ... in order), one per line. */
 const criteriaIdsText = (criteria: readonly string[] | undefined): string => (criteria?.length ? criteriaOf(criteria).map((c) => `${c.id}: ${c.text}`).join("\n") : NONE);
 
@@ -441,6 +448,9 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
       (input.context.testCases ?? []).map((c) => scenarioLine("approach" in c ? c : { ...c, approach: c.test })),
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
+    // The machine's fact, from the plan's files: a documentation change is checked by reading it, never by a new test.
+    "{{context.docsOnly}}": input.context.docsOnly ? DOCS_ONLY : "",
+    "{{context.plan.docsOnly}}": input.context.plan?.docsOnly ? DOCS_ONLY_SCENARIOS : "",
     // The machine's own words around a hex sha it checked; the files are the writer's, so they go in as data.
     "{{context.testsCommit}}": input.context.testsCommit
       ? `The machine made commit \`${input.context.testsCommit.sha}\` itself, for the approved scenarios' tests, before the implementer ran (Build's tests step). Its files, listed below, are the harness's, not the change the ticket asks for: when a criterion or a scenario limits which files the change touches, judge it on the change without these files (\`git diff --name-only ${input.context.baseCommit ?? "<base>"}..HEAD\`, minus them). They are tests like any other: run them, and judge them as tests.`

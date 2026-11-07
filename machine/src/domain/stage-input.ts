@@ -1,5 +1,6 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
 import { type ChatTriageContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
 
@@ -162,7 +163,7 @@ export function buildStageInput(opts: {
   const pack = opts.pack ?? (stage as PackId);
   // The test designer designs from the criteria and the goal: it is never shown the plan's steps, brief or assumptions.
   const designer = pack === "test_design" || pack === "test_design_fast";
-  const designed: PlanContext | null = designer && opts.plan ? { record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.coverage_notes ? { coverage_notes: opts.plan.coverage_notes } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}) } : null;
+  const designed: PlanContext | null = designer && opts.plan ? { ...(opts.plan.docsOnly ? { docsOnly: true } : {}), record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.coverage_notes ? { coverage_notes: opts.plan.coverage_notes } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}) } : null;
   const reviewed = designed ?? opts.plan;
   const underReview = reviewed
     ? { brief: reviewed.brief, criteria: reviewed.criteria, assumptions: reviewed.assumptions, ...(designer ? {} : { slices: reviewed.slices }), ...(reviewed.rollback !== undefined ? { rollback: reviewed.rollback } : {}) }
@@ -213,6 +214,7 @@ export function buildStageInput(opts: {
       ...(pack === "implementing" && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
       ...(pack === "implementing" && opts.sweepFailures?.length ? { sweepFailures: opts.sweepFailures.slice(0, SWEEP_FAILURES_MAX).map((f) => ({ name: safe(f.name).slice(0, 60), tail: safe(f.tail.slice(-SWEEP_TAIL_CAP)).slice(-SWEEP_TAIL_CAP) })) } : {}),
       baseCommit: opts.baseCommit ?? null,
+      ...((pack === "implementing" || pack === "verifying") && plan && isDocsOnly((plan.slices ?? []).flatMap((s) => (s as { touchpoints?: string[] }).touchpoints ?? [])) ? { docsOnly: true } : {}),
       ...(pack === "verifying" && opts.testsCommit ? { testsCommit: opts.testsCommit } : {}),
       ...(pack === "triage" ? { intake: intakeOf(task) } : {}),
       ci: opts.ci ?? null,

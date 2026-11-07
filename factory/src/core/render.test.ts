@@ -756,3 +756,18 @@ describe("test design: the criteria ids", () => {
   });
 });
 
+describe("a documentation-only change", () => {
+  const verifying = readFileSync(new URL("../../prompts/verifying.md", import.meta.url), "utf8");
+  const design = readFileSync(new URL("../../prompts/test_design.md", import.meta.url), "utf8");
+  it("tells Verify and the implementer to write no test, when the machine says the plan touches only documentation", () => {
+    const on = renderQuoted({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying", context: { ...input.context, docsOnly: true } } as never, template: verifying });
+    expect(on).toContain("Write no new test and no test file for it");
+    const off = renderQuoted({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying" } as never, template: verifying });
+    expect(off).not.toContain("Write no new test");
+  });
+  it("tells the test designer every scenario is a reading check", () => {
+    const prompt = renderQuoted({ pack: PACKS.test_design, input: { ...input, pack: "test_design", stage: "test_design", context: { ...input.context, plan: { docsOnly: true, record: null, brief: "", criteria: ["a"], assumptions: [], slices: [] } } } as never, template: design });
+    expect(prompt).toContain("never a new test or test file");
+  });
+});
+

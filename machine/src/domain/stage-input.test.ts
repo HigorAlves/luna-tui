@@ -216,6 +216,14 @@ describe("buildStageInput", () => {
     expect(input.env).toEqual({ LUNA_FACTORY: "1" });
   });
 
+  it("tells the implementer and Verify, and nobody else, that an approved plan touching only documentation gets no test", () => {
+    const docsGate = { ...approvals.at(-1)!, kind: "awaiting_approval" as const, decision: "approved" as const, requested: { brief: "b", criteria: ["c1"], assumptions: [], slices: [{ title: "Rewrite", est_loc: 20, touchpoints: ["docs/README.md", "board/README.md"], acceptance: ["a"] }] } };
+    for (const stage of ["implementing", "verifying"] as const) expect(buildStageInput({ task, stage, attempt: 1, approvals: [docsGate], priorFindings: [] }).context.docsOnly).toBe(true);
+    expect(buildStageInput({ task, stage: "reviewing", attempt: 1, approvals: [docsGate], priorFindings: [] }).context).not.toHaveProperty("docsOnly");
+    const codeGate = { ...docsGate, requested: { ...docsGate.requested, slices: [{ title: "x", est_loc: 5, touchpoints: ["web/cart.ts", "docs/api.md"], acceptance: ["a"] }] } };
+    expect(buildStageInput({ task, stage: "verifying", attempt: 1, approvals: [codeGate], priorFindings: [] }).context).not.toHaveProperty("docsOnly");
+  });
+
   it("gives a whole number of milliseconds when Build's budget has a fraction of a minute left", () => {
     const input = buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [], budgetMinutes: 12.3456789 });
     expect(Number.isInteger(input.limits.timeoutMs)).toBe(true);

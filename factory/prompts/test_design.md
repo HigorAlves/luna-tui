@@ -35,6 +35,7 @@ If this lists criteria, an earlier round of scenarios missed them: write scenari
 4. Otherwise answer `kind: "done"` with `summary` (what you found about the repo's conventions) and `scenarios[]`. The machine numbers them (S1, S2, ...); do not.
 
 ## Rules
+{{context.plan.docsOnly}}
 - Questions end the stage (`kind: "questions"`, each with its `recommended` answer): nobody answers them during the run.
 - Never write anything: no test files, no fixtures, nothing under `/work`. The implementer writes the tests; you name what they prove.
 - Design from the criteria and the goal only: do not design around a solution you imagine.

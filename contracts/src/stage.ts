@@ -642,6 +642,8 @@ export const PlanRisk = z.object({
 export type PlanRisk = z.infer<typeof PlanRisk>;
 
 export const PlanContext = z.object({
+  /** The machine's fact that every file the plan touches is documentation (or a test): the test designer writes reading checks, no test. */
+  docsOnly: z.boolean().optional(),
   record: TriageRecord.nullable(),
   brief: z.string(),
   criteria: z.array(z.string()),
@@ -1105,6 +1107,8 @@ export const StageInput = z.object({
     sweepFailures: z.array(z.object({ name: z.string(), tail: z.string() })).optional(),
     /** Where the task branch forked from the repo; verifying diffs against it. */
     baseCommit: z.string().nullable().optional(),
+    /** implementing and verifying: the machine's fact that the approved plan touches only documentation (domain/docs-only.ts): no test is written for it. */
+    docsOnly: z.boolean().optional(),
     /** verifying: the commit the machine itself made for the scenario tests (Build's tests step) and its files. They are the harness's, not the change the ticket asks for. */
     testsCommit: z.object({ sha: z.string().regex(/^[0-9a-f]{7,64}$/), files: z.array(z.string()) }).nullable().optional(),
     /** For ci_watch: what the host fetched, since the sandbox has no gh credential. */
