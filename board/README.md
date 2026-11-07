@@ -235,7 +235,7 @@ While a gate is open, its strip sits on top of every section with the keys that 
 | Evidence | the QA verdict and every artifact the stages produced, by kind; opens on the latest | `j`/`k` pick a file, `J`/`K` scroll, `o` opens it |
 | PR | the branch's pull request as the Pulls inbox sees it: checks by name, review state, threads, the task in flight. Or the URL the ship gate reported | `o` opens it, `S` ships at the gate |
 | Activity | every event | |
-| Engines | each stage the ticket runs (from `GET /packs`), the engine it is set to (yours, else `default: <engine>`) and the one it ran on. The bottom line names the running stage's (`implementing on codex:sol`). A machine from before engines says it offers none | `j`/`k` pick a stage. `E` picks its engine: the default, or one the stage allows. An engine with no credential on this machine is dim with what is missing. You cannot pick it. A stage that already ran keeps its engine |
+| Engines | each stage the ticket runs (from `GET /packs`), the engine it is set to (yours, else `default: <engine>`) and the one it ran on. The bottom line names the running stage's (`implementing on codex:sol`). A machine from before engines says it offers none | `j`/`k` pick a stage. `E` picks its engine: the default, or one the stage allows. An engine with no credential on this machine is dim and shows what is missing. You cannot pick it. A stage that already ran keeps its engine |
 
 These are the popup's keys. `?` inside it lists them with the ticket's state.
 `J` scrolls here, so the Jira link is the board's `J`:
@@ -460,7 +460,7 @@ Since wave 17 the machine reads only the conversations you opted in. That is a c
 
 | Split | An item lands here when |
 |---|---|
-| Needs reply | triage says a reply is expected and you did not reply |
+| Needs reply | triage expects a reply and you did not reply |
 | Waiting on them | you asked something in a thread and nobody answered |
 | Decide | a decision or a blocker without an explicit question |
 | FYI | everything P2/P3 that is not automated |
