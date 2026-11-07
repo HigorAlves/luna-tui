@@ -380,6 +380,9 @@ function graphText(graph: StageInput["context"]["graph"]): string {
   return `Code graph: ${graph.path}, ${built} (${graph.fresh ? "fresh" : "stale: the base commit is newer; prefer Grep for changed areas"})`;
 }
 
+/** Criteria with the ids the machine gives them (C1, C2, ... in order), one per line. */
+const criteriaIdsText = (criteria: readonly string[] | undefined): string => (criteria?.length ? criteriaOf(criteria).map((c) => `${c.id}: ${c.text}`).join("\n") : NONE);
+
 /** The prompt the model gets. */
 export const renderPrompt = (render: RenderInput): string => renderPromptReport(render).prompt;
 
@@ -420,7 +423,9 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{plan.fallback}}": input.plan ? "" : "No plan (a PR task fixing CI or a review thread): the ticket and the prior findings are the plan. Seed the ledger with one slice per prior finding, in order, and stay on the current branch, which is the PR's own.",
     "{{plan.brief}}": txt(input.plan?.brief),
     "{{plan.criteria}}": bullets(input.plan?.criteria),
-    "{{plan.criteria.ids}}": input.plan?.criteria?.length ? criteriaOf(input.plan.criteria).map((c) => `${c.id}: ${c.text}`).join("\n") : NONE,
+    // The ids the machine checks coverage against: the plan under design (context.plan) when there is one, else the approved plan. The top-level
+    // plan of a re-plan is the earlier approved one; a list one criterion longer shifted every id, and the last criterion was never covered.
+    "{{plan.criteria.ids}}": criteriaIdsText(input.context.plan?.criteria?.length ? input.context.plan.criteria : input.plan?.criteria),
     "{{task.goal}}": txt(input.task.record?.goal),
     "{{plan.assumptions}}": bullets(input.plan?.assumptions),
     "{{plan.slices}}": bullets(

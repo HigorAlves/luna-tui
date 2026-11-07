@@ -741,3 +741,18 @@ describe("callTarget: a long search", () => {
   });
 });
 
+describe("test design: the criteria ids", () => {
+  const template = readFileSync(new URL("../../prompts/test_design.md", import.meta.url), "utf8");
+  it("numbers the plan under design, the list the machine checks coverage against, not the earlier approved plan", () => {
+    const approved = ["a", "b", "c"];
+    const underDesign = ["goal sentence", "a", "b", "c"];
+    const prompt = renderQuoted({ pack: PACKS.test_design, input: { ...input, pack: "test_design", stage: "test_design", plan: { ...input.plan, criteria: approved }, context: { ...input.context, plan: { record: null, brief: "", criteria: underDesign, assumptions: [], slices: [] } } } as never, template });
+    expect(prompt).toContain("C4: c");
+    expect(prompt).not.toContain("C3: c");
+  });
+  it("falls back to the approved plan's criteria when there is no plan under design", () => {
+    const prompt = renderQuoted({ pack: PACKS.test_design, input: { ...input, pack: "test_design", stage: "test_design", plan: { ...input.plan, criteria: ["x", "y"] } } as never, template });
+    expect(prompt).toContain("C2: y");
+  });
+});
+
