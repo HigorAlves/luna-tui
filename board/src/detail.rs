@@ -115,6 +115,8 @@ pub struct DetailView<'a> {
     pub follow: &'a Cell<bool>,
     /// `GET /packs` and `GET /engines`, for the Engines section; None until first asked.
     pub engines: Option<&'a Result<EngineCatalog, String>>,
+    /// The board's current cards, to name a split's origin and children by title.
+    pub tasks: &'a [Task],
 }
 
 /// A terminal this wide or wider lays the rail beside the pane; narrower, the rail becomes a
@@ -201,7 +203,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     }
 
     let (section_lines, cursor_row) = match view.section {
-        Section::Overview => (overview_lines(task, detail, width, now), None),
+        Section::Overview => (overview_lines(task, detail, width, now, view.tasks), None),
         Section::Plan => (plan_lines(task, detail, now), None),
         Section::Tests => (tests_lines(task, detail, width, now), None),
         Section::Runs => runs_lines(task, detail, view.cursor, width, now),
@@ -721,7 +723,7 @@ fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> 
     lines
 }
 
-fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64) -> Vec<Line<'static>> {
+fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64, tasks: &[Task]) -> Vec<Line<'static>> {
     let look = task.look();
     let mut status = vec![Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(c(look_color(look))).bold()];
     if let Some(run) = detail.and_then(|d| d.stage_runs.last()) {
@@ -765,7 +767,7 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     if let Some(stage) = &task.resume_to {
         lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
     }
-    lines.extend(stack_lines(task, detail));
+    lines.extend(stack_lines(task, detail, tasks));
     if let Some(reason) = &task.archive_reason {
         lines.push(muted(if reason == "split" { "Archived   split into smaller changes".to_string() } else { format!("Archived   {reason}") }));
     } else if let Some(reason) = &task.reason {
@@ -1084,11 +1086,13 @@ fn held_text(detail: Option<&TaskDetail>) -> Option<String> {
 }
 
 /// A card's place in a split or a stack: where it came from, what it waits for, what it is built on, what it was split into. Nothing for a card with none of them.
-fn stack_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
+fn stack_lines(task: &Task, detail: Option<&TaskDetail>, tasks: &[Task]) -> Vec<Line<'static>> {
     let short = |id: &str| plain(&id.chars().take(8).collect::<String>());
+    let find = |id: &str| tasks.iter().find(|t| t.id == id);
     let mut lines = Vec::new();
     if let (Some(from), Some(part)) = (&task.split_from, &task.split_part) {
-        lines.push(muted(format!("Stack      Part {} of {} of {}", part.n, part.of, short(from))));
+        let title = find(from).map(|o| format!(" {}", plain(&o.title))).unwrap_or_default();
+        lines.push(muted(format!("Stack      Part {} of {} of {}{}", part.n, part.of, short(from), title)));
     }
     for dep in &task.depends_on {
         lines.push(muted(format!("Stack      Depends on {}", short(dep))));
@@ -1105,8 +1109,14 @@ fn stack_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
             None => lines.push(muted("Stack      Waiting: held until its dependencies have an open PR or have merged".to_string())),
         }
     }
-    if !task.split_into.is_empty() {
-        lines.push(muted(format!("Stack      Split into {}", task.split_into.iter().map(|i| short(i)).collect::<Vec<_>>().join(", "))));
+    let (known, missing): (Vec<&String>, Vec<&String>) = task.split_into.iter().partition(|i| find(i).is_some());
+    for id in known {
+        let kid = find(id).expect("partitioned as present");
+        let part = kid.split_part.as_ref().map(|p| format!("part {}/{} ", p.n, p.of)).unwrap_or_default();
+        lines.push(muted(format!("Stack      Split into {} {}{} ({})", short(id), part, plain(&kid.title), kid.status_label())));
+    }
+    if !missing.is_empty() {
+        lines.push(muted(format!("Stack      Split into {}", missing.iter().map(|i| short(i)).collect::<Vec<_>>().join(", "))));
     }
     lines
 }
@@ -1641,7 +1651,7 @@ mod tests {
     ) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let scroll = Cell::new(0);
-        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None };
+        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[] };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect()
@@ -1970,7 +1980,7 @@ mod tests {
         .unwrap();
         let (width, height) = (120, 20);
         let scroll = Cell::new(300);
-        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None };
+        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[] };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -2247,14 +2257,14 @@ mod tests {
     fn the_overview_says_what_a_stacked_card_is_and_what_it_waits_for() {
         let json = TASK.replace("\"state\":\"implementing\"", "\"state\":\"draft\"").replace("\"createdAt\"", "\"splitFrom\":\"aaaaaaaa-0000-4000-8000-000000000000\",\"splitPart\":{\"n\":2,\"of\":3},\"dependsOn\":[\"bbbbbbbb-0000-4000-8000-000000000000\"],\"base\":{\"card\":\"cccccccc-0000-4000-8000-000000000000\",\"branch\":\"task/x\"},\"startWhenReady\":true,\"riskFloor\":\"high\",\"createdAt\"");
         let task: Task = serde_json::from_str(&json).unwrap();
-        let text = overview_lines(&task, None, 100, 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        let text = overview_lines(&task, None, 100, 0, &[]).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
         assert!(text.contains("Part 2 of 3 of aaaaaaaa"), "{text}");
         assert!(text.contains("Depends on bbbbbbbb"), "{text}");
         assert!(text.contains("Stacked on cccccccc (task/x)"), "{text}");
         assert!(text.contains("Waiting"), "{text}");
         assert!(text.contains("Risk floor high"), "{text}");
         let plain: Task = serde_json::from_str(TASK).unwrap();
-        assert!(!overview_lines(&plain, None, 100, 0).iter().any(|l| l.to_string().contains("Stacked") || l.to_string().contains("Part ")), "a card with no stack shows nothing of one");
+        assert!(!overview_lines(&plain, None, 100, 0, &[]).iter().any(|l| l.to_string().contains("Stacked") || l.to_string().contains("Part ")), "a card with no stack shows nothing of one");
     }
 
     #[test]
@@ -2276,7 +2286,7 @@ mod tests {
             let json = TASK.replace("\"state\":\"implementing\"", "\"state\":\"draft\"").replace("\"createdAt\"", "\"startWhenReady\":true,\"createdAt\"");
             let task: Task = serde_json::from_str(&json).unwrap();
             let detail: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{json},"stageRuns":[],"approvals":[],"events":{events}}}"#)).unwrap();
-            overview_lines(&task, Some(&detail), 100, 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n")
+            overview_lines(&task, Some(&detail), 100, 0, &[]).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n")
         };
         let hold = r#"{"taskId":"t","kind":"card.held","at":"2026-11-06T10:00:00Z","payload":{"reason":"dependency","waitingOn":["b"],"text":"Waiting for bbbbbbbb: its PR is not open yet\u001b[31m"}}"#;
         let text = held(&format!("[{hold}]"));
@@ -2287,14 +2297,133 @@ mod tests {
         assert!(held("[]").contains("held until its dependencies"), "no event: the fixed words stay");
     }
 
+    // @scenario:S12
+    #[test]
+    fn a_snapshot_without_split_fields_parses_with_them_empty() {
+        let task: Task = serde_json::from_str(TASK).unwrap();
+        assert!(task.split_part.is_none() && task.split_from.is_none());
+        assert!(overview_lines(&task, None, 100, 0, &[]).iter().all(|l| !l.to_string().contains("Part ")));
+    }
+
     #[test]
     fn an_old_snapshot_without_the_stack_fields_still_parses_and_a_split_origin_reads_split() {
         let task: Task = serde_json::from_str(TASK).unwrap();
         assert!(task.split_from.is_none() && task.depends_on.is_empty() && task.base.is_none());
         let json = TASK.replace("\"createdAt\"", "\"archiveReason\":\"split\",\"splitInto\":[\"dddddddd-0000-4000-8000-000000000000\"],\"createdAt\"");
         let origin: Task = serde_json::from_str(&json).unwrap();
-        let text = overview_lines(&origin, None, 100, 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        let text = overview_lines(&origin, None, 100, 0, &[]).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
         assert!(text.contains("split into smaller changes") && text.contains("Split into dddddddd"), "{text}");
+    }
+
+    fn split_card(id8: &str, title: &str, extra: &str) -> Task {
+        let json = TASK
+            .replace("abcdef123456", &format!("{id8}-0000-4000-8000-000000000000"))
+            .replace("Add CSV export", title)
+            .replace("\"createdAt\"", &format!("{extra}\"createdAt\""));
+        serde_json::from_str(&json).unwrap()
+    }
+
+    fn overview_text(task: &Task, tasks: &[Task]) -> String {
+        overview_lines(task, None, 100, 0, tasks).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n")
+    }
+
+    const CHILD_FROM: &str = "\"splitFrom\":\"aaaaaaaa-0000-4000-8000-000000000000\",";
+
+    fn origin_into(ids: &[&str]) -> Task {
+        let list = ids.iter().map(|i| format!("\"{i}-0000-4000-8000-000000000000\"")).collect::<Vec<_>>().join(",");
+        split_card("aaaaaaaa", "Export everything", &format!("\"archiveReason\":\"split\",\"splitInto\":[{list}],"))
+    }
+
+    fn child(id8: &str, title: &str, n: u32, of: u32) -> Task {
+        split_card(id8, title, &format!("{CHILD_FROM}\"splitPart\":{{\"n\":{n},\"of\":{of}}},"))
+    }
+
+    // @scenario:S4
+    #[test]
+    fn a_split_origin_lists_every_child_on_its_own_stack_line_with_part_title_and_state() {
+        let origin = origin_into(&["bbbbbbbb", "cccccccc", "dddddddd"]);
+        let tasks = vec![origin.clone(), child("bbbbbbbb", "Export CSV rows", 1, 3), child("cccccccc", "Export JSON rows", 2, 3), child("dddddddd", "Export XML rows", 3, 3)];
+        let text = overview_text(&origin, &tasks);
+        for (n, title) in [(1, "Export CSV rows"), (2, "Export JSON rows"), (3, "Export XML rows")] {
+            let line = text.lines().find(|l| l.contains(title)).unwrap_or_else(|| panic!("no line for {title}: {text}"));
+            assert!(line.starts_with("Stack") && line.to_lowercase().contains(&format!("part {n}")) && line.contains("implementing"), "{line}");
+        }
+    }
+
+    // @scenario:S5
+    #[test]
+    fn a_split_origin_with_one_child_has_exactly_one_child_stack_line() {
+        let origin = origin_into(&["bbbbbbbb"]);
+        let tasks = vec![origin.clone(), child("bbbbbbbb", "Export CSV rows", 1, 1)];
+        let text = overview_text(&origin, &tasks);
+        let lines: Vec<&str> = text.lines().filter(|l| l.contains("Export CSV rows")).collect();
+        assert_eq!(lines.len(), 1, "{text}");
+        assert!(lines[0].starts_with("Stack") && lines[0].to_lowercase().contains("part 1") && lines[0].contains("implementing"), "{text}");
+    }
+
+    // @scenario:S6
+    #[test]
+    fn a_child_s_origin_line_has_the_origin_title_and_its_short_id() {
+        let origin = origin_into(&["bbbbbbbb"]);
+        let kid = child("bbbbbbbb", "Export CSV rows", 1, 1);
+        let text = overview_text(&kid, &[origin, kid.clone()]);
+        let line = text.lines().find(|l| l.contains("Part 1 of 1 of")).unwrap_or_else(|| panic!("{text}"));
+        assert!(line.contains("Export everything") && line.contains("aaaaaaaa"), "{line}");
+    }
+
+    // @scenario:S7
+    #[test]
+    fn a_child_whose_origin_is_gone_shows_the_origin_s_short_id() {
+        let kid = child("bbbbbbbb", "Export CSV rows", 1, 2);
+        let text = overview_text(&kid, std::slice::from_ref(&kid));
+        let line = text.lines().find(|l| l.contains("Part 1 of 2 of")).unwrap_or_else(|| panic!("{text}"));
+        assert!(line.contains("aaaaaaaa") && !line.contains("aaaaaaaa-"), "{line}");
+    }
+
+    // @scenario:S8
+    #[test]
+    fn a_split_origin_shows_a_missing_child_by_short_id_and_a_present_one_by_title() {
+        let origin = origin_into(&["bbbbbbbb", "eeeeeeee"]);
+        let tasks = vec![origin.clone(), child("bbbbbbbb", "Export CSV rows", 1, 2)];
+        let text = overview_text(&origin, &tasks);
+        let stack: Vec<&str> = text.lines().filter(|l| l.starts_with("Stack")).collect();
+        assert!(stack.iter().any(|l| l.contains("Export CSV rows")), "{text}");
+        let missing = stack.iter().find(|l| l.contains("eeeeeeee")).unwrap_or_else(|| panic!("{text}"));
+        assert!(!missing.contains("Export CSV rows"), "{missing}");
+        assert!(!stack.iter().any(|l| l.trim() == "Stack"), "no empty line: {text}");
+    }
+
+    // @scenario:S9
+    #[test]
+    fn a_title_with_an_escape_sequence_in_a_split_line_is_printed_plain() {
+        let origin = split_card("aaaaaaaa", "Origin \\u001b[31mred", "\"archiveReason\":\"split\",\"splitInto\":[\"bbbbbbbb-0000-4000-8000-000000000000\"],");
+        let kid = child("bbbbbbbb", "Child \\u001b[2Jwipe", 1, 1);
+        let tasks = vec![origin.clone(), kid.clone()];
+        let from_origin = overview_text(&origin, &tasks);
+        let from_child = overview_text(&kid, &tasks);
+        assert!(!from_origin.contains('\u{1b}') && !from_child.contains('\u{1b}'), "{from_origin:?} {from_child:?}");
+        assert!(from_origin.contains("Child") && from_child.contains("Origin"), "{from_origin} {from_child}");
+    }
+
+    // @scenario:S10
+    #[test]
+    fn the_split_lines_keep_the_part_and_split_into_wording_with_an_empty_list() {
+        let kid = child("bbbbbbbb", "Export CSV rows", 2, 3);
+        assert!(overview_text(&kid, &[]).contains("Part 2 of 3 of aaaaaaaa"));
+        let origin = origin_into(&["dddddddd"]);
+        assert!(overview_text(&origin, &[]).contains("Split into dddddddd"));
+        let tasks = vec![origin.clone(), kid.clone()];
+        let named = overview_text(&kid, &tasks);
+        assert!(named.contains("Part 2 of 3 of") && named.contains("aaaaaaaa") && named.contains("Export everything"), "{named}");
+    }
+
+    // @scenario:S11
+    #[test]
+    fn a_card_with_no_split_fields_has_no_split_stack_lines() {
+        let plain: Task = serde_json::from_str(TASK).unwrap();
+        let other = child("bbbbbbbb", "Export CSV rows", 1, 2);
+        let text = overview_text(&plain, &[other, plain.clone()]);
+        assert!(!text.contains("Part ") && !text.contains("Split into") && !text.contains("Export CSV rows"), "{text}");
     }
 
     #[test]
@@ -2353,6 +2482,7 @@ mod tests {
             viewport: &Cell::new(0),
             follow: &Cell::new(false),
             engines: Some(catalog),
+            tasks: &[],
         };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();

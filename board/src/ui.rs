@@ -225,6 +225,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     viewport: &app.detail_viewport,
                     follow: &app.detail_follow,
                     engines: app.engine_catalog.as_ref(),
+                    tasks: &app.tasks,
                 };
                 detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
             }
@@ -806,6 +807,9 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     }
     if let Some(key) = task.jira_key() {
         ids.push_str(&format!(" · {key}"));
+    }
+    if let Some(part) = &task.split_part {
+        ids.push_str(&format!(" · part {}/{}", part.n, part.of));
     }
     let ids = Line::from(Span::from(ids).fg(c(SUBTEXT0)));
 
@@ -3980,5 +3984,68 @@ mod help_sheet_tests {
         assert!(text.contains("↳ has a repo; x or :repo <name> replaces it"), "{text}");
         press(&mut app, KeyCode::Char('a'));
         assert!(matches!(app.mode, Mode::Normal), "a menu key runs and closes");
+    }
+
+    fn split_task(id: &str, title: &str, extra: &str) -> Task {
+        serde_json::from_str(&format!(
+            r#"{{"id":"{id}-0000-4000-8000-000000000000","title":"{title}","description":"","criteria":[],
+            "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,{extra}
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    fn drawn(app: &App, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect();
+        rows.join("\n")
+    }
+
+    // @scenario:S1
+    #[test]
+    fn a_split_origin_names_its_children_and_a_child_names_its_origin_by_title() {
+        let origin = split_task("aaaaaaaa", "Export everything", r#""archiveReason":"split","splitInto":["bbbbbbbb-0000-4000-8000-000000000000","cccccccc-0000-4000-8000-000000000000"],"#);
+        let one = split_task("bbbbbbbb", "Export CSV rows", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":1,"of":2},"#);
+        let two = split_task("cccccccc", "Export JSON rows", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":2},"#);
+        let mut app = App::new(crate::Machine::from_env());
+        app.tasks = vec![origin.clone(), one.clone(), two];
+        app.mode = Mode::Detail(origin.id.clone());
+        let text = drawn(&app, 160, 50);
+        assert!(text.contains("Export CSV rows") && text.contains("Export JSON rows"), "{text}");
+        app.mode = Mode::Detail(one.id.clone());
+        let text = drawn(&app, 160, 50);
+        assert!(text.contains("Export everything"), "{text}");
+    }
+
+    // @scenario:S2
+    #[test]
+    fn a_cozy_card_row_says_which_part_it_is() {
+        let task = split_task("abcdef12", "Login page", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#);
+        let text = card_lines(&task, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("part 2/3"), "{text}");
+    }
+
+    // @scenario:S3
+    #[test]
+    fn a_comfortable_card_row_says_which_part_it_is() {
+        let task = split_task("abcdef12", "Login page", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#);
+        let text = card_lines(&task, None, false, false, Density::Comfortable, 60).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("part 2/3"), "{text}");
+    }
+
+    // @scenario:S10
+    #[test]
+    fn a_split_card_keeps_its_title_and_id_rows_and_a_plain_card_has_no_part_marker() {
+        let task = split_task("abcdef12", "Login page", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#);
+        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect();
+        assert!(lines[0].contains("Login page") && lines.iter().any(|l| l.contains("#abcdef12")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("part 2/3")), "{lines:?}");
+        let plain = split_task("abcdef12", "Login page", "");
+        let lines: Vec<String> = card_lines(&plain, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect();
+        assert!(!lines.iter().any(|l| l.contains("part ")), "{lines:?}");
     }
 }
