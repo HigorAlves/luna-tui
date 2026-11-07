@@ -45,28 +45,61 @@ Both use the same database. Tasks carry over when you switch. For board usage an
 
 ## Slack inbox
 
-`S` on the board is your Slack Activity tab, triaged. It needs a small Slack app of your own. Install the app only in your workspace. Create it once from the manifest in this repo:
+`S` on the board is your Slack Activity tab, triaged. It needs a small Slack app of your own. Install the app only in your workspace. You create it once from the manifest in this repo.
 
-1. Open <https://api.slack.com/apps>. Click **Create New App**. Click **From a manifest**. Pick your workspace. Paste [`slack/manifest.json`](../slack/manifest.json). Click **Create**.
-2. Click **Install to Workspace**. Allow the install. Open the app's **OAuth & Permissions** page. Copy the **User OAuth Token** (`xoxp-…`).
-3. Open **Basic Information → App-Level Tokens**. Generate a token with the `connections:write` scope. Copy it (`xapp-…`). It feeds the live socket. The socket brings in reactions and replies as they happen. Without it, the inbox polls once a minute and shows no reactions.
-4. Put both tokens where the machine reads them. Use `machine/.env` for `pnpm dev`. Use a root `.env` (or the shell) for `pnpm start`:
+To create the app:
+
+1. Open <https://api.slack.com/apps>.
+2. Click **Create New App**.
+3. Click **From a manifest**.
+4. Pick your workspace.
+5. Paste [`slack/manifest.json`](../slack/manifest.json).
+6. Click **Create**.
+
+To get the user token:
+
+1. Click **Install to Workspace**.
+2. Allow the install.
+3. Open the app's **OAuth & Permissions** page.
+4. Copy the **User OAuth Token** (`xoxp-…`).
+
+To get the app token:
+
+1. Open **Basic Information → App-Level Tokens**.
+2. Generate a token with the `connections:write` scope.
+3. Copy the token (`xapp-…`).
+
+The app token feeds the live socket. The socket brings in reactions and replies as they happen. Without it, the inbox polls once a minute and shows no reactions.
+
+To connect the machine:
+
+1. Put both tokens where the machine reads them: `machine/.env` for `pnpm dev`, or a root `.env` (or the shell) for `pnpm start`:
 
    ```sh
    MACHINE_SLACK_USER_TOKEN=xoxp-...
    MACHINE_SLACK_APP_TOKEN=xapp-...
    ```
 
-5. Start the machine. Press `S` on the board. Press `W` to add the team handles (`@platform-team`), keywords or channels. The machine treats them as addressed to you.
+2. Start the machine.
+3. Press `S` on the board.
+4. Press `W` to add the team handles (`@platform-team`), keywords or channels that the machine treats as addressed to you.
 
 The token is yours, so replies from the board post as you. The board posts nothing until you press `ctrl+s` in the reply editor. `d` clears an item on the board only. `MACHINE_SLACK_MARK_READ=on` also marks it read in Slack. Priorities and drafts come from the `slack_triage` pack. The pack is a harness agent. Its default engine is `claude:haiku`, at low effort, with no tools. It runs in the stage container with your Claude credential, the same way every stage does. It makes one short run for each batch of new messages after the poll publishes. Without Docker or a credential (or with `MACHINE_AGENTS=off`), the inbox still fills. It sorts items by time and shows no priorities. The triage follows rules about VIPs, muted channels, quiet hours, always-P0 keywords and your notes. These rules live in `~/.local/state/hardness/slack-triage.md` (`MACHINE_STATE_DIR`). On first run, the machine writes this file from the template in [`docs/agents/slack-triage.md`](./agents/slack-triage.md). `MACHINE_SLACK_RULES` moves it. The `## SLA` section sets how long you give yourself to reply, by priority. The defaults are 10m for P0, 30m for P1, and 1h for P2 and P3, unless you change them. An item past its target turns red on the board. Inside the `## Quiet hours` window, the board raises notices for P0 only. The inbox learns from what you clear and answer. It keeps this next to the rules file, in `slack-triage.learned.md`. Every variable is in [configuration.md](./configuration.md).
 
 ## Jira
 
-Tickets stay on the board. A linked Jira issue follows them. You need one token and one block for each repo:
+Tickets stay on the board. A linked Jira issue follows them. You need one token and one block for each repo.
 
-1. Open <https://id.atlassian.com/manage-profile/security/api-tokens>. Click **Create API token**. Create an unscoped token with an expiry of up to a year. Copy it.
-2. Put the site, your Atlassian email and the token where the machine reads them. Use `machine/.env` for `pnpm dev`. Use a root `.env` or the shell for `pnpm start`:
+To make the token:
+
+1. Open <https://id.atlassian.com/manage-profile/security/api-tokens>.
+2. Click **Create API token**.
+3. Make the token unscoped, with an expiry of up to a year.
+4. Copy the token.
+
+To connect the machine:
+
+1. Put the site, your Atlassian email and the token where the machine reads them: `machine/.env` for `pnpm dev`, or a root `.env` or the shell for `pnpm start`:
 
    ```sh
    MACHINE_JIRA_SITE=https://acme.atlassian.net
@@ -74,7 +107,7 @@ Tickets stay on the board. A linked Jira issue follows them. You need one token 
    MACHINE_JIRA_TOKEN=...
    ```
 
-3. In each repo's `luna.yaml`, say what the machine does in Jira. Set at least `on:` with the statuses you care about. Spell the names as your project's workflow spells them:
+2. In each repo's `luna.yaml`, say what the machine does in Jira:
 
    ```yaml
    jira:
@@ -88,7 +121,9 @@ Tickets stay on the board. A linked Jira issue follows them. You need one token 
        jql: 'project = PLAT AND labels = luna AND status = Ready'
    ```
 
-4. Press `J` on a ticket to link an issue by key or by text search. You can also press `J` to create an issue from the ticket. A `PLAT-123` in the title or description of a new ticket links by itself. Label an issue `luna`. Intake picks it up after the `jira_intake` agent reads it.
+The block needs at least `on:` with the statuses you care about. Spell the names as your project's workflow spells them.
+
+Press `J` on a ticket to link an issue by key or by text search. `J` can also create an issue from the ticket. A `PLAT-123` in the title or description of a new ticket links by itself. To send an issue to intake, label it `luna`. Intake picks it up after the `jira_intake` agent reads it.
 
 The issue moves when the task enters a mapped state. It gets a comment when the machine picks up the task, when the task opens its PR, and when the task closes. The ticket shows the issue's status, priority and due date. A transition that Jira will not allow shows on the ticket as blocked. The machine tries it again every few minutes while the issue answers. Jira never holds up the pipeline. The token expires after at most a year. Jira does not say when it expires ahead of time. Set `MACHINE_JIRA_TOKEN_EXPIRES` to the date you chose when you made the token. Then the machine warns you once a day in the last two weeks. A scoped token also works through `MACHINE_JIRA_CLOUD_ID`. See [configuration.md](./configuration.md).
 
