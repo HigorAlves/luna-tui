@@ -39,7 +39,8 @@ export interface ScopeIssue {
 
 const TOML = /\.toml$/;
 const HEADER = /^\[+([^\]]+)\]+\s*$/;
-const TOKEN = /xox[abposr]-|gh[oprsu]_|github_pat_|\bsk-[A-Za-z0-9_-]{20,}|\b[sr]k_(live|test)_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+// A prefix alone is not a token: docs show `xoxp-…`, `ghp_...` and `KEY=xoxp-...` as placeholders. Each prefix needs a body as long as a real one.
+const TOKEN = /xox[abposr]-[A-Za-z0-9-]{10,}|gh[oprsu]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|\bsk-[A-Za-z0-9_-]{20,}|\b[sr]k_(live|test)_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const SECRET_FILE = /(^|\/)(\.env(\..*)?|\.envrc|\.npmrc|id_(rsa|ecdsa|ed25519)|[^/]+\.(pem|key|p12|pfx))$/;
 /** A match is named by its first four characters: the fact is that one exists, never its value. */
 

@@ -246,3 +246,18 @@ describe("scopeFacts: a source file that holds Rust's inline tests", () => {
     expect(scopeFacts(rs).weakened).toEqual(["S1"]);
   });
 });
+
+describe("scopeFacts: a token prefix in documentation", () => {
+  it("is not a secret: the install guide shows `xoxp-…` and `MACHINE_SLACK_USER_TOKEN=xoxp-...` (a docs card was refused twice)", () => {
+    const addedLines = [
+      { path: "docs/install.md", line: "Copy the **User OAuth Token** (`xoxp-…`)." },
+      { path: "docs/install.md", line: "   MACHINE_SLACK_USER_TOKEN=xoxp-..." },
+      { path: "docs/configuration.md", line: "a GitHub token (`ghp_...`) or a fine-grained one (`github_pat_…`)" },
+    ];
+    expect(scopeFacts({ ...none, nameStatus: status("M\tdocs/install.md", "M\tdocs/configuration.md"), addedLines }).secrets).toEqual([]);
+  });
+  it("still catches a real one: a Slack token with its body (built here, so no token-shaped literal sits in the file)", () => {
+    const slack = ["xox", "p-", "1234567890", "-", "abcdefghij"].join("");
+    expect(scopeFacts({ ...none, nameStatus: status("M\tdocs/install.md"), addedLines: [{ path: "docs/install.md", line: `TOKEN=${slack}` }] }).secrets).toEqual(["docs/install.md: xoxp…"]);
+  });
+});
