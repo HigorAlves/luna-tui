@@ -125,4 +125,24 @@ describe("scenarioTags: Rust's inline tests", () => {
     const outside = scenarioTags({ nameStatus: "M\tboard/src/detail.rs", diff: text, scenarios, testRegions: after, testRegionsBefore: { "board/src/detail.rs": [[2050, 2497]] } });
     expect(outside).toMatchObject({ ok: false, nonTest: ["board/src/detail.rs"] });
   });
+  it("takes a second test module added after the first, with the blank line between them (the split-card writer's ui.rs)", () => {
+    const text = [
+      "diff --git a/board/src/ui.rs b/board/src/ui.rs",
+      "--- a/board/src/ui.rs",
+      "+++ b/board/src/ui.rs",
+      "@@ -3984,0 +3985,6 @@",
+      "+",
+      "+#[cfg(test)]",
+      "+mod split_render_tests {",
+      "+    // @scenario:S1",
+      "+    // @scenario:S2",
+      "+}",
+    ].join("\n");
+    const facts = scenarioTags({ nameStatus: "M\tboard/src/ui.rs", diff: text, scenarios, testRegions: { "board/src/ui.rs": [[3986, 3990]] }, testRegionsBefore: {} });
+    expect(facts).toMatchObject({ ok: true, nonTest: [], inline: ["board/src/ui.rs"] });
+  });
+  it("still refuses code added between two modules", () => {
+    const text = ["diff --git a/board/src/ui.rs b/board/src/ui.rs", "--- a/board/src/ui.rs", "+++ b/board/src/ui.rs", "@@ -3984,0 +3985,6 @@", "+fn sneaky() {}", "+#[cfg(test)]", "+mod t {", "+    // @scenario:S1", "+    // @scenario:S2", "+}"].join("\n");
+    expect(scenarioTags({ nameStatus: "M\tboard/src/ui.rs", diff: text, scenarios, testRegions: { "board/src/ui.rs": [[3986, 3990]] } }).nonTest).toEqual(["board/src/ui.rs"]);
+  });
 });

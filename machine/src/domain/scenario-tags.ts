@@ -48,7 +48,8 @@ export function scenarioTags(input: { nameStatus: string; diff: string; scenario
   const addedByPath = new Map<string, { inside: number; outside: number }>();
   for (const added of addedWithNumbers(input.diff)) {
     const inside = plain(added.path) && !isTest(added.path) && inRegion(added.path, added.no);
-    if (!isTest(added.path)) {
+    // A blank line holds no code: the one between two test modules, or after one, is neither a test line nor production code.
+    if (!isTest(added.path) && added.line.trim() !== "") {
       const count = addedByPath.get(added.path) ?? { inside: 0, outside: 0 };
       if (inside) count.inside++;
       else count.outside++;
@@ -65,7 +66,7 @@ export function scenarioTags(input: { nameStatus: string; diff: string; scenario
   // A source file is a test change when every line the step added to it is inside a test module and every line it removed was inside one
   // before (an existing test updated to a new call, or tagged): a line added or removed outside one makes it a production change.
   const before = input.testRegionsBefore ?? {};
-  const removedOutside = new Set(removedWithNumbers(input.diff).filter((r) => !(before[r.path] ?? []).some(([from, to]) => r.no >= from && r.no <= to)).map((r) => r.path));
+  const removedOutside = new Set(removedWithNumbers(input.diff).filter((r) => r.line.trim() !== "" && !(before[r.path] ?? []).some(([from, to]) => r.no >= from && r.no <= to)).map((r) => r.path));
   const inline = [...addedByPath].filter(([path, n]) => n.inside > 0 && n.outside === 0 && !removedOutside.has(path)).map(([path]) => path);
   const taggedDirs = [...new Set(Object.values(tagged).map((p) => p.split("/").slice(0, -1).join("/")))];
   // A fixture is taken only as an added file under a test directory or beside a tagged test; a modified or deleted one elsewhere (a mock production imports) is a production change.
