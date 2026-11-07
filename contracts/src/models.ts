@@ -64,12 +64,13 @@ export const MODELS: Record<ModelKey, ModelEntry> = CATALOG;
 
 /**
  * The models services use outside any pack (RFC 0007). Cognee, the memory service, calls OpenAI itself with its own opt-in key to
- * build its graph and write answers (`llm`), and embeds with a local model (`embedder`, `dimensions` its vector size). `pnpm start`
+ * build its graph and write answers (`llm`), and embeds with a local model (`embedder`, `dimensions` its vector size, `maxInputTokens` the most it reads at once, which Cognee's
+ * chunks are cut to: its default follows an 8191-token limit, and GLiNER on chunks that big runs it out of memory). `pnpm start`
  * renders `~/.config/hardness/cognee.env` from these entries, so no model ID is written in `compose.yaml` or anywhere else.
  */
 export const SERVICE_MODELS = {
-  cognee: { llm: "openai/gpt-6-luna", embedder: "local/bge-small-en-v1.5", dimensions: 384, llmProvider: "openai", embeddingProvider: "fastembed" },
-} as const satisfies Record<string, { llm: ModelKey; embedder: ModelKey; dimensions: number; llmProvider: string; embeddingProvider: string }>;
+  cognee: { llm: "openai/gpt-6-luna", embedder: "local/bge-small-en-v1.5", dimensions: 384, maxInputTokens: 512, llmProvider: "openai", embeddingProvider: "fastembed" },
+} as const satisfies Record<string, { llm: ModelKey; embedder: ModelKey; dimensions: number; maxInputTokens: number; llmProvider: string; embeddingProvider: string }>;
 
 /** Whether a model is past its retirement on `today` (YYYY-MM-DD): deprecated, and after retireAfter. */
 export function retired(model: ModelEntry, today: string): boolean {

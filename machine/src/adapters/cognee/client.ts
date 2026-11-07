@@ -3,6 +3,8 @@
 // and errors that carry the status and a short, scrubbed body: never the token, never the password.
 import { createHash } from "node:crypto";
 
+import { SERVICE_MODELS } from "@hardness/contracts";
+
 export interface CogneeClientOptions {
   /** `http://127.0.0.1:8010`, no path. */
   baseUrl: string;
@@ -228,7 +230,8 @@ export function cogneeClient(options: CogneeClientOptions): CogneeClient {
     },
 
     async cognify(datasets, timeoutMs = COGNIFY_TIMEOUT_MS) {
-      const body = await json("POST", "/api/v1/cognify", { json: { datasets, runInBackground: false }, timeoutMs });
+      // Chunks the embedder can read whole: Cognee's default follows an 8191-token limit, which ran its local extractor out of memory.
+      const body = await json("POST", "/api/v1/cognify", { json: { datasets, runInBackground: false, chunkSize: SERVICE_MODELS.cognee.maxInputTokens }, timeoutMs });
       // A failed pipeline answers 200 with a status per dataset.
       if (isRecord(body)) {
         for (const run of Object.values(body)) {

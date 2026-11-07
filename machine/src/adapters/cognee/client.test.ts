@@ -126,11 +126,12 @@ describe("calls", () => {
     await expect(client().add({ dataset: "x", items: [{ lunaId: "m", text: "t" }] })).rejects.toThrow(/0 data ids for 1 items/);
   });
 
-  it("cognifies the named datasets and fails on a pipeline that ended in error", async () => {
+  it("cognifies the named datasets in chunks the local embedder can hold, and fails on a pipeline that ended in error", async () => {
     let status = "PipelineRunCompleted";
     authed((_req, res) => send(res, 200, { "ds-1": { status } }));
     await client().cognify(["r:github"]);
-    expect(JSON.parse(seen.find((s) => s.url === "/api/v1/cognify")!.body)).toEqual({ datasets: ["r:github"], runInBackground: false });
+    // Cognee sizes chunks to an 8191-token embedding limit unless told: the local embedder holds 512, and GLiNER on chunks that big ran Cognee out of memory.
+    expect(JSON.parse(seen.find((s) => s.url === "/api/v1/cognify")!.body)).toEqual({ datasets: ["r:github"], runInBackground: false, chunkSize: 512 });
     status = "PipelineRunErrored";
     await expect(client().cognify(["r:github"])).rejects.toThrow(/cognify ended/);
   });
