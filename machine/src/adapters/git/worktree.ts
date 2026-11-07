@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { branchLinkOf, jiraBranch, slug } from "../../domain/jira-link.ts";
 import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
+import { rustTestRegions } from "../../domain/rust-test-regions.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
 import { assertNoNestedRepository, at, isUnderWorkspaces, machineGitDir } from "./machine-repo.ts";
 
@@ -568,8 +569,21 @@ function modesOf(raw: string): Record<string, string> {
   return modes;
 }
 
+/** The `#[cfg(test)]` line ranges, in the new file, of each `.rs` file a name-status lists as added or changed: read from `rev:path` (`:path` is the index). A file over 1 MB or unreadable has none. */
+async function rustRegionsOf(path: string, nameStatus: string, rev: string): Promise<Record<string, Array<[number, number]>>> {
+  const files = nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => /^[AMCR]/.test(status)).map((cols) => cols[cols.length - 1] ?? "").filter((f) => f.endsWith(".rs"));
+  const regions: Record<string, Array<[number, number]>> = {};
+  for (const file of files) {
+    const shown = await exec("git", [...HOST_GIT, ...at(path), "show", `${rev}:${file}`]);
+    if (shown.code !== 0 || shown.stdout.length > 1_000_000) continue;
+    const found = rustTestRegions(shown.stdout);
+    if (found.length > 0) regions[file] = found;
+  }
+  return regions;
+}
+
 /** Stages everything a stage left in the worktree (new files too) and reads what that adds to `base`, the commit the run started from: the name-status, the unified diff and each path's new mode. */
-export async function stagePending(path: string, base: string, options: { untrackedLimit?: number } = {}): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> }> {
+export async function stagePending(path: string, base: string, options: { untrackedLimit?: number } = {}): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; testRegions: Record<string, Array<[number, number]>> }> {
   assertNoNestedRepository(path);
   await refuseHugeUntracked(path, options.untrackedLimit);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
@@ -579,11 +593,11 @@ export async function stagePending(path: string, base: string, options: { untrac
     execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--no-color", "--no-ext-diff", base]),
     execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--raw", base]),
   ]);
-  return { nameStatus, diff, modes: modesOf(raw) };
+  return { nameStatus, diff, modes: modesOf(raw), testRegions: await rustRegionsOf(path, nameStatus, "") };
 }
 
 /** What the commit `sha` changed, only when it is an ancestor of HEAD (the machine's own tests commit, never one found by its subject); null otherwise. */
-export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; parent: string } | null> {
+export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; testRegions: Record<string, Array<[number, number]>>; parent: string } | null> {
   if (!/^[0-9a-f]{7,64}$/.test(sha)) return null;
   if ((await exec("git", [...HOST_GIT, ...at(path), "merge-base", "--is-ancestor", sha, "HEAD"])).code !== 0) return null;
   const [nameStatus, diff, raw, parent] = await Promise.all([
@@ -592,7 +606,7 @@ export async function readCommitDiff(path: string, sha: string): Promise<{ nameS
     execOrThrow("git", [...HOST_GIT, ...at(path), "show", "--raw", "--format=", sha]),
     execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", `${sha}^`]).catch(() => ""),
   ]);
-  return { nameStatus, diff, modes: modesOf(raw), parent };
+  return { nameStatus, diff, modes: modesOf(raw), testRegions: await rustRegionsOf(path, nameStatus, sha), parent };
 }
 
 /** The branch the worktree is on (`HEAD` when detached). */

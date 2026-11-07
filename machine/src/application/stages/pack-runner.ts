@@ -170,6 +170,8 @@ export interface AgentExtra {
   ship?: ShipContext;
   /** implementing: every path of the tests commit, protected from change. */
   testsFiles?: string[];
+  /** implementing: the source files that hold Rust's inline tests, which the implementer may change. */
+  inlineTests?: string[];
   /** implementing, feature route: the commit the scope is measured from (the tests commit the machine made); absent, the branch's base. */
   scopeBase?: string;
   /** implementing: the tests Build's tests step made, one per scenario. */
@@ -444,6 +446,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           planPresent: input.plan != null,
           ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
           ...(extra.testsFiles?.length ? { protectedPaths: extra.testsFiles } : {}),
+          ...(extra.inlineTests?.length ? { inlineTests: extra.inlineTests } : {}),
           get decide() {
             return deps.decide ?? null;
           },

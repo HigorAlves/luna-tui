@@ -302,6 +302,20 @@ describe("the tests step's git", () => {
     expect(pending.modes).toEqual({ "cart.test.ts": "100644" });
   });
 
+  it("reads where a changed Rust file's #[cfg(test)] module is, from the index and from the commit", async () => {
+    const root = workspaceWith("rust-inline-", "a\n");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "ui.rs"), "fn draw() {}\n");
+    wgit(root, "add", "-A");
+    wgit(root, "commit", "-q", "-m", "ui");
+    const base = wgit(root, "rev-parse", "HEAD");
+    writeFileSync(join(root, "src", "ui.rs"), `fn draw() {}\n#[cfg(test)]\nmod tests {\n    // @scenario:S1\n    #[test] fn s1() { assert!("}".len() == 1); }\n}\n`);
+    const pending = await stagePending(root, base);
+    expect(pending.testRegions).toEqual({ "src/ui.rs": [[2, 6]] });
+    const sha = await commitAll(root, "test: scenarios");
+    expect((await readCommitDiff(root, sha!))?.testRegions).toEqual({ "src/ui.rs": [[2, 6]] });
+  });
+
   it("refuses to stage a folder nobody ignored that is too big to be source, naming it, instead of committing a package manager's store", async () => {
     expect(UNTRACKED_LIMIT).toBeLessThan(256 * 1024 * 1024);
     const { root, base } = repoWith();

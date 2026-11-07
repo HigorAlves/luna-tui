@@ -230,3 +230,19 @@ describe("scopeIssues", () => {
     expect(issues).toEqual([expect.objectContaining({ severity: "should_fix", kind: "unrelated_refactor" })]);
   });
 });
+
+describe("scopeFacts: a source file that holds Rust's inline tests", () => {
+  const tests = [{ scenario: "S1", file: "board/src/ui.rs" }];
+  const rs = { ...none, nameStatus: "M\tboard/src/ui.rs", scenarioTests: tests };
+
+  it("is not a weakened test when the implementer changes it: it holds production code too", () => {
+    expect(scopeFacts({ ...rs, inlineTests: ["board/src/ui.rs"], addedLines: [{ path: "board/src/ui.rs", line: "fn draw() {}" }] }).weakened).toEqual([]);
+  });
+  it("is still weakened when a scenario tag is removed from it", () => {
+    const removedLines = [{ path: "board/src/ui.rs", line: "    // @scenario:S1" }];
+    expect(scopeFacts({ ...rs, inlineTests: ["board/src/ui.rs"], removedLines }).weakened).toEqual(["S1"]);
+  });
+  it("any change to a file the step did not mark as inline stays a weakened test", () => {
+    expect(scopeFacts(rs).weakened).toEqual(["S1"]);
+  });
+});

@@ -27,7 +27,7 @@ function fakes(trees: Array<{ nameStatus: string; diff: string }>, over: Partial
   let headValue = "base0";
   const headNow = () => headValue;
   const reviews: Array<string[] | undefined> = [];
-  const implemented: Array<{ scenarioTests?: { scenario: string; file: string }[] }> = [];
+  const implemented: Array<{ scenarioTests?: { scenario: string; file: string }[]; testsFiles?: string[] }> = [];
   let tree = trees[0]!;
   let commit: { subject: string; body: string } | null = null;
   const deps: BuildTestsDeps = {
@@ -143,6 +143,47 @@ describe("the red check, per scenario", () => {
     const result = await buildTestsStep(f.deps)(context([v2]));
     expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
     expect(result.detail).toMatchObject({ testsStep: { status: "committed", redCheck: "skipped" } });
+  });
+});
+
+describe("Rust's inline tests", () => {
+  const rustTree = (outside = false) => ({
+    nameStatus: "M\tboard/src/ui.rs\nA\tboard/tests/extra.rs",
+    diff: [
+      "diff --git a/board/src/ui.rs b/board/src/ui.rs",
+      "--- a/board/src/ui.rs",
+      "+++ b/board/src/ui.rs",
+      ...(outside ? ["@@ -20,0 +20 @@", "+fn sneaky() {}"] : []),
+      "@@ -100,0 +101,5 @@",
+      "+#[cfg(test)]",
+      "+mod tests {",
+      "+    // @scenario:S1",
+      "+    // @scenario:S2",
+      "+}",
+      "diff --git a/board/tests/extra.rs b/board/tests/extra.rs",
+      "--- /dev/null",
+      "+++ b/board/tests/extra.rs",
+      "@@ -0,0 +1 @@",
+      "+// helper",
+    ].join("\n"),
+    testRegions: { "board/src/ui.rs": [[101, 105]] as Array<[number, number]> },
+  });
+
+  it("writes the tests in the source file, commits them, and leaves that file to the implementer: it holds production code", async () => {
+    const f = fakes([rustTree()]);
+    const result = await buildTestsStep(f.deps)(context([v1]));
+    expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(f.implemented[0]!.scenarioTests).toEqual([{ scenario: "S1", file: "board/src/ui.rs" }, { scenario: "S2", file: "board/src/ui.rs" }]);
+    // The test file beside it stays protected; the source file with inline tests does not.
+    expect(f.implemented[0]!.testsFiles).toEqual(["board/tests/extra.rs"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed" } });
+  });
+
+  it("sends the writer back when a line outside the test module was added", async () => {
+    const f = fakes([rustTree(true), rustTree()]);
+    await buildTestsStep(f.deps)(context([v1]));
+    expect(f.calls).toEqual(["writer", "writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(f.reviews[1]!.join(" ")).toMatch(/board\/src\/ui\.rs/);
   });
 });
 

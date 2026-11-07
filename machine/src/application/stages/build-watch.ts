@@ -228,6 +228,8 @@ export interface BuildChecksDeps {
   scenarioTests?: { scenario: string; file: string }[];
   /** Every path of the tests commit: none may change without a person. */
   protectedPaths?: string[];
+  /** Source files that hold Rust's inline tests (the tests step took them as test changes): changing one is not a weakened test. */
+  inlineTests?: string[];
   /** Null when no decision can run: every check is skipped. Read at call time. */
   decide: Decide | null;
   overrides: Record<string, DecisionOverrides>;
@@ -290,7 +292,7 @@ export function buildChecks(deps: BuildChecksDeps) {
     if (deps.inputCommit === null) throw new Error("there is no commit the card's change can be measured from");
     const [nameStatus, diff] = await Promise.all([deps.git.nameStatus(deps.inputCommit, "HEAD"), deps.git.diff(deps.inputCommit, "HEAD")]);
     const addedLines: AddedLine[] = addedLinesOf(diff);
-    return sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines: removedLinesOf(diff), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}) }));
+    return sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines: removedLinesOf(diff), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
   };
 
   /** The files the implementer declared to scope_check, kept here as the verdict is: the machine took them when they were made, so a final answer that leaves them out does not turn them into undeclared files. */

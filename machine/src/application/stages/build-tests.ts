@@ -16,11 +16,13 @@ export interface TestsDiff {
   diff: string;
   /** The new mode of each path (`git diff --raw`): a symlink (120000) or a gitlink (160000) is never a test. */
   modes?: Record<string, string>;
+  /** Per `.rs` file, the line ranges of its `#[cfg(test)]` modules in the new file: Rust's inline tests. */
+  testRegions?: Record<string, Array<[number, number]>>;
 }
 
 export interface BuildTestsDeps {
   /** The implementer, handed the tests the step made (by scenario). */
-  implement: (context: StageContext, extra: { scenarioTests?: { scenario: string; file: string }[]; sweepFailures?: { name: string; tail: string }[]; scopeBase?: string; /** Every path of the tests commit: none may change without a person. */ testsFiles?: string[] }) => Promise<StageResult>;
+  implement: (context: StageContext, extra: { scenarioTests?: { scenario: string; file: string }[]; /** Source files that hold Rust's inline tests, which the implementer may change. */ inlineTests?: string[]; sweepFailures?: { name: string; tail: string }[]; scopeBase?: string; /** Every path of the tests commit: none may change without a person. */ testsFiles?: string[] }) => Promise<StageResult>;
   /** The test writer, as a sub-run; a second round carries what the first left out as `plan.review`. */
   runWriter: (context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** The red_check decision for one scenario's test; `skipped` when it did not answer in time (it never blocks). `problems` are what a confident no said is wrong. */
@@ -140,6 +142,8 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     };
     const subject = `test(${task.id.slice(0, 8)}): scenarios`;
     const testsOf = (facts: ScenarioTagFacts) => Object.entries(facts.tagged).map(([scenario, file]) => ({ scenario, file }));
+    // A source file that holds Rust's inline tests holds production code too: the implementer changes it, so it is not a protected test file.
+    const protectedOf = (nameStatus: string, facts: ScenarioTagFacts) => pathsOf(nameStatus).filter((p) => !facts.inline.includes(p));
     const worktree = task.worktreePath;
     const headMoved = (reason: string): StageResult => ({ outcome: "escalated", detail: { escalation: "head_moved", headMoved: true, reason, testsStep: { status: "failed", problems: [reason] } } });
     const pathsOf = (nameStatus: string): string[] => nameStatus.split("\n").filter((l) => l.trim()).filter((l) => !l.startsWith("D")).map((l) => l.split("\t").at(-1) ?? "").filter(Boolean);
@@ -150,7 +154,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       if (!read) return headMoved("the tests commit the machine made is no longer on the branch: the branch was moved, so nothing is written on it");
       const facts = scenarioTags({ ...read, scenarios });
       if (!context.firstInputCommit || read.parent !== context.firstInputCommit || !facts.ok) return headMoved("the recorded tests commit does not check out against the commit the card's first run started from");
-      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: pathsOf(read.nameStatus) }), { status: "committed", commit: context.testsCommit, resumed: true, scenarioTests: testsOf(facts) });
+      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: protectedOf(read.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) }), { status: "committed", commit: context.testsCommit, resumed: true, scenarioTests: testsOf(facts) });
     }
     if (context.resume) return implementSwept({});
     if (await deps.holdout(task.repoPath)) return withStep(await implementSwept({}), { status: "skipped", why: "holdout_cases" });
@@ -218,7 +222,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       for (const j of judged) await context.emit?.("scenario.red", { scenario: j.id });
       const sha = await deps.git.commit(where, subject, `plan version ${plan.success ? plan.data.version : 2}`);
       await deps.checkpoint(context, where, "red").catch(() => {});
-      const result = await implementSwept({ scenarioTests: testsOf(facts), scopeBase: sha, testsFiles: pathsOf(pending.nameStatus) });
+      const result = await implementSwept({ scenarioTests: testsOf(facts), scopeBase: sha, testsFiles: protectedOf(pending.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) });
       const skipped = judged.some((j) => j.verdict === "skipped");
       return withStep(result, { status: "committed", commit: sha, tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
     }

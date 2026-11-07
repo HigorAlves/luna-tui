@@ -76,3 +76,33 @@ describe("scenarioTags", () => {
     expect(run(["A\tsrc/spec.ts", "A\tlib/test.py", "A\ttests/spec.ts", "A\ttests/test.py", "A\tsrc/test_cart.py", "A\tsrc/cart.spec.ts"])).toEqual(["src/spec.ts", "lib/test.py"]);
   });
 });
+
+describe("scenarioTags: Rust's inline tests", () => {
+  const rs = (path: string, start: number, ...added: string[]) => [`diff --git a/${path} b/${path}`, "index 1..2 100644", `--- a/${path}`, `+++ b/${path}`, `@@ -${start},0 +${start},${added.length} @@`, ...added.map((l) => `+${l}`)].join("\n");
+  const body = ["#[cfg(test)]", "mod tests {", "    // @scenario:S1", "    #[test] fn s1() {}", "    // @scenario:S2", "    #[test] fn s2() {}", "}"];
+  const regions = { "board/src/ui.rs": [[101, 107]] as Array<[number, number]> };
+
+  it("takes a tagged test added inside a #[cfg(test)] module of a source file, and says the file is inline", () => {
+    const facts = scenarioTags({ nameStatus: "M\tboard/src/ui.rs", diff: rs("board/src/ui.rs", 101, ...body), scenarios, testRegions: regions });
+    expect(facts).toMatchObject({ ok: true, missing: [], nonTest: [], tagged: { S1: "board/src/ui.rs", S2: "board/src/ui.rs" }, inline: ["board/src/ui.rs"] });
+  });
+  it("refuses the file when a line is added outside the module", () => {
+    const text = [rs("board/src/ui.rs", 20, "fn sneaky() {}"), rs("board/src/ui.rs", 101, ...body)].join("\n");
+    const facts = scenarioTags({ nameStatus: "M\tboard/src/ui.rs", diff: text, scenarios, testRegions: regions });
+    expect(facts).toMatchObject({ ok: false, nonTest: ["board/src/ui.rs"], inline: [] });
+  });
+  it("refuses the file when a line is removed, even inside the module", () => {
+    const text = `${rs("board/src/ui.rs", 101, ...body)}\n-    #[test] fn old() {}`;
+    const facts = scenarioTags({ nameStatus: "M\tboard/src/ui.rs", diff: text, scenarios, testRegions: regions });
+    expect(facts.ok).toBe(false);
+    expect(facts.nonTest).toEqual(["board/src/ui.rs"]);
+  });
+  it("gives a tag outside any module no credit, and does not take the file without regions", () => {
+    const facts = scenarioTags({ nameStatus: "M\tboard/src/ui.rs", diff: rs("board/src/ui.rs", 101, ...body), scenarios });
+    expect(facts).toMatchObject({ ok: false, missing: ["S1", "S2"], nonTest: ["board/src/ui.rs"] });
+  });
+  it("does not change a test file's own rules", () => {
+    const facts = scenarioTags({ nameStatus: "A\tweb/cart.test.ts", diff: diff("web/cart.test.ts", "// @scenario:S1", "// @scenario:S2"), scenarios });
+    expect(facts).toMatchObject({ ok: true, inline: [] });
+  });
+});
