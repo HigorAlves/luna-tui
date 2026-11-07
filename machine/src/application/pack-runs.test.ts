@@ -6,11 +6,11 @@ import { type DecisionRecord, type EngineId, PACKS, StageInput, type StageOutput
 import { beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
-import { type Credentials, NoCredentialError } from "../adapters/credentials/index.ts";
+import { type Credentials, CredentialWaitError, NoCredentialError } from "../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
 import { withTask } from "./task-scope.ts";
 import { type RunEnd, type RunStart, type Telemetry, noTelemetry } from "./telemetry.ts";
-import { EngineNotAllowedError, NotOnDemandError, PACK_RUNS_DIR, type PackRunRecord, PackRuns, QueueFullError, ownCalls, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "./pack-runs.ts";
+import { EngineNotAllowedError, LOGIN_BUSY_WAIT_MS, NotOnDemandError, PACK_RUNS_DIR, type PackRunRecord, PackRuns, QueueFullError, ownCalls, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "./pack-runs.ts";
 
 const NOW = new Date("2026-11-02T12:00:00.000Z");
 const chat = {
@@ -232,6 +232,40 @@ describe("PackRuns", () => {
     await runs(fakeSandbox(output()), { engineBudgets: { afterRun: async (engine, run) => void calls.push([engine, run]) } }).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, null);
     await runs(fakeSandbox(output({ usage: { turns: 1, costUsd: null, durationMs: 1, model: "m" } })), { engineBudgets: { afterRun: async (engine, run) => void calls.push([engine, run]) } }).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, null);
     expect(calls).toEqual([["codex:luna", { taskId: null, repo: null }]]);
+  });
+
+  describe("when the default engine's login is held by another run (Codex: one run at a time)", () => {
+    /** Credentials whose `busy` engines wait and fail as the Codex lease does, recording the wait each prepare was given. */
+    const busyOn = (busy: EngineId[], waits: Array<number | undefined>): Credentials => ({
+      check: async () => ({ available: true }),
+      prepare: async (engine, _runDir, wait) => {
+        waits.push(wait?.timeoutMs);
+        if (busy.includes(engine)) throw new CredentialWaitError("waited 10 s for the Codex login, which another Codex run on this machine held past this stage's timeout");
+        return { env: { TOKEN: "t" }, mounts: [], release: async () => {} };
+      },
+    });
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
+    const issue = { title: "Board crashes on resize", description: "It panics." };
+
+    it("waits a little, then runs a decision pack on its fallback instead of failing (red_check came back skipped behind a 12-minute Verify)", async () => {
+      const waits: Array<number | undefined> = [];
+      const result = await runs(fakeSandbox(output({ answer: labels })), { credentials: busyOn([DEFAULT], waits) }).run({ pack: "triage_signals", context: { issue } }, "build");
+      expect(result.usage.engine).toBe(FALLBACK);
+      expect(waits[0]).toBe(LOGIN_BUSY_WAIT_MS);
+      expect(seen.map((run) => StageInput.parse(run.input).engine)).toEqual([FALLBACK]);
+    });
+
+    it("never moves an engine the caller named: it fails as before, after the run's own wait", async () => {
+      const waits: Array<number | undefined> = [];
+      await expect(runs(fakeSandbox(output({ answer: labels })), { credentials: busyOn([DEFAULT], waits) }).run({ pack: "triage_signals", engine: DEFAULT, context: { issue } }, null)).rejects.toBeInstanceOf(RunFailedError);
+      expect(waits[0]).not.toBe(LOGIN_BUSY_WAIT_MS);
+      expect(seen).toHaveLength(0);
+    });
+
+    it("fails when the fallback's login is held too", async () => {
+      await expect(runs(fakeSandbox(output({ answer: labels })), { credentials: busyOn([DEFAULT, FALLBACK], []) }).run({ pack: "triage_signals", context: { issue } }, null)).rejects.toBeInstanceOf(RunFailedError);
+      expect(seen).toHaveLength(0);
+    });
   });
 
   describe("on a usage limit", () => {

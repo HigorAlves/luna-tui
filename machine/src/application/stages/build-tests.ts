@@ -209,8 +209,11 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
         continue;
       }
       const reds = redsOf(written.detail?.scenarioReds);
-      const judged = await Promise.all(
-        scenarios.map(async (s) => {
+      // Two at a time, as the machine runs pack calls (PACK_RUNS_MAX): all at once overflowed its queue, and the overflow came back as skipped.
+      const judged = await inTurns(
+        scenarios,
+        RED_JUDGES_AT_ONCE,
+        async (s) => {
           const id = s.id!;
           const output = reds[id];
           if (output === undefined) return { id, verdict: "missing", problems: [`${id}: no red reported; run its test and report the failing output with scenario_red`] };
@@ -221,7 +224,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
           // The task's events say what each scenario's judge said, so an escalation is never only a sentence.
           await context.emit?.("scenario.red_check", { scenario: id, verdict: vote.verdict, asked: vote.askings.length, flagged: vote.askings.filter((a) => a.flagged).length, testRead: test !== null, ...(vote.problems.length ? { problems: vote.problems.map((p) => safe(p).slice(0, 200)) } : {}) });
           return { id, verdict: vote.verdict, problems: vote.problems.map((p) => `${id}: ${safe(p).slice(0, 200)}`) };
-        }),
+        },
       );
       const problems = judged.flatMap((j) => j.problems);
       if (problems.length > 0) {
@@ -238,6 +241,23 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       return withStep(result, { status: "committed", commit: sha, ...checksNote, tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
     }
   };
+}
+
+/** How many scenarios' red_check run at once: the machine's pack calls run two at a time. */
+const RED_JUDGES_AT_ONCE = 2;
+
+/** `work` over `items`, at most `width` at a time, results in the items' order. */
+async function inTurns<T, R>(items: readonly T[], width: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const at = next++;
+      results[at] = await work(items[at]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, lane));
+  return results;
 }
 
 const withUsage = (result: StageResult, usage: StageResult["usage"]): StageResult => (usage ? { ...result, usage } : result);

@@ -52,6 +52,8 @@ import { type Telemetry, noTelemetry } from "./telemetry.ts";
 export const PACK_RUNS_MAX = 2;
 /** How many calls may wait for a place; past it a call is refused (QueueFullError). */
 export const PACK_RUNS_QUEUE = 8;
+/** How long a decision pack with a fallback waits for a login another run holds before it moves to the fallback. */
+export const LOGIN_BUSY_WAIT_MS = 10_000;
 /** Where the run folders live under the state dir while a call runs: their own folder, never the
  *  stage runs' `runs/`, so clearing it at start-up touches nothing a stage left. */
 export const PACK_RUNS_DIR = "pack-runs";
@@ -88,6 +90,8 @@ export class RunEngineDisabledError extends Error {}
 export class RunEngineBudgetError extends Error {}
 /** The pack ran and gave no valid answer: 422 with the run's error. */
 export class RunFailedError extends Error {}
+/** The engine's login was held by another run (Codex: one run at a time) for the whole wait: nothing ran, a fallback engine may. */
+export class RunCredentialBusyError extends RunFailedError {}
 /** Every place is taken and the waiting list is full: 429, nothing ran. */
 export class QueueFullError extends Error {}
 /** The day's spend is at its ceiling: 429, nothing ran. */
@@ -237,9 +241,21 @@ export class PackRuns implements PackRunsPort {
       let movedFrom: EngineId | null = null;
       let limit: RunRateLimitedError | null = null;
       for (;;) {
+        // A decision pack whose engine the caller left to it does not sit out a long agent run that holds the login (Codex: one run
+        // at a time): it waits a little, then moves to its fallback like after a usage limit, instead of failing as skipped.
+        const mayMove = request.engine === undefined && PACKS[pack].kind === "decision" && fallbackCandidates(PACKS[pack], [...tried, engine]).length > 0;
         try {
-          return await this.once(pack, context, engine, client, signal, movedFrom, { taskId: request.taskId, stage: request.stage, own: options.own === true });
+          return await this.once(pack, context, engine, client, signal, movedFrom, { taskId: request.taskId, stage: request.stage, own: options.own === true, ...(mayMove ? { credentialWaitMs: LOGIN_BUSY_WAIT_MS } : {}) });
         } catch (thrown) {
+          if (thrown instanceof RunCredentialBusyError && mayMove) {
+            tried.push(engine);
+            const next = signal?.aborted ? null : await this.fallback(pack, tried);
+            if (!next) throw thrown;
+            this.log(`run: ${pack} moves to ${next}: ${engine}'s login is held by another run`);
+            movedFrom = engine;
+            engine = next;
+            continue;
+          }
           if (!(thrown instanceof RunRateLimitedError)) throw thrown;
           tried.push(engine);
           limit = sooner(limit, thrown);
@@ -284,7 +300,7 @@ export class PackRuns implements PackRunsPort {
   }
 
   /** One run of the pack on one engine, in a place already taken: its answer, or the error that ended it. */
-  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null, origin: { taskId?: string; stage?: string; own?: boolean } = {}): Promise<RunResult> {
+  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null, origin: { taskId?: string; stage?: string; own?: boolean; credentialWaitMs?: number } = {}): Promise<RunResult> {
     const startedAt = this.now();
     const t0 = Date.now();
     const policy = await this.learningOf(origin.taskId);
@@ -306,10 +322,10 @@ export class PackRuns implements PackRunsPort {
       await mkdir(work, { recursive: true });
       const input = buildContextPackInput(pack, context, engine);
       const run = await runPackOnce(
-        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, signal },
+        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: mode === "full" ? span.childEnv() : {}, ...(origin.credentialWaitMs !== undefined ? { credentialWaitMs: origin.credentialWaitMs } : {}), signal },
         { credentials: this.deps.credentials, sandbox: this.deps.sandbox, ...(this.deps.egress ? { egress: this.deps.egress } : {}) },
       );
-      if (run.error !== null) failure = signal?.aborted ? new RunAbortedError("the client left: the run was stopped") : new RunFailedError(run.error);
+      if (run.error !== null) failure = signal?.aborted ? new RunAbortedError("the client left: the run was stopped") : run.credentialBusy ? new RunCredentialBusyError(run.error) : new RunFailedError(run.error);
       else {
         const out = run.output;
         usage = { model: out.usage.model, engine, turns: out.usage.turns, durationMs: out.usage.durationMs, costUsd: out.usage.costUsd };
