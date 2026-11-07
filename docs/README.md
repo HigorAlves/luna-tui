@@ -18,7 +18,7 @@ For the board (the Rust TUI): [`board/README.md`](../board/README.md).
 
 ## RFCs
 
-Design proposals, numbered in the order they were written. Each one says its status at the top; 0002 to 0004 end with notes on what was built and how it differs.
+Design proposals. The numbers follow the order in which the authors wrote them. Each one says its status at the top. 0002 to 0004 end with notes on what the team built and how it differs.
 
 | RFC | What it proposes |
 |---|---|
