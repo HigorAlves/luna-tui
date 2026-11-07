@@ -56,8 +56,8 @@ Press `?` anywhere for the keys of what has the keyboard. That is the board, the
 Inbox, the Digest, the Floor, Pulls, Slack or its Watches. One registry
 (`src/keys.rs`) feeds the sheet. The `x` menus, the `:` completion and the tables in this file
 derive from it too, so they cannot disagree. The sheet knows the ticket under the cursor. The title names
-the ticket and its state. A key that works right now is bright, with what it does (`a  approve the plan`
-at the plan gate, `a  start` on a draft). A key that does not work is dim, with the reason (`r  (only
+the ticket and its state. A key that works right now shows bright, with what it does (`a  approve the plan`
+at the plan gate, `a  start` on a draft). A key that does not work shows dim, with the reason (`r  (only
 a setup, plan or tests go back)`), and a meaning that cannot apply is left out. It opens with every group as rows; `?` again folds the dense groups
 (Move, Filter, Views, App) to one line of keys.
 Inside the sheet, `j`/`k` and `ctrl+d`/`ctrl+u` move the cursor. `enter` runs the row.
@@ -235,7 +235,7 @@ While a gate is open, its strip sits on top of every section with the keys that 
 | Evidence | the QA verdict and every artifact the stages produced, by kind; opens on the latest | `j`/`k` pick a file, `J`/`K` scroll, `o` opens it |
 | PR | the branch's pull request as the Pulls inbox sees it: checks by name, review state, threads, the task in flight; or the URL the ship gate reported | `o` opens it, `S` ships at the gate |
 | Activity | every event | |
-| Engines | each stage the ticket runs (from `GET /packs`), the engine it is set to (yours, else `default: <engine>`) and the one it ran on; the bottom line names the running stage's (`implementing on codex:sol`). A machine from before engines says it offers none | `j`/`k` pick a stage, `E` picks its engine: the default, or one the stage allows; one this machine has no credential for is dim with what is missing and cannot be picked. A stage that already ran keeps its engine |
+| Engines | each stage the ticket runs (from `GET /packs`), the engine it is set to (yours, else `default: <engine>`) and the one it ran on. The bottom line names the running stage's (`implementing on codex:sol`). A machine from before engines says it offers none | `j`/`k` pick a stage. `E` picks its engine: the default, or one the stage allows. An engine with no credential on this machine is dim with what is missing. You cannot pick it. A stage that already ran keeps its engine |
 
 These are the popup's keys. `?` inside it lists them with the ticket's state.
 `J` scrolls here, so the Jira link is the board's `J`:
@@ -299,7 +299,7 @@ meaning. At the plan gate it opens the two-pane plan editor. Otherwise it opens 
 The plan editor splits into two columns. Triage's plan is on the left (brief, criteria to build,
 assumptions). Slices stay as triage wrote them. The ticket's own description and criteria are on the
 right. `tab` moves between the two while you edit. `ctrl+s` saves whichever side changed. You can
-edit the plan through the test check too, since the team has built nothing yet. The editor keeps each edit as a
+edit the plan through the test check too, since no build has started yet. The editor keeps each edit as a
 revision that the Plan section's history shows. On a terminal narrower than 110 columns, the two columns stack
 instead, plan first. `n` fills in a new ticket as the same markdown that `e` edits:
 
