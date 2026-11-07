@@ -353,3 +353,20 @@ describe("the mailbox is read and written as the container's, not the machine's"
     expect(readFileSync(join(dir, "checks", "scope.json"), "utf8")).toBe('{"verdict":"flag"}');
   });
 });
+
+describe("a deleted test the card's own branch wrote", () => {
+  const nameStatus = "M\tdocs/README.md\nD\tcontracts/src/readme-ste.test.ts\nD\tcontracts/src/readme.test.ts";
+  it("is neither a removed test nor an undeclared change; a deleted test of the repo's stays both", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const c = checks(out, null, { planPresent: true, planned: ["docs/README.md"], git: { nameStatus: async () => nameStatus, diff: async () => "" }, repoFiles: async () => new Set(["contracts/src/readme.test.ts"]) });
+    const facts = await c.finalFacts([]);
+    expect(facts.removedTests).toEqual(["contracts/src/readme.test.ts"]);
+    expect(facts.undeclared).toEqual(["contracts/src/readme.test.ts"]);
+  });
+  it("counts every deleted test when the machine cannot tell whose it is", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const c = checks(out, null, { planPresent: true, planned: ["docs/README.md"], git: { nameStatus: async () => nameStatus, diff: async () => "" } });
+    expect((await c.finalFacts([])).removedTests).toEqual(["contracts/src/readme-ste.test.ts", "contracts/src/readme.test.ts"]);
+  });
+});
+

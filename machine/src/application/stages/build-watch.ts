@@ -228,6 +228,9 @@ export interface BuildChecksDeps {
   scenarioTests?: { scenario: string; file: string }[];
   /** Every path of the tests commit: none may change without a person. */
   protectedPaths?: string[];
+  /** Which of `paths` are the repo's own files (on its default branch). A deleted test only a card's branch had (one the harness wrote, such as a
+   *  prose test on a docs card) is neither a removed test nor an undeclared change. Absent, every deleted test counts. */
+  repoFiles?: (paths: string[]) => Promise<Set<string>>;
   /** Source files that hold Rust's inline tests (the tests step took them as test changes): changing one is not a weakened test. */
   inlineTests?: string[];
   /** Null when no decision can run: every check is skipped. Read at call time. */
@@ -292,7 +295,14 @@ export function buildChecks(deps: BuildChecksDeps) {
     if (deps.inputCommit === null) throw new Error("there is no commit the card's change can be measured from");
     const [nameStatus, diff] = await Promise.all([deps.git.nameStatus(deps.inputCommit, "HEAD"), deps.git.diff(deps.inputCommit, "HEAD")]);
     const addedLines: AddedLine[] = addedLinesOf(diff);
-    return sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines: removedLinesOf(diff), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
+    const facts = sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines: removedLinesOf(diff), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}), ...(deps.protectedPaths?.length ? { protectedPaths: deps.protectedPaths } : {}), ...(deps.inlineTests?.length ? { inlineTests: deps.inlineTests } : {}) }));
+    // A test file the card's own branch wrote and the card then deleted was never the repo's: it is not a removed test, nor a change to declare.
+    const deleted = nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => status.startsWith("D")).map((cols) => cols[1] ?? "").filter(Boolean);
+    const deletedTests = deleted.filter((p) => facts.removedTests.includes(p));
+    if (!deps.repoFiles || deletedTests.length === 0) return facts;
+    const repo = await deps.repoFiles(deletedTests).catch(() => new Set(deletedTests));
+    const harness = new Set(deletedTests.filter((p) => !repo.has(p)));
+    return { ...facts, removedTests: facts.removedTests.filter((p) => !harness.has(p)), undeclared: facts.undeclared.filter((p) => !harness.has(p)) };
   };
 
   /** The files the implementer declared to scope_check, kept here as the verdict is: the machine took them when they were made, so a final answer that leaves them out does not turn them into undeclared files. */

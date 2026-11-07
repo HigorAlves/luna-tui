@@ -382,7 +382,7 @@ function graphText(graph: StageInput["context"]["graph"]): string {
 
 /** Said to the implementer and Verify when every file the approved plan touches is documentation. */
 const DOCS_ONLY =
-  "This change touches only documentation (the machine read it off the plan's files). Write no new test and no test file for it: a test of a markdown file measures the prose, not behaviour. Check each scenario by reading the files and the diff, and run only the repo's existing checks.";
+  "This change touches only documentation (the machine read it off the plan's files). Write no new test and no test file for it: a test of a markdown file measures the prose, not behaviour. Check each scenario by reading the files and the diff, and run only the repo's existing checks. A test file this branch added that only checks the prose (written before this rule) is not the repo's: delete it.";
 /** Said to the test designer when every file the plan touches is documentation. */
 const DOCS_ONLY_SCENARIOS =
   "This plan touches only documentation (the machine read it off the plan's files). Every scenario is a check a reviewer makes by reading the files or the diff, or the repo's existing command that already covers them: never a new test or test file, and never a command the repo does not have.";

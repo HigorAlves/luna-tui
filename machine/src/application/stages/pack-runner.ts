@@ -455,6 +455,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
           ...(extra.testsFiles?.length ? { protectedPaths: extra.testsFiles } : {}),
           ...(extra.inlineTests?.length ? { inlineTests: extra.inlineTests } : {}),
+          ...(task.repoPath ? { repoFiles: (paths: string[]) => onDefaultBranch(task.repoPath!, paths) } : {}),
           get decide() {
             return deps.decide ?? null;
           },
