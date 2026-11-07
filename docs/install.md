@@ -19,12 +19,12 @@ It walks a fresh Mac through everything below, one step at a time. Every step is
 | Target | Does |
 |---|---|
 | `make tools` | installs what is missing with Homebrew after one confirmation (Docker Desktop, Node, pnpm, Rust, gh, herdr; gum, Codex and Claude Code if you want them) |
-| `make credentials` | each engine's credential into `~/.config/hardness/` (0600): Claude through `claude setup-token`, the Codex login, an OpenAI key and a Jev key (Vercel AI Gateway or TypeSafe) if you use them; the machine's API token; `gh auth login` |
-| `make integrations` | Jira, the Slack inbox and machine settings (where your repos live, engine budgets) into the root `.env` (0600), each tried against its service; `machine/.env` is linked to it for `pnpm dev` |
+| `make credentials` | each engine's credential into `~/.config/hardness/` (0600). Claude uses `claude setup-token`. Codex uses its login. Add an OpenAI key and a Jev key (Vercel AI Gateway or TypeSafe) if you use them. Add the machine's API token. Run `gh auth login` |
+| `make integrations` | Jira, the Slack inbox and machine settings (where your repos live, engine budgets) into the root `.env` (0600). The target tries each one against its service. It links `machine/.env` to the root file for `pnpm dev` |
 | `make up`, `make down` | `pnpm start`, `pnpm stop` |
 | `make board` | `pnpm board:link` |
-| `make luna-yaml REPO=<path>` | a repo's `luna.yaml`: Jira (the statuses listed from your project when the Jira keys are set), engines, policy, budgets and SLAs; an existing file keeps its comments, the change is shown as a diff, and nothing is written that the machine would refuse. Checks and services come from the board's `:setup <repo>`, which proves them |
-| `make doctor` | what is installed, set and running, and what is missing; never prints a secret |
+| `make luna-yaml REPO=<path>` | a repo's `luna.yaml`: Jira (the statuses that it lists from your project when you set the Jira keys), engines, policy, budgets and SLAs. An existing file keeps its comments. The target shows the change as a diff. It writes nothing that the machine would refuse. Checks and services come from the board's `:setup <repo>`, which proves them |
+| `make doctor` | what you have installed, set and running, and what is missing. It never prints a secret |
 
 No key ever goes into `luna.yaml`. That file lives in the repo, and you usually commit it. The scripts are in `scripts/setup/`. They use gum for the prompts when you have gum, and plain prompts otherwise. Each script opens with Luna's mark in the terminal. The mark moves on a real terminal. `LUNA_NO_ANIMATION=1` keeps it still. `NO_COLOR=1` drops the colours.
 
@@ -73,7 +73,7 @@ The app token feeds the live socket. The socket brings in reactions and replies 
 
 To connect the machine:
 
-1. Put both tokens where the machine reads them: `machine/.env` for `pnpm dev`, or a root `.env` (or the shell) for `pnpm start`:
+1. Put both tokens where the machine reads them. Use `machine/.env` for `pnpm dev`, or a root `.env` (or the shell) for `pnpm start`:
 
    ```sh
    MACHINE_SLACK_USER_TOKEN=xoxp-...
@@ -99,7 +99,7 @@ To make the token:
 
 To connect the machine:
 
-1. Put the site, your Atlassian email and the token where the machine reads them: `machine/.env` for `pnpm dev`, or a root `.env` or the shell for `pnpm start`:
+1. Put the site, your Atlassian email and the token where the machine reads them. Use `machine/.env` for `pnpm dev`, or a root `.env` or the shell for `pnpm start`:
 
    ```sh
    MACHINE_JIRA_SITE=https://acme.atlassian.net
