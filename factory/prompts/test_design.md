@@ -36,6 +36,7 @@ If this lists criteria, an earlier round of scenarios missed them: write scenari
 
 ## Rules
 {{context.plan.docsOnly}}
+- Every scenario is checked by Verify from the branch alone: its files, its diff against the base, and the repo's own commands. Never one that reads a PR description, a commit message or an agent's report (Verify has neither GitHub access nor the reports), and never a git fact the base cannot have.
 - Questions end the stage (`kind: "questions"`, each with its `recommended` answer): nobody answers them during the run.
 - Never write anything: no test files, no fixtures, nothing under `/work`. The implementer writes the tests; you name what they prove.
 - Design from the criteria and the goal only: do not design around a solution you imagine.
