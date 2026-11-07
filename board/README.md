@@ -58,7 +58,7 @@ Inbox, the Digest, the Floor, Pulls, Slack or its Watches. One registry
 derive from it too, so they cannot disagree. The sheet knows the ticket under the cursor. The title names
 the ticket and its state. A key that works right now shows bright, with what it does (`a  approve the plan`
 at the plan gate, `a  start` on a draft). A key that does not work shows dim, with the reason (`r  (only
-a setup, plan or tests go back)`), and a meaning that cannot apply is left out. It opens with every group as rows; `?` again folds the dense groups
+a setup, plan or tests go back)`). The sheet leaves out a meaning that cannot apply. It opens with every group as rows. Press `?` again to fold the dense groups
 (Move, Filter, Views, App) to one line of keys.
 Inside the sheet, `j`/`k` and `ctrl+d`/`ctrl+u` move the cursor. `enter` runs the row.
 Press a bright key to close the sheet and run it. A dim key only says why it does not work.
