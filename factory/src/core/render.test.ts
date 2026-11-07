@@ -706,3 +706,20 @@ describe("renderPromptReport: what a prompt lost", () => {
     expect(renderQuoted({ pack: PACKS.build_tests, input: { ...input, pack: "build_tests", stage: "implementing" } as never, template })).toBe(renderPromptReport({ pack: PACKS.build_tests, input: { ...input, pack: "build_tests", stage: "implementing" } as never, template }).prompt);
   });
 });
+
+describe("verifying: the machine's tests commit", () => {
+  const template = readFileSync(new URL("../../prompts/verifying.md", import.meta.url), "utf8");
+  const verify = (testsCommit?: { sha: string; files: string[] }) =>
+    renderQuoted({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying", context: { ...input.context, baseCommit: "de1ae7a", ...(testsCommit ? { testsCommit } : {}) } } as never, template });
+
+  it("tells Verify the tests commit's files are the harness's, so a 'which files change' scenario is judged without them", () => {
+    const prompt = verify({ sha: "a7aa421", files: ["contracts/src/readme-ste.test.ts"] });
+    expect(prompt).toContain("The machine made commit `a7aa421` itself");
+    expect(prompt).toContain("judge it on the change without these files");
+    // The files are the writer's: quoted as data, never as the machine's words.
+    expect(prompt).toMatch(/<<<data:context\.testsCommit\.files>>>\n\| - contracts\/src\/readme-ste\.test\.ts\n<<<end-data:context\.testsCommit\.files>>>/);
+  });
+  it("says there is none when the card has no tests commit", () => {
+    expect(verify()).toContain("This card has no tests commit of the machine's");
+  });
+});

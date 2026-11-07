@@ -1105,6 +1105,8 @@ export const StageInput = z.object({
     sweepFailures: z.array(z.object({ name: z.string(), tail: z.string() })).optional(),
     /** Where the task branch forked from the repo; verifying diffs against it. */
     baseCommit: z.string().nullable().optional(),
+    /** verifying: the commit the machine itself made for the scenario tests (Build's tests step) and its files. They are the harness's, not the change the ticket asks for. */
+    testsCommit: z.object({ sha: z.string().regex(/^[0-9a-f]{7,64}$/), files: z.array(z.string()) }).nullable().optional(),
     /** For ci_watch: what the host fetched, since the sandbox has no gh credential. */
     ci: CiContext.nullable().optional(),
     /** For reviewing_memory: the last implementing run's slice ledger. */

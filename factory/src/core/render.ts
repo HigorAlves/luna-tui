@@ -436,6 +436,11 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
       (input.context.testCases ?? []).map((c) => scenarioLine("approach" in c ? c : { ...c, approach: c.test })),
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
+    // The machine's own words around a hex sha it checked; the files are the writer's, so they go in as data.
+    "{{context.testsCommit}}": input.context.testsCommit
+      ? `The machine made commit \`${input.context.testsCommit.sha}\` itself, for the approved scenarios' tests, before the implementer ran (Build's tests step). Its files, listed below, are the harness's, not the change the ticket asks for: when a criterion or a scenario limits which files the change touches, judge it on the change without these files (\`git diff --name-only ${input.context.baseCommit ?? "<base>"}..HEAD\`, minus them). They are tests like any other: run them, and judge them as tests.`
+      : "This card has no tests commit of the machine's: every file the branch changed is the change's.",
+    "{{context.testsCommit.files}}": input.context.testsCommit?.files.length ? input.context.testsCommit.files.map((f) => `- ${f}`).join("\n") : "",
     "{{context.graph}}": graphText(input.context.graph),
     "{{context.intake}}": intakeText(input.context.intake),
     "{{context.blastRadius}}": bullets(input.context.blastRadius),

@@ -24,6 +24,7 @@ import {
   defaultBranch,
   dirtyFiles,
   ownedWorkspace,
+  readCommitDiff,
   resetWorktree,
   restoreFiles,
   stackOf,
@@ -360,6 +361,11 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
 
   // The browser run drives ONE target, chosen here, and holds only that target's credential.
   const e2eTarget = pack === "e2e" ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
+  // Verify is told which files the machine's own tests commit added, so a "which files change" criterion is judged without them.
+  const testsRead = pack === "verifying" && context.testsCommit ? await readCommitDiff(workspace.path, context.testsCommit).catch(() => null) : null;
+  const testsCommit = testsRead
+    ? { sha: context.testsCommit!, files: testsRead.nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => /^[AMCR]/.test(status)).map((cols) => cols[cols.length - 1] ?? "").filter(Boolean) }
+    : null;
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -370,6 +376,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     approvals: context.approvals,
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
     baseCommit,
+    ...(testsCommit ? { testsCommit } : {}),
     graph: graphContext,
     ci: extra.ci ?? null,
     review: extra.review ?? null,

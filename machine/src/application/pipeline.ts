@@ -3178,7 +3178,7 @@ export class Pipeline {
       ]);
       repo = task.repoPath;
       const budgetMinutes = stage === "implementing" && task.route === "feature" ? await this.buildMinutesLeft(id, task.repoPath) : undefined;
-      const testsCommit = stage === "implementing" && task.route === "feature" ? await this.testsCommitOf(id) : undefined;
+      const testsCommit = (stage === "implementing" || stage === "verifying") && task.route === "feature" ? await this.testsCommitOf(id) : undefined;
       const firstInputCommit = stage === "implementing" && task.route === "feature" ? await this.firstInputCommitOf(id) : undefined;
       // The entry contract of Build: the feature route builds only from what Plan hands over; what is missing goes back to the planner (once per card), then to a person.
       const entry = stage === "implementing" && task.route === "feature" && !resume ? buildEntryOf(approvals, task.record) : null;

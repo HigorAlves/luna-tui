@@ -135,6 +135,8 @@ export function buildStageInput(opts: {
   budgetMinutes?: number;
   /** For implementing: the tests Build's tests step wrote, one entry per scenario. */
   scenarioTests?: { scenario: string; file: string }[];
+  /** verifying: the tests commit the machine made, and its files. */
+  testsCommit?: { sha: string; files: string[] };
   /** For e2e: the repo's QA targets from luna.yaml. */
   qaTargets?: QaTarget[];
   /** For implementing and verifying: the repo's checks from luna.yaml. */
@@ -210,6 +212,7 @@ export function buildStageInput(opts: {
       ...(pack === "implementing" && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
       ...(pack === "implementing" && opts.sweepFailures?.length ? { sweepFailures: opts.sweepFailures.slice(0, SWEEP_FAILURES_MAX).map((f) => ({ name: safe(f.name).slice(0, 60), tail: safe(f.tail.slice(-SWEEP_TAIL_CAP)).slice(-SWEEP_TAIL_CAP) })) } : {}),
       baseCommit: opts.baseCommit ?? null,
+      ...(pack === "verifying" && opts.testsCommit ? { testsCommit: opts.testsCommit } : {}),
       ...(pack === "triage" ? { intake: intakeOf(task) } : {}),
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,

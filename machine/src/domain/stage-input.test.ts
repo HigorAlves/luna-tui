@@ -216,6 +216,14 @@ describe("buildStageInput", () => {
     expect(input.env).toEqual({ LUNA_FACTORY: "1" });
   });
 
+  it("hands Verify the machine's tests commit and its files, and nobody else", () => {
+    const testsCommit = { sha: "a7aa421", files: ["contracts/src/readme-ste.test.ts"] };
+    const verify = buildStageInput({ task, stage: "verifying", attempt: 1, approvals, priorFindings: [], baseCommit: "9c1f0e2a", testsCommit });
+    expect(StageInput.safeParse(verify).success).toBe(true);
+    expect(verify.context.testsCommit).toEqual(testsCommit);
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [], testsCommit }).context).not.toHaveProperty("testsCommit");
+  });
+
   it("carries the coverage summary to verifying only", () => {
     const coverage = { files: [{ path: "src/a.ts", added: 4, covered: 3, uncovered: [12] }], total: { added: 4, covered: 3 }, report: "coverage/lcov.info" };
     const build = (stage: "verifying" | "implementing") => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], coverage });
