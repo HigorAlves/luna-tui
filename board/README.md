@@ -331,7 +331,7 @@ root above that directory.
 repo search instead of advancing. So you fix the repo before a stage runs.
 `R` opens the same search on a ticket without a repo.
 On a ticket with a repo, it points
-you to `:repo <name>` or the `x` menu's "set the repo", so a stray `R` never
+you to `:repo <name>` or the `x` menu's "set the repo". So a stray `R` never
 re-points a ticket. Type to filter. Press enter to set the repo. There is no path to type or get
 wrong. The search lists every repo under `HARDNESS_REPOS_DIR` (default `~/Developer`).
 It finds a repo that sits directly under that folder,
@@ -344,7 +344,8 @@ too, pre-filled with its recommended answers. `ctrl+s` sends them.
 A new ticket starts in Backlog. `a` moves it to Intake.
 No stage runs: it is just a deliberate "I'm shaping this one up" step. `a` again starts triage.
 
-Press `f` on a ticket with a running stage to open a herdr tab that follows its
+Press `f` on a ticket with a running stage to open a herdr tab.
+The tab follows its
 agent (`docker logs -f` on its container). This works whether the machine runs in Docker or
 on your host. `f` again focuses that tab. Nothing opens by itself.
 Once the tab exists, later stages of the ticket re-point it.
@@ -413,7 +414,7 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 
 ## Backlog
 
-`B` (or `:backlog`) opens the shared backlog: candidates that are not tickets yet, from every source, ranked by the machine (cost of delay over cost of doing, ties by age). A row shows the score, size, demand, age and a stale mark; the selected item's text and sources sit beside the list. Text from outside is flattened before it is drawn.
+`B` (or `:backlog`) opens the shared backlog. It holds candidates that are not tickets yet, from every source. The machine ranks them by cost of delay over cost of doing, with ties by age. A row shows the score, size, demand, age and a stale mark. The selected item's text and sources sit beside the list. The board flattens text from outside before it draws it.
 
 <!-- keys:start backlog -->
 **Item**
@@ -440,22 +441,22 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 
 <!-- keys:end -->
 
-`m` merges after one `y` (Ready to merge only), the way the repo allows (squash, else merge, else rebase). `X` closes your own PR without merging, after one `y` in a "Close PR?" modal; the branch stays, and it is off while a task runs for the PR. `c` dispatches an agent that diagnoses the red
-run; a fixable one is fixed, checked and pushed to the PR's branch. `v` dispatches an agent that
-reads the diff and posts line comments under your name right away; an approve or request-changes
+`m` merges after one `y` (Ready to merge only), the way the repo allows (squash, else merge, else rebase). `X` closes your own PR without merging, after one `y` in a "Close PR?" modal. The branch stays. The key is off while a task runs for the PR. `c` dispatches an agent that diagnoses the red
+run. The agent fixes a fixable one, checks it and pushes it to the PR's branch. `v` dispatches an agent that
+reads the diff and posts line comments under your name right away. An approve or request-changes
 verdict waits at the Ship gate for `a`. `t` dispatches an agent that answers every unresolved
-review thread on your PR, pushes, posts the replies and resolves the threads it settled. `enter`
+review thread on your PR. It pushes, posts the replies and resolves the threads it settled. `enter`
 jumps to the PR's task on the board when one is running, else opens the PR.
 
-`R` polls GitHub now. A poll reads every PR, so it runs in the background: the header says `◐ polling GitHub…` until the answer lands, then a toast says `polled GitHub`, and a second `R` meanwhile only says it is already polling. Slack's `R` does the same.
+`R` polls GitHub now. A poll reads every PR, so it runs in the background. The header says `◐ polling GitHub…` until the answer lands. Then a toast says `polled GitHub`. A second `R` meanwhile only says it is already polling. Slack's `R` does the same.
 
-From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌repo  #n  title  age  tag` in fixed columns, the checks glyph first (`✓` green, `✗` red, `◐` running), the repo's colour bar and name next (the name after the owner's `/`, the same colour its cards wear), a spinner and the work (`◐ ci fix`, `◐ review`, `◐ threads`, in bold yellow) while a task runs for it, and `⌂` when the machine has no clone of the repo; only the title is ever cut; the list scrolls to keep the selected row in view. The pane shows the selected PR: author and branches, every check by name, the review state and unresolved threads, the task in flight, and the keys with why each is off. Under 100 columns the pane hides and `x` shows the same detail over the list. A dispatch on such a PR opens the clone prompt: the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`; `enter` clones into `<folder>/<name>` and runs the action once it lands, `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it), `v` is off on your own PRs, and all three are off while a task already runs for the PR.
+From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌repo  #n  title  age  tag` in fixed columns. The checks glyph comes first (`✓` green, `✗` red, `◐` running). The repo's colour bar and name come next (the name after the owner's `/`, in the same colour its cards wear). While a task runs for the PR, a spinner and the work follow (`◐ ci fix`, `◐ review`, `◐ threads`, in bold yellow). `⌂` shows when the machine has no clone of the repo. The board only ever cuts the title. The list scrolls to keep the selected row in view. The pane shows the selected PR. It lists the author and branches, every check by name, the review state and unresolved threads. It also lists the task in flight and the keys, with why each is off. Under 100 columns the pane hides, and `x` shows the same detail over the list. A dispatch on such a PR opens the clone prompt. It is the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`. `enter` clones into `<folder>/<name>` and runs the action once the clone lands. `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it). `v` is off on your own PRs. All three are off while a task already runs for the PR.
 
 ## Slack
 
-Since wave 17 the machine reads only the conversations you opted in (a channel you watch with `W`, or one listed in `conversation.channels` of a repository's `luna.yaml`); until you opt something in the view says so. Each thread shows what the machine made of it: its kind and how sure it is, the five scores and the total, the knock-out when one hit, "asks you" when it is not sure, the card or backlog item it relates to (and, for a ticket-sourced card, `about a card from <kind> <key>` on its own line), how many secrets were cut, and the draft that waits with how long until it expires. `c` sets the kind and `L` the card or backlog item it is about (the picker lists only the candidates the machine listed); both store an answer and teach the machine, and neither posts. Nothing is posted until you tap: `r` sends or edits the draft, `d` ignores a waiting draft and asks why (`n` no reply was needed, `b` the draft was bad, `s` skip: the answer teaches the machine, nothing is posted), `t` makes the card.
+Since wave 17 the machine reads only the conversations you opted in. That is a channel you watch with `W`, or one listed in `conversation.channels` of a repository's `luna.yaml`. Until you opt something in, the view says so. Each thread shows what the machine made of it. It shows the thread's kind and how sure the machine is. It shows the five scores and the total, and the knock-out when one hit. It shows "asks you" when the machine is not sure. It shows the card or backlog item the thread relates to (for a ticket-sourced card, `about a card from <kind> <key>` on its own line). It shows how many secrets the machine cut. It shows the draft that waits, with how long until it expires. `c` sets the kind, and `L` sets the card or backlog item the thread is about (the picker lists only the candidates the machine listed). Both store an answer and teach the machine. Neither posts. The board posts nothing until you tap. `r` sends or edits the draft. `d` ignores a waiting draft and asks why. The answers are `n` (the thread needed no reply), `b` (the draft was bad) and `s` (skip). The answer teaches the machine, and nothing posts. `t` makes the card.
 
-`S` opens the Slack inbox (`:slack` too): everything your Activity tab shows plus the handles you watch, as the machine polls it every minute and a triage pass sorts it. Six splits, `h`/`l` or `1`–`6` between them, `j`/`k` down the rows. Needs reply and Decide go P0 first, then oldest; the other splits newest first.
+`S` opens the Slack inbox (`:slack` too). It shows everything your Activity tab shows, plus the handles you watch. The machine polls it every minute, and a triage pass sorts it. The inbox has six splits. Use `h`/`l` or `1`–`6` to move between the splits. Use `j`/`k` to go down the rows. Needs reply and Decide go P0 first, then oldest. The other splits go newest first.
 
 | Split | An item lands here when |
 |---|---|
@@ -466,7 +467,7 @@ Since wave 17 the machine reads only the conversations you opted in (a channel y
 | Snoozed | you pressed `s`; it returns to its split when the timer ends |
 | Done | you replied, pressed `d`, or made it a ticket |
 
-A P0 or P1 entering Needs reply or Decide counts on the Board tab's badge and raises a herdr notice; so does any item whose thread moved after you cleared it (`Reopened`). Lower priorities and the other splits are quiet.
+A P0 or P1 entering Needs reply or Decide counts on the Board tab's badge and raises a herdr notice. So does any item whose thread moved after you cleared it (`Reopened`). Lower priorities and the other splits are quiet.
 
 <!-- keys:start slack -->
 **Message**
@@ -505,23 +506,23 @@ A P0 or P1 entering Needs reply or Decide counts on the Board tab's badge and ra
 
 <!-- keys:end -->
 
-`r` opens the editor with triage's draft (vim keys, like every editor); `ctrl+s` posts it as you
-in the thread, `esc` backs out; nothing is ever sent without the key. `t` makes a Backlog task
-from the message and its thread, titled with the summary, in the repo the channel name matches;
-one `y` first, and the repo picker follows when none was guessed. `d` clears the item here at
-once; Slack itself is not touched, and if the thread moves afterwards the item comes back,
+`r` opens the editor with triage's draft (vim keys, like every editor). `ctrl+s` posts it as you
+in the thread, and `esc` backs out. The board never sends anything without the key. `t` makes a Backlog task
+from the message and its thread, titled with the summary, in the repo that the channel name matches.
+It asks for one `y` first, and the repo picker follows when the board guessed none. `d` clears the item here at
+once. The board does not touch Slack itself. If the thread moves afterwards, the item comes back,
 re-triaged, with `new since you cleared it` in the pane. `s` snoozes for 1h, 3h, tomorrow 9:00 or
 next Monday 9:00 (your local 9:00). `N` (Waiting on them only) opens the reply editor with a
-one-line reminder. `!` / `-` move the priority one step; re-triage keeps your value. `enter`
+one-line reminder. `!` / `-` move the priority one step. Re-triage keeps your value. `enter`
 jumps to the item's ticket on the board when it has one, else opens the message in Slack.
 
-From 100 columns the view is a list beside a detail pane. A row reads `P0 ▌#channel  @author  summary  age  tag` in fixed columns: the priority first (`P0` red, `P1` yellow, `P3` muted), the channel's colour bar next (the same hue a repo of that name wears on the board), the author, triage's one-line summary (the only column ever cut; `×N` when a thread's mentions collapsed into one row), the age, then `⎇` for a thread, `⚙` once it is a ticket and `↺` when it came back after you cleared it. The pane shows where and who, the thread's last messages, the message itself, triage's verdict (`P0 · blocker · reply expected`), why, the links it found (with the linked PR's split from your Pulls inbox), the draft, and every key with why it is off. Under 100 columns the strip shortens its labels (`Reply`, `Wait`, `Snz`…), the pane hides and `x` shows the same detail over the list. The strip also says when Slack was last polled and, with an app token, whether the Socket Mode websocket is `live` or down.
+From 100 columns the view is a list beside a detail pane. A row reads `P0 ▌#channel  @author  summary  age  tag` in fixed columns. The priority comes first (`P0` red, `P1` yellow, `P3` muted). The channel's colour bar comes next (the same hue a repo of that name wears on the board). Then come the author and triage's one-line summary. The summary is the only column the board ever cuts, and `×N` shows when a thread's mentions collapsed into one row. The row ends with the age. Then come `⎇` for a thread, `⚙` once it is a ticket, and `↺` when it came back after you cleared it. The pane shows where and who, the thread's last messages and the message itself. It shows triage's verdict (`P0 · blocker · reply expected`) and why. It shows the links it found, with the linked PR's split from your Pulls inbox. It shows the draft and every key, with why it is off. Under 100 columns the strip shortens its labels (`Reply`, `Wait`, `Snz`…). The pane hides, and `x` shows the same detail over the list. The strip also says when the machine last polled Slack and, with an app token, whether the Socket Mode websocket is `live` or down.
 
-Every item that expects a reply carries a due time under the reply SLA for its priority. The targets come from the rules file's `## SLA` section (defaults: P0 10m, P1 30m, P2 and P3 1h); the machine computes them, the board only shows them. The pane says `due      in 12m (P1 · 30m SLA)`, and within five minutes of it the row's age turns yellow. Past it the item is overdue: the row's summary and age go red, the tag leads with `‼`, it sorts to the top of Needs reply and Decide (the longest overdue first, ahead of P0), the strip counts them as `‼ N overdue`, the Board badge counts each one once whatever its priority, and a notice fires the moment it tips over (once; coming back inside the SLA is not news).
+Every item that expects a reply carries a due time under the reply SLA for its priority. The targets come from the rules file's `## SLA` section (defaults: P0 10m, P1 30m, P2 and P3 1h). The machine computes them, and the board only shows them. The pane says `due      in 12m (P1 · 30m SLA)`. Within five minutes of that time, the row's age turns yellow. Past it the item is overdue. The row's summary and age go red, and the tag leads with `‼`. The item sorts to the top of Needs reply and Decide (the longest overdue first, ahead of P0). The strip counts the overdue items as `‼ N overdue`. The Board badge counts each one once, whatever its priority. A notice fires the moment the item tips over (once). Coming back inside the SLA is not news.
 
 ### Watches
 
-A watch is anything beyond your own handle the inbox should treat as addressed to you: a user group (`@platform-team`), a broadcast (`@here`, `@channel`, `@everyone`; these ship on and can be switched off, not deleted), a keyword, or a whole channel. `W` opens them; `e` cycles the priority floor through none, P0, P1, P2 (an item matching the watch is at least that). After `n`, type `@` to complete a user group, `#` to complete a channel, anything else is a keyword; `enter` saves it. Watches live in the machine, so every board shares them and triage reads them.
+A watch is anything beyond your own handle that the inbox should treat as addressed to you. It can be a user group (`@platform-team`), a broadcast, a keyword, or a whole channel. The broadcasts are `@here`, `@channel` and `@everyone`. They ship on, and you can switch them off but not delete them. `W` opens the watches. `e` cycles the priority floor through none, P0, P1, P2 (an item that matches the watch is at least that). After `n`, type `@` to complete a user group, and `#` to complete a channel. Anything else is a keyword. `enter` saves it. Watches live in the machine, so every board shares them and triage reads them.
 
 <!-- keys:start watches -->
 **Watch**
@@ -550,19 +551,19 @@ A watch is anything beyond your own handle the inbox should treat as addressed t
 
 ## Jira
 
-A ticket carries at most one Jira issue; the machine syncs it (the repo's `luna.yaml` says which Jira status each task state moves it to) and the board shows the link. `J` on a ticket with no issue opens a prompt like `R`'s repo search: type a key or a few words, the machine searches from the third character on (`GET /jira/search`, your open issues first), rows read `PLAT-123  In Progress  summary`, `enter` links the row (`POST /tasks/:id/jira`), `ctrl+n` (or `enter` on the first row, `+ create an issue from this ticket`) creates one in the repo's project and links it (`POST /tasks/:id/jira/create`), `esc` backs out. A typed key such as `PLAT-7` links as is without picking a row, and `:jira PLAT-7` does the same from the palette (`:jira` alone is `J`). On a linked ticket `J` asks `unlink PLAT-123? y/n`; `y` drops the link and leaves the issue alone. On a machine without Jira configured the prompt refuses with the reason in the footer. `x` lists the key with the other actions.
+A ticket carries at most one Jira issue. The machine syncs it, and the board shows the link. The repo's `luna.yaml` says which Jira status each task state moves it to. `J` on a ticket with no issue opens a prompt like `R`'s repo search. Type a key or a few words. The machine searches from the third character on (`GET /jira/search`, your open issues first). Rows read `PLAT-123  In Progress  summary`. `enter` links the row (`POST /tasks/:id/jira`). `ctrl+n` (or `enter` on the first row, `+ create an issue from this ticket`) creates one in the repo's project and links it (`POST /tasks/:id/jira/create`). `esc` backs out. A typed key such as `PLAT-7` links as is without picking a row. `:jira PLAT-7` does the same from the palette (`:jira` alone is `J`). On a linked ticket, `J` asks `unlink PLAT-123? y/n`. `y` drops the link and leaves the issue alone. On a machine without Jira configured, the prompt refuses with the reason in the footer. `x` lists the key with the other actions.
 
 What the ticket shows:
 
-- Overview: `Jira       PLAT-123 · In Progress · due Fri · High` (muted `—  J links an issue` until linked), with a red `⚠ blocked: no transition to "In Review" from "Blocked"` line under it while the last declared transition is refused, and an `SLA` row with the clocks the ticket has: `gate 12m of 1h` (red `overdue 40m` once past), `stage implementing 42m of 4h` (yellow from 80% of the target, red past it), `cycle 1d 3h of 3d`, `jira due Fri` (red when the issue's due date passed). Clocks the machine does not report are left out; a machine without them has no row.
-- Cards: the second line ends in ` · PLAT-123` when linked; a ticket past any clock leads with `‼` and its head line goes red, like an overdue Slack row; a stage past 80% turns the age yellow. A ticket made from a Jira issue wears the key in front of its title where a GitHub one wears `#42`.
+- Overview: `Jira       PLAT-123 · In Progress · due Fri · High` (muted `—  J links an issue` until linked). A red `⚠ blocked: no transition to "In Review" from "Blocked"` line shows under it while the machine refuses the last declared transition. An `SLA` row shows the clocks the ticket has. It shows `gate 12m of 1h` (red `overdue 40m` once past). It shows `stage implementing 42m of 4h` (yellow from 80% of the target, red past it). It shows `cycle 1d 3h of 3d`. It shows `jira due Fri` (red when the issue's due date passed). The row leaves out clocks the machine does not report. A machine without them has no row.
+- Cards: the second line ends in ` · PLAT-123` when linked. A ticket past any clock leads with `‼`, and its head line goes red, like an overdue Slack row. A stage past 80% turns the age yellow. A ticket made from a Jira issue wears the key in front of its title where a GitHub one wears `#42`.
 - Activity: `jira → In Progress`, `jira blocked: no transition to "In Review" from "Blocked" — why`, `jira moved to Done`.
-- Within a column a ticket past its gate SLA sorts first, whatever the order; the `!` filter keeps that.
-- Notices: `Gate overdue` the moment the gate clock tips over (once), `Stage over SLA` when the stage clock does, `Jira` when someone moves the linked issue in Jira while the ticket runs (`PLAT-123 moved to Done while #abcdef12 runs`). The header counts the tickets past a clock as `‼ N overdue`, and the Board tab's badge reads `Board !2 ‼1`: the needs-you count as before, then the overdue count. An overdue gate is already waiting on you, so it is not counted twice.
+- Within a column a ticket past its gate SLA sorts first, whatever the order. The `!` filter keeps that.
+- Notices: `Gate overdue` the moment the gate clock tips over (once), and `Stage over SLA` when the stage clock does. `Jira` when someone moves the linked issue in Jira while the ticket runs (`PLAT-123 moved to Done while #abcdef12 runs`). The header counts the tickets past a clock as `‼ N overdue`. The Board tab's badge reads `Board !2 ‼1`: the needs-you count as before, then the overdue count. An overdue gate already waits on you, so the badge does not count it twice.
 
 ## Floor
 
-`F` opens the Floor: one full-screen table with a 7d and a 30d column, read from the machine's `GET /metrics?since=7d|30d`. It shows tasks closed, created and open, what needs you, running and queued now, cycle time (median and p90), the gates answered and the share answered within their SLA with the median wait per gate state (`wait approval median`, from `metrics.gates`), first-pass rate for verifying, ci_watch and implementing, escalation rate with the top reasons, retries per task, cost, and queue depth, slot use and utilisation. A per-stage table (runs, median, p90, cost) sits below it, or beside it on terminals 110 columns or wider. With the Slack inbox on, a Slack block sits under the stage table: items and replies by priority over 7d / 30d, how many of the 7d replies came inside their SLA (count and share), the median and p90 time to reply, the share answered within an hour, and the SLA targets in force as `10m/30m/1h/1h` (`GET /slack/metrics?since=7d|30d`); a machine without the inbox simply leaves it out. Above the per-repo table, an engine table: per engine over 7d (`GET /metrics?groupBy=engine`, for the focused repo when one is) the stage runs, first-pass rate, escalations, runs that hit a usage limit, mean turns and cost, `(none)` for host-only stages and runs from before engines, then this month's spend against the cap that binds it (`$16.00 / $20.00`, `$3.10 / no cap`, from `GET /engines`); an engine with a cap or a spend but no runs this week still gets its row, and one at or past its cap reads red. A machine from before engines gets one line, `the machine does not report engines`. An engine cap crossing 80, 90 or 100% (`budget.alert`, scope `engine`) is a notice naming the engine. Numbers load when you open the view and again on `R` (refresh is `R` in every view, as Pulls and Slack poll with it); if the machine is unreachable the error shows in the footer and the last numbers stay. Fold moved from `F` to `z` to make room.
+`F` opens the Floor: one full-screen table with a 7d and a 30d column. It reads from the machine's `GET /metrics?since=7d|30d`. The table shows tasks closed, created and open, what needs you, and running and queued now. It shows cycle time (median and p90). It shows the gates answered and the share answered within their SLA, with the median wait per gate state (`wait approval median`, from `metrics.gates`). It shows first-pass rate for verifying, ci_watch and implementing. It shows escalation rate with the top reasons, retries per task, and cost. It shows queue depth, slot use and utilisation. A per-stage table (runs, median, p90, cost) sits below it, or beside it on terminals 110 columns or wider. With the Slack inbox on, a Slack block sits under the stage table. It shows items and replies by priority over 7d / 30d. It shows how many of the 7d replies came inside their SLA (count and share). It shows the median and p90 time to reply, and the share answered within an hour. It shows the SLA targets in force as `10m/30m/1h/1h` (`GET /slack/metrics?since=7d|30d`). A machine without the inbox simply leaves the block out. Above the per-repo table, an engine table shows each engine over 7d (`GET /metrics?groupBy=engine`, for the focused repo when one is). It shows the stage runs, first-pass rate, escalations, runs that hit a usage limit, mean turns and cost. It shows `(none)` for host-only stages and runs from before engines. Then it shows this month's spend against the cap that binds it (`$16.00 / $20.00`, `$3.10 / no cap`, from `GET /engines`). An engine with a cap or a spend but no runs this week still gets its row. One at or past its cap reads red. A machine from before engines gets one line, `the machine does not report engines`. An engine cap crossing 80, 90 or 100% (`budget.alert`, scope `engine`) raises a notice naming the engine. The view loads numbers when you open it and again on `R`. Refresh is `R` in every view, as Pulls and Slack poll with it. If the machine is unreachable, the error shows in the footer and the last numbers stay. Fold moved from `F` to `z` to make room.
 
 <!-- keys:start floor -->
 **Move**
@@ -584,9 +585,9 @@ What the ticket shows:
 
 ## Inbox and Digest
 
-`I` opens the Inbox: every ticket that waits on you, split by why (Approve, Answer, Retry, …);
-`a`, `r` and `e` act on the row in place, `A` approves every ticket in the Approve split after one
-`y`, `enter` opens the ticket.
+`I` opens the Inbox. It shows every ticket that waits on you, split by why (Approve, Answer, Retry, …).
+`a`, `r` and `e` act on the row in place. `A` approves every ticket in the Approve split after one
+`y`. `enter` opens the ticket.
 
 <!-- keys:start inbox -->
 **Gate**
@@ -639,8 +640,8 @@ What the ticket shows:
 
 <!-- keys:end -->
 
-`D` opens the Digest: what changed since you last had the board open; `enter` jumps to the
-ticket, `o` opens its PR or issue.
+`D` opens the Digest. It shows what changed since you last had the board open. `enter` jumps to the
+ticket. `o` opens its PR or issue.
 
 <!-- keys:start digest -->
 **Ticket**
