@@ -62,8 +62,6 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_DECISIONS_RETENTION_DAYS` | 365 | a decision record, and a file under `<state dir>/ground-truth/`, older than this is removed by the nightly prune (never one of a card that is still open; `0` keeps everything) |
 | `MACHINE_DECISIONS_MAX_MB` | 4096 | when `decisions/` is over this many megabytes the prune removes records with no truth first, oldest first, never one younger than 7 days or of an open card (`0` for no cap). A card that runs end to end leaves 0.2 to 0.7 MB of records and about 50 KB of ground truth: at 5 cards a day a year is about 1 GB, at 20 a day about 4 GB |
 | `learning` in `luna.yaml` | all kept | a repository can keep less, never more: `records: false`, `context: answers`, `truth: false`, `traces: off`/`metadata`. `MACHINE_DECISIONS=off` and `MACHINE_TRACES=off` stay ceilings it cannot raise |
-| `MACHINE_MEMORY_DOCS` | unset | the company folder for memory (RFC 0007): absolute host folders separated by `:`, never from `luna.yaml`. Its `.md`, `.txt` and `.pdf` files (up to 20 MB, no link followed) go to memory's `company` dataset, which every repository sees and no answer posted in public does. A relative path is an error. Changed files are sent again, deleted ones retired; hashes are kept in `<MACHINE_STATE_DIR>/memory/company-docs.json`. Idle while memory is off Set it with `make company-docs` (also offered by `make integrations`), which writes it to the root `.env` and can make the folder, a git repository with a README. Under Docker (`pnpm start`) it is **one** folder, mounted read-only into the machine at the same path; a `:` list works only for `pnpm dev`. Hidden files and folders (`.git`) are skipped. |
-| `MACHINE_MEMORY_DOCS_INTERVAL` | `600` | seconds between walks of the company folders; `off` stops the poll |
 | `MACHINE_GROUND_TRUTH` | on | set to `off` to stop the machine keeping each approved plan, with what the proposal said and what was edited before approval (and who approved), as `<MACHINE_STATE_DIR>/ground-truth/plan/<taskId>-<approvalId>.json`; the files stay on your machine, never in a repo, and feed later evals |
 | `MACHINE_SLACK_TOKEN` / `MACHINE_SLACK_CHANNEL` | unset | a bot token (`chat:write`) and a channel id: one Slack thread per task, for the cards of a repository whose `luna.yaml` sets `conversation.auto: on` and for no other (with it off, a card's updates are drafts in the thread it came from). Both or neither |
 | `MACHINE_SLACK_SCOPE` | `opted_in` | `all` restores the old reading of every mention, DM and channel; the default reads only a channel watched from the board, a channel a repository lists in `conversation.channels`, and a DM you opted in by its id. A machine variable on purpose: a repository's file cannot widen what the machine reads |
@@ -213,7 +211,7 @@ Three defaults changed with wave 17, and how to set each back:
 | `backlog` | `stale_days: 14` | 14 |
 | `tickets` | `assignees: []`, `teams: []`, `debounce_seconds: 60`, `auto: off`, `sla.acknowledge_hours: 24`, `sla.resolve_days: P0 2, P1 7, P2 30, P3 90`, `sla.stale_days: 30`, `sla.needs_info_reminder_days: 3`, `sla.needs_info_park_days: 10` | 16 |
 | `triage` | `confidence {kind 0.80, size 0.60, urgency 0.70, risk 0.85, archive 0.90}`, `flag_band: 0.15`, `hint_weight: 0.5`, `max_questions: 3`, `max_rounds: 2`, `sla {reminder_days 2, archive_days 5}` | 9 |
-| `graph` | `stale_commits: 50`, `first_build_minutes: 10`, `branch_build_minutes: 3` | 9 `stale_commits` (read by triage, and by the plan stage for the code map's stale flag and, from 11b, the rebuild bar); 11b `first_build_minutes` (how long a card waits for its repository's first graph build before it escalates); `branch_build_minutes` (how long the build of the graph of a card's accepted slice commit may run before the previous branch graph stays, with a note on the card) |
+| `graph` | `stale_commits: 50`, `first_build_minutes: 10` | 9 `stale_commits` (read by triage, and by the plan stage for the code map's stale flag and, from 11b, the rebuild bar); 11b `first_build_minutes` (how long a card waits for its repository's first graph build before it escalates) |
 | `scoring` | `weights {who 3, what 3, impact 2, time 2, demand 1}`, `bands {P0 28, P1 22, P2 16}` | 9 |
 | `fast_lane` | `max_risk: low`, `max_size: S`, `excluded_types: [infra, data]`, `cross_team: false` | 9 |
 | `plan` | `coverage_score_min: 0.85`, `coverage_rounds: 3`, `plan_check_retries: 2`, `approvers {low 1, medium 1, high 2, outside_owning_team true}`, `sla {reminder_days 2, escalate_days 5}` | all read by wave 9b (`coverage_rounds` and `plan_check_retries` since 8) |
@@ -237,36 +235,6 @@ Wave 15 reads `size.target_loc` (`[1000, 2000]`: what the decomposer aims at and
 ## Environment cache
 
 Every stage and check container mounts a docker volume named `hardness-cache-<repo>` at `/cache`, with npm, pnpm, yarn, Go, cargo, pip and uv pointed at it. A retry, or the next task of the same repo, installs from that warm cache instead of the network. `docker volume rm hardness-cache-<repo>` starts a repo over.
-
-## Memory (Cognee)
-
-Memory is [Cognee](https://docs.cognee.ai/) run from its official image, unchanged ([RFC 0007](rfcs/0007-memory-with-cognee.md)). It is the one model path outside packs, and only with its own opt-in OpenAI key. `pnpm start` brings it up with the machine (about a 4 GB image, 1.5 to 2.5 GB of memory); `MACHINE_MEMORY=off` keeps the machine from using it.
-
-**Modes.** With `~/.config/hardness/cognee-openai-key` Cognee builds its graph and writes answers with OpenAI (`openai` mode, model `SERVICE_MODELS.cognee` in the catalog, metered on that key: use a separate OpenAI project with its own budget). Without it Cognee runs keyless (`local` mode): its local extractor builds a shallower graph and answer-writing search is off. Recall and the code graph work the same either way, and embeddings are always local (`BAAI/bge-small-en-v1.5` through fastembed), so search never calls OpenAI. The Floor (`GET /metrics`, field `memory`) says which mode memory is in, its items, writes waiting to be sent, items `cognify` processed today against the cap, and Cognee's tokens and cost today when it reports them.
-
-**Nothing is searchable until `cognify` has run** on the dataset: Cognee chunks and embeds what was added then. The daily cap (`memory.daily_cognify_items`) therefore also delays recall of new items, not only their graph.
-
-| Secret file in `~/.config/hardness` | Made by | What it is |
-|---|---|---|
-| `cognee-openai-key` | you, optional | Cognee's own OpenAI key; absent means local mode. Mode 600. |
-| `cognee-password` | `pnpm start`, once | the machine user's password (`machine@luna.example.com`); sign in to Cognee's UI with it |
-| `cognee-jwt-secret` | `pnpm start`, once | `FASTAPI_USERS_JWT_SECRET`, so tokens survive a container restart |
-| `cognee.env` | `pnpm start`, every start | the Cognee service's env file, rendered from the model catalog (LLM and key in `openai` mode, embedder, JWT secret, cache paths). Edit the files above, not this one |
-
-| Variable | Default | What it does |
-|---|---|---|
-| `MACHINE_MEMORY` | `on` | `off` makes the memory port `noMemory()`: nothing is remembered or recalled and Luna works as before. `on` with Cognee unreachable at boot is the same until it answers (retried every minute, said on the Floor) |
-| `COGNEE_URL` | `http://127.0.0.1:8010` (`http://cognee:8000` under compose) | Cognee's API as the machine reaches it |
-| `COGNEE_EMAIL` | `machine@luna.example.com` | the machine's Cognee user (Cognee refuses reserved domains such as `.local`); registered and logged in at boot |
-| `COGNEE_PASSWORD` | `cognee-password` file | overrides the file |
-| `MACHINE_MEMORY_DAILY_COGNIFY` | `200` | items `cognify` may process in a day, machine-wide; past it the machine stops asking until tomorrow |
-| `COGNEE_PORT` | `8010` | host port of Cognee's API (`127.0.0.1` only; Laminar holds 8000 and 8001) |
-| `COGNEE_UI_TAG` | `latest` | tag of Cognee's UI image (`--profile memory-ui`, at `127.0.0.1:3000`, which `pnpm start` includes) |
-| `COGNEE_EGRESS_ALLOW` | `api.openai.com,huggingface.co,*.huggingface.co,*.hf.co,pypi.org,files.pythonhosted.org` | what Cognee's proxy lets it reach. Everything past `api.openai.com` is for the first start, while the embedder's weights and the local extractor are downloaded onto the `cognee-data` volume; afterwards set it to `api.openai.com` and restart |
-
-**What Cognee can reach.** It sits on the internal `memory` network (no gateway) shared with the machine, the `cognee-proxy` service (the machine's egress proxy from the runner image, with the list above) and `cognee-gate`, a relay that publishes the API on `127.0.0.1:${COGNEE_PORT}`. Its HTTP and HTTPS go through the proxy; a direct connection fails. It also tries GitHub (a price table) and a telemetry host, which are refused and harmless (`LITELLM_LOCAL_MODEL_COST_MAP` and `TELEMETRY_DISABLED` are set to stop the attempts). Its code graph reads `/repos`, the host's `<MACHINE_STATE_DIR>/memory/code` mounted read-write. `docker compose up -d machine` starts the machine with no memory service.
-
-**`luna.yaml` `memory`.** `memory: off` (or `memory: { mode: off }`) keeps a repository out of memory. `daily_cognify_items` (default: the machine's cap) and `stale_lines` (default `200`: changed lines in an item's anchored files that make it stale) are read into `Policy.memory`.
 
 ## Compose
 
@@ -322,18 +290,6 @@ The image carries Node 24, `gh`, Go, Python with a pinned Graphify (`GRAPHIFY_VE
 The video image adds, on top of the QA image, the tools in `/video-tools`: `narrate.ts` (kokoro-js for the voice and whisper-tiny.en through transformers.js for word timestamps, both baked into `/models` at build and read offline), `cards.ts` (a time-driven card page rendered frame by frame through the QA image's chromium), `compose.ts` (ffmpeg cuts, narration, captions, chapters), `measure.ts` (frame statistics, loudness, contact sheets, a transcript) and `fixture.ts` (the demo fixture the recorder imports). The logic is in pure libraries beside them that the machine's test suite covers. Each tool reads and writes only under its job dir `/work`, and the machine runs it with no network and no credential. `pnpm --filter @hardness/machine runner-video:smoke` builds a 20-second synthetic job and runs all four tools inside the image. Size: measured at build, the video image is 6.55 GB on disk (1.79 GB compressed) against the QA image's 5.56 GB (1.49 GB), so about 1 GB more, of which the two models are 235 MB and the npm packages (onnxruntime among them) most of the rest.
 
 Inside a stage container the runner sees `/in/stage.json`, `/out`, `/work` (the card's work folder, with a git repository of the agent's own in `.git` that the machine never reads) and `/session` (the task's SDK session dir, `CLAUDE_CONFIG_DIR`). `LUNA_FACTORY=1` marks the run; `LUNA_STAGE_DRY_RUN=1` renders the prompt and the SDK options without a model call (the sandbox smoke uses it); on an eve engine it prints the agent, model, tools and guard policy instead, and for a decision pack the questions and the state it would send to Jev. A repo may keep binding rules for every stage in `docs/agents/project-context.md`; the memory review proposes additions to it.
-
-## Memory in Claude Code (MCP)
-
-A Claude Code session on this host can recall what Luna remembers through a stdio MCP server in this repository, with one read-only tool, `recall` `{ query, repo?, scope? }` (`scope`: `memory` by default, `docs`, `code`, `all`). It returns items (an id, a kind, where it came from, whether it is stale, the text), never an answer: the session is its own model. It calls the running machine's `POST /memory/recall` as the operator, so with memory off it says so.
-
-```
-claude mcp add luna-memory -- pnpm --silent --dir <path to luna-tui> memory:mcp
-```
-
-`--silent` matters: anything pnpm prints on stdout would corrupt the protocol. The server finds the machine as the board does: `HARDNESS_MACHINE_URL` alone when set, else `http://127.0.0.1:4317` (`pnpm dev`), then `http://127.0.0.1:4318` (`pnpm start`), looked up on each call; and the token from `MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`. It adds no dependency and no model call. Its calls carry `X-Luna-Client: mcp`.
-
-`memory.stale_lines` in a repository's luna.yaml (default 200) is how many lines of an item's anchored files may change after its commit before the item is marked stale (see Memory in architecture.md); a machine that does not know the key uses the default.
 
 ## Board
 

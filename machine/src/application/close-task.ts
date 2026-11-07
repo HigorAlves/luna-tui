@@ -13,7 +13,7 @@ import type { GitHub } from "./github.ts";
 import { CAP_BYTES, CAP_LINES, CONTEXT_FILE, mergeRules } from "./stages/memory.ts";
 
 export interface CloseStep {
-  step: "rules" | "watch-tab" | "worktree" | "branch-graph";
+  step: "rules" | "watch-tab" | "worktree";
   ok: boolean;
   note: string;
 }
@@ -35,8 +35,6 @@ export interface CloseDeps {
   slugOf?: (cwd: string) => Promise<string | null>;
   /** The repo's default branch (default: read from the repo); tests inject one. */
   defaultBranchOf?: (repoPath: string) => Promise<string | null>;
-  /** Deletes the card's branch graphs (`Graph.dropBranch`). */
-  dropBranchGraphs?: (repoPath: string, taskId: string) => Promise<void>;
 }
 
 export interface CloseTarget {
@@ -182,8 +180,5 @@ export async function closeTask(task: CloseTarget, deps: CloseDeps): Promise<Clo
     return "worktree removed";
   });
 
-  // The card's own graphs go with it, whatever became of its workspace.
-  const branchGraph = deps.dropBranchGraphs && task.repoPath ? await attempt("branch-graph", async () => (await deps.dropBranchGraphs!(task.repoPath!, task.id), "branch graphs deleted")) : null;
-
-  return { steps: [...(rules ? [rules] : []), watchTab, worktree, ...(branchGraph ? [branchGraph] : [])], worktreeRemoved };
+  return { steps: [...(rules ? [rules] : []), watchTab, worktree], worktreeRemoved };
 }

@@ -71,8 +71,6 @@ export interface BuildWatchOptions {
   onScopeRequest?: (request: ScopeRequest) => Promise<void>;
   /** Called once per `checks/card-search-request.json` the triage agent writes (a rewritten request is a new one). */
   onCardSearch?: (query: string) => Promise<void>;
-  /** Called once per `checks/memory-request.json` (each carries its call number, so the same query twice is two requests). */
-  onMemoryRecall?: (request: { query: string; scope: "memory" | "docs" | "code" }) => Promise<void>;
   log?: (line: string) => void;
 }
 
@@ -97,8 +95,6 @@ export const MAX_SCOPE_REQUESTS = 3;
 export const MAX_CARD_SEARCHES = 5;
 /** The tail of a red note a decision sees: the failing lines are at the end, and a note is agent-written. */
 export const NOTE_TAIL = 4096;
-/** Memory recalls answered per run. */
-export const MAX_MEMORY_RECALLS = 12;
 
 export function buildWatch(options: BuildWatchOptions): BuildWatch {
   const seen = new Set<number>();
@@ -108,8 +104,6 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
   let lastRequest = "";
   let lastSearch = "";
   let cardSearches = 0;
-  let lastMemory = "";
-  let memoryRecalls = 0;
   let stopped = false;
   let tick: Promise<void> = Promise.resolve();
 
@@ -191,30 +185,8 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
     }
   };
 
-  const memories = async (): Promise<void> => {
-    if (!options.onMemoryRecall) return;
-    const text = await readMailbox(options.outDir, "memory-request.json");
-    if (text === null || text === lastMemory) return;
-    let request: { query: string; scope: "memory" | "docs" | "code" };
-    try {
-      const parsed = JSON.parse(text) as { query?: unknown; scope?: unknown };
-      if (typeof parsed.query !== "string" || (parsed.scope !== "memory" && parsed.scope !== "docs" && parsed.scope !== "code")) return;
-      request = { query: parsed.query.slice(0, 300), scope: parsed.scope };
-    } catch {
-      return; // half-written: the next tick retries
-    }
-    lastMemory = text;
-    if (memoryRecalls >= MAX_MEMORY_RECALLS) return;
-    memoryRecalls += 1;
-    try {
-      await options.onMemoryRecall(request);
-    } catch (error) {
-      options.log?.(`build watch: memory recall: ${(error as Error).message}`);
-    }
-  };
-
   const timer = setInterval(() => {
-    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches).then(memories)));
+    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches)));
   }, options.every);
 
   return {
@@ -226,7 +198,6 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
       await poll();
       await requests();
       await searches();
-      await memories();
       stopped = true;
     },
   };

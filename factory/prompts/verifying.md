@@ -29,10 +29,6 @@ You review before the suite runs: the machine runs the repo's checks and measure
 ## Project context
 {{context.projectContext}}
 
-## Memory from past work
-{{memory.framing}}
-{{context.memory}}
-
 ## Repo checks (from luna.yaml)
 {{context.checks}}
 

@@ -2,7 +2,7 @@
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
 import { hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
-import { type BudgetAlert, type EvidenceContext, type MemoryAnswerAnswer, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal, MemoryExtractAnswer } from "@hardness/contracts";
+import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -12,12 +12,7 @@ import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 
 import { machineSecrets } from "./bootstrap/machine-secrets.ts";
-import { truthName, useTruthSecrets, writeTruthFile } from "./application/ground-truth.ts";
-import { MemoryService } from "./application/memory-service.ts";
-import { MemoryReverts } from "./application/memory-revert.ts";
-import { sweepStale } from "./application/memory-anchoring.ts";
-import { cardMergedAs } from "./adapters/persistence/merged-cards.ts";
-import { repoSlug } from "./adapters/graph/slug.ts";
+import { useTruthSecrets } from "./application/ground-truth.ts";
 import { buildTelemetry, probeCollector } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
@@ -35,18 +30,17 @@ import { DecisionLog } from "./application/decision-log.ts";
 import { ownCalls } from "./application/pack-runs.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
 import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
-import { commitsSince, defaultHead, headCommit, linesChangedSince } from "./adapters/git/worktree.ts";
+import { commitsSince, headCommit } from "./adapters/git/worktree.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
 import { loadCursor } from "./application/ship-cursor.ts";
 import { shipViewOf } from "./application/ship-view.ts";
-import { type MemoryDeps, retroFactsOf } from "./application/stages/memory.ts";
-import { approvedPlan } from "./domain/stage-input.ts";
+import { retroFactsOf } from "./application/stages/memory.ts";
 import { shippedStream } from "./application/ship-loop.ts";
 import type { ShipDecide } from "./application/stages/ship-fixes.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
 import { createIssueClassifier } from "./application/classify.ts";
-import { searchCards, sourceKindOf } from "./domain/card-search.ts";
+import { searchCards } from "./domain/card-search.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
 import { SlackInbox } from "./application/slack-inbox.ts";
@@ -75,19 +69,6 @@ import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
 import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
-import { blobAt, exportRepoCommit, treeAt } from "./adapters/git/main-export.ts";
-import { CompanyDocs } from "./application/memory-company-docs.ts";
-import { MemorySync } from "./application/memory-sync.ts";
-import { recallReviewAsks, writeReviewAsks } from "./application/memory-review-asks.ts";
-import type { AgentDeps } from "./application/stages/pack-runner.ts";
-import type { ShipMonitorDeps } from "./application/stages/ship-monitor.ts";
-import type { TaskRow } from "./domain/task.ts";
-import { similarCardIds, similarOutcomes, viewerOfCard } from "./application/memory-similar.ts";
-import type { Memory } from "./application/memory.ts";
-import { memoryBoot } from "./bootstrap/memory.ts";
-import { recallBlock, toolAnswer, viewerForRun } from "./application/memory-recall.ts";
-import { recordClose } from "./application/memory-close.ts";
-import { type CloseFactsInput, closeFacts } from "./application/memory-facts.ts";
 import { imageSpecOf } from "./domain/image-spec.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
@@ -255,98 +236,6 @@ let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = as
 const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
 let graphWatch: GraphWatch | null = null;
-// Memory (RFC 0007): the one instance every stage, route and loop reads. Quiet (`noMemory()`) when off or until Cognee answers; the boot
-// retries the connection, sends writes still pending and lines Cognee up with the table every hour (`start()` below).
-/** Set further down, once the graph watch and the company poll exist: memory connects after boot, and what the boot skipped is synced then. */
-let onMemoryConnected: (() => void) | null = null;
-const memoryBoot_ = memoryBoot({ config: config.memory, db, onConnected: () => onMemoryConnected?.() });
-const memory: Memory = memoryBoot_.memory;
-/** What memory takes from a repository's default branch (docs, code graph) and from the company folder; both idle while memory is off. */
-const memoryDir = join(config.stateDir, "memory");
-const memorySync = new MemorySync({ memory, git: { head: defaultHead, tree: treeAt, blob: blobAt, exportTo: exportRepoCommit }, slugOf: repoSlug, dir: memoryDir });
-const companyDocs = new CompanyDocs({ memory, dirs: config.memoryDocs.dirs, stateDir: memoryDir });
-/** A card's own source and repository as memory's viewer: what it recalls is what its source could already see. */
-const memoryViewerOf = (task: TaskRow) => viewerOfCard({ repoSlug: repoSlug(task.repoPath ?? ""), source: task.source });
-/** What memory adds around triage, implementing and the merge (RFC 0007, M3 and M4); each part is empty with memory off. */
-/** The viewer a run of `pack` recalls as: the card's own, with `publicPost` from the pack and the card's source (never a literal). */
-const memoryViewerForRun = (task: TaskRow, pack: string) => viewerForRun(memoryViewerOf(task), pack, sourceKindOf(task));
-/** What the close step writes for a card, from the machine's own records: its retro facts, Verify's and CI's findings, its escalations (with a person's correction), Build's scope reds, the CI classes, the dedup answer, the plan's files and the commit it ended at. Null for a card with no repository. */
-async function closeFactsInput(taskId: string): Promise<CloseFactsInput | null> {
-  const task = await pipeline.get(taskId);
-  if (!task.repoPath) return null;
-  const [facts, events, approvals, runs] = await Promise.all([retroFactsFor(taskId), pipeline.events(taskId), pipeline.approvals(taskId), pipeline.stageRuns(taskId)]);
-  const finished = events.filter((e) => e.kind === "stage.finished").map((e) => e.payload as { stage?: string; findings?: unknown; detail?: Record<string, unknown> });
-  const findingsOf = (p: (typeof finished)[number]): Array<{ id?: string; severity: string; category?: string; path: string; title: string }> => {
-    const list = p.findings ?? p.detail?.findings;
-    return Array.isArray(list) ? (list as never) : [];
-  };
-  const seen = new Map<string, { severity: string; category?: string | undefined; path: string }>();
-  for (const p of finished.filter((f) => f.stage === "verifying" || f.stage === "ci_watch")) for (const f of findingsOf(p)) seen.set(f.id ?? `${f.path}:${f.title}`, { severity: String(f.severity), category: f.category, path: String(f.path) });
-  const scopeReds = finished.filter((f) => f.stage === "implementing" && f.detail?.scopeRed === true).flatMap((f) => findingsOf(f).filter((x) => x.severity === "scope").map((x) => ({ check: String(x.title), path: x.path ? String(x.path) : null })));
-  const corrections = events.filter((e) => e.kind === "escalation.corrected").map((e) => (typeof e.payload.to === "string" ? e.payload.to : null));
-  const escalations = events.filter((e) => e.kind === "transition" && e.payload.to === "escalated").map((e, i) => ({ reason: typeof e.payload.escalation === "string" ? e.payload.escalation : null, correctedTo: corrections[i] ?? null }));
-  const ciClasses = finished.filter((f) => f.stage === "ci_watch").flatMap((f) => (typeof f.detail?.class === "string" && f.detail.class !== "none" ? [f.detail.class] : []));
-  const dedup = events.some((e) => e.kind === "card.merged") ? "merged" : events.some((e) => e.kind === "intake.related") ? "related" : null;
-  const plan = approvedPlan(approvals);
-  const planned = (plan?.slices ?? []).flatMap((s) => ((s as { touchpoints?: unknown }).touchpoints as string[] | undefined) ?? []);
-  return {
-    card: { id: task.id, title: task.title },
-    repo: repoSlug(task.repoPath),
-    source: memoryViewerOf(task).source,
-    facts,
-    findings: [...seen.values()],
-    escalations,
-    scopeReds,
-    ciClasses,
-    dedup,
-    files: [...new Set([...planned, ...[...seen.values()].map((f) => f.path)])].filter((p) => typeof p === "string" && p !== ""),
-    commit: runs.findLast((r) => r.outputCommit)?.outputCommit ?? null,
-  };
-}
-/** The retro's lessons (RFC 0007, M2): memory_extract, memory_worth and memory_conflict through PackRuns, bound late. Memory connects after
- *  boot, so each call asks whether it is on now: off, the retro proposes no lessons. */
-const memoryLessons = {
-  facts: async (taskId: string): Promise<string[]> => {
-    const input = await closeFactsInput(taskId);
-    return input ? closeFacts(input).map((d) => d.text) : [];
-  },
-  extract: async (context: Parameters<NonNullable<MemoryDeps["lessons"]>["extract"]>[0]) => {
-    if (!packRuns || !memory.enabled) return null;
-    const parsed = MemoryExtractAnswer.safeParse((await ownCalls(packRuns).run({ pack: "memory_extract", context: { lessons: context }, stage: "ship" }, "ship")).answer);
-    return parsed.success ? parsed.data : null;
-  },
-  recall: async (context: Parameters<NonNullable<MemoryDeps["lessons"]>["recall"]>[0], text: string) =>
-    context.task.repoPath ? (await memory.recall({ query: text, viewer: memoryViewerForRun(context.task, "memory_extract"), scope: "memory", limit: 12 })).items : [],
-  decide: async (pack: "memory_worth" | "memory_conflict", context: Parameters<NonNullable<MemoryDeps["lessons"]>["extract"]>[0]) => {
-    if (!packRuns) throw new Error("agents are off: no model to ask");
-    return tagged(await ownCalls(packRuns).run({ pack, context: { lessons: context }, stage: "ship" }, "ship"));
-  },
-};
-const memoryHooks: { memoryFor: NonNullable<AgentDeps["memoryFor"]>; reviewAsks: NonNullable<ShipMonitorDeps["reviewAsks"]>; lessons?: MemoryDeps["lessons"] } = {
-  lessons: memoryLessons,
-  memoryFor: {
-    // The pushed block and the memory_recall tool: the same viewer, the card's own source, publicPost from the pack.
-    recall: async (task, pack, files) => (task.repoPath ? recallBlock(memory, { pack, viewer: memoryViewerForRun(task, pack), goal: `${task.title}\n${task.record?.goal ?? ""}`, files }) : undefined),
-    answer: async (task, pack, request) => (task.repoPath ? toolAnswer(memory, request, memoryViewerForRun(task, pack)) : { verdict: "ok", items: [], note: "the card has no repository" }),
-    similarOutcomes: async (task) => (task.repoPath ? await similarOutcomes(memory, { title: task.title, text: task.description, id: task.id }, memoryViewerOf(task)) : []),
-    reviewAsks: async (task, files) => {
-      if (!task.repoPath || files.length === 0) return [];
-      const found = await graph.owners(task.repoPath, files).catch(() => null);
-      const owners = [...new Set((found?.owners ?? []).flatMap((o) => o.owners))];
-      return recallReviewAsks(memory, { files, owners, viewer: memoryViewerOf(task) });
-    },
-  },
-  // The PR merged: the threads that led to a fix or a change request become `review_ask` items, with the team CODEOWNERS names for the file.
-  reviewAsks: async (taskId, asks) => {
-    if (!memory.enabled) return;
-    const task = await pipeline.get(taskId);
-    if (!task.repoPath) return;
-    const paths = asks.flatMap((a) => (a.path ? [a.path] : []));
-    const found = paths.length > 0 ? await graph.owners(task.repoPath, paths).catch(() => null) : null;
-    const teams = new Map((found?.owners ?? []).map((o) => [o.path, o.owners.find((x) => x.includes("/")) ?? null]));
-    await writeReviewAsks(memory, { id: task.id, repo: repoSlug(task.repoPath), source: task.source }, asks, (path) => teams.get(path) ?? null);
-  },
-};
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
  *  MACHINE_DISABLE_RUNTIMES turned off, or at a monthly cap (MACHINE_ENGINE_BUDGETS, a repo's
  *  luna.yaml `budget.engines`), is unavailable, as if its credential were missing. */
@@ -440,7 +329,6 @@ const { real, verifyPack, checksExec, agentDeps, shipGateProbe } = await buildRe
   { search: async ({ repoPath, selfId, selfSource, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, selfSource, now: new Date() }) },
   // A stacked card's workspace: what it is cut from and the base it drops, read from the pipeline's rows when a run first makes it.
   stackDeps,
-  memoryHooks,
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -530,8 +418,6 @@ let replies: ThreadReplies;
 let jiraSync: JiraSync;
 /** The ticket clocks, computed whenever a task is serialized. */
 let slaClocks: SlaClocks;
-/** Retires what memory learned from a card whose merged PR a later merged PR reverts; built below, once GitHub and the database are. */
-let memoryReverts: MemoryReverts | null = null;
 
 /** Streams each logged event, plus the whole task whenever its state (or its Jira link) may have changed. */
 function publish(event: EventRow): void {
@@ -540,7 +426,6 @@ function publish(event: EventRow): void {
   if (shipped) bus.publish(shipped);
   void replies.handle(event);
   void jiraSync.handle(event);
-  void memoryReverts?.handle(event);
   if (event.kind === "transition" || event.kind === "task.created" || event.kind === "approval.partial" || event.kind.startsWith("jira.")) {
     pipeline.get(event.taskId).then(
       async (task) =>
@@ -577,8 +462,6 @@ pipeline = new Pipeline(db, runnerFor, {
   // Context setup: by script, through the ports. The history ports and the map are read at call time (they are built below).
   ...(config.publicUrl ? { publicBoardUrl: config.publicUrl } : {}),
   knownRepos: async () => [...Object.values(config.repoMap), ...(await repoMap.remembered())],
-  // Memory's nearest past cards join the lexical dedup shortlist (RFC 0007, M3); the card's own source is the viewer.
-  similarCardIds: async (task) => (task.repoPath ? similarCardIds(memory, { title: task.title, text: task.description }, memoryViewerOf(task)) : []),
   // Intake's duplicate check: one `intake_dedup` call through the packs-on-demand runner, and the backlog as it is at that moment (both read at call time: they are built below).
   dedup: {
     decide: async (context) => {
@@ -619,13 +502,7 @@ pipeline = new Pipeline(db, runnerFor, {
   maxPerStage: config.maxPerStage,
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
-  // Memory at close (RFC 0007, M2): the card's facts, the lessons a person approved, the items they retired. Asked at close, not at boot:
-  // memory connects after the machine starts.
-  memoryClose: async (taskId: string, approved: Parameters<typeof recordClose>[2]) => {
-    if (!memory.enabled) return;
-    await recordClose(memory, await closeFactsInput(taskId).catch(() => null), approved);
-  },
-  closeDeps: { exec, worktreeRemove: false, watcher, github, dropBranchGraphs: async (repoPath, taskId) => void (await graph.dropBranch?.(repoPath, taskId)) },
+  closeDeps: { exec, worktreeRemove: false, watcher, github },
   // A merged card's retro: the truth file, and the graph misses its Build Report also declared (never written into prompts or rules).
   retroOutputs: {
     stateDir: config.stateDir,
@@ -730,8 +607,6 @@ const slackInbox = new SlackInbox({
       return at < 0 ? null : `it ranks ${at + 1} of ${list.length}`;
     },
     docs: (repo, text) => repoDocs(repo, text),
-    // Memory's part of the draft: recalled as the Slack viewer of this repository and channel, so only this channel's own items and the shared docs come back.
-    memory: async (repo, channel, query) => (await memory.recall({ query, viewer: { kind: "slack", repo: repoSlug(repo), channel }, scope: "memory" })).items,
     tone: (channel, isPrivate) => conversationDrafts.recentEdits(channel, isPrivate),
     run: async (context) => {
       if (!packRuns) throw new Error("agents are off: no model to draft the reply");
@@ -820,46 +695,6 @@ verifyDecisions.lastRed = async (taskId) => {
 };
 // A run folder a crash left holds a client's context: never kept.
 await packRuns?.clearLeftovers();
-/** What the API does with memory (RFC 0007): ask (the `memory_answer` pack over recalled items, or Cognee's own answer), recall for the host MCP server, the memory view's list, forget and adopt. */
-const memoryService = new MemoryService({
-  memory,
-  ...(packRuns ? { run: async (context) => (await ownCalls(packRuns).run({ pack: "memory_answer", context: { memoryAnswer: context } }, "memory")).answer as MemoryAnswerAnswer } : {}),
-  slugOf: repoSlug,
-  ...(config.groundTruth ? { onForgotten: async (record) => void (await writeTruthFile(config.stateDir, "memory_forget", truthName(`${record.at}-${record.id}.json`), record)) } : {}),
-});
-// Forgetting (RFC 0007): a merged revert retires the reverted card's items; hourly, items whose anchored files moved on go stale.
-// Idempotent (a second pass changes nothing). `memory.reconcile()` is scheduled by the Cognee bootstrap, not here.
-memoryReverts = new MemoryReverts({
-  memory,
-  pr: async (repo, number) => {
-    const facts = await github.prFacts(repo, number);
-    return facts ? { title: facts.title, body: facts.body ?? null } : null;
-  },
-  cardMergedAs: (target) => cardMergedAs(db, target),
-});
-const memoryRepoPaths = async (): Promise<string[]> => [...new Set([...Object.values(config.repoMap), ...(await repoMap.remembered())])];
-let memoryMaintaining = false;
-async function maintainMemory(): Promise<void> {
-  if (!memory.enabled || memoryMaintaining) return;
-  memoryMaintaining = true;
-  try {
-    const swept = await sweepStale({
-      memory,
-      repoPaths: memoryRepoPaths,
-      slugOf: repoSlug,
-      linesChanged: linesChangedSince,
-      // `memory.stale_lines` in the repository's luna.yaml; absent, the default of 200.
-      staleLines: async (repoPath) => ((await policies.for(repoPath)).factory as { memory?: { stale_lines?: number } }).memory?.stale_lines,
-    });
-    if (swept.staled > 0) console.log(`memory: ${swept.staled} items gone stale of ${swept.checked} checked`);
-  } catch (error) {
-    console.warn("memory: maintenance failed", error);
-  } finally {
-    memoryMaintaining = false;
-  }
-}
-setInterval(() => void maintainMemory(), 60 * MINUTE_MS).unref();
-setTimeout(() => void maintainMemory(), 2 * MINUTE_MS).unref();
 /** Intake's first read of a new issue: triage_signals on Jev through the same PackRuns, recorded
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
 const classifier = packRuns ? createIssueClassifier({ runs: ownCalls(packRuns) }) : null;
@@ -939,9 +774,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
   return { ok: true };
 };
 const app = createApp({
-  memory: memoryService,
   approveBase,
-  memoryFloor: () => memoryBoot_.floor(),
   repoHealth: () =>
     repoHealthOf({
       repos: [],
@@ -951,7 +784,6 @@ const app = createApp({
       images: { status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null },
       graph,
       watch: { health: (repoPath) => graphWatch?.health(repoPath) ?? { building: false, lastFailure: null } },
-      memory: memorySync,
     }),
   db,
   pipeline,
@@ -979,8 +811,6 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
     `machine listening on http://${config.host}:${info.port} · real stages: ${agents.join(", ")} · up to ${config.maxConcurrentTasks} task(s) at once${config.apiToken ? " · API token required" : ""}`,
   );
 });
-
-memoryBoot_.start();
 
 if (config.githubPrs.enabled) {
   console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s`);
@@ -1069,10 +899,6 @@ graphWatch = new GraphWatch({
   graph,
   policies,
   repos: knownRepos,
-  // Only while memory is connected: a sync against the quiet port would record documents and the code graph as sent.
-  afterBuild: async (repoPath, head) => {
-    if (memory.enabled) await memorySync.sync(repoPath, head || undefined);
-  },
 });
 const graphTicker = config.agents && config.graphIntervalSecs !== null ? new Ticker(() => void graphWatch?.tick(), config.graphIntervalSecs * 1000) : null;
 if (graphTicker) {
@@ -1081,23 +907,6 @@ if (graphTicker) {
   console.log(`graph: each repo's code graph rebuilt when its default branch moves, checked every ${config.graphIntervalSecs}s`);
 } else {
   console.log("graph: off (MACHINE_GRAPH_INTERVAL=off or agents off); stages run without a code graph");
-}
-
-/** The company folder (RFC 0007): polled while memory is on and `MACHINE_MEMORY_DOCS` names a folder. */
-// Each pass asks whether memory is connected now (it connects after boot); a pass against the quiet port would record files as sent.
-const companyPoll = (): void => {
-  if (memory.enabled) void companyDocs.poll();
-};
-const companyTicker = config.memory.enabled && config.memoryDocs.dirs.length > 0 && config.memoryDocs.intervalSecs !== null ? new Ticker(companyPoll, config.memoryDocs.intervalSecs * 1000) : null;
-// Memory connected after boot: a graph pass (its afterBuild syncs the docs and the code graph) and a company poll, now rather than at the next timer.
-onMemoryConnected = () => {
-  void graphWatch?.tick();
-  if (companyTicker) companyPoll();
-};
-if (companyTicker) {
-  companyTicker.start();
-  companyPoll();
-  console.log(`memory: company folder (${config.memoryDocs.dirs.length}) read every ${config.memoryDocs.intervalSecs}s`);
 }
 
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
@@ -1146,13 +955,11 @@ const slaTicker = new Ticker(() => {
 slaTicker.start();
 
 async function shutdown(): Promise<void> {
-  memoryBoot_.stop();
   intake?.stop();
   jiraWatch?.stop();
   jiraIntake?.stop();
   slaTicker.stop();
   graphTicker?.stop();
-  companyTicker?.stop();
   pulls.stop();
   slackInbox.stop();
   socket?.stop();

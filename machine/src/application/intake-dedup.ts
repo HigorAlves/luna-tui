@@ -3,7 +3,7 @@
 import { type DedupContext, FACTORY_DEFAULTS } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
-import { type Candidate, type Near, SHORTLIST, similarWithVectors } from "../domain/similarity.ts";
+import { type Candidate, type Near, SHORTLIST, similar } from "../domain/similarity.ts";
 
 export type DedupAnswer = Record<`slot${1 | 2 | 3 | 4 | 5}`, { choice: "same" | "related" | "different"; confidence: number } | undefined>;
 
@@ -57,16 +57,15 @@ export interface DedupFindings {
   failed: boolean;
 }
 
-/** The shortlist of `candidates`, judged in one call. No similar card means no call; a failed call means no outcome, so a card is never held up by it.
- *  `vectorIds` (memory's nearest cards, best first) join the lexical shortlist inside `candidates` only: they never widen what the card could see. */
+/** The shortlist of `candidates`, judged in one call. No similar card means no call; a failed call means no outcome, so a card is never held up by it. */
 export async function checkDuplicates(
   deps: DedupDeps,
   card: { title: string; text: string; repo: string | null },
   candidates: Candidate[],
-  options: { now: Date; dedup?: { duplicate: number; related: number; ask_below: number; lookback_days: number }; vectorIds?: readonly string[] },
+  options: { now: Date; dedup?: { duplicate: number; related: number; ask_below: number; lookback_days: number } },
 ): Promise<DedupFindings> {
   const dedup = options.dedup ?? FACTORY_DEFAULTS.dedup;
-  const shortlist = similarWithVectors(card, candidates, options.vectorIds ?? [], { now: options.now, lookbackDays: dedup.lookback_days });
+  const shortlist = similar(card, candidates, { now: options.now, lookbackDays: dedup.lookback_days });
   if (shortlist.length === 0) return { outcome: NO_OUTCOME, shortlist, answer: null, failed: false };
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const context: DedupContext = {

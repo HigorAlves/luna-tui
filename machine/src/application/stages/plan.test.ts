@@ -112,7 +112,7 @@ describe("planStage's code map", () => {
   it("looks the goal up in the graph with the ticket's title and description and the repo's stale bar", async () => {
     const seen: Array<{ text: string; options?: { staleCommits?: number } }> = [];
     const graph = { stampOf: async () => ({ commit: "c" }), locate: async (_repo: string, text: string, options?: { staleCommits?: number }) => { seen.push({ text, options }); return located(); } };
-    const repo = { policies: { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2 }, graph: { stale_commits: 7, first_build_minutes: 10, branch_build_minutes: 3 } } }) } };
+    const repo = { policies: { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2 }, graph: { stale_commits: 7, first_build_minutes: 10 } } }) } };
     await setup({}, { graph, ...repo }).run(context());
     expect(seen).toEqual([{ text: "Panic\nd", options: { staleCommits: 7 } }]);
   });

@@ -2,7 +2,6 @@
 # to keep running on the side. `pnpm dev` starts only Postgres (`docker compose up postgres`)
 # and runs the machine on the host with hot reload, for working on the harness itself.
 # `docker compose --profile observe up -d` adds Laminar, the local trace and eval UI (docs/configuration.md).
-# Memory (RFC 0007) is Cognee, from its official image: `cognee` starts with the machine, `--profile memory-ui` adds its UI at 127.0.0.1:3000.
 name: hardness-dev
 
 services:
@@ -33,7 +32,6 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    networks: [default, memory]
     healthcheck:
       # Bound to 0.0.0.0 in here, the API asks for its token (`pnpm start` writes one), /health too.
       test: ["CMD", "node", "-e", "const t = process.env.MACHINE_API_TOKEN || require('fs').readFileSync('/root/.config/hardness/machine-api-token', 'utf8'); fetch('http://127.0.0.1:4317/health', { headers: { authorization: 'Bearer ' + t.replace(/\\s+/g, '') } }).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
@@ -84,14 +82,6 @@ services:
       MACHINE_JIRA_TOKEN_EXPIRES: ${MACHINE_JIRA_TOKEN_EXPIRES:-}
       MACHINE_JIRA_CLOUD_ID: ${MACHINE_JIRA_CLOUD_ID:-}
       MACHINE_JIRA: ${MACHINE_JIRA:-on}
-      # Memory (RFC 0007): Cognee as the machine reaches it, on the internal network it shares with it. Its password, JWT secret and
-      # optional OpenAI key are in ~/.config/hardness (mounted below); `pnpm start` makes them.
-      MACHINE_MEMORY: ${MACHINE_MEMORY:-on}
-      COGNEE_URL: http://cognee:8000
-      # The company folder (`make company-docs`): one absolute host folder, mounted read-only at the same path below. Empty: none.
-      MACHINE_MEMORY_DOCS: ${MACHINE_MEMORY_DOCS:-}
-      COGNEE_EMAIL: ${COGNEE_EMAIL:-machine@luna.example.com}
-      MACHINE_MEMORY_DAILY_COGNIFY: ${MACHINE_MEMORY_DAILY_COGNIFY:-200}
       # The kill switch and the per-engine monthly caps (docs/configuration.md).
       MACHINE_DISABLE_RUNTIMES: ${MACHINE_DISABLE_RUNTIMES:-}
       MACHINE_ENGINE_BUDGETS: ${MACHINE_ENGINE_BUDGETS:-}
@@ -134,99 +124,8 @@ services:
       - ${LUNA_REPOS_DIR:-${HOME}/Developer}:${LUNA_REPOS_DIR:-${HOME}/Developer}
       - ${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}:${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}
       - ${HOME}/.config/hardness:/root/.config/hardness:ro
-      # The company folder, read-only at the path you gave; with none, an empty folder under the state dir stands in (compose needs a source).
-      - ${MACHINE_MEMORY_DOCS:-${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}/memory/no-company-docs}:${MACHINE_MEMORY_DOCS:-${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}/memory/no-company-docs}:ro
       # Read-write: a run that refreshed the Codex token writes it back (a temp file, then a rename).
       - ${CODEX_HOME:-${HOME}/.codex}:/root/.codex-host
-
-  # Cognee (cognee.ai, Apache 2.0), the memory service, from its official image pinned by digest and unchanged. Its stores (SQLite, LanceDB,
-  # Kuzu) and its model caches live on the `cognee-data` volume, the only path its uid 1000 may write. It sits on the internal `memory`
-  # network, shared with the machine: its only way out is `cognee-proxy`, and its API is published to localhost by `cognee-gate`.
-  # ~/.config/hardness/cognee.env (`pnpm start` renders it from the model catalog) holds the LLM and key when you gave it one, the embedder,
-  # the JWT secret. No key: local mode, no OpenAI call.
-  cognee:
-    image: cognee/cognee@sha256:84584eade25cd9526ef4fe8dd550be69fb974fb1083bde9e498da451fad0dfc6
-    restart: unless-stopped
-    networks: [memory]
-    env_file:
-      - path: ${HOME}/.config/hardness/cognee.env
-        required: false
-    environment:
-      # The code graph: Cognee reads a repository from /repos only, a copy the machine exports under <state>/memory/code.
-      ACCEPT_LOCAL_FILE_PATH: "true"
-      COGNEE_ALLOWED_LOCAL_FILE_ROOTS: /repos
-      # The UI's origin, so the browser may call the API.
-      CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
-      # Cognee tries GitHub (a price table) and a telemetry host on its own; neither is on the list, so ask it not to.
-      LITELLM_LOCAL_MODEL_COST_MAP: "True"
-      TELEMETRY_DISABLED: "1"
-      # Local mode extracts with GLiNER, about 2 GB per batch in flight; the default sizes the batches to the CPU, not to a Docker VM
-      # shared with Laminar, and a worker was killed for memory. One batch at a time: the graph is the same, only slower.
-      GLINER_INFERENCE_THREADS: "1"
-      HTTP_PROXY: http://cognee-proxy:3128
-      HTTPS_PROXY: http://cognee-proxy:3128
-      http_proxy: http://cognee-proxy:3128
-      https_proxy: http://cognee-proxy:3128
-      NO_PROXY: localhost,127.0.0.1,cognee,cognee-gate
-      no_proxy: localhost,127.0.0.1,cognee,cognee-gate
-    volumes:
-      - cognee-data:/cognee-storage
-      - ${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}/memory/code:/repos
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 60s
-
-  # The one door out of Cognee: the machine's egress proxy (machine/runner/egress/proxy.ts, from the runner image `pnpm images` builds), with
-  # a list. api.openai.com is the LLM; huggingface.co and its CDN, and PyPI, are for the first start only (the embedder's weights and the
-  # local extractor are downloaded once onto `cognee-data`). After that, set COGNEE_EGRESS_ALLOW=api.openai.com in .env and restart.
-  cognee-proxy:
-    image: ${RUNNER_IMAGE:-hardness-runner:dev}
-    restart: unless-stopped
-    entrypoint: ["node", "/opt/luna/egress/proxy.ts"]
-    command: ["--listen", "3128", "--allow", "${COGNEE_EGRESS_ALLOW:-api.openai.com,huggingface.co,*.huggingface.co,*.hf.co,pypi.org,files.pythonhosted.org}"]
-    networks: [memory, default]
-
-  # Publishes Cognee's API on localhost: a container on an internal network cannot publish a port, so this relay (on both networks) does.
-  cognee-gate:
-    image: alpine/socat:1.8.0.1
-    restart: unless-stopped
-    # IPv4 and IPv6: the UI, in this network namespace, calls http://localhost:8000, which Node resolves to ::1 first. The IPv6 listener
-    # may fail where the host has IPv6 off; the IPv4 one carries on.
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["socat TCP6-LISTEN:8000,ipv6only=1,fork,reuseaddr TCP:cognee:8000 & exec socat TCP4-LISTEN:8000,fork,reuseaddr TCP:cognee:8000"]
-    depends_on:
-      cognee:
-        condition: service_healthy
-    networks: [memory, default]
-    ports:
-      # 8010 on the host: Laminar holds 8000 and 8001.
-      - "127.0.0.1:${COGNEE_PORT:-8010}:8000"
-
-  # Cognee's own UI, to look at the graph. Sign in with machine@luna.example.com and the password in ~/.config/hardness/cognee-password.
-  # What you add or delete there is reconciled by the machine; the board's memory view is where memory is changed with a record.
-  # The image has its API's address compiled in as http://localhost:8000 (Laminar's port here) and reads no setting for it: the UI shares
-  # `cognee-gate`'s network, so its own server finds Cognee there, and `cognee-ui-proxy` rewrites that address in what the browser loads.
-  cognee-ui:
-    image: cognee/cognee-ui:${COGNEE_UI_TAG:-latest}
-    profiles: ["memory-ui"]
-    restart: unless-stopped
-    network_mode: "service:cognee-gate"
-    depends_on: [cognee-gate]
-
-  cognee-ui-proxy:
-    image: nginx:1.27-alpine
-    profiles: ["memory-ui"]
-    restart: unless-stopped
-    depends_on: [cognee-ui]
-    environment:
-      COGNEE_PORT: ${COGNEE_PORT:-8010}
-    volumes:
-      - ./memory/cognee-ui.conf.template:/etc/nginx/templates/default.conf.template:ro
-    ports:
-      - "127.0.0.1:3000:3000"
 
   # Laminar (laminar.sh, Apache 2.0): traces of every stage and pack run, and the replay evals'
   # scorecards, in a UI at http://localhost:5667. Opt-in: `docker compose --profile observe up -d`,
@@ -346,13 +245,7 @@ services:
       AEAD_SECRET_KEY: ${LMNR_AEAD_SECRET_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
       QUICKWIT_SEARCH_URL: http://lmnr-quickwit:7280
 
-networks:
-  # Cognee's own: no gateway, so a container only on it reaches nothing but the others on it (the machine, the proxy, the relay).
-  memory:
-    internal: true
-
 volumes:
-  cognee-data:
   pgdata:
   lmnr-pgdata:
   lmnr-clickhouse-data:

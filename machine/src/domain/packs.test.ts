@@ -30,7 +30,6 @@ describe("packStates", () => {
     expect(packStates("slack_triage")).toEqual([]);
     expect(packStates("jira_intake")).toEqual([]);
     expect(packStates("chat_triage")).toEqual([]);
-    expect(packStates("memory_answer")).toEqual([]);
   });
 
   it("names only states in which a stage runs", () => {

@@ -25,21 +25,6 @@ describe("a repository's image and graph health", () => {
     expect(off).toMatchObject({ graph: { on: false, commit: null, behind: null, graphify: null, builtAt: null } });
   });
 
-  it("carries memory's last failure for the repository when memory is on, and nothing when it is off", async () => {
-    const base = {
-      repos: ["/a/shop"],
-      policy: async () => ({}),
-      machineImage: "hardness-runner:dev",
-      images: { pending: async () => null, status: () => null },
-      graph: { stampOf: async () => null },
-      watch: { health: () => ({ building: false, lastFailure: null }) },
-    };
-    const [on] = await repoHealthOf({ ...base, memory: { health: () => ({ lastFailure: "code graph: cognee is down" }) } });
-    expect(on!.memory).toEqual({ lastFailure: "code graph: cognee is down" });
-    const [off] = await repoHealthOf(base);
-    expect(off).not.toHaveProperty("memory");
-  });
-
   it("shows a build a card's readiness wait started, which the watch never saw", async () => {
     const [row] = await repoHealthOf({
       repos: ["/a/shop"],

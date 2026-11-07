@@ -19,7 +19,6 @@ use ureq::{
 };
 
 use crate::backlog::BacklogEntry;
-use crate::memory::{MemoryAnswer, MemoryItem, MemoryStatus};
 use crate::tickets::{TicketEntry, encode_key};
 use crate::model::{
     EngineCatalog, EngineInfo, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
@@ -56,8 +55,6 @@ pub enum Incoming {
     PrsPolled(Result<PrSnapshot, String>),
     /// The answer to `R` in Slack, polled off the UI thread.
     SlackPolled(Result<SlackSnapshot, String>),
-    /// The answer to a question in the ask pane, waited for off the UI thread (a pack run takes seconds).
-    MemoryAnswered(Result<MemoryAnswer, String>),
 }
 
 #[derive(Clone)]
@@ -379,43 +376,6 @@ impl Machine {
     /// A tap on a ticket: `approve`, `edit`, `ignore`, `card` or `backlog`; `body` carries the draft id and hash (and the text for an edit).
     pub fn ticket_act(&self, key: &str, action: &str, body: Value) -> Result<(), String> {
         Self::json(self.agent.post(self.url(&format!("/tickets/{}/{action}", encode_key(key)))).send_json(body)).map(|_| ())
-    }
-
-    /// The memory items of `repo` (a checkout path the machine turns into its slug; `None` is every repository) that are not retired, newest rows first as the machine lists them. `outside_only` keeps the uploads nobody adopted.
-    pub fn memory_items(&self, repo: Option<&str>, outside_only: bool) -> Result<Vec<MemoryItem>, String> {
-        let mut path = "/memory/items?status=pending,active,stale&limit=200".to_string();
-        if let Some(repo) = repo {
-            path.push_str(&format!("&repo={}", urlencoding(repo)));
-        }
-        if outside_only {
-            path.push_str("&trust=outside");
-        }
-        Self::typed(self.agent.get(self.url(&path)).call())
-    }
-
-    /// A question about what the machine remembers: the answer and its citations. A pack run, so it waits on the slow agent.
-    pub fn memory_ask(&self, question: &str, repo: Option<&str>) -> Result<MemoryAnswer, String> {
-        let mut body = json!({ "question": question });
-        if let Some(repo) = repo {
-            body["repo"] = json!(repo);
-        }
-        Self::typed(self.slow.post(self.url("/memory/ask")).send_json(body))
-    }
-
-    /// Forgets one memory item; the machine deletes its data and records that a person did.
-    pub fn memory_forget(&self, id: &str) -> Result<(), String> {
-        Self::json(self.agent.post(self.url(&format!("/memory/items/{}/forget", path_segment(id)))).send_json(json!({}))).map(|_| ())
-    }
-
-    /// A person takes an `outside` item as theirs: it becomes a lesson.
-    pub fn memory_adopt(&self, id: &str) -> Result<(), String> {
-        Self::json(self.agent.post(self.url(&format!("/memory/items/{}/adopt", path_segment(id)))).send_json(json!({}))).map(|_| ())
-    }
-
-    /// Memory's mode and today's usage, for the Floor: the plain `GET /metrics` window's optional `memory` object, else `GET /memory/status`; `None` from a machine that reports neither or has memory off.
-    pub fn memory_status(&self) -> Option<MemoryStatus> {
-        let from_metrics = Self::json(self.agent.get(self.url("/metrics?since=7d")).call()).ok().and_then(|v| v.get("memory").cloned()).and_then(|m| serde_json::from_value::<MemoryStatus>(m).ok());
-        from_metrics.or_else(|| Self::typed::<MemoryStatus>(self.agent.get(self.url("/memory/status")).call()).ok()).filter(|s| s.enabled)
     }
 
     /// `bump`, `promote` or `decline` on a backlog item.

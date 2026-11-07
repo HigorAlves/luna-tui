@@ -13,9 +13,6 @@ export interface GraphWatchOptions {
   policies: { for(repoPath: string): Promise<{ graph: boolean }> };
   /** The commit `origin/<default>` points at after a fetch. */
   defaultHead?: (repoPath: string) => Promise<string>;
-  /** Runs after each build attempt of a repo, and on each pass over one whose graph is current (memory's documents and code graph, RFC 0007):
-   *  the same trigger as the graph (a merge, the poll). Serialised with the builds; a failure is logged, never thrown. `head` is empty when not known. */
-  afterBuild?: (repoPath: string, head: string) => Promise<unknown>;
   log?: (message: string) => void;
 }
 
@@ -85,10 +82,8 @@ export class GraphWatch {
         if (!(await this.options.policies.for(repoPath)).graph) continue;
         const head = await this.head(repoPath);
         const stamp = await this.options.graph.stampOf(repoPath);
-        if (stamp?.commit === head || this.failed.get(repoPath) === head) {
-          await this.after(repoPath, head);
-          continue;
-        }
+        if (stamp?.commit === head) continue;
+        if (this.failed.get(repoPath) === head) continue;
         await this.build(repoPath, head);
       } catch (error) {
         this.log(`graph: ${repoPath}: ${error instanceof Error ? error.message : String(error)}`);
@@ -112,23 +107,7 @@ export class GraphWatch {
       } finally {
         this.scheduled.delete(repoPath);
       }
-      await this.runAfter(repoPath, head);
     });
     return this.queue;
-  }
-
-  /** `afterBuild` for a repo with nothing to build, queued behind what is running. */
-  private after(repoPath: string, head: string): Promise<void> {
-    if (!this.options.afterBuild) return Promise.resolve();
-    this.queue = this.queue.then(() => this.runAfter(repoPath, head));
-    return this.queue;
-  }
-
-  private async runAfter(repoPath: string, head: string): Promise<void> {
-    try {
-      await this.options.afterBuild?.(repoPath, head);
-    } catch (error) {
-      this.log(`graph: after build: ${repoPath}: ${error instanceof Error ? error.message : String(error)}`);
-    }
   }
 }

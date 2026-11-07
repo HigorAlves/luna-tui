@@ -35,7 +35,6 @@ import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import { blockerSetKey } from "../domain/finding-sets.ts";
-import { type ResolvedLessons, resolveLessons } from "./memory-approval.ts";
 import { type RetroOutputs, acceptedMisses, appendAddedFinding, appendDismissedFinding, retroTruthOf, writeRetroTruth } from "./retro-outputs.ts";
 import { EMITTABLE, type StageContext, type StageResult, type StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
@@ -230,8 +229,6 @@ export interface PipelineOptions {
   contextSetup?: ContextDeps;
   /** Intake's duplicate check; absent, no card is checked. */
   dedup?: DedupPort;
-  /** Memory's nearest past cards to a new card (RFC 0007, M3), best first: they join the lexical dedup shortlist, inside the cards its reporter could see. Absent, or failing, dedup is as before. */
-  similarCardIds?: (task: TaskRow) => Promise<string[]>;
   /** The board's PUBLIC address (`MACHINE_PUBLIC_URL`), for the link a merged duplicate's source is given when its reporter may see the kept card; never the machine's own address. */
   publicBoardUrl?: string;
   /** The repositories the machine knows (the repository map, remembered checkouts): the only ones a person may give the context gate. Absent, none. */
@@ -256,8 +253,6 @@ export interface PipelineOptions {
   diffStat?: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
   closeDeps?: CloseDeps;
-  /** Memory at close (RFC 0007, M2): writes the card's facts and what the retro gate approved. Absent, a close writes nothing to memory. */
-  memoryClose?: (taskId: string, approved: ResolvedLessons) => Promise<void>;
   /** Where a merged card's retro leaves its outputs (decision 25): the truth file's directory, the machine's own facts, the graph's misses file and the Build Report's out-of-map files. */
   retroOutputs?: RetroOutputs;
   /** Who owns paths at the default branch, from CODEOWNERS (the code graph port's `owners`). The outside-approver rule reads only this, never a model's owners; absent, the rule is not enforced and says so. */
@@ -422,7 +417,6 @@ export class Pipeline {
   private readonly hasConfig: (repoPath: string) => boolean;
   private readonly contextDeps: ContextDeps | null;
   private readonly dedupDeps: DedupPort | null;
-  private readonly similarCardIds: ((task: TaskRow) => Promise<string[]>) | null;
   private readonly boardUrl: string | null;
   private readonly knownRepos: (() => Promise<string[]>) | null;
   private readonly escalationDecide: { decide: Decide | null };
@@ -445,7 +439,6 @@ export class Pipeline {
   private readonly revertCommit: (worktreePath: string, sha: string) => Promise<void>;
   private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   private readonly closeDeps: CloseDeps | undefined;
-  private readonly memoryClose: ((taskId: string, approved: ResolvedLessons) => Promise<void>) | undefined;
   private readonly retroOutputs: RetroOutputs | undefined;
   private readonly releaseKept: ((taskId: string) => Promise<void>) | undefined;
   private readonly groundTruth: PipelineOptions["groundTruth"];
@@ -492,7 +485,6 @@ export class Pipeline {
     this.headOf = options.headOf;
     this.contextDeps = options.contextSetup ?? null;
     this.dedupDeps = options.dedup ?? null;
-    this.similarCardIds = options.similarCardIds ?? null;
     this.boardUrl = options.publicBoardUrl ?? null;
     this.knownRepos = options.knownRepos ?? null;
     this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
@@ -503,7 +495,6 @@ export class Pipeline {
     this.maxPerStage = options.maxPerStage ?? {};
     this.containerRunning = options.containerRunning ?? containerRunning;
     this.removeContainer = options.removeContainer ?? removeContainer;
-    this.memoryClose = options.memoryClose;
     this.revertCommit = options.revertCommit ?? revertCommit;
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
@@ -1131,9 +1122,6 @@ export class Pipeline {
         console.error(`could not remove the worktree of deleted task ${id}`, error),
       );
     }
-    if (task.repoPath) {
-      await this.closeDeps?.dropBranchGraphs?.(task.repoPath, id).catch((error: unknown) => console.error(`could not delete the branch graphs of deleted task ${id}`, error));
-    }
     return this.store.deleteTask(id);
   }
 
@@ -1488,8 +1476,7 @@ export class Pipeline {
       { decide: async (ctx) => { const r = await deps.decide(ctx); recordId = r.recordId ?? null; return r.answer; } },
       { title: task.title, text: task.description, repo: task.repoPath },
       await this.dedupCandidates(task),
-      // Memory's vector shortlist joins the lexical one, inside the same could-see candidates; a failure is no ids.
-      { now: new Date(), dedup: policy.dedup, vectorIds: (await this.similarCardIds?.(task).catch(() => [])) ?? [] },
+      { now: new Date(), dedup: policy.dedup },
     );
     const { outcome } = found;
     const kept = outcome.duplicate && outcome.duplicate.kind !== "backlog" ? await this.store.getTask(outcome.duplicate.id) : null;
@@ -1920,12 +1907,6 @@ export class Pipeline {
       } else if (gate.kind === "reviewing_memory" && typeof ids.worth_learning === "string" && requested.rules && typeof requested.rules === "object") {
         const kept = decision === "approved" && response?.applyRules !== false;
         await truth.learned({ pack: "worth_learning", recordId: ids.worth_learning, label: worthLearningTruth(kept), kind: "person", source: kept ? "retro_approved" : "retro_closed", taskId });
-      }
-      // Each lesson and retirement a person answered at the retro gate is ground truth for the question that proposed it.
-      if (gate.kind === "reviewing_memory" && decision === "approved" && requested.rules && typeof requested.rules === "object") {
-        for (const t of resolveLessons(requested.rules as { lessons?: unknown; retirements?: unknown }, response?.lessons).truth) {
-          await truth.learned({ pack: t.pack, recordId: t.recordId, label: t.label, kind: "person", source: t.source, taskId });
-        }
       }
     } catch (error) {
       console.warn(`decision truth: gate ${gate.kind} of task ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -2458,22 +2439,6 @@ export class Pipeline {
     return { markdown: rules.markdown, apply: gate.response?.applyRules !== false, ...(proposals.length > 0 ? { proposals } : {}) };
   }
 
-  /** The retro gate's lessons and retirements a person approved, the last approved gate's `requested.rules` read with its `response.lessons`. */
-  private async approvedLessons(id: string): Promise<ResolvedLessons> {
-    const gate = (await this.approvals(id)).filter((a) => a.kind === "reviewing_memory" && a.decision === "approved").at(-1);
-    return resolveLessons((gate?.requested as { rules?: { lessons?: unknown; retirements?: unknown } } | undefined)?.rules, gate?.response?.lessons);
-  }
-
-  /** At close: the card's facts, the lessons a person approved and the items they retired go to memory (never throws). */
-  private async recordMemory(id: string): Promise<void> {
-    if (!this.memoryClose) return;
-    try {
-      await this.memoryClose(id, await this.approvedLessons(id));
-    } catch (error) {
-      console.error(`could not record the memory of ${id}`, error);
-    }
-  }
-
   /** A merged card's retro: the truth file for the eval loop (written whether or not a retro ran) and the graph misses the Build Report also declared. Returns how many misses were recorded. Never throws. */
   private async recordRetroOutputs(id: string, repoPath: string | null, adopted: boolean): Promise<number> {
     const out = this.retroOutputs;
@@ -2519,7 +2484,6 @@ export class Pipeline {
 
   private async closeOut(id: string): Promise<void> {
     await this.releaseKept?.(id).catch((error: unknown) => console.error(`could not release the kept sandbox of ${id}`, error));
-    await this.recordMemory(id);
     if (!this.closeDeps) return;
     try {
       const task = await this.get(id);

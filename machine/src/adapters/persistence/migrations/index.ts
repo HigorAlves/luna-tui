@@ -27,7 +27,6 @@ import { AddBacklog1794610000000 } from "./1794610000000-AddBacklog.ts";
 import { AddTickets1794620000000 } from "./1794620000000-AddTickets.ts";
 import { AddTicketCardClaim1794625000000 } from "./1794625000000-AddTicketCardClaim.ts";
 import { AddConversations1794700000000 } from "./1794700000000-AddConversations.ts";
-import { AddMemoryItems1794800000000 } from "./1794800000000-AddMemoryItems.ts";
 
 export const MIGRATIONS: Function[] = [
   Init1792712166445,
@@ -58,5 +57,4 @@ export const MIGRATIONS: Function[] = [
   AddTickets1794620000000,
   AddTicketCardClaim1794625000000,
   AddConversations1794700000000,
-  AddMemoryItems1794800000000,
 ];

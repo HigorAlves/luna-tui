@@ -59,32 +59,3 @@ export function similar(
     .sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : 1))
     .slice(0, SHORTLIST);
 }
-
-/**
- * The lexical shortlist joined with the cards memory's vectors named (`vectorIds`, best first): the lexical hits keep their ranking and come first,
- * the vector hits fill the slots that are left, never past `SHORTLIST`. A vector hit counts only when it is among `candidates` (the caller already
- * filtered those by what the new card's reporter could see) and passes the same lookback and repository rules; its score is its own lexical one.
- * With no vector ids this is `similar`.
- */
-export function similarWithVectors(
-  card: { title: string; text: string; repo: string | null },
-  candidates: Candidate[],
-  vectorIds: readonly string[],
-  options: { now: Date; lookbackDays: number },
-): Near[] {
-  const lexical = similar(card, candidates, options);
-  if (vectorIds.length === 0 || lexical.length >= SHORTLIST) return lexical;
-  const since = options.now.getTime() - options.lookbackDays * DAY;
-  const byId = new Map(candidates.map((c) => [c.id, c]));
-  const have = new Set(lexical.map((n) => n.id));
-  const extra: Near[] = [];
-  for (const id of vectorIds) {
-    const c = byId.get(id);
-    if (!c || have.has(id)) continue;
-    if (c.kind === "closed" && !(c.closedAt !== null && c.closedAt.getTime() >= since)) continue;
-    if (c.kind === "backlog" && c.repo !== card.repo) continue;
-    have.add(id);
-    extra.push({ id, kind: c.kind, score: similarity(`${card.title} ${card.text}`, `${c.title} ${c.text}`) });
-  }
-  return [...lexical, ...extra].slice(0, SHORTLIST);
-}

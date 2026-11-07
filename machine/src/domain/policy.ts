@@ -19,9 +19,7 @@ export interface JiraPolicy {
   branch: string;
 }
 
-/** Changed lines in an item's anchored files that make a memory item stale (`memory.stale_lines`). */
-export const DEFAULT_STALE_LINES = 200;
-export const DEFAULT_JIRA_BRANCH ="{type}/{key}";
+export const DEFAULT_JIRA_BRANCH = "{type}/{key}";
 export const DEFAULT_JIRA_COMMENTS: JiraPolicy["comments"] = "milestones";
 
 export interface Policy {
@@ -58,8 +56,6 @@ export interface Policy {
   decisions: Record<string, DecisionOverrides>;
   /** Days the local Evidence Pack store keeps a task's media (luna.yaml `evidence.retention_days`); 0 keeps it for good, null defers to the machine's retention. */
   evidenceRetentionDays: number | null;
-  /** Memory for this repo (luna.yaml `memory`, RFC 0007): `on: false` keeps it out of memory; `dailyCognifyItems` caps the items Cognee builds a graph for in a day (null: the machine's own cap); `staleLines` is the changed lines in an item's anchored files that make it stale. */
-  memory: { on: boolean; dailyCognifyItems: number | null; staleLines: number };
   /** Windows in which the machine merges nothing (luna.yaml `freeze`). */
   freeze: Freeze[];
   /** The v2.2 diagram's sections over its defaults (luna.yaml `dedup`, `triage`, ... `ship`). Keys wave 8 reads are named in CONSUMED_FROM; the others are defined for the wave that reads them. */
@@ -99,7 +95,6 @@ export const DEFAULT_POLICY: Policy = {
   engineBudgets: {},
   decisions: {},
   evidenceRetentionDays: null,
-  memory: { on: true, dailyCognifyItems: null, staleLines: DEFAULT_STALE_LINES },
   freeze: [],
   factory: FACTORY_DEFAULTS,
 };

@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, type IntakeContext, type MemoryContext, type RecalledMemory, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -50,11 +50,11 @@ import { checkpointPush } from "./checkpoint.ts";
 import { readScenarioReds } from "./scenario-reds.ts";
 
 import type { TruthSink } from "../decision-truth.ts";
-import { type Decide, buildChecks, buildWatch, cardSearchAnswers, writeMailbox } from "./build-watch.ts";
+import { type Decide, buildChecks, buildWatch, cardSearchAnswers } from "./build-watch.ts";
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
-import { MEMORY_PACKS, PACK_LIMITS, approvedPlan, buildStageInput } from "../../domain/stage-input.ts";
+import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
 import { reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
 import type { Graph } from "../graph.ts";
@@ -62,7 +62,6 @@ import { PolicyStore } from "../policy.ts";
 import { RepoImageError } from "../repo-images.ts";
 import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
-import { mergeReviewAsks, planFilesOf } from "../memory-review-asks.ts";
 
 export interface AgentDeps {
   /** The id of a local image, for the environment hash; absent, no environment is recorded. */
@@ -124,17 +123,6 @@ export interface AgentDeps {
   pushSleep?: (ms: number) => Promise<void>;
   /** The board search triage's agent asks for (`card_search`): read-only, the task's own repository only. Absent: the tool answers nothing. */
   cards?: { search(request: { repoPath: string | null; selfId: string; selfSource: string | null; query: string }): Promise<CardHit[]> };
-  /** What memory adds to a stage's input (RFC 0007). Each may fail or be absent: the stage then runs without the block. */
-  memoryFor?: {
-    /** Triage (M3): similar past cards' recalled outcomes, predicted against actual. */
-    similarOutcomes?: (task: TaskRow) => Promise<NonNullable<IntakeContext["similar"]>>;
-    /** Implementing (M4): the review asks recalled for the plan's files and their code owners. */
-    reviewAsks?: (task: TaskRow, planFiles: string[]) => Promise<RecalledMemory[]>;
-    /** The packs of `MEMORY_PACKS` (M2): `context.memory`, recalled for the card's goal and the plan's files with the card's viewer. Never throws; undefined with memory off. */
-    recall?: (task: TaskRow, pack: PackId, files: string[]) => Promise<MemoryContext | undefined>;
-    /** The `memory_recall` luna tool (M2): the answer for one request, with the same viewer as `recall`. */
-    answer?: (task: TaskRow, pack: PackId, request: { query: string; scope: "memory" | "docs" | "code" }) => Promise<Record<string, unknown>>;
-  };
 }
 
 /** Every branch the pipeline writes starts with this; see `workspaceFor`. */
@@ -147,9 +135,6 @@ const MINUTE = 60_000;
 /** Where a repo's graph is mounted in a stage container, and the file the `graphify` verbs read. */
 const GRAPH_MOUNT = "/graph";
 const GRAPH_FILE = "/graph/graphify-out/graph.json";
-/** Where the graph of the card's own newest slice commit is mounted, when it has one. */
-const BRANCH_MOUNT = "/graph-branch";
-const BRANCH_FILE = "/graph-branch/graphify-out/graph.json";
 const isFile = (path: string): boolean => {
   try {
     return statSync(path).isFile();
@@ -366,28 +351,17 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const graphStamp = deps.graph && policy.graph ? await deps.graph.stampOf(task.repoPath) : null;
   const graphDir = graphStamp ? deps.graph!.currentDir(task.repoPath) : null;
   if (deps.graph && policy.graph && !graphDir) deps.ensureGraph?.(task.repoPath);
-  // The graph of the card's own newest slice commit, beside it: the card's next runs (the next slice, Verify) read what its commits changed.
-  const branchGraph = graphDir && !extra.checkout ? await deps.graph!.branchGraph?.(task.repoPath, task.id).catch(() => null) : null;
   const graphContext =
     graphStamp && graphDir
-      ? {
-          path: GRAPH_FILE,
-          commit: graphStamp.commit,
-          builtAt: graphStamp.builtAt,
-          fresh: baseCommit ? await deps.graph!.isFresh(task.repoPath, graphStamp, baseCommit) : true,
-          ...(branchGraph ? { branch: { path: BRANCH_FILE, commit: branchGraph.stamp.commit, builtAt: branchGraph.stamp.builtAt } } : {}),
-        }
+      ? { path: GRAPH_FILE, commit: graphStamp.commit, builtAt: graphStamp.builtAt, fresh: baseCommit ? await deps.graph!.isFresh(task.repoPath, graphStamp, baseCommit) : true }
       : null;
 
   // The browser run drives ONE target, chosen here, and holds only that target's credential.
   const e2eTarget = pack === "e2e" ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
-  // MEMORY: the pushed block (RFC 0007, M2), recalled with the card's goal and the plan's files before the input is built; a failed recall is an empty block with a note.
-  const pushedMemory = MEMORY_PACKS.has(pack) && deps.memoryFor?.recall ? await deps.memoryFor.recall(task, pack, plannedFiles(approvedPlan(context.approvals))).catch((): undefined => undefined) : undefined;
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
     pack,
-    ...(pushedMemory ? { memory: pushedMemory } : {}),
     ...(extra.plan ? { plan: extra.plan } : {}),
     engine: choice.engine,
     attempt: context.attempt,
@@ -410,15 +384,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
-    ...(pack === "triage" && deps.memoryFor?.similarOutcomes ? { similarOutcomes: await deps.memoryFor.similarOutcomes(task).catch(() => []) } : {}),
   });
-  // MEMORY: review asks (RFC 0007, M4). Before the implementing run, the review asks recalled for the plan's files and their code owners join `context.memory`
-  // (created when absent, within the contract's item and byte caps). Reconcile with lane M2's pushed block here.
-  if (pack === "implementing" && deps.memoryFor?.reviewAsks) {
-    const asks = await deps.memoryFor.reviewAsks(task, planFilesOf(input.plan)).catch(() => []);
-    const merged = mergeReviewAsks(input.context.memory, asks);
-    if (merged) input.context.memory = merged;
-  }
 
   // Watches the transcript as it streams: a loop on one call is stopped before it spends the turn budget.
   const detector = new StuckDetector();
@@ -453,20 +419,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
         runId: context.runId,
         dir: join(runDir, "out", "bundles"),
         // The card's branch shows in the user's repository too, written by the machine; a refusal is a note.
-        onAccepted: async (head) => {
+        onAccepted: async () => {
           const shown = await publishBranch(task.repoPath!, workspace.path, workspace.branch);
           if (!shown.ok) await context.note?.(shown.note).catch(() => {});
-          // The graph of this slice commit is built off the run's path: the run does not wait, and a failure is a note, never the card's.
-          if (graphStamp && graphDir && policy.graph && deps.graph?.buildBranch) {
-            const minutes = policy.factory.graph.branch_build_minutes;
-            const unbuilt = (why: string) => `the branch graph of ${head.slice(0, 7)} was not built (${why}); the previous graph stays`;
-            void deps.graph
-              .buildBranch({ repoPath: task.repoPath!, taskId: task.id, workspacePath: workspace.path, commit: head, minutes })
-              .then(async (built) => {
-                if (built.state === "failed") await context.note?.(unbuilt(built.reason));
-              })
-              .catch((error: unknown) => context.note?.(unbuilt(error instanceof Error ? error.message : String(error))).catch(() => {}));
-          }
         },
       });
   // Implementing: every slice that turns committed is pushed as it lands, one push at a time.
@@ -504,13 +459,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     pack === "triage" && deps.cards
       ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, selfSource: sourceKindOf(task), query }) })
       : null;
-  // The `memory_recall` tool: the same mailbox, answered with the card's own viewer (the same one the pushed block used).
-  const memoryTool =
-    MEMORY_PACKS.has(pack) && deps.memoryFor?.answer
-      ? { onMemoryRecall: async (request: { query: string; scope: "memory" | "docs" | "code" }) => writeMailbox(join(runDir, "out"), "memory.json", JSON.stringify(await deps.memoryFor!.answer!(task, pack, request))) }
-      : null;
   const startWatch = (): void => {
-    if ((!checks && !cardSearch && !memoryTool) || watch) return;
+    if ((!checks && !cardSearch) || watch) return;
     const hostExec = deps.hostExec;
     watch = buildWatch({
       outDir: join(runDir, "out"),
@@ -518,7 +468,6 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       log: (line) => void context.note?.(line).catch(() => {}),
       ...(checks ? { onRed: async (...a: Parameters<typeof checks.onRed>) => (await importer?.sync(), checks.onRed(...a)), onScopeRequest: async (...a: Parameters<typeof checks.onScopeRequest>) => (await importer?.sync(), checks.onScopeRequest(...a)) } : {}),
       ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
-      ...(memoryTool ? { onMemoryRecall: memoryTool.onMemoryRecall } : {}),
       onCommitted: async (slice) => {
         if (!checks) return;
         await importer?.sync();
@@ -624,12 +573,11 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     labels: { "dev.hardness.task": task.id },
     mounts: [
       ...(graphContext && graphDir ? [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }] : []),
-      ...(graphContext && branchGraph ? [{ host: branchGraph.dir, container: BRANCH_MOUNT, readOnly: true }] : []),
       // The worktree's `.git` file points at its admin dir: read-only, so no stage can repoint the checkout.
       ...(extra.mounts ?? []),
     ],
     // The graph's path for the pack, and what the stage container needs to continue the machine's trace.
-    extraEnv: { ...(graphContext && graphDir ? { LUNA_GRAPH: GRAPH_FILE } : {}), ...(graphContext && branchGraph ? { LUNA_GRAPH_BRANCH: BRANCH_FILE } : {}), ...(context.traceEnv ?? {}), ...(qaCredentialNames.length > 0 ? { LUNA_QA_CREDENTIALS: qaCredentialNames.join(",") } : {}) },
+    extraEnv: { ...(graphContext && graphDir ? { LUNA_GRAPH: GRAPH_FILE } : {}), ...(context.traceEnv ?? {}), ...(qaCredentialNames.length > 0 ? { LUNA_QA_CREDENTIALS: qaCredentialNames.join(",") } : {}) },
     signal: context.signal,
     // The tab's label names the repo too: five repos' Build tabs read apart.
     onStarted: (name) => {

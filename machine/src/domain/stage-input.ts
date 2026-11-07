@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, type TicketContext, type ConversationContext, type MemoryAnswerContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext, type LessonsContext, type MemoryContext } from "@hardness/contracts";
+import { type ChatTriageContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -12,9 +12,6 @@ import type { ApprovalRow, TaskRow } from "./task.ts";
 const VIDEO_PACKS: ReadonlySet<PackId> = new Set<PackId>(["video_script", "recording", "video_qa", "video_fix"]);
 
 const MINUTE = 60_000;
-
-/** The packs whose input carries `context.memory` and whose access lists `memory_recall` (RFC 0007). */
-export const MEMORY_PACKS: ReadonlySet<PackId> = new Set<PackId>(["plan", "build_tests", "implementing", "verifying", "triage", "pr_reply"]);
 
 /** The synthetic task's title for a check context sent to a decision pack. */
 function checkTitle(check: CheckContext): string {
@@ -99,7 +96,7 @@ export function approvedScenarios(approvals: ApprovalRow[]): Scenario[] {
 }
 
 /** What Intake gathered, as triage reads it: each stranger's text flattened again and capped, every list bounded, attachments as references only. */
-export function intakeOf(task: TaskRow, similar?: IntakeContext["similar"]): IntakeContext {
+export function intakeOf(task: TaskRow): IntakeContext {
   const card = cardOf(task);
   const hints = card.hints ? Object.fromEntries(Object.entries(card.hints).map(([k, v]) => [k, typeof v === "string" ? safe(v).slice(0, 120) : v])) : null;
   return {
@@ -109,7 +106,6 @@ export function intakeOf(task: TaskRow, similar?: IntakeContext["similar"]): Int
     history: (card.history ?? []).slice(0, 50).map((h) => ({ author: h.author ? safe(h.author).slice(0, 60) : null, text: safe(h.text).slice(0, 500) })),
     attachments: (card.attachments ?? []).slice(0, 20).map((a) => ({ name: safe(a.name).slice(0, 120), url: a.url, ...(a.mediaType ? { mediaType: safe(a.mediaType).slice(0, 80) } : {}), ...(a.size !== undefined ? { size: a.size } : {}) })),
     hints: hints && Object.keys(hints).length ? (hints as IntakeContext["hints"]) : null,
-    ...(similar?.length ? { similar: similar.slice(0, 5).map((s) => ({ card: s.card, text: safe(s.text).slice(0, 400) })) } : {}),
   };
 }
 
@@ -135,8 +131,6 @@ export function buildStageInput(opts: {
   holdoutCases?: boolean;
   /** For implementing: the checks Build's regression sweep saw fail, with the tail of each one's output. */
   sweepFailures?: { name: string; tail: string }[];
-  /** For triage: similar past cards' recalled outcomes from memory (predicted against actual), rendered as data; absent, none. */
-  similarOutcomes?: IntakeContext["similar"];
   /** For implementing: the minutes Build's budget has left; the run's time limit is the smaller of its own and this. */
   budgetMinutes?: number;
   /** For implementing: the tests Build's tests step wrote, one entry per scenario. */
@@ -159,8 +153,6 @@ export function buildStageInput(opts: {
   video?: VideoContext | null;
   /** For verifying: the files the code graph says depend on what the change touched. */
   blastRadius?: string[];
-  /** For the packs of `MEMORY_PACKS`: what memory recalled for this run (RFC 0007), data from past work. */
-  memory?: MemoryContext | null;
   /** For verifying: how much of the change's added lines the repo's lcov report saw run. */
   coverage?: CoverageSummary;
 }): StageInput {
@@ -209,7 +201,6 @@ export function buildStageInput(opts: {
     // The runner reads docs/agents/project-context.md from the worktree itself.
     context: {
       projectContext: opts.projectContext ?? null,
-      ...(MEMORY_PACKS.has(pack) && opts.memory ? { memory: opts.memory } : {}),
       testCases:
         pack === "verifying" || pack === "e2e" || pack === "video_script" || pack === "video_fix" || pack === "recording" || (pack === "implementing" && !opts.holdoutCases)
           ? approvedCases(approvals)
@@ -219,7 +210,7 @@ export function buildStageInput(opts: {
       ...(pack === "implementing" && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
       ...(pack === "implementing" && opts.sweepFailures?.length ? { sweepFailures: opts.sweepFailures.slice(0, SWEEP_FAILURES_MAX).map((f) => ({ name: safe(f.name).slice(0, 60), tail: safe(f.tail.slice(-SWEEP_TAIL_CAP)).slice(-SWEEP_TAIL_CAP) })) } : {}),
       baseCommit: opts.baseCommit ?? null,
-      ...(pack === "triage" ? { intake: intakeOf(task, opts.similarOutcomes) } : {}),
+      ...(pack === "triage" ? { intake: intakeOf(task) } : {}),
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: reviewed ?? opts.plan } : {}),
@@ -305,19 +296,17 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   // The ticket and conversation packs: their whole context is the ticket or the thread. Left out, a pack runs blind.
   const ticket: TicketContext | null = "ticket" in context ? context.ticket : null;
   const conversation: ConversationContext | null = "conversation" in context ? context.conversation : null;
-  const memoryAnswer: MemoryAnswerContext | null = "memoryAnswer" in context ? context.memoryAnswer : null;
-  const lessons: LessonsContext | null = "lessons" in context ? context.lessons : null;
   return {
     schema: 3,
     stage: pack,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (lessons ? `Memory lessons: ${lessons.kind}` : null) ?? (memoryAnswer ? "Memory answer" : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(lessons ? { lessons } : {}), ...(memoryAnswer ? { memoryAnswer } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

@@ -91,11 +91,10 @@ machine_settings() {
 }
 
 ui_header "Integrations" "Written to $ENV_FILE (0600). Empty answers keep what is there."
-picked=$(ui_choose_many "What should the machine connect to?" "" "Jira" "Slack inbox" "Laminar" "Company documents" "Machine settings")
+picked=$(ui_choose_many "What should the machine connect to?" "" "Jira" "Slack inbox" "Laminar" "Machine settings")
 grep -qx "Jira" <<<"$picked" && jira
 grep -qx "Slack inbox" <<<"$picked" && slack
 grep -qx "Laminar" <<<"$picked" && laminar
-grep -qx "Company documents" <<<"$picked" && bash "$SETUP_DIR/company-docs.sh"
 grep -qx "Machine settings" <<<"$picked" && machine_settings
 [ -z "$picked" ] && info "Nothing picked; run make integrations any time."
 

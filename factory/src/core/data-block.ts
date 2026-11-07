@@ -54,18 +54,17 @@ export type VariableKind = "machine" | "line" | "block";
 // Only what the machine alone writes (a constant, a count, an enum, a hash, a path it chose). Traced one by one: the checks and QA targets
 // are the repository's own text, the scenario tests and the video's narration and sheets carry names a model or a tool wrote, the coverage
 // report lists paths from a report the container wrote, and a classification holds labels a model answered: all foreign.
-const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note", "memory.framing"];
-const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.memoryAnswer.note", "context.eval.pack", "context.eval.case"];
+const machine = ["agent", "attempt", "skills", "plan.risk", "context.plan.risk", "context.baseCommit", "context.graph", "context.chat.source", "context.jira.repoPath", "plan.fallback", "context.video.budgetS", "context.conversation.relation", "context.conversation.note"];
+const line = ["task.title", "task.branch", "task.goal", "task.classification", "context.jira.classification", "context.slack.me", "context.chat.me", "context.eval.pack", "context.eval.case"];
 const block = [
   "task.description", "task.criteria", "task.record", "task.evidence", "plan.brief", "plan.criteria", "plan.criteria.ids", "plan.assumptions", "plan.slices",
   "context.plan.map", "context.plan.shortlist", "context.plan.replan", "context.plan.coverageNotes", "context.plan.gaps", "context.plan.review", "context.plan.cases",
   "context.sweepFailures", "context.blastRadius", "context.checks", "context.scenarioTests", "context.coverage", "context.qaTargets", "context.video.narration", "context.video.sheets", "decisions", "priorFindings", "context.projectContext", "context.testCases", "context.ci", "context.review", "context.threads", "context.ship", "context.retro",
   "context.video.scenarios", "context.video.steps", "context.video.chapters", "context.video.target", "context.video.timeline", "context.video.report", "context.video.transcript", "context.video.fixCards",
-  "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items", "context.memoryAnswer.question", "context.memoryAnswer.items",
+  "context.slack.watches", "context.slack.rules", "context.slack.items", "context.chat.rules", "context.chat.items",
   "context.split", "context.jira.issue", "context.jira.description", "context.jira.comments", "context.intake", "context.ticket",
-  "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone", "context.conversation.memory",
+  "context.conversation.thread", "context.conversation.card", "context.conversation.evidence", "context.conversation.docs", "context.conversation.tone",
   "context.eval.rubric", "context.eval.input", "context.eval.checks", "context.eval.answer",
-  "context.memory", "context.lessons.facts", "context.lessons.proposals",
 ];
 
 /** Every template variable, as the machine's own text, a foreign single line or a foreign block. */
@@ -88,11 +87,9 @@ const CAPS: Readonly<Record<string, number>> = {
   "context.intake": 8000,
   "context.split": 20_000,
   "context.ticket": 12_000,
-  "context.memoryAnswer.items": 12_000,
   "context.conversation.thread": 12_000,
   "context.conversation.docs": 8000,
   "context.conversation.tone": 4000,
-  "context.conversation.memory": 6000,
   "context.conversation.card": 4000,
   "context.conversation.evidence": 4000,
   "context.slack.items": 30_000,
@@ -109,9 +106,6 @@ const CAPS: Readonly<Record<string, number>> = {
   "plan.slices": 8000,
   "task.evidence": 8000,
   "context.sweepFailures": 8000,
-  "context.memory": 6000,
-  "context.lessons.facts": 12_000,
-  "context.lessons.proposals": 8000,
   decisions: 4000,
 };
 export const capOf = (name: string): number => CAPS[name] ?? FIELD_CAP;

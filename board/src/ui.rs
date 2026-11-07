@@ -23,7 +23,6 @@ use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState};
 use crate::{
     app::{App, Density, FloorState, GroupBy, Mode},
-    memory::AskPhase,
     model::{
         COLUMNS, EngineInfo, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
         fmt_usd, repo_colour_slot, sla_targets, spend_p90, now_secs, unix_secs,
@@ -147,17 +146,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
         frame.render_widget(footer_line(app), footer);
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
-        }
-        return;
-    }
-    if let Some(state) = app.memory.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::ConfirmForget(_) | Mode::Ask(_))) {
-        render_memory(frame, body, app, state);
-        frame.render_widget(footer_line(app), footer);
-        match &app.mode {
-            Mode::ConfirmForget(_) => render_note(frame, " Forget this memory? ", "It is deleted from memory and recorded as a correction.  y / n"),
-            Mode::Ask(pane) => render_ask(frame, pane),
-            Mode::Help { .. } => render_help(frame, app),
-            _ => {}
         }
         return;
     }
@@ -386,7 +374,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         Mode::Help { .. } => render_help(frame, app),
         Mode::Command { text, pick } => render_completions(frame, text, *pick),
-        Mode::Ask(pane) => render_ask(frame, pane),
         _ => {}
     }
 }
@@ -547,13 +534,6 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::SlackTask { .. } => hint(&[("y", "create the ticket"), ("n", "cancel")]),
         Mode::SlackWatchAdd { .. } => hint(&[("type", "@handle, #channel or a word"), ("↑/↓", "pick"), ("enter", "watch"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
-        Mode::ConfirmForget(_) => hint(&[("y", "forget it"), ("n", "cancel")]),
-        Mode::Ask(pane) => match pane.phase {
-            AskPhase::Typing => hint(&[("type", "your question"), ("enter", "ask"), ("esc", "cancel")]),
-            AskPhase::Waiting => hint(&[("esc", "stop waiting")]),
-            AskPhase::Answered(_) => hint(&[("j/k", "scroll"), ("Q", "ask again"), ("esc", "close")]),
-            AskPhase::Failed(_) => hint(&[("Q", "ask again"), ("esc", "close")]),
-        },
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
         Mode::Command { text, .. } => Line::from(vec![
             Span::from(" :").fg(c(ACCENT)).bold(),
@@ -574,7 +554,6 @@ fn view_footer(app: &App) -> Line<'static> {
         Scope::Inbox => hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]),
         Scope::Pulls => hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]),
         Scope::Backlog => hint(&[("j/k", "move"), ("p", "promote"), ("b", "bump"), ("d", "decline"), ("R", "refetch"), ("esc", "close")]),
-        Scope::Memory => hint(&[("j/k", "move"), ("f", "forget"), ("a", "adopt"), ("o", "outside only"), ("Q", "ask"), ("R", "refetch"), ("esc", "close")]),
         Scope::Tickets => hint(&[("j/k", "move"), ("a", "approve"), ("e", "edit"), ("x", "ignore"), ("c", "card"), ("s", "backlog"), ("R", "refetch"), ("esc", "close")]),
         Scope::Watches => hint(&[("j/k", "move"), ("n", "add"), ("e", "floor"), ("d", "delete"), ("space", "on/off"), ("esc", "close")]),
         Scope::Slack => hint(&[
@@ -1350,52 +1329,6 @@ fn render_tickets(frame: &mut Frame, area: Rect, app: &App, state: &crate::ticke
         None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
     };
     frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
-}
-
-/// The Memory view: one row per item of the repository, the selected one's source, anchors and text beside it.
-fn render_memory(frame: &mut Frame, area: Rect, app: &App, state: &crate::memory::MemoryState) {
-    let items = &app.memory_items;
-    let selected = state.cursor.min(items.len().saturating_sub(1));
-    let [list_area, detail_area] = Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)]).areas(area);
-    let scope = state.repo.as_deref().map(|r| r.rsplit('/').next().unwrap_or(r).to_string()).unwrap_or_else(|| "every repo".to_string());
-    let outside = if state.outside_only { " · outside only" } else { "" };
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).title(Line::from(format!(" Memory · {scope}{outside} · {} ", items.len())).bold());
-    let inner = block.inner(list_area);
-    let mut lines = Vec::new();
-    if items.is_empty() {
-        lines.push(Line::from(Span::from("  nothing remembered here").fg(c(GREEN))));
-    }
-    let visible = (inner.height as usize).max(1);
-    let start = selected.saturating_sub(visible / 2).min(items.len().saturating_sub(visible));
-    for (row, item) in items.iter().enumerate().skip(start).take(visible) {
-        let text = truncate(&item.row(), inner.width.saturating_sub(2) as usize);
-        let style = if item.is_outside() { Style::new().fg(c(YELLOW)) } else { Style::new().fg(c(SUBTEXT0)) };
-        lines.push(if row == selected { Line::from(Span::from(format!("▸ {text}")).fg(c(BASE)).bg(c(ACCENT)).bold()) } else { Line::from(Span::from(format!("  {text}")).style(style)) });
-    }
-    frame.render_widget(Paragraph::new(lines).block(block), list_area);
-    let side = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(MUTED))).padding(Padding::horizontal(1)).title(Line::from(" Item ").bold());
-    let lines = match items.get(selected) {
-        Some(item) => item.detail_lines().into_iter().map(Line::from).collect(),
-        None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
-    };
-    frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
-}
-
-/// The ask pane: the question being typed, a wait, or the answer with its sources.
-fn render_ask(frame: &mut Frame, pane: &crate::memory::AskPane) {
-    let area = centered(frame.area(), frame.area().width * 70 / 100, frame.area().height * 6 / 10);
-    frame.render_widget(Clear, area);
-    let repo = pane.repo.as_deref().map(|r| r.rsplit('/').next().unwrap_or(r).to_string()).unwrap_or_else(|| "every repo".to_string());
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).padding(Padding::horizontal(1)).title(Line::from(format!(" Ask memory · {repo} ")).bold());
-    let question = Line::from(vec![Span::from("? ").fg(c(ACCENT)).bold(), Span::from(crate::detail::plain(&pane.text).replace('\n', " "))]);
-    let mut lines = vec![question, Line::from("")];
-    match &pane.phase {
-        AskPhase::Typing => lines[0].spans.push(Span::from("▏")),
-        AskPhase::Waiting => lines.push(Line::from(Span::from(format!("{} asking…", spinner())).fg(c(YELLOW)).bold())),
-        AskPhase::Answered(answer) => lines.extend(answer.lines().into_iter().map(Line::from)),
-        AskPhase::Failed(error) => lines.push(Line::from(Span::from(format!("⚠ {}", crate::detail::plain(error))).fg(c(RED)))),
-    }
-    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }).scroll((pane.scroll, 0)), area);
 }
 
 fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
@@ -2346,10 +2279,6 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
     )];
     if floor.d7.is_none() && floor.d30.is_none() {
         lines.push(Line::from(Span::from(" no numbers yet; R to retry").style(label_style)));
-    }
-    // Memory's mode and today's usage, when the machine reports it (nothing when memory is off or the machine does not know it).
-    if let Some(line) = floor.memory.as_ref().and_then(|m| m.floor_line()) {
-        lines.push(Line::from(Span::from(line).style(label_style)));
     }
 
     // The per-repo table takes the bottom when there is more than one repo to compare, the

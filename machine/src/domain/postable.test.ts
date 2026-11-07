@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { archivedNotice, questionsComment } from "./notices.ts";
-import { carriesSecret, flattenLinks, postable, postableDraft, postableKeeping } from "./postable.ts";
+import { carriesSecret, flattenLinks, postable, postableKeeping } from "./postable.ts";
 
 describe("postable", () => {
   it("shows a link's address in the open and drops an image", () => {
@@ -69,18 +69,5 @@ describe("postableKeeping", () => {
   it("ignores a supplied value that is not a plain web address", () => {
     expect(postableKeeping("see javascript:alert(1)", ["javascript:alert(1)"])).toBe("see javascript:alert(1)");
     expect(postableKeeping(`go to ${pr}`, [])).toBe(`go to https\u200b://github.com/acme/app/pull/4`);
-  });
-});
-
-describe("a company memory item's marker never leaves the machine", () => {
-  it("is dropped from every postable text", () => {
-    const out = postable("Per the handbook [luna:co_a1B2-c3] and LUNA: co_zz9 you may ship; see luna:mem_0001");
-    expect(out).not.toMatch(/co_/i);
-    expect(out).toContain("luna:mem_0001");
-    expect(postableKeeping("limit is 5 luna:co_x1", [])).toBe("limit is 5");
-  });
-  it("makes a draft that carries one refused", () => {
-    expect(postableDraft("the policy says so (luna:co_abc)", [])).toBeNull();
-    expect(postableDraft("the policy says so (luna:mem_abc)", [])).not.toBeNull();
   });
 });

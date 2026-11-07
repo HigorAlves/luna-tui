@@ -23,7 +23,6 @@ export function conversationText(context: ConversationContext): Record<string, s
     evidence: reply?.evidence ? reply.evidence : NONE,
     docs: lines(reply?.docs ?? []),
     tone: lines((reply?.tone ?? []).flatMap((t, i) => [`example ${i + 1}, the machine wrote: ${t.machine}`, `example ${i + 1}, the person sent: ${t.person}`])),
-    memory: lines(reply?.memory ?? []),
     relation: reply?.relation ?? "none",
     note: DATA_NOTE,
   };

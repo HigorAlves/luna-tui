@@ -34,8 +34,6 @@ const ShipCursorSchema = z.object({
   decisions: z
     .array(z.object({ pack: z.enum(["event_class", "comment_intent", "fix_scope"]), recordId: z.string(), choice: z.string(), threadId: z.string().optional(), further: z.boolean().optional() }))
     .optional(),
-  /** Review threads that led to a fix or a change request, by a repository's own reviewer (RFC 0007, M4): written to memory as `review_ask` items when the PR merges. Excerpts are `postable`-flattened and at most 150 characters. */
-  asks: z.array(z.object({ thread: z.string(), reviewer: z.string(), kind: z.enum(["change_request", "nit"]), path: z.string().nullable(), excerpt: z.string().max(150) })).max(20).optional(),
   /** The evidence_valid answer that sent Evidence to run again, and the scenario results (by id) the pack had: the re-made pack is compared with them when it lands. */
   validity: z.object({ recordId: z.string(), before: z.record(z.string(), z.string()) }).optional(),
   /** Threads the machine itself resolved in a fix round: its own resolution says nothing about what the reviewer meant. */

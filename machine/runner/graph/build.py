@@ -20,15 +20,9 @@ def main() -> int:
     p.add_argument("--out", required=True)
     p.add_argument("--commit", required=True)
     p.add_argument("--misses", default=None, help="a misses.jsonl: files tasks changed that the code map did not name")
-    p.add_argument("--keep-cache", action="store_true", help="keep graphify-out/cache in --out, so a later build can seed from it")
-    p.add_argument("--seed-cache", default=None, help="a previous build's folder (read-only): its AST cache is copied in, so only files whose content changed are extracted again")
     a = p.parse_args()
     root, out = Path(a.input), Path(a.out) / "graphify-out"
     out.mkdir(parents=True, exist_ok=True)
-    # The AST cache is keyed by file content: seeding it from the previous commit's build makes this one incremental.
-    seed = Path(a.seed_cache) / "graphify-out" / "cache" if a.seed_cache else None
-    if seed is not None and seed.is_dir():
-        shutil.copytree(seed, out / "cache", dirs_exist_ok=True)
     from graphify.detect import detect
     from graphify.extract import collect_files, extract
     from graphify.build import build_from_json
@@ -51,8 +45,7 @@ def main() -> int:
     if G.number_of_nodes() == 0:
         print("graph: empty extraction", file=sys.stderr)
         return 2
-    if not a.keep_cache:
-        shutil.rmtree(out / "cache", ignore_errors=True)
+    shutil.rmtree(out / "cache", ignore_errors=True)
     communities = cluster(G)
     cohesion = score_all(G, communities)
     labels = {cid: f"Community {cid}" for cid in communities}

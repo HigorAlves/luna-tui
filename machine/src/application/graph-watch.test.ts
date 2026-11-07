@@ -5,8 +5,7 @@ import { GraphWatch } from "./graph-watch.ts";
 
 const stamp = (commit: string): GraphStamp => ({ schema: 1, commit, builtAt: "t", nodes: 1, edges: 1, communities: 1, graphify: "0.9.34" });
 
-function setup(opts: { stamps?: Record<string, string>; heads?: Record<string, string>; off?: string[]; failing?: string[]; afterFails?: boolean } = {}) {
-  const afters: string[] = [];
+function setup(opts: { stamps?: Record<string, string>; heads?: Record<string, string>; off?: string[]; failing?: string[] } = {}) {
   const stamps = new Map(Object.entries(opts.stamps ?? {}));
   const heads = new Map(Object.entries(opts.heads ?? {}));
   const builds: string[] = [];
@@ -38,13 +37,9 @@ function setup(opts: { stamps?: Record<string, string>; heads?: Record<string, s
     repos: async () => repos,
     policies: { for: async (repo) => ({ graph: !(opts.off ?? []).includes(repo) }) },
     defaultHead: async (repo) => heads.get(repo)!,
-    afterBuild: async (repo, head) => {
-      afters.push(`${repo}@${head}`);
-      if (opts.afterFails) throw new Error("memory down");
-    },
     log: (message) => logs.push(message),
   });
-  return { watch, builds, afters, logs, overlap: () => overlap, setHead: (repo: string, head: string) => heads.set(repo, head) };
+  return { watch, builds, logs, overlap: () => overlap, setHead: (repo: string, head: string) => heads.set(repo, head) };
 }
 
 describe("GraphWatch after a merge", () => {
@@ -118,24 +113,5 @@ describe("GraphWatch", () => {
     watch.ensure("/b");
     await watch.idle();
     expect(builds).toEqual([]);
-  });
-});
-
-describe("GraphWatch afterBuild (memory's trigger)", () => {
-  it("runs after a build, even a failed one, and for a repo whose graph is current, on a merge and on the poll", async () => {
-    const { watch, builds, afters } = setup({ stamps: { "/a": "1" }, heads: { "/a": "1", "/b": "2", "/c": "3" }, failing: ["/c"] });
-    await watch.tick();
-    expect(builds.sort()).toEqual(["/b", "/c"]);
-    expect(afters.sort()).toEqual(["/a@1", "/b@2", "/c@3"]);
-    watch.requestRebuild("/a");
-    await watch.idle();
-    expect(afters).toContain("/a@");
-  });
-
-  it("is not run for a repo whose graph is off, and its failure never stops the pass", async () => {
-    const { watch, afters, logs } = setup({ heads: { "/a": "1", "/b": "1" }, off: ["/a"], afterFails: true });
-    await watch.tick();
-    expect(afters).toEqual(["/b@1"]);
-    expect(logs.join()).toContain("memory down");
   });
 });

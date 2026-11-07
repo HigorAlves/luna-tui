@@ -11,10 +11,6 @@ You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`, branch `{{tas
 ## Project context
 {{context.projectContext}}
 
-## Memory from past work
-{{memory.framing}}
-{{context.memory}}
-
 ## The thread and the pack
 {{context.ship}}
 

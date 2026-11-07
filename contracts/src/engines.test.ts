@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, SERVICE_MODELS, type ModelEntry, PACKS, STRONGER, StageInput, credentialOwner, engineBudgetKeyProblem, helperPack, readOnly, resolveEngine, retired, stronger } from "./index.ts";
+import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, STRONGER, StageInput, credentialOwner, engineBudgetKeyProblem, helperPack, readOnly, resolveEngine, retired, stronger } from "./index.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -41,12 +41,6 @@ describe("the model catalog and the engines", () => {
 
   it("names every engine's model in the catalog", () => {
     for (const [id, engine] of Object.entries(ENGINES)) expect(MODELS[engine.model], id).toBeDefined();
-  });
-
-  it("names the models memory's service uses in the catalog: Cognee's LLM is an existing entry, its embedder is local and free, and no engine runs it", () => {
-    expect(MODELS[SERVICE_MODELS.cognee.llm].runtime).toBe("eve");
-    expect(MODELS[SERVICE_MODELS.cognee.embedder]).toMatchObject({ runtime: "local", id: "BAAI/bge-small-en-v1.5", pricing: { inputPerMTokUsd: 0 } });
-    expect(Object.values(ENGINES).some((e) => (e.model as string) === SERVICE_MODELS.cognee.embedder)).toBe(false);
   });
 
   it("retires a deprecated model the day after its retireAfter, and nothing else", () => {

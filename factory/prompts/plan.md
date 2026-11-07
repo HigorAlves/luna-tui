@@ -47,10 +47,6 @@ When it is fresh, follow the `code-discovery` skill: query it with `graphify <ve
 ## Project context
 {{context.projectContext}}
 
-## Memory from past work
-{{memory.framing}}
-{{context.memory}}
-
 ## What to do
 1. Read just enough of `/work` (Glob, Grep, Read) to place the change and learn how it is tested.
 2. Pick one answer:

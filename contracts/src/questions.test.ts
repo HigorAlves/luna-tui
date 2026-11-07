@@ -458,43 +458,6 @@ describe("the conversation_reply agent pack reads hostile text and has no hands"
   });
 });
 
-describe("the memory lesson packs (RFC 0007)", () => {
-  it("memory_worth keeps or drops one candidate with a yes or no", async () => {
-    const { PACKS } = await import("./index.ts");
-    const pack = PACKS.memory_worth;
-    expect(pack.kind).toBe("decision");
-    expect(Object.keys(pack.questions)).toEqual(["keep"]);
-    expect(pack.answer.safeParse({ keep: { value: false, p: 0.1 } }).success).toBe(true);
-  });
-
-  it("memory_conflict judges the candidate against each of five recalled slots: contradicts, consistent or unsure", async () => {
-    const { PACKS } = await import("./index.ts");
-    const pack = PACKS.memory_conflict;
-    expect(pack.kind).toBe("decision");
-    expect(Object.keys(pack.questions)).toEqual(["slot1", "slot2", "slot3", "slot4", "slot5"]);
-    const answer = Object.fromEntries(Object.keys(pack.questions).map((k) => [k, { choice: "consistent", confidence: 0.9 }]));
-    expect(pack.answer.safeParse({ ...answer, slot2: { choice: "contradicts", confidence: 0.9 } }).success).toBe(true);
-    expect(pack.answer.safeParse({ ...answer, slot2: { choice: "maybe", confidence: 0.9 } }).success).toBe(false);
-  });
-
-  it("memory_extract has no tools, few turns, codex first with Haiku behind it, and answers capped lessons", async () => {
-    const { PACKS, NO_ACCESS } = await import("./index.ts");
-    const pack = PACKS.memory_extract;
-    expect(pack).toMatchObject({ kind: "agent", agent: "memory-extractor", writable: false, template: "memory_extract.md", effort: "low", access: NO_ACCESS, engines: { default: "codex:luna", allowed: ["codex:luna", "claude:haiku"], fallback: ["claude:haiku"] } });
-    expect(pack.maxTurns).toBeLessThanOrEqual(3);
-    const lesson = { text: "A README move needs its relative links checked.", kind: "finding", files: ["README.md"], reason: "Verify found broken links twice" };
-    expect(pack.answer.safeParse({ lessons: [lesson] }).success).toBe(true);
-    expect(pack.answer.safeParse({ lessons: [{ ...lesson, text: "x".repeat(401) }] }).success).toBe(false);
-    expect(pack.answer.safeParse({ lessons: [{ ...lesson, kind: "doc" }] }).success).toBe(false);
-  });
-
-  it("memory_recall is in the access of exactly the packs that get the pushed block", async () => {
-    const { PACKS } = await import("./index.ts");
-    const withTool = Object.values(PACKS).filter((p) => p.kind === "agent" && p.access.luna.includes("memory_recall")).map((p) => p.id).sort();
-    expect(withTool).toEqual(["build_tests", "implementing", "plan", "pr_reply", "triage", "verifying"]);
-  });
-});
-
 describe("which packs are measured answer by answer", () => {
   it("declares measure: answer for exactly the three packs the machine reads one answer at a time, and verdict (absent) for every other decision pack", async () => {
     const { PACKS } = await import("./packs.ts");

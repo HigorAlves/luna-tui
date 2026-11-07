@@ -3,10 +3,6 @@
 import {
   AnswersInput,
   type ApiError,
-  MemoryAskInput,
-  MemoryForgetInput,
-  MemoryItem,
-  MemoryRecallInput,
   CloneInput,
   ArchiveInput,
   AddFindingInput,
@@ -54,7 +50,6 @@ import {
   TaskSource,
   TaskState,
   UpdateTaskInput,
-  type MemoryFloor,
   type RepoHealth,
 } from "@hardness/contracts";
 import { type Context, Hono } from "hono";
@@ -90,7 +85,6 @@ import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type
 import type { StubStages } from "../../application/stages/stubs.ts";
 import { type ApiAccess, guard } from "./access.ts";
 import { EngineNotAllowedError, NotOnDemandError, type PackRunsPort, QueueFullError, RunAbortedError, RunEngineBudgetError, RunEngineDisabledError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "../../application/pack-runs.ts";
-import { MemoryAgentsOffError, MemoryItemNotFoundError, MemoryNoAnswerError, MemoryOffError, type MemoryService } from "../../application/memory-service.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
 import { ReplayFeed } from "./replay.ts";
@@ -107,8 +101,6 @@ const IDEMPOTENCY_KEY_MAX = 200;
 const RECENT_EVENTS = 50;
 
 export interface AppDeps {
-  /** Memory's mode and spend for the Floor (`GET /metrics` `memory`); absent, the field is absent. */
-  memoryFloor?: () => Promise<MemoryFloor>;
   /** Each repository's image and graph health for `GET /repos`; absent, the list is empty. */
   repoHealth?: () => Promise<RepoHealth[]>;
   /** Approves a base for a repository (refused unless it is the one in the repository's luna.yaml on the user's checkout); absent, `POST /repos/base/approve` is absent. */
@@ -148,8 +140,6 @@ export interface AppDeps {
   access?: ApiAccess;
   /** Packs on demand (`POST /runs`); without it (MACHINE_AGENTS=off) the route answers 503 `agents_off`. */
   runs?: PackRunsPort;
-  /** Memory (RFC 0007): ask, recall, the item list, forget and adopt; without it the `/memory/*` routes answer 503 `memory_off`. */
-  memory?: MemoryService;
 }
 
 class BadRequest extends Error {}
@@ -197,7 +187,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ memoryFloor, repoHealth, approveBase, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, memory }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -273,10 +263,6 @@ export function createApp({ memoryFloor, repoHealth, approveBase, db, pipeline, 
     if (error instanceof QueueFullError) return fail(c, 429, "queue_full", error.message);
     if (error instanceof RunOverBudgetError) return fail(c, 429, "budget", error.message);
     if (error instanceof RunAbortedError) return fail(c, CLIENT_CLOSED, "client_closed", error.message);
-    if (error instanceof MemoryOffError) return fail(c, 503, "memory_off", error.message);
-    if (error instanceof MemoryAgentsOffError) return fail(c, 503, "agents_off", error.message);
-    if (error instanceof MemoryNoAnswerError) return fail(c, 503, "memory_no_answer", error.message);
-    if (error instanceof MemoryItemNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof ZodError) return fail(c, 400, "invalid_request", z.prettifyError(error));
     if (error instanceof BadRequest) return fail(c, 400, "invalid_request", error.message);
     console.error(error);
@@ -337,17 +323,15 @@ export function createApp({ memoryFloor, repoHealth, approveBase, db, pipeline, 
     const groupBy = c.req.query("groupBy");
     if (groupBy !== undefined && !(METRICS_GROUP_BY as readonly string[]).includes(groupBy)) throw new BadRequest(`groupBy must be one of ${METRICS_GROUP_BY.join(", ")}, got "${groupBy}"`);
     const repo = c.req.query("repo");
-    const memory = groupBy === undefined && memoryFloor ? await memoryFloor().catch(() => undefined) : undefined;
-    return c.json({
-      ...(memory ? { memory } : {}),
-      ...(await computeMetrics(db, {
+    return c.json(
+      await computeMetrics(db, {
         since,
         slots: pipeline.slots,
         budget,
         ...(repo !== undefined ? { repo: repo === "" ? null : repo } : {}),
         ...(groupBy !== undefined ? { groupBy: groupBy as MetricsGroupBy } : {}),
-      })),
-    });
+      }),
+    );
   });
 
   app.get("/tasks", async (c) => {
@@ -482,8 +466,8 @@ export function createApp({ memoryFloor, repoHealth, approveBase, db, pipeline, 
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
   app.post("/tasks/:id/decision", async (c) => {
     const id = taskId(c);
-    const { decision, reason, comment, applyRules, lessons, approver, keepWhole } = await body(c, DecisionInput);
-    const response = applyRules === undefined && keepWhole === undefined && lessons === undefined ? undefined : { ...(applyRules === undefined ? {} : { applyRules }), ...(keepWhole === undefined ? {} : { keepWhole }), ...(lessons === undefined ? {} : { lessons }) };
+    const { decision, reason, comment, applyRules, approver, keepWhole } = await body(c, DecisionInput);
+    const response = applyRules === undefined && keepWhole === undefined ? undefined : { ...(applyRules === undefined ? {} : { applyRules }), ...(keepWhole === undefined ? {} : { keepWhole }) };
     return c.json(await serialize(await pipeline.decide(id, decision, reason ?? comment ?? undefined, response, approver ? { approver } : {})));
   });
 
@@ -696,37 +680,6 @@ export function createApp({ memoryFloor, repoHealth, approveBase, db, pipeline, 
   }
 
   /** Live updates; `since` replays the task changes past that sequence number first, `source` keeps one source's tasks (see replay.ts). `ready` follows the replay. */
-  if (memory) {
-    // Memory's ask surfaces and the memory view. The caller is the operator: every dataset of the repository named (or all of them).
-    app.get("/memory/status", async (c) => c.json(await memory.status()));
-    app.post("/memory/ask", async (c) => {
-      const input = await body(c, MemoryAskInput);
-      const via = c.req.query("via") ?? "pack";
-      if (via !== "pack" && via !== "cognee") throw new BadRequest("via must be pack or cognee");
-      return c.json(await memory.ask(input, via));
-    });
-    app.post("/memory/recall", async (c) => c.json(await memory.recall(await body(c, MemoryRecallInput))));
-    app.get("/memory/items", async (c) => {
-      const many = <T extends z.ZodType>(schema: T, raw: string | undefined) => (raw ? z.array(schema).parse(raw.split(",").map((v) => v.trim()).filter(Boolean)) : undefined);
-      const number = (raw: string | undefined) => (raw === undefined ? undefined : z.coerce.number().int().min(0).parse(raw));
-      const status = many(MemoryItem.shape.status, c.req.query("status"));
-      const trust = many(MemoryItem.shape.trust, c.req.query("trust"));
-      const kinds = many(MemoryItem.shape.kind, c.req.query("kind"));
-      const limit = number(c.req.query("limit"));
-      const offset = number(c.req.query("offset"));
-      const repo = c.req.query("repo");
-      return c.json(await memory.list({ ...(repo ? { repo } : {}), ...(status ? { status } : {}), ...(trust ? { trust } : {}), ...(kinds ? { kinds } : {}), ...(limit !== undefined ? { limit } : {}), ...(offset !== undefined ? { offset } : {}) }));
-    });
-    app.get("/memory/items/:id", async (c) => c.json(await memory.get(c.req.param("id"))));
-    app.post("/memory/items/:id/forget", async (c) => {
-      const { reason } = await body(c, MemoryForgetInput);
-      return c.json(await memory.forget(c.req.param("id"), c.req.header("x-luna-client") ?? "api", reason));
-    });
-    app.post("/memory/items/:id/adopt", async (c) => c.json(await memory.adopt(c.req.param("id"), c.req.header("x-luna-client") ?? "api")));
-  } else {
-    app.all("/memory/*", (c) => fail(c, 503, "memory_off", "memory is not wired on this machine"));
-  }
-
   app.get("/events", (c) => {
     const since = c.req.query("since");
     const source = c.req.query("source") ?? null;

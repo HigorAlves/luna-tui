@@ -45,21 +45,6 @@ describe("closeTask: a card whose PR merged", () => {
   });
 });
 
-describe("closeTask: the card's branch graphs", () => {
-  it("deletes them for any close, as its own step, and reports a failure instead of throwing", async () => {
-    const dropped: string[][] = [];
-    const ok = await closeTask(task(null), { exec: fakeExec().exec, worktreeRemove: false, dropBranchGraphs: async (repoPath, taskId) => void dropped.push([repoPath, taskId]) });
-    expect(dropped).toEqual([["/repo", "t1"]]);
-    expect(ok.steps.find((s) => s.step === "branch-graph")).toMatchObject({ ok: true });
-    const bad = await closeTask(task(null), { exec: fakeExec().exec, worktreeRemove: false, dropBranchGraphs: async () => Promise.reject(new Error("disk")) });
-    expect(bad.steps.find((s) => s.step === "branch-graph")).toMatchObject({ ok: false, note: "disk" });
-    // A card with no repository has none.
-    const none = await closeTask({ id: "t1", repoPath: null, worktreePath: null }, { exec: fakeExec().exec, worktreeRemove: false, dropBranchGraphs: async () => void dropped.push(["never"]) });
-    expect(dropped).toEqual([["/repo", "t1"]]);
-    expect(none.steps.some((s) => s.step === "branch-graph")).toBe(false);
-  });
-});
-
 describe("closeTask", () => {
   it("closes the watch tab, and reports a failure to", async () => {
     const closed: string[] = [];

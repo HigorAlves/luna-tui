@@ -29,9 +29,5 @@ Step files (slices):
 ## Project context
 {{context.projectContext}}
 
-## Memory from past work
-{{memory.framing}}
-{{context.memory}}
-
 ## Output
 Answer with kind "done" and a one-line summary and the list of `tests` (`{scenario, file}`), or kind "escalated" with escalation, reason when a scenario cannot be written as a test.

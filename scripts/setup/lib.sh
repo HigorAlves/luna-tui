@@ -94,18 +94,3 @@ rust_path() {
   [ -d "$HOME/.cargo/bin" ] && PATH="$HOME/.cargo/bin:$PATH"
   export PATH
 }
-
-# company_docs_path INPUT: the company folder as the machine needs it (docs/configuration.md "Memory"): one absolute folder,
-# `~` expanded, no trailing slash. A relative path, a `:` list (the machine in Docker mounts one folder) or `/` is refused.
-company_docs_path() {
-  local dir="$1"
-  # shellcheck disable=SC2088  # a literal ~ typed at the prompt is what is matched and expanded here
-  case "$dir" in "~") dir="$HOME" ;; "~/"*) dir="$HOME/${dir#\~/}" ;; esac
-  while [ "${#dir}" -gt 1 ] && [ "${dir%/}" != "$dir" ]; do dir="${dir%/}"; done
-  case "$dir" in
-    *:*) echo "one folder only (no ':' list): the machine in Docker mounts a single folder" >&2; return 1 ;;
-    /) echo "not the root folder" >&2; return 1 ;;
-    /*) printf '%s' "$dir" ;;
-    *) echo "an absolute folder (/… or ~/…), got: $1" >&2; return 1 ;;
-  esac
-}

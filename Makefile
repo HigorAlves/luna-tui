@@ -4,7 +4,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 SETUP := scripts/setup
 
-.PHONY: help setup doctor tools credentials integrations company-docs luna-yaml up down board
+.PHONY: help setup doctor tools credentials integrations luna-yaml up down board
 
 help: ## Show these targets
 	@LUNA_NO_ANIMATION=1 bash -c 'source $(SETUP)/helpers/banner.sh && banner_show "make <target>"'
@@ -25,9 +25,6 @@ credentials: ## Engine credentials (Claude, Codex, OpenAI, Jev), the API token, 
 
 integrations: ## Jira, the Slack inbox and machine settings, into .env
 	@bash $(SETUP)/integrations.sh
-
-company-docs: ## The company folder memory reads: md, txt, pdf (make company-docs DIR=~/Developer/company-docs; DIR=none clears it)
-	@bash $(SETUP)/company-docs.sh $(DIR)
 
 luna-yaml: ## Write or update a repo's luna.yaml (make luna-yaml REPO=~/Developer/app)
 	@bash $(SETUP)/luna-yaml.sh $(REPO)

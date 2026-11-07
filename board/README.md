@@ -148,7 +148,6 @@ and a test fails when they drift from the registry.
 | `P` | Pulls: every open PR involving you |
 | `B` | Backlog: candidates, not tickets yet |
 | `K` | Tickets: held, assessed, waiting on you |
-| `M` | Memory: what the machine remembers |
 | `S` | Slack: mentions, DMs and watches |
 
 **Marks & bulk**
@@ -167,7 +166,6 @@ and a test fails when they drift from the registry.
 | `x` then `+` | one more slot |
 | `x` then `-` | one slot fewer |
 | `n` | new ticket, then edit it in place |
-| `Q` | ask memory, answers cite sources |
 | `x` | actions menu for the ticket |
 | `:` | command palette |
 | `esc` | clear the filter and the marks |
@@ -200,8 +198,6 @@ and a test fails when they drift from the registry.
 | `:prs` | open Pulls |
 | `:backlog` | open the Backlog |
 | `:tickets` | open the Tickets view |
-| `:memory` | open the Memory view |
-| `:ask <question>` | ask memory, in the selected repo |
 | `:ticket-edit <text>` | post your text, not the draft's |
 | `:dedup duplicate <n> \| related <ns> \| neither` | answer the duplicate question |
 | `:dup <id>` | close as a duplicate of that ticket |
@@ -399,43 +395,6 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 |---|---|
 | `R` | poll GitHub now |
 | `x` | the same actions as a menu |
-| `?` | keys |
-
-<!-- keys:end -->
-
-## Memory
-
-`M` (or `:memory`) opens the Memory view: what the machine remembers (RFC 0007), one row per item of the selected card's repository (the repo this board sits in when none is selected; every repository otherwise), read from `GET /memory/items`. A row shows the status (`pending`, `active`, `stale`), the trust (`fact`, `lesson`, `outside`), the kind, the source and the provenance (who wrote it, from which card); the selected item's anchors, run and text sit beside the list. `o` keeps only the `outside` items (uploads in Cognee's own UI that nobody adopted, shown in yellow); `a` adopts one, which makes it a lesson; `f` forgets the selected item after one yes, which deletes it from Cognee and records the correction as ground truth. Text from past runs and outsiders is flattened before it is drawn.
-
-`Q` (or `:ask <question>`) opens the ask pane, from the board or the Memory view: type a question about the repository and enter sends it to `POST /memory/ask`, which recalls what the operator may see and has the `memory_answer` pack answer from those items alone. The answer shows with its sources (the ids of the items it rests on), or says plainly that the memory does not settle it. `?` stays the key sheet. With memory off the pane says so. When the machine runs Cognee with a model, the Floor shows one more line: memory's mode and today's tokens, cost and items cognified (`GET /memory/status`); it is left out when memory is off.
-
-<!-- keys:start memory -->
-**Memory item**
-
-| Key | Does |
-|---|---|
-| `f` | forget: delete it (asks first) |
-| `a` | adopt: an outside item, a lesson |
-
-**Move**
-
-| Key | Does |
-|---|---|
-| `j / k` | previous / next item |
-| `esc / M / q` | close |
-
-**Filter & order**
-
-| Key | Does |
-|---|---|
-| `o` | only the outside items |
-
-**App**
-
-| Key | Does |
-|---|---|
-| `Q` | ask memory a question |
-| `R` | fetch the items again |
 | `?` | keys |
 
 <!-- keys:end -->

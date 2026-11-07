@@ -14,9 +14,6 @@ mod digest;
 mod discover;
 mod herdr;
 mod inbox;
-mod memory;
-#[cfg(test)]
-mod memory_view_tests;
 mod intake;
 mod keys;
 mod model;
