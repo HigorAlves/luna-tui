@@ -310,7 +310,7 @@ export function cogneeMemory(options: MemoryServiceOptions): MemoryService {
       let current = live.find((r) => r.anchors.commit === code.commit && r.status !== "pending") ?? null;
       if (!current) {
         const item: MemoryItem = {
-          id: newId(),
+          id: newId(code.repo),
           kind: "code",
           repo: code.repo,
           source: { kind: "code", ref: code.commit },
@@ -537,6 +537,16 @@ export function cogneeMemory(options: MemoryServiceOptions): MemoryService {
             await store.setStatus(row.id, "retired", "deleted outside Luna");
             retired++;
           }
+        }
+      }
+      // An outside row for an item a row of ours now holds (an add that found the item already in Cognee, left by a build whose row was
+      // lost): the item is Luna's, and forgetting the outside row would delete it, so the row is only retired.
+      const held = await store.withData();
+      const claimed = new Set(held.filter((r) => r.trust !== "outside" && r.status !== "retired").map((r) => r.cogneeDataId));
+      for (const row of held) {
+        if (row.trust === "outside" && row.status !== "retired" && claimed.has(row.cogneeDataId)) {
+          await store.setStatus(row.id, "retired", "the item is Luna's own: a row of ours holds it");
+          retired++;
         }
       }
       // A whole dataset removed in Cognee's UI takes its rows with it.

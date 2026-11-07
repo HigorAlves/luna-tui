@@ -329,6 +329,13 @@ describe("code", () => {
     expect(cognee.calls.cognify.at(-1)).toEqual(["code:acme-app"]);
   });
 
+  it("gives a code graph row a repository's id, never the company folder's", async () => {
+    const memory = make();
+    await memory.ingestCode({ repo: "acme-app", dir: "/repos/acme-app/c1", commit: "c1" });
+    const [row] = await memory.list({ kinds: ["code"] });
+    expect(row!.id).toMatch(/^mem_/);
+  });
+
   it("gives company items ids of the co_ shape and repository items mem_", async () => {
     const memory = make();
     const doc = await memory.ingestDoc({ repo: null, path: "a.md", name: "a.md", content: Buffer.from("company text") });
@@ -423,6 +430,19 @@ describe("reconcile", () => {
     const outside = await memory.list({ trust: ["outside"] });
     expect(outside.map((r) => [r.dataset.name, r.repo, r.kind, r.status]).sort()).toEqual([["acme-app:github", "acme-app", "doc", "active"], ["company", null, "doc", "active"]]);
     expect(outside.every((r) => r.provenance.by === "person" && r.cogneeDataId !== null)).toBe(true);
+  });
+
+  it("retires an outside row once a row of ours holds the same Cognee item (an add that found the item already there)", async () => {
+    const memory = make();
+    cognee.uploadOutside("acme-app:github", "orphan.md", "left by an add whose row was lost");
+    await memory.reconcile();
+    const [outside] = await memory.list({ trust: ["outside"] });
+    const [ours] = await memory.write([draft("ours")]);
+    await db.query("update memory_items set cognee_data_id = $1 where id = $2", [outside!.cogneeDataId, ours!.id]);
+    expect(await memory.reconcile()).toEqual({ added: 0, retired: 1 });
+    expect(await memory.get(outside!.id)).toMatchObject({ status: "retired" });
+    expect(String((await rowOf(outside!.id)).status_note)).toBe("the item is Luna's own: a row of ours holds it");
+    expect(await memory.get(ours!.id)).toMatchObject({ status: "active", trust: "fact" });
   });
 
   it("retires a row whose data was deleted in Cognee, with the note 'deleted outside Luna', and a row whose whole dataset went", async () => {
