@@ -319,6 +319,9 @@ export function cogneeMemory(options: MemoryServiceOptions): MemoryService {
         const added = await exclusive(() => client.add({ dataset, items: [{ lunaId: item.id, text: code.dir.startsWith(`${CODE_ROOT}/`) ? code.dir : `${CODE_ROOT}/${code.repo}/${code.commit}` }] }));
         noteDataset(added.datasetId, added.datasetName);
         await store.markAdded(item.id, { dataId: added.dataIds[0]!, datasetId: added.datasetId });
+        // Cognee holds the repository now: a failed graph build below keeps the row, so reconcile knows the item and the next pass
+        // builds again without adding it twice.
+        rowId = null;
         current = await store.get(item.id);
       }
       await cognifyExclusive(async () => {

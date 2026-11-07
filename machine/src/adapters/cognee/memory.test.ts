@@ -288,6 +288,24 @@ describe("code", () => {
     await expect(memory.ingestCode({ repo: "acme-app", dir: "/repos/acme-app/c2", commit: "c2" })).rejects.toThrow(/graph build failed/);
   });
 
+  it("keeps the row of a repository Cognee took when only its graph build failed, so the next pass builds again without adding it twice", async () => {
+    const memory = make();
+    const cognify = cognee.cognify;
+    cognee.cognify = async () => {
+      throw new Error("worker was killed");
+    };
+    await expect(memory.ingestCode({ repo: "acme-app", dir: "/repos/acme-app/c1", commit: "c1" })).rejects.toThrow(/killed/);
+    const [row] = await memory.list({ kinds: ["code"] });
+    expect(row).toMatchObject({ trust: "fact", anchors: { commit: "c1" } });
+    expect(row!.cogneeDataId).not.toBeNull();
+    // Reconcile finds Cognee's item ours, not an upload made outside Luna.
+    expect(await memory.reconcile()).toEqual({ added: 0, retired: 0 });
+    cognee.cognify = cognify;
+    await memory.ingestCode({ repo: "acme-app", dir: "/repos/acme-app/c1", commit: "c1" });
+    expect(cognee.calls.add).toHaveLength(1);
+    expect(cognee.calls.cognify.at(-1)).toEqual(["code:acme-app"]);
+  });
+
   it("gives company items ids of the co_ shape and repository items mem_", async () => {
     const memory = make();
     const doc = await memory.ingestDoc({ repo: null, path: "a.md", name: "a.md", content: Buffer.from("company text") });
