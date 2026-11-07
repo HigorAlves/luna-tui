@@ -85,12 +85,49 @@ describe("the red check, per scenario", () => {
     expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
   });
 
-  it("sends the writer back with the problems of a scenario whose test fails for the wrong reason", async () => {
+  it("sends the writer back with the problems of a scenario whose test two askings say fails for the wrong reason", async () => {
     let n = 0;
-    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (c.scenario?.id === "S2" && n++ === 0 ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (c.scenario?.id === "S2" && n++ < 2 ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
     await buildTestsStep(f.deps)(context([v1]));
     expect(f.calls).toEqual(["writer", "writer", "commit", "checkpoint:red", "implement", "sweep"]);
     expect(f.reviews[1]!.join(" ")).toMatch(/S2.*import/);
+  });
+
+  it("does not send the writer back for one stray no: the judge is asked again and the majority stands", async () => {
+    const asked: string[] = [];
+    let n = 0;
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (asked.push(c.scenario!.id), c.scenario?.id === "S2" && n++ === 0 ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
+    const e = emitted();
+    await buildTestsStep(f.deps)({ ...context([v1]), emit: e.emit } as never);
+    expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(asked.filter((id) => id === "S2")).toHaveLength(3);
+    expect(asked.filter((id) => id === "S1")).toHaveLength(1);
+    expect(e.rows).toContainEqual(["scenario.red_check", expect.objectContaining({ scenario: "S2", verdict: "proceed", asked: 3, flagged: 1 })]);
+  });
+
+  it("puts each scenario's verdict on the stream, and on the escalation when the step gives up", async () => {
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (c.scenario?.id === "S2" ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
+    const e = emitted();
+    const result = await buildTestsStep(f.deps)({ ...context([v1]), emit: e.emit } as never);
+    expect(e.rows.filter(([k]) => k === "scenario.red_check").map(([, p]) => [p.scenario, p.verdict, p.asked, p.flagged])).toEqual(expect.arrayContaining([["S1", "proceed", 1, 0], ["S2", "flag", 2, 2]]));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { testsStep: { status: "failed", redChecks: [{ scenario: "S1", verdict: "proceed" }, { scenario: "S2", verdict: "flag" }] } } });
+  });
+
+  it("gives the judge the test's source, read by the machine, beside the writer's report", async () => {
+    const seen: Array<string | undefined> = [];
+    const f = fakes([tagged("S1")], {
+      readTest: async (_w, file, id) => `// ${file} ${id}\nit("x", () => {});`,
+      judgeRed: async (c) => (seen.push(c.test), { verdict: "proceed", problems: [] }),
+    });
+    await buildTestsStep(f.deps)(context([v2]));
+    expect(seen).toEqual([expect.stringContaining("it(\"x\"")]);
+  });
+
+  it("asks without the source when it cannot be read", async () => {
+    const seen: Array<string | undefined> = [];
+    const f = fakes([tagged("S1")], { readTest: async () => Promise.reject(new Error("EISDIR")), judgeRed: async (c) => (seen.push(c.test), { verdict: "proceed", problems: [] }) });
+    await buildTestsStep(f.deps)(context([v2]));
+    expect(seen).toEqual([undefined]);
   });
 
   it("sends the writer back for a scenario with no red reported, twice at most, and escalates the third time", async () => {

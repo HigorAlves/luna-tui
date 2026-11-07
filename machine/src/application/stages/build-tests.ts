@@ -7,6 +7,7 @@ import { safe } from "../../domain/evidence-markdown.ts";
 import { isPlainRepoPath } from "@hardness/contracts";
 import { type ScenarioTagFacts, scenarioTags } from "../../domain/scenario-tags.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import { voteRed } from "./red-vote.ts";
 import type { SweepOutcome } from "./sweep.ts";
 
 /** A tree the writer left, or a commit the step made earlier: what git says changed, and the diff. */
@@ -24,6 +25,8 @@ export interface BuildTestsDeps {
   runWriter: (context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** The red_check decision for one scenario's test; `skipped` when it did not answer in time (it never blocks). `problems` are what a confident no said is wrong. */
   judgeRed: (check: CheckContext, repoPath: string | null) => Promise<{ verdict: string; problems: string[] }>;
+  /** The source of the scenario's tagged test, read from the worktree, capped; null when it cannot be read. The judge reads it beside the writer's report. */
+  readTest?: (worktree: string, file: string, scenario: string) => Promise<string | null>;
   /** Pushes the tests commit to the checkpoint ref before the implementer runs (a push that fails is a note, never a failure). */
   checkpoint: (context: StageContext, worktree: string, follows: "red" | "green") => Promise<void>;
   /** The regression sweep by script, after the implementer's last slice is green. */
@@ -154,9 +157,9 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
 
     const approved = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
     const plan = Plan.safeParse(approved?.requested.plan);
-    const escalate = async (where: string, base: string, problems: string[]): Promise<StageResult> => {
+    const escalate = async (where: string, base: string, problems: string[], redChecks?: { scenario: string; verdict: string }[]): Promise<StageResult> => {
       await deps.git.reset(where, base);
-      return { outcome: "escalated", ...(writerUsage ? { usage: writerUsage } : {}), detail: { escalation: "other", reason: `the tests step could not make a tagged test that fails for the right reason for every scenario: ${problems.join("; ")}`, testsStep: { status: "failed", problems } } };
+      return { outcome: "escalated", ...(writerUsage ? { usage: writerUsage } : {}), detail: { escalation: "other", reason: `the tests step could not make a tagged test that fails for the right reason for every scenario: ${problems.join("; ")}`, testsStep: { status: "failed", problems, ...(redChecks ? { redChecks } : {}) } } };
     };
     // A missing tag is sent back once; a red that is missing or wrong, twice.
     let tagMisses = 0;
@@ -196,15 +199,19 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
           const id = s.id!;
           const output = reds[id];
           if (output === undefined) return { id, verdict: "missing", problems: [`${id}: no red reported; run its test and report the failing output with scenario_red`] };
-          const check: CheckContext = { kind: "red", scenario: { id, title: s.title, given: s.given ?? null, when: s.when ?? null, then: s.then ?? null, approach: s.approach }, exists: id in facts.tagged, output };
-          const answer = await deps.judgeRed(check, task.repoPath);
-          return { id, verdict: answer.verdict, problems: answer.problems.map((p) => `${id}: ${safe(p).slice(0, 200)}`) };
+          const file = facts.tagged[id];
+          const test = file && deps.readTest ? await deps.readTest(where, file, id).catch(() => null) : null;
+          const check: CheckContext = { kind: "red", scenario: { id, title: s.title, given: s.given ?? null, when: s.when ?? null, then: s.then ?? null, approach: s.approach }, exists: id in facts.tagged, output, ...(test ? { test } : {}) };
+          const vote = await voteRed(deps.judgeRed, check, task.repoPath);
+          // The task's events say what each scenario's judge said, so an escalation is never only a sentence.
+          await context.emit?.("scenario.red_check", { scenario: id, verdict: vote.verdict, asked: vote.askings.length, flagged: vote.askings.filter((a) => a.flagged).length, testRead: test !== null, ...(vote.problems.length ? { problems: vote.problems.map((p) => safe(p).slice(0, 200)) } : {}) });
+          return { id, verdict: vote.verdict, problems: vote.problems.map((p) => `${id}: ${safe(p).slice(0, 200)}`) };
         }),
       );
       const problems = judged.flatMap((j) => j.problems);
       if (problems.length > 0) {
         review = problems;
-        if (redMisses >= 2) return escalate(where, base, problems);
+        if (redMisses >= 2) return escalate(where, base, problems, judged.map((j) => ({ scenario: j.id, verdict: j.verdict })));
         redMisses += 1;
         continue;
       }

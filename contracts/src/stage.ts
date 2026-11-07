@@ -691,8 +691,10 @@ export const CheckContext = z.object({
   /** red, for a scenario's test (Build's tests step): the scenario, and the machine's fact that its tagged test is in the diff. */
   scenario: z.object({ id: z.string(), title: z.string(), given: z.string().nullable().optional(), when: z.string().nullable().optional(), then: z.string().nullable().optional(), approach: z.string().optional() }).optional(),
   exists: z.boolean().optional(),
-  /** red: the failing output's tail. */
+  /** red: the failing output's tail: the test writer's own report of it. */
   output: z.string().optional(),
+  /** red: the tagged test's source, read by the machine from the worktree (capped): the writer's report alone is not evidence of why the test fails. */
+  test: z.string().optional(),
   planned: z.array(z.string()).optional(),
   changed: z.array(z.string()).optional(),
   declared: z.array(z.object({ path: z.string(), reason: z.string() })).optional(),
