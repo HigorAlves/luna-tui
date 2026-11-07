@@ -9,6 +9,8 @@ import { type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import { cardOf } from "../../domain/card-fields.ts";
+import { isDocsOnly } from "../../domain/docs-only.ts";
+import { looksLikeTestPath } from "../../domain/locked-files.ts";
 import type { StackFacts } from "../stack.ts";
 
 export type ExecFn = (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<ExecResult>;
@@ -124,8 +126,9 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
       } else if (parent?.parent.head) {
         const recorded = await (deps.stacked.baseSha ?? (async (path: string) => (await stackOf(path)).sha))(task.worktreePath);
         if (recorded !== parent.parent.head) {
-          const done = await (deps.stacked.rebase ?? rebaseOntoBase)(deps.exec, task.worktreePath, task.repoPath, defaultOf);
+          const done = await (deps.stacked.rebase ?? rebaseOntoBase)(deps.exec, task.worktreePath, task.repoPath, defaultOf, parentWinsFor(context));
           const failed = stopped(done, "the rebase onto the parent's new tip");
+          if (done.ok && done.resolved?.length) await context.note?.(`rebased onto the parent's new tip; the parent's version kept for ${done.resolved.join(", ")} (not this card's to change)`).catch(() => {});
           if (failed) return failed;
           restacked = true;
         }
@@ -196,3 +199,16 @@ export const realDeliverRunner = (github: GitHub, stacked?: DeliverDeps["stacked
       return { base: await branchBase(worktreePath, repoPath).catch(() => null), head: head && head.code === 0 ? head.stdout.trim() : null };
     },
   });
+
+/** Which files in a rebase conflict the parent's version wins, from the card's approved plan: a file the plan does not touch is not the card's,
+ *  and on a docs-only plan neither is a test (a docs card stacked on another kept both editing the first card's prose test, and every rebase
+ *  stopped on it). A file the plan touches still stops the rebase: settling it needs judgement. With no plan, nothing is settled by itself. */
+export function parentWinsFor(context: Pick<StageContext, "approvals">): { parentWins?: (path: string) => boolean } {
+  const plan = approvedPlan(context.approvals);
+  const touched = (plan?.slices ?? []).flatMap((s) => (s as { touchpoints?: string[] }).touchpoints ?? []);
+  if (touched.length === 0) return {};
+  const planned = new Set(touched);
+  const docs = isDocsOnly(touched);
+  return { parentWins: (path) => !planned.has(path) || (docs && looksLikeTestPath(path)) };
+}
+

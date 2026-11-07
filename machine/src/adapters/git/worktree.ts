@@ -75,7 +75,13 @@ export type GitExec = (command: string, args: string[], options?: { cwd?: string
 
 const FETCH_TIMEOUT = 60_000;
 
-export type RebaseResult = { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] };
+export type RebaseResult = { ok: true; onto: string; /** Files in conflict the rebase settled by taking the parent's side (`RebaseOptions.parentWins`). */ resolved?: string[] } | { ok: false; error: string; conflicts: string[] };
+
+/** How a rebase may settle a conflict by itself: `parentWins(path)` says the card has no claim on a file, so the parent's version stands. A conflict
+ *  in any other file stops the rebase, which is aborted as before. */
+export interface RebaseOptions {
+  parentWins?: (path: string) => boolean;
+}
 
 /** A branch name git would accept as a positional: the default branch is read from a ref in the common git
  *  dir, which a writable stage can rewrite, so a name shaped like an option is never passed to git. */
@@ -120,12 +126,45 @@ async function defaultTarget(defaultBranchOf: (repoPath: string) => Promise<stri
 }
 
 /** The rebase of a card that is, or was, stacked: `--onto <onto> refs/luna/base` replays only the card's own commits; aborted when it stops (the folder is left as it was), with the files in conflict. Its commits are unsigned, as every commit the machine makes is. */
-async function replayOwn(run: GitExec, worktreePath: string, onto: string, label: string): Promise<RebaseResult> {
-  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), "-c", "commit.gpgsign=false", "rebase", "--onto", onto, BASE_REF]);
-  if (rebased.code === 0) return { ok: true, onto: label };
-  const unmerged = await run("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", "--diff-filter=U"]);
-  await run("git", [...HOST_GIT, ...at(worktreePath), "rebase", "--abort"]);
-  return { ok: false, error: (rebased.stderr || rebased.stdout).trim() || `exit code ${rebased.code}`, conflicts: conflictsOf(unmerged) };
+/** A stopped rebase, carried on while every file in conflict is one `parentWins` gives to the parent: that side is kept (or the file removed, when the
+ *  parent removed it) and the rebase continues; a commit left empty is dropped. Any other conflict, or any other stop, is aborted as before. */
+async function settleRebase(run: GitExec, worktreePath: string, first: { code: number; stdout: string; stderr: string }, options: RebaseOptions): Promise<{ ok: true; resolved: string[] } | { ok: false; error: string; conflicts: string[] }> {
+  const git = (...args: string[]) => run("git", [...HOST_GIT, ...at(worktreePath), ...args]);
+  const resolved = new Set<string>();
+  let step = first;
+  for (let n = 0; step.code !== 0 && n < 200; n++) {
+    const unmerged = conflictsOf(await git("diff", "--name-only", "--diff-filter=U"));
+    const said = `${step.stdout}\n${step.stderr}`;
+    if (unmerged.length === 0 && /nothing to commit|is now empty|empty commit|--allow-empty/i.test(said)) {
+      step = await git("-c", "core.editor=true", "rebase", "--skip");
+      continue;
+    }
+    if (!options.parentWins || unmerged.length === 0 || !unmerged.every(options.parentWins)) {
+      await git("rebase", "--abort");
+      return { ok: false, error: said.trim() || `exit code ${step.code}`, conflicts: unmerged };
+    }
+    for (const path of unmerged) {
+      // Stage 2 is the side being rebased onto: the parent's. Absent, the parent removed the file.
+      if ((await git("cat-file", "-e", `:2:${path}`)).code === 0) {
+        await git("checkout", "--ours", "--", path);
+        await git("add", "--", path);
+      } else await git("rm", "--quiet", "--", path);
+      resolved.add(path);
+    }
+    step = await git("-c", "core.editor=true", "-c", "commit.gpgsign=false", "rebase", "--continue");
+  }
+  if (step.code !== 0) {
+    await git("rebase", "--abort");
+    return { ok: false, error: `${step.stdout}\n${step.stderr}`.trim() || `exit code ${step.code}`, conflicts: [] };
+  }
+  return { ok: true, resolved: [...resolved] };
+}
+
+async function replayOwn(run: GitExec, worktreePath: string, onto: string, label: string, options: RebaseOptions = {}): Promise<RebaseResult> {
+  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), "-c", "commit.gpgsign=false", "rebase", "--empty=drop", "--onto", onto, BASE_REF]);
+  const settled = await settleRebase(run, worktreePath, rebased, options);
+  if (!settled.ok) return settled;
+  return { ok: true, onto: label, ...(settled.resolved.length ? { resolved: settled.resolved } : {}) };
 }
 
 /** The refusal a nested repository in the folder gets: a failed result, never a thrown error. */
@@ -151,6 +190,7 @@ export async function rebaseOntoBase(
   worktreePath: string,
   repoPath: string,
   defaultBranchOf: (repoPath: string) => Promise<string | null> = defaultBranch,
+  options: RebaseOptions = {},
 ): Promise<RebaseResult> {
   const recorded = await stackOf(worktreePath);
   if (recorded.sha && recorded.branch) {
@@ -162,7 +202,7 @@ export async function rebaseOntoBase(
     const tip = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", `refs/remotes/origin/${b}^{commit}`]);
     if (tip.code !== 0) return failed("reading the parent's branch", tip);
     if (await workspaceAddsGitlink(run, worktreePath, recorded.sha, tip.stdout.trim())) return { ok: false, error: "the parent's branch adds a nested repository (mode 160000): nothing was rebased", conflicts: [] };
-    const result = await replayOwn(run, worktreePath, `refs/remotes/origin/${b}`, `origin/${b}`);
+    const result = await replayOwn(run, worktreePath, `refs/remotes/origin/${b}`, `origin/${b}`, options);
     if (result.ok) await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, tip.stdout.trim()]);
     return result;
   }
@@ -171,17 +211,14 @@ export async function rebaseOntoBase(
   // `--end-of-options`: whatever the name, it is a ref, never an option.
   const fetched = await run("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--end-of-options", "origin", base], { timeoutMs: FETCH_TIMEOUT });
   if (fetched.code !== 0) return failed("git fetch", fetched);
-  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), ...(recorded.sha ? ["-c", "commit.gpgsign=false"] : []), "rebase", `origin/${base}`]);
-  if (rebased.code === 0) {
-    if (recorded.sha) {
-      const tip = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", `origin/${base}^{commit}`]);
-      if (tip.code === 0) await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, tip.stdout.trim()]);
-    }
-    return { ok: true, onto: `origin/${base}` };
+  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), ...(recorded.sha ? ["-c", "commit.gpgsign=false"] : []), "rebase", "--empty=drop", `origin/${base}`]);
+  const settled = await settleRebase(run, worktreePath, rebased, options);
+  if (!settled.ok) return settled;
+  if (recorded.sha) {
+    const tip = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", `origin/${base}^{commit}`]);
+    if (tip.code === 0) await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, tip.stdout.trim()]);
   }
-  const unmerged = await run("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", "--diff-filter=U"]);
-  await run("git", [...HOST_GIT, ...at(worktreePath), "rebase", "--abort"]);
-  return { ok: false, error: (rebased.stderr || rebased.stdout).trim() || `exit code ${rebased.code}`, conflicts: conflictsOf(unmerged) };
+  return { ok: true, onto: `origin/${base}`, ...(settled.resolved.length ? { resolved: settled.resolved } : {}) };
 }
 
 /** The same function, under the name every caller before the stack used. */

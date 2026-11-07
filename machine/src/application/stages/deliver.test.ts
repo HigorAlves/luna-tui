@@ -6,7 +6,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import type { StageContext } from "../ports.ts";
-import { deliverRunner } from "./deliver.ts";
+import { deliverRunner, parentWinsFor } from "./deliver.ts";
 
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
 const bad = (stderr = "nope"): ExecResult => ({ code: 1, stdout: "", stderr });
@@ -151,7 +151,7 @@ describe("delivering a branch that conflicts with the default branch", () => {
     expect(calls).toEqual([
       [...G, "push", "-u", "origin", "hardness/t1"],
       [...G, "fetch", "--quiet", "--end-of-options", "origin", "main"],
-      [...G, "rebase", "origin/main"],
+      [...G, "rebase", "--empty=drop", "origin/main"],
       [...G, "push", "--force-with-lease", "-u", "origin", "hardness/t1"],
     ]);
   });
@@ -189,7 +189,7 @@ describe("delivering a branch that conflicts with the default branch", () => {
     const result = await run(context);
     expect(result.outcome).toBe("pass");
     expect(calls).toContainEqual([...G, "fetch", "--quiet", "--end-of-options", "origin", "trunk"]);
-    expect(calls).toContainEqual([...G, "rebase", "origin/trunk"]);
+    expect(calls).toContainEqual([...G, "rebase", "--empty=drop", "origin/trunk"]);
     expect(github.calls.some((c) => c.includes("acme/widgets"))).toBe(true);
   });
 
@@ -323,5 +323,23 @@ describe("delivering a stacked card", () => {
     await run(context);
     expect(stackFacts).not.toHaveBeenCalled();
     expect((github.openPr as unknown as { mock: { calls: Array<[string, { base?: string }]> } }).mock.calls[0]![1].base).toBeUndefined();
+  });
+});
+
+describe("parentWinsFor: which conflicts a stacked card's rebase settles by itself", () => {
+  const gate = (touchpoints: string[]) => [{ id: "g", kind: "awaiting_approval", decision: "approved", reason: null, requested: { brief: "b", criteria: ["c"], assumptions: [], slices: [{ title: "s", est_loc: 10, touchpoints, acceptance: ["a"] }] }, response: null, createdAt: new Date(), decidedAt: new Date() }] as never;
+  it("gives the parent a file the plan does not touch, and on a docs-only plan any test too", () => {
+    const docs = parentWinsFor({ approvals: gate(["docs/api.md", "contracts/src/readme-ste.test.ts"]) }).parentWins!;
+    expect(docs("contracts/src/readme-ste.test.ts")).toBe(true);
+    expect(docs("board/README.md")).toBe(true);
+    expect(docs("docs/api.md")).toBe(false);
+  });
+  it("keeps a planned test on a code plan the card's: that conflict needs judgement", () => {
+    const code = parentWinsFor({ approvals: gate(["web/cart.ts", "web/cart.test.ts"]) }).parentWins!;
+    expect(code("web/cart.test.ts")).toBe(false);
+    expect(code("web/other.ts")).toBe(true);
+  });
+  it("settles nothing without an approved plan", () => {
+    expect(parentWinsFor({ approvals: [] }).parentWins).toBeUndefined();
   });
 });
