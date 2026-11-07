@@ -88,6 +88,8 @@ services:
       # optional OpenAI key are in ~/.config/hardness (mounted below); `pnpm start` makes them.
       MACHINE_MEMORY: ${MACHINE_MEMORY:-on}
       COGNEE_URL: http://cognee:8000
+      # The company folder (`make company-docs`): one absolute host folder, mounted read-only at the same path below. Empty: none.
+      MACHINE_MEMORY_DOCS: ${MACHINE_MEMORY_DOCS:-}
       COGNEE_EMAIL: ${COGNEE_EMAIL:-machine@luna.example.com}
       MACHINE_MEMORY_DAILY_COGNIFY: ${MACHINE_MEMORY_DAILY_COGNIFY:-200}
       # The kill switch and the per-engine monthly caps (docs/configuration.md).
@@ -132,6 +134,8 @@ services:
       - ${LUNA_REPOS_DIR:-${HOME}/Developer}:${LUNA_REPOS_DIR:-${HOME}/Developer}
       - ${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}:${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}
       - ${HOME}/.config/hardness:/root/.config/hardness:ro
+      # The company folder, read-only at the path you gave; with none, an empty folder under the state dir stands in (compose needs a source).
+      - ${MACHINE_MEMORY_DOCS:-${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}/memory/no-company-docs}:${MACHINE_MEMORY_DOCS:-${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}/memory/no-company-docs}:ro
       # Read-write: a run that refreshed the Codex token writes it back (a temp file, then a rename).
       - ${CODEX_HOME:-${HOME}/.codex}:/root/.codex-host
 
@@ -156,6 +160,9 @@ services:
       # Cognee tries GitHub (a price table) and a telemetry host on its own; neither is on the list, so ask it not to.
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
       TELEMETRY_DISABLED: "1"
+      # Local mode extracts with GLiNER, about 2 GB per batch in flight; the default sizes the batches to the CPU, not to a Docker VM
+      # shared with Laminar, and a worker was killed for memory. One batch at a time: the graph is the same, only slower.
+      GLINER_INFERENCE_THREADS: "1"
       HTTP_PROXY: http://cognee-proxy:3128
       HTTPS_PROXY: http://cognee-proxy:3128
       http_proxy: http://cognee-proxy:3128

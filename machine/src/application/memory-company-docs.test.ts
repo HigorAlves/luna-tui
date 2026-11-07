@@ -50,6 +50,17 @@ describe("CompanyDocs", () => {
     expect(memory.cognified).toHaveLength(2);
   });
 
+  it("reads nothing hidden: a folder kept in git sends its documents, never what is under .git", async () => {
+    writeFileSync(join(docs, "README.md"), "# handbook");
+    mkdirSync(join(docs, ".git", "info"), { recursive: true });
+    writeFileSync(join(docs, ".git", "description.md"), "git's own");
+    writeFileSync(join(docs, ".draft.md"), "not ready");
+    const memory = fakeMemory();
+    const report = await poller(memory).poll();
+    expect(memory.docs.map((d) => d.path)).toEqual(["handbook/README.md"]);
+    expect(report?.skipped).toEqual([]);
+  });
+
   it("never follows a link, and skips a file over the cap", async () => {
     writeFileSync(join(root, "secret.md"), "outside");
     symlinkSync(join(root, "secret.md"), join(docs, "link.md"));

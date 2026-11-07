@@ -148,6 +148,8 @@ function labelsOf(dirs: string[]): string[] {
 function walk(root: string, rel: string, depth: number, out: Array<{ rel: string; full: string; size: number }>, report: CompanyDocsReport, label: string): void {
   const here = rel === "" ? root : join(root, rel);
   for (const entry of readdirSync(here, { withFileTypes: true })) {
+    // Hidden entries are not documents: a folder kept in git has .git, an editor leaves its own dot files.
+    if (entry.name.startsWith(".")) continue;
     const childRel = rel === "" ? entry.name : `${rel}/${entry.name}`;
     const full = join(root, childRel);
     const shown = `${label}/${childRel}`;
