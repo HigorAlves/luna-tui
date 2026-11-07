@@ -538,6 +538,20 @@ describe("Build's budget", () => {
     expect((await p.events(task.id)).some((e) => e.kind === "build.budget")).toBe(true);
   });
 
+  it("runs Build again with a fresh budget when a person approves the spent-budget escalation, once per approval", async () => {
+    const ran: string[] = [];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), { outcome: "fail" as const, events: events(16) }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(1);
+    expect((await p.get(task.id)).state).toBe("escalated");
+    // Approving the spent budget runs the implementer again, which it never did before (the same spent budget escalated at once).
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(2);
+    expect((await p.events(task.id)).filter((e) => e.kind === "build.budget_reset")).toHaveLength(1);
+  });
+
   it("counts the runtime's tokens from the finish row, and a run that reports none leaves them uncounted", async () => {
     const ran: string[] = [];
     const usage = { turns: 1, costUsd: null, tokens: { input: 1_900_000, output: 100_001 } };

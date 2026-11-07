@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { DATA_NOTE } from "./data-block.ts";
-import { EVE_TOOL_NAMES, FACTORY_RULES, callLine, escalationLine, factoryRules, renderPrompt as renderQuoted, renderPromptReport } from "./render.ts";
+import { EVE_TOOL_NAMES, FACTORY_RULES, callLine, callTarget, escalationLine, factoryRules, renderPrompt as renderQuoted, renderPromptReport } from "./render.ts";
 
 /** What a prompt says with the data notes, the block markers and the quoting taken off: the older tests read the values, not their quoting. */
 const unquote = (prompt: string): string => {
@@ -527,8 +527,9 @@ describe("callLine", () => {
     // eve's file tools name the target filePath; a read of four files is four lines, not a loop.
     expect(callLine("read_file", { filePath: "/work/b.ts" })).toBe("→ read_file /work/b.ts");
     expect(callLine("write_file", { filePath: "/work/b.ts", content: "a" })).not.toBe(callLine("write_file", { filePath: "/work/b.ts", content: "b" }));
-    expect(callLine("Bash", { command: "cargo test\n--verbose" })).toBe("→ Bash cargo test");
-    expect(callLine("Grep", { pattern: "x".repeat(200) })).toHaveLength("→ Grep ".length + 160);
+    // A target cut to one line or to 160 columns carries a fingerprint of all of it, so two commands that share a first line are two calls.
+    expect(callLine("Bash", { command: "cargo test\n--verbose" })).toMatch(/^→ Bash cargo test ·[0-9a-f]{8}$/);
+    expect(callLine("Grep", { pattern: "x".repeat(200) })).toMatch(new RegExp(`^→ Grep ${"x".repeat(160)} ·[0-9a-f]{8}$`));
     expect(callLine("mcp__luna__step", { label: "slice 1" })).toBe("→ mcp__luna__step slice 1");
   });
 
@@ -723,3 +724,19 @@ describe("verifying: the machine's tests commit", () => {
     expect(verify()).toContain("This card has no tests commit of the machine's");
   });
 });
+
+describe("callTarget: a long search", () => {
+  const pattern = "\\b(is|are|was|were|be|been|being)\\s+(left|built|run|written|given|made|shown|kept|chosen|known|taken|done|seen|found|sent|read|held|stored|picked|cut|set|put|told)\\b";
+  it("tells four greps over four files apart when the pattern pushes the path past the cut (Verify was stopped as stuck)", () => {
+    const calls = [".github/README.md", "docs/README.md", "evals/README.md", "board/README.md"].map((path) => callTarget("grep", { pattern, path }));
+    expect(new Set(calls.map((c) => `${c.target}|${c.fingerprint}`)).size).toBe(4);
+  });
+  it("still reads the same long search four times as one call", () => {
+    const calls = Array.from({ length: 4 }, () => callTarget("grep", { pattern, path: "board/README.md" }));
+    expect(new Set(calls.map((c) => `${c.target}|${c.fingerprint}`)).size).toBe(1);
+  });
+  it("leaves a short call as it was: no fingerprint", () => {
+    expect(callTarget("grep", { pattern: "TODO", path: "src" })).toEqual({ target: "TODO in src" });
+  });
+});
+

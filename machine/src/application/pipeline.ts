@@ -1588,6 +1588,9 @@ export class Pipeline {
     // A person resuming an escalated card: what they do on the branch from here is ground truth for the reason that was decided.
     const before = await this.get(id);
     const escalated = before.state === "escalated" && !options.auto ? (await this.approvals(id)).find((a) => a.kind === "escalated" && a.decision === null) : undefined;
+    // "Build's budget is spent: a person decides": a person who approves has decided the card goes on, so it goes on with a fresh budget.
+    // Without one, the next Build reads the same spent budget and escalates again, and approving can never move the card.
+    if (escalated && wanted === "approved" && budgetWasSpent(escalated.requested)) await this.log(id, "build.budget_reset", { reason: "a person approved the card past its spent budget" });
     const moved = await this.decideNow(id, wanted, reason, response, options);
     if (escalated) await this.keepEscalationTruth(moved, escalated.id);
     if (escalated) await this.confirmEscalationReason(id, escalated);
@@ -3335,4 +3338,10 @@ export class Pipeline {
   ): Promise<void> {
     this.onEvent(await this.store.recordEvent({ taskId, kind, payload, stageRunId }));
   }
+}
+
+/** Whether an escalation's gate is Build's spent budget: the pipeline's own check (`budget.spent`) or the tests step's (`budgetSpent`). */
+function budgetWasSpent(requested: Record<string, unknown>): boolean {
+  const budget = requested.budget as { spent?: unknown } | undefined;
+  return requested.budgetSpent === true || (typeof budget?.spent === "string" && budget.spent !== "");
 }
