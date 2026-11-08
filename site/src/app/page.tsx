@@ -11,6 +11,7 @@ import { Moments } from "@/components/landing/moments"
 import { Factory } from "@/components/landing/factory"
 import { Pricing } from "@/components/landing/pricing"
 import { Repos } from "@/components/landing/repos"
+import { Engines } from "@/components/landing/engines"
 import { Stacks } from "@/components/landing/stacks"
 import { TestFirst } from "@/components/landing/test-first"
 import { SiteFooter } from "@/components/site-footer"
@@ -43,6 +44,9 @@ export default function Home() {
         </Reveal>
         <Reveal>
           <Stacks />
+        </Reveal>
+        <Reveal>
+          <Engines />
         </Reveal>
         <Reveal>
           <Factory />
