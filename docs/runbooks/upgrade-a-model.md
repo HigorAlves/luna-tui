@@ -27,7 +27,7 @@ pnpm --filter @hardness/contracts test
 `contracts/src/engines.test.ts` fails in these cases:
 
 - An engine names a model that is not in the catalog.
-- A pack's engine cannot serve its model (an agent pack needs tools and structured output, and the pack's effort must be among the model's).
+- A pack's engine cannot serve its model. An agent pack needs tools and structured output, and the pack's effort must be among the model's.
 - Anything references a retired model.
 - Any source file under `contracts/src`, `factory/src` or `machine/src` other than `models.ts` names a model ID.
 
@@ -35,7 +35,13 @@ Its "keeps today's models as the defaults" case fails on purpose if a pack's def
 
 ## 3. The SDK, if it has to move
 
-The runtime SDKs are `@anthropic-ai/claude-agent-sdk`, `eve`, `@typesafe-ai/sdk` and the Codex CLI's `CODEX_VERSION` in `machine/runner/Dockerfile`. If the new model needs a newer one, bump that SDK alone first. Make the bump its own PR, with an exact version. Run these commands in order:
+The runtime SDKs are `@anthropic-ai/claude-agent-sdk`, `eve`, `@typesafe-ai/sdk` and the Codex CLI's `CODEX_VERSION` in `machine/runner/Dockerfile`. If the new model needs a newer one, do these steps first:
+
+- Bump that SDK alone.
+- Make the bump its own PR.
+- Use an exact version.
+
+Then run these commands in order:
 
 ```sh
 pnpm --filter @hardness/factory test                      # the conformance table, on each runtime's fake
@@ -73,12 +79,11 @@ Nobody has built shadow (the candidate answering the same input without anyone a
 1. Add the candidate to the pack's `engines.allowed` in `contracts/src/packs.ts`.
    The `default` stays as it is. A reviewer reviews this one-line change.
 2. Pick the engine for one repo in that repo's `luna.yaml` (`engines: { triage: claude:opus-next }`).
+   To pick the engine for one task instead, use `stages` on `POST /tasks`, `PATCH /tasks/:id/stages`, or the engine picker on the board.
 3. Run a few real tickets.
-4. Revert the one-line change from step 1.
-
-To pick the engine for one task instead, use `stages` on `POST /tasks`, `PATCH /tasks/:id/stages`, or the engine picker on the board.
-
-Every stage run records the engine it started on (`GET /tasks/:id`). `/metrics` does not split by engine yet. So compare the runs by hand: approved plans, first-pass verifying, cost, escalations.
+4. Compare the runs by hand: approved plans, first-pass verifying, cost, escalations.
+   Every stage run records the engine it started on (`GET /tasks/:id`). `/metrics` does not split by engine yet.
+5. Revert the one-line change from step 1.
 
 ## 6. Promote
 
