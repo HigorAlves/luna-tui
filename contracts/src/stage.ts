@@ -1107,6 +1107,8 @@ export const StageInput = z.object({
     sweepFailures: z.array(z.object({ name: z.string(), tail: z.string() })).optional(),
     /** Where the task branch forked from the repo; verifying diffs against it. */
     baseCommit: z.string().nullable().optional(),
+    /** implementing: locked test files a person approved changing, after the implementer's test-change request named them. */
+    unlockedTests: z.array(z.string()).optional(),
     /** implementing and verifying: the machine's fact that the approved plan touches only documentation (domain/docs-only.ts): no test is written for it. */
     docsOnly: z.boolean().optional(),
     /** verifying: the commit the machine itself made for the scenario tests (Build's tests step) and its files. They are the harness's, not the change the ticket asks for. */

@@ -33,6 +33,8 @@ export interface StageContext {
   testsCommit?: string;
   /** For implementing: the scenarios the tests step recorded as already holding (no test was asked for them), from the same finish row as `testsCommit`. */
   testsHoldsToday?: string[];
+  /** For implementing: locked test files a person approved changing (the plan approved after the implementer's test change named them). */
+  unlockedTests?: string[];
   /** For implementing: the minutes Build's budget has left; a run's time limit is the smaller of its own and this. */
   budgetMinutes?: number;
   /** For delivering: what the draft PR's body is fed, from the rows of the stages before it (the open findings, the files outside the map, each scenario's test file). */

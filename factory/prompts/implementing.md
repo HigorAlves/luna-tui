@@ -66,6 +66,9 @@ These are the suite: "the full suite" and "lint/type-check if configured" below 
 
 ## Locked tests
 Tests present when your run starts (from a prior verifying attempt, or already in the repo) are locked: every test that was there must still pass, unchanged. You may add cases to an existing test file (and widen its imports); the machine replays the original file against your code and resets your commit if it no longer passes. Never delete, rename, rewrite or weaken an existing test. If a locked test is wrong, stop and answer `kind: "test_change"` with `request`.
+{{context.unlockedTests.note}}
+{{context.unlockedTests}}
+
 
 ## Rules
 - Escalation ends the stage: there is no one to ask, so an open question is `kind: "escalated"` with your pick in `options[]`.

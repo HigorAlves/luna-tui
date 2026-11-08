@@ -136,6 +136,8 @@ export function buildStageInput(opts: {
   budgetMinutes?: number;
   /** For implementing: the tests Build's tests step wrote, one entry per scenario. */
   scenarioTests?: { scenario: string; file: string }[];
+  /** implementing: locked test files a person approved changing. */
+  unlockedTests?: string[];
   /** verifying: the tests commit the machine made, and its files. */
   testsCommit?: { sha: string; files: string[] };
   /** For e2e: the repo's QA targets from luna.yaml. */
@@ -216,6 +218,7 @@ export function buildStageInput(opts: {
       baseCommit: opts.baseCommit ?? null,
       ...((pack === "implementing" || pack === "verifying") && plan && isDocsOnly((plan.slices ?? []).flatMap((s) => (s as { touchpoints?: string[] }).touchpoints ?? [])) ? { docsOnly: true } : {}),
       ...(pack === "verifying" && opts.testsCommit ? { testsCommit: opts.testsCommit } : {}),
+      ...(pack === "implementing" && opts.unlockedTests?.length ? { unlockedTests: opts.unlockedTests } : {}),
       ...(pack === "triage" ? { intake: intakeOf(task) } : {}),
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,

@@ -384,7 +384,11 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       break;
     case "implementing":
       if (outcome === "pass") return run("verifying", retries);
-      if (outcome === "test_change") return testChangeRequested(task);
+      if (outcome === "test_change") {
+        // The request's reason rides on the move, so the board says why the card went back to be planned.
+        const moved = testChangeRequested(task);
+        return moved.reason || !event.reason ? moved : { ...moved, reason: event.reason };
+      }
       if (outcome === "fail") return enterImplementing(retries);
       break;
     case "verifying":

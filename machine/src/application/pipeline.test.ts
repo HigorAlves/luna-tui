@@ -19,7 +19,7 @@ import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { ApprovalEntity } from "../adapters/persistence/schemas.ts";
-import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
+import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, testPathsIn, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureClone } from "../adapters/git/clone.ts";
@@ -2154,6 +2154,37 @@ describe("retries and escalation", () => {
     expect(escalated).toMatchObject({ state: "escalated", reason: "triage failed" });
     const finished = (await pipeline.events(task.id)).find((e) => e.kind === "stage.finished");
     expect(finished?.payload).toMatchObject({ status: "failed", error: "container exited with 137" });
+  });
+});
+
+describe("a test change a person approves", () => {
+  it("carries the request to the replan, and unlocks the test it names for the next Build once the plan is approved", async () => {
+    const seen: Array<{ stage: string; ctx: StageContext }> = [];
+    const runnerFor = (stage: TaskState): StageRunner => async (ctx) => (seen.push({ stage, ctx }), stubs.runnerFor(stage)(ctx));
+    pipeline = new Pipeline(db, runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, revertCommit: async () => {} });
+    const request = "In site/src/components/landing/static-sections.test.tsx, the Pricing test asserts the old suffix '+ your Claude'; change it to read the plan's suffix.";
+    stubs.plan(
+      "implementing",
+      { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" } },
+      { outcome: "test_change", detail: { request, summary: "a locked test pins the old suffix", reason: "the implementer asks to change a locked test: a locked test pins the old suffix" } },
+    );
+    stubs.plan("verifying", { outcome: "fail", run: { inputCommit: "aaa", outputCommit: "bbb" }, detail: { findings: [] } });
+    const task = await newTask();
+    expect((await startAndApprove(task.id)).state).toBe("awaiting_approval");
+    // The replan read the request, word for word.
+    const replanned = seen.filter((s) => s.stage === "test_design").at(-1)!.ctx;
+    expect(replanned.replan?.reason).toContain("static-sections.test.tsx");
+    const asked = (await pipeline.events(task.id)).find((e) => e.kind === "transition" && e.payload.outcome === "test_change");
+    expect(asked?.payload.reason).toMatch(/asks to change a locked test/);
+    // A person approves the new plan: the next Build may change exactly that test.
+    await pipeline.decide(task.id, "approved");
+    const next = seen.filter((s) => s.stage === "implementing").at(-1)!.ctx;
+    expect(next.unlockedTests).toEqual(["site/src/components/landing/static-sections.test.tsx"]);
+  });
+
+  it("unlocks nothing before a plan is approved after the request", async () => {
+    expect(testPathsIn("no test is named here")).toEqual([]);
+    expect(testPathsIn("change web/cart.test.ts and docs/api.md; not ../x.test.ts or /abs/y.test.ts")).toEqual(["web/cart.test.ts"]);
   });
 });
 

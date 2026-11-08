@@ -378,6 +378,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
     baseCommit,
     ...(testsCommit ? { testsCommit } : {}),
+    ...(context.unlockedTests?.length ? { unlockedTests: context.unlockedTests } : {}),
     graph: graphContext,
     ci: extra.ci ?? null,
     review: extra.review ?? null,
@@ -710,7 +711,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     });
   }
   if (output.outcome === "test_change") {
-    return merged({ ...mapped, detail: { request: output.summary } });
+    // The request itself (which test, why, what to change) is what the replan and the person at the plan gate read; the summary is one line.
+    const asked = (output.answer as { request?: unknown } | null)?.request;
+    const request = typeof asked === "string" && asked.trim() ? asked : output.summary;
+    return merged({ ...mapped, detail: { request, summary: output.summary, reason: `the implementer asks to change a locked test: ${output.summary}`.slice(0, 600) } });
   }
 
   // The agent stopped on purpose. Runners before the `escalated` outcome reported this as a pass.
@@ -762,7 +766,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     // forbidden to touch it. Scenario tests stay protected by the scope check (a weakened test is a blocker).
     const touchedTests = lockedFilesTouched(nameStatus);
     const repoTests = touchedTests.length && task.repoPath ? await onDefaultBranch(task.repoPath, touchedTests).catch(() => new Set(touchedTests)) : new Set(touchedTests);
-    const locked = touchedTests.filter((path) => repoTests.has(path));
+    // A test a person approved changing (the plan approved after the implementer's test-change request) is not locked for this card.
+    const unlocked = new Set(context.unlockedTests ?? []);
+    const locked = touchedTests.filter((path) => repoTests.has(path) && !unlocked.has(path));
     let replayed = false;
     let replayError: string | null = null;
     if (locked.length > 0) {
