@@ -170,11 +170,26 @@ describe("ci_watch classifies a red run by a typed decision", () => {
     expect(github.rerunFailedJobs).not.toHaveBeenCalled();
   });
 
-  it("sends an infrastructure failure to a person", async () => {
-    const { run, context, runPack } = setup({ polls: red(), classOf: "infra" });
+  it("re-runs an infrastructure failure once and passes when it goes green, teaching nothing", async () => {
+    // The site card's PR #216 (2026-11-08): fresh-clone hit a 504 downloading Python; a person had to re-run it.
+    const { run, context, runPack, github, learned } = setup({ polls: red(checks(["lint", "SUCCESS"])), classOf: "infra", learn: true });
     const result = await run(context);
+    expect(github.rerunFailedJobs).toHaveBeenCalledTimes(1);
     expect(runPack).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: "pass", detail: { class: "infra", note: "infrastructure failure, re-run passed" } });
+    expect(learned).toEqual([]);
+  });
+
+  it("sends an infrastructure failure to a person when it stays red after the re-run, or when no re-run is allowed", async () => {
+    const red2 = setup({ polls: red(checks(["lint", "FAILURE"])), classOf: "infra" });
+    const result = await red2.run(red2.context);
+    expect(red2.github.rerunFailedJobs).toHaveBeenCalledTimes(1);
+    expect(red2.runPack).not.toHaveBeenCalled();
     expect(result).toMatchObject({ outcome: "escalated", detail: { class: "infra", escalation: "env_broken" } });
+    expect((result.detail as { reason: string }).reason).toContain("stayed red after 1 re-run");
+    const none = setup({ polls: red(), classOf: "infra", reruns: 0 });
+    expect(await none.run(none.context)).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken" } });
+    expect(none.github.rerunFailedJobs).not.toHaveBeenCalled();
   });
 
   it("rebases on a drift when verify.auto_rebase allows, and watches again; otherwise a person decides", async () => {

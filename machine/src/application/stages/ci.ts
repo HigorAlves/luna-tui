@@ -1,6 +1,6 @@
 // The ci_watch stage: poll the PR's checks until they settle. Green passes; red goes to the
 // ci_watch pack, whose verdict decides: fixable fails (the loop hands its findings to
-// implementing), flake re-runs the failed workflow once, infra and needs_debug escalate to a
+// implementing), flake and infra re-run the failed workflow once (infra escalates if it stays red), needs_debug escalates to a
 // human with the pack's reason. The pack runs in a sandbox with no GitHub credential, so the
 // host fetches the PR, the checks and the failed run's log and hands them over as context.
 import type { CiContext, DecisionOverrides, Finding } from "@hardness/contracts";
@@ -239,7 +239,26 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
         outcome: "escalated",
         detail: { step: "checks", verdict: kind === "flake" ? "flake" : "infra", class: kind, summary: reason, reason, options, checks, escalation, ...classFacts },
       });
-      if (kind === "infra") return person("the failure is in the CI infrastructure or its environment, not in the change", "env_broken", ["fix the runner or the service, then re-run CI and approve", "re-run the failed jobs by hand"]);
+      // An infrastructure failure (a registry's 504, a runner that died) is often gone a minute later: the failed jobs re-run once, as a flake's
+      // do, and a person is asked only when they stay red. Nothing is taught: a green re-run after an outage does not make the outage a flake.
+      if (kind === "infra") {
+        const infraEscalation = (why: string) => person(`the failure is in the CI infrastructure or its environment, not in the change${why}`, "env_broken", ["fix the runner or the service, then re-run CI and approve", "re-run the failed jobs by hand"]);
+        const runId = failed.map(runIdOf).find(Boolean);
+        for (let round = 0; runId && round < settings.reruns; round++) {
+          acted = true;
+          try {
+            await deps.github.rerunFailedJobs(slug, runId);
+          } catch (error) {
+            return infraEscalation(`, and the re-run could not start: ${messageOf(error)}`);
+          }
+          const next = await settle(RERUN_WAIT_MS);
+          const stoppedNext = stopped(next);
+          if (stoppedNext) return stoppedNext;
+          checks = (next as { checks: Check[] }).checks;
+          if (failedOf(checks).length === 0) return { outcome: "pass", detail: { step: "checks", verdict: "infra", class: "infra", checks, note: "infrastructure failure, re-run passed" } };
+        }
+        return infraEscalation(runId && settings.reruns > 0 ? `; it stayed red after ${settings.reruns} re-run${settings.reruns === 1 ? "" : "s"}` : "");
+      }
       if (kind === "drift") {
         if (rebased || settings.autoRebase < 1) return person("the base branch moved under the change and the branch was not rebased automatically", "other", ["rebase the branch by hand and approve", "merge the default branch into the branch and approve"]);
         const failedRebase = await rebaseAndWatch();
