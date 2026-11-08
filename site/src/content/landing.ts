@@ -294,7 +294,7 @@ export const sandbox = {
     { title: "A container per stage", body: "Each stage runs in its own throwaway container with a read-only root filesystem." },
     { title: "An egress allow-list per repository", body: "Each repository adds hosts to the defaults: registries, GitHub and the engine hosts. Everything else has no route out." },
     { title: "Secret checks", body: "Every change gets secret checks before it ships." },
-    { title: "No AI credit", body: "Commits are never credited to an AI. Luna blocks AI attribution in a commit." },
+    { title: "No AI credit", body: "Luna ships commits never credited to an AI. A hook rejects AI attribution in a commit." },
   ],
   visual: { label: "Sandbox", rows: ["container · read-only", "egress · allow-list", "secrets · checked"] },
 }
@@ -354,7 +354,7 @@ export const factory = {
     { name: "evidence", body: "Checks the QA manifest and puts the verdict and artifacts on the ship gate." },
     { name: "reviewing_memory", body: "After shipping, proposes rules for the repo's agent context. You keep or skip them." },
   ],
-  note: "Needs Docker, Node 24+, pnpm, Rust and a Claude token in ~/.config/hardness or a Codex login from `codex login`. Without a login, every stage is a stub.",
+  note: "Needs Docker, Node 24+, pnpm, Rust and a Claude token in ~/.config/hardness. A Codex login from `codex login` adds the Codex engines. Without a Claude token, stages that need Claude stay stubs.",
   guide: "Full setup guide",
 }
 
@@ -429,7 +429,7 @@ export const faq = {
     },
     {
       q: "Which logins do I need?",
-      a: "A Claude subscription token saved in ~/.config/hardness, a Codex login from `codex login`, or both. A Jev key is optional and metered. Without a login, every stage is a stub, which is enough to try the board.",
+      a: "A Claude subscription token saved in ~/.config/hardness runs every stage. A Codex login from `codex login` adds the Codex engines. A Jev key is optional and metered. Stages without a login stay stubs, which is enough to try the board.",
     },
     {
       q: "Can it push to main?",
