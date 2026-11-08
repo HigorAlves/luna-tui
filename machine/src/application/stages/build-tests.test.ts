@@ -480,6 +480,19 @@ describe("Build's tests step", () => {
 
   const recordedCommit = (parent = "base0", tree = tagged("S1")) => ({ ...tree, parent });
 
+  it("accepts a recorded tests commit with no tag for a scenario the step recorded as already holding (the site card's S9 and S14)", async () => {
+    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => recordedCommit("base0", tagged("S1")) } });
+    const result = await buildTestsStep(f.deps)(context([v1], { testsCommit: "def5678", firstInputCommit: "base0", testsHoldsToday: ["S2"] }));
+    expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed", resumed: true, holdsToday: [{ scenario: "S2" }] } });
+  });
+
+  it("says what is wrong when a recorded tests commit misses a tag, not that the branch moved", async () => {
+    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => recordedCommit("base0", tagged("S1")) } });
+    const result = await buildTestsStep(f.deps)(context([v1], { testsCommit: "def5678", firstInputCommit: "base0" }));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringMatching(/no longer passes its own check: .*S2/) } });
+  });
+
   it("does not write the tests twice: a card whose tests commit exists goes straight to the implementer, with the tests listed from that commit, the scope measured from it and every path in it protected", async () => {
     const reads: string[] = [];
     const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async (_w, sha) => (reads.push(sha), { ...recordedCommit(), nameStatus: "A\tweb/cart.test.ts\nA\tweb/__fixtures__/cart.json" }) } });

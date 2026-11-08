@@ -3094,6 +3094,18 @@ export class Pipeline {
   }
 
   /** The sha of the tests commit the machine itself made, from the newest implementing finish row that kept one (a sha, nothing else); undefined when there is none. */
+  /** The scenarios the tests step recorded as already holding, from the newest implementing finish row that kept a tests commit. */
+  private async testsHoldsTodayOf(id: string): Promise<string[]> {
+    for (const finished of await this.store.findFinishedEvents(id)) {
+      if (finished.payload.stage !== "implementing") continue;
+      const step = objectOf(objectOf(finished.payload.detail)?.testsStep);
+      if (typeof step?.commit !== "string") continue;
+      const held = Array.isArray(step.holdsToday) ? step.holdsToday : [];
+      return held.map((h) => objectOf(h)?.scenario).filter((s): s is string => typeof s === "string");
+    }
+    return [];
+  }
+
   private async testsCommitOf(id: string): Promise<string | undefined> {
     for (const finished of await this.store.findFinishedEvents(id)) {
       if (finished.payload.stage !== "implementing") continue;
@@ -3182,6 +3194,7 @@ export class Pipeline {
       repo = task.repoPath;
       const budgetMinutes = stage === "implementing" && task.route === "feature" ? await this.buildMinutesLeft(id, task.repoPath) : undefined;
       const testsCommit = (stage === "implementing" || stage === "verifying") && task.route === "feature" ? await this.testsCommitOf(id) : undefined;
+      const testsHoldsToday = testsCommit && stage === "implementing" ? await this.testsHoldsTodayOf(id) : [];
       const firstInputCommit = stage === "implementing" && task.route === "feature" ? await this.firstInputCommitOf(id) : undefined;
       // The entry contract of Build: the feature route builds only from what Plan hands over; what is missing goes back to the planner (once per card), then to a person.
       const entry = stage === "implementing" && task.route === "feature" && !resume ? buildEntryOf(approvals, task.record) : null;
@@ -3200,6 +3213,7 @@ export class Pipeline {
         ...(replan ? { replan } : {}),
         ...(budgetMinutes !== undefined ? { budgetMinutes } : {}),
         ...(testsCommit ? { testsCommit } : {}),
+        ...(testsHoldsToday.length ? { testsHoldsToday } : {}),
         ...(firstInputCommit ? { firstInputCommit } : {}),
         signal,
         ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),

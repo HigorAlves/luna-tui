@@ -176,9 +176,12 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     if (context.testsCommit && worktree) {
       const read = await deps.git.readCommit(worktree, context.testsCommit);
       if (!read) return headMoved("the tests commit the machine made is no longer on the branch: the branch was moved, so nothing is written on it");
-      const facts = scenarioTags({ ...read, scenarios });
-      if (!context.firstInputCommit || read.parent !== context.firstInputCommit || !facts.ok) return headMoved("the recorded tests commit does not check out against the commit the card's first run started from");
-      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: protectedOf(read.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) }), { status: "committed", commit: context.testsCommit, resumed: true, ...checksNote, scenarioTests: testsOf(facts) });
+      // What the step recorded as already holding has no tag in the commit, by design.
+      const held = new Set(context.testsHoldsToday ?? []);
+      const facts = scenarioTags({ ...read, scenarios: scenarios.filter((sc) => !held.has(sc.id!)) });
+      if (!context.firstInputCommit || read.parent !== context.firstInputCommit) return headMoved("the recorded tests commit does not check out against the commit the card's first run started from");
+      if (!facts.ok) return headMoved(`the recorded tests commit no longer passes its own check: ${problemsOf(facts).join("; ")}`);
+      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: protectedOf(read.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) }), { status: "committed", commit: context.testsCommit, resumed: true, ...checksNote, ...(held.size ? { holdsToday: [...held].map((scenario) => ({ scenario, reason: "recorded by the tests step" })) } : {}), scenarioTests: testsOf(facts) });
     }
     if (context.resume) return implementSwept({});
     if (await deps.holdout(task.repoPath)) return withStep(await implementSwept({}), { status: "skipped", why: "holdout_cases" });
