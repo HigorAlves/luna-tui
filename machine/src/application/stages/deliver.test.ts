@@ -96,17 +96,17 @@ describe("the draft PR's body", () => {
     return { run, context };
   };
 
-  it("carries the record's goal and the base and head commits between the machine's markers", async () => {
+  it("carries the record's goal between the machine's markers, and no commit shas (a reviewer has the PR's own)", async () => {
     const github = fakeGitHub({ findPr: async () => null, openPr: async () => ({ url: "u", number: 7, isDraft: true }) });
     const { run, context } = withBody(github);
     await run(context);
     const body = (github.openPr as ReturnType<typeof vi.fn>).mock.calls[0]![1].body as string;
     expect(body.startsWith("<!-- luna:pr:start -->")).toBe(true);
-    expect(body).toContain("- Readers export a CSV");
-    expect(body).toContain(`Base ${"a".repeat(7)}, head ${"b".repeat(7)}`);
+    expect(body).toContain("## Why\nReaders export a CSV");
+    expect(body).not.toContain("a".repeat(7));
   });
 
-  it("is fed the open findings, the files outside the map and each scenario's test by the context", async () => {
+  it("is fed the open findings and each scenario's test by the context, and names only what a reviewer needs", async () => {
     const github = fakeGitHub({ findPr: async () => null, openPr: async () => ({ url: "u", number: 7, isDraft: true }) });
     const { run, context } = withBody(github);
     const finding = (title: string, severity: string) => ({ path: "a.ts", line: 2, severity, title, body: "b", confidence: 0.9 });
@@ -117,10 +117,20 @@ describe("the draft PR's body", () => {
     } as unknown as StageContext;
     await run(ctx);
     const body = (github.openPr as ReturnType<typeof vi.fn>).mock.calls[0]![1].body as string;
-    expect(body).toContain("### should_fix\n- add a test (a.ts:2)");
-    expect(body).toContain("### nit\n- rename (a.ts:2)");
-    expect(body).toContain("- docs/x.md: stale flag");
-    expect(body).toContain("- S1: export downloads, test `src/export.test.ts`");
+    expect(body).toContain("2 findings still open: add a test (`a.ts`); rename (`a.ts`)");
+    expect(body).toContain("Verify judged 1 scenario, 1 with a test written before the code");
+    expect(body).not.toContain("docs/x.md");
+  });
+
+  it("follows the repository's PR template, read from its default branch", async () => {
+    const github = fakeGitHub({ findPr: async () => null, openPr: async () => ({ url: "u", number: 7, isDraft: true }) });
+    const { context } = withBody(github);
+    const run = deliverRunner({ exec: async () => ok(), github, slugOf: async () => "acme/widgets", defaultBranch: async () => "main", commitsOf: async () => ({ base: "a".repeat(40), head: "b".repeat(40) }) , prTemplate: async () => "## Summary\n\n## Testing\n" });
+    await run(context);
+    const body = (github.openPr as ReturnType<typeof vi.fn>).mock.calls[0]![1].body as string;
+    expect(body).toContain("## Summary\nReaders export a CSV");
+    expect(body).toContain("## Testing\n");
+    expect(body).not.toContain("## Why");
   });
 
   it("on a PR that exists, replaces only what is between the markers and keeps a person's own text", async () => {

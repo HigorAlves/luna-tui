@@ -87,22 +87,22 @@ describe("publishEvidence", () => {
     await publishEvidence({ ...base, github: gh, localDir, pack: pack([]) });
     expect(state.body.startsWith("## Why\n- cart\n\n")).toBe(true);
     expect(state.body).toContain(SECTION_START);
-    expect(state.body).toContain("Show the cart total.");
+    expect(state.body).toContain("**Rollback.** Revert.");
   });
 
   it("replaces its own section on a second run and keeps one comment: created, then updated", async () => {
     const state = { body: "## Why", comments: [{ id: 1, body: "someone else's comment", url: "u", author: "reviewer" }], assets: [] };
     const gh = github({}, state);
     const first = await publishEvidence({ ...base, github: gh, localDir, pack: pack([]) });
-    const second = await publishEvidence({ ...base, github: gh, localDir, pack: { ...pack([]), summary: "Second take." } });
+    const second = await publishEvidence({ ...base, github: gh, localDir, pack: { ...pack([]), rollback: "Second take." } });
     expect([first.comment, second.comment]).toEqual(["created", "updated"]);
     expect(state.comments).toHaveLength(2);
     expect(state.comments[1]!.body).toContain(COMMENT_MARKER);
     expect(state.comments[1]!.body).toContain("Second take.");
     expect(state.comments[0]!.body).toBe("someone else's comment");
     expect(state.body.split(SECTION_START)).toHaveLength(2);
-    expect(state.body).toContain("Second take.");
-    expect(state.body).not.toContain("Show the cart total.");
+    expect(state.body).toContain("**Rollback.** Second take.");
+    expect(state.body).not.toContain("**Rollback.** Revert.");
   });
 
   it("never adopts another author's comment that carries the marker: only the token's own comment is updated", async () => {

@@ -33,7 +33,7 @@ async function saveCursor(stateDir: string, taskId: string, cursor: ShipCursor):
 import { ciContextOf, ciRunIdOf, failedChecks } from "./ci.ts";
 import { buildPr, mergePrSection } from "../../domain/prbody.ts";
 import { approvedPlan } from "../../domain/stage-input.ts";
-import { prExtraOf, pushBranch } from "./deliver.ts";
+import { prExtraOf, prTemplateOf, pushBranch } from "./deliver.ts";
 import { FACTORY_DEFAULTS } from "@hardness/contracts";
 import { type TruthSink, commentIntentTruth, eventClassTruth, fixScopeTruth } from "../decision-truth.ts";
 import { type EvidenceHandle, type FixDeps, type ReviewLoop, SECRET_REASON, carriesSecret, escalated, fixRound, headOfWorktree, judgeShip, postable, resetTo, restampPack, subContext } from "./ship-fixes.ts";
@@ -569,7 +569,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         const current = await deps.github.prFacts(slug, number).catch(() => null);
         if (current) {
           const recordedBase = await (stack.recordedBase ?? (async (path: string) => (await stackOf(path)).sha))(wt).catch(() => null);
-          const fresh = buildPr({ task: task as never, plan: approvedPlan(context.approvals), repoSlug: slug, extra: prExtraOf(context, { base: recordedBase, head: done.head ?? null }) }).body;
+          const fresh = buildPr({ task: task as never, plan: approvedPlan(context.approvals), repoSlug: slug, extra: prExtraOf(context, { base: recordedBase, head: done.head ?? null }, await prTemplateOf(task.repoPath ?? null)) }).body;
           await deps.github.updatePrBody(slug, number, mergePrSection(current.body ?? "", fresh)).catch(() => {});
         }
         await stack.clearBase?.(task.id);
