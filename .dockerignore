@@ -8,6 +8,7 @@ docs
 design
 machine/runner/*
 !machine/runner/graph
+!machine/runner/fetch-release.sh
 !machine/runner/egress
 !machine/runner/luna-stage
 !machine/runner/layer-wrapper

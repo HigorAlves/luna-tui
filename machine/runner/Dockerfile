@@ -9,11 +9,12 @@ ARG GH_VERSION=2.63.2
 ARG GO_VERSION=1.25.1
 ARG RUST_VERSION=1.99.1
 
+COPY machine/runner/fetch-release.sh /tmp/fetch-release.sh
 RUN apt-get update \
  && apt-get install -y --no-install-recommends bash git ca-certificates ripgrep curl python3 python3-pip \
  && arch="$(dpkg --print-architecture)" \
- && curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz" \
-    | tar -xz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh" \
+ && sh /tmp/fetch-release.sh cli/cli "v${GH_VERSION}" "gh_${GH_VERSION}_linux_${arch}.tar.gz" /tmp/gh.tar.gz \
+ && tar -xzf /tmp/gh.tar.gz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh" && rm /tmp/gh.tar.gz \
  && gh --version \
  && rm -rf /var/lib/apt/lists/*
 
@@ -35,7 +36,7 @@ RUN mkdir -p /opt/luna/bin /opt/luna/lib /opt/luna/libexec /opt/luna/graph-tools
       amd64) parch=x86_64; psum=126343c54daff4068efc1ac269518d0cc202d57857794948103dd1454e8881be ;; \
       arm64) parch=aarch64; psum=b48451865bde9a39e2f3e71d7fdcbf1f32615f50f24d78dc50d04ede6501cf81 ;; \
       *) echo "unsupported architecture $arch" >&2; exit 1 ;; esac \
- && curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/python.tar.gz "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_STANDALONE}/cpython-${PYTHON_VERSION}%2B${PYTHON_STANDALONE}-${parch}-unknown-linux-gnu-install_only.tar.gz" \
+ && sh /tmp/fetch-release.sh astral-sh/python-build-standalone "${PYTHON_STANDALONE}" "cpython-${PYTHON_VERSION}+${PYTHON_STANDALONE}-${parch}-unknown-linux-gnu-install_only.tar.gz" /tmp/python.tar.gz \
  && echo "${psum}  /tmp/python.tar.gz" | sha256sum -c - \
  && tar -xz -C /opt/luna -f /tmp/python.tar.gz && rm /tmp/python.tar.gz \
  && /opt/luna/python/bin/python3 -m pip install --no-cache-dir "graphifyy==${GRAPHIFY_VERSION}" \
