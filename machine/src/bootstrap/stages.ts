@@ -62,6 +62,7 @@ import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
 import { resolve, sep } from "node:path";
+import { readdir } from "node:fs/promises";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
 import { testExcerpt } from "../domain/test-excerpt.ts";
 import { repoCommandsOf } from "../domain/command-check.ts";
@@ -286,8 +287,20 @@ export async function buildRealStages(
         } catch {
           // no package.json, or not JSON: no scripts
         }
+        // Each workspace package one folder down (a package.json with a name), with its scripts.
+        const workspaces: { name: string; dir: string; scripts: string[] }[] = [];
+        for (const entry of await readdir(repoPath, { withFileTypes: true }).catch(() => [])) {
+          if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules") continue;
+          const text = await readRegularFile(resolve(repoPath, entry.name, "package.json"), 1024 * 1024).catch(() => "");
+          try {
+            const parsed = JSON.parse(text) as { name?: unknown; scripts?: Record<string, unknown> };
+            if (typeof parsed.name === "string" && parsed.name) workspaces.push({ name: parsed.name, dir: entry.name, scripts: Object.keys(parsed.scripts ?? {}) });
+          } catch {
+            // no package.json there
+          }
+        }
         const policy = await policies.for(repoPath);
-        return repoCommandsOf(scripts, (policy.checks ?? []).map((c) => c.run));
+        return repoCommandsOf(scripts, (policy.checks ?? []).map((c) => c.run), workspaces);
       },
       readTest: async (worktree, file, scenario) => {
         // The path is a tagged file git named in the diff: it stays inside the worktree, and a link or a big file is never read.

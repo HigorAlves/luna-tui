@@ -18,3 +18,15 @@ describe("isCommandCheck", () => {
     expect(isCommandCheck({ when: "pnpm board:tests runs", then: "it exits 0" }, commands)).toBe(false);
   });
 });
+
+describe("isCommandCheck: a workspace package's scripts", () => {
+  const commands = repoCommandsOf(["typecheck"], [], [{ name: "site", dir: "site", scripts: ["typecheck", "lint", "test", "facts:check", "build"] }]);
+  it("takes `pnpm --filter site …` as the repo's command (the site card's S22 and S23)", () => {
+    expect(isCommandCheck({ when: "pnpm --filter site typecheck, lint, test and facts:check run", then: "each exits 0" }, commands)).toBe(true);
+    expect(isCommandCheck({ when: "pnpm --filter site build runs", then: "it exits 0" }, commands)).toBe(true);
+  });
+  it("does not take a package or script the repo does not have", () => {
+    expect(isCommandCheck({ when: "pnpm --filter web build runs", then: "it exits 0" }, commands)).toBe(false);
+    expect(isCommandCheck({ when: "pnpm --filter site deploy runs", then: "it exits 0" }, commands)).toBe(false);
+  });
+});

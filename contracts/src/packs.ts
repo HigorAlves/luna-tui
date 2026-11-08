@@ -173,6 +173,9 @@ export const BuildTestsAnswer = z.object({
   kind: z.enum(["done", "escalated"]),
   summary: z.string(),
   tests: z.array(z.object({ scenario: z.string(), file: z.string() })).optional(),
+  /** Scenarios that already hold before the change (an invariant: no dependency added, an order kept), with why: no test can be red for them.
+   *  The machine asks no red for them; Verify still judges every scenario once the code exists. */
+  holdsToday: z.array(z.object({ scenario: z.string(), reason: z.string().min(1) })).optional(),
   escalation: EscalationReason.optional(),
   reason: z.string().optional(),
 });

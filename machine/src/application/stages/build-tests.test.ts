@@ -243,6 +243,36 @@ describe("a plan that only rewrites documentation", () => {
   });
 });
 
+describe("scenarios no red test can be written for (the site card)", () => {
+  const sitePlan = gate({
+    plan: { goal: "g", steps: [{ title: "x", est_loc: 50, touchpoints: ["site/src/content/landing.ts"], acceptance: ["a"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: [
+      { id: "S1", title: "one", criterion: "c1", criterion_ref: "C1", approach: "a" },
+      { id: "S14", title: "No dependency is added", criterion: "c1", criterion_ref: "C1", when: "site/package.json and pnpm-lock.yaml are compared", then: "neither file adds a dependency", approach: "a", layer: "integration" },
+      { id: "S24", title: "Each new section shows its heading", criterion: "c1", criterion_ref: "C1", when: "a browser loads the page", then: "each of the four new sections shows its h2 heading", approach: "a", layer: "e2e" },
+    ],
+  });
+
+  it("asks no red for a browser scenario, nor for one the writer says already holds, with its reason", async () => {
+    const asked: string[] = [];
+    const f = fakes([tagged("S1")], {
+      runWriter: async () => ({ outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, run: { inputCommit: "base0" }, detail: { scenarioReds: { S1: "FAIL: no section" }, answer: { kind: "done", summary: "s", holdsToday: [{ scenario: "S14", reason: "no dependency is added today either" }] } } }),
+      judgeRed: async (c) => (asked.push(c.scenario!.id), { verdict: "proceed", problems: [] }),
+    });
+    const result = await buildTestsStep(f.deps)(context([sitePlan]));
+    expect(asked).toEqual(["S1"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed", browserChecks: ["S24"], holdsToday: [{ scenario: "S14", reason: "no dependency is added today either" }] } });
+  });
+
+  it("still asks for a test when the writer gives no reason", async () => {
+    const f = fakes([tagged("S1")], {
+      runWriter: async () => ({ outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, run: { inputCommit: "base0" }, detail: { scenarioReds: { S1: "FAIL" }, answer: { kind: "done", summary: "s", holdsToday: [{ scenario: "S14", reason: " " }] } } }),
+    });
+    const result = await buildTestsStep(f.deps)(context([sitePlan]));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringMatching(/S14/) } });
+  });
+});
+
 describe("scenario.green", () => {
   const emitted = () => {
     const rows: Array<[string, Record<string, unknown>]> = [];

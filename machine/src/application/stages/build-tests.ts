@@ -141,10 +141,12 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     // exists, so none is asked for; the sweep and Verify run the command once the code is there.
     const commands = task.repoPath && deps.repoCommands ? await deps.repoCommands(task.repoPath).catch(() => []) : [];
     const commandChecks = approvedAll.filter((s) => isCommandCheck(s, commands)).map((s) => s.id!).filter(Boolean);
-    const scenarios = approvedAll.filter((s) => !commandChecks.includes(s.id!));
+    // A browser scenario (layer e2e) is run by the e2e stage in a real browser once the code exists: no red test is asked for it here.
+    const browserChecks = approvedAll.filter((s) => s.layer === "e2e" && !commandChecks.includes(s.id!)).map((s) => s.id!).filter(Boolean);
+    const scenarios = approvedAll.filter((s) => !commandChecks.includes(s.id!) && !browserChecks.includes(s.id!));
     if (task.route !== "feature") return deps.implement(context, {});
     if (!task.repoPath || scenarios.length === 0) return implementSwept({});
-    const checksNote = commandChecks.length ? { commandChecks } : {};
+    const checksNote = { ...(commandChecks.length ? { commandChecks } : {}), ...(browserChecks.length ? { browserChecks } : {}) };
 
     /** What the writer's runs cost: added to the run the stage reports, so the budget counts them. */
     let writerUsage: StageResult["usage"];
@@ -191,6 +193,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     let tagMisses = 0;
     let redMisses = 0;
     let review: string[] | undefined;
+    let holdsToday: { scenario: string; reason: string }[] = [];
     for (;;) {
       const round = await budgeted();
       if (!round) return { ...spentResult(), ...(writerUsage ? { usage: writerUsage } : {}) };
@@ -212,7 +215,10 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       // The commit is made on the branch the host chose for the run: a container that switched the worktree to another branch gets nothing committed.
       if (written.workspace?.branch && (await deps.git.branch(where)) !== written.workspace.branch) return headMoved("the worktree is not on the task's branch: the branch was moved");
       const pending = await deps.git.pending(where, base);
-      const facts = scenarioTags({ ...pending, scenarios });
+      // What the writer says already holds before the change (with its reason) gets no red: no test can fail for it yet. Verify judges it later.
+      holdsToday = holdsTodayOf(written.detail?.answer, scenarios);
+      const required = scenarios.filter((s) => !holdsToday.some((h) => h.scenario === s.id));
+      const facts = scenarioTags({ ...pending, scenarios: required });
       if (!facts.ok) {
         review = problemsOf(facts);
         if (tagMisses >= 1) return escalate(where, base, review);
@@ -222,7 +228,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       const reds = redsOf(written.detail?.scenarioReds);
       // Two at a time, as the machine runs pack calls (PACK_RUNS_MAX): all at once overflowed its queue, and the overflow came back as skipped.
       const judged = await inTurns(
-        scenarios,
+        required,
         RED_JUDGES_AT_ONCE,
         async (s) => {
           const id = s.id!;
@@ -249,7 +255,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       await deps.checkpoint(context, where, "red").catch(() => {});
       const result = await implementSwept({ scenarioTests: testsOf(facts), scopeBase: sha, testsFiles: protectedOf(pending.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) });
       const skipped = judged.some((j) => j.verdict === "skipped");
-      return withStep(result, { status: "committed", commit: sha, ...checksNote, tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
+      return withStep(result, { status: "committed", commit: sha, ...checksNote, ...(holdsToday.length ? { holdsToday } : {}), tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
     }
   };
 }
@@ -269,6 +275,16 @@ async function inTurns<T, R>(items: readonly T[], width: number, work: (item: T)
   };
   await Promise.all(Array.from({ length: Math.min(width, items.length) }, lane));
   return results;
+}
+
+/** The writer's `holdsToday`: scenarios of the step's own list, each with a reason. */
+function holdsTodayOf(answer: unknown, scenarios: readonly { id?: string }[]): { scenario: string; reason: string }[] {
+  const listed = (answer as { holdsToday?: unknown } | null | undefined)?.holdsToday;
+  if (!Array.isArray(listed)) return [];
+  const ids = new Set(scenarios.map((s) => s.id).filter(Boolean));
+  return listed
+    .filter((h): h is { scenario: string; reason: string } => typeof h?.scenario === "string" && typeof h?.reason === "string" && h.reason.trim() !== "" && ids.has(h.scenario))
+    .map((h) => ({ scenario: h.scenario, reason: safe(h.reason).slice(0, 300) }));
 }
 
 const withUsage = (result: StageResult, usage: StageResult["usage"]): StageResult => (usage ? { ...result, usage } : result);
