@@ -250,8 +250,8 @@ export const testFirst = {
   title: "Build writes the failing tests first.",
   lead: "Before any code, Build writes one failing test per approved scenario. A judge checks that each test fails for the right reason.",
   steps: [
-    { title: "One test per scenario", body: "Each approved scenario gets one failing test, tagged with the scenario's id." },
-    { title: "A judge reads each failure", body: "The judge checks that the test fails because the behaviour is missing, not because the test is broken." },
+    { title: "One test per scenario", body: "Each approved scenario gets one failing test. The test carries the scenario's id." },
+    { title: "A judge reads each failure", body: "The judge checks that the test fails because the behaviour is missing. A test with a bug of its own does not pass." },
     { title: "Locked before code", body: "Luna commits the tests first. The implementer then builds until they pass and cannot change them." },
     { title: "Docs-only changes", body: "A change that touches only documentation gets no tests. Luna checks it by reading it." },
   ],
@@ -277,7 +277,7 @@ export const engines = {
   title: "Pick the engine. Keep the fallback.",
   lead: "Claude runs on your subscription and Codex on your Codex login. Jev is an opt-in metered path.",
   steps: [
-    { title: "Claude", body: "Claude runs on your subscription. Luna uses the login you already saved." },
+    { title: "Claude", body: "Claude runs on your subscription. Luna uses the login you already have." },
     { title: "Codex", body: "Codex runs on your Codex login. Small decisions such as risk and red checks can use it." },
     { title: "Jev", body: "Jev is an opt-in metered path. It stays off until you add a key." },
     { title: "A fallback for each decision", body: "A decision moves to its fallback engine when a login is busy or rate-limited." },
@@ -292,7 +292,7 @@ export const sandbox = {
   lead: "Each stage runs in a container with a per-repository egress allow-list. The agent reaches package registries, GitHub, its engine hosts and the hosts you add.",
   steps: [
     { title: "A container per stage", body: "Each stage runs in its own throwaway container with a read-only root filesystem." },
-    { title: "An egress allow-list per repository", body: "Each repository adds hosts to the defaults: registries, GitHub and the engine hosts. Everything else has no route out." },
+    { title: "An egress allow-list per repository", body: "Each repository adds hosts to the defaults: registries, GitHub and the engine hosts. Every other host has no route out, unless the owner sets MACHINE_EGRESS to off." },
     { title: "Secret checks", body: "Every change gets secret checks before it ships." },
     { title: "No AI credit", body: "Luna ships commits never credited to an AI. A hook rejects AI attribution in a commit." },
   ],
@@ -429,7 +429,7 @@ export const faq = {
     },
     {
       q: "Which logins do I need?",
-      a: "A Claude subscription token saved in ~/.config/hardness runs every stage. A Codex login from `codex login` adds the Codex engines. A Jev key is optional and metered. Stages without a login stay stubs, which is enough to try the board.",
+      a: "A Claude subscription token in ~/.config/hardness runs the Claude stages. A Codex login from `codex login` adds the Codex engines. A Jev key is optional and metered. Stages without a login stay stubs, which is enough to try the board.",
     },
     {
       q: "Can it push to main?",
