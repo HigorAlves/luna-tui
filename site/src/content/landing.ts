@@ -69,7 +69,7 @@ export const repos = {
   eyebrow: "One machine, every repo",
   title: "Same machine. A new PR for every repo.",
   lead: "One board, one queue, up to four tasks at once. The repo decides the checks, the tests and the PR.",
-  heatmap: { title: "1,204 stage runs in the last year", label: "Same machine", less: "Less", more: "More" },
+  heatmap: { title: "Stage runs across every repo", label: "Same machine", less: "Less", more: "More" },
   rows: [
     {
       kind: "web",
@@ -247,7 +247,7 @@ export const features = {
 export const factory = {
   eyebrow: "The factory · inside every stage",
   title: "The factory does the work. Luna runs the floor.",
-  lead: "Each agent stage is a stage pack that runs in a sealed container through the Claude Agent SDK. Its role, prompt, skills and guardrails live in the repo's factory/ folder; nothing else to install, a fresh clone runs. Luna moves the ticket; the pack writes the code.",
+  lead: "Each agent stage is a stage pack that runs in a sealed container on Claude or Codex. Its role, prompt, skills and guardrails live in the repo's factory/ folder. A fresh clone runs with nothing else to install. Luna moves the ticket; the pack writes the code.",
   features: [
     {
       title: "Packs, not prompts",
@@ -299,7 +299,7 @@ export const factory = {
     { name: "evidence", body: "Checks the QA manifest and puts the verdict and artifacts on the ship gate." },
     { name: "reviewing_memory", body: "After shipping, proposes rules for the repo's agent context. You keep or skip them." },
   ],
-  note: "Needs Docker, Node 24+, pnpm, Rust and a Claude credential in ~/.config/hardness. Without a credential, every stage is a stub.",
+  note: "Needs Docker, Node 24+, pnpm, Rust and a Claude or Codex login in ~/.config/hardness. Without a login, every stage is a stub.",
   guide: "Full setup guide",
 }
 
@@ -324,8 +324,8 @@ export const moments = {
 
 export const pricing = {
   eyebrow: "Pricing",
-  title: "Free. Pay only for the Claude you already use.",
-  lead: "Luna TUI is open source and runs on your machine. The agents use your own Claude subscription or API key.",
+  title: "Free. Bring the subscriptions you already have.",
+  lead: "Luna runs locally on the Claude and Codex subscriptions you already have. Metered API keys are optional.",
   plans: [
     {
       name: "Board only",
@@ -341,7 +341,7 @@ export const pricing = {
       price: "$0",
       suffix: "+ your Claude",
       body: "Real stage packs in sealed containers.",
-      items: ["Triage, tests, build and verify", "Draft PRs and CI watch", "Your Claude plan or API key", "Cost tracked per stage"],
+      items: ["Triage, tests, build and verify", "Draft PRs and CI watch", "Your Claude and Codex logins", "Cost tracked per stage"],
       cta: "Install",
       href: INSTALL_DOC,
       recommended: "Recommended",
@@ -356,7 +356,7 @@ export const pricing = {
       href: `${DOCS}/configuration.md#runner-image`,
     },
   ],
-  footnote: "Agent cost is whatever your Claude plan charges; the machine reports it per stage at /metrics.",
+  footnote: "Metered keys are optional. Your subscriptions bill as they do today, and the machine reports cost per stage at /metrics.",
 }
 
 export const faq = {
@@ -373,8 +373,8 @@ export const faq = {
       a: "No. A stage container sees the task's worktree, its own /in and /out, a tmpfs /tmp and the repo's git dir read-only. The root filesystem is read-only.",
     },
     {
-      q: "Which Claude do I need?",
-      a: "A Claude subscription token or an Anthropic API key, saved in ~/.config/hardness. Without one, every stage is a stub, which is enough to try the board.",
+      q: "Which logins do I need?",
+      a: "A Claude subscription token, a Codex login, or both, saved in ~/.config/hardness. A Jev key is optional and metered. Without a login, every stage is a stub, which is enough to try the board.",
     },
     {
       q: "Can it push to main?",
@@ -390,7 +390,7 @@ export const faq = {
     },
     {
       q: "What happens at a usage limit?",
-      a: "The task pauses instead of failing and resumes 30 seconds after the window resets. Its worktree is reset first, so nothing half-done carries over.",
+      a: "The task moves to a fallback engine first. It pauses only when no fallback is left, then resumes 30 seconds after the window resets. Luna resets its worktree first, so nothing half-done carries over.",
     },
     {
       q: "Do I need herdr?",
@@ -398,7 +398,7 @@ export const faq = {
     },
     {
       q: "How much does it cost?",
-      a: "Nothing. It's open source. The agents bill to your own Claude plan, and /metrics shows cost per stage.",
+      a: "Nothing. It's open source and runs on the Claude and Codex subscriptions you already have. Metered keys are optional, and /metrics shows cost per stage.",
     },
   ],
 }
