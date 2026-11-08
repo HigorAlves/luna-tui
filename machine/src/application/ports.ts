@@ -33,6 +33,8 @@ export interface StageContext {
   testsCommit?: string;
   /** For implementing: the scenarios the tests step recorded as already holding (no test was asked for them), from the same finish row as `testsCommit`. */
   testsHoldsToday?: string[];
+  /** For implementing: a plan was approved after the tests commit was made (a re-plan): a scenario it added has no tag in that commit. */
+  planChangedSinceTests?: boolean;
   /** For implementing: locked test files a person approved changing (the plan approved after the implementer's test change named them). */
   unlockedTests?: string[];
   /** For implementing: the minutes Build's budget has left; a run's time limit is the smaller of its own and this. */

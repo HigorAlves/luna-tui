@@ -180,8 +180,12 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       const held = new Set(context.testsHoldsToday ?? []);
       const facts = scenarioTags({ ...read, scenarios: scenarios.filter((sc) => !held.has(sc.id!)) });
       if (!context.firstInputCommit || read.parent !== context.firstInputCommit) return headMoved("the recorded tests commit does not check out against the commit the card's first run started from");
-      if (!facts.ok) return headMoved(`the recorded tests commit no longer passes its own check: ${problemsOf(facts).join("; ")}`);
-      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: protectedOf(read.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) }), { status: "committed", commit: context.testsCommit, resumed: true, ...checksNote, ...(held.size ? { holdsToday: [...held].map((scenario) => ({ scenario, reason: "recorded by the tests step" })) } : {}), scenarioTests: testsOf(facts) });
+      // A plan approved after the commit (a re-plan) may add scenarios the commit has no tag for: Verify judges those. Anything else wrong with the
+      // commit (a removed test, a file that is not a test, an ambiguous tag) still stops the card.
+      const onlyAdded = facts.nonTest.length === 0 && facts.removed.length === 0 && facts.ambiguous.length === 0;
+      if (!facts.ok && !(context.planChangedSinceTests && onlyAdded)) return headMoved(`the recorded tests commit no longer passes its own check: ${problemsOf(facts).join("; ")}`);
+      const addedSinceTests = facts.ok ? [] : facts.missing;
+      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: protectedOf(read.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) }), { status: "committed", commit: context.testsCommit, resumed: true, ...checksNote, ...(addedSinceTests.length ? { addedSinceTests } : {}), ...(held.size ? { holdsToday: [...held].map((scenario) => ({ scenario, reason: "recorded by the tests step" })) } : {}), scenarioTests: testsOf(facts) });
     }
     if (context.resume) return implementSwept({});
     if (await deps.holdout(task.repoPath)) return withStep(await implementSwept({}), { status: "skipped", why: "holdout_cases" });

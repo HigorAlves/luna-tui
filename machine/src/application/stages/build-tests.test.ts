@@ -487,6 +487,13 @@ describe("Build's tests step", () => {
     expect(result.detail).toMatchObject({ testsStep: { status: "committed", resumed: true, holdsToday: [{ scenario: "S2" }] } });
   });
 
+  it("accepts a scenario a re-plan added after the tests commit, with no tag in it: Verify judges it", async () => {
+    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => recordedCommit("base0", tagged("S1")) } });
+    const result = await buildTestsStep(f.deps)(context([v1], { testsCommit: "def5678", firstInputCommit: "base0", planChangedSinceTests: true }));
+    expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed", resumed: true, addedSinceTests: ["S2"] } });
+  });
+
   it("says what is wrong when a recorded tests commit misses a tag, not that the branch moved", async () => {
     const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => recordedCommit("base0", tagged("S1")) } });
     const result = await buildTestsStep(f.deps)(context([v1], { testsCommit: "def5678", firstInputCommit: "base0" }));

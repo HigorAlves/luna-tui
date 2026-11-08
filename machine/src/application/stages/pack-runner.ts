@@ -56,7 +56,7 @@ import { type Decide, buildChecks, buildWatch, cardSearchAnswers } from "./build
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
-import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
+import { PACK_LIMITS, approvedScenarios, buildStageInput } from "../../domain/stage-input.ts";
 import { reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
 import type { Graph } from "../graph.ts";
@@ -937,7 +937,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     const answer = answerOf(output.answer);
     // The v2.2 scenarios (given/when/then, each tied to its criterion by id) first; an answer with v1 cases keeps them.
     const parsed = z.array(AnswerScenario).safeParse(answer?.scenarios);
-    const scenarios = parsed.success && parsed.data.length > 0 ? scenariosOfAnswer(parsed.data, criteriaOf(extra.plan?.criteria ?? task.criteria), extra.plan?.round ?? 1) : null;
+    const scenarios = parsed.success && parsed.data.length > 0 ? scenariosOfAnswer(parsed.data, criteriaOf(extra.plan?.criteria ?? task.criteria), extra.plan?.round ?? 1, approvedScenarios(context.approvals)) : null;
     const cases = scenarios ?? answer?.cases;
     return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, cases: Array.isArray(cases) ? cases : [] } });
   }

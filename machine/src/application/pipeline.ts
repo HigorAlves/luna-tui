@@ -3095,6 +3095,15 @@ export class Pipeline {
   }
 
   /** The sha of the tests commit the machine itself made, from the newest implementing finish row that kept one (a sha, nothing else); undefined when there is none. */
+  /** Whether a plan was approved after the implementing run that made the tests commit: the first finish row that recorded a tests commit, then
+   *  any plan approval after it in the stream. */
+  private async planChangedSinceTestsOf(id: string): Promise<boolean> {
+    const events = await this.events(id);
+    const made = events.findIndex((e) => e.kind === "stage.finished" && e.payload.stage === "implementing" && typeof objectOf(objectOf(e.payload.detail)?.testsStep)?.commit === "string" && objectOf(objectOf(e.payload.detail)?.testsStep)?.resumed !== true);
+    if (made === -1) return false;
+    return events.slice(made + 1).some((e) => e.kind === "transition" && e.payload.from === "awaiting_approval" && e.payload.event === "approved");
+  }
+
   /** The locked test files a person approved changing: those the implementer's last test-change request names, once a plan was approved after it. */
   private async unlockedTestsOf(id: string): Promise<string[]> {
     const events = await this.events(id);
@@ -3214,6 +3223,7 @@ export class Pipeline {
       const budgetMinutes = stage === "implementing" && task.route === "feature" ? await this.buildMinutesLeft(id, task.repoPath) : undefined;
       const testsCommit = (stage === "implementing" || stage === "verifying") && task.route === "feature" ? await this.testsCommitOf(id) : undefined;
       const testsHoldsToday = testsCommit && stage === "implementing" ? await this.testsHoldsTodayOf(id) : [];
+      const planChangedSinceTests = testsCommit && stage === "implementing" ? await this.planChangedSinceTestsOf(id) : false;
       const unlockedTests = stage === "implementing" ? await this.unlockedTestsOf(id) : [];
       const firstInputCommit = stage === "implementing" && task.route === "feature" ? await this.firstInputCommitOf(id) : undefined;
       // The entry contract of Build: the feature route builds only from what Plan hands over; what is missing goes back to the planner (once per card), then to a person.
@@ -3234,6 +3244,7 @@ export class Pipeline {
         ...(budgetMinutes !== undefined ? { budgetMinutes } : {}),
         ...(testsCommit ? { testsCommit } : {}),
         ...(testsHoldsToday.length ? { testsHoldsToday } : {}),
+        ...(planChangedSinceTests ? { planChangedSinceTests } : {}),
         ...(unlockedTests.length ? { unlockedTests } : {}),
         ...(firstInputCommit ? { firstInputCommit } : {}),
         signal,
