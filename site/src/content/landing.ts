@@ -265,7 +265,7 @@ export const stacks = {
   lead: "Luna splits a big ticket into parts that build on each other. Each part is its own card with its own PR.",
   steps: [
     { title: "A split, not a pile", body: "A big ticket becomes a parent and children. Each child builds on the part before it." },
-    { title: "A child follows its parent", body: "When a parent moves, Luna rebases its child onto it and pushes with a lease." },
+    { title: "A child follows its parent", body: "Luna keeps each child rebased onto its parent. When the parent moves, Luna rebases again and pushes with a lease." },
     { title: "Conflicts ask you", body: "A rebase that stops on a conflict pushes nothing. The card comes back to you." },
   ],
   visual: { label: "A stack", rows: ["#1 parent · merged", "#2 child · rebased", "#3 child · building"] },
