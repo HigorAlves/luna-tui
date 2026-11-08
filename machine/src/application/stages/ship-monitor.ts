@@ -463,7 +463,11 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const failed = failedChecks(checks);
       const runIds = [...new Set(failed.map(ciRunIdOf).filter((id): id is string => Boolean(id)))].sort();
       if (failed.length === 0 || runIds.length === 0) return {};
-      const key = `${head}:${runIds.join(",")}`;
+      // A red is known by its head and its failed jobs' links: a re-run keeps the run id but its jobs get new ids, so its red is a new one even
+      // when no poll saw the checks leave failure in between (PR #216: the re-run went queued to red between polls, and the watch said nothing
+      // for half an hour instead of asking a person). A link-less check counts by its name.
+      const jobs = [...new Set(failed.map((c) => c.link ?? c.name))].sort();
+      const key = `${head}:${runIds.join(",")}:${jobs.join(",")}`;
       if (cursor.ciKey === key && !cursor.ciCycled) return {};
       cursor.ciKey = key;
       cursor.ciCycled = false;

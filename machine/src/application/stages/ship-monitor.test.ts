@@ -1108,6 +1108,28 @@ describe("the review loop: what the security pass found", () => {
     expect(calls(github, "replyToThread")).toEqual([]);
   });
 
+  it("judges a re-run's red under the same run id even when no poll saw the checks leave failure: its jobs have new ids", async () => {
+    // PR #216 (2026-11-08): the re-run went queued to red between two polls; the same run id read as the red already handled, and the watch
+    // said "waiting: CI is red" for half an hour instead of asking a person.
+    const world = loopWorld({ ciVerdict: { verdict: "flake", summary: "a 504" }, choices: { event_class: "ci_flaky" } });
+    let reruns = 0;
+    const { run, github } = setup(
+      {
+        viewer: async () => ({ login: "me", teams: [] }),
+        prFacts: async () => redNode(),
+        prChecks: async () => [{ name: "build", state: "FAILURE", link: `https://github.com/o/a/actions/runs/77/job/${1 + reruns}` }],
+        failedRunLog: async () => "curl: (22) The requested URL returned error: 504",
+        findPr: async () => ({ number: 3, url: REF.url, isDraft: false }) as never,
+        rerunFailedJobs: async () => {
+          reruns++;
+        },
+      },
+      { loop: world.loop, evidence: world.evidence },
+    );
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("red again after one re-run") } });
+    expect(calls(github, "rerunFailedJobs")).toHaveLength(1);
+  });
+
   it("judges a red that comes back with the same run id once the checks have left failure in between (a flake re-run keeps the run id)", async () => {
     const world = loopWorld({ ciVerdict: { verdict: "flake", summary: "a timeout" }, choices: { event_class: "ci_flaky" } });
     let polls = 0;
