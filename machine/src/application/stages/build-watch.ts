@@ -255,7 +255,7 @@ function problemsOf(pack: "red_check" | "scope_check", answer: Record<string, un
   if (pack === "red_check") {
     return [
       ...no("right_reason", "the test fails for a reason other than the missing behaviour (a typo, an import, a path or a fixture)"),
-      ...no("not_tautological", "the test would still pass without the behaviour: it asserts its own setup"),
+      ...no("not_tautological", "the test would still pass without the behaviour: it asserts its own setup (a scenario that already holds before the change goes in holdsToday, with its reason, and gets no test)"),
     ];
   }
   return [
