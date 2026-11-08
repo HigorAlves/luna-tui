@@ -3,9 +3,11 @@
 The machine reads the engine for each decision slot from `contracts/src/decision-defaults.json`. The command `pnpm eval defaults --write` writes that file from baselines. Revisit one slot when:
 
 - a person upgraded a model ([upgrade-a-model](upgrade-a-model.md)) and the slot's engine uses it;
-- the pack's questions, criteria or bars changed (`contracts/src/packs.ts`), because the cases that quote the criteria break until a person reads them again;
-- a scorecard row looks wrong (an engine that wins on six cases, a tie that went the unexpected way);
+- the pack's questions, criteria or bars changed (`contracts/src/packs.ts`);
+- a scorecard row looks wrong (a win on six cases, an unexpected tie);
 - a month of new truth has gathered: more labelled records than there were cases.
+
+A change to the criteria breaks the cases that quote them. The cases stay broken until a person reads them again.
 
 The owner pins a decision on Jev (`PINNED` in `evals/src/scorecard.ts`). These steps do not revisit that decision. Only the owner lifts the owner's pin.
 
@@ -19,7 +21,7 @@ The owner pins a decision on Jev (`PINNED` in `evals/src/scorecard.ts`). These s
    - Other ways to label: `pnpm eval label push --queue <id>`, the trace tool, or `pnpm eval dataset pull --pack <p>`.
 3. **Harvest with readings.**
    1. Run `pnpm eval harvest --pack <p> --with-truth`.
-   2. For each new case, write its `reading` from the pack's own criteria (see `evals/README.md`).
+   2. For each new case, write its `reading` from the pack's own criteria, as `evals/README.md` explains.
    3. Review the cases as a PR.
    - The pack needs at least eight cases, six labelled, an adversarial one with its twin and a borderline one.
 4. **Preflight.**
@@ -28,7 +30,7 @@ The owner pins a decision on Jev (`PINNED` in `evals/src/scorecard.ts`). These s
 5. **The three baselines.**
    1. Run `pnpm eval --pack <p> --engine claude:haiku --save-baseline`.
    2. Repeat with `codex:luna`.
-   3. Repeat with `jev`. It is metered and needs `AI_GATEWAY_API_KEY` or `TYPESAFE_API_KEY`.
+   3. Repeat with `jev`. Its provider meters it, and it needs `AI_GATEWAY_API_KEY` or `TYPESAFE_API_KEY`.
    - Add `--trials 3` to see a model's variance.
 6. **Scorecard.**
    - Run `pnpm eval scorecard`.
