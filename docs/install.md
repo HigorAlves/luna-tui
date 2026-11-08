@@ -19,12 +19,12 @@ It walks a fresh Mac through everything below, one step at a time. Every step is
 | Target | Does |
 |---|---|
 | `make tools` | installs what is missing with Homebrew after one confirmation (Docker Desktop, Node, pnpm, Rust, gh, herdr; gum, Codex and Claude Code if you want them) |
-| `make credentials` | each engine's credential into `~/.config/hardness/` (0600). Claude uses `claude setup-token`. Codex uses its login. Add an OpenAI key and a Jev key (Vercel AI Gateway or TypeSafe) if you use them. Add the machine's API token. Run `gh auth login` |
-| `make integrations` | Jira, the Slack inbox and machine settings (where your repos live, engine budgets) into the root `.env` (0600). The target tries each one against its service. It links `machine/.env` to the root file for `pnpm dev` |
+| `make credentials` | each engine's credential into `~/.config/hardness/` (0600): Claude through `claude setup-token`, the Codex login, an OpenAI key and a Jev key (Vercel AI Gateway or TypeSafe) if you use them; the machine's API token; `gh auth login` |
+| `make integrations` | Jira, the Slack inbox and machine settings (where your repos live, engine budgets) into the root `.env` (0600), each tried against its service; `machine/.env` is linked to it for `pnpm dev` |
 | `make up`, `make down` | `pnpm start`, `pnpm stop` |
 | `make board` | `pnpm board:link` |
-| `make luna-yaml REPO=<path>` | a repo's `luna.yaml`: Jira (the statuses that it lists from your project when you set the Jira keys), engines, policy, budgets and SLAs. An existing file keeps its comments. The target shows the change as a diff. It writes nothing that the machine would refuse. Checks and services come from the board's `:setup <repo>`, which proves them |
-| `make doctor` | what you have installed, set and running, and what is missing. It never prints a secret |
+| `make luna-yaml REPO=<path>` | a repo's `luna.yaml`: Jira (the statuses listed from your project when the Jira keys are set), engines, policy, budgets and SLAs; an existing file keeps its comments, the change is shown as a diff, and nothing is written that the machine would refuse. Checks and services come from the board's `:setup <repo>`, which proves them |
+| `make doctor` | what is installed, set and running, and what is missing; never prints a secret |
 
 No key ever goes into `luna.yaml`. That file lives in the repo, and you usually commit it. The scripts are in `scripts/setup/`. They use gum for the prompts when you have gum, and plain prompts otherwise. Each script opens with Luna's mark in the terminal. The mark moves on a real terminal. `LUNA_NO_ANIMATION=1` keeps it still. `NO_COLOR=1` drops the colours.
 
@@ -73,17 +73,16 @@ The app token feeds the live socket. The socket brings in reactions and replies 
 
 To connect the machine:
 
-1. Choose where the machine reads the tokens. Use `machine/.env` for `pnpm dev`, or a root `.env` (or the shell) for `pnpm start`.
-2. Put both tokens in that place:
+1. Put both tokens where the machine reads them: `machine/.env` for `pnpm dev`, or a root `.env` (or the shell) for `pnpm start`:
 
    ```sh
    MACHINE_SLACK_USER_TOKEN=xoxp-...
    MACHINE_SLACK_APP_TOKEN=xapp-...
    ```
 
-3. Start the machine.
-4. Press `S` on the board.
-5. Press `W` to add the team handles (`@platform-team`), keywords or channels that the machine treats as addressed to you.
+2. Start the machine.
+3. Press `S` on the board.
+4. Press `W` to add the team handles (`@platform-team`), keywords or channels that the machine treats as addressed to you.
 
 The token is yours, so replies from the board post as you. The board posts nothing until you press `ctrl+s` in the reply editor. `d` clears an item on the board only. `MACHINE_SLACK_MARK_READ=on` also marks it read in Slack. Priorities and drafts come from the `slack_triage` pack. The pack is a harness agent. Its default engine is `claude:haiku`, at low effort, with no tools. It runs in the stage container with your Claude credential, the same way every stage does. It makes one short run for each batch of new messages after the poll publishes. Without Docker or a credential (or with `MACHINE_AGENTS=off`), the inbox still fills. It sorts items by time and shows no priorities. The triage follows rules about VIPs, muted channels, quiet hours, always-P0 keywords and your notes. These rules live in `~/.local/state/hardness/slack-triage.md` (`MACHINE_STATE_DIR`). On first run, the machine writes this file from the template in [`docs/agents/slack-triage.md`](./agents/slack-triage.md). `MACHINE_SLACK_RULES` moves it. The `## SLA` section sets how long you give yourself to reply, by priority. The defaults are 10m for P0, 30m for P1, and 1h for P2 and P3, unless you change them. An item past its target turns red on the board. Inside the `## Quiet hours` window, the board raises notices for P0 only. The inbox learns from what you clear and answer. It keeps this next to the rules file, in `slack-triage.learned.md`. Every variable is in [configuration.md](./configuration.md).
 
@@ -100,8 +99,7 @@ To make the token:
 
 To connect the machine:
 
-1. Choose where the machine reads the credentials. Use `machine/.env` for `pnpm dev`, or a root `.env` or the shell for `pnpm start`.
-2. Put the site, your Atlassian email and the token in that place:
+1. Put the site, your Atlassian email and the token where the machine reads them: `machine/.env` for `pnpm dev`, or a root `.env` or the shell for `pnpm start`:
 
    ```sh
    MACHINE_JIRA_SITE=https://acme.atlassian.net
@@ -109,7 +107,7 @@ To connect the machine:
    MACHINE_JIRA_TOKEN=...
    ```
 
-3. In each repo's `luna.yaml`, say what the machine does in Jira:
+2. In each repo's `luna.yaml`, say what the machine does in Jira:
 
    ```yaml
    jira:
