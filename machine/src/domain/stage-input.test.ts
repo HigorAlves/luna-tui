@@ -2,7 +2,7 @@ import { PACKS, type PackId, StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
-import { PACK_LIMITS, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
+import { PACK_LIMITS, browserCases, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
 
 const task = {
   id: "t1",
@@ -432,5 +432,14 @@ describe("buildContextPackInput: every context a pack is given reaches its input
     const { buildContextPackInput } = await import("./stage-input.ts");
     expect(buildContextPackInput("ticket_validity" as never, { ticket: { key: "PAY-12", title: "Refund twice" } } as never).task.title).toBe("PAY-12: Refund twice");
     expect(buildContextPackInput("conversation_assess" as never, { conversation: { channel: { id: "C1" } } } as never).task.title).toBe("Conversation");
+  });
+});
+
+describe("browserCases", () => {
+  it("keeps the e2e scenarios of a plan with layers, and every case of a plan without them", () => {
+    const layered = [{ title: "a", criterion: null, approach: "x", layer: "e2e" }, { title: "b", criterion: null, approach: "y", layer: "unit" }] as never[];
+    expect(browserCases(layered).map((c: { title: string }) => c.title)).toEqual(["a"]);
+    const v1 = [{ title: "a", criterion: null, approach: "x" }, { title: "b", criterion: null, approach: "y" }] as never[];
+    expect(browserCases(v1)).toHaveLength(2);
   });
 });

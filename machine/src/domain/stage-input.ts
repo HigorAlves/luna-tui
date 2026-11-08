@@ -74,6 +74,14 @@ export function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
 
 /** The test cases approved at the last test check; anything malformed is dropped. A case
  *  recorded under schema 2 (`test` for `approach`) is read as today's shape. */
+/** What a browser run can judge: the scenarios of layer `e2e`. The site card's e2e graded its unit, diff and build scenarios too, could not observe
+ *  them, called the run partial and sent the card back. A plan whose scenarios carry no layer (v1) keeps them all; one with layers and no browser
+ *  scenario gives the browser run nothing to grade but the page itself. */
+export function browserCases(cases: TestCase[]): TestCase[] {
+  const layered = cases.some((c) => (c as { layer?: unknown }).layer);
+  return layered ? cases.filter((c) => (c as { layer?: unknown }).layer === "e2e") : cases;
+}
+
 export function approvedCases(approvals: ApprovalRow[]): TestCase[] {
   // The one approval carries the scenarios now; a legacy test check, when a task has one, wins.
   const approval =
@@ -208,7 +216,9 @@ export function buildStageInput(opts: {
     context: {
       projectContext: opts.projectContext ?? null,
       testCases:
-        pack === "verifying" || pack === "e2e" || pack === "video_script" || pack === "video_fix" || pack === "recording" || (pack === "implementing" && !opts.holdoutCases)
+        pack === "e2e"
+          ? browserCases(approvedCases(approvals))
+          : pack === "verifying" || pack === "video_script" || pack === "video_fix" || pack === "recording" || (pack === "implementing" && !opts.holdoutCases)
           ? approvedCases(approvals)
           : pack === "build_tests"
             ? approvedScenarios(approvals)
