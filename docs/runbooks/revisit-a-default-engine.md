@@ -51,7 +51,8 @@ The owner pins a decision on Jev (`PINNED` in `evals/src/scorecard.ts`). These s
 To keep an engine the rule did not pick:
 
 - Edit its entry in `contracts/src/decision-defaults.json` by hand.
-- Start its `reason` with `override:` and say why.
+- Start its `reason` with `override:`.
+- Say why in the rest of the `reason`.
 
 The contracts test checks the file. To go back:
 

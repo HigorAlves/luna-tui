@@ -35,7 +35,7 @@ Its "keeps today's models as the defaults" case fails on purpose if a pack's def
 
 ## 3. The SDK, if it has to move
 
-The runtime SDKs are `@anthropic-ai/claude-agent-sdk`, `eve`, `@typesafe-ai/sdk` and the Codex CLI's `CODEX_VERSION` in `machine/runner/Dockerfile`. If the new model needs a newer one, bump that SDK alone first. Make the bump its own PR, with an exact version. Then run these commands:
+The runtime SDKs are `@anthropic-ai/claude-agent-sdk`, `eve`, `@typesafe-ai/sdk` and the Codex CLI's `CODEX_VERSION` in `machine/runner/Dockerfile`. If the new model needs a newer one, bump that SDK alone first. Make the bump its own PR, with an exact version. Run these commands in order:
 
 ```sh
 pnpm --filter @hardness/factory test                      # the conformance table, on each runtime's fake
@@ -70,7 +70,8 @@ pnpm golden --matrix       # needs a running machine from that branch, a credent
 
 Nobody has built shadow (the candidate answering the same input without anyone acting on it) or canary (a share of tasks by hash). The harness has a per-repo and per-task choice of engine. So you run a trial by hand:
 
-1. Add the candidate to the pack's `engines.allowed` in `contracts/src/packs.ts`. The `default` stays as it is. A reviewer reviews this one-line change.
+1. Add the candidate to the pack's `engines.allowed` in `contracts/src/packs.ts`.
+   The `default` stays as it is. A reviewer reviews this one-line change.
 2. Pick the engine for one repo in that repo's `luna.yaml` (`engines: { triage: claude:opus-next }`).
 3. Run a few real tickets.
 4. Revert the one-line change from step 1.

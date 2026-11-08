@@ -73,16 +73,17 @@ The app token feeds the live socket. The socket brings in reactions and replies 
 
 To connect the machine:
 
-1. Put both tokens where the machine reads them. Use `machine/.env` for `pnpm dev`, or a root `.env` (or the shell) for `pnpm start`:
+1. Choose where the machine reads the tokens. Use `machine/.env` for `pnpm dev`, or a root `.env` (or the shell) for `pnpm start`.
+2. Put both tokens in that place:
 
    ```sh
    MACHINE_SLACK_USER_TOKEN=xoxp-...
    MACHINE_SLACK_APP_TOKEN=xapp-...
    ```
 
-2. Start the machine.
-3. Press `S` on the board.
-4. Press `W` to add the team handles (`@platform-team`), keywords or channels that the machine treats as addressed to you.
+3. Start the machine.
+4. Press `S` on the board.
+5. Press `W` to add the team handles (`@platform-team`), keywords or channels that the machine treats as addressed to you.
 
 The token is yours, so replies from the board post as you. The board posts nothing until you press `ctrl+s` in the reply editor. `d` clears an item on the board only. `MACHINE_SLACK_MARK_READ=on` also marks it read in Slack. Priorities and drafts come from the `slack_triage` pack. The pack is a harness agent. Its default engine is `claude:haiku`, at low effort, with no tools. It runs in the stage container with your Claude credential, the same way every stage does. It makes one short run for each batch of new messages after the poll publishes. Without Docker or a credential (or with `MACHINE_AGENTS=off`), the inbox still fills. It sorts items by time and shows no priorities. The triage follows rules about VIPs, muted channels, quiet hours, always-P0 keywords and your notes. These rules live in `~/.local/state/hardness/slack-triage.md` (`MACHINE_STATE_DIR`). On first run, the machine writes this file from the template in [`docs/agents/slack-triage.md`](./agents/slack-triage.md). `MACHINE_SLACK_RULES` moves it. The `## SLA` section sets how long you give yourself to reply, by priority. The defaults are 10m for P0, 30m for P1, and 1h for P2 and P3, unless you change them. An item past its target turns red on the board. Inside the `## Quiet hours` window, the board raises notices for P0 only. The inbox learns from what you clear and answer. It keeps this next to the rules file, in `slack-triage.learned.md`. Every variable is in [configuration.md](./configuration.md).
 
@@ -99,7 +100,8 @@ To make the token:
 
 To connect the machine:
 
-1. Put the site, your Atlassian email and the token where the machine reads them. Use `machine/.env` for `pnpm dev`, or a root `.env` or the shell for `pnpm start`:
+1. Choose where the machine reads the credentials. Use `machine/.env` for `pnpm dev`, or a root `.env` or the shell for `pnpm start`.
+2. Put the site, your Atlassian email and the token in that place:
 
    ```sh
    MACHINE_JIRA_SITE=https://acme.atlassian.net
@@ -107,7 +109,7 @@ To connect the machine:
    MACHINE_JIRA_TOKEN=...
    ```
 
-2. In each repo's `luna.yaml`, say what the machine does in Jira:
+3. In each repo's `luna.yaml`, say what the machine does in Jira:
 
    ```yaml
    jira:
