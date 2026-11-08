@@ -264,7 +264,7 @@ export const stacks = {
   title: "Big tickets split into stacked cards.",
   lead: "Luna splits a big ticket into parts that build on each other. Each part is its own card with its own PR.",
   steps: [
-    { title: "A split, not a pile", body: "A big ticket becomes a parent and children. Each child builds on the part before it." },
+    { title: "A split, not a pile", body: "A big ticket becomes an origin and its children. Each child builds on its parent, the part before it." },
     { title: "A child follows its parent", body: "Luna keeps each child rebased onto its parent. When the parent moves, Luna rebases again and pushes with a lease." },
     { title: "Conflicts ask you", body: "A rebase that stops on a conflict pushes nothing. The card comes back to you." },
   ],
@@ -289,10 +289,10 @@ export const sandbox = {
   id: "sandbox",
   eyebrow: "Sandbox and safety",
   title: "Sandbox and safety on every stage.",
-  lead: "Each stage runs in a container with a per-repository egress allow-list. The agent reaches only the hosts you list.",
+  lead: "Each stage runs in a container with a per-repository egress allow-list. The agent reaches package registries, GitHub, its engine hosts and the hosts you add.",
   steps: [
     { title: "A container per stage", body: "Each stage runs in its own throwaway container with a read-only root filesystem." },
-    { title: "An egress allow-list per repository", body: "Each repository lists the hosts its stages may reach. Everything else has no route out." },
+    { title: "An egress allow-list per repository", body: "Each repository adds hosts to the defaults: registries, GitHub and the engine hosts. Everything else has no route out." },
     { title: "Secret checks", body: "Every change gets secret checks before it ships." },
     { title: "No AI credit", body: "Commits are never credited to an AI. Luna blocks AI attribution in a commit." },
   ],
@@ -354,7 +354,7 @@ export const factory = {
     { name: "evidence", body: "Checks the QA manifest and puts the verdict and artifacts on the ship gate." },
     { name: "reviewing_memory", body: "After shipping, proposes rules for the repo's agent context. You keep or skip them." },
   ],
-  note: "Needs Docker, Node 24+, pnpm, Rust and a Claude or Codex login in ~/.config/hardness. Without a login, every stage is a stub.",
+  note: "Needs Docker, Node 24+, pnpm, Rust and a Claude token in ~/.config/hardness or a Codex login from `codex login`. Without a login, every stage is a stub.",
   guide: "Full setup guide",
 }
 
@@ -429,7 +429,7 @@ export const faq = {
     },
     {
       q: "Which logins do I need?",
-      a: "A Claude subscription token, a Codex login, or both, saved in ~/.config/hardness. A Jev key is optional and metered. Without a login, every stage is a stub, which is enough to try the board.",
+      a: "A Claude subscription token saved in ~/.config/hardness, a Codex login from `codex login`, or both. A Jev key is optional and metered. Without a login, every stage is a stub, which is enough to try the board.",
     },
     {
       q: "Can it push to main?",

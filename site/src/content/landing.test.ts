@@ -49,13 +49,15 @@ const covered = [
   factory.lead, factory.note, repos.heatmap.title,
   usageAnswer, credentialAnswer, costAnswer,
 ]
-const procedural: string[] = []
+// Strings that tell the reader what to set up or run.
+const procedural: string[] = [factory.note, credentialAnswer, factory.setup.lead, pricing.plans[0]!.cta, pricing.plans[1]!.cta]
 
 describe("copy rules", () => {
   it("every covered sentence has at most 25 words", () => {
     for (const t of covered) expect(tooLong(t), t).toEqual([])
   })
   it("every procedural sentence has at most 20 words", () => {
+    expect(procedural.length).toBeGreaterThan(0)
     for (const t of procedural) expect(tooLong(t, true), t).toEqual([])
   })
   it("the checker fails a 26-word sentence and a 21-word procedural one", () => {
