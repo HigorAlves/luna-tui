@@ -244,6 +244,61 @@ export const features = {
   ],
 } as const
 
+export const testFirst = {
+  id: "test-first",
+  eyebrow: "Test-first Build",
+  title: "Build writes the failing tests first.",
+  lead: "Before any code, Build writes one failing test per approved scenario. A judge checks that each test fails for the right reason.",
+  steps: [
+    { title: "One test per scenario", body: "Each approved scenario gets one failing test, tagged with the scenario's id." },
+    { title: "A judge reads each failure", body: "The judge checks that the test fails because the behaviour is missing, not because the test is broken." },
+    { title: "Locked before code", body: "Luna commits the tests first. The implementer then builds until they pass and cannot change them." },
+    { title: "Docs-only changes", body: "A change that touches only documentation gets no tests. Luna checks it by reading it." },
+  ],
+  visual: { label: "Scenario tests", rows: ["S1 · red · judged", "S2 · red · judged", "S3 · red · judged"] },
+}
+
+export const stacks = {
+  id: "stacks",
+  eyebrow: "Stacked cards and splits",
+  title: "Big tickets split into stacked cards.",
+  lead: "Luna splits a big ticket into parts that build on each other. Each part is its own card with its own PR.",
+  steps: [
+    { title: "A split, not a pile", body: "A big ticket becomes a parent and children. Each child builds on the part before it." },
+    { title: "A child follows its parent", body: "When a parent moves, Luna rebases its child onto it and pushes with a lease." },
+    { title: "Conflicts ask you", body: "A rebase that stops on a conflict pushes nothing. The card comes back to you." },
+  ],
+  visual: { label: "A stack", rows: ["#1 parent · merged", "#2 child · rebased", "#3 child · building"] },
+}
+
+export const engines = {
+  id: "engines",
+  eyebrow: "Engines and fallbacks",
+  title: "Pick the engine. Keep the fallback.",
+  lead: "Claude runs on your subscription and Codex on your Codex login. Jev is an opt-in metered path.",
+  steps: [
+    { title: "Claude", body: "Claude runs on your subscription. Luna uses the login you already saved." },
+    { title: "Codex", body: "Codex runs on your Codex login. Small decisions such as risk and red checks can use it." },
+    { title: "Jev", body: "Jev is an opt-in metered path. It stays off until you add a key." },
+    { title: "A fallback for each decision", body: "A decision moves to its fallback engine when a login is busy or rate-limited." },
+  ],
+  visual: { label: "Engine choice", rows: ["claude · your subscription", "codex · your Codex login", "jev · opt-in, metered"] },
+}
+
+export const sandbox = {
+  id: "sandbox",
+  eyebrow: "Sandbox and safety",
+  title: "Every stage runs sealed.",
+  lead: "Each stage runs in a container with a per-repository egress allow-list. The agent reaches only the hosts you list.",
+  steps: [
+    { title: "A container per stage", body: "Each stage runs in its own throwaway container with a read-only root filesystem." },
+    { title: "An egress allow-list per repository", body: "Each repository lists the hosts its stages may reach. Everything else has no route out." },
+    { title: "Secret checks", body: "Every change gets secret checks before it ships." },
+    { title: "No AI credit", body: "Commits are never credited to an AI. Luna blocks AI attribution in a commit." },
+  ],
+  visual: { label: "Sandbox", rows: ["container · read-only", "egress · allow-list", "secrets · checked"] },
+}
+
 export const factory = {
   eyebrow: "The factory · inside every stage",
   title: "The factory does the work. Luna runs the floor.",
