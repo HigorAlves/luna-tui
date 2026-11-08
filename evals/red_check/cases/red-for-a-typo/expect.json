@@ -16,7 +16,7 @@
   "kind": "labelled",
   "reading": {
     "criteria": {
-      "right_reason": "Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture."
+      "right_reason": "The failing output is the test writer's own report; when the test's source is given, read it too, and judge the test, not the report's wording. Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes; so is a page element the change adds and the test looks for (a section, a heading, a button, a text) not being there yet. In a compiled language (Rust, Go, Java) one missing function stops the whole test build: a test that fails because the build fails on code the change has not written yet (a function, an argument, a field the scenarios' tests call) is a yes, whichever test in the build calls it. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture."
     },
     "why": "A misspelt import stops the test before it reaches the behaviour: a typo in the test itself is a no.",
     "second": {
