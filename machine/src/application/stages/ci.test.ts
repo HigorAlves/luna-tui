@@ -13,14 +13,25 @@ const checks = (...states: Array<[string, string]>): Check[] =>
 const finding = { path: "a.ts", line: 1, start_line: null, severity: "test", title: "red", body: "", suggestion_code: null, confidence: 1 };
 const pack = (answer: Record<string, unknown>): StageResult => ({ outcome: "pass", detail: { answer } });
 
-function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] }; classOf?: string | null; reruns?: number; autoRebase?: number; learn?: boolean; lastRed?: { recordId: string; job: string } | null }) {
+function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] }; classOf?: string | null; reruns?: number; autoRebase?: number; learn?: boolean; lastRed?: { recordId: string; job: string } | null; staleAfterRerun?: number }) {
   let poll = 0;
   let facts = 0;
+  // A re-run's jobs get new ids, as on GitHub: after the n-th re-run a check's link ends in /job/<n+1> (after `staleAfterRerun` polls that
+  // still show the old one).
+  let reruns = 0;
+  let sinceRerun = 0;
+  const relinked = (list: Check[]): Check[] => {
+    if (reruns === 0 || sinceRerun++ < (opts.staleAfterRerun ?? 0)) return list;
+    return list.map((c) => ({ ...c, link: c.link?.replace(/\/job\/1$/, `/job/${reruns + 1}`) ?? null }));
+  };
   const github = fakeGitHub({
-    prChecks: async (_slug, ref) => (opts.parent && ref === opts.parent.ref ? opts.parent.checks : opts.polls[Math.min(poll++, opts.polls.length - 1)]!),
+    prChecks: async (_slug, ref) => (opts.parent && ref === opts.parent.ref ? opts.parent.checks : relinked(opts.polls[Math.min(poll++, opts.polls.length - 1)]!)),
     findPr: async () => ({ url: "https://github.com/a/b/pull/7", number: 7, isDraft: true }),
     failedRunLog: async (_slug, runId) => `log of run ${runId}\nFAIL src/a.test.ts > boom\n`,
-    rerunFailedJobs: async () => {},
+    rerunFailedJobs: async () => {
+      reruns++;
+      sinceRerun = 0;
+    },
     ...(opts.mergeable ? { prFacts: async () => ({ mergeable: opts.mergeable![Math.min(facts++, opts.mergeable!.length - 1)] }) as never } : {}),
   });
   const rebase = vi.fn(async () => opts.rebase ?? { ok: true as const, onto: "origin/main" });
@@ -178,6 +189,15 @@ describe("ci_watch classifies a red run by a typed decision", () => {
     expect(runPack).not.toHaveBeenCalled();
     expect(result).toMatchObject({ outcome: "pass", detail: { class: "infra", note: "infrastructure failure, re-run passed" } });
     expect(learned).toEqual([]);
+  });
+
+  it("does not read a re-run as green while GitHub lists only the other checks, nor as red while it still shows the old job", async () => {
+    // PR #216 (2026-11-08): right after the re-run the list held only Vercel and GitGuardian; "nothing red" passed while fresh-clone was queued.
+    const gap = setup({ polls: red([{ name: "vercel", state: "SUCCESS", link: "https://vercel.com/x" }], checks(["lint", "FAILURE"])), classOf: "infra" });
+    expect(await gap.run(gap.context)).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken" } });
+    const stale = setup({ polls: red(checks(["lint", "FAILURE"]), checks(["lint", "SUCCESS"])), classOf: "flake", staleAfterRerun: 1 });
+    // The first poll after the re-run still shows the old red job: that is not the re-run's answer, so the green one after it is.
+    expect(await stale.run(stale.context)).toMatchObject({ outcome: "pass", detail: { note: "flake, re-run passed" } });
   });
 
   it("sends an infrastructure failure to a person when it stays red after the re-run, or when no re-run is allowed", async () => {

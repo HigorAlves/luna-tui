@@ -117,8 +117,12 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
       })());
     let graceEnds = Date.now() + graceMs;
 
-    async function settle(waitMs: number): Promise<Settled> {
+    /** Polls until nothing is pending. After a re-run, `before` (the checks as they stood when it was asked) must also be seen through: every
+     *  check of it listed again, and none still red on its old link (the re-run's job has a new one), since GitHub first drops the re-run
+     *  jobs from the list and may still show the old red for a moment; reading either as settled would call the re-run green, or red, unseen. */
+    async function settle(waitMs: number, before?: readonly Check[]): Promise<Settled> {
       const deadline = Date.now() + waitMs;
+      const wasRed = before ? failedOf([...before]) : [];
       for (;;) {
         if (signal.aborted) return { kind: "aborted" };
         let checks: Check[];
@@ -130,7 +134,10 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
         if (!checks.some((c) => PENDING.has(String(c.state).toUpperCase()))) {
           const have = new Set(checks.map((c) => c.name));
           const missing = Date.now() < graceEnds && (await expectedNames()).some((name) => !have.has(name));
-          if (!missing) return { kind: "settled", checks };
+          const rerunUnseen = before
+            ? before.some((b) => !have.has(b.name)) || failedOf(checks).some((c) => wasRed.some((b) => b.name === c.name && b.link === c.link))
+            : false;
+          if (!missing && !rerunUnseen) return { kind: "settled", checks };
         }
         if (Date.now() >= deadline) return { kind: "timeout" };
         await sleep(pollMs);
@@ -246,12 +253,13 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
         const runId = failed.map(runIdOf).find(Boolean);
         for (let round = 0; runId && round < settings.reruns; round++) {
           acted = true;
+          const before = checks;
           try {
             await deps.github.rerunFailedJobs(slug, runId);
           } catch (error) {
             return infraEscalation(`, and the re-run could not start: ${messageOf(error)}`);
           }
-          const next = await settle(RERUN_WAIT_MS);
+          const next = await settle(RERUN_WAIT_MS, before);
           const stoppedNext = stopped(next);
           if (stoppedNext) return stoppedNext;
           checks = (next as { checks: Check[] }).checks;
@@ -273,12 +281,13 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
         const runId = failed.map(runIdOf).find(Boolean);
         for (let round = 0; runId && round < settings.reruns; round++) {
           acted = true;
+          const before = checks;
           try {
             await deps.github.rerunFailedJobs(slug, runId);
           } catch (error) {
             return person(`a flaky failure, and the re-run could not start: ${messageOf(error)}`, "flaky_tests", ["re-run the failed jobs by hand and approve"]);
           }
-          const next = await settle(RERUN_WAIT_MS);
+          const next = await settle(RERUN_WAIT_MS, before);
           const stoppedNext = stopped(next);
           if (stoppedNext) return stoppedNext;
           checks = (next as { checks: Check[] }).checks;
@@ -323,7 +332,7 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
       } catch (error) {
         return fixable(`flake verdict, but the re-run failed: ${messageOf(error)}`);
       }
-      const second = await settle(RERUN_WAIT_MS);
+      const second = await settle(RERUN_WAIT_MS, checks);
       const stoppedAgain = stopped(second);
       if (stoppedAgain) return stoppedAgain;
       const after = (second as { checks: Check[] }).checks;
