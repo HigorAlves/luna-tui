@@ -72,9 +72,10 @@ Nobody has built shadow (the candidate answering the same input without anyone a
 
 1. Add the candidate to the pack's `engines.allowed` in `contracts/src/packs.ts`. The `default` stays as it is. A reviewer reviews this one-line change.
 2. Pick the engine for one repo in that repo's `luna.yaml` (`engines: { triage: claude:opus-next }`).
-   For one task, use `stages` on `POST /tasks`, `PATCH /tasks/:id/stages`, or the engine picker on the board.
 3. Run a few real tickets.
 4. Revert the one-line change from step 1.
+
+To pick the engine for one task instead, use `stages` on `POST /tasks`, `PATCH /tasks/:id/stages`, or the engine picker on the board.
 
 Every stage run records the engine it started on (`GET /tasks/:id`). `/metrics` does not split by engine yet. So compare the runs by hand: approved plans, first-pass verifying, cost, escalations.
 
@@ -94,9 +95,10 @@ To roll back, revert the alias line. A stage already running keeps its engine. T
 ## 7. Retire
 
 - Mark the old entry `status: "deprecated"` with `retireAfter: "YYYY-MM-DD"`.
-- Delete the entry when no pack's engines reach it.
 
-From the day after `retireAfter`, the contract test fails while any pack's engines still reach the entry.
+From the day after that date, the contract test fails while any pack's engines still reach the entry.
+
+Once no pack's engines reach the entry, delete it.
 
 The evals measure a decision pack's engine default. Nobody assumes it. After the upgrade, do these steps:
 
