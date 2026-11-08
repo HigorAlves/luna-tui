@@ -273,6 +273,26 @@ describe("scenarios no red test can be written for (the site card)", () => {
   });
 });
 
+describe("a red judged right once", () => {
+  it("keeps its verdict in the next round while its test and output are the same; a changed red is judged again", async () => {
+    const asked: string[] = [];
+    let s2Calls = 0;
+    // Round one: S1 is right, S2 is flagged twice (sent back). Round two: S1 unchanged is not asked again; S2's new red is judged and passes.
+    const f = fakes([tagged("S1", "S2"), tagged("S1", "S2")], {
+      judgeRed: async (c) => {
+        asked.push(c.scenario!.id);
+        if (c.scenario!.id === "S2" && s2Calls++ < 2) return { verdict: "flag", problems: ["the test fails on an import"] };
+        return { verdict: "proceed", problems: [] };
+      },
+    }, [{ S1: "FAIL: no export", S2: "FAIL: cannot find module" }, { S1: "FAIL: no export", S2: "FAIL: no total" }]);
+    const e = { rows: [] as Array<[string, Record<string, unknown>]> };
+    await buildTestsStep(f.deps)({ ...context([v1]), emit: async (k: string, p: Record<string, unknown>) => void e.rows.push([k, p]) } as never);
+    expect(f.calls).toEqual(["writer", "writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(asked.filter((id) => id === "S1")).toHaveLength(1);
+    expect(e.rows).toContainEqual(["scenario.red_check", expect.objectContaining({ scenario: "S1", kept: true })]);
+  });
+});
+
 describe("scenario.green", () => {
   const emitted = () => {
     const rows: Array<[string, Record<string, unknown>]> = [];

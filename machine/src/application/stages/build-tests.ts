@@ -194,6 +194,9 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     let redMisses = 0;
     let review: string[] | undefined;
     let holdsToday: { scenario: string; reason: string }[] = [];
+    // A red judged right once keeps its verdict while its test and its output are the same: a round sends the writer back as a whole, and
+    // re-asking every scenario every round gave a slightly noisy judge enough draws to flag one it had accepted twice before.
+    const accepted = new Set<string>();
     for (;;) {
       const round = await budgeted();
       if (!round) return { ...spentResult(), ...(writerUsage ? { usage: writerUsage } : {}) };
@@ -237,7 +240,13 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
           const file = facts.tagged[id];
           const test = file && deps.readTest ? await deps.readTest(where, file, id).catch(() => null) : null;
           const check: CheckContext = { kind: "red", scenario: { id, title: s.title, given: s.given ?? null, when: s.when ?? null, then: s.then ?? null, approach: s.approach }, exists: id in facts.tagged, output, ...(test ? { test } : {}) };
+          const same = `${id}\u0000${test ?? ""}\u0000${output}`;
+          if (accepted.has(same)) {
+            await context.emit?.("scenario.red_check", { scenario: id, verdict: "proceed", asked: 0, flagged: 0, testRead: test !== null, kept: true });
+            return { id, verdict: "proceed", problems: [] };
+          }
           const vote = await voteRed(deps.judgeRed, check, task.repoPath);
+          if (vote.verdict === "proceed") accepted.add(same);
           // The task's events say what each scenario's judge said, so an escalation is never only a sentence.
           await context.emit?.("scenario.red_check", { scenario: id, verdict: vote.verdict, asked: vote.askings.length, flagged: vote.askings.filter((a) => a.flagged).length, testRead: test !== null, ...(vote.problems.length ? { problems: vote.problems.map((p) => safe(p).slice(0, 200)) } : {}) });
           return { id, verdict: vote.verdict, problems: vote.problems.map((p) => `${id}: ${safe(p).slice(0, 200)}`) };
