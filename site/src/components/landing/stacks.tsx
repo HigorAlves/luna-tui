@@ -33,9 +33,8 @@ export function Stacks() {
       <div className={`${container} grid grid-cols-1 items-center gap-12 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:gap-16`}>
         <SceneSlot load={loadScene} Scene={GitHubScene} fallback={<Fallback />} className="order-last h-[360px] sm:h-[440px] lg:order-first lg:h-[520px]" />
         <div className="min-w-0">
-          <Eyebrow>{stacks.eyebrow}</Eyebrow>
-          <SectionTitle id={`${stacks.id}-title`}>{stacks.title}</SectionTitle>
-          <Lead className="text-lg">{stacks.lead}</Lead>
+          <Eyebrow>{stacks.eyebrow}</Eyebrow> <SectionTitle id={`${stacks.id}-title`}>{stacks.title}</SectionTitle>{" "}
+          <Lead className="text-lg">{stacks.lead}</Lead>{" "}
           <ul className="mt-10 grid grid-cols-1 gap-6">
             {stacks.steps.map((s, i) => {
               const Icon = icons[i]!
@@ -44,8 +43,7 @@ export function Stacks() {
                   <IconTile>
                     <Icon className="size-4 text-brand" />
                   </IconTile>
-                  <h3 className="font-medium">{s.title}</h3>
-                  <p className="text-sm text-pretty text-muted-foreground">{s.body}</p>
+                  <h3 className="font-medium">{s.title}</h3> <p className="text-sm text-pretty text-muted-foreground">{s.body}</p>{" "}
                 </li>
               )
             })}

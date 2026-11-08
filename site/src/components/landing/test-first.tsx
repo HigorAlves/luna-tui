@@ -33,9 +33,8 @@ export function TestFirst() {
     <Section id={testFirst.id} className="relative overflow-hidden">
       <div className={`${container} grid grid-cols-1 items-center gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] lg:gap-16`}>
         <div className="min-w-0">
-          <Eyebrow>{testFirst.eyebrow}</Eyebrow>
-          <SectionTitle id={`${testFirst.id}-title`}>{testFirst.title}</SectionTitle>
-          <Lead className="text-lg">{testFirst.lead}</Lead>
+          <Eyebrow>{testFirst.eyebrow}</Eyebrow> <SectionTitle id={`${testFirst.id}-title`}>{testFirst.title}</SectionTitle>{" "}
+          <Lead className="text-lg">{testFirst.lead}</Lead>{" "}
           <ul className="mt-10 grid grid-cols-1 gap-6 sm:grid-cols-2">
             {testFirst.steps.map((s, i) => {
               const Icon = icons[i]!
@@ -44,8 +43,7 @@ export function TestFirst() {
                   <IconTile>
                     <Icon className="size-4 text-brand" />
                   </IconTile>
-                  <h3 className="font-medium">{s.title}</h3>
-                  <p className="text-sm text-pretty text-muted-foreground">{s.body}</p>
+                  <h3 className="font-medium">{s.title}</h3> <p className="text-sm text-pretty text-muted-foreground">{s.body}</p>{" "}
                 </li>
               )
             })}

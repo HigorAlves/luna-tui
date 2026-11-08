@@ -32,9 +32,8 @@ export function Engines() {
     <Section id={engines.id} className="relative overflow-hidden">
       <div className={`${container} grid grid-cols-1 items-center gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] lg:gap-16`}>
         <div className="min-w-0">
-          <Eyebrow>{engines.eyebrow}</Eyebrow>
-          <SectionTitle id={`${engines.id}-title`}>{engines.title}</SectionTitle>
-          <Lead className="text-lg">{engines.lead}</Lead>
+          <Eyebrow>{engines.eyebrow}</Eyebrow> <SectionTitle id={`${engines.id}-title`}>{engines.title}</SectionTitle>{" "}
+          <Lead className="text-lg">{engines.lead}</Lead>{" "}
           <ul className="mt-10 grid grid-cols-1 gap-6 sm:grid-cols-2">
             {engines.steps.map((s, i) => {
               const Icon = icons[i]!
@@ -43,8 +42,7 @@ export function Engines() {
                   <IconTile>
                     <Icon className="size-4 text-brand" />
                   </IconTile>
-                  <h3 className="font-medium">{s.title}</h3>
-                  <p className="text-sm text-pretty text-muted-foreground">{s.body}</p>
+                  <h3 className="font-medium">{s.title}</h3> <p className="text-sm text-pretty text-muted-foreground">{s.body}</p>{" "}
                 </li>
               )
             })}

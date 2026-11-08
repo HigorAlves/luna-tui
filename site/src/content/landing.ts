@@ -288,7 +288,7 @@ export const engines = {
 export const sandbox = {
   id: "sandbox",
   eyebrow: "Sandbox and safety",
-  title: "Every stage runs sealed.",
+  title: "Sandbox and safety on every stage.",
   lead: "Each stage runs in a container with a per-repository egress allow-list. The agent reaches only the hosts you list.",
   steps: [
     { title: "A container per stage", body: "Each stage runs in its own throwaway container with a read-only root filesystem." },
