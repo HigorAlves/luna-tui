@@ -18,6 +18,17 @@ describe("the browser run's manifest", () => {
     expect(rows[1]).toMatchObject({ seen: "", artifacts: [] });
   });
 
+  it("matches a row that opens with its scenario id, or copies the title but for case and spacing, and never gives one scenario's id row to another", () => {
+    // The site card's run (2026-11-08): every row was "S25 <title>" with the criterion's text, and all three read not_run.
+    const rows = manifestRows(scenarios, [
+      { text: "S1 export downloads a file", criterion: "In a browser, …", result: "pass", evidence: [] },
+      { text: "[S3]: large report renders", result: "fail", evidence: [] },
+      { text: "S1 empty report", result: "fail", evidence: [] },
+      { text: "  Empty  Report. ", result: "pass", evidence: [] },
+    ], "");
+    expect(rows.map((r) => [r.scenario, r.result])).toEqual([["S1", "pass"], ["S2", "pass"], ["S3", "fail"]]);
+  });
+
   it("reads an artifact written as files/qa/<name> as that name", () => {
     const rows = manifestRows(scenarios, [{ text: "empty report", result: "fail", evidence: ["files/qa/a.png", "files/qa/sub/b.png"] }], "");
     expect(rows[1]!.artifacts).toEqual(["a.png", "files/qa/sub/b.png".slice("files/qa/".length)]);
