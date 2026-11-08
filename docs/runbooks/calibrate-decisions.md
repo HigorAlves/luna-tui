@@ -6,7 +6,7 @@ For one pack, step by step, with the labelling and the case readings, see [revis
 
 ## Run the baselines
 
-Each decision pack has seed cases under `evals/<pack>/cases/` (two clear, one borderline and one adversarial). More cases come from `pnpm eval harvest` (see `evals/README.md`). A baseline is one engine's run of one pack:
+Each decision pack has seed cases under `evals/<pack>/cases/` (two clear, one borderline and one adversarial). More cases come from `pnpm eval harvest`, which `evals/README.md` explains. A baseline is one engine's run of one pack:
 
 ```sh
 # needs docker, the runner image (pnpm --filter @hardness/machine runner:build) and the engine's credential
@@ -16,7 +16,7 @@ MACHINE_TRACES=metadata pnpm eval --pack risk_score --engine jev          --tria
 ```
 
 - Run every decision pack on at least two engines. A pack with one engine measured stays `unmeasured` and keeps its default.
-- `claude:haiku` runs on your Claude subscription token and `codex:luna` on your local Codex login. Neither has a meter. **Jev is metered** (`AI_GATEWAY_API_KEY` or `TYPESAFE_API_KEY`). Jev is by far the cheapest engine per call. The rule below gives Jev a tie. Jev must still act on enough cases to qualify.
+- `claude:haiku` runs on your Claude subscription token and `codex:luna` on your local Codex login. Neither has a meter. **Jev's provider meters it** (`AI_GATEWAY_API_KEY` or `TYPESAFE_API_KEY`). Jev is by far the cheapest engine per call. The rule below gives Jev a tie. Jev must still act on enough cases to qualify.
 - With a Laminar key (`LMNR_PROJECT_API_KEY`, the `observe` compose profile), each engine's run is an evaluation in group `<pack>`. Compare engines side by side in the UI. `--trials 3` shows a model's variance. Three trials of every decision pack on three engines make a few hundred small calls.
 - A decision pack runs without the judge. Add `--judge` to include the judge.
 
