@@ -2,7 +2,7 @@ import { PACKS, type PackId, StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
-import { PACK_LIMITS, browserCases, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
+import { PACK_LIMITS, browserCases, withoutBrowserCases, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
 
 const task = {
   id: "t1",
@@ -441,5 +441,16 @@ describe("browserCases", () => {
     expect(browserCases(layered).map((c: { title: string }) => c.title)).toEqual(["a"]);
     const v1 = [{ title: "a", criterion: null, approach: "x" }, { title: "b", criterion: null, approach: "y" }] as never[];
     expect(browserCases(v1)).toHaveLength(2);
+  });
+});
+
+describe("Verify and the browser scenarios", () => {
+  it("leaves the browser scenarios to the e2e stage and says how many there are", () => {
+    const cases = [{ title: "renders", criterion: null, approach: "x", layer: "e2e" }, { title: "splits sentences", criterion: null, approach: "y", layer: "unit" }];
+    const gate = { id: "g", kind: "awaiting_approval", decision: "approved", reason: null, requested: { brief: "b", criteria: ["c1"], assumptions: [], slices: [], cases }, response: null, createdAt: new Date(), decidedAt: new Date() } as never;
+    const verify = buildStageInput({ task: { id: "t", title: "t", description: "", criteria: [], repoPath: "/r", branch: "b", source: null } as never, stage: "verifying", attempt: 1, approvals: [gate], priorFindings: [] });
+    expect(verify.context.testCases?.map((c: { title: string }) => c.title)).toEqual(["splits sentences"]);
+    expect(verify.context.browserScenarios).toBe(1);
+    expect(withoutBrowserCases(cases as never[])).toHaveLength(1);
   });
 });

@@ -41,6 +41,7 @@ The machine has already run these and they passed; a new test you add runs throu
 
 ## What to do
 {{context.docsOnly}}
+{{context.browserScenarios}}
 1. Find the change. The branch started at `{{context.baseCommit}}`: `git diff {{context.baseCommit}}..HEAD` (also `git log`; `gh pr diff` if a PR exists). When the base is unknown, `git log --oneline` shows where the branch began; the plan above names the slices and their touchpoints.
 2. For each scenario, follow its `approach`.
 3. A named repo command: add a new test proving it, in the repo's own idiom (detected from package.json/go.mod/Cargo.toml/pytest config/existing tests). Skip one an existing test already covers.

@@ -42,6 +42,7 @@ This card has no tests commit of the machine's: every file the branch changed is
 
 ## What to do
 
+
 1. Find the change. The branch started at `(none)`: `git diff (none)..HEAD` (also `git log`; `gh pr diff` if a PR exists). When the base is unknown, `git log --oneline` shows where the branch began; the plan above names the slices and their touchpoints.
 2. For each scenario, follow its `approach`.
 3. A named repo command: add a new test proving it, in the repo's own idiom (detected from package.json/go.mod/Cargo.toml/pytest config/existing tests). Skip one an existing test already covers.

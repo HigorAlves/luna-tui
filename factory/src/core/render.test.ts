@@ -771,3 +771,14 @@ describe("a documentation-only change", () => {
   });
 });
 
+
+describe("verifying: the browser scenarios left to e2e", () => {
+  const verifying = readFileSync(new URL("../../prompts/verifying.md", import.meta.url), "utf8");
+  it("tells Verify not to prove them, and says nothing when there are none", () => {
+    const on = renderQuoted({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying", context: { ...input.context, browserScenarios: 3 } } as never, template: verifying });
+    expect(on).toContain("3 more scenarios are browser checks");
+    expect(on).toContain("the e2e stage runs them in a real browser after you");
+    const off = renderQuoted({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying" } as never, template: verifying });
+    expect(off).not.toContain("browser check");
+  });
+});

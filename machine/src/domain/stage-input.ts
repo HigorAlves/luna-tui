@@ -82,6 +82,13 @@ export function browserCases(cases: TestCase[]): TestCase[] {
   return layered ? cases.filter((c) => (c as { layer?: unknown }).layer === "e2e") : cases;
 }
 
+/** Every case but the browser ones, for Verify: a scenario of layer e2e is run by the e2e stage in a real browser after Verify, which has none
+ *  (the site card's Verify escalated looking for Playwright). A plan with no layers keeps them all. */
+export function withoutBrowserCases(cases: TestCase[]): TestCase[] {
+  const layered = cases.some((c) => (c as { layer?: unknown }).layer);
+  return layered ? cases.filter((c) => (c as { layer?: unknown }).layer !== "e2e") : cases;
+}
+
 export function approvedCases(approvals: ApprovalRow[]): TestCase[] {
   // The one approval carries the scenarios now; a legacy test check, when a task has one, wins.
   const approval =
@@ -218,7 +225,9 @@ export function buildStageInput(opts: {
       testCases:
         pack === "e2e"
           ? browserCases(approvedCases(approvals))
-          : pack === "verifying" || pack === "video_script" || pack === "video_fix" || pack === "recording" || (pack === "implementing" && !opts.holdoutCases)
+          : pack === "verifying"
+          ? withoutBrowserCases(approvedCases(approvals))
+          : pack === "video_script" || pack === "video_fix" || pack === "recording" || (pack === "implementing" && !opts.holdoutCases)
           ? approvedCases(approvals)
           : pack === "build_tests"
             ? approvedScenarios(approvals)
@@ -229,6 +238,8 @@ export function buildStageInput(opts: {
       ...((pack === "implementing" || pack === "verifying") && plan && isDocsOnly((plan.slices ?? []).flatMap((s) => (s as { touchpoints?: string[] }).touchpoints ?? [])) ? { docsOnly: true } : {}),
       ...(pack === "verifying" && opts.testsCommit ? { testsCommit: opts.testsCommit } : {}),
       ...(pack === "implementing" && opts.unlockedTests?.length ? { unlockedTests: opts.unlockedTests } : {}),
+      // Verify is told the browser scenarios are run after it, so a criterion that names a browser does not send it looking for one.
+      ...(pack === "verifying" && approvedCases(approvals).length !== withoutBrowserCases(approvedCases(approvals)).length ? { browserScenarios: approvedCases(approvals).length - withoutBrowserCases(approvedCases(approvals)).length } : {}),
       ...(pack === "triage" ? { intake: intakeOf(task) } : {}),
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
