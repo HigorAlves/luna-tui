@@ -9,7 +9,7 @@ ARG PNPM_VERSION=12.14.0
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates curl \
  && arch="$(dpkg --print-architecture)" \
- && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz" \
+ && curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz" \
     | tar -xz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh" \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g "pnpm@${PNPM_VERSION}"
