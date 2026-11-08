@@ -43,6 +43,19 @@ describe("evidenceRunner: one manifest row per approved scenario", () => {
   const row = (text: string, result = "pass") => ({ text, result, evidence: [] });
   const write = (manifest: Record<string, unknown>) => writeFileSync(join(qaDir(), "qa-manifest.json"), JSON.stringify({ verdict: "pass", ...manifest }));
 
+  it("in a plan with layers, names as missing only the browser scenarios: the others are proven by their tests", async () => {
+    // The site card's evidence (2026-11-08) listed all 23 scenarios as "no manifest row" though the browser run covers only its e2e ones.
+    const layered = [{ ...scenarios[0]!, layer: "unit" }, { ...scenarios[1]!, layer: "e2e" }];
+    const ctx = { ...context, approvals: [{ kind: "awaiting_approval", decision: "approved", requested: { cases: layered } }] } as unknown as StageContext;
+    write({ acceptance: [row(scenarios[1]!.title)] });
+    const covered = await runner({ runId: "e2e-run" })(ctx);
+    expect(covered.detail).toMatchObject({ verdict: "pass" });
+    expect(covered.detail).not.toHaveProperty("note");
+    write({ acceptance: [] });
+    const missing = await runner({ runId: "e2e-run" })(ctx);
+    expect(missing.detail).toMatchObject({ verdict: "partial", note: `1 approved scenario(s) have no manifest row: ${scenarios[1]!.title}` });
+  });
+
   it("reads a manifest that is JSON null as unreadable instead of crashing", async () => {
     writeFileSync(join(qaDir(), "qa-manifest.json"), "null");
     const result = await runner({ runId: "e2e-run" })(approved);
