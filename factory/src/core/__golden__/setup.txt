@@ -41,7 +41,21 @@ services:                    # what the code needs beside it; key = hostname
 toolchains: { node: "24", rust: "1.99" }
 policy: { qa: web }          # only keys the tree states: qa, monthly_budget_usd, auto_approve_plan_minutes, max_concurrent, holdout_cases
 qa_targets: []               # only documented targets: { name, url, credential: env:NAME }
+verify:
+  e2e:
+    start:                   # how the browser check starts the app from the card's branch; only for a repo that renders a page
+      command: "pnpm --filter web dev --hostname 0.0.0.0 --port 3000"   # bound to 0.0.0.0: the browser runs in another container
+      port: 3000
+      ready: /               # the path that answers once the app is up
+      ready_timeout_s: 180
+sandbox:
+  egress:
+    allow: [index.crates.io, static.crates.io]   # hosts a check or the app reaches that the machine's list misses (below)
 ```
+
+**The app start** (`verify.e2e.start`): find the dev or start script of the package that serves the pages (a `dev`/`start` script, a framework config), and bind it to `0.0.0.0` with the framework's own flag (`--hostname`, `--host`, `-H`). No page to render (a library, a CLI, a service with no UI): leave it out and set `policy.qa: none`.
+
+**Egress** (`sandbox.egress.allow`): every check and the app run behind a proxy that lets out only the package registries of the lockfiles it finds at the repo's root, and GitHub. List what else they reach: the registry of a lockfile in a subfolder (a Rust crate's `Cargo.lock` in `board/` needs `index.crates.io`, `static.crates.io`, `crates.io`), a tool a script fetches (corepack fetches pnpm from `registry.npmjs.org`), fonts or assets the app loads at build time (`fonts.googleapis.com`, `fonts.gstatic.com`). Only hosts the tree shows a need for; the proof names any host a check was refused, for the person to add.
 
 Every key is optional. A `run` line goes through `sh -c` in `cwd`, in a container built from the stage image (Node 24, Go, Rust, git, gh; no Docker inside). The machine then runs every check once with the services beside it and shows the person pass or fail per check.
 
