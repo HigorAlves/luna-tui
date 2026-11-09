@@ -515,6 +515,29 @@ export async function lockfilesAt(path: string, commit: string, names: readonly 
   return found;
 }
 
+/** The lockfiles below the root of `commit`'s tree in a card's repository (`board/Cargo.lock` → its blob id), at most 20: git's tree, never the
+ *  folder, so nothing a container wrote counts, and never under a `node_modules` or `vendor` folder (a dependency's own lockfile). */
+export async function nestedLockfilesAt(path: string, commit: string, names: readonly string[]): Promise<Record<string, string>> {
+  const found: Record<string, string> = {};
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) return found;
+  const out = await exec("git", [...HOST_GIT, ...at(path), "ls-tree", "-r", "-z", "--full-tree", commit]);
+  if (out.code !== 0) return found;
+  const wanted = new Set(names);
+  for (const entry of out.stdout.split("\0")) {
+    // `<mode> blob <sha>\t<path>`
+    const tab = entry.indexOf("\t");
+    if (tab === -1) continue;
+    const [, type, sha] = entry.slice(0, tab).split(" ");
+    const file = entry.slice(tab + 1);
+    if (type !== "blob" || !sha || !file.includes("/")) continue;
+    const parts = file.split("/");
+    if (!wanted.has(parts.at(-1)!) || parts.some((p) => p === "node_modules" || p === "vendor")) continue;
+    found[file] = sha;
+    if (Object.keys(found).length >= 20) break;
+  }
+  return found;
+}
+
 /** The blob id of each named file in the tree of `commit` in the USER's own repository (its own git directory, as `repoHead` reads it): what the commit holds, never a file in a folder. */
 export async function blobsAtRepo(repoPath: string, commit: string, names: readonly string[]): Promise<Record<string, string>> {
   const found: Record<string, string> = {};

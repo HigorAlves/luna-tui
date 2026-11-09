@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import { envHash } from "./env-hash.ts";
-import { installKey, installPlanOf } from "./install-plan.ts";
+import { argvIn, installKey, installPlanOf, nestedPlansOf } from "./install-plan.ts";
 
 const plan = (lockfiles: string[], scripts = false, yarnBerry = false) => installPlanOf(lockfiles, { scripts, yarnBerry });
 const argvs = (lockfiles: string[], scripts = false, yarnBerry = false) => plan(lockfiles, scripts, yarnBerry).steps.map((s) => s.argv.join(" "));
@@ -71,5 +71,22 @@ describe("installKey", () => {
     const literal = (text: string) => createHash("sha256").update(text).digest("hex");
     expect(envHash({ image: "sha256:abc", lockfiles: { "pnpm-lock.yaml": "blob1" }, commit: "c0ffee" })).toBe(literal("image:sha256:abc\nlock:pnpm-lock.yaml:blob1\ncommit:c0ffee\n"));
     expect(installKey(inputs)).toBe(literal("image:sha256:abc\nlock:pnpm-lock.yaml:blob1\nscripts:off\n"));
+  });
+});
+
+describe("nestedPlansOf: lockfiles below the root", () => {
+  it("plans each folder as the root would be planned, in path order, with the path as the lockfile and the folder's own choices", () => {
+    const plan = nestedPlansOf(["web/yarn.lock", "board/Cargo.lock", "Cargo.lock", "svc/poetry.lock"], (dir) => ({ scripts: false, yarnBerry: dir === "web" }));
+    expect(plan.steps.map((s) => [s.dir, s.lockfile, s.argv.join(" ")])).toEqual([
+      ["board", "board/Cargo.lock", "cargo fetch --locked"],
+      ["web", "web/yarn.lock", "yarn install --immutable"],
+    ]);
+    expect(plan.skipped.map((s) => s.lockfile)).toEqual(["svc/poetry.lock"]);
+  });
+
+  it("runs a folder's step through sh with the folder as an argument; a root step as it is", () => {
+    const [step] = nestedPlansOf(["a b/$(x)/Cargo.lock"], () => ({ scripts: false, yarnBerry: false })).steps;
+    expect(argvIn(step!)).toEqual(["sh", "-c", 'cd -- "$1" && shift && exec "$@"', "install-in", "a b/$(x)", "cargo", "fetch", "--locked"]);
+    expect(argvIn({ lockfile: "Cargo.lock", tool: "cargo", argv: ["cargo", "fetch"], env: {}, node: false })).toEqual(["cargo", "fetch"]);
   });
 });

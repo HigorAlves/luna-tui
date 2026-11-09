@@ -60,7 +60,7 @@ import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
 import { hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
-import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
+import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, nestedLockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
@@ -204,7 +204,7 @@ export async function buildRealStages(
   });
   // The machine installs from the lockfile before a stage that writes, and before a check on a card's workspace (Verify's fresh one included).
   const install = (input: InstallInput): Promise<InstallOutcome> =>
-    ensureInstalled({ stateDir: config.stateDir, policies, repoImages, imageId, lockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c) => lockfilesAt(w, c, PACKAGE_MANAGER_CONFIG), userBlobs: (r, c) => blobsAtRepo(r, c, PACKAGE_MANAGER_CONFIG), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
+    ensureInstalled({ stateDir: config.stateDir, policies, repoImages, imageId, lockfilesAt, nestedLockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c, names) => lockfilesAt(w, c, names), userBlobs: (r, c, names) => blobsAtRepo(r, c, names), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
   const checksExec: typeof sandboxChecks = async (command, args, options = {}) => {
     if (options.repoPath && options.cwd && isClone(options.cwd)) {
       const installed = await install({ taskId: "_checks", repoPath: options.repoPath, workspace: options.cwd, commit: await headCommit(options.cwd), ...(options.signal ? { signal: options.signal } : {}) });
