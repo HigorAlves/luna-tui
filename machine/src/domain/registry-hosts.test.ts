@@ -62,3 +62,10 @@ describe("registryHostsOf", () => {
     for (const own of ["registry.npmjs.org", "registry.yarnpkg.com", "repo.yarnpkg.com"]) expect(hosts).toContain(own);
   });
 });
+
+describe("registryHostsOf: lockfiles in subfolders", () => {
+  it("takes each nested lockfile's ecosystem hosts by its name, and never a host from its text", () => {
+    expect(registryHostsOf([], ["board/Cargo.lock", "svc/poetry.lock", "docs/notes.md"])).toEqual(["crates.io", "files.pythonhosted.org", "index.crates.io", "pypi.org", "static.crates.io"]);
+    expect(registryHostsOf([{ name: "pnpm-lock.yaml", text: "" }], ["board/Cargo.lock"])).toContain("registry.npmjs.org");
+  });
+});

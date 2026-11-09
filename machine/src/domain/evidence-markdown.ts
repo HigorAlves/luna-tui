@@ -99,27 +99,36 @@ export function renderEvidenceSection(pack: EvidencePack, options: SectionOption
   const build = (rows: number): string => {
     const shown = pack.scenarios.slice(0, rows);
     const hidden = pack.scenarios.length - shown.length;
+    // What a reviewer reads first: how the scenarios were proven, the commit, the risk, what is still open and how to back out. The rest
+    // (the scenario table, the fixes after review, the files outside the plan) is folded away: the PRs were walls of "not run" rows.
+    const counted = { pass: 0, fail: 0, not_run: 0 } as Record<string, number>;
+    for (const sc of pack.scenarios) counted[sc.result] = (counted[sc.result] ?? 0) + 1;
+    const proven = pack.scenarios.length
+      ? `${pack.scenarios.length} scenario${pack.scenarios.length === 1 ? "" : "s"}: ${[counted.pass ? `${counted.pass} proven by a test` : "", counted.fail ? `${counted.fail} failing` : "", counted.not_run ? `${counted.not_run} judged by Verify` : ""].filter(Boolean).join(", ")}`
+      : "no scenarios";
+    const open = (pack.findingsDetail ?? []).filter((f) => !f.resolution);
+    const folded = [
+      ...(pack.results ? [resultsLine(pack.results)] : []),
+      ...((pack.diffSummary ? changeLine(pack.diffSummary) : null) ? ["", changeLine(pack.diffSummary!)!] : []),
+      ...(shown.length
+        ? ["", "| Scenario | Proof | Result |", "|---|---|---|", ...shown.map((sc) => `| ${safe(sc.text, true)} | ${sc.test ? safe(sc.test, true) : "none"} | ${sc.result === "not_run" ? "judged by Verify" : sc.result} |`), ...(hidden > 0 ? [`| … ${hidden} more | | |`] : [])]
+        : []),
+      ...(pack.findings.length || pack.findingsDetail?.length ? ["", "**Findings**", ...findingLines(pack)] : []),
+      ...(pack.fixes?.length ? ["", "**Changes after review**", ...pack.fixes.map((f) => `- \`${f.sha.slice(0, 7)}\` ${safe(f.summary)}`)] : []),
+      ...(pack.outOfMap.length ? ["", "**Outside the plan's map**", ...pack.outOfMap.map((o) => `- ${safe(o)}`)] : []),
+    ];
     const lines = [
       SECTION_START,
       "## Evidence",
       "",
-      safe(pack.summary),
-      "",
-      `**Format** ${pack.format} · **Commit** \`${pack.commitSha.slice(0, 7)}\` · **Risk** ${pack.risk}${pack.revision !== undefined && pack.revision > 1 ? ` · **Revision** ${pack.revision}` : ""}`,
-      ...(pack.results ? ["", resultsLine(pack.results)] : []),
-      ...((pack.diffSummary ? changeLine(pack.diffSummary) : null) ? ["", changeLine(pack.diffSummary!)!] : []),
+      `${proven} · **Commit** \`${pack.commitSha.slice(0, 7)}\` · **Risk** ${pack.risk}${pack.revision !== undefined && pack.revision > 1 ? ` · **Revision** ${pack.revision}` : ""}`,
       ...(pack.note ? ["", `> Degraded: ${safe(pack.note)}`] : []),
-      ...(pack.scenarios.length
-        ? ["", "| Scenario | Proof | Result |", "|---|---|---|", ...shown.map((s) => `| ${safe(s.text, true)} | ${s.test ? safe(s.test, true) : "none"} | ${s.result === "not_run" ? "not run" : s.result} |`), ...(hidden > 0 ? [`| … ${hidden} more | | |`] : [])]
-        : []),
-      ...(pack.findings.length || pack.findingsDetail?.length ? ["", "### Findings", ...findingLines(pack)] : []),
-      ...(pack.fixes?.length ? ["", "### Changes after review", ...pack.fixes.map((f) => `- \`${f.sha.slice(0, 7)}\` ${safe(f.summary)}`)] : []),
-      ...(pack.outOfMap.length ? ["", "### Outside the plan's map", ...pack.outOfMap.map((o) => `- ${safe(o)}`)] : []),
+      ...(open.length ? ["", "**Open findings**", ...open.slice(0, 10).map((f) => `- ${safe(f.severity).slice(0, 40)}: ${safe(f.title).slice(0, 200)}`)] : []),
       "",
-      `**Rollback.** ${safe(pack.rollback)}`,
-      "",
-      `**How to verify.** ${safe(pack.howToVerify)}`,
-      ...(pack.media.length ? ["", "### Media", ...pack.media.map((m) => mediaLine(pack, m))] : []),
+      `**Rollback.** ${safe(pack.rollback).slice(0, 300)}`,
+      `**How to verify.** ${safe(pack.howToVerify).slice(0, 300)}`,
+      ...(pack.media.length ? ["", ...pack.media.map((m) => mediaLine(pack, m))] : []),
+      ...(folded.length ? ["", "<details><summary>Details</summary>", "", ...folded, "", "</details>"] : []),
       SECTION_END,
     ];
     return lines.join("\n");

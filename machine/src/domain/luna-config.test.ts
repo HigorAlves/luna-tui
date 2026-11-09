@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_POLICY, PolicyParseError } from "./policy.ts";
 import { FactoryConfigInput } from "@hardness/contracts";
-import { parseLunaConfig, policyOf, renderLunaConfig, validateLunaConfig } from "./luna-config.ts";
+import { checkLunaConfigText, parseLunaConfig, policyOf, renderLunaConfig, validateLunaConfig } from "./luna-config.ts";
 
 const full = `
 checks:
@@ -449,5 +449,28 @@ describe("the name luna-app", () => {
     expect(() => parseLunaConfig("services:\n  luna-app:\n    image: x\n")).toThrow(/services\.luna-app.*luna-app/);
     expect(() => parseLunaConfig("checks:\n  - name: luna-app\n    run: x\n")).toThrow(/checks.*luna-app/);
     expect(parseLunaConfig("services:\n  db:\n    image: x\nchecks:\n  - name: unit\n    run: x\n").services).toHaveProperty("db");
+  });
+});
+
+describe("checkLunaConfigText: the setup skill's check of a file", () => {
+  it("passes a good file and names the keys it does not know, at any depth", () => {
+    const out = checkLunaConfigText(["checks:", "  - name: unit", "    run: pnpm test", "    timeout: 5", "polcy:", "  qa: web", "verify:", "  e2e:", "    start: { command: \"pnpm dev\", port: 3000 }"].join("\n"));
+    expect(out.ok).toBe(true);
+    expect(out.problems).toEqual([]);
+    expect(out.unknownKeys).toEqual(["checks[0].timeout", "polcy"]);
+  });
+
+  it("lists every schema problem, not only the first", () => {
+    const out = checkLunaConfigText(["policy:", "  qa: sometimes", "  monthly_budget_usd: -3"].join("\n"));
+    expect(out.ok).toBe(false);
+    expect(out.problems).toHaveLength(2);
+    expect(out.problems.join("\n")).toMatch(/policy\.qa/);
+    expect(out.problems.join("\n")).toMatch(/policy\.monthly_budget_usd/);
+  });
+
+  it("refuses what the machine refuses past the schema, and bad YAML, and reads an empty file as the defaults", () => {
+    expect(checkLunaConfigText("services:\n  luna-app: { image: x }\n")).toMatchObject({ ok: false, problems: [expect.stringContaining("luna-app")] });
+    expect(checkLunaConfigText("checks: [\n")).toMatchObject({ ok: false, problems: [expect.stringContaining("not valid YAML")] });
+    expect(checkLunaConfigText("")).toEqual({ ok: true, problems: [], warnings: [], unknownKeys: [] });
   });
 });

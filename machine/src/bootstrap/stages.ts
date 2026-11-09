@@ -44,7 +44,10 @@ import { repoSecrets } from "../adapters/credentials/repo-secrets.ts";
 import { PACKAGE_MANAGER_CONFIG, configFilesChanged } from "../application/install.ts";
 import { InstallFailedError, type InstallInput, type InstallOutcome, ensureInstalled } from "../application/install.ts";
 import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
-import { isClone } from "../adapters/git/clone.ts";
+import { ensureClone, isClone, removeClone } from "../adapters/git/clone.ts";
+import type { ProofRig } from "../application/config-proof.ts";
+import { policyOf } from "../domain/luna-config.ts";
+import { randomUUID } from "node:crypto";
 import { DEFAULT_SANDBOX_SIZE, execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { removeLeftoverApps } from "../adapters/docker/app.ts";
 import { openCardNetwork, openPlainNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
@@ -57,10 +60,15 @@ import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
 import { hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
-import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
+import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, nestedLockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
+import { basename, join, resolve, sep } from "node:path";
+import { readdir } from "node:fs/promises";
+import { readRegularFile } from "../adapters/fs/bounded.ts";
+import { testExcerpt } from "../domain/test-excerpt.ts";
+import { repoCommandsOf } from "../domain/command-check.ts";
 import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
@@ -73,6 +81,8 @@ export interface RealStagesResult {
   verifyPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) => Promise<StageResult>) | null;
   /** Runs a project's checks inside the runner image; null when stages are stubs. */
   checksExec: ReturnType<typeof sandboxExecutor> | null;
+  /** Where a luna.yaml is proven: a throwaway clone and the browser run's app start; null when stages are stubs. */
+  proofRig: ProofRig | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
    *  the credentials, the state dir, the worktrees dir and each repo's luna.yaml; null when agents are off or something is missing. */
   agentDeps: { egress?: EgressPolicy; image: string; approvals: ApprovedBases; repoImages: ReturnType<typeof makeRepoImages>; imageEvents: ImageEventSink; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
@@ -133,21 +143,21 @@ export async function buildRealStages(
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
-    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null, shipGateProbe: null };
+    return { real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null };
   }
   // Every pack defaults to a Claude engine, so without Claude's credential nothing runs for real.
   if (!(await loadCredential())) {
     console.warn("no Claude credential in ~/.config/hardness: every stage is a stub");
-    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null, shipGateProbe: null };
+    return { real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null };
   }
   if (!(await imageExists(config.runnerImage))) {
     console.warn(`image ${config.runnerImage} is missing (pnpm runner:build): every stage is a stub`);
-    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null, shipGateProbe: null };
+    return { real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null };
   }
   const noProxy = config.egress.enabled ? await egressImageProblem(config.runnerImage) : null;
   if (noProxy) {
     console.warn(`${noProxy}: every stage is a stub`);
-    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null, shipGateProbe: null };
+    return { real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null };
   }
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
@@ -194,7 +204,7 @@ export async function buildRealStages(
   });
   // The machine installs from the lockfile before a stage that writes, and before a check on a card's workspace (Verify's fresh one included).
   const install = (input: InstallInput): Promise<InstallOutcome> =>
-    ensureInstalled({ stateDir: config.stateDir, policies, repoImages, imageId, lockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c) => lockfilesAt(w, c, PACKAGE_MANAGER_CONFIG), userBlobs: (r, c) => blobsAtRepo(r, c, PACKAGE_MANAGER_CONFIG), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
+    ensureInstalled({ stateDir: config.stateDir, policies, repoImages, imageId, lockfilesAt, nestedLockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c, names) => lockfilesAt(w, c, names), userBlobs: (r, c, names) => blobsAtRepo(r, c, names), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
   const checksExec: typeof sandboxChecks = async (command, args, options = {}) => {
     if (options.repoPath && options.cwd && isClone(options.cwd)) {
       const installed = await install({ taskId: "_checks", repoPath: options.repoPath, workspace: options.cwd, commit: await headCommit(options.cwd), ...(options.signal ? { signal: options.signal } : {}) });
@@ -214,6 +224,45 @@ export async function buildRealStages(
     startServices,
     exec: execInSandbox,
     docker: (args, options) => exec("docker", args, options ?? {}),
+  };
+  // Where a luna.yaml is proven (the setup stage's proposal, `POST /repos/config/prove`): a throwaway clone made as a card's workspace is, never
+  // the person's checkout (a check's install wrote Linux binaries into one), and the app started by the browser run's own `openApp`, on the
+  // file being proven (its services, its start command, its egress list over the machine's).
+  const proofRig: ProofRig = {
+    workspace: async (repoPath) => {
+      const id = randomUUID().slice(0, 8);
+      const path = join(config.worktreesDir, basename(repoPath), `luna-proof-${id}`);
+      await ensureClone(repoPath, { path, branch: `luna-proof/${id}` });
+      return { path, close: async () => removeClone(path) };
+    },
+    app: async ({ repoPath, workspace, config: file, signal }) => {
+      const started = Date.now();
+      const policy = policyOf(file);
+      const extra = file.sandbox?.egress?.allow ?? [];
+      const blocked: string[] = [];
+      const proofDeps: AppDeps = {
+        ...appDeps,
+        policies: { for: async () => policy },
+        ...(egress ? { egress: { for: async (request) => { const run = await egress.for(request); return { ...run, allow: [...new Set([...run.allow, ...extra])] }; } } } : {}),
+      };
+      const opened = await openApp(proofDeps, {
+        taskId: `proof-${randomUUID()}`,
+        repoPath,
+        workspace,
+        commit: await headCommit(workspace),
+        attempt: 1,
+        signal,
+        onBlocked: (_step, rows) => {
+          for (const row of rows) if (row.reason === "not_listed") blocked.push(`${row.host}:${row.port}`);
+        },
+      });
+      if (opened.ok) await opened.close();
+      const seconds = Math.round((Date.now() - started) / 1000);
+      if (opened.ok) return { ok: true, seconds, refused: [...new Set(blocked)] };
+      const detail = opened.detail as { reason?: unknown; error?: unknown; message?: unknown; logTail?: unknown };
+      const reason = [detail.reason, detail.error, detail.message].find((v): v is string => typeof v === "string") ?? "the app did not start";
+      return { ok: false, seconds, reason, ...(typeof detail.logTail === "string" ? { logTail: detail.logTail } : {}), refused: [...new Set(blocked)] };
+    },
   };
   // Each stage gets only its own engine's credential, read when the stage starts.
   const credentials = engineCredentials;
@@ -271,6 +320,37 @@ export async function buildRealStages(
       judgeRed: async (check, repoPath) => {
         const policy = repoPath ? await policies.for(repoPath) : null;
         return judgeRedCheck(buildDecisions?.decide ?? null, check, repoPath, policy?.decisions ?? {});
+      },
+      repoCommands: async (repoPath) => {
+        // The user's checkout is the source, never the card's folder: a card cannot turn its own scenario into a check.
+        const pkg = await readRegularFile(resolve(repoPath, "package.json"), 1024 * 1024).catch(() => "");
+        let scripts: string[] = [];
+        try {
+          const parsed = JSON.parse(pkg) as { scripts?: Record<string, unknown> };
+          scripts = Object.keys(parsed.scripts ?? {});
+        } catch {
+          // no package.json, or not JSON: no scripts
+        }
+        // Each workspace package one folder down (a package.json with a name), with its scripts.
+        const workspaces: { name: string; dir: string; scripts: string[] }[] = [];
+        for (const entry of await readdir(repoPath, { withFileTypes: true }).catch(() => [])) {
+          if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules") continue;
+          const text = await readRegularFile(resolve(repoPath, entry.name, "package.json"), 1024 * 1024).catch(() => "");
+          try {
+            const parsed = JSON.parse(text) as { name?: unknown; scripts?: Record<string, unknown> };
+            if (typeof parsed.name === "string" && parsed.name) workspaces.push({ name: parsed.name, dir: entry.name, scripts: Object.keys(parsed.scripts ?? {}) });
+          } catch {
+            // no package.json there
+          }
+        }
+        const policy = await policies.for(repoPath);
+        return repoCommandsOf(scripts, (policy.checks ?? []).map((c) => c.run), workspaces);
+      },
+      readTest: async (worktree, file, scenario) => {
+        // The path is a tagged file git named in the diff: it stays inside the worktree, and a link or a big file is never read.
+        const path = resolve(worktree, file);
+        if (path !== worktree && !path.startsWith(`${worktree}${sep}`)) return null;
+        return testExcerpt(await readRegularFile(path, 512 * 1024), scenario);
       },
       budget: async (context) => (buildDecisions?.budget ? buildDecisions.budget(context.task.id) : undefined),
       sweep: async (context) => {
@@ -348,7 +428,7 @@ export async function buildRealStages(
       ...(graphs ? { graph: graphs.graph, graphReady } : {}),
     }),
     // Setup reads the repo checkout itself (no worktree yet) and proves what it proposes in the image.
-    setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, stateDir: config.stateDir }),
+    setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, rig: proofRig, stateDir: config.stateDir }),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.
     ci_watch: ciWatchRunner({
       github,
@@ -473,7 +553,7 @@ export async function buildRealStages(
       overrides: async (repoPath) => (await policies.for(repoPath)).decisions.worth_learning,
     }),
   };
-  return { real, verifyPack, checksExec, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { real, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

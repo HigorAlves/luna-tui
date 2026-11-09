@@ -12,7 +12,7 @@ import { assembleEvidencePack, packComplete, repairPack } from "../../domain/evi
 import { type CheckOutput, checksExcerpt, terminalCapture } from "../../domain/terminal-capture.ts";
 import { parseNote } from "../../domain/fix-card.ts";
 import type { Policy } from "../../domain/policy.ts";
-import { approvedCases, approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
+import { approvedCases, approvedPlan, approvedScenarios, browserCases } from "../../domain/stage-input.ts";
 import { EvidenceStore, MAX_MEDIA_BYTES, safeName } from "../evidence-store.ts";
 import { type PublishEvidence, publishAndReady } from "../evidence-publish.ts";
 import { type GitHub, GitHubError } from "../github.ts";
@@ -172,8 +172,11 @@ async function prelude(deps: EvidenceDeps, context: StageContext): Promise<{ res
     }
     return { text: c.title, criterion: c.criterion ?? null, result, chapter: typeof chapter?.start === "number" ? chapter.start : null, hasChapter: chapter !== undefined, test };
   });
-  const noRow = scenarios.filter((x) => x.result === "not_run").map((x) => x.text);
-  const noChapter = hasVideo ? scenarios.filter((x) => !x.hasChapter).map((x) => x.text) : [];
+  // Only the scenarios the browser run covers can be missing from its manifest or its video: in a plan with layers the others are proven by
+  // their tests and judged by Verify (the site card's evidence listed all 23 of them as "no manifest row").
+  const inBrowser = new Set(browserCases(approved).map((c) => c.title));
+  const noRow = scenarios.filter((x) => x.result === "not_run" && inBrowser.has(x.text)).map((x) => x.text);
+  const noChapter = hasVideo ? scenarios.filter((x) => !x.hasChapter && inBrowser.has(x.text)).map((x) => x.text) : [];
   if (noRow.length > 0 && manifestState === "ok") gaps.push(`${noRow.length} approved scenario(s) have no manifest row: ${noRow.join(", ")}`);
   else if (noRow.length > 0 && cardRows) gaps.push(`${noRow.length} approved scenario(s) have no run row: ${noRow.join(", ")}`);
   if (noChapter.length > 0) gaps.push(`${noChapter.length} approved scenario(s) have no video chapter: ${noChapter.join(", ")}`);

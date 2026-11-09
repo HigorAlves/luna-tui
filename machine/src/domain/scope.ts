@@ -39,7 +39,8 @@ export interface ScopeIssue {
 
 const TOML = /\.toml$/;
 const HEADER = /^\[+([^\]]+)\]+\s*$/;
-const TOKEN = /xox[abposr]-|gh[oprsu]_|github_pat_|\bsk-[A-Za-z0-9_-]{20,}|\b[sr]k_(live|test)_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+// A prefix alone is not a token: docs show `xoxp-…`, `ghp_...` and `KEY=xoxp-...` as placeholders. Each prefix needs a body as long as a real one.
+const TOKEN = /xox[abposr]-[A-Za-z0-9-]{10,}|gh[oprsu]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|\bsk-[A-Za-z0-9_-]{20,}|\b[sr]k_(live|test)_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const SECRET_FILE = /(^|\/)(\.env(\..*)?|\.envrc|\.npmrc|id_(rsa|ecdsa|ed25519)|[^/]+\.(pem|key|p12|pfx))$/;
 /** A match is named by its first four characters: the fact is that one exists, never its value. */
 
@@ -154,7 +155,7 @@ function dependencyOf({ path, line, section }: AddedLine): string | null {
   return null;
 }
 
-export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[]; removedLines?: AddedLine[]; /** The tests the tests step committed, by scenario: the scope is measured from that commit, and any change to one of these files is a weakened test. */ scenarioTests?: readonly { scenario: string; file: string }[]; /** Every path of the tests commit (helpers and fixtures included): none may change without a person. */ protectedPaths?: readonly string[]; planned: string[]; declared: { path: string; reason?: string }[];
+export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[]; removedLines?: AddedLine[]; /** The tests the tests step committed, by scenario: the scope is measured from that commit, and any change to one of these files is a weakened test. */ scenarioTests?: readonly { scenario: string; file: string }[]; /** Every path of the tests commit (helpers and fixtures included): none may change without a person. */ protectedPaths?: readonly string[]; /** Source files that hold Rust's inline tests as well as production code: changing one is not a weakened test, losing a scenario tag from one is. */ inlineTests?: readonly string[]; planned: string[]; declared: { path: string; reason?: string }[];
   /** An approved plan exists: an empty planned list then switches nothing off (every changed file is undeclared). */
   planPresent?: boolean }): ScopeFacts {
   const changed = changedOf(input.nameStatus);
@@ -171,18 +172,20 @@ export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[];
       ...input.addedLines.filter((l) => TOKEN.test(l.line)).map((l) => `${l.path}: ${TOKEN.exec(l.line)![0].slice(0, 4)}\u2026`),
     ],
     switchedOff: input.addedLines.filter((l) => SWITCHED_OFF.test(l.line)).map((l) => `${l.path}: ${l.line.trim()}`),
-    weakened: weakenedOf(input.removedLines ?? [], input.addedLines, input.nameStatus, input.scenarioTests ?? [], input.protectedPaths ?? []),
+    weakened: weakenedOf(input.removedLines ?? [], input.addedLines, input.nameStatus, input.scenarioTests ?? [], input.protectedPaths ?? [], input.inlineTests ?? []),
   };
 }
 
-function weakenedOf(removed: AddedLine[], added: AddedLine[], nameStatus: string, scenarioTests: readonly { scenario: string; file: string }[], protectedPaths: readonly string[]): string[] {
+function weakenedOf(removed: AddedLine[], added: AddedLine[], nameStatus: string, scenarioTests: readonly { scenario: string; file: string }[], protectedPaths: readonly string[], inlineTests: readonly string[] = []): string[] {
   const tagsOf = (lines: AddedLine[]) => lines.flatMap((l) => [...l.line.matchAll(SCENARIO_TAG)].map((m) => m[1]!));
   // A tag counts as kept only on an added line of a test file: a tag re-added in production code keeps nothing.
   const kept = new Set(tagsOf(added.filter((l) => looksLikeTestPath(l.path))));
   const lost = tagsOf(removed).filter((id) => !kept.has(id));
   // The scenario tests are fixed once committed: any change to a file that holds one (a delete or a rename-away included), tag untouched or not.
   const touched = new Set(nameStatus.split("\n").filter((l) => l.trim()).flatMap((l) => l.split("\t").slice(1)));
-  const changed = scenarioTests.filter((t) => touched.has(t.file)).map((t) => t.scenario);
+  // A file that holds Rust's inline tests holds production code too: the implementer changes it, and the tag lost above is what shows a test was cut.
+  const inline = new Set(inlineTests);
+  const changed = scenarioTests.filter((t) => touched.has(t.file) && !inline.has(t.file)).map((t) => t.scenario);
   // Every other path of the tests commit is protected as well, named by its path.
   const mapped = new Set(scenarioTests.map((t) => t.file));
   const others = protectedPaths.filter((p) => touched.has(p) && !mapped.has(p)).map((p) => `file:${p}`);

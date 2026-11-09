@@ -2,6 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
+import { looksLikeTestPath } from "../domain/locked-files.ts";
 import { z } from "zod";
 
 import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, SplitChild, coverageOf, criteriaOf, sizeLimits, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger, RUN_OR_GATE } from "@hardness/contracts";
@@ -1588,6 +1589,9 @@ export class Pipeline {
     // A person resuming an escalated card: what they do on the branch from here is ground truth for the reason that was decided.
     const before = await this.get(id);
     const escalated = before.state === "escalated" && !options.auto ? (await this.approvals(id)).find((a) => a.kind === "escalated" && a.decision === null) : undefined;
+    // "Build's budget is spent: a person decides": a person who approves has decided the card goes on, so it goes on with a fresh budget.
+    // Without one, the next Build reads the same spent budget and escalates again, and approving can never move the card.
+    if (escalated && wanted === "approved" && budgetWasSpent(escalated.requested)) await this.log(id, "build.budget_reset", { reason: "a person approved the card past its spent budget" });
     const moved = await this.decideNow(id, wanted, reason, response, options);
     if (escalated) await this.keepEscalationTruth(moved, escalated.id);
     if (escalated) await this.confirmEscalationReason(id, escalated);
@@ -3091,6 +3095,39 @@ export class Pipeline {
   }
 
   /** The sha of the tests commit the machine itself made, from the newest implementing finish row that kept one (a sha, nothing else); undefined when there is none. */
+  /** Whether a plan was approved after the implementing run that made the tests commit: the first finish row that recorded a tests commit, then
+   *  any plan approval after it in the stream. */
+  private async planChangedSinceTestsOf(id: string): Promise<boolean> {
+    const events = await this.events(id);
+    const made = events.findIndex((e) => e.kind === "stage.finished" && e.payload.stage === "implementing" && typeof objectOf(objectOf(e.payload.detail)?.testsStep)?.commit === "string" && objectOf(objectOf(e.payload.detail)?.testsStep)?.resumed !== true);
+    if (made === -1) return false;
+    return events.slice(made + 1).some((e) => e.kind === "transition" && e.payload.from === "awaiting_approval" && e.payload.event === "approved");
+  }
+
+  /** The locked test files a person approved changing: those the implementer's last test-change request names, once a plan was approved after it. */
+  private async unlockedTestsOf(id: string): Promise<string[]> {
+    const events = await this.events(id);
+    // Event ids are bigints as strings: order by position in the stream, never by comparing the ids as text.
+    const at = events.findLastIndex((e) => e.kind === "transition" && e.payload.to === "test_design" && e.payload.outcome === "test_change");
+    if (at === -1) return [];
+    const approvedAfter = events.slice(at + 1).some((e) => e.kind === "transition" && e.payload.from === "awaiting_approval" && e.payload.event === "approved");
+    if (!approvedAfter) return [];
+    const finished = (await this.store.findFinishedEvents(id)).find((e) => e.payload.stage === "implementing" && typeof objectOf(e.payload.detail)?.request === "string");
+    return testPathsIn(String(objectOf(finished?.payload.detail)?.request ?? ""));
+  }
+
+  /** The scenarios the tests step recorded as already holding, from the newest implementing finish row that kept a tests commit. */
+  private async testsHoldsTodayOf(id: string): Promise<string[]> {
+    for (const finished of await this.store.findFinishedEvents(id)) {
+      if (finished.payload.stage !== "implementing") continue;
+      const step = objectOf(objectOf(finished.payload.detail)?.testsStep);
+      if (typeof step?.commit !== "string") continue;
+      const held = Array.isArray(step.holdsToday) ? step.holdsToday : [];
+      return held.map((h) => objectOf(h)?.scenario).filter((s): s is string => typeof s === "string");
+    }
+    return [];
+  }
+
   private async testsCommitOf(id: string): Promise<string | undefined> {
     for (const finished of await this.store.findFinishedEvents(id)) {
       if (finished.payload.stage !== "implementing") continue;
@@ -3139,6 +3176,12 @@ export class Pipeline {
    *  stage's last run said, flattened and capped (`replanOf`). Null for any other run of the plan stage. */
   private async replanEvidence(id: string): Promise<ReturnType<typeof replanOf> | null> {
     const entry = (await this.events(id)).findLast((e) => e.kind === "transition" && e.payload.to === "test_design");
+    // A test change the implementer asked for is evidence too: the planner and the person at the plan gate read the request.
+    if (entry && entry.payload.outcome === "test_change") {
+      const finished = (await this.store.findFinishedEvents(id)).find((e) => e.payload.stage === "implementing");
+      const request = objectOf(finished?.payload.detail)?.request;
+      return replanOf({ raisedBy: "implementing (a test change)", reason: typeof request === "string" ? `The implementer asks to change a locked test: ${request}` : "the implementer asks to change a locked test", finished: null });
+    }
     if (!entry || entry.payload.escalation !== "plan_wrong" || typeof entry.payload.from !== "string") return null;
     const from = entry.payload.from;
     const finished = (await this.store.findFinishedEvents(id)).find((e) => e.payload.stage === from);
@@ -3178,7 +3221,10 @@ export class Pipeline {
       ]);
       repo = task.repoPath;
       const budgetMinutes = stage === "implementing" && task.route === "feature" ? await this.buildMinutesLeft(id, task.repoPath) : undefined;
-      const testsCommit = stage === "implementing" && task.route === "feature" ? await this.testsCommitOf(id) : undefined;
+      const testsCommit = (stage === "implementing" || stage === "verifying") && task.route === "feature" ? await this.testsCommitOf(id) : undefined;
+      const testsHoldsToday = testsCommit && stage === "implementing" ? await this.testsHoldsTodayOf(id) : [];
+      const planChangedSinceTests = testsCommit && stage === "implementing" ? await this.planChangedSinceTestsOf(id) : false;
+      const unlockedTests = stage === "implementing" ? await this.unlockedTestsOf(id) : [];
       const firstInputCommit = stage === "implementing" && task.route === "feature" ? await this.firstInputCommitOf(id) : undefined;
       // The entry contract of Build: the feature route builds only from what Plan hands over; what is missing goes back to the planner (once per card), then to a person.
       const entry = stage === "implementing" && task.route === "feature" && !resume ? buildEntryOf(approvals, task.record) : null;
@@ -3197,6 +3243,9 @@ export class Pipeline {
         ...(replan ? { replan } : {}),
         ...(budgetMinutes !== undefined ? { budgetMinutes } : {}),
         ...(testsCommit ? { testsCommit } : {}),
+        ...(testsHoldsToday.length ? { testsHoldsToday } : {}),
+        ...(planChangedSinceTests ? { planChangedSinceTests } : {}),
+        ...(unlockedTests.length ? { unlockedTests } : {}),
         ...(firstInputCommit ? { firstInputCommit } : {}),
         signal,
         ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),
@@ -3336,3 +3385,17 @@ export class Pipeline {
     this.onEvent(await this.store.recordEvent({ taskId, kind, payload, stageRunId }));
   }
 }
+
+/** Whether an escalation's gate is Build's spent budget: the pipeline's own check (`budget.spent`) or the tests step's (`budgetSpent`). */
+function budgetWasSpent(requested: Record<string, unknown>): boolean {
+  const budget = requested.budget as { spent?: unknown } | undefined;
+  return requested.budgetSpent === true || (typeof budget?.spent === "string" && budget.spent !== "");
+}
+
+/** The test files a test-change request names (repo-relative paths that look like tests), each once. */
+export function testPathsIn(request: string): string[] {
+  // A path starts where no path character is before it: `/abs/y.test.ts` is not `abs/y.test.ts`, and `../x` is refused below.
+  const paths = request.match(/(?<![A-Za-z0-9_@.\/-])[A-Za-z0-9_@.\-]+(?:\/[A-Za-z0-9_@.\-]+)+\.[A-Za-z0-9]+/g) ?? [];
+  return [...new Set(paths.filter((p) => !p.startsWith("/") && !p.includes("..") && looksLikeTestPath(p)))];
+}
+

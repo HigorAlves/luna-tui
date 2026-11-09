@@ -11,7 +11,7 @@ const root = mkdtempSync(join(tmpdir(), "install-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 let n = 0;
 
-function setup(over: { changed?: string[]; lockfiles?: Record<string, string>; exit?: number; modules?: boolean; scripts?: boolean; run?: "on" | "off"; dirty?: string[]; nested?: string[] } = {}) {
+function setup(over: { changed?: string[]; lockfiles?: Record<string, string>; exit?: number; modules?: boolean; scripts?: boolean; run?: "on" | "off"; dirty?: string[]; nested?: string[]; sub?: Record<string, string>; exitFor?: (argv: string[]) => number; modulesAt?: (dir: string) => boolean; changedFor?: (dirs: readonly string[]) => string[] } = {}) {
   const runs: SandboxExec[] = [];
   const asked: unknown[] = [];
   const restored: Array<[string, string[]]> = [];
@@ -23,11 +23,16 @@ function setup(over: { changed?: string[]; lockfiles?: Record<string, string>; e
     repoImages: { ensure: async () => ({ image: "repo-image:1" }) },
     imageId: async () => state.imageId,
     lockfilesAt: async (path, commit) => (asked.push({ path, commit }), state.lockfiles),
-    exec: async (run) => (runs.push(run), { code: over.exit ?? 0, stdout: "out line\n", stderr: over.exit ? "boom: tail\n" : "" }),
+    ...(over.sub ? { nestedLockfilesAt: async () => over.sub! } : {}),
+    exec: async (run) => {
+      runs.push(run);
+      const code = over.exitFor ? over.exitFor(run.argv) : (over.exit ?? 0);
+      return { code, stdout: "out line\n", stderr: code ? "boom: tail\n" : "" };
+    },
     egress: { for: async (request) => (asked.push(request), { allow: ["registry.npmjs.org:443"], allowPrivate: [], proxyImage: "machine:dev" }) },
     yarnBerry: async () => false,
-    configChanged: async () => over.changed ?? [],
-    hasNodeModules: async () => state.modules,
+    configChanged: async (i) => (over.changedFor ? over.changedFor(i.dirs ?? []) : (over.changed ?? [])),
+    hasNodeModules: async (dir) => (over.modulesAt ? over.modulesAt(dir) : state.modules),
     removeNested: () => over.nested ?? [],
     dirtyFiles: async () => over.dirty ?? [],
     restoreFiles: async (path, ref, files) => void restored.push([ref, files]),
@@ -140,5 +145,62 @@ describe("configFilesChanged", () => {
   it("fails closed when the base is unknown and the card has any of them", async () => {
     expect(await check({ ".npmrc": "x" }, null)).toEqual([".npmrc"]);
     expect(await check({}, null)).toEqual([]);
+  });
+});
+
+describe("ensureInstalled: lockfiles in subfolders", () => {
+  const sub = { "board/Cargo.lock": "blobC", "tools/web/package-lock.json": "blobW" };
+
+  it("installs each subfolder's lockfile in its folder, after the root, the folder an argument and never shell text", async () => {
+    const { deps, runs, input } = setup({ sub });
+    const out = await ensureInstalled(deps, input);
+    expect(out).toMatchObject({ ok: true, ran: ["pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile", "board: cargo fetch --locked", "tools/web: npm ci --ignore-scripts"] });
+    expect(runs.map((r) => r.argv)).toEqual([
+      ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"],
+      ["sh", "-c", 'cd -- "$1" && shift && exec "$@"', "install-in", "board", "cargo", "fetch", "--locked"],
+      ["sh", "-c", 'cd -- "$1" && shift && exec "$@"', "install-in", "tools/web", "npm", "ci", "--ignore-scripts"],
+    ]);
+  });
+
+  it("a subfolder's failure is a note and the rest goes on; the root's still stops the install", async () => {
+    const failing = setup({ sub, exitFor: (argv) => (argv.includes("cargo") ? 101 : 0) });
+    const out = await ensureInstalled(failing.deps, failing.input);
+    expect(out.ok).toBe(true);
+    expect(out.ok && out.ran).toEqual(["pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile", "tools/web: npm ci --ignore-scripts"]);
+    expect(out.ok && out.notes.join("\n")).toContain("installing from board/Cargo.lock: a check under board may fail for it");
+    const root = setup({ sub, exitFor: (argv) => (argv[0] === "pnpm" ? 1 : 0) });
+    expect(await ensureInstalled(root.deps, root.input)).toMatchObject({ ok: false, detail: { step: "install", lockfile: "pnpm-lock.yaml" } });
+  });
+
+  it("keys on the subfolders' lockfiles too, and installs again when a subfolder's node_modules is missing", async () => {
+    let webModules = true;
+    const first = setup({ sub, modulesAt: (dir) => !dir.endsWith("tools/web") || webModules });
+    await ensureInstalled(first.deps, first.input);
+    await ensureInstalled(first.deps, first.input);
+    expect(first.runs).toHaveLength(3);
+    webModules = false;
+    await ensureInstalled(first.deps, first.input);
+    expect(first.runs).toHaveLength(6);
+  });
+
+  it("asks about the package-manager files of every folder it installs in, and refuses one the card changed", async () => {
+    let dirs: readonly string[] = [];
+    const { deps, runs, input } = setup({ sub, changedFor: (d) => ((dirs = d), d.includes("tools/web") ? ["tools/web/.npmrc"] : []) });
+    const out = await ensureInstalled(deps, input);
+    expect(dirs).toEqual(["board", "tools/web"]);
+    expect(out).toMatchObject({ ok: false, detail: { reason: expect.stringContaining("tools/web/.npmrc") } });
+    expect(runs).toEqual([]);
+  });
+});
+
+describe("configFilesChanged in subfolders", () => {
+  it("compares each folder's files by blob, the root's first", async () => {
+    const asked: string[][] = [];
+    const out = await configFilesChanged(
+      { cardBlobs: async (_w, _c, names) => (asked.push([...names]), { "tools/web/.npmrc": "new" }), userBlobs: async () => ({ "tools/web/.npmrc": "old" }), baseOf: async () => "b".repeat(40) },
+      { workspace: "/w", repoPath: "/r", commit: "a".repeat(40), dirs: ["tools/web"] },
+    );
+    expect(asked[0]).toEqual([".yarnrc.yml", ".yarnrc", ".npmrc", "tools/web/.yarnrc.yml", "tools/web/.yarnrc", "tools/web/.npmrc"]);
+    expect(out).toEqual(["tools/web/.npmrc"]);
   });
 });

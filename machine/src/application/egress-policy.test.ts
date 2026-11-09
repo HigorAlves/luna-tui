@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { egressPolicy } from "./egress-policy.ts";
+import { execFileSync } from "node:child_process";
+
+import { egressPolicy, trackedNestedLockfiles } from "./egress-policy.ts";
 import { PolicyStore } from "./policy.ts";
 
 let root: string;
@@ -80,5 +82,37 @@ describe("egressPolicy", () => {
     const spec = await egressPolicy({ ...base, policies: policies(), readLockfile: async (path) => (reads.push(path), (await import("../adapters/fs/bounded.ts")).readRegularFile(path, 4)) }).for({ repoPath: odd, kind: "check" });
     expect(spec.allow).not.toContain("registry.npmjs.org:443");
     expect(reads.some((r) => r.endsWith("pnpm-lock.yaml"))).toBe(true);
+  });
+});
+
+describe("lockfiles in subfolders", () => {
+  it("adds the ecosystem's own hosts of a tracked lockfile below the root, and nothing its text names", async () => {
+    // board/Cargo.lock: the crates hosts were listed by hand in luna.yaml until now.
+    const policy = egressPolicy({ policies: policies(), proxyImage: "machine:dev", nestedLockfiles: async () => ["board/Cargo.lock", "tools/go/go.sum", "web/README.md"], readLockfile: async (path) => {
+      if (path.endsWith("pnpm-lock.yaml")) return "lockfileVersion: 9";
+      throw new Error("absent");
+    } });
+    const spec = await policy.for({ repoPath: checkout, kind: "check" });
+    expect(spec.allow).toEqual(expect.arrayContaining(["index.crates.io:443", "static.crates.io:443", "crates.io:443", "proxy.golang.org:443", "sum.golang.org:443"]));
+    // A pack reads no lockfile, root or nested.
+    expect((await policy.for({ repoPath: checkout, kind: "pack" })).allow).not.toContain("index.crates.io:443");
+  });
+
+  it("lists only what git tracks below the root: not the root's own, not an untracked or ignored folder", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "nested-locks-"));
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@x", "-c", "commit.gpgsign=false", ...args]);
+    git("init", "-q");
+    for (const [path, text] of [["pnpm-lock.yaml", "x"], ["board/Cargo.lock", "x"], ["a/b/go.sum", "x"], [".gitignore", "target/\n"], ["notes/Cargo.lock.md", "x"]] as const) {
+      mkdirSync(join(repo, path, ".."), { recursive: true });
+      writeFileSync(join(repo, path), text);
+    }
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    mkdirSync(join(repo, "node_modules/dep"), { recursive: true });
+    writeFileSync(join(repo, "node_modules/dep/package-lock.json"), "{}");
+    mkdirSync(join(repo, "target"), { recursive: true });
+    writeFileSync(join(repo, "target/Cargo.lock"), "x");
+    expect((await trackedNestedLockfiles(repo)).sort()).toEqual(["a/b/go.sum", "board/Cargo.lock"]);
+    expect(await trackedNestedLockfiles(join(repo, "no-such"))).toEqual([]);
   });
 });

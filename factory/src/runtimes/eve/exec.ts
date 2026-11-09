@@ -9,8 +9,10 @@ import { dirname } from "node:path";
 export const STAGE_PATH = [...new Set([dirname(process.execPath), "/usr/local/go/bin", "/usr/local/cargo/bin", "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"])].join(":");
 
 /** What a command may inherit from the server: locale, git's config, the toolchains' homes and
- *  caches. Nothing that holds a credential or names one of the runner's files. */
-const INHERITED = /^(LANG|LC_[A-Z]+|TZ|GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)|GIT_AUTHOR_NAME|GIT_AUTHOR_EMAIL|GIT_COMMITTER_NAME|GIT_COMMITTER_EMAIL|GOTOOLCHAIN|GOPATH|GOCACHE|GOMODCACHE|GOFLAGS|RUSTUP_HOME|CARGO_HOME|CARGO_TARGET_DIR|npm_config_cache|COREPACK_HOME|PNPM_HOME|CI|LUNA_FACTORY)$/;
+ *  caches, and the egress proxy (the sandbox refuses every other way out: without it pnpm, cargo and
+ *  npm cannot reach a registry the repo allows). Nothing that holds a credential or names one of the
+ *  runner's files: the proxy URL is `http://<address>:<port>`, with no user or password. */
+const INHERITED = /^(LANG|LC_[A-Z]+|TZ|GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)|GIT_AUTHOR_NAME|GIT_AUTHOR_EMAIL|GIT_COMMITTER_NAME|GIT_COMMITTER_EMAIL|GOTOOLCHAIN|GOPATH|GOCACHE|GOMODCACHE|GOFLAGS|RUSTUP_HOME|CARGO_HOME|CARGO_TARGET_DIR|npm_config_cache|COREPACK_HOME|COREPACK_ENABLE_DOWNLOAD_PROMPT|COREPACK_DEFAULT_TO_LATEST|PNPM_HOME|CI|LUNA_FACTORY|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|YARN_HTTPS?_PROXY|NODE_USE_ENV_PROXY)$/;
 
 export interface CommandEnvOptions {
   /** The server's environment, to pick the inherited variables from. */
@@ -25,7 +27,9 @@ export interface CommandEnvOptions {
 export function commandEnv(command: string, { source = process.env, home, ghToken }: CommandEnvOptions): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(source)) if (value !== undefined && INHERITED.test(key)) env[key] = value;
-  Object.assign(env, { PATH: STAGE_PATH, HOME: home, TMPDIR: home, TERM: "dumb", NO_COLOR: "1" });
+  // TERM=dumb keeps escape codes out of what the model reads. No NO_COLOR: it changes what a program does, not only how it prints
+  // (a TUI's colour tests fail under it), and the repo's CI does not set it, so a check would fail here and pass there.
+  Object.assign(env, { PATH: STAGE_PATH, HOME: home, TMPDIR: home, TERM: "dumb" });
   if (command === "gh" && ghToken) env.GH_TOKEN = ghToken;
   return env;
 }

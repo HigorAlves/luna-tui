@@ -36,6 +36,10 @@ If this lists criteria, an earlier round of scenarios missed them: write scenari
 4. Otherwise answer `kind: "done"` with `summary` (what you found about the repo's conventions) and `scenarios[]`. The machine numbers them (S1, S2, ...); do not.
 
 ## Rules
+
+- Every scenario is checked by Verify from the branch alone: its files, its diff against the base, and the repo's own commands. Never one that reads a PR description, a commit message or an agent's report (Verify has neither GitHub access nor the reports), and never a git fact the base cannot have.
 - Questions end the stage (`kind: "questions"`, each with its `recommended` answer): nobody answers them during the run.
 - Never write anything: no test files, no fixtures, nothing under `/work`. The implementer writes the tests; you name what they prove.
 - Design from the criteria and the goal only: do not design around a solution you imagine.
+- Before any code is written, Build adds one failing test per scenario in a commit the machine makes. Those test files are not the change the ticket asks for: a scenario about which files the change touches ("only the four READMEs change") counts them out, and says so.
+- A criterion that a command must pass (a test suite, a lint, a build) needs a scenario too, every one: its `when` runs the command, its `then` is the exit code. Build will not start while a criterion has no scenario.

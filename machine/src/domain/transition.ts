@@ -232,6 +232,9 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       if (state === "awaiting_ship") return event.gate === "ship_approval" ? run("awaiting_ship", retries) : run("evidence", retries);
       if (state === "awaiting_approval") return run(event.from === "triage" ? "triage" : "test_design", retries);
       if (state === "awaiting_test_check") return run("test_design", retries);
+      // An escalation a person sends back is a plan they judge wrong: the card is planned again (the reason rides on the decision), rather than
+      // only approved, which reruns the stage that stopped on the same plan.
+      if (state === "escalated") return run("test_design", NO_RETRIES);
       break;
     case "stage_done":
       return stageDone(task, event);
@@ -345,10 +348,13 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
 
   // The agent stopped on purpose and says why: a human decides, so no retry is spent.
   if (outcome === "escalated" && (RUNNING.has(state) || (task.route === "feature" && state === "awaiting_ship"))) {
-    // A plan that cannot be built as written goes back to the planner (the plan stage) with the evidence, retries kept and the record as triage
-    // left it; the second time on the same card a person decides. On a PR route there is no plan to redo, and triage and setup have none.
+    // A plan that cannot be built as written goes back to the planner (the plan stage) with the evidence and the record as triage left it; the
+    // second time on the same card a person decides. The implementer's runs are kept (its cap still bounds the card), but the Verify, browser and
+    // CI loops start again: their failures were against the old plan, and carried over they would stop the new one on its first finding before
+    // Build had a round on it. On a PR route there is no plan to redo, and triage and setup have none.
     if (event.escalation === "plan_wrong" && task.route === "feature" && state !== "triage" && state !== "setup" && state !== "test_design" && (retries.planWrong ?? 0) < 1) {
-      return { ...run("test_design", { ...retries, planWrong: (retries.planWrong ?? 0) + 1 }), reason: event.reason, escalation: "plan_wrong" };
+      const { findingSet: _old, ...kept } = retries;
+      return { ...run("test_design", { ...kept, verify: 0, e2e: 0, ci: 0, planWrong: (retries.planWrong ?? 0) + 1 }), reason: event.reason, escalation: "plan_wrong" };
     }
     // The PR head moved after the evidence pack was made: Evidence runs again, retries kept; its format is kept too.
     // From the watch or the merge; a fix that changed what a scenario shows asks for a new browser run first, and Evidence re-makes the media from it.
@@ -381,7 +387,11 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       break;
     case "implementing":
       if (outcome === "pass") return run("verifying", retries);
-      if (outcome === "test_change") return testChangeRequested(task);
+      if (outcome === "test_change") {
+        // The request's reason rides on the move, so the board says why the card went back to be planned.
+        const moved = testChangeRequested(task);
+        return moved.reason || !event.reason ? moved : { ...moved, reason: event.reason };
+      }
       if (outcome === "fail") return enterImplementing(retries);
       break;
     case "verifying":

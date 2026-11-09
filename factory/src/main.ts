@@ -22,7 +22,8 @@ import type { Emit } from "./core/events.ts";
 import { runInfo } from "./core/fingerprint.ts";
 import { lunaHandlers } from "./core/luna-tools.ts";
 import { EMPTY_RUN, type RunOutcome, finish, settle } from "./core/output.ts";
-import { renderPrompt } from "./core/render.ts";
+import { cutReason } from "./core/data-block.ts";
+import { renderPromptReport } from "./core/render.ts";
 import { factoryTelemetry } from "./core/telemetry.ts";
 import { readJson, readStageInput } from "./core/stage-io.ts";
 import { transcript } from "./core/transcript.ts";
@@ -104,8 +105,16 @@ async function runStage(): Promise<RunOutcome> {
     template = readFileSync(join(FACTORY_ROOT, "prompts", pack.template), "utf8");
     const contextFile = join(WORK, "docs", "agents", "project-context.md");
     const projectContext = existsSync(contextFile) ? readFileSync(contextFile, "utf8") : null;
-    prompt = renderPrompt({ pack, input: input!, template, projectContext });
+    const rendered = renderPromptReport({ pack, input: input!, template, projectContext });
+    prompt = rendered.prompt;
     writeFileSync(join(OUT, "prompt.md"), prompt);
+    // A cut is said where the person looks (the task's events), not only in prompt.md; a cut of the work itself ends the stage.
+    if (rendered.cuts.length > 0) {
+      out(`luna factory · prompt cut: ${rendered.cuts.map((c) => `${c.name} -${c.chars}`).join(", ")}`);
+      emit({ kind: "note", payload: { phase: "prompt_cut", pack: pack.id, cuts: rendered.cuts } });
+    }
+    const lost = cutReason(rendered.cuts);
+    if (lost) return { ...EMPTY_RUN, error: lost };
   }
   // The engine the machine chose, else the pack's default; its runtime runs the stage. An engine
   // on a runtime this factory does not carry yet fails the stage with a reason, not a crash.

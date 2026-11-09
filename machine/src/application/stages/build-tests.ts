@@ -3,10 +3,13 @@
 import { type CheckContext, Plan, type PlanContext } from "@hardness/contracts";
 
 import { approvedScenarios } from "../../domain/stage-input.ts";
+import { isCommandCheck } from "../../domain/command-check.ts";
+import { isDocsOnly } from "../../domain/docs-only.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { isPlainRepoPath } from "@hardness/contracts";
 import { type ScenarioTagFacts, scenarioTags } from "../../domain/scenario-tags.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import { voteRed } from "./red-vote.ts";
 import type { SweepOutcome } from "./sweep.ts";
 
 /** A tree the writer left, or a commit the step made earlier: what git says changed, and the diff. */
@@ -15,15 +18,21 @@ export interface TestsDiff {
   diff: string;
   /** The new mode of each path (`git diff --raw`): a symlink (120000) or a gitlink (160000) is never a test. */
   modes?: Record<string, string>;
+  /** Per `.rs` file, the line ranges of its `#[cfg(test)]` modules in the new file: Rust's inline tests. */
+  testRegions?: Record<string, Array<[number, number]>>;
+  /** The same, in each file before the change. */
+  testRegionsBefore?: Record<string, Array<[number, number]>>;
 }
 
 export interface BuildTestsDeps {
   /** The implementer, handed the tests the step made (by scenario). */
-  implement: (context: StageContext, extra: { scenarioTests?: { scenario: string; file: string }[]; sweepFailures?: { name: string; tail: string }[]; scopeBase?: string; /** Every path of the tests commit: none may change without a person. */ testsFiles?: string[] }) => Promise<StageResult>;
+  implement: (context: StageContext, extra: { scenarioTests?: { scenario: string; file: string }[]; /** Source files that hold Rust's inline tests, which the implementer may change. */ inlineTests?: string[]; sweepFailures?: { name: string; tail: string }[]; scopeBase?: string; /** Every path of the tests commit: none may change without a person. */ testsFiles?: string[] }) => Promise<StageResult>;
   /** The test writer, as a sub-run; a second round carries what the first left out as `plan.review`. */
   runWriter: (context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** The red_check decision for one scenario's test; `skipped` when it did not answer in time (it never blocks). `problems` are what a confident no said is wrong. */
   judgeRed: (check: CheckContext, repoPath: string | null) => Promise<{ verdict: string; problems: string[] }>;
+  /** The source of the scenario's tagged test, read from the worktree, capped; null when it cannot be read. The judge reads it beside the writer's report. */
+  readTest?: (worktree: string, file: string, scenario: string) => Promise<string | null>;
   /** Pushes the tests commit to the checkpoint ref before the implementer runs (a push that fails is a note, never a failure). */
   checkpoint: (context: StageContext, worktree: string, follows: "red" | "green") => Promise<void>;
   /** The regression sweep by script, after the implementer's last slice is green. */
@@ -32,6 +41,8 @@ export interface BuildTestsDeps {
   /** The clock, for the step's shared deadline (tests inject one). */
   now?: () => number;
   budget?: (context: StageContext) => Promise<{ spent: boolean; minutesLeft: number } | undefined>;
+  /** The repo's own commands (package scripts, luna.yaml checks, the toolchains' test and lint): a scenario that only runs one and expects it to pass needs no test. */
+  repoCommands?: (repoPath: string) => Promise<string[]>;
   /** The repo's `holdout_cases`: the implementer must not see the scenarios, so no test is written for it to read. */
   holdout: (repoPath: string) => Promise<boolean>;
   git: {
@@ -125,9 +136,17 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
         usage = addUsage(usage, result.usage);
       }
     };
-    const scenarios = approvedScenarios(context.approvals);
+    const approvedAll = approvedScenarios(context.approvals);
+    // A scenario that only runs one of the repo's commands and expects it to pass is a check: no test can fail for it before the code
+    // exists, so none is asked for; the sweep and Verify run the command once the code is there.
+    const commands = task.repoPath && deps.repoCommands ? await deps.repoCommands(task.repoPath).catch(() => []) : [];
+    const commandChecks = approvedAll.filter((s) => isCommandCheck(s, commands)).map((s) => s.id!).filter(Boolean);
+    // A browser scenario (layer e2e) is run by the e2e stage in a real browser once the code exists: no red test is asked for it here.
+    const browserChecks = approvedAll.filter((s) => s.layer === "e2e" && !commandChecks.includes(s.id!)).map((s) => s.id!).filter(Boolean);
+    const scenarios = approvedAll.filter((s) => !commandChecks.includes(s.id!) && !browserChecks.includes(s.id!));
     if (task.route !== "feature") return deps.implement(context, {});
     if (!task.repoPath || scenarios.length === 0) return implementSwept({});
+    const checksNote = { ...(commandChecks.length ? { commandChecks } : {}), ...(browserChecks.length ? { browserChecks } : {}) };
 
     /** What the writer's runs cost: added to the run the stage reports, so the budget counts them. */
     let writerUsage: StageResult["usage"];
@@ -135,8 +154,20 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       const usage = addUsage(writerUsage, result.usage);
       return { ...result, ...(usage ? { usage } : {}), detail: { ...result.detail, testsStep } };
     };
+    // A plan that only rewrites documentation has nothing to test first: Build runs it without the tests step (domain/docs-only.ts). A card
+    // whose tests step already committed keeps the scope measured from that commit, but nothing in it is locked: its tests are the change's
+    // to fix (a test that read git history CI does not have kept a README card failing CI with the implementer forbidden to touch it).
+    const gate = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
+    const gatePlan = Plan.safeParse(gate?.requested.plan);
+    const touchpoints = gatePlan.success ? gatePlan.data.steps.flatMap((s) => s.touchpoints) : (Array.isArray(gate?.requested.slices) ? (gate!.requested.slices as Array<{ touchpoints?: unknown }>) : []).flatMap((s) => (Array.isArray(s.touchpoints) ? s.touchpoints.map(String) : []));
+    if (isDocsOnly(touchpoints)) {
+      const result = await implementSwept(context.testsCommit ? { scopeBase: context.testsCommit } : {});
+      return withStep(result, { status: "skipped", why: "docs_only", ...(context.testsCommit ? { commit: context.testsCommit, unlocked: true } : {}) });
+    }
     const subject = `test(${task.id.slice(0, 8)}): scenarios`;
     const testsOf = (facts: ScenarioTagFacts) => Object.entries(facts.tagged).map(([scenario, file]) => ({ scenario, file }));
+    // A source file that holds Rust's inline tests holds production code too: the implementer changes it, so it is not a protected test file.
+    const protectedOf = (nameStatus: string, facts: ScenarioTagFacts) => pathsOf(nameStatus).filter((p) => !facts.inline.includes(p));
     const worktree = task.worktreePath;
     const headMoved = (reason: string): StageResult => ({ outcome: "escalated", detail: { escalation: "head_moved", headMoved: true, reason, testsStep: { status: "failed", problems: [reason] } } });
     const pathsOf = (nameStatus: string): string[] => nameStatus.split("\n").filter((l) => l.trim()).filter((l) => !l.startsWith("D")).map((l) => l.split("\t").at(-1) ?? "").filter(Boolean);
@@ -145,23 +176,34 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     if (context.testsCommit && worktree) {
       const read = await deps.git.readCommit(worktree, context.testsCommit);
       if (!read) return headMoved("the tests commit the machine made is no longer on the branch: the branch was moved, so nothing is written on it");
-      const facts = scenarioTags({ ...read, scenarios });
-      if (!context.firstInputCommit || read.parent !== context.firstInputCommit || !facts.ok) return headMoved("the recorded tests commit does not check out against the commit the card's first run started from");
-      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: pathsOf(read.nameStatus) }), { status: "committed", commit: context.testsCommit, resumed: true, scenarioTests: testsOf(facts) });
+      // What the step recorded as already holding has no tag in the commit, by design.
+      const held = new Set(context.testsHoldsToday ?? []);
+      const facts = scenarioTags({ ...read, scenarios: scenarios.filter((sc) => !held.has(sc.id!)) });
+      if (!context.firstInputCommit || read.parent !== context.firstInputCommit) return headMoved("the recorded tests commit does not check out against the commit the card's first run started from");
+      // A plan approved after the commit (a re-plan) may add scenarios the commit has no tag for: Verify judges those. Anything else wrong with the
+      // commit (a removed test, a file that is not a test, an ambiguous tag) still stops the card.
+      const onlyAdded = facts.nonTest.length === 0 && facts.removed.length === 0 && facts.ambiguous.length === 0;
+      if (!facts.ok && !(context.planChangedSinceTests && onlyAdded)) return headMoved(`the recorded tests commit no longer passes its own check: ${problemsOf(facts).join("; ")}`);
+      const addedSinceTests = facts.ok ? [] : facts.missing;
+      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: protectedOf(read.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) }), { status: "committed", commit: context.testsCommit, resumed: true, ...checksNote, ...(addedSinceTests.length ? { addedSinceTests } : {}), ...(held.size ? { holdsToday: [...held].map((scenario) => ({ scenario, reason: "recorded by the tests step" })) } : {}), scenarioTests: testsOf(facts) });
     }
     if (context.resume) return implementSwept({});
     if (await deps.holdout(task.repoPath)) return withStep(await implementSwept({}), { status: "skipped", why: "holdout_cases" });
 
     const approved = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
     const plan = Plan.safeParse(approved?.requested.plan);
-    const escalate = async (where: string, base: string, problems: string[]): Promise<StageResult> => {
+    const escalate = async (where: string, base: string, problems: string[], redChecks?: { scenario: string; verdict: string }[]): Promise<StageResult> => {
       await deps.git.reset(where, base);
-      return { outcome: "escalated", ...(writerUsage ? { usage: writerUsage } : {}), detail: { escalation: "other", reason: `the tests step could not make a tagged test that fails for the right reason for every scenario: ${problems.join("; ")}`, testsStep: { status: "failed", problems } } };
+      return { outcome: "escalated", ...(writerUsage ? { usage: writerUsage } : {}), detail: { escalation: "other", reason: `the tests step could not make a tagged test that fails for the right reason for every scenario: ${problems.join("; ")}`, testsStep: { status: "failed", problems, ...(redChecks ? { redChecks } : {}) } } };
     };
     // A missing tag is sent back once; a red that is missing or wrong, twice.
     let tagMisses = 0;
     let redMisses = 0;
     let review: string[] | undefined;
+    let holdsToday: { scenario: string; reason: string }[] = [];
+    // A red judged right once keeps its verdict while its test and its output are the same: a round sends the writer back as a whole, and
+    // re-asking every scenario every round gave a slightly noisy judge enough draws to flag one it had accepted twice before.
+    const accepted = new Set<string>();
     for (;;) {
       const round = await budgeted();
       if (!round) return { ...spentResult(), ...(writerUsage ? { usage: writerUsage } : {}) };
@@ -183,7 +225,10 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       // The commit is made on the branch the host chose for the run: a container that switched the worktree to another branch gets nothing committed.
       if (written.workspace?.branch && (await deps.git.branch(where)) !== written.workspace.branch) return headMoved("the worktree is not on the task's branch: the branch was moved");
       const pending = await deps.git.pending(where, base);
-      const facts = scenarioTags({ ...pending, scenarios });
+      // What the writer says already holds before the change (with its reason) gets no red: no test can fail for it yet. Verify judges it later.
+      holdsToday = holdsTodayOf(written.detail?.answer, scenarios);
+      const required = scenarios.filter((s) => !holdsToday.some((h) => h.scenario === s.id));
+      const facts = scenarioTags({ ...pending, scenarios: required });
       if (!facts.ok) {
         review = problemsOf(facts);
         if (tagMisses >= 1) return escalate(where, base, review);
@@ -191,31 +236,71 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
         continue;
       }
       const reds = redsOf(written.detail?.scenarioReds);
-      const judged = await Promise.all(
-        scenarios.map(async (s) => {
+      // Two at a time, as the machine runs pack calls (PACK_RUNS_MAX): all at once overflowed its queue, and the overflow came back as skipped.
+      const judged = await inTurns(
+        required,
+        RED_JUDGES_AT_ONCE,
+        async (s) => {
           const id = s.id!;
           const output = reds[id];
           if (output === undefined) return { id, verdict: "missing", problems: [`${id}: no red reported; run its test and report the failing output with scenario_red`] };
-          const check: CheckContext = { kind: "red", scenario: { id, title: s.title, given: s.given ?? null, when: s.when ?? null, then: s.then ?? null, approach: s.approach }, exists: id in facts.tagged, output };
-          const answer = await deps.judgeRed(check, task.repoPath);
-          return { id, verdict: answer.verdict, problems: answer.problems.map((p) => `${id}: ${safe(p).slice(0, 200)}`) };
-        }),
+          const file = facts.tagged[id];
+          const test = file && deps.readTest ? await deps.readTest(where, file, id).catch(() => null) : null;
+          const check: CheckContext = { kind: "red", scenario: { id, title: s.title, given: s.given ?? null, when: s.when ?? null, then: s.then ?? null, approach: s.approach }, exists: id in facts.tagged, output, ...(test ? { test } : {}) };
+          const same = `${id}\u0000${test ?? ""}\u0000${output}`;
+          if (accepted.has(same)) {
+            await context.emit?.("scenario.red_check", { scenario: id, verdict: "proceed", asked: 0, flagged: 0, testRead: test !== null, kept: true });
+            return { id, verdict: "proceed", problems: [] };
+          }
+          const vote = await voteRed(deps.judgeRed, check, task.repoPath);
+          if (vote.verdict === "proceed") accepted.add(same);
+          // The task's events say what each scenario's judge said, so an escalation is never only a sentence.
+          await context.emit?.("scenario.red_check", { scenario: id, verdict: vote.verdict, asked: vote.askings.length, flagged: vote.askings.filter((a) => a.flagged).length, testRead: test !== null, ...(vote.problems.length ? { problems: vote.problems.map((p) => safe(p).slice(0, 200)) } : {}) });
+          return { id, verdict: vote.verdict, problems: vote.problems.map((p) => `${id}: ${safe(p).slice(0, 200)}`) };
+        },
       );
       const problems = judged.flatMap((j) => j.problems);
       if (problems.length > 0) {
         review = problems;
-        if (redMisses >= 2) return escalate(where, base, problems);
+        if (redMisses >= 2) return escalate(where, base, problems, judged.map((j) => ({ scenario: j.id, verdict: j.verdict })));
         redMisses += 1;
         continue;
       }
       for (const j of judged) await context.emit?.("scenario.red", { scenario: j.id });
       const sha = await deps.git.commit(where, subject, `plan version ${plan.success ? plan.data.version : 2}`);
       await deps.checkpoint(context, where, "red").catch(() => {});
-      const result = await implementSwept({ scenarioTests: testsOf(facts), scopeBase: sha, testsFiles: pathsOf(pending.nameStatus) });
+      const result = await implementSwept({ scenarioTests: testsOf(facts), scopeBase: sha, testsFiles: protectedOf(pending.nameStatus, facts), ...(facts.inline.length ? { inlineTests: facts.inline } : {}) });
       const skipped = judged.some((j) => j.verdict === "skipped");
-      return withStep(result, { status: "committed", commit: sha, tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
+      return withStep(result, { status: "committed", commit: sha, ...checksNote, ...(holdsToday.length ? { holdsToday } : {}), tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
     }
   };
+}
+
+/** How many scenarios' red_check run at once: the machine's pack calls run two at a time. */
+const RED_JUDGES_AT_ONCE = 2;
+
+/** `work` over `items`, at most `width` at a time, results in the items' order. */
+async function inTurns<T, R>(items: readonly T[], width: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const at = next++;
+      results[at] = await work(items[at]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, lane));
+  return results;
+}
+
+/** The writer's `holdsToday`: scenarios of the step's own list, each with a reason. */
+function holdsTodayOf(answer: unknown, scenarios: readonly { id?: string }[]): { scenario: string; reason: string }[] {
+  const listed = (answer as { holdsToday?: unknown } | null | undefined)?.holdsToday;
+  if (!Array.isArray(listed)) return [];
+  const ids = new Set(scenarios.map((s) => s.id).filter(Boolean));
+  return listed
+    .filter((h): h is { scenario: string; reason: string } => typeof h?.scenario === "string" && typeof h?.reason === "string" && h.reason.trim() !== "" && ids.has(h.scenario))
+    .map((h) => ({ scenario: h.scenario, reason: safe(h.reason).slice(0, 300) }));
 }
 
 const withUsage = (result: StageResult, usage: StageResult["usage"]): StageResult => (usage ? { ...result, usage } : result);

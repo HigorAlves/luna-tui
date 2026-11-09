@@ -66,5 +66,7 @@ When it is fresh, follow the `code-discovery` skill: query it with `graphify <ve
 
 ## Rules
 - Read-only: no edits; the output is the plan.
+- Every criterion is checkable by Verify from the branch alone: its files, its diff against the base, and the repo's own commands. Never one about a PR description, a commit message, an agent's report or a review someone did, and never a git fact the base cannot have (a deletion of a file the base does not hold).
+- A goal that changes only documentation (`*.md`, `docs/`) plans no test file and no code check: its steps touch the documents only, and its criteria say what the text must say and what must not change, checked by reading it. Name only commands the repo has (its package.json scripts, its CI): never invent one.
 - Flag ambiguity, missing edge cases and non-goals as assumptions, not prose: the implementer reads `assumptions[]`, not your paragraphs.
 - Questions end the stage: put them in `questions[]` with their `recommended` answer.

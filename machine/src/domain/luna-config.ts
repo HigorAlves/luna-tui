@@ -72,6 +72,69 @@ export function parseLunaConfig(text: string, warn: Warn = quiet): Policy {
   return policyOf(validateLunaConfig(raw, warn), warn);
 }
 
+/** What a check of a file's text found: every schema problem (not only the first), what the machine would drop with a warning, and the
+ *  keys it does not know. The schema strips an unknown key, so a misspelt one would otherwise change nothing without a word. */
+export interface ConfigCheck {
+  ok: boolean;
+  problems: string[];
+  warnings: string[];
+  unknownKeys: string[];
+}
+
+const MAX_REPORTED = 50;
+
+/** Checks a luna.yaml's text as the machine will read it, for the setup skill and the board: pure, nothing is written. */
+export function checkLunaConfigText(text: string): ConfigCheck {
+  const warnings: string[] = [];
+  let raw: unknown;
+  try {
+    raw = parseYaml(text);
+  } catch (error) {
+    return { ok: false, problems: [`not valid YAML: ${error instanceof Error ? error.message : String(error)}`], warnings, unknownKeys: [] };
+  }
+  if (raw === null || raw === undefined) return { ok: true, problems: [], warnings, unknownKeys: [] };
+  if (typeof raw !== "object" || Array.isArray(raw)) return { ok: false, problems: ["the file must be a YAML mapping"], warnings, unknownKeys: [] };
+  const parsed = LunaConfig.safeParse(legacyEgress(raw, (m) => warnings.push(m)));
+  if (!parsed.success) {
+    const problems = parsed.error.issues.slice(0, MAX_REPORTED).map((issue) => `${issue.path.join(".") || "file"}: ${issue.message}`);
+    return { ok: false, problems, warnings, unknownKeys: unknownKeysOf(raw, null) };
+  }
+  const unknownKeys = unknownKeysOf(raw, parsed.data);
+  try {
+    // The rules past the schema (luna-app, engines, durations, jira patterns), with the warnings the store would say.
+    parseLunaConfig(text, (m) => warnings.push(m));
+  } catch (error) {
+    return { ok: false, problems: [error instanceof Error ? error.message : String(error)], warnings, unknownKeys };
+  }
+  return { ok: true, problems: [], warnings: [...new Set(warnings)], unknownKeys };
+}
+
+/** The dotted paths of keys in `raw` the parsed config dropped. With no parsed config (the schema refused it), only unknown top-level keys. */
+function unknownKeysOf(raw: unknown, parsed: unknown): string[] {
+  const out: string[] = [];
+  const top = new Set(Object.keys(LunaConfig.shape));
+  const walk = (a: unknown, b: unknown, path: string): void => {
+    if (out.length >= MAX_REPORTED || a === null || typeof a !== "object" || b === null || typeof b !== "object") return;
+    if (Array.isArray(a) || Array.isArray(b)) {
+      // A list item (a check, a freeze window) is compared with the parsed item at its place.
+      if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) a.forEach((item, i) => walk(item, b[i], `${path}[${i}]`));
+      return;
+    }
+    for (const key of Object.keys(a)) {
+      const at = path ? `${path}.${key}` : key;
+      if (!(key in (b as object))) out.push(at);
+      else walk((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key], at);
+    }
+  };
+  if (parsed === null) {
+    for (const key of Object.keys(raw as object)) if (!top.has(key)) out.push(key);
+    return out;
+  }
+  walk(raw, parsed, "");
+  // A record (services, engines, decisions…) keeps every key it was given, so only fixed shapes report here.
+  return out;
+}
+
 /** The `conversation` block as policy: a file opts in channels only (`C…`, and `G…` for a private one). A DM or group DM id is dropped with a warning: a repository's file never makes the machine read a DM. */
 function conversationOf(conversation: LunaConfig["conversation"], warn: Warn): LunaConfig["conversation"] {
   if (!conversation?.channels) return conversation;
