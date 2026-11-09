@@ -38,6 +38,7 @@ import {
   PackId,
   RunInput,
   SetupRepoInput,
+  ConfigCheckInput,
   SlackItemPatch,
   SlackRelationInput,
   SlackReplyInput,
@@ -71,6 +72,8 @@ import { engineInfo } from "../../domain/engines.ts";
 import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
+import { checkLunaConfigText } from "../../domain/luna-config.ts";
+import { type ConfigProofs, ConfigProofError } from "../../application/config-proofs.ts";
 import type { Watcher } from "../../application/ports.ts";
 import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitAutoApprovalError, SplitChangedError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
@@ -140,6 +143,8 @@ export interface AppDeps {
   access?: ApiAccess;
   /** Packs on demand (`POST /runs`); without it (MACHINE_AGENTS=off) the route answers 503 `agents_off`. */
   runs?: PackRunsPort;
+  /** Proofs of a repository's own luna.yaml for the setup skill; without it (no sandbox) `POST /repos/config/prove` answers 503. */
+  configProofs?: ConfigProofs;
 }
 
 class BadRequest extends Error {}
@@ -187,7 +192,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -265,6 +270,7 @@ export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog,
     if (error instanceof RunAbortedError) return fail(c, CLIENT_CLOSED, "client_closed", error.message);
     if (error instanceof ZodError) return fail(c, 400, "invalid_request", z.prettifyError(error));
     if (error instanceof BadRequest) return fail(c, 400, "invalid_request", error.message);
+    if (error instanceof ConfigProofError) return fail(c, 400, "invalid_request", error.message);
     console.error(error);
     return fail(c, 500, "internal", error.message);
   });
@@ -455,6 +461,25 @@ export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog,
   app.post("/repos/setup", async (c) => {
     const { repoPath } = await body(c, SetupRepoInput);
     return c.json(await serialize(await pipeline.setupRepo(repoPath)), 201);
+  });
+
+  // The setup skill's checks of a luna.yaml: `check` reads the text it is given (nothing runs, nothing is written); `prove` runs every check of the
+  // file at the repository's root once in the sandbox, as a job read by id, and names the hosts the sandbox refused.
+  app.post("/repos/config/check", async (c) => {
+    const { text } = await body(c, ConfigCheckInput);
+    return c.json(checkLunaConfigText(text));
+  });
+
+  app.post("/repos/config/prove", async (c) => {
+    if (!configProofs) return fail(c, 503, "sandbox_off", "the machine has no sandbox to prove checks in (MACHINE_AGENTS=off or no Docker)");
+    const { repoPath } = await body(c, SetupRepoInput);
+    return c.json(await configProofs.start(repoPath), 202);
+  });
+
+  app.get("/repos/config/prove/:id", (c) => {
+    const job = configProofs?.get(c.req.param("id") ?? "") ?? null;
+    if (!job) return fail(c, 404, "not_found", "no such proof (a restart forgets them; start it again)");
+    return c.json(job);
   });
 
   app.post("/tasks/:id/answers", async (c) => {

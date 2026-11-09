@@ -421,6 +421,11 @@ export async function execInSandbox(
  *  `cwd` is the worktree, and only HARDNESS_* env and the git identity (GIT_AUTHOR_*,
  *  GIT_COMMITTER_*) reach the container. The cache volume is the repo's: task worktrees live
  *  at `<worktreesDir>/<repo>/task-…`, so the parent names it. */
+/** An egress list with `extra` names added; none, the list as it was. */
+function withAllow<T extends { allow: readonly string[] }>(egress: T, extra: readonly string[] | undefined): T {
+  return extra && extra.length > 0 ? { ...egress, allow: [...new Set([...egress.allow, ...extra])] } : egress;
+}
+
 export function sandboxExecutor(
   images: {
     machine: string;
@@ -436,8 +441,8 @@ export function sandboxExecutor(
   return async (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[]; image?: string } = {},
-  ): Promise<ExecResult> => {
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[]; image?: string; egressAllow?: readonly string[] } = {},
+  ): Promise<ExecResult & { blocked?: BlockedRow[] }> => {
     if (!options.cwd) throw new Error("sandboxExecutor needs cwd: the worktree to mount");
     // The image is the repository's, named by the caller: never guessed from the folder. No repository, the machine's image.
     // A caller that already chose the image for its whole stage hands it in (`image`): it is not resolved a second time.
@@ -467,7 +472,8 @@ export function sandboxExecutor(
         ...(isFile(join(options.cwd, ".git")) ? { gitFile: join(options.cwd, ".git") } : {}),
         argv: [command, ...args],
         env,
-        ...(images.egress ? { egress: await images.egress(options.repoPath) } : {}),
+        // A file not yet on disk (the setup proposal, a file being proved) adds its own `sandbox.egress.allow` on top of the machine's list.
+        ...(images.egress ? { egress: withAllow(await images.egress(options.repoPath), options.egressAllow) } : {}),
         ...(images.limitsOf ? { limits: await images.limitsOf(options.repoPath) } : {}),
         gitIdentity,
         services: options.services,

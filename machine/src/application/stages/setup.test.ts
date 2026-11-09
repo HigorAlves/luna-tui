@@ -65,6 +65,23 @@ describe("setup stage", () => {
     expect(calls[0]!.options).toMatchObject({ cwd: "/repo", services: proposal.services, env: expect.objectContaining({ GIT_AUTHOR_NAME: "Ada L" }) });
   });
 
+  it("proves with the proposal's own egress list, and names the hosts a check was refused with the entries to add, without adding them", async () => {
+    // This week's runs: board/'s crates hosts and corepack's npm were refused until a person read the logs and listed them by hand.
+    const withEgress = { ...proposal, sandbox: { egress: { allow: ["index.crates.io"] } } };
+    const { run, context, calls } = setup({
+      pack: { outcome: "pass", detail: { answer: { kind: "proposal", summary: "s", config: withEgress } } } as StageResult,
+      checks: {
+        "sh -c pnpm lint": { code: 1, stdout: "", stderr: "corepack: fetch failed", blocked: [{ host: "registry.npmjs.org", port: 443, via: "connect", reason: "not_listed", count: 2 }, { host: "10.0.0.1", port: 80, via: "http", reason: "address", count: 1 }, { host: "fonts.gstatic.com", port: 8443, via: "connect", reason: "not_listed", count: 1 }] } as ExecResult,
+      },
+    });
+    const result = await run(context);
+    expect(calls[0]!.options).toMatchObject({ egressAllow: ["index.crates.io"] });
+    expect(result.detail).toMatchObject({ egressRefused: ["registry.npmjs.org:443", "fonts.gstatic.com:8443"] });
+    expect((result.detail as { notes: string[] }).notes.at(-1)).toContain("add to sandbox.egress.allow: registry.npmjs.org, fonts.gstatic.com:8443");
+    // The file the gate shows is the proposal's: nothing was added to it.
+    expect((result.detail as { config: string }).config).not.toContain("registry.npmjs.org");
+  });
+
   it("still passes with a failing check, marked so you can decide, and keeps its tail", async () => {
     const { run, context } = setup({ checks: { "sh -c pnpm lint": { code: 1, stdout: "3 problems", stderr: "" } } });
     const result = await run(context);
