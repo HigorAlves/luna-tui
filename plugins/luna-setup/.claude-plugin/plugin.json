@@ -1,0 +1,9 @@
+{
+  "name": "luna-setup",
+  "description": "Set Luna up on a repository: draft its luna.yaml with you, check it, prove its checks in the machine's sandbox, and open it as a PR.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Higor Alves"
+  },
+  "repository": "https://github.com/HigorAlves/luna-tui"
+}

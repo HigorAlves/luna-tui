@@ -26,6 +26,15 @@ It walks a fresh Mac through everything below, one step at a time, and every ste
 | `make luna-yaml REPO=<path>` | a repo's `luna.yaml`: Jira (the statuses listed from your project when the Jira keys are set), engines, policy, budgets and SLAs; an existing file keeps its comments, the change is shown as a diff, and nothing is written that the machine would refuse. Checks and services come from the board's `:setup <repo>`, which proves them |
 | `make doctor` | what is installed, set and running, and what is missing; never prints a secret |
 
+**In Claude Code**, the `luna-setup` plugin sets a repository up with you: checks, services, how the browser check starts the app and the hosts the sandbox may reach, each check proven in the machine's sandbox, the file opened as a PR. Install it once, then ask Claude in any repository to set Luna up:
+
+```sh
+claude plugin marketplace add HigorAlves/luna-tui      # or the path of your Luna checkout
+claude plugin install luna-setup@luna-tui
+```
+
+`make luna-yaml` asks about the preferences only (Jira, engines, budgets, SLAs) and `:setup <repo>` proves checks and services only; the skill covers both, plus the app start and the egress hosts.
+
 No key ever goes into `luna.yaml`: it lives in the repo and is usually committed. The scripts are in `scripts/setup/` (gum for the prompts when it is installed, plain prompts otherwise). Each opens with Luna's mark drawn in the terminal, animated on a real terminal; `LUNA_NO_ANIMATION=1` keeps it still and `NO_COLOR=1` drops the colours.
 
 ## Quick start (by hand)
