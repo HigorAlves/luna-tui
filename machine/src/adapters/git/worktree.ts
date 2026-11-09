@@ -1,6 +1,7 @@
 // Task worktrees on the host. Each task gets its own branch and checkout; the agent works
 // there through a bind mount, and the machine commits on the host.
-import { existsSync, lstatSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -257,6 +258,28 @@ export function graphCheckoutPath(slug: string, worktreesDir: string): string {
   return join(worktreesDir, slug, GRAPH_CHECKOUT);
 }
 
+/**
+ * A clean copy of `commit`'s files in a new folder `dest`, taken from the card's machine-owned repository `M` (named by the
+ * workspace path, like every host git on a workspace) and never from the work folder. A temporary index, so neither the card's
+ * index nor its folder is touched; git itself refuses to write through a link in the tree. `dest` holds no `.git`.
+ */
+export async function exportCommit(workspacePath: string, commit: string, dest: string): Promise<void> {
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) throw new Error("not a commit id");
+  rmSync(dest, { recursive: true, force: true });
+  mkdirSync(dest, { recursive: true });
+  const scratch = mkdtempSync(join(tmpdir(), "luna-export-"));
+  try {
+    const env = { ...process.env, GIT_INDEX_FILE: join(scratch, "index") };
+    await execOrThrow("git", [...HOST_GIT, ...at(workspacePath), "read-tree", commit], { env });
+    await execOrThrow("git", [...HOST_GIT, ...at(workspacePath), "checkout-index", "--all", "--force", `--prefix=${resolve(dest)}/`], { env });
+  } catch (error) {
+    rmSync(dest, { recursive: true, force: true });
+    throw error;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 /** The commit `origin/<default>` points at after a fetch (the repo's HEAD without an origin). */
 export async function defaultHead(repoPath: string): Promise<string> {
   return execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", await startPoint(repoPath)]);
@@ -265,6 +288,23 @@ export async function defaultHead(repoPath: string): Promise<string> {
 /** Whether `ancestor` is an ancestor of (or the same commit as) `descendant`; false when either is unknown. */
 export async function isAncestor(repoPath: string, ancestor: string, descendant: string): Promise<boolean> {
   return (await exec("git", [...HOST_GIT, "-C", repoPath, "merge-base", "--is-ancestor", ancestor, descendant])).code === 0;
+}
+
+/**
+ * Lines added plus removed in `files` between `commit` and the default branch as the repository last saw it (`git diff --numstat`), on the
+ * user's own repository by its path, never in a workspace; a binary file counts for none. Null when the commit is not a sha, the repository
+ * lacks it, or the path is a card's workspace. Memory's commit anchoring reads this to mark an item stale (RFC 0007).
+ */
+export async function linesChangedSince(repoPath: string, commit: string, files: readonly string[]): Promise<number | null> {
+  if (!/^[0-9a-f]{7,64}$/.test(commit) || files.length === 0 || isUnderWorkspaces(repoPath)) return null;
+  const out = await exec("git", [...HOST_GIT, "--literal-pathspecs", "-C", repoPath, "diff", "--numstat", "--no-ext-diff", `${commit}..${await lastKnownDefault(repoPath)}`, "--", ...files]);
+  if (out.code !== 0) return null;
+  let lines = 0;
+  for (const line of out.stdout.split("\n")) {
+    const [added, removed] = line.split("\t");
+    lines += (Number(added) || 0) + (Number(removed) || 0);
+  }
+  return lines;
 }
 
 /** The default branch as the repo last saw it (`origin/HEAD`, else HEAD); no fetch, so it is cheap to ask per card. */

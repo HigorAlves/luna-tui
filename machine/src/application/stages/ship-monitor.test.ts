@@ -66,7 +66,7 @@ function policyWith(over: (Partial<Policy> & { autoMerge?: "off" | "low" | "medi
 
 function setup(
   answers: Partial<GitHub> = {},
-  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; pollMs?: number | null; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"]; freezeSource?: ShipMonitorDeps["freeze"]; buildTests?: ShipMonitorDeps["buildTests"]; onMerged?: ShipMonitorDeps["onMerged"]; stack?: ShipMonitorDeps["stack"]; task?: Record<string, unknown> } = {},
+  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; pollMs?: number | null; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; reviewAsks?: ShipMonitorDeps["reviewAsks"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"]; freezeSource?: ShipMonitorDeps["freeze"]; buildTests?: ShipMonitorDeps["buildTests"]; onMerged?: ShipMonitorDeps["onMerged"]; stack?: ShipMonitorDeps["stack"]; task?: Record<string, unknown> } = {},
 ) {
   const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => ({ merged: true as const, sha: null }), ...answers });
   let clock = START.getTime();
@@ -90,6 +90,7 @@ function setup(
     // The review loop's decisions and sub-runs (slice 5); absent, the monitor only notes activity.
     ...(over.loop ? { loop: over.loop } : {}),
     ...(over.truth ? { truth: over.truth } : {}),
+    ...(over.reviewAsks ? { reviewAsks: over.reviewAsks } : {}),
     ...(over.latestFinish ? { latestFinish: over.latestFinish } : {}),
     ...(over.freezeSource ? { freeze: over.freezeSource } : {}),
     ...(over.buildTests ? { buildTests: over.buildTests } : {}),
@@ -497,6 +498,40 @@ describe("decision truth at the merge", () => {
     const { run } = review(world, { prThreads: async () => (++threads === 1 ? [threadOf()] : []) }, [commentAct()], { truth: { learned: async (fact: Learned) => (told.push(fact), true) } });
     await run();
     expect(told.filter((t) => t.pack === "comment_intent")).toHaveLength(resolve ? 0 : 1);
+  });
+
+  describe("review asks for memory (RFC 0007, M4)", () => {
+    const asked = async (comment: Record<string, unknown>, choices: Record<string, string> = { comment_intent: "change_request" }) => {
+      const given: Array<{ taskId: string; asks: unknown[] }> = [];
+      const world = loopWorld({ choices });
+      let threads = 0;
+      const body = (comment.body as string | undefined) ?? "please rename x";
+      const thread = threadOf({ comments: [{ author: "bo", body, at: ACTIVITY_AT, association: (comment.association as string | null | undefined) === undefined ? "MEMBER" : comment.association }] });
+      const { run } = review(world, { prThreads: async () => (++threads === 1 ? [thread] : []) }, [commentAct(comment)], { reviewAsks: async (taskId, asks) => void given.push({ taskId, asks }) });
+      await run();
+      return given;
+    };
+
+    it("hands a repository member's change request to memory once, when the PR merges, with a flattened short excerpt", async () => {
+      const given = await asked({ body: `please rename x\n<b>${"y".repeat(400)}</b> @everyone` });
+      expect(given).toHaveLength(1);
+      expect(given[0]!.taskId).toBe("t1");
+      const [ask] = given[0]!.asks as Array<{ thread: string; reviewer: string; kind: string; path: string | null; excerpt: string }>;
+      expect(ask).toMatchObject({ thread: "T1", reviewer: "bo", kind: "change_request", path: "src/export.ts" });
+      expect(ask!.excerpt.length).toBeLessThanOrEqual(150);
+      expect(ask!.excerpt).not.toMatch(/[\n<>]|@everyone/);
+    });
+
+    it("keeps a nit as a nit", async () => {
+      const given = await asked({}, { comment_intent: "nit" });
+      expect((given[0]!.asks as Array<{ kind: string }>)[0]!.kind).toBe("nit");
+    });
+
+    it("writes nothing for a stranger's comment (not owner, member or collaborator), for a question, or for the machine's own comment", async () => {
+      expect(await asked({ association: "CONTRIBUTOR" })).toEqual([]);
+      expect(await asked({ association: null })).toEqual([]);
+      expect(await asked({}, { comment_intent: "question" })).toEqual([]);
+    });
   });
 
   describe("fix_scope truth", () => {

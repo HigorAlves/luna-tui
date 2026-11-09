@@ -50,6 +50,14 @@ check "out-of-range numbers are asked again" c "$(printf '9\nx\n3\n' | ui_choose
 check "many: y, n, and Enter on a preselected one" $'a\nc' "$(printf 'y\nn\n\n' | ui_choose_many h c a b c 2>/dev/null)"
 check "a secret reads whole" 'xoxp-1/2=3' "$(printf 'xoxp-1/2=3\n' | ui_secret k 2>/dev/null)"
 
+echo "company_docs_path"
+# shellcheck disable=SC2088  # the literal ~ a person types is the input under test
+check "a home-relative folder is made absolute" "$HOME/company-docs" "$(company_docs_path '~/company-docs')"
+check "an absolute folder stays, its trailing slash dropped" "/srv/handbook" "$(company_docs_path /srv/handbook/)"
+check "a relative folder is refused" "refused" "$(company_docs_path docs 2>/dev/null || echo refused)"
+check "a list is refused: the machine in Docker mounts one folder" "refused" "$(company_docs_path /a:/b 2>/dev/null || echo refused)"
+check "the root itself is refused" "refused" "$(company_docs_path / 2>/dev/null || echo refused)"
+
 echo "banner"
 still=$(banner_show "tickets in, pull requests out" | cat)
 check "off a terminal it is plain text: no escape codes" 0 "$(printf '%s' "$still" | LC_ALL=C grep -c $'\033' || true)"

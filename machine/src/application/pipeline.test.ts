@@ -1478,6 +1478,60 @@ describe("memory review decision", () => {
     expect(steps[0]).toMatchObject({ step: "rules", note: expect.stringMatching(/^skipped/) });
   });
 
+  it("memory (RFC 0007, M2): the gate carries lessons and retirements, a person's per-lesson answers decide what close writes and retires, and each answer is ground truth", async () => {
+    const closes: Array<{ taskId: string; write: string[]; retire: string[] }> = [];
+    const learned: Array<Record<string, unknown>> = [];
+    const p = new Pipeline(db, stubs.runnerFor, {
+      policies: previewOn,
+      inline: true, hasConfig: () => true,
+      closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false },
+      truth: { learned: async (fact: Record<string, unknown>) => (learned.push(fact), true) } as never,
+      memoryClose: async (taskId, approved) => void closes.push({ taskId, write: approved.write.map((w) => w.text), retire: approved.retire.map((r) => r.itemId) }),
+    });
+    stubs.plan("reviewing_memory", {
+      outcome: "pass",
+      detail: {
+        decisions: { worth_learning: "wl" },
+        rules: {
+          markdown: "- r\n",
+          lessons: [{ id: "l1", text: "Check links.", kind: "finding", files: [], reason: "r", record: "w1" }, { id: "l2", text: "Second.", kind: "lesson", files: [], reason: "r", record: "w2" }],
+          retirements: [{ itemId: "mem_9", text: "Old.", lesson: "l1", certainty: "confident", record: "c1", slot: 1 }],
+        },
+      },
+    });
+    const created = await p.createTask({ title: "Login page", criteria: ["x"] });
+    await p.start(created.id);
+    for (let i = 0; i < 2; i++) await p.decide(created.id, "approved");
+    await p.decide(created.id, "approved", undefined, { lessons: [{ id: "l1", action: "edit", text: "Check links twice." }, { id: "l2", action: "drop" }, { id: "mem_9", action: "approve" }] });
+
+    expect(closes).toEqual([{ taskId: created.id, write: ["Check links twice."], retire: ["mem_9"] }]);
+    expect((await p.approvals(created.id)).find((a) => a.kind === "reviewing_memory")).toMatchObject({ response: { lessons: [{ id: "l1" }, { id: "l2" }, { id: "mem_9" }] } });
+    expect(learned.filter((f) => f.pack === "memory_worth" || f.pack === "memory_conflict").map((f) => [f.pack, f.recordId, f.source])).toEqual([
+      ["memory_worth", "w1", "lesson_edited"],
+      ["memory_worth", "w2", "lesson_dropped"],
+      ["memory_conflict", "c1", "retirement_approved"],
+    ]);
+  });
+
+  it("an approval without per-lesson answers (an older client) writes no lesson and retires nothing, and a card with no retro still gets its facts", async () => {
+    const closes: Array<{ write: number; retire: number }> = [];
+    const p = new Pipeline(db, stubs.runnerFor, {
+      policies: previewOn,
+      inline: true, hasConfig: () => true,
+      closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false },
+      memoryClose: async (_id, approved) => void closes.push({ write: approved.write.length, retire: approved.retire.length }),
+    });
+    stubs.plan("reviewing_memory", { outcome: "pass", detail: { rules: { markdown: "- r\n", lessons: [{ id: "l1", text: "L.", kind: "lesson", files: [], reason: "r" }], retirements: [] } } });
+    const a = await p.createTask({ title: "A", criteria: ["x"] });
+    await p.start(a.id);
+    for (let i = 0; i < 3; i++) await p.decide(a.id, "approved");
+    stubs.plan("reviewing_memory", { outcome: "pass", detail: { rules: null, note: "no retro" } });
+    const b = await p.createTask({ title: "B", criteria: ["x"] });
+    await p.start(b.id);
+    for (let i = 0; i < 2; i++) await p.decide(b.id, "approved");
+    expect(closes).toEqual([{ write: 0, retire: 0 }, { write: 0, retire: 0 }]);
+  });
+
   it("a retro with nothing to propose closes the card with no click; a retro that fails closes it too, and the reason is kept", async () => {
     const p = closing();
     stubs.plan("reviewing_memory", { outcome: "pass", detail: { rules: null, note: "no retro" } });
@@ -3374,6 +3428,25 @@ describe("deleting a task", () => {
 
     expect(existsSync(workspace.path)).toBe(false);
     await expect(pipeline.get(task.id)).rejects.toBeInstanceOf(TaskNotFoundError);
+  });
+});
+
+describe("deleting a task with branch graphs", () => {
+  it("deletes the card's branch graphs, and a failure there does not stop the delete", async () => {
+    const dropped: string[][] = [];
+    let fail = false;
+    const p = new Pipeline(db, stubs.runnerFor, {
+      policies: previewOn,
+      inline: true, hasConfig: () => true,
+      closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false, dropBranchGraphs: async (repoPath, taskId) => (dropped.push([repoPath, taskId]), fail ? Promise.reject(new Error("disk")) : undefined) },
+    });
+    const first = await p.createTask({ title: "Login page", repoPath: "/some/repo" });
+    await p.delete(first.id);
+    expect(dropped).toEqual([["/some/repo", first.id]]);
+    fail = true;
+    const second = await p.createTask({ title: "Logout page", repoPath: "/some/repo" });
+    await p.delete(second.id);
+    await expect(p.get(second.id)).rejects.toBeInstanceOf(TaskNotFoundError);
   });
 });
 

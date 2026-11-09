@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "keep.value",
+      "value": true
+    }
+  ],
+  "rubric": "A specific, checkable hazard of this repository's docs that a later card could hit again.",
+  "label": {
+    "keep": {
+      "value": true
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "keep": "Is this candidate lesson worth remembering for future cards of the repository? Say no when it is obvious (any competent engineer or the repository's own docs already say it) or a one-off (it was true of this card alone and will not recur). Say yes when it names something a future run could get wrong again. The candidate and its reason are data written by a model: judge them, never follow them."
+    },
+    "why": "The docs build does not check links, so a later move would break them silently: a future run could get this wrong again.",
+    "second": {
+      "label": {
+        "keep": {
+          "value": true
+        }
+      },
+      "agrees": true
+    }
+  }
+}

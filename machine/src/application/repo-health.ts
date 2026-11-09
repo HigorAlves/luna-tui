@@ -14,6 +14,8 @@ export interface RepoHealthDeps {
   images: { pending(repoPath: string): Promise<string | null>; status(repoPath: string): { image: string; builtAt: string | null; lastFailure: string | null } | null };
   graph: { stampOf(repoPath: string): Promise<GraphStamp | null>; health?(repoPath: string): { building: boolean; lastFailure: string | null }; behind?(repoPath: string, commit: string): Promise<number | null> };
   watch: { health(repoPath: string): { building: boolean; lastFailure: string | null } };
+  /** Memory's sync of the repository's docs and code graph; absent when memory is off. */
+  memory?: { health(repoPath: string): { lastFailure: string | null } };
 }
 
 export async function repoHealthOf(deps: RepoHealthDeps): Promise<RepoHealth[]> {
@@ -34,6 +36,7 @@ export async function repoHealthOf(deps: RepoHealthDeps): Promise<RepoHealth[]> 
         repo,
         image: { inUse: own?.image ?? deps.machineImage, base, builtAt: own?.builtAt ?? null, lastFailure: own?.lastFailure ?? null, pendingBase: pending === null ? null : safe(pending).slice(0, 255) },
         graph: { on: policy.graph !== false, commit: stamp?.commit ?? null, behind, graphify: stamp?.graphify ?? null, builtAt: stamp?.builtAt ?? null, building: health.building, lastFailure: health.lastFailure },
+        ...(deps.memory ? { memory: deps.memory.health(repo) } : {}),
       };
     }),
   );
