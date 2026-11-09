@@ -45,8 +45,8 @@ Draft from what you read:
   flag (`--hostname`, `--host`, `-H`), its port and a ready path. The browser runs in another container, so `localhost` binding never works.
   No pages (a library, a CLI, an API with no UI): leave it out and set `policy.qa: none`.
 - **sandbox.egress.allow**: every check and the app run behind a proxy that lets out only GitHub and the package registries of the
-  lockfiles at the repo's **root**. Add what else the tree shows a need for, with a comment saying why: a nested lockfile's registry
-  (a `Cargo.lock` in a subfolder needs `index.crates.io`, `static.crates.io`, `crates.io`), a tool a script downloads (corepack fetches pnpm
+  repo's lockfiles (a tracked lockfile in a subfolder counts too, for its ecosystem's public registry). Add what else the tree shows a
+  need for, with a comment saying why: a custom registry a subfolder's lockfile names, a tool a script downloads (corepack fetches pnpm
   from `registry.npmjs.org`), fonts or assets fetched at build time (`fonts.googleapis.com`, `fonts.gstatic.com`), an API the tests call.
 
 ## 3. Ask the person what only they can decide

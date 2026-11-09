@@ -32,7 +32,7 @@ verify:
       secrets: []              # names of secrets the app needs, read from the machine's secrets folder
 sandbox:
   egress:
-    allow: [index.crates.io]   # hosts beyond the root lockfiles' registries and GitHub; `host`, `host:port` or `*.suffix`
+    allow: [fonts.googleapis.com]   # hosts beyond the lockfiles' registries and GitHub; `host`, `host:port` or `*.suffix`
   cpu: 2                       # per stage container; default 2
   memory_gb: 4                 # default 4
 ```

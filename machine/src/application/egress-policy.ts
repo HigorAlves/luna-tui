@@ -5,6 +5,8 @@ import { join } from "node:path";
 import type { CredentialOwner } from "@hardness/contracts";
 
 import { readRegularFile } from "../adapters/fs/bounded.ts";
+import { HOST_GIT } from "../adapters/git/worktree.ts";
+import { exec } from "../adapters/process/exec.ts";
 import { LOCKFILES } from "../domain/env-hash.ts";
 import { type EgressKind, egressFor } from "../domain/egress.ts";
 import { type LockfileText, registryHostsOf } from "../domain/registry-hosts.ts";
@@ -39,19 +41,33 @@ export interface EgressPolicyDeps {
   engineHosts?: readonly string[];
   /** The machine's trace endpoints a stage may reach, `host:port`, only when traces are in full mode. */
   traceEntries?: readonly string[];
+  /** The tracked lockfiles below the repository's root, as paths; the default asks git (`trackedNestedLockfiles`). */
+  nestedLockfiles?: (repoPath: string) => Promise<string[]>;
   /** Reads one lockfile; the default reads a regular file of at most 32 MB and never follows a link. */
   readLockfile?: (path: string) => Promise<string>;
 }
 
 const LOCKFILE_CAP = 32 * 1024 * 1024;
 
+const NESTED_MAX = 50;
+
+/** The lockfiles the repository tracks below its root, as paths (`board/Cargo.lock`): git's index, so never an untracked or ignored folder
+ *  (`node_modules`, `target/`), and nothing is read. At most 50. */
+export async function trackedNestedLockfiles(repoPath: string): Promise<string[]> {
+  const out = await exec("git", [...HOST_GIT, "-C", repoPath, "ls-files", "-z", "--", ...LOCKFILES.map((name) => `:(glob)*/**/${name}`)], { timeoutMs: 10_000 });
+  if (out.code !== 0) return [];
+  return out.stdout.split("\0").filter((path) => path.includes("/")).slice(0, NESTED_MAX);
+}
+
 export function egressPolicy(deps: EgressPolicyDeps): EgressPolicy {
   const read = deps.readLockfile ?? ((path: string) => readRegularFile(path, LOCKFILE_CAP));
+  const listNested = deps.nestedLockfiles ?? trackedNestedLockfiles;
   return {
     async for(request) {
       const policy = request.repoPath ? await deps.policies.for(request.repoPath) : null;
       const sandbox = policy?.factory.sandbox.egress ?? { allow: [], registries: "always" as const };
       const lockfiles: LockfileText[] = [];
+      let nested: string[] = [];
       if (request.repoPath && request.kind !== "pack") {
         for (const name of LOCKFILES) {
           try {
@@ -60,12 +76,14 @@ export function egressPolicy(deps: EgressPolicyDeps): EgressPolicy {
             // absent, a link, too big: no registry from it
           }
         }
+        // The lockfiles in subfolders the repository tracks (`board/Cargo.lock`), by path only: their ecosystems' own hosts.
+        nested = await listNested(request.repoPath).catch(() => []);
       }
       const agentLike = request.kind === "agent" || request.kind === "pack";
       const { allow, allowPrivate } = egressFor(request.kind, {
         allow: sandbox.allow,
         registries: sandbox.registries,
-        registryHosts: registryHostsOf(lockfiles),
+        registryHosts: registryHostsOf(lockfiles, nested),
         ...(request.owners ? { owners: request.owners } : {}),
         engineHosts: agentLike ? (deps.engineHosts ?? []) : [],
         targets: request.targets ?? [],
