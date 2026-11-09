@@ -8,7 +8,7 @@ import { isAbsolute, join } from "node:path";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
 import { CONFIG_FILE, type ConfigCheck, checkLunaConfigText, validateLunaConfig } from "../domain/luna-config.ts";
 import { parse as parseYaml } from "yaml";
-import { type Proof, type ProofExec, allowEntriesOf, proveConfig } from "./config-proof.ts";
+import { type Proof, type ProofExec, type ProofRig, allowEntriesOf, proveConfig } from "./config-proof.ts";
 
 const FILE_CAP = 256 * 1024;
 const JOBS_KEPT = 20;
@@ -24,6 +24,8 @@ export class ConfigProofs {
   constructor(
     private readonly deps: {
       exec: ProofExec;
+      /** Where the proof runs and how the app start is proven: a throwaway clone, never the checkout. */
+      rig: ProofRig;
       gitIdentity: (repoPath: string) => Promise<{ name: string; email: string } | null>;
       now?: () => Date;
     },
@@ -62,7 +64,7 @@ export class ConfigProofs {
     const config = validateLunaConfig(parseYaml(text) ?? {});
     const identity = await this.deps.gitIdentity(job.repoPath).catch(() => null);
     const env = identity ? { GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email } : {};
-    const proof = await proveConfig(config, { exec: this.deps.exec, repoPath: job.repoPath, signal: new AbortController().signal, env, stage: "setup" });
+    const proof = await proveConfig(config, { exec: this.deps.exec, rig: this.deps.rig, repoPath: job.repoPath, signal: new AbortController().signal, env, stage: "setup" });
     return { ...job, state: "done", finishedAt: finished(), check, proof, suggestedAllow: allowEntriesOf(proof.refused) };
   }
 

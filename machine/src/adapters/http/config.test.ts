@@ -38,7 +38,8 @@ describe("the setup skill's luna.yaml routes", () => {
   it("POST /repos/config/prove starts a job read by id, and answers 503 with no sandbox", async () => {
     const repo = mkdtempSync(join(tmpdir(), "repo-"));
     writeFileSync(join(repo, "luna.yaml"), "checks:\n  - { name: unit, run: pnpm test }\n");
-    const configProofs = new ConfigProofs({ exec: async () => ({ code: 0, stdout: "ok", stderr: "" }), gitIdentity: async () => null });
+    const rig = { workspace: async (path: string) => ({ path, close: async () => {} }), app: async () => ({ ok: true, seconds: 1, refused: [] }) };
+    const configProofs = new ConfigProofs({ exec: async () => ({ code: 0, stdout: "ok", stderr: "" }), rig, gitIdentity: async () => null });
     const app = createApp({ db, pipeline: pipeline(), bus: new Bus(), configProofs });
     const started = await app.request("/repos/config/prove", post({ repoPath: repo }));
     expect(started.status).toBe(202);

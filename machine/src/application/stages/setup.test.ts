@@ -82,6 +82,25 @@ describe("setup stage", () => {
     expect((result.detail as { config: string }).config).not.toContain("registry.npmjs.org");
   });
 
+  it("with a rig, proves in a throwaway clone (never the checkout), removes it, and proves the app start there", async () => {
+    // A proof ran `pnpm typecheck` in the person's own checkout on 2026-11-09: the install filled its node_modules with Linux binaries.
+    const withApp = { ...proposal, verify: { e2e: { start: { command: "pnpm dev --hostname 0.0.0.0", port: 3000 } } } };
+    const stateDir = mkdtempSync(join(tmpdir(), "setup-"));
+    const cwds: Array<string | undefined> = [];
+    const closed: string[] = [];
+    const run = setupRunner({
+      runPack: async () => ({ outcome: "pass", detail: { answer: { kind: "proposal", summary: "s", config: withApp } } }) as StageResult,
+      exec: async (_c, _a, options) => (cwds.push(options.cwd), { code: 0, stdout: "ok", stderr: "" }),
+      rig: { workspace: async () => ({ path: "/clones/repo-proof", close: async () => void closed.push("/clones/repo-proof") }), app: async ({ workspace }) => ({ ok: workspace === "/clones/repo-proof", seconds: 9, refused: [] }) },
+      stateDir,
+      gitIdentity: async () => null,
+    });
+    const result = await run({ task: { id: "t1", repoPath: "/repo", worktreePath: null } as unknown as TaskRow, stage: "setup", attempt: 1, runId: "r", approvals: [], signal: new AbortController().signal });
+    expect(cwds).toEqual(["/clones/repo-proof", "/clones/repo-proof"]);
+    expect(closed).toEqual(["/clones/repo-proof"]);
+    expect(result.detail).toMatchObject({ app: { ok: true, seconds: 9 }, notes: ["the app started from verify.e2e.start and answered in 9 s"] });
+  });
+
   it("still passes with a failing check, marked so you can decide, and keeps its tail", async () => {
     const { run, context } = setup({ checks: { "sh -c pnpm lint": { code: 1, stdout: "3 problems", stderr: "" } } });
     const result = await run(context);

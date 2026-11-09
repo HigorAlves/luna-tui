@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { renderLunaConfig, validateLunaConfig } from "../../domain/luna-config.ts";
-import { type ProofExec, allowEntriesOf, proveConfig } from "../config-proof.ts";
+import { type ProofExec, type ProofRig, allowEntriesOf, proveConfig } from "../config-proof.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 export { PROOF_TIMEOUT_MS, type ProofReport } from "../config-proof.ts";
@@ -17,6 +17,8 @@ export interface SetupDeps {
   runPack: (context: StageContext) => Promise<StageResult>;
   /** Runs one check in the stage image over `cwd`, with the services beside it and the proposal's egress list on top of the machine's. */
   exec: ProofExec;
+  /** Where the proof runs (a throwaway clone) and how the app start is proven; without it (tests) the checks run in the checkout. */
+  rig?: ProofRig;
   stateDir: string;
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
 }
@@ -51,7 +53,7 @@ export function setupRunner(deps: SetupDeps): StageRunner {
     const identityEnv = identity
       ? { GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email }
       : {};
-    const proven = await proveConfig(config, { exec: deps.exec, repoPath: task.repoPath, signal, env: identityEnv, stage: "setup" });
+    const proven = await proveConfig(config, { exec: deps.exec, repoPath: task.repoPath, signal, env: identityEnv, stage: "setup", ...(deps.rig ? { rig: deps.rig } : {}) });
     if (signal.aborted) return { outcome: "fail", detail: { error: "aborted" } };
     const { proof, refused } = proven;
     const runDir = join(deps.stateDir, "runs", context.runId);
@@ -67,12 +69,17 @@ export function setupRunner(deps: SetupDeps): StageRunner {
       outcome: "pass",
       detail: {
         summary: typeof answer?.summary === "string" ? answer.summary : "",
-        notes: [...(Array.isArray(answer?.notes) ? answer.notes : []), ...egressNotes],
+        notes: [
+          ...(Array.isArray(answer?.notes) ? answer.notes : []),
+          ...(proven.app ? [proven.app.ok ? `the app started from verify.e2e.start and answered in ${proven.app.seconds} s` : `the app did not start from verify.e2e.start: ${safe(proven.app.reason ?? "unknown").slice(0, 300)}`] : []),
+          ...egressNotes,
+        ],
         ...(refused.length > 0 ? { egressRefused: refused } : {}),
         config: text,
         // The base image is singled out of the long proposal: it runs the stage's process, so approving this setup does not approve it.
         ...(config.sandbox?.image?.base ? { sandboxBase: `sandbox.image.base: ${safe(config.sandbox.image.base).slice(0, 255)} (this setup sets it; approving the setup does not approve the base, which a person approves from the repository's row on the Floor)` } : {}),
         proof,
+        ...(proven.app ? { app: proven.app } : {}),
         ...(identity ? {} : { note: "git has no identity for this repo; checks that commit would fail as nobody" }),
       },
       run: { ...pack.run, transcriptPath },

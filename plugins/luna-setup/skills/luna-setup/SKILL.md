@@ -76,28 +76,29 @@ always a typo: fix it or remove it. Read the warnings to the person. Check again
 
 ## 5. Prove it in the sandbox
 
-The proof runs every check once in the machine's sandbox, with the file's services beside it and its egress list, exactly as a card's
-checks run. It reads the file from disk, so write it first. It is a job:
+The proof runs in a throwaway clone of the repository, made as a card's workspace is (never in this checkout): every check once in the
+machine's sandbox, with the file's services beside it and its egress list, exactly as a card's checks run; then, when the file has
+`verify.e2e.start`, the app is started the way the browser check starts it and must answer its ready path. It reads the file from disk,
+so write it first. It is a job:
 
 ```bash
 JOB=$(curl -sf -X POST -H "$AUTH" -H 'content-type: application/json' -d "{\"repoPath\":\"$(pwd -P)\"}" "$LUNA/repos/config/prove" | jq -r .id)
 until [ "$(curl -sf -H "$AUTH" "$LUNA/repos/config/prove/$JOB" | jq -r .state)" != running ]; do sleep 15; done
-curl -sf -H "$AUTH" "$LUNA/repos/config/prove/$JOB" | jq '{state, error, check, proof: (.proof | {proof: [.proof[] | {name, ok, tail}], refused}), suggestedAllow}'
+curl -sf -H "$AUTH" "$LUNA/repos/config/prove/$JOB" | jq '{state, error, check, proof: (.proof | {proof: [.proof[] | {name, ok, tail}], app, refused}), suggestedAllow}'
 ```
 
-A proof can take as long as the repo's slowest check (up to 30 minutes); poll in the background and tell the person it is running.
-Then, for each result:
+A proof installs the dependencies in the clone and runs every check, so it can take a while (up to 30 minutes, plus the app's
+`ready_timeout_s`); poll in the background and tell the person it is running. Then, for each result:
 - **A check failed**: read its `tail`. A wrong command or folder is yours to fix. A missing service or env is yours to add. A host in
   `refused` explains most "fetch failed" and "could not resolve" errors.
 - **`suggestedAllow`** names the hosts a check was refused, as entries for `sandbox.egress.allow`. Do not add them silently: show each with
   the check that wanted it, and add the ones the person agrees a check needs. A host nobody expected is worth a question, not an entry.
 - A check that cannot pass in a sandbox (it needs a real cloud account, a GPU, Docker inside) comes out of `checks`, with a comment.
+- **`app`** is the app start: `ok` with the `seconds` it took to answer, or the `reason` it did not and its `logTail`. Not answering is
+  usually a `localhost` binding (bind `0.0.0.0`), the wrong port or ready path, a `ready_timeout_s` too short for a first build, an env
+  var the app reads (a service's `exports`, or a secret in `verify.e2e.start.secrets`), or a host in `refused` (fonts, an API).
 
-Prove again after every change, until every check passes or the person accepts what still fails.
-
-**The app start is not part of the proof.** Try it on the host instead: run the command in the background, wait for the port, request the
-ready path, and stop it. If it serves, say it worked here and that the first card's browser check is its real test (the sandbox may
-still refuse a host it needs: the card names it).
+Prove again after every change, until every check passes and the app answers, or the person accepts what still fails.
 
 ## 6. Open it as a PR
 
