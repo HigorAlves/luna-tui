@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { bringBack, copiedSettings, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, moveToClone, publishBranch, removeClone, unpushedCommits } from "./clone.ts";
 import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
-import { branchBase, changedPaths, commitAll, ensureWorktree, removeWorktree, workspaceFor } from "./worktree.ts";
+import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, workspaceFor } from "./worktree.ts";
 
 const base = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"];
 /** git in a repository of the user's. */
@@ -372,5 +372,27 @@ describe("what a card's workspace leaves behind", () => {
     expect(existsSync(workspace.path)).toBe(true);
     expect(existsSync(`${workspace.path}.verify-run-1`)).toBe(true);
     expect(machineRepoRoot()).toBe(stateRoot);
+  });
+});
+
+describe("nestedLockfilesAt", () => {
+  it("lists the lockfiles below the root of the card's commit by path and blob: never the folder, never a dependency's own", async () => {
+    const { repo, dir } = repository("nested-locks-");
+    for (const [path, text] of [["Cargo.lock", "root"], ["board/Cargo.lock", "board"], ["tools/web/package-lock.json", "{}"], ["vendor/x/go.sum", "v"], ["web/node_modules/dep/yarn.lock", "d"], ["docs/Cargo.lock.md", "no"]] as const) {
+      mkdirSync(join(repo, path, ".."), { recursive: true });
+      writeFileSync(join(repo, path), text);
+    }
+    git(repo, "add", "-A", "-f");
+    git(repo, "commit", "-q", "-m", "locks");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    // A file the container wrote in the folder is not in the commit, so it is not a lockfile here.
+    mkdirSync(join(workspace.path, "planted"), { recursive: true });
+    writeFileSync(join(workspace.path, "planted/Cargo.lock"), "x");
+    const head = wgit(workspace.path, "rev-parse", "HEAD");
+    const found = await nestedLockfilesAt(workspace.path, head, ["Cargo.lock", "package-lock.json", "go.sum", "yarn.lock"]);
+    expect(Object.keys(found).sort()).toEqual(["board/Cargo.lock", "tools/web/package-lock.json"]);
+    expect(found["board/Cargo.lock"]).toBe(git(repo, "rev-parse", "HEAD:board/Cargo.lock"));
+    expect(await nestedLockfilesAt(workspace.path, "not-a-sha", ["Cargo.lock"])).toEqual({});
   });
 });

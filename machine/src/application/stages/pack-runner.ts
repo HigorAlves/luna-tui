@@ -22,8 +22,10 @@ import {
   lockfilesAt,
   repoHead,
   defaultBranch,
+  onDefaultBranch,
   dirtyFiles,
   ownedWorkspace,
+  readCommitDiff,
   resetWorktree,
   restoreFiles,
   stackOf,
@@ -54,7 +56,7 @@ import { type Decide, buildChecks, buildWatch, cardSearchAnswers } from "./build
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
-import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
+import { PACK_LIMITS, approvedScenarios, buildStageInput } from "../../domain/stage-input.ts";
 import { reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
 import type { Graph } from "../graph.ts";
@@ -170,6 +172,8 @@ export interface AgentExtra {
   ship?: ShipContext;
   /** implementing: every path of the tests commit, protected from change. */
   testsFiles?: string[];
+  /** implementing: the source files that hold Rust's inline tests, which the implementer may change. */
+  inlineTests?: string[];
   /** implementing, feature route: the commit the scope is measured from (the tests commit the machine made); absent, the branch's base. */
   scopeBase?: string;
   /** implementing: the tests Build's tests step made, one per scenario. */
@@ -358,6 +362,11 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
 
   // The browser run drives ONE target, chosen here, and holds only that target's credential.
   const e2eTarget = pack === "e2e" ? (extra.qaTarget !== undefined ? extra.qaTarget : (policy.qaTargets[0] ?? null)) : null;
+  // Verify is told which files the machine's own tests commit added, so a "which files change" criterion is judged without them.
+  const testsRead = pack === "verifying" && context.testsCommit ? await readCommitDiff(workspace.path, context.testsCommit).catch(() => null) : null;
+  const testsCommit = testsRead
+    ? { sha: context.testsCommit!, files: testsRead.nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => /^[AMCR]/.test(status)).map((cols) => cols[cols.length - 1] ?? "").filter(Boolean) }
+    : null;
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -368,6 +377,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     approvals: context.approvals,
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
     baseCommit,
+    ...(testsCommit ? { testsCommit } : {}),
+    ...(context.unlockedTests?.length ? { unlockedTests: context.unlockedTests } : {}),
     graph: graphContext,
     ci: extra.ci ?? null,
     review: extra.review ?? null,
@@ -444,6 +455,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           planPresent: input.plan != null,
           ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
           ...(extra.testsFiles?.length ? { protectedPaths: extra.testsFiles } : {}),
+          ...(extra.inlineTests?.length ? { inlineTests: extra.inlineTests } : {}),
+          ...(task.repoPath ? { repoFiles: (paths: string[]) => onDefaultBranch(task.repoPath!, paths) } : {}),
           get decide() {
             return deps.decide ?? null;
           },
@@ -698,7 +711,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     });
   }
   if (output.outcome === "test_change") {
-    return merged({ ...mapped, detail: { request: output.summary } });
+    // The request itself (which test, why, what to change) is what the replan and the person at the plan gate read; the summary is one line.
+    const asked = (output.answer as { request?: unknown } | null)?.request;
+    const request = typeof asked === "string" && asked.trim() ? asked : output.summary;
+    return merged({ ...mapped, detail: { request, summary: output.summary, reason: `the implementer asks to change a locked test: ${output.summary}`.slice(0, 600) } });
   }
 
   // The agent stopped on purpose. Runners before the `escalated` outcome reported this as a pass.
@@ -745,7 +761,14 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     // Tests present at the start of the run are locked; implementing has a test_change
     // escape hatch, verifying has none — it may only ever add a new test file.
     const nameStatus = await diffNameStatus(workspace.path, inputCommit, "HEAD");
-    const locked = lockedFilesTouched(nameStatus);
+    // Locked are the repo's own tests (on its default branch). A test only a card's branch has was written for that work by the harness
+    // (a tests step, an earlier card it builds on): the card may fix it. A README card's git-history test failed CI with the implementer
+    // forbidden to touch it. Scenario tests stay protected by the scope check (a weakened test is a blocker).
+    const touchedTests = lockedFilesTouched(nameStatus);
+    const repoTests = touchedTests.length && task.repoPath ? await onDefaultBranch(task.repoPath, touchedTests).catch(() => new Set(touchedTests)) : new Set(touchedTests);
+    // A test a person approved changing (the plan approved after the implementer's test-change request) is not locked for this card.
+    const unlocked = new Set(context.unlockedTests ?? []);
+    const locked = touchedTests.filter((path) => repoTests.has(path) && !unlocked.has(path));
     let replayed = false;
     let replayError: string | null = null;
     if (locked.length > 0) {
@@ -753,7 +776,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       // tests that were there must still pass against the new code, unchanged. Put the
       // originals back, run the project's test command, then restore the agent's versions.
       // A deleted or renamed-away test file has nothing to replay and stays a hard fail.
-      const removed = lockedFilesRemoved(nameStatus);
+      const removed = lockedFilesRemoved(nameStatus).filter((path) => repoTests.has(path));
       const found = removed.length === 0 ? await (deps.detect ?? detectChecks)(workspace.path) : null;
       if (found?.test) {
         await restoreFiles(workspace.path, inputCommit, locked);
@@ -914,7 +937,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     const answer = answerOf(output.answer);
     // The v2.2 scenarios (given/when/then, each tied to its criterion by id) first; an answer with v1 cases keeps them.
     const parsed = z.array(AnswerScenario).safeParse(answer?.scenarios);
-    const scenarios = parsed.success && parsed.data.length > 0 ? scenariosOfAnswer(parsed.data, criteriaOf(extra.plan?.criteria ?? task.criteria), extra.plan?.round ?? 1) : null;
+    const scenarios = parsed.success && parsed.data.length > 0 ? scenariosOfAnswer(parsed.data, criteriaOf(extra.plan?.criteria ?? task.criteria), extra.plan?.round ?? 1, approvedScenarios(context.approvals)) : null;
     const cases = scenarios ?? answer?.cases;
     return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, cases: Array.isArray(cases) ? cases : [] } });
   }

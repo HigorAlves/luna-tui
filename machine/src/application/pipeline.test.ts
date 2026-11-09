@@ -19,7 +19,7 @@ import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { ApprovalEntity } from "../adapters/persistence/schemas.ts";
-import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
+import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, testPathsIn, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureClone } from "../adapters/git/clone.ts";
@@ -536,6 +536,20 @@ describe("Build's budget", () => {
     expect(gate?.payload.reason).toMatch(/budget is spent: 16 of 15 iterations/);
     expect(gate?.payload.reason).toMatch(/tokens not counted/);
     expect((await p.events(task.id)).some((e) => e.kind === "build.budget")).toBe(true);
+  });
+
+  it("runs Build again with a fresh budget when a person approves the spent-budget escalation, once per approval", async () => {
+    const ran: string[] = [];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), { outcome: "fail" as const, events: events(16) }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(1);
+    expect((await p.get(task.id)).state).toBe("escalated");
+    // Approving the spent budget runs the implementer again, which it never did before (the same spent budget escalated at once).
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(2);
+    expect((await p.events(task.id)).filter((e) => e.kind === "build.budget_reset")).toHaveLength(1);
   });
 
   it("counts the runtime's tokens from the finish row, and a run that reports none leaves them uncounted", async () => {
@@ -2140,6 +2154,37 @@ describe("retries and escalation", () => {
     expect(escalated).toMatchObject({ state: "escalated", reason: "triage failed" });
     const finished = (await pipeline.events(task.id)).find((e) => e.kind === "stage.finished");
     expect(finished?.payload).toMatchObject({ status: "failed", error: "container exited with 137" });
+  });
+});
+
+describe("a test change a person approves", () => {
+  it("carries the request to the replan, and unlocks the test it names for the next Build once the plan is approved", async () => {
+    const seen: Array<{ stage: string; ctx: StageContext }> = [];
+    const runnerFor = (stage: TaskState): StageRunner => async (ctx) => (seen.push({ stage, ctx }), stubs.runnerFor(stage)(ctx));
+    pipeline = new Pipeline(db, runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, revertCommit: async () => {} });
+    const request = "In site/src/components/landing/static-sections.test.tsx, the Pricing test asserts the old suffix '+ your Claude'; change it to read the plan's suffix.";
+    stubs.plan(
+      "implementing",
+      { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" } },
+      { outcome: "test_change", detail: { request, summary: "a locked test pins the old suffix", reason: "the implementer asks to change a locked test: a locked test pins the old suffix" } },
+    );
+    stubs.plan("verifying", { outcome: "fail", run: { inputCommit: "aaa", outputCommit: "bbb" }, detail: { findings: [] } });
+    const task = await newTask();
+    expect((await startAndApprove(task.id)).state).toBe("awaiting_approval");
+    // The replan read the request, word for word.
+    const replanned = seen.filter((s) => s.stage === "test_design").at(-1)!.ctx;
+    expect(replanned.replan?.reason).toContain("static-sections.test.tsx");
+    const asked = (await pipeline.events(task.id)).find((e) => e.kind === "transition" && e.payload.outcome === "test_change");
+    expect(asked?.payload.reason).toMatch(/asks to change a locked test/);
+    // A person approves the new plan: the next Build may change exactly that test.
+    await pipeline.decide(task.id, "approved");
+    const next = seen.filter((s) => s.stage === "implementing").at(-1)!.ctx;
+    expect(next.unlockedTests).toEqual(["site/src/components/landing/static-sections.test.tsx"]);
+  });
+
+  it("unlocks nothing before a plan is approved after the request", async () => {
+    expect(testPathsIn("no test is named here")).toEqual([]);
+    expect(testPathsIn("change web/cart.test.ts and docs/api.md; not ../x.test.ts or /abs/y.test.ts")).toEqual(["web/cart.test.ts"]);
   });
 });
 

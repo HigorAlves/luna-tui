@@ -218,3 +218,21 @@ describe("the v2.2 plan contracts", () => {
     });
   });
 });
+
+describe("scenariosOfAnswer across a re-plan", () => {
+  const s = (when: string, then: string) => ({ criterion_ref: "C1", type: "happy" as const, given: "a page", when, then, data_needs: [], layer: "unit" as const });
+  const criteria = [{ id: "C1", text: "c1" }];
+  const first = scenariosOfAnswer([s("a", "one"), s("b", "two"), s("c", "three")], criteria, 1);
+
+  it("numbers S1.. by position with no earlier plan", () => {
+    expect(first.map((x) => x.id)).toEqual(["S1", "S2", "S3"]);
+  });
+  it("keeps the id of an unchanged scenario and gives an inserted one the next number (the site card's re-plan shifted every id after S20)", () => {
+    const again = scenariosOfAnswer([s("a", "one"), s("new", "inserted"), s("b", "two"), s("c ", "Three")], criteria, 2, first);
+    expect(again.map((x) => x.id)).toEqual(["S1", "S4", "S2", "S3"]);
+  });
+  it("never gives two scenarios one id, and numbers new ones past the earlier plan's", () => {
+    const twice = scenariosOfAnswer([s("a", "one"), s("a", "one"), s("z", "new")], criteria, 2, first);
+    expect(twice.map((x) => x.id)).toEqual(["S1", "S4", "S5"]);
+  });
+});

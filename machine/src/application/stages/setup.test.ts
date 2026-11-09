@@ -65,6 +65,42 @@ describe("setup stage", () => {
     expect(calls[0]!.options).toMatchObject({ cwd: "/repo", services: proposal.services, env: expect.objectContaining({ GIT_AUTHOR_NAME: "Ada L" }) });
   });
 
+  it("proves with the proposal's own egress list, and names the hosts a check was refused with the entries to add, without adding them", async () => {
+    // This week's runs: board/'s crates hosts and corepack's npm were refused until a person read the logs and listed them by hand.
+    const withEgress = { ...proposal, sandbox: { egress: { allow: ["index.crates.io"] } } };
+    const { run, context, calls } = setup({
+      pack: { outcome: "pass", detail: { answer: { kind: "proposal", summary: "s", config: withEgress } } } as StageResult,
+      checks: {
+        "sh -c pnpm lint": { code: 1, stdout: "", stderr: "corepack: fetch failed", blocked: [{ host: "registry.npmjs.org", port: 443, via: "connect", reason: "not_listed", count: 2 }, { host: "10.0.0.1", port: 80, via: "http", reason: "address", count: 1 }, { host: "fonts.gstatic.com", port: 8443, via: "connect", reason: "not_listed", count: 1 }] } as ExecResult,
+      },
+    });
+    const result = await run(context);
+    expect(calls[0]!.options).toMatchObject({ egressAllow: ["index.crates.io"] });
+    expect(result.detail).toMatchObject({ egressRefused: ["registry.npmjs.org:443", "fonts.gstatic.com:8443"] });
+    expect((result.detail as { notes: string[] }).notes.at(-1)).toContain("add to sandbox.egress.allow: registry.npmjs.org, fonts.gstatic.com:8443");
+    // The file the gate shows is the proposal's: nothing was added to it.
+    expect((result.detail as { config: string }).config).not.toContain("registry.npmjs.org");
+  });
+
+  it("with a rig, proves in a throwaway clone (never the checkout), removes it, and proves the app start there", async () => {
+    // A proof ran `pnpm typecheck` in the person's own checkout on 2026-11-09: the install filled its node_modules with Linux binaries.
+    const withApp = { ...proposal, verify: { e2e: { start: { command: "pnpm dev --hostname 0.0.0.0", port: 3000 } } } };
+    const stateDir = mkdtempSync(join(tmpdir(), "setup-"));
+    const cwds: Array<string | undefined> = [];
+    const closed: string[] = [];
+    const run = setupRunner({
+      runPack: async () => ({ outcome: "pass", detail: { answer: { kind: "proposal", summary: "s", config: withApp } } }) as StageResult,
+      exec: async (_c, _a, options) => (cwds.push(options.cwd), { code: 0, stdout: "ok", stderr: "" }),
+      rig: { workspace: async () => ({ path: "/clones/repo-proof", close: async () => void closed.push("/clones/repo-proof") }), app: async ({ workspace }) => ({ ok: workspace === "/clones/repo-proof", seconds: 9, refused: [] }) },
+      stateDir,
+      gitIdentity: async () => null,
+    });
+    const result = await run({ task: { id: "t1", repoPath: "/repo", worktreePath: null } as unknown as TaskRow, stage: "setup", attempt: 1, runId: "r", approvals: [], signal: new AbortController().signal });
+    expect(cwds).toEqual(["/clones/repo-proof", "/clones/repo-proof"]);
+    expect(closed).toEqual(["/clones/repo-proof"]);
+    expect(result.detail).toMatchObject({ app: { ok: true, seconds: 9 }, notes: ["the app started from verify.e2e.start and answered in 9 s"] });
+  });
+
   it("still passes with a failing check, marked so you can decide, and keeps its tail", async () => {
     const { run, context } = setup({ checks: { "sh -c pnpm lint": { code: 1, stdout: "3 problems", stderr: "" } } });
     const result = await run(context);

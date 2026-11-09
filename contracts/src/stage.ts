@@ -642,6 +642,8 @@ export const PlanRisk = z.object({
 export type PlanRisk = z.infer<typeof PlanRisk>;
 
 export const PlanContext = z.object({
+  /** The machine's fact that every file the plan touches is documentation (or a test): the test designer writes reading checks, no test. */
+  docsOnly: z.boolean().optional(),
   record: TriageRecord.nullable(),
   brief: z.string(),
   criteria: z.array(z.string()),
@@ -691,8 +693,10 @@ export const CheckContext = z.object({
   /** red, for a scenario's test (Build's tests step): the scenario, and the machine's fact that its tagged test is in the diff. */
   scenario: z.object({ id: z.string(), title: z.string(), given: z.string().nullable().optional(), when: z.string().nullable().optional(), then: z.string().nullable().optional(), approach: z.string().optional() }).optional(),
   exists: z.boolean().optional(),
-  /** red: the failing output's tail. */
+  /** red: the failing output's tail: the test writer's own report of it. */
   output: z.string().optional(),
+  /** red: the tagged test's source, read by the machine from the worktree (capped): the writer's report alone is not evidence of why the test fails. */
+  test: z.string().optional(),
   planned: z.array(z.string()).optional(),
   changed: z.array(z.string()).optional(),
   declared: z.array(z.object({ path: z.string(), reason: z.string() })).optional(),
@@ -1103,6 +1107,14 @@ export const StageInput = z.object({
     sweepFailures: z.array(z.object({ name: z.string(), tail: z.string() })).optional(),
     /** Where the task branch forked from the repo; verifying diffs against it. */
     baseCommit: z.string().nullable().optional(),
+    /** verifying: how many approved scenarios are browser checks the e2e stage runs after Verify (left out of `testCases`). */
+    browserScenarios: z.number().int().nonnegative().optional(),
+    /** implementing: locked test files a person approved changing, after the implementer's test-change request named them. */
+    unlockedTests: z.array(z.string()).optional(),
+    /** implementing and verifying: the machine's fact that the approved plan touches only documentation (domain/docs-only.ts): no test is written for it. */
+    docsOnly: z.boolean().optional(),
+    /** verifying: the commit the machine itself made for the scenario tests (Build's tests step) and its files. They are the harness's, not the change the ticket asks for. */
+    testsCommit: z.object({ sha: z.string().regex(/^[0-9a-f]{7,64}$/), files: z.array(z.string()) }).nullable().optional(),
     /** For ci_watch: what the host fetched, since the sandbox has no gh credential. */
     ci: CiContext.nullable().optional(),
     /** For reviewing_memory: the last implementing run's slice ledger. */

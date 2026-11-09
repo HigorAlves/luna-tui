@@ -28,6 +28,8 @@ export interface OneRun {
   extraEnv?: Record<string, string>;
   /** Which list the run gets: the pack list (default, no repository) or the list a real run of an agent pack gets (an eval measures what runs). */
   egressKind?: "pack" | "agent";
+  /** How long to wait for a login another run holds (the Codex one is one run at a time); absent, the run's own time limit. */
+  credentialWaitMs?: number;
   signal?: AbortSignal;
 }
 
@@ -40,16 +42,16 @@ export interface OneRunDeps {
 }
 
 /** The run's result when the container left a readable one; `error` says why when it did not. */
-export type OneRunResult = { output: StageOutput; error: null } | { output: null; error: string };
+export type OneRunResult = { output: StageOutput; error: null } | { output: null; error: string; /** The login was held by another run for the whole wait: nothing ran. */ credentialBusy?: true };
 
 /** Runs `run.input` once. A missing credential rejects (NoCredentialError); every other failure,
  *  a credential another run held past the timeout included, is in `error`. */
 export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRunResult> {
   let credential;
   try {
-    credential = await deps.credentials.prepare(run.engine, run.runDir, { signal: run.signal, timeoutMs: run.input.limits.timeoutMs });
+    credential = await deps.credentials.prepare(run.engine, run.runDir, { signal: run.signal, timeoutMs: run.credentialWaitMs ?? run.input.limits.timeoutMs });
   } catch (error) {
-    if (error instanceof CredentialWaitError) return { output: null, error: error.message };
+    if (error instanceof CredentialWaitError) return { output: null, error: error.message, ...(run.signal?.aborted ? {} : { credentialBusy: true as const }) };
     throw error;
   }
   const egress = deps.egress ? await deps.egress.for({ repoPath: null, kind: run.egressKind ?? "pack", owners: [credentialOwner(run.engine)] }).catch((error) => credential.release().then(() => Promise.reject(error))) : undefined;

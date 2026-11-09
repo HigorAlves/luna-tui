@@ -30,7 +30,8 @@ import { DecisionLog } from "./application/decision-log.ts";
 import { ownCalls } from "./application/pack-runs.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
 import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
-import { commitsSince, headCommit } from "./adapters/git/worktree.ts";
+import { commitsSince, gitIdentity, headCommit } from "./adapters/git/worktree.ts";
+import { ConfigProofs } from "./application/config-proofs.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
 import { loadCursor } from "./application/ship-cursor.ts";
@@ -289,7 +290,7 @@ const stackDeps = {
 };
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
-const { real, verifyPack, checksExec, agentDeps, shipGateProbe } = await buildRealStages(
+const { real, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -797,6 +798,7 @@ const app = createApp({
   slack: slackInbox,
   ...(jiraTasks ? { jira: jiraTasks } : {}),
   ...(packRuns ? { runs: packRuns } : {}),
+  ...(checksExec && proofRig ? { configProofs: new ConfigProofs({ exec: checksExec, rig: proofRig, gitIdentity }) } : {}),
   sla: (task) => slaClocks.for(task),
   slaAll: (tasks) => slaClocks.forAll(tasks),
   shipView: async (taskId) => shipViewOf(await loadCursor(config.stateDir, taskId)),

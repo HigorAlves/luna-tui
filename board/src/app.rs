@@ -5361,7 +5361,7 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
         app.handle_key(KeyEvent::from(KeyCode::Char('r')));
         assert!(matches!(app.mode, Mode::Help { .. }), "a dim key keeps the sheet");
-        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("only a setup, plan or tests go back"));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("only a setup, plan, tests or escalation go back"));
         app.handle_key(KeyEvent::from(KeyCode::Char('%')));
         assert!(matches!(app.mode, Mode::Help { .. }));
         assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("% is not a key here; esc closes"));

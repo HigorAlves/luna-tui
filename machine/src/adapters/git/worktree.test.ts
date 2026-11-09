@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { ensureClone } from "./clone.ts";
 import { machineGitDir } from "./machine-repo.ts";
-import { refuseHugeUntracked, UNTRACKED_LIMIT, changedSince, commitsSince, currentBranch, dirtyFiles, headCommit, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, checkoutHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { refuseHugeUntracked, UNTRACKED_LIMIT, changedSince, commitsSince, currentBranch, dirtyFiles, headCommit, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, checkoutHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, onDefaultBranch, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -271,6 +271,22 @@ describe("graph helpers", () => {
   });
 });
 
+describe("dirtyFiles", () => {
+  it("keeps the status columns of the first line: ` M path` stays ` M path`, so the path starts at the fourth character", async () => {
+    const root = workspaceWith("dirty-", "a\n");
+    writeFileSync(join(root, "a.txt"), "changed\n");
+    writeFileSync(join(root, "new.txt"), "n\n");
+    const lines = await dirtyFiles(root);
+    expect(lines).toContain(" M a.txt");
+    expect(lines).toContain("?? new.txt");
+    // The install restores what it changed from these lines: every one must name a real path.
+    expect(lines.filter((l) => !l.startsWith("??")).map((l) => l.slice(3))).toEqual(["a.txt"]);
+  });
+  it("is empty for a clean worktree", async () => {
+    expect(await dirtyFiles(workspaceWith("clean-", "a\n"))).toEqual([]);
+  });
+});
+
 describe("the tests step's git", () => {
   const repoWith = () => {
     const root = workspaceWith("tests-step-", "a\n");
@@ -284,6 +300,20 @@ describe("the tests step's git", () => {
     expect(pending.nameStatus).toBe("A\tcart.test.ts");
     expect(pending.diff).toContain("+it('x @scenario:S1'");
     expect(pending.modes).toEqual({ "cart.test.ts": "100644" });
+  });
+
+  it("reads where a changed Rust file's #[cfg(test)] module is, from the index and from the commit", async () => {
+    const root = workspaceWith("rust-inline-", "a\n");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "ui.rs"), "fn draw() {}\n");
+    wgit(root, "add", "-A");
+    wgit(root, "commit", "-q", "-m", "ui");
+    const base = wgit(root, "rev-parse", "HEAD");
+    writeFileSync(join(root, "src", "ui.rs"), `fn draw() {}\n#[cfg(test)]\nmod tests {\n    // @scenario:S1\n    #[test] fn s1() { assert!("}".len() == 1); }\n}\n`);
+    const pending = await stagePending(root, base);
+    expect(pending.testRegions).toEqual({ "src/ui.rs": [[2, 6]] });
+    const sha = await commitAll(root, "test: scenarios");
+    expect((await readCommitDiff(root, sha!))?.testRegions).toEqual({ "src/ui.rs": [[2, 6]] });
   });
 
   it("refuses to stage a folder nobody ignored that is too big to be source, naming it, instead of committing a package manager's store", async () => {
@@ -460,3 +490,27 @@ describe("the branch of a part of a split", () => {
     expect(workspaceFor({ id: own, title: "Fix the bug", card: { splitFrom: origin } } as never, "/r/app", "/w").branch).toBe("task/22222222-fix-the-bug");
   });
 });
+
+describe("onDefaultBranch", () => {
+  it("names the repo's own files (on origin's default branch), not one only a card's branch added", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "default-branch-")));
+    const origin = join(root, "origin.git");
+    const repo = join(root, "repo");
+    const g = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+    execFileSync("git", ["clone", "-q", origin, repo]);
+    mkdirSync(join(repo, "contracts/src"), { recursive: true });
+    writeFileSync(join(repo, "contracts/src/readme.test.ts"), "it('x', () => {})\n");
+    g(repo, "add", "-A");
+    g(repo, "commit", "-q", "-m", "base");
+    g(repo, "push", "-q", "origin", "main");
+    g(repo, "remote", "set-head", "origin", "main");
+    // The card's branch adds a test of its own.
+    g(repo, "checkout", "-q", "-b", "task/x");
+    writeFileSync(join(repo, "contracts/src/readme-ste.test.ts"), "it('y', () => {})\n");
+    g(repo, "add", "-A");
+    g(repo, "commit", "-q", "-m", "test: scenarios");
+    expect([...(await onDefaultBranch(repo, ["contracts/src/readme.test.ts", "contracts/src/readme-ste.test.ts"]))]).toEqual(["contracts/src/readme.test.ts"]);
+  });
+});
+

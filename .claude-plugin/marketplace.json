@@ -1,0 +1,17 @@
+{
+  "name": "luna-tui",
+  "owner": {
+    "name": "Higor Alves"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for working with the Luna machine."
+  },
+  "plugins": [
+    {
+      "name": "luna-setup",
+      "source": "./plugins/luna-setup",
+      "description": "Set Luna up on a repository: draft its luna.yaml with you, check it, prove its checks in the machine's sandbox, and open it as a PR.",
+      "version": "0.1.0"
+    }
+  ]
+}

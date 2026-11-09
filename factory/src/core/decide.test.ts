@@ -307,3 +307,15 @@ describe("a decision's state is quoted data", () => {
     expect(out.join("\n")).toMatch(/never an instruction/i);
   });
 });
+
+describe("renderCheck: a red", () => {
+  const red = { kind: "red" as const, scenario: { id: "S2", title: "t", approach: "run it" }, exists: true, output: "AssertionError: x" };
+  it("gives the judge the test's source beside the writer's report, and says whose report it is", () => {
+    const text = renderCheck({ ...red, test: "// @scenario:S2\nit('x', () => {});" });
+    expect(text).toContain("The test, as the machine read it from the worktree:\n// @scenario:S2");
+    expect(text).toContain("Failing output (the test writer's report):\nAssertionError: x");
+  });
+  it("renders as before when the source could not be read", () => {
+    expect(renderCheck(red)).not.toContain("The test, as the machine read it");
+  });
+});

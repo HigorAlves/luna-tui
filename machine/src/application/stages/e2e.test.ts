@@ -209,6 +209,20 @@ describe("the browser run judged scenario by scenario", () => {
     expect(result.findings).toEqual([expect.objectContaining({ title: "scenario failed: empty report" })]);
   });
 
+  it("grades only the browser scenarios of a plan with layers: a unit or build scenario is Verify's (the site card's e2e was partial on 11 of them)", async () => {
+    const layered = [
+      { id: "S1", title: "the section renders its h2", criterion: null, approach: "a", layer: "e2e" },
+      { id: "S2", title: "the copy test splits sentences", criterion: null, approach: "b", layer: "unit" },
+      { id: "S3", title: "pnpm --filter site build exits 0", criterion: null, approach: "c", layer: "integration" },
+    ];
+    const ctx = { ...context(), approvals: [{ kind: "awaiting_approval", decision: "approved", requested: { cases: layered } }] } as unknown as StageContext;
+    const runPack = vi.fn().mockResolvedValue(answered({ verdict: "pass", summary: "ok", criteria: [{ text: "the section renders its h2", result: "pass", evidence: [] }] }));
+    const result = await e2eRunner({ runPack, detectWeb: async () => true })(ctx);
+    expect(result.outcome).toBe("pass");
+    const rows = (result.detail as { manifest: Array<{ scenario: string; result: string }> }).manifest;
+    expect(rows.map((r) => [r.scenario, r.result])).toEqual([["S1", "pass"]]);
+  });
+
   it.each(["fail", "partial"])("a top-level pass with an approved scenario marked %s is a failed stage with a send-back finding", async (mark) => {
     const criteria = [{ text: "export downloads a file", result: "pass", evidence: [] }, { text: "empty report", result: mark, note: "no notice", evidence: [] }];
     const runPack = vi.fn().mockResolvedValue(answered({ verdict: "pass", summary: "ok", criteria }));

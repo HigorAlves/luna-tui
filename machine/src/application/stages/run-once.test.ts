@@ -75,7 +75,7 @@ describe("runPackOnce", () => {
           },
         },
       );
-    expect(await once(new CredentialWaitError("waited 3 min for the Codex login"))).toEqual({ output: null, error: "waited 3 min for the Codex login" });
+    expect(await once(new CredentialWaitError("waited 3 min for the Codex login"))).toEqual({ output: null, error: "waited 3 min for the Codex login", credentialBusy: true });
     expect(waits[0]).toMatchObject({ timeoutMs: input.limits.timeoutMs });
     await expect(once(new NoCredentialError("no Codex login"))).rejects.toThrow(/no Codex login/);
   });

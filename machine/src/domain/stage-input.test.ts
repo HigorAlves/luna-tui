@@ -2,7 +2,7 @@ import { PACKS, type PackId, StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
-import { PACK_LIMITS, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
+import { PACK_LIMITS, browserCases, withoutBrowserCases, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
 
 const task = {
   id: "t1",
@@ -216,6 +216,28 @@ describe("buildStageInput", () => {
     expect(input.env).toEqual({ LUNA_FACTORY: "1" });
   });
 
+  it("tells the implementer and Verify, and nobody else, that an approved plan touching only documentation gets no test", () => {
+    const docsGate = { ...approvals.at(-1)!, kind: "awaiting_approval" as const, decision: "approved" as const, requested: { brief: "b", criteria: ["c1"], assumptions: [], slices: [{ title: "Rewrite", est_loc: 20, touchpoints: ["docs/README.md", "board/README.md"], acceptance: ["a"] }] } };
+    for (const stage of ["implementing", "verifying"] as const) expect(buildStageInput({ task, stage, attempt: 1, approvals: [docsGate], priorFindings: [] }).context.docsOnly).toBe(true);
+    expect(buildStageInput({ task, stage: "reviewing", attempt: 1, approvals: [docsGate], priorFindings: [] }).context).not.toHaveProperty("docsOnly");
+    const codeGate = { ...docsGate, requested: { ...docsGate.requested, slices: [{ title: "x", est_loc: 5, touchpoints: ["web/cart.ts", "docs/api.md"], acceptance: ["a"] }] } };
+    expect(buildStageInput({ task, stage: "verifying", attempt: 1, approvals: [codeGate], priorFindings: [] }).context).not.toHaveProperty("docsOnly");
+  });
+
+  it("gives a whole number of milliseconds when Build's budget has a fraction of a minute left", () => {
+    const input = buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [], budgetMinutes: 12.3456789 });
+    expect(Number.isInteger(input.limits.timeoutMs)).toBe(true);
+    expect(StageInput.safeParse(input).success).toBe(true);
+  });
+
+  it("hands Verify the machine's tests commit and its files, and nobody else", () => {
+    const testsCommit = { sha: "a7aa421", files: ["contracts/src/readme-ste.test.ts"] };
+    const verify = buildStageInput({ task, stage: "verifying", attempt: 1, approvals, priorFindings: [], baseCommit: "9c1f0e2a", testsCommit });
+    expect(StageInput.safeParse(verify).success).toBe(true);
+    expect(verify.context.testsCommit).toEqual(testsCommit);
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [], testsCommit }).context).not.toHaveProperty("testsCommit");
+  });
+
   it("carries the coverage summary to verifying only", () => {
     const coverage = { files: [{ path: "src/a.ts", added: 4, covered: 3, uncovered: [12] }], total: { added: 4, covered: 3 }, report: "coverage/lcov.info" };
     const build = (stage: "verifying" | "implementing") => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], coverage });
@@ -410,5 +432,25 @@ describe("buildContextPackInput: every context a pack is given reaches its input
     const { buildContextPackInput } = await import("./stage-input.ts");
     expect(buildContextPackInput("ticket_validity" as never, { ticket: { key: "PAY-12", title: "Refund twice" } } as never).task.title).toBe("PAY-12: Refund twice");
     expect(buildContextPackInput("conversation_assess" as never, { conversation: { channel: { id: "C1" } } } as never).task.title).toBe("Conversation");
+  });
+});
+
+describe("browserCases", () => {
+  it("keeps the e2e scenarios of a plan with layers, and every case of a plan without them", () => {
+    const layered = [{ title: "a", criterion: null, approach: "x", layer: "e2e" }, { title: "b", criterion: null, approach: "y", layer: "unit" }] as never[];
+    expect(browserCases(layered).map((c: { title: string }) => c.title)).toEqual(["a"]);
+    const v1 = [{ title: "a", criterion: null, approach: "x" }, { title: "b", criterion: null, approach: "y" }] as never[];
+    expect(browserCases(v1)).toHaveLength(2);
+  });
+});
+
+describe("Verify and the browser scenarios", () => {
+  it("leaves the browser scenarios to the e2e stage and says how many there are", () => {
+    const cases = [{ title: "renders", criterion: null, approach: "x", layer: "e2e" }, { title: "splits sentences", criterion: null, approach: "y", layer: "unit" }];
+    const gate = { id: "g", kind: "awaiting_approval", decision: "approved", reason: null, requested: { brief: "b", criteria: ["c1"], assumptions: [], slices: [], cases }, response: null, createdAt: new Date(), decidedAt: new Date() } as never;
+    const verify = buildStageInput({ task: { id: "t", title: "t", description: "", criteria: [], repoPath: "/r", branch: "b", source: null } as never, stage: "verifying", attempt: 1, approvals: [gate], priorFindings: [] });
+    expect(verify.context.testCases?.map((c: { title: string }) => c.title)).toEqual(["splits sentences"]);
+    expect(verify.context.browserScenarios).toBe(1);
+    expect(withoutBrowserCases(cases as never[])).toHaveLength(1);
   });
 });

@@ -33,7 +33,7 @@ async function saveCursor(stateDir: string, taskId: string, cursor: ShipCursor):
 import { ciContextOf, ciRunIdOf, failedChecks } from "./ci.ts";
 import { buildPr, mergePrSection } from "../../domain/prbody.ts";
 import { approvedPlan } from "../../domain/stage-input.ts";
-import { prExtraOf, pushBranch } from "./deliver.ts";
+import { prExtraOf, prTemplateOf, pushBranch } from "./deliver.ts";
 import { FACTORY_DEFAULTS } from "@hardness/contracts";
 import { type TruthSink, commentIntentTruth, eventClassTruth, fixScopeTruth } from "../decision-truth.ts";
 import { type EvidenceHandle, type FixDeps, type ReviewLoop, SECRET_REASON, carriesSecret, escalated, fixRound, headOfWorktree, judgeShip, postable, resetTo, restampPack, subContext } from "./ship-fixes.ts";
@@ -463,7 +463,11 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const failed = failedChecks(checks);
       const runIds = [...new Set(failed.map(ciRunIdOf).filter((id): id is string => Boolean(id)))].sort();
       if (failed.length === 0 || runIds.length === 0) return {};
-      const key = `${head}:${runIds.join(",")}`;
+      // A red is known by its head and its failed jobs' links: a re-run keeps the run id but its jobs get new ids, so its red is a new one even
+      // when no poll saw the checks leave failure in between (PR #216: the re-run went queued to red between polls, and the watch said nothing
+      // for half an hour instead of asking a person). A link-less check counts by its name.
+      const jobs = [...new Set(failed.map((c) => c.link ?? c.name))].sort();
+      const key = `${head}:${runIds.join(",")}:${jobs.join(",")}`;
       if (cursor.ciKey === key && !cursor.ciCycled) return {};
       cursor.ciKey = key;
       cursor.ciCycled = false;
@@ -569,7 +573,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         const current = await deps.github.prFacts(slug, number).catch(() => null);
         if (current) {
           const recordedBase = await (stack.recordedBase ?? (async (path: string) => (await stackOf(path)).sha))(wt).catch(() => null);
-          const fresh = buildPr({ task: task as never, plan: approvedPlan(context.approvals), repoSlug: slug, extra: prExtraOf(context, { base: recordedBase, head: done.head ?? null }) }).body;
+          const fresh = buildPr({ task: task as never, plan: approvedPlan(context.approvals), repoSlug: slug, extra: prExtraOf(context, { base: recordedBase, head: done.head ?? null }, await prTemplateOf(task.repoPath ?? null)) }).body;
           await deps.github.updatePrBody(slug, number, mergePrSection(current.body ?? "", fresh)).catch(() => {});
         }
         await stack.clearBase?.(task.id);
