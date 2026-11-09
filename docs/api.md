@@ -1,6 +1,6 @@
 # API
 
-The machine's HTTP API, read straight from `machine/src/adapters/http/app.ts`. Shapes are defined in `contracts/src/api.ts`.
+This is the machine's HTTP API. It comes straight from `machine/src/adapters/http/app.ts`. `contracts/src/api.ts` defines the shapes.
 
 | Method | Path | Does |
 |---|---|---|
@@ -93,16 +93,16 @@ Errors use `{ "error", "message" }`: 400 for invalid input, 404 for an unknown t
 
 ## Who may call
 
-The machine's clients are the board, Luna Notch and scripts; none is a web page. Every request, on every route (`/events` and `/health` included), passes these checks in order (`machine/src/adapters/http/access.ts`):
+The machine's clients are the board, Luna Notch and scripts. None is a web page. Every request passes these checks in order. This applies to every route, including `/events` and `/health`. The checks are in `machine/src/adapters/http/access.ts`:
 
-- **Host**: while `MACHINE_HOST` is a loopback address, a `Host` header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, else 403 `forbidden_host` (a DNS name rebound to 127.0.0.1). Beyond loopback the check is skipped and the token is required instead.
-- **Origin**: only browsers send one; any but the machine's own (`http://127.0.0.1:<port>`, `http://localhost:<port>`) is 403 `forbidden_origin`.
-- **Token**: when `MACHINE_API_TOKEN` is set (env, else `~/.config/hardness/machine-api-token`), `Authorization: Bearer <token>`, else 401 `unauthorized`. A machine bound beyond loopback with no token refuses to start. The board and the golden scripts read the same variable and file.
-- **Body**: a request that sends a body must say `Content-Type: application/json` (a `; charset=…` is fine), else 415 `unsupported_media_type`. A page can only send that across sites after a CORS preflight, which the machine never allows, so a cross-site form or `no-cors` fetch cannot create, start, merge or close anything.
+- **Host**: while `MACHINE_HOST` is a loopback address, a `Host` header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`. Any other host gets 403 `forbidden_host`. This stops a DNS name that rebinds to 127.0.0.1. Beyond loopback, the machine skips the check and requires the token instead.
+- **Origin**: only browsers send one. Any origin but the machine's own gets 403 `forbidden_origin`. The machine's own origins are `http://127.0.0.1:<port>` and `http://localhost:<port>`.
+- **Token**: when you set `MACHINE_API_TOKEN` (env, else `~/.config/hardness/machine-api-token`), each request needs `Authorization: Bearer <token>`. Without it, the response is 401 `unauthorized`. A machine that binds beyond loopback with no token refuses to start. The board and the golden scripts read the same variable and file.
+- **Body**: a request that sends a body must say `Content-Type: application/json`. A `; charset=…` is fine. Any other type gets 415 `unsupported_media_type`. A page can send that type across sites only after a CORS preflight. The machine never allows a CORS preflight. So a cross-site form or `no-cors` fetch cannot create, start, merge or close anything.
 
 ## What a run was refused
 
-A stage logs `sandbox.egress_blocked` on the card, one row per refused (host, port, via), at most 20 per stage and then one `{ step, more }` row. Payload: `{ step, host, port, via, reason, count }`; `step` is `stage`, `check`, `install`, `app`, `seed` or `deploy`; `via` is `connect`, `http` or `dns`; `reason` is `not_listed`, `address`, `private_address`, `sni_mismatch`, `unresolved` or `head_too_large`. The host is text a container chose: flattened and capped, and a secret's value in it is replaced. A container cannot write this kind (it is reserved); the board shows it as `blocked: host:port (step, via)`.
+A stage logs `sandbox.egress_blocked` on the card. It logs one row for each refused (host, port, via), at most 20 for each stage. After that it logs one `{ step, more }` row. The payload is `{ step, host, port, via, reason, count }`. The `step` is `stage`, `check`, `install`, `app`, `seed` or `deploy`. The `via` is `connect`, `http` or `dns`. The `reason` is `not_listed`, `address`, `private_address`, `sni_mismatch`, `unresolved` or `head_too_large`. The host is text that a container chose. The machine flattens and caps it, and replaces the value of a secret in it. A container cannot write this kind, because the machine reserves it. The board shows it as `blocked: host:port (step, via)`.
 
 ## Example session
 
@@ -123,7 +123,7 @@ Give a task a `"repoPath"` so the agents have a repo to work on.
 
 ## Change size and stacked cards (wave 15)
 
-- **A task's stack.** `GET /tasks` and `GET /tasks/:id` carry the card's own fields as they are: `splitFrom`, `splitPart` (`{ n, of }`), `splitInto`, `dependsOn`, `base` (`{ card, branch }`), `riskFloor` and `startWhenReady`. They hold ids, numbers and enum values only; a card with none of them shows none. A client's `POST /tasks` cannot set them.
+- **A task's stack.** `GET /tasks` and `GET /tasks/:id` carry the card's own fields as they are: `splitFrom`, `splitPart` (`{ n, of }`), `splitInto`, `dependsOn`, `base` (`{ card, branch }`), `riskFloor` and `startWhenReady`. They hold ids, numbers and enum values only. A card with none of them shows none. A client's `POST /tasks` cannot set them.
 - **Events** the pipeline alone logs (no container can): `card.split`, `card.child`, `card.held` (`reason`, `waitingOn`, `text`), `card.released`, `size.overridden` and `stack.retargeted`. The ship watch logs `ship.event { kind: "stack", class: "parent_changed" | "parent_merged" }`.
-- **The backlog.** Each entry of `GET /backlog` has `schedulable` and `blockedBy` (`{ id, kind: "card" | "item", state }`). `POST /backlog/:id/promote` of an entry that is not schedulable is `409 not_schedulable` with `blockedBy`; nothing is removed. A promoted card is made with `dependsOn` for its card dependencies, and the other items that named it name the new card.
-- **A ticket's split.** A ticket whose recommendation is `split` gets a draft of kind `split` (`children`, numbered `text`, `created` once approved) and the status `split_proposed`; with no valid split it has no draft, its assessment says `split.failed` and its status is `needs_decision`. `POST /tickets/:key/approve` on the draft creates the child tickets in the origin's own project or repository (a failure partway leaves the draft waiting with `created`; approving again goes on), marks the origin `epic` and posts one comment listing the keys; editing the draft is `409 ticket_refused`. The assessment carries `sizeEstimate` (`estLoc`, `estFiles`, `reviewable`, `confidence`).
+- **The backlog.** Each entry of `GET /backlog` has `schedulable` and `blockedBy` (`{ id, kind: "card" | "item", state }`). `POST /backlog/:id/promote` of an entry that is not schedulable answers `409 not_schedulable` with `blockedBy`. The machine removes nothing. The machine makes a promoted card with `dependsOn` for its card dependencies. The other items that named it now name the new card.
+- **A ticket's split.** A ticket whose recommendation is `split` gets a draft of kind `split`. The draft has `children`, numbered `text` and `created` once you approve it. The ticket gets the status `split_proposed`. With no valid split, the ticket has no draft. Its assessment says `split.failed`, and its status is `needs_decision`. `POST /tickets/:key/approve` on the draft creates the child tickets in the origin's own project or repository. A failure partway leaves the draft waiting with `created`. Approving again goes on. The same call marks the origin `epic` and posts one comment that lists the keys. Editing the draft gives `409 ticket_refused`. The assessment carries `sizeEstimate` (`estLoc`, `estFiles`, `reviewable`, `confidence`).
