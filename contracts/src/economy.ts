@@ -92,6 +92,20 @@ export interface EconomyConfig {
   prune: { runs: number; min_cards: number; cards: number };
 }
 
+/** What a stage's usage may carry of a run's tokens: `cached` may be missing from older numbers. */
+export type TokensIn = Pick<Tokens, "input" | "output"> & Partial<Tokens>;
+
+/** Two runs' tokens added, every field kept: the cache writes are summed when either run has them. A side that is null or absent gives the other. */
+export function sumTokens(a: TokensIn | null | undefined, b: TokensIn | null | undefined): Tokens | null {
+  if (!a && !b) return null;
+  const x = a ?? { input: 0, output: 0 };
+  const y = b ?? { input: 0, output: 0 };
+  const total: Tokens = { input: x.input + y.input, output: x.output + y.output, cached: (x.cached ?? 0) + (y.cached ?? 0) };
+  if (x.cacheWrite5m !== undefined || y.cacheWrite5m !== undefined) total.cacheWrite5m = (x.cacheWrite5m ?? 0) + (y.cacheWrite5m ?? 0);
+  if (x.cacheWrite1h !== undefined || y.cacheWrite1h !== undefined) total.cacheWrite1h = (x.cacheWrite1h ?? 0) + (y.cacheWrite1h ?? 0);
+  return total;
+}
+
 /** The price of each kind of token, relative to a fresh input token (the providers' published ratios). */
 export const EFFECTIVE_WEIGHTS = { input: 1, cacheRead: 0.1, cacheWrite5m: 1.25, cacheWrite1h: 2, output: 5 } as const;
 

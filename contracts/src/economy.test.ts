@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { Detector, EconomyGuardEvent, EconomyInput, EconomyStatus, FACTS_HEADER, FactProposal, LOOP_STUCK, Observation, ProposeContext, access, effectiveTokens, manualHeader, narrow } from "./index.ts";
+import { Detector, EconomyGuardEvent, EconomyInput, EconomyStatus, FACTS_HEADER, FactProposal, LOOP_STUCK, Observation, ProposeContext, access, effectiveTokens, manualHeader, narrow, sumTokens } from "./index.ts";
+
+describe("sumTokens", () => {
+  it("adds every field, the cache writes included, and gives the other side when one is missing", () => {
+    expect(sumTokens({ input: 100, output: 10, cached: 5, cacheWrite5m: 40 }, { input: 50, output: 5, cached: 1, cacheWrite1h: 7 })).toEqual({ input: 150, output: 15, cached: 6, cacheWrite5m: 40, cacheWrite1h: 7 });
+    expect(sumTokens({ input: 1, output: 2 }, { input: 3, output: 4 })).toEqual({ input: 4, output: 6, cached: 0 });
+    expect(sumTokens(null, { input: 3, output: 4, cacheWrite5m: 2 })).toEqual({ input: 3, output: 4, cached: 0, cacheWrite5m: 2 });
+    expect(sumTokens({ input: 3, output: 4, cached: 9 }, undefined)).toEqual({ input: 3, output: 4, cached: 9 });
+    expect(sumTokens(null, null)).toBeNull();
+  });
+});
 
 describe("economy", () => {
   it("weights tokens as they are billed: cache reads a tenth, cache writes above input, output five times", () => {
