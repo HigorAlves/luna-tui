@@ -285,13 +285,13 @@ export class TurnFollower {
   private ending: { tool: string; input: unknown } | null = null;
   private ended = false;
 
-  private readonly economy: Pick<EconomyTap, "take"> | null;
+  private readonly economy: Pick<EconomyTap, "take" | "count"> | null;
   private readonly pack: Pick<Pack, "id" | "answer">;
   private readonly maxTurns: number;
   private readonly emit: Emit;
   private readonly model: string;
 
-  constructor(pack: Pick<Pack, "id" | "answer">, maxTurns: number, emit: Emit, model = "", economy: Pick<EconomyTap, "take"> | null = null) {
+  constructor(pack: Pick<Pack, "id" | "answer">, maxTurns: number, emit: Emit, model = "", economy: Pick<EconomyTap, "take" | "count"> | null = null) {
     this.economy = economy;
     this.pack = pack;
     this.maxTurns = maxTurns;
@@ -347,8 +347,10 @@ export class TurnFollower {
       const error = data.error as { message?: string } | undefined;
       // A rejected call never started: in a stage nobody approves by hand, so the guard refused it.
       if (data.outcome === "rejected") this.calls.decided(id, "", {}, { allow: false, reason: error?.message ?? "rejected" });
-      // The tool reported this call over the bridge before it settled: its observation goes on the event.
       const asked = this.known.get(id);
+      // A tool no wrapper reports (the luna tools, `delegate`) never reached the guard: the machine's envelope counts it, so it does too.
+      if (asked && data.outcome !== "rejected" && !GUARDED.has(asked.tool)) this.economy?.count(asked.tool, asked.input, data.outcome === "completed");
+      // The tool reported this call over the bridge before it settled: its observation goes on the event.
       const reported = asked ? this.economy?.take(asked.tool, asked.input) : undefined;
       if (reported) this.calls.observed(id, reported.observation);
       const ok = data.outcome === "completed" && reported?.ok !== false;

@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import { type EconomySession, economySession } from "../../core/economy/session.ts";
 import { EconomyTap } from "./economy.ts";
-import { serveLuna } from "./run.ts";
+import { serveLuna, TurnFollower } from "./run.ts";
+import { PACKS, type RunEvent } from "@hardness/contracts";
 
 const session = (steps: ("none" | "redirect" | "stop")[]): EconomySession & { seen: { tool: string; input: unknown }[] } => {
   const seen: { tool: string; input: unknown }[] = [];
@@ -59,6 +60,57 @@ describe("EconomyTap", () => {
 
   it("answers nothing to a report it cannot read", () => {
     expect(new EconomyTap(session([]), () => {}).report({ nope: 1 })).toEqual({});
+  });
+});
+
+describe("calls the wrappers do not report", () => {
+  const stream = (turn: TurnFollower, callId: string, tool: string, input: unknown, outcome = "completed") => {
+    turn.take({ type: "call.requested", data: { callId, capability: { name: tool }, input } });
+    turn.take({ type: "call.started", data: { callId } });
+    return turn.take({ type: "call.settled", data: { callId, outcome } });
+  };
+
+  it("gives the session one settled call with no output for a tool nothing wraps, ok from the stream", () => {
+    const s = session([]);
+    const settled: { tool: string; output: string; ok: boolean }[] = [];
+    const spy = { ...s, settled: (c: Parameters<EconomySession["settled"]>[0]) => (settled.push({ tool: c.tool, output: c.output, ok: c.ok }), s.settled(c)) };
+    const turn = new TurnFollower(PACKS.implementing, 50, () => {}, "", new EconomyTap(spy, () => {}));
+    stream(turn, "c1", "delegate", { helper: "x" });
+    stream(turn, "c2", "step", { id: 1 }, "failed");
+    expect(settled).toEqual([{ tool: "delegate", output: "", ok: true }, { tool: "step", output: "", ok: false }]);
+  });
+
+  it("does not count a wrapped tool twice: its report is the call, and the stream adds nothing", () => {
+    const s = session([]);
+    const tap = new EconomyTap(s, () => {});
+    const turn = new TurnFollower(PACKS.implementing, 50, () => {}, "", tap);
+    turn.take({ type: "call.requested", data: { callId: "c1", capability: { name: "bash" }, input: { command: "ls" } } });
+    tap.report({ tool: "bash", input: { command: "ls" }, output: "", ok: true });
+    turn.take({ type: "call.started", data: { callId: "c1" } });
+    turn.take({ type: "call.settled", data: { callId: "c1", outcome: "completed" } });
+    expect(s.seen).toHaveLength(1);
+  });
+
+  it("counts no call the guard refused", () => {
+    const s = session([]);
+    const turn = new TurnFollower(PACKS.implementing, 50, () => {}, "", new EconomyTap(s, () => {}));
+    stream(turn, "c1", "delegate", {}, "rejected");
+    expect(s.seen).toHaveLength(0);
+  });
+
+  it("carries a redirect from such a call on the next report's reply, and ends the run on a stop", () => {
+    const stops: unknown[] = [];
+    const redirecting = new EconomyTap(session(["redirect"]), () => {});
+    const turn = new TurnFollower(PACKS.implementing, 50, () => {}, "", redirecting);
+    stream(turn, "c1", "delegate", {});
+    expect(redirecting.report({ tool: "bash", input: {}, output: "", ok: true })).toEqual({ append: "change approach" });
+    expect(redirecting.report({ tool: "bash", input: {}, output: "", ok: true })).toEqual({});
+
+    const stopping = new EconomyTap(session(["stop"]), (reason, call) => (stops.push([reason, call]), turn2.end(call.tool, call.input)));
+    const events: RunEvent[] = [];
+    const turn2 = new TurnFollower(PACKS.implementing, 50, (e) => events.push(e), "", stopping);
+    expect(stream(turn2, "c2", "delegate", { a: 1 })).toBe(true);
+    expect(stops).toEqual([["LOOP_STUCK: x", { tool: "delegate", input: { a: 1 } }]]);
   });
 });
 

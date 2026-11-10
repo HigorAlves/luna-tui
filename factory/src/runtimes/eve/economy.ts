@@ -33,6 +33,8 @@ export class EconomyTap {
   private readonly onStop: (reason: string, call: { tool: string; input: unknown }) => void;
   /** Observations waiting for the call.settled event of their call; the model's own call id is not known here. */
   private readonly waiting: { tool: string; input: unknown; observation: Observation; ok: boolean }[] = [];
+  /** A redirect that came with a call no wrapper reports: there is no result to append it to, so it rides on the next report. */
+  private carried: string | undefined;
   private seq = 0;
   private stopped = false;
 
@@ -56,9 +58,28 @@ export class EconomyTap {
         this.onStop(step.reason, { tool: call.tool, input: call.input });
         return { stop: true };
       }
-      return step.kind === "redirect" ? { append: step.text } : {};
+      const redirect = step.kind === "redirect" ? step.text : undefined;
+      const append = [this.carried, redirect].filter((text): text is string => text !== undefined).join("\n\n");
+      this.carried = undefined;
+      return append ? { append } : {};
     } catch {
       return {};
+    }
+  }
+
+  /** A call the stream shows settled for a tool no wrapper reports (the luna tools, `delegate`): the machine's envelope counts it, so the
+   *  guard does too, with no output to read. A redirect it earns waits for the next report's reply; a stop ends the run on this call. */
+  count(tool: string, input: unknown, ok: boolean): void {
+    try {
+      if (this.stopped) return;
+      const { step } = this.session.settled({ id: `eve-${++this.seq}`, tool, input, output: "", ok });
+      if (step.kind === "redirect") this.carried = step.text;
+      else if (step.kind === "stop") {
+        this.stopped = true;
+        this.onStop(step.reason, { tool, input });
+      }
+    } catch {
+      // The economy never breaks the run.
     }
   }
 
