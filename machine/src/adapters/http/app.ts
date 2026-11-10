@@ -374,8 +374,10 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       ...(groupBy !== undefined ? { groupBy: groupBy as MetricsGroupBy } : {}),
     });
     // The economy's numbers come from its own files, never from Postgres: one repository's, or every known one's added up.
-    if (economy && repo !== "") {
-      const repos = repo !== undefined ? [repo] : await economy.knownRepos();
+    // A `repo` the machine does not know gets none: its path is the client's, and the policy for it would be read from that host path.
+    const knownRepos = economy && repo !== "" ? await economy.knownRepos() : [];
+    if (economy && repo !== "" && (repo === undefined || knownRepos.includes(repo))) {
+      const repos = repo !== undefined ? [repo] : knownRepos;
       const statuses = await Promise.all(repos.map(async (r) => economy.port.status(r, (await economy.configOf(r)).guard.envelope_min_samples)));
       return c.json({ ...metrics, economy: economyMetrics(statuses) });
     }

@@ -148,6 +148,20 @@ describe("GET /metrics economy", () => {
     expect(metrics.economy).toEqual({ effective: { exec: 1800, overhead: 200 }, overheadShare: 0.1, overheadUnpriced: 4, guard: { redirects: 2, stops: 2 }, facts: { active: 2, promoted: 2 }, masked: 4 });
   });
 
+  it("leaves the economy out for a repository the machine does not know, and reads nothing for it", async () => {
+    const { calls, port } = spy(shown);
+    const configured: string[] = [];
+    const app = createApp({ db, pipeline, bus: new Bus(), economy: { port, knownRepos: async () => ["/a/shop"], configOf: async (repo) => (configured.push(repo), config) } });
+    const res = await app.request("/metrics?repo=/etc/somewhere");
+    expect(res.status).toBe(200);
+    const metrics = (await res.json()) as Metrics;
+    expect(metrics.economy).toBeUndefined();
+    expect(metrics.budget).toBeDefined();
+    expect(calls).toEqual([]);
+    expect(configured).toEqual([]);
+    expect(((await (await app.request("/metrics?repo=/a/shop")).json()) as Metrics).economy).toBeDefined();
+  });
+
   it("is absent without an economy, and for the tasks with no repository", async () => {
     const without = (await (await createApp({ db, pipeline, bus: new Bus() }).request("/metrics")).json()) as Metrics;
     expect(without.economy).toBeUndefined();
