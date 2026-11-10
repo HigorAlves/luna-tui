@@ -2358,6 +2358,21 @@ describe("the token economy around a stage", () => {
     expect(closed).toHaveLength(1);
   });
 
+  it("does not wait for the proposer when a card closes: the next held card is released first, and the tick finishes on its own", async () => {
+    let finish: () => void = () => {};
+    const slow = new Promise<void>((resolve) => (finish = resolve));
+    const started: string[] = [];
+    const economy: Economy = { ...noEconomy(), cardClosed: async (_r, id) => (started.push(id), void (await slow)) };
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, economy, proposer: { run: async () => null } });
+    const task = await p.createTask({ title: "Login page", criteria: ["x"], repoPath: "/r/a" });
+    await p.start(task.id);
+    for (let i = 0; i < 2; i++) await p.decide(task.id, "approved");
+    expect((await p.get(task.id)).state).toBe("closed");
+    expect(started).toEqual([task.id]);
+    finish();
+    await p.factTicksDone();
+  });
+
   it("marks the facts the approved retro wrote as pending, not promoted, once the rules step wrote them, and not when the rules were skipped", async () => {
     const promoted: unknown[][] = [];
     const pending: unknown[][] = [];

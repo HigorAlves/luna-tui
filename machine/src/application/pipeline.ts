@@ -2495,8 +2495,16 @@ export class Pipeline {
   /** Runs the host-side close step for a task that just closed and logs what it did. Never throws. */
   private async close(id: string): Promise<void> {
     await this.closeOut(id);
-    await this.factTick(id);
     await this.releaseHeld();
+    // The proposer is a pack run of minutes: nothing waits on it, and it never throws.
+    const tick = this.factTick(id).finally(() => void this.factTicks.delete(tick));
+    this.factTicks.add(tick);
+  }
+
+  /** The fact-proposer ticks still running after closes. Tests wait on it; nothing else does. */
+  private readonly factTicks = new Set<Promise<void>>();
+  async factTicksDone(): Promise<void> {
+    while (this.factTicks.size > 0) await Promise.all([...this.factTicks]);
   }
 
   /** A card closed: the economy counts it and, on every few, asks the proposer for facts. Never throws. */
