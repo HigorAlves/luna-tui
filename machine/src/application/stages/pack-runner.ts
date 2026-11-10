@@ -14,6 +14,7 @@ import { ensureClone, isClone, moveToClone, publishBranch, refreshScratch } from
 import {
   type Workspace,
   branchBase,
+  scopeStartOf,
   commonGitDir,
   gitIdentity,
   diffNameStatus,
@@ -441,6 +442,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const pushErrors: string[] = [];
   let watch: ReturnType<typeof buildWatch> | null = null;
   let pushing: Promise<void> = Promise.resolve();
+  // Where the scope is measured from (see the comment below), moved past default-branch history the branch merged since (`scopeStartOf`).
+  const scopeFrom = input.plan != null ? (extra.scopeBase ?? context.firstInputCommit ?? (context.attempt === 1 ? inputCommit : null)) : inputCommit;
+  const scopeStart = scopeFrom && input.plan != null && task.repoPath && pack === "implementing" && !extra.checkout ? await scopeStartOf(workspace.path, task.repoPath, scopeFrom) : scopeFrom;
   // The machine's side of the checks the implementer asks for: a red slice and the change's scope.
   const checks =
     pack === "implementing" && !extra.checkout
@@ -449,7 +453,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           repoPath: task.repoPath,
           worktree: workspace.path,
           // The feature route measures the scope over the card's whole change, so a fix run that changes nothing still sees what an earlier run committed: from the vetted tests commit, else the commit the card's first implementing run started from (the machine's own stage_runs row; the first run's own start, read by the host before the container ran). Never from a ref or a later run's commit: with none of them the check fails closed. A route with no plan keeps the run's own commit.
-          inputCommit: input.plan != null ? (extra.scopeBase ?? context.firstInputCommit ?? (context.attempt === 1 ? inputCommit : null)) : inputCommit,
+          inputCommit: scopeStart,
           slices: input.plan?.slices ?? [],
           planned: plannedFiles(input.plan),
           planPresent: input.plan != null,

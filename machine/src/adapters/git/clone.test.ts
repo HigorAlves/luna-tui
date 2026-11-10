@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { bringBack, copiedSettings, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, moveToClone, publishBranch, removeClone, unpushedCommits } from "./clone.ts";
 import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
-import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, workspaceFor } from "./worktree.ts";
+import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, scopeStartOf, workspaceFor } from "./worktree.ts";
 
 const base = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"];
 /** git in a repository of the user's. */
@@ -394,5 +394,45 @@ describe("nestedLockfilesAt", () => {
     expect(Object.keys(found).sort()).toEqual(["board/Cargo.lock", "tools/web/package-lock.json"]);
     expect(found["board/Cargo.lock"]).toBe(git(repo, "rev-parse", "HEAD:board/Cargo.lock"));
     expect(await nestedLockfilesAt(workspace.path, "not-a-sha", ["Cargo.lock"])).toEqual({});
+  });
+});
+
+describe("scopeStartOf", () => {
+  it("moves past default-branch history a person merged into the card's branch, so only the card's own files are its scope", async () => {
+    const { repo, dir } = repository("scope-start-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    const start = wgit(workspace.path, "rev-parse", "HEAD");
+    writeFileSync(join(workspace.path, "card.md"), "the card's change\n");
+    wgit(workspace.path, "add", "-A");
+    wgit(workspace.path, "commit", "-q", "-m", "card");
+    // The default branch moves on with other people's files, and a person merges it into the card's branch.
+    writeFileSync(join(repo, "theirs.ts"), "x\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "main moves");
+    const main = git(repo, "rev-parse", "HEAD");
+    wgit(workspace.path, "fetch", "-q", repo, "main");
+    wgit(workspace.path, "merge", "-q", "--no-edit", "FETCH_HEAD");
+    expect(wgit(workspace.path, "diff", "--name-only", `${start}..HEAD`).split("\n").sort()).toEqual(["card.md", "theirs.ts"]);
+    const from = await scopeStartOf(workspace.path, repo, start);
+    expect(from).toBe(main);
+    expect(wgit(workspace.path, "diff", "--name-only", `${from}..HEAD`)).toBe("card.md");
+  });
+
+  it("keeps the start when nothing was merged, and for a value that is not a commit id", async () => {
+    const { repo, dir } = repository("scope-keep-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    const start = wgit(workspace.path, "rev-parse", "HEAD");
+    writeFileSync(join(workspace.path, "card.md"), "x\n");
+    wgit(workspace.path, "add", "-A");
+    wgit(workspace.path, "commit", "-q", "-m", "card");
+    expect(await scopeStartOf(workspace.path, repo, start)).toBe(start);
+    // The default branch moved, but the card did not merge it: its base is still the start.
+    writeFileSync(join(repo, "theirs.ts"), "x\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "main moves");
+    expect(await scopeStartOf(workspace.path, repo, start)).toBe(start);
+    expect(await scopeStartOf(workspace.path, repo, "HEAD~1")).toBe("HEAD~1");
   });
 });

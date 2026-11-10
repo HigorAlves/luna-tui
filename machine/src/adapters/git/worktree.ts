@@ -464,6 +464,22 @@ export async function branchBase(worktreePath: string, repoPath: string): Promis
   return base.code === 0 ? base.stdout.trim() || null : null;
 }
 
+/**
+ * Where a card's scope is measured from: `start` (the commit its first implementing run began on), moved forward to the branch's base
+ * (`branchBase`: the machine's base ref, else the merge-base with the repository's HEAD) when that base descends from `start` and is in HEAD.
+ * A person who merges the default branch into the card's branch brings its commits in: measured from `start`, every file of theirs reads as the
+ * card's (PR #213: about 130 paths, two scope reds, an escalation). The base is a commit of the repository's or the machine's own ref, never
+ * one the card made, so moving to it cannot hide the card's own change.
+ */
+export async function scopeStartOf(worktreePath: string, repoPath: string, start: string): Promise<string> {
+  if (!/^[0-9a-f]{7,64}$/.test(start)) return start;
+  const base = await branchBase(worktreePath, repoPath);
+  if (!base || base === start) return start;
+  const descends = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", start, base]);
+  const inHead = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", base, "HEAD"]);
+  return descends.code === 0 && inHead.code === 0 ? base : start;
+}
+
 /** The files the branch changed since it forked from the repo, worktree-relative; null when
  *  the base is unknown, so a caller runs every check rather than none. */
 export async function changedPaths(worktreePath: string, repoPath: string): Promise<string[] | null> {
