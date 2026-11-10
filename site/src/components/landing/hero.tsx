@@ -1,7 +1,7 @@
 import { ArrowDownIcon, CheckIcon } from "lucide-react"
 import { cn } from "cn"
 import { buttonVariants } from "@/components/ui/button"
-import { INSTALL_DOC, cta, hero } from "@/content/landing"
+import { INSTALL_DOC, REPO, cta, hero } from "@/content/landing"
 import { CommitCascade } from "./fx/commit-cascade"
 import { HeroEquation } from "./hero-equation"
 
@@ -21,6 +21,9 @@ export function Hero() {
         <div className="mt-10 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
           <a href={INSTALL_DOC} className={cn(buttonVariants(), "h-11 px-5 text-sm")}>
             {cta.primary}
+          </a>
+          <a href={REPO} className={cn(buttonVariants({ variant: "outline" }), "h-11 bg-transparent px-5 text-sm dark:bg-transparent")}>
+            {cta.github}
           </a>
           <a href="#example" className={cn(buttonVariants({ variant: "outline" }), "h-11 bg-transparent px-5 text-sm dark:bg-transparent")}>
             {cta.secondary}

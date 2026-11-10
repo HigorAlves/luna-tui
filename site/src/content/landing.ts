@@ -69,7 +69,7 @@ export const repos = {
   eyebrow: "One machine, every repo",
   title: "Same machine. A new PR for every repo.",
   lead: "One board, one queue, up to four tasks at once. The repo decides the checks, the tests and the PR.",
-  heatmap: { title: "1,204 stage runs in the last year", label: "Same machine", less: "Less", more: "More" },
+  heatmap: { title: "Stage runs across every repo", label: "Same machine", less: "Less", more: "More" },
   rows: [
     {
       kind: "web",
@@ -244,10 +244,65 @@ export const features = {
   ],
 } as const
 
+export const testFirst = {
+  id: "test-first",
+  eyebrow: "Test-first Build",
+  title: "Build writes the failing tests first.",
+  lead: "Before any code, Build writes one failing test per approved scenario. A judge checks that each test fails for the right reason.",
+  steps: [
+    { title: "One test per scenario", body: "Each approved scenario gets one failing test. The test carries the scenario's id." },
+    { title: "A judge reads each failure", body: "The judge checks that the test fails because the behaviour is missing. A test with a bug of its own does not pass." },
+    { title: "Locked before code", body: "Luna commits the tests first. The implementer then builds until they pass and cannot change them." },
+    { title: "Docs-only changes", body: "A change that touches only documentation gets no tests. Luna checks it by reading it." },
+  ],
+  visual: { label: "Scenario tests", rows: ["S1 · red · judged", "S2 · red · judged", "S3 · red · judged"] },
+}
+
+export const stacks = {
+  id: "stacks",
+  eyebrow: "Stacked cards and splits",
+  title: "Big tickets split into stacked cards.",
+  lead: "Luna splits a big ticket into parts that build on each other. Each part is its own card with its own PR.",
+  steps: [
+    { title: "A split, not a pile", body: "A big ticket becomes an origin and its children. Each child builds on its parent, the part before it." },
+    { title: "A child follows its parent", body: "Luna keeps each child rebased onto its parent. When the parent moves, Luna rebases again and pushes with a lease." },
+    { title: "Conflicts ask you", body: "A rebase that stops on a conflict pushes nothing. The card comes back to you." },
+  ],
+  visual: { label: "A stack", rows: ["#1 parent · merged", "#2 child · rebased", "#3 child · building"] },
+}
+
+export const engines = {
+  id: "engines",
+  eyebrow: "Engines and fallbacks",
+  title: "Pick the engine. Keep the fallback.",
+  lead: "Claude runs on your subscription and Codex on your Codex login. Jev is an opt-in metered path.",
+  steps: [
+    { title: "Claude", body: "Claude runs on your subscription. Luna uses the login you already have." },
+    { title: "Codex", body: "Codex runs on your Codex login. Small decisions such as risk and red checks can use it." },
+    { title: "Jev", body: "Jev is an opt-in metered path. It stays off until you add a key." },
+    { title: "A fallback for each decision", body: "A decision moves to its fallback engine when a login is busy or rate-limited." },
+  ],
+  visual: { label: "Engine choice", rows: ["claude · your subscription", "codex · your Codex login", "jev · opt-in, metered"] },
+}
+
+export const sandbox = {
+  id: "sandbox",
+  eyebrow: "Sandbox and safety",
+  title: "Sandbox and safety on every stage.",
+  lead: "Each stage runs in a container with a per-repository egress allow-list. The agent reaches package registries, GitHub, its engine hosts and the hosts you add.",
+  steps: [
+    { title: "A container per stage", body: "Each stage runs in its own throwaway container with a read-only root filesystem." },
+    { title: "An egress allow-list per repository", body: "Each repository adds hosts to the defaults: registries, GitHub and the engine hosts. Every other host has no route out, unless the owner sets MACHINE_EGRESS to off." },
+    { title: "Secret checks", body: "Every change gets secret checks before it ships." },
+    { title: "No AI credit", body: "Luna ships commits never credited to an AI. A hook rejects AI attribution in a commit." },
+  ],
+  visual: { label: "Sandbox", rows: ["container · read-only", "egress · allow-list", "secrets · checked"] },
+}
+
 export const factory = {
   eyebrow: "The factory · inside every stage",
   title: "The factory does the work. Luna runs the floor.",
-  lead: "Each agent stage is a stage pack that runs in a sealed container through the Claude Agent SDK. Its role, prompt, skills and guardrails live in the repo's factory/ folder; nothing else to install, a fresh clone runs. Luna moves the ticket; the pack writes the code.",
+  lead: "Each agent stage is a stage pack that runs in a sealed container on Claude or Codex. Its role, prompt, skills and guardrails live in the repo's factory/ folder. A fresh clone runs with nothing else to install. Luna moves the ticket; the pack writes the code.",
   features: [
     {
       title: "Packs, not prompts",
@@ -299,7 +354,7 @@ export const factory = {
     { name: "evidence", body: "Checks the QA manifest and puts the verdict and artifacts on the ship gate." },
     { name: "reviewing_memory", body: "After shipping, proposes rules for the repo's agent context. You keep or skip them." },
   ],
-  note: "Needs Docker, Node 24+, pnpm, Rust and a Claude credential in ~/.config/hardness. Without a credential, every stage is a stub.",
+  note: "Needs Docker, Node 24+, pnpm, Rust and a Claude token in ~/.config/hardness. A Codex login from `codex login` adds the Codex engines. Without a Claude token, stages that need Claude stay stubs.",
   guide: "Full setup guide",
 }
 
@@ -324,8 +379,8 @@ export const moments = {
 
 export const pricing = {
   eyebrow: "Pricing",
-  title: "Free. Pay only for the Claude you already use.",
-  lead: "Luna TUI is open source and runs on your machine. The agents use your own Claude subscription or API key.",
+  title: "Free. Bring the subscriptions you already have.",
+  lead: "Luna runs locally on the Claude and Codex subscriptions you already have. Metered API keys are optional.",
   plans: [
     {
       name: "Board only",
@@ -341,7 +396,7 @@ export const pricing = {
       price: "$0",
       suffix: "+ your Claude",
       body: "Real stage packs in sealed containers.",
-      items: ["Triage, tests, build and verify", "Draft PRs and CI watch", "Your Claude plan or API key", "Cost tracked per stage"],
+      items: ["Triage, tests, build and verify", "Draft PRs and CI watch", "Your Claude and Codex logins", "Cost tracked per stage"],
       cta: "Install",
       href: INSTALL_DOC,
       recommended: "Recommended",
@@ -356,7 +411,7 @@ export const pricing = {
       href: `${DOCS}/configuration.md#runner-image`,
     },
   ],
-  footnote: "Agent cost is whatever your Claude plan charges; the machine reports it per stage at /metrics.",
+  footnote: "Metered keys are optional. Your subscriptions bill as they do today, and the machine reports cost per stage at /metrics.",
 }
 
 export const faq = {
@@ -373,8 +428,8 @@ export const faq = {
       a: "No. A stage container sees the task's worktree, its own /in and /out, a tmpfs /tmp and the repo's git dir read-only. The root filesystem is read-only.",
     },
     {
-      q: "Which Claude do I need?",
-      a: "A Claude subscription token or an Anthropic API key, saved in ~/.config/hardness. Without one, every stage is a stub, which is enough to try the board.",
+      q: "Which logins do I need?",
+      a: "A Claude subscription token in ~/.config/hardness runs the Claude stages. A Codex login from `codex login` adds the Codex engines. A Jev key is optional and metered. Stages without a login stay stubs, which is enough to try the board.",
     },
     {
       q: "Can it push to main?",
@@ -390,7 +445,7 @@ export const faq = {
     },
     {
       q: "What happens at a usage limit?",
-      a: "The task pauses instead of failing and resumes 30 seconds after the window resets. Its worktree is reset first, so nothing half-done carries over.",
+      a: "The task moves to a fallback engine first. It pauses only when no fallback is left, then resumes 30 seconds after the window resets. Luna resets its worktree first, so nothing half-done carries over.",
     },
     {
       q: "Do I need herdr?",
@@ -398,7 +453,7 @@ export const faq = {
     },
     {
       q: "How much does it cost?",
-      a: "Nothing. It's open source. The agents bill to your own Claude plan, and /metrics shows cost per stage.",
+      a: "Nothing. It's open source and runs on the Claude and Codex subscriptions you already have. Metered keys are optional, and /metrics shows cost per stage.",
     },
   ],
 }
