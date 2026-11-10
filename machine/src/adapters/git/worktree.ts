@@ -464,6 +464,33 @@ export async function branchBase(worktreePath: string, repoPath: string): Promis
   return base.code === 0 ? base.stdout.trim() || null : null;
 }
 
+/**
+ * Where a card's scope is measured from: `start` (the commit its first implementing run began on), moved forward to the branch's base
+ * when the branch holds it: the machine's own base ref as it is; else `branchBase` (the merge-base with the repository's HEAD) when it descends
+ * from `start` and is in HEAD.
+ * A person who merges the default branch into the card's branch brings its commits in: measured from `start`, every file of theirs reads as the
+ * card's (PR #213: about 130 paths, two scope reds, an escalation). The base is a commit of the repository's or the machine's own ref, never
+ * one the card made, so moving to it cannot hide the card's own change.
+ */
+export async function scopeStartOf(worktreePath: string, repoPath: string, start: string): Promise<string> {
+  if (!/^[0-9a-f]{7,64}$/.test(start)) return start;
+  // The machine's own base ref, when the branch holds it: only the machine writes it (a cut, a rebase, a merge round), so it needs no tie to
+  // `start`. A card that started on a parent's tip which was then squash-merged (PR #214) has a start that is in no default-branch history.
+  const own = await exec("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", "--quiet", `${BASE_REF}^{commit}`]);
+  const ownSha = own.code === 0 ? own.stdout.trim() : "";
+  if (/^[0-9a-f]{40,64}$/.test(ownSha) && ownSha !== start && (await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", ownSha, "HEAD"])).code === 0) return ownSha;
+  const base = await branchBase(worktreePath, repoPath);
+  if (!base || base === start) return start;
+  const descends = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", start, base]);
+  const inHead = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", base, "HEAD"]);
+  return descends.code === 0 && inHead.code === 0 ? base : start;
+}
+
+/** The card is no longer stacked: the name of the parent's branch it followed is dropped, as `unstack` drops it (its base ref stays). */
+export async function leaveStack(run: GitExec, worktreePath: string): Promise<void> {
+  await run("git", [...HOST_GIT, ...at(worktreePath), "config", "--local", "--unset", BASE_KEY]);
+}
+
 /** The files the branch changed since it forked from the repo, worktree-relative; null when
  *  the base is unknown, so a caller runs every check rather than none. */
 export async function changedPaths(worktreePath: string, repoPath: string): Promise<string[] | null> {
