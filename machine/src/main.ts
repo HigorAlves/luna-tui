@@ -243,7 +243,7 @@ let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = as
 // The token economy (RFC 0007): each repository's envelope and cost ledger, folded from every finished run. `MACHINE_ECONOMY=off` keeps none and hands no run anything.
 /** The fact proposer: the `fact_propose` pack, run through PackRuns once it exists (bound below). */
 const factProposer: { run: Propose | null } = { run: null };
-const economy = config.economy ? economyOver(economyStore(config.stateDir), (line) => console.warn(line), (repoPath) => finishedRunsOf(db, repoPath)) : noEconomy();
+const economy = config.economy ? economyOver(economyStore(config.stateDir), (line) => console.warn(line), (repoPath) => finishedRunsOf(db, repoPath, config.stateDir)) : noEconomy();
 const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
 let graphWatch: GraphWatch | null = null;

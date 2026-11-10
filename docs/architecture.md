@@ -588,7 +588,7 @@ Effective tokens price each kind of token as it is billed. The weights are ratio
 
 `Tokens.input` still holds the cache writes. The weights take the writes off `input` first. Claude reports the writes, split by lifetime when the SDK says. A write with no split counts as a 5-minute write. eve reports cache reads only, so eve's cache writes count as fresh input. The Build budget keeps its own count, with cache reads off the budget.
 
-The machine appends one record to `ledger.jsonl` for each finished stage run. A run that reported no tokens counts as 0. A `loop_judge`, `loop_redirect` or `fact_propose` run is an `overhead` record. Every other run is an `exec` record. A runtime can report no tokens for an overhead run. Such a run keeps its cost in dollars and counts in `overheadUnpriced`. When `overheadUnpriced` is above 0, `overhead` is a floor.
+The pack runner appends one record to `ledger.jsonl` for each container run, right after it ends. A run that stopped with no result (aborted, timed out, stuck) keeps a record with no tokens and teaches nothing else. A stage that runs several containers in one run folder, such as Build, gets one record per container. The first keeps the run id and the next ones are `<runId>#<n>`. Each is folded from the events that container wrote, before the next one starts. A run that reported no tokens counts as 0. A `loop_judge`, `loop_redirect` or `fact_propose` run is an `overhead` record. Every other run is an `exec` record. A runtime can report no tokens for an overhead run. Such a run keeps its cost in dollars and counts in `overheadUnpriced`. When `overheadUnpriced` is above 0, `overhead` is a floor.
 
 `GET /economy` shows the cost of one repository. `GET /metrics` adds an `economy` section. It holds effective tokens for work and overhead, the overhead share, the redirects and stops, the active and promoted facts and the masked units.
 
@@ -610,7 +610,7 @@ The files sit under `<state dir>/economy/<repo slug>/`. The slug is the folder n
 
 ### Importing past runs
 
-`POST /economy/import` folds the runs that are already in the database, once. It gives envelopes from the runs that passed. It gives tool evidence from Claude runs. Old runs carry no observation, so the import learns no fact and writes no cost record. A run with no events file stays out. A second call folds nothing.
+`POST /economy/import` folds the runs that are already in the database, once. The sub-run folders of a finished run (`<runId>-<suffix>`) count too, under the pack in their `in/stage.json`. A folder with no readable pack is skipped. A folder holds the events of its last container only, so the import of a Build folds that container under the run id. It gives envelopes from the runs that passed. It gives tool evidence from Claude runs. Old runs carry no observation, so the import learns no fact and writes no cost record. A run with no events file stays out. A second call folds nothing.
 
 ### Trust
 

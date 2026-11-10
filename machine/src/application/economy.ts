@@ -79,6 +79,10 @@ export interface FinishedRun {
   tokens: Tokens | null;
   /** The runtime the stage ran on. Skills and subagents cannot be seen on `eve` or `jev`, so their runs give no tool evidence. */
   runtime?: "claude" | "eve" | "jev";
+  /** The run folder the container wrote its events in (`runs/<folder>/out`), when it is not `runId`: containers that share a folder are told apart by `runId` (`<folder>#<n>`). */
+  folder?: string;
+  /** False for a run that left no output (aborted, timed out, stuck): it keeps its ledger record and teaches nothing. */
+  fold?: boolean;
   config: EconomyConfig;
 }
 
@@ -179,7 +183,7 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
       ),
     afterRun: async (run) => {
       await kept("imported", () => store.markImported(run.repoPath, [run.runId]), undefined);
-      const events = await kept("events", () => store.events(run.runId), [] as unknown[]);
+      const events = run.fold === false ? [] : await kept("events", () => store.events(run.folder ?? run.runId), [] as unknown[]);
       await kept(
         "fold",
         async () => {

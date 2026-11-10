@@ -488,6 +488,58 @@ describe("agent stages through packs", () => {
     expect("economy" in (seen!.input as unknown as StageInput).context).toBe(false);
   });
 
+  describe("folding each container run into the economy", () => {
+    const folding = () => {
+      const folded: Array<Parameters<ReturnType<typeof noEconomy>["afterRun"]>[0]> = [];
+      return { folded, economy: { ...noEconomy(), afterRun: async (run: (typeof folded)[number]) => void folded.push(run) } };
+    };
+
+    it("folds the run under its own pack and run folder, with the card, the runtime, the outcome and the tokens", async () => {
+      const { folded, economy } = folding();
+      const run = { runtime: "claude", engine: "claude:sonnet", modelId: "claude-sonnet-5-5", sdk: { name: "s", version: "1" }, fingerprint: "a".repeat(64) };
+      const tokens = { input: 10, output: 2, cached: 5 };
+      await runAgent({ ...deps(fakeSandbox(output({ run, usage: { turns: 7, costUsd: 0.5, durationMs: 100, model: "m", tokens } }))), economy }, { ...context("implementing"), runId: "run-fold-1" }, "code_map");
+      expect(folded).toHaveLength(1);
+      expect(folded[0]).toMatchObject({ repoPath: repo, runId: "run-fold-1", folder: "run-fold-1", pack: "code_map", cardId: "11111111-2222-3333-4444-555555555555", outcome: "pass", runtime: "claude", tokens: { input: 10, output: 2, cached: 5 } });
+      expect(folded[0]!.fold).not.toBe(false);
+    });
+
+    it("keeps a record for a run that was aborted: no tokens, no fold", async () => {
+      const { folded, economy } = folding();
+      const sandbox = async (r: SandboxRun) => (mkdirSync(join(r.runDir, "out"), { recursive: true }), { exitCode: 137, timedOut: false, aborted: true, transcriptPath: join(r.runDir, "t.log") });
+      await runAgent({ ...deps(sandbox), economy }, { ...context("implementing"), runId: "run-fold-2" }, "code_map");
+      expect(folded).toHaveLength(1);
+      expect(folded[0]).toMatchObject({ runId: "run-fold-2", pack: "code_map", outcome: "fail", tokens: null, fold: false });
+    });
+
+    it("records no run when no container started", async () => {
+      const { folded, economy } = folding();
+      const credentials: Credentials = { check: async () => ({ available: false, reason: "none" }), prepare: async () => Promise.reject(new NoCredentialError("none")) };
+      const d = { ...deps(fakeSandbox(output())), economy, credentials };
+      await runAgent(d, { ...context("implementing"), runId: "run-fold-3" }, "code_map");
+      expect(folded).toEqual([]);
+    });
+
+    it("tells the containers that share one run folder apart, each folded on its own events", async () => {
+      const { folded, economy } = folding();
+      const seenEvents: string[] = [];
+      const sandbox = (name: string) => async (r: SandboxRun) => {
+        const result = await fakeSandbox(output())(r);
+        writeFileSync(join(r.runDir, "out", "events.jsonl"), `${JSON.stringify({ at: "2026-01-01T00:00:00Z", kind: name, payload: {} })}\n`);
+        return result;
+      };
+      const folderEvents = (economyRun: (typeof folded)[number]) => economyRun.folder;
+      const both = { ...economy, afterRun: async (run: (typeof folded)[number]) => (seenEvents.push(readFileSync(join(stateDir, "runs", run.folder!, "out", "events.jsonl"), "utf8")), economy.afterRun(run)) };
+      const ctx = { ...context("implementing"), runId: "run-shared" };
+      await runAgent({ ...deps(sandbox("first")), economy: both }, ctx, "build_tests");
+      await runAgent({ ...deps(sandbox("second")), economy: both }, ctx, "build_tests");
+      expect(folded.map((f) => f.runId)).toEqual(["run-shared", "run-shared#2"]);
+      expect(folded.map(folderEvents)).toEqual(["run-shared", "run-shared"]);
+      expect(seenEvents[0]).toContain("first");
+      expect(seenEvents[1]).toContain("second");
+    });
+  });
+
   it("runs the repo's services from its luna.yaml beside the stage container", async () => {
     writeFileSync(join(repo, "luna.yaml"), "services:\n  postgres:\n    image: postgres:16\n    exports: { DATABASE_URL: x }\n");
     git(repo, "add", "-A");

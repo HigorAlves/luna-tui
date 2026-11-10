@@ -2312,22 +2312,11 @@ describe("the token economy around a stage", () => {
     return task.id;
   };
 
-  it("folds each finished stage run with its pack, card, outcome and tokens", async () => {
+  it("leaves folding to the pack runner: a stage run is not folded a second time under its stage", async () => {
     const { folded, economy } = fake();
-    const tokens = { input: 10, output: 2, cached: 5 };
-    const p = build(economy, async () => ({ outcome: "pass" as const, usage: { turns: 3, costUsd: 0.1, tokens } }));
+    const p = build(economy, async () => ({ outcome: "pass" as const, usage: { turns: 3, costUsd: 0.1, tokens: { input: 10, output: 2, cached: 5 } } }));
     const id = await approvedCard(p);
-    const run = folded.find((f) => f.pack === "implementing");
-    expect(run).toMatchObject({ cardId: id, repoPath: "/r/a", outcome: "pass", tokens });
-    expect(run?.runId).toBeTruthy();
-    expect(folded.every((f) => f.cardId === id)).toBe(true);
-  });
-
-  it("does not fail a stage because the fold threw", async () => {
-    const { economy } = fake({ afterRun: async () => Promise.reject(new Error("disk full")) });
-    const p = build(economy, async () => ({ outcome: "pass" as const }));
-    const id = await approvedCard(p);
-    expect((await p.get(id)).state).not.toBe("failed");
+    expect(folded).toEqual([]);
     expect((await p.stageRuns(id)).filter((r) => r.stage === "implementing")[0]).toMatchObject({ status: "passed" });
   });
 

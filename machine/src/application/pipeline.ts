@@ -3321,13 +3321,6 @@ export class Pipeline {
       ...(stage === "verifying" ? { cases: casesOf(result.detail) } : {}),
       ...runFacts(result.run?.info),
     });
-    // The economy folds the run (its calls into the repository's envelope, its tokens into the ledger); it never throws, and a stage never waits on it failing.
-    const pack = packForState(stage);
-    if (repo && pack) {
-      const config = (await this.policyFor(repo)).factory.economy;
-      const runtime = result.run?.info?.runtime;
-      await this.economy.afterRun({ repoPath: repo, runId, pack, cardId: id, outcome, tokens: result.usage?.tokens ? { ...result.usage.tokens, cached: result.usage.tokens.cached ?? 0 } : null, ...(runtime === "claude" || runtime === "eve" || runtime === "jev" ? { runtime } : {}), config }).catch(() => {});
-    }
     if (result.rateLimited) span.event("rate_limited", { resetsAt: result.detail?.resetsAt ?? null });
     if (result.outcome === "escalated") span.event("escalated", { reason: result.detail?.reason ?? null });
     for (const item of result.events ?? []) span.event(item.kind.replace(/^stage\./, ""), item.payload);

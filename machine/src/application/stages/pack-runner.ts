@@ -241,7 +241,10 @@ const OutOfMap = z.array(z.object({ path: z.string(), reason: z.string() }));
 export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
   // The image the stage's sandbox runs in is chosen once, inside the run, and carried out here: the record of Build's environment names it, never a second resolution.
   const chosen: { image?: string } = {};
-  const result = await runAgentIn(deps, context, pack, extra, chosen);
+  const ran = { container: false };
+  const result = await runAgentIn(deps, context, pack, extra, chosen, ran);
+  // The container's run is folded into the economy before anything else starts in the folder: the next container of a Build overwrites its events.
+  if (ran.container) await foldRun(deps, context, pack, result);
   // The environment a passing Build ran in: the run's own record, and the Build Report's `envHash`.
   const path = result.workspace?.worktreePath;
   if (pack !== "implementing" || result.outcome !== "pass" || !path || !deps.imageId) return result;
@@ -254,7 +257,40 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
 }
 
-async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}, chosen: { image?: string } = {}): Promise<StageResult> {
+/** The containers a run folder has held in this process, for the ordinal that tells them apart. */
+const containersIn = new Map<string, number>();
+const CONTAINERS_KEPT = 500;
+
+/** Folds one container run into the repository's economy: its pack, its folder's events, its tokens. Never throws. */
+async function foldRun(deps: AgentDeps, context: StageContext, pack: PackId, result: StageResult): Promise<void> {
+  const repoPath = context.task.repoPath;
+  if (!deps.economy || !repoPath) return;
+  try {
+    const nth = (containersIn.get(context.runId) ?? 0) + 1;
+    containersIn.delete(context.runId);
+    containersIn.set(context.runId, nth);
+    if (containersIn.size > CONTAINERS_KEPT) containersIn.delete(containersIn.keys().next().value!);
+    const config = (await (deps.policies ?? sharedPolicies).for(repoPath)).factory.economy;
+    const runtime = result.run?.info?.runtime;
+    const tokens = result.usage?.tokens;
+    await deps.economy.afterRun({
+      repoPath,
+      runId: nth === 1 ? context.runId : `${context.runId}#${nth}`,
+      folder: context.runId,
+      pack,
+      cardId: context.task.id,
+      outcome: result.rateLimited ? "rate_limited" : result.outcome,
+      tokens: tokens ? { ...tokens, cached: tokens.cached ?? 0 } : null,
+      ...(runtime === "claude" || runtime === "eve" || runtime === "jev" ? { runtime } : {}),
+      ...(result.usage ? {} : { fold: false }),
+      config,
+    });
+  } catch {
+    // The economy never stops a stage.
+  }
+}
+
+async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}, chosen: { image?: string } = {}, ran: { container: boolean } = { container: false }): Promise<StageResult> {
   const { task } = context;
   if (!task.repoPath) {
     throw new Error("the task has no repoPath; create it with a repo to run real stages");
@@ -633,6 +669,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     await pushing;
     credential.release();
   });
+    ran.container = true;
   } catch (error) {
     if (!(error instanceof EgressUnsupportedError)) throw error;
     return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
