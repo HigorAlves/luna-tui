@@ -27,6 +27,7 @@ import { renderPromptReport } from "./core/render.ts";
 import { factoryTelemetry } from "./core/telemetry.ts";
 import { readJson, readStageInput } from "./core/stage-io.ts";
 import { transcript } from "./core/transcript.ts";
+import { mailboxJudge } from "./core/economy/judge-mailbox.ts";
 import { RUNTIMES } from "./runtimes/index.ts";
 
 const env = process.env;
@@ -127,7 +128,7 @@ async function runStage(): Promise<RunOutcome> {
   // so far are its calls so far, which is never fewer.
   const turnsUsed = () => events.filter((e) => e.kind === "tool_call").length;
   const delegating = delegationFor(runtime.id, { pack, input: input!, paths, runtimes: RUNTIMES, emit, print: out, startedAt, turnsUsed });
-  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna: withDelegate(luna, delegating), dry: DRY, emit, delegate: delegating?.tool ?? null, telemetry });
+  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna: withDelegate(luna, delegating), dry: DRY, emit, delegate: delegating?.tool ?? null, telemetry, judge: pack.kind === "agent" ? mailboxJudge(join(OUT, "checks")) : null });
   // A dry run answers nothing unless the test seam gave it an answer; that one is settled.
   return withChildren(DRY && run.structured === null ? run : settle(run, pack), delegating);
 }

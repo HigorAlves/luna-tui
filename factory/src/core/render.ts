@@ -9,7 +9,7 @@ import type { TriageRecord } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
 import { CONVERSATION_VARIABLES, conversationText } from "./conversation-text.ts";
-import { renderSplit, renderTicket } from "./decide.ts";
+import { renderCheck, renderSplit, renderTicket } from "./decide.ts";
 import { type Cut, DATA_NOTE, foreignBudget, foreignValueCut } from "./data-block.ts";
 import { callText } from "./transcript.ts";
 
@@ -411,6 +411,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{task.record}}": recordText(input.task.record),
     "{{context.split}}": splitText(input.context.split),
     "{{context.ticket}}": input.context.ticket ? renderTicket(input.context.ticket) : NONE,
+    "{{context.check}}": input.context.check ? renderCheck(input.context.check) : NONE,
     ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, NONE]))),
     "{{context.plan.map}}": mapText(input.context.plan?.map),
     "{{context.plan.shortlist}}": shortlistText(input.context.plan?.shortlist),

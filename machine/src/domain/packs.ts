@@ -55,6 +55,9 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   conversation_reply: [],
   ticket_recommend: [],
   ticket_reply: [],
+  // The loop guard's judge and its redirect writer, run on demand by the build watch.
+  loop_judge: [],
+  loop_redirect: [],
   // Drafts an answer inside the shipping stage's monitor; `reviewing_memory` stays first in PACKS so the state still picks it.
   pr_reply: ["awaiting_ship"],
   eval_judge: [],

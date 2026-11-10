@@ -854,5 +854,9 @@
   "decompose": {
     "allowedTools": [],
     "tools": []
+  },
+  "loop_redirect": {
+    "allowedTools": [],
+    "tools": []
   }
 }

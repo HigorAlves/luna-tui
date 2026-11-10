@@ -1,0 +1,36 @@
+{
+  "schema": 3,
+  "stage": "loop_judge",
+  "pack": "loop_judge",
+  "attempt": 1,
+  "task": {
+    "id": "loop-judge",
+    "title": "Loop judge",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "loop",
+      "loop": {
+        "digest": "turns=45 edit_churn=2 distinct_edit_files=6 error_outputs=6 test_runs=8 repeated_identical_failures=0 stagnation=0.00\nrepo_context: tasks here usually RESOLVE within ~15 calls; this trajectory is at 45 calls = 3.0x that typical length. The last verification run passed. A trajectory far past the typical resolved length with recurring failures is likely a dead-end loop, even if it touches many files.\nRecent actions (oldest->newest):\n 33: $ pnpm test --filter cart  [Error#0a1b2c3d4e]\n 34: edit routes.ts  [edits routes.ts]\n 35: $ pnpm test --filter cart  [TypeError#1b2c3d4e5f]\n 36: edit schema.ts  [edits schema.ts]\n 37: $ pnpm test --filter cart  [AssertionError#2c3d4e5f6a]\n 38: edit handler.ts  [edits handler.ts]\n 39: $ pnpm test --filter cart  [RangeError#3d4e5f6a7b]\n 40: edit limits.ts  [edits limits.ts]\n 41: $ pnpm test --filter cart  [AssertionError#4e5f6a7b8c]\n 42: edit index.ts  [edits index.ts]\n 43: $ pnpm test --filter cart  [AssertionError#5f6a7b8c9d]\n 44: edit routes.ts  [edits routes.ts]\n 45: $ pnpm test --filter cart",
+        "pack": "implementing",
+        "calls": 45
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

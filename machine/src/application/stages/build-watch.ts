@@ -1,7 +1,7 @@
 // The build watch follows an implementing run's /out while its container runs. The container
 // cannot push and the machine reads the ledger only after the run, so a slice that turned
 // committed is handed to `onCommitted` as it lands.
-import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, Slice } from "@hardness/contracts";
+import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, PACKS, Slice, confidenceOf } from "@hardness/contracts";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
@@ -72,7 +72,23 @@ export interface BuildWatchOptions {
   onScopeRequest?: (request: ScopeRequest) => Promise<void>;
   /** Called once per `checks/card-search-request.json` the triage agent writes (a rewritten request is a new one). */
   onCardSearch?: (query: string) => Promise<void>;
+  /** Called once per `checks/loop-request-<n>.json` the loop guard writes, in order; its verdict is written as `loop-answer-<n>.json`. Not awaited by the watch: a judge takes seconds, and a red slice or a commit does not wait for it. */
+  onLoopRequest?: (request: LoopRequest) => Promise<LoopVerdict>;
   log?: (line: string) => void;
+}
+
+/** What the loop guard's question leaves for the machine: its number is the file's, never the content's. */
+export interface LoopRequest {
+  n: number;
+  digest: string;
+}
+
+/** The answer to a loop request: what the guard's `Verdict` reads. */
+export interface LoopVerdict {
+  stuck: boolean;
+  confidence: number;
+  cause: string;
+  redirect?: string;
 }
 
 /** What the implementer's `scope_check` tool leaves for the machine. */
@@ -105,6 +121,7 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
   let lastRequest = "";
   let lastSearch = "";
   let cardSearches = 0;
+  let loopsSeen = 0;
   let stopped = false;
   let tick: Promise<void> = Promise.resolve();
 
@@ -186,8 +203,32 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
     }
   };
 
+  /** The loop guard's questions, in order. Each is judged on its own, off the tick; once the watch stops its answer is dropped, for the run's folder may be gone. */
+  const loops = async (): Promise<void> => {
+    if (!options.onLoopRequest) return;
+    for (;;) {
+      const n = loopsSeen + 1;
+      const text = await readMailbox(options.outDir, `loop-request-${n}.json`);
+      if (text === null) return;
+      loopsSeen = n;
+      let digest = "";
+      try {
+        const parsed = JSON.parse(text) as { digest?: unknown };
+        if (typeof parsed.digest === "string") digest = parsed.digest;
+      } catch {
+        // not JSON: an empty digest, which the judge answers as not stuck
+      }
+      void options.onLoopRequest({ n, digest }).then(
+        async (verdict) => {
+          if (!stopped) await writeMailbox(options.outDir, `loop-answer-${n}.json`, JSON.stringify(verdict));
+        },
+        (error: unknown) => options.log?.(`build watch: loop request ${n}: ${error instanceof Error ? error.message : String(error)}`),
+      ).catch(() => {});
+    }
+  };
+
   const timer = setInterval(() => {
-    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches)));
+    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches).then(loops)));
   }, options.every);
 
   return {
@@ -200,6 +241,76 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
       await requests();
       await searches();
       stopped = true;
+    },
+  };
+}
+
+/** The loop judge's budget for the redirect writer: past it the guard uses its own template. */
+export const REDIRECT_BUDGET_MS = 30_000;
+/** The most a redirect may hold. */
+const REDIRECT_MAX = 1200;
+const CALM: LoopVerdict = { stuck: false, confidence: 0, cause: "productive" };
+
+export interface LoopAnswersDeps {
+  /** The pack the run is: it names itself in the judge's context. */
+  pack: string;
+  /** Whether the pack may change files: only then does a redirect have anything to steer. */
+  writable: boolean;
+  repoPath: string | null;
+  /** Null when no decision can run. Read at call time. */
+  decide: Decide | null;
+  overrides: Record<string, DecisionOverrides>;
+  redirectMs?: number;
+  log?: (line: string) => void;
+}
+
+/** The machine's side of the loop guard's question: `loop_judge` over the digest, and for a stuck verdict on a writable pack `loop_redirect`. Any failure is "not stuck" and no redirect. Never throws. */
+export function loopAnswers(deps: LoopAnswersDeps) {
+  const log = deps.log ?? (() => {});
+  const redirectOf = async (loop: { digest: string; pack: string; calls: number; cause: string }): Promise<string | undefined> => {
+    if (!deps.decide) return undefined;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const answer = await Promise.race([
+        deps.decide("loop_redirect", { kind: "loop", loop }, deps.repoPath),
+        new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), deps.redirectMs ?? REDIRECT_BUDGET_MS))),
+      ]);
+      if (answer === null) {
+        log("loop judge: the redirect took too long; the guard's own text goes in");
+        return undefined;
+      }
+      const text = typeof answer.redirect === "string" ? answer.redirect.replace(/\s+/g, " ").trim().slice(0, REDIRECT_MAX) : "";
+      return text || undefined;
+    } catch (error) {
+      log(`loop judge: redirect skipped: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  return {
+    async onLoopRequest(request: LoopRequest): Promise<LoopVerdict> {
+      if (request.digest === "") return CALM;
+      // The guard's digest opens with its own counter: the calls the segment has seen.
+      const calls = Number(/^turns=(\d+)/.exec(request.digest)?.[1] ?? 0);
+      const loop = { digest: request.digest, pack: deps.pack, calls };
+      const { answer } = await judgeCheck(deps.decide, "loop_judge", { kind: "loop", loop }, deps.repoPath, deps.overrides, log);
+      if (!answer) return CALM;
+      try {
+        // Stuck is the yes the pack's own bar accepts: the judge's confidence is the yes/no's, the cause only names it.
+        const pack = PACKS.loop_judge;
+        const bar = deps.overrides.loop_judge?.stuck?.proceed ?? pack.policy.stuck?.proceed ?? 0.7;
+        const confidence = confidenceOf(pack.questions.stuck!, answer.stuck);
+        const said = (answer.stuck as { value?: unknown } | undefined)?.value === true;
+        const choice = (answer.cause as { choice?: unknown } | undefined)?.choice;
+        const cause = typeof choice === "string" ? choice : "productive";
+        if (!said || !(confidence >= bar)) return { stuck: false, confidence: Number.isFinite(confidence) ? confidence : 0, cause };
+        const redirect = deps.writable ? await redirectOf({ ...loop, cause }) : undefined;
+        return { stuck: true, confidence, cause, ...(redirect ? { redirect } : {}) };
+      } catch (error) {
+        log(`loop judge: unreadable answer: ${error instanceof Error ? error.message : String(error)}`);
+        return CALM;
+      }
     },
   };
 }

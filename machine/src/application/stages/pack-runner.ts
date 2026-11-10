@@ -53,7 +53,7 @@ import { checkpointPush } from "./checkpoint.ts";
 import { readScenarioReds } from "./scenario-reds.ts";
 
 import type { TruthSink } from "../decision-truth.ts";
-import { type Decide, buildChecks, buildWatch, cardSearchAnswers } from "./build-watch.ts";
+import { type Decide, buildChecks, buildWatch, cardSearchAnswers, loopAnswers } from "./build-watch.ts";
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
@@ -476,8 +476,22 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     pack === "triage" && deps.cards
       ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, selfSource: sourceKindOf(task), query }) })
       : null;
+  // The loop guard's question: any agent pack that runs shell commands has a guard to ask it (the machine's economy input says `judge: true` for the same packs).
+  const loopJudge =
+    PACKS[pack].kind === "agent" && PACKS[pack].access.commands.length > 0
+      ? loopAnswers({
+          pack,
+          writable: PACKS[pack].writable,
+          repoPath: task.repoPath,
+          get decide() {
+            return deps.decide ?? null;
+          },
+          overrides: policy.decisions,
+          log: (line) => void context.note?.(line).catch(() => {}),
+        })
+      : null;
   const startWatch = (): void => {
-    if ((!checks && !cardSearch) || watch) return;
+    if ((!checks && !cardSearch && !loopJudge) || watch) return;
     const hostExec = deps.hostExec;
     watch = buildWatch({
       outDir: join(runDir, "out"),
@@ -485,6 +499,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       log: (line) => void context.note?.(line).catch(() => {}),
       ...(checks ? { onRed: async (...a: Parameters<typeof checks.onRed>) => (await importer?.sync(), checks.onRed(...a)), onScopeRequest: async (...a: Parameters<typeof checks.onScopeRequest>) => (await importer?.sync(), checks.onScopeRequest(...a)) } : {}),
       ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
+      ...(loopJudge ? { onLoopRequest: loopJudge.onLoopRequest } : {}),
       onCommitted: async (slice) => {
         if (!checks) return;
         await importer?.sync();

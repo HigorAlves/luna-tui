@@ -21,6 +21,8 @@ export const CONTEXT_OF = {
   e2e_failure_cause: { key: "check", schema: CheckContext },
   ci_failure_class: { key: "check", schema: CheckContext },
   frame_privacy: { key: "check", schema: CheckContext },
+  loop_judge: { key: "check", schema: CheckContext },
+  loop_redirect: { key: "check", schema: CheckContext },
   evidence_format: { key: "evidence", schema: EvidenceContext },
   size_estimate: { key: "size", schema: SizeContext },
   split_check: { key: "split", schema: SplitContext },

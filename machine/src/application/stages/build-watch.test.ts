@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { CheckContext } from "@hardness/contracts";
 
 import { type Learned, tagged } from "../decision-truth.ts";
-import { type Decide, MAX_CARD_SEARCHES, MAX_MAILBOX_BYTES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, readMailbox, writeMailbox } from "./build-watch.ts";
+import { type Decide, MAX_CARD_SEARCHES, MAX_MAILBOX_BYTES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, loopAnswers, readMailbox, writeMailbox } from "./build-watch.ts";
 
 const ledger = (slices: Array<{ id: number; status: string; commit?: string | null }>) =>
   JSON.stringify({ schema: 1, slices: slices.map((s) => ({ id: s.id, title: `slice ${s.id}`, status: s.status, commit: s.commit ?? null })) });
@@ -290,6 +290,116 @@ describe("the board search mailbox", () => {
     await watch.stop();
     expect(queries).toHaveLength(MAX_CARD_SEARCHES);
     expect(queries[0]).toBe("q1");
+  });
+});
+
+describe("the loop judge's mailbox", () => {
+  const request = (out: string, n: number, body: unknown) => {
+    mkdirSync(join(out, "checks"), { recursive: true });
+    writeFileSync(join(out, "checks", `loop-request-${n}.json`), JSON.stringify(body));
+  };
+
+  it("hands each loop-request-<n>.json to the handler in order and writes its verdict as loop-answer-<n>.json", async () => {
+    const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    const seen: unknown[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), { stuck: r.n === 1, confidence: 0.9, cause: "repeating_failure" }) });
+    request(out, 1, { n: 1, digest: "turns=30" });
+    expect(await waitFor(join(out, "checks", "loop-answer-1.json"))).toEqual({ stuck: true, confidence: 0.9, cause: "repeating_failure" });
+    request(out, 2, { n: 2, digest: "turns=40" });
+    expect(await waitFor(join(out, "checks", "loop-answer-2.json"))).toEqual({ stuck: false, confidence: 0.9, cause: "repeating_failure" });
+    await watch.stop();
+    expect(seen).toEqual([{ n: 1, digest: "turns=30" }, { n: 2, digest: "turns=40" }]);
+  });
+
+  it("numbers a request by its file, and gives a request with no text digest an empty one", async () => {
+    const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    const seen: unknown[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), { stuck: false, confidence: 0, cause: "productive" }) });
+    request(out, 1, { n: 9, digest: 5 });
+    await waitFor(join(out, "checks", "loop-answer-1.json"));
+    await watch.stop();
+    expect(seen).toEqual([{ n: 1, digest: "" }]);
+  });
+
+  it("does not wait on a slow judge: a red slice is still answered, and nothing is written after the watch stops", async () => {
+    const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    let release: () => void = () => {};
+    const slow = new Promise<void>((resolve) => (release = resolve));
+    const c = checks(out, async () => ({ right_reason: yes(), not_tautological: yes() }));
+    writeFileSync(join(out, "ledger.json"), redLedger("AssertionError: x"));
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onRed: c.onRed, onLoopRequest: async () => (await slow, { stuck: true, confidence: 1, cause: "x" }) });
+    request(out, 1, { n: 1, digest: "d" });
+    expect(await waitFor(join(out, "checks", "red-1.json"))).not.toBeNull();
+    await watch.stop();
+    release();
+    await settle(30);
+    expect(existsSync(join(out, "checks", "loop-answer-1.json"))).toBe(false);
+  });
+});
+
+describe("loopAnswers", () => {
+  const out = () => mkdtempSync(join(tmpdir(), "loop-answers-"));
+  const stuck = (p = 0.9, choice = "repeating_failure") => ({ stuck: yes(p), cause: { choice, confidence: 0.8 } });
+  const deps = (decide: Decide | null, over: Partial<Parameters<typeof loopAnswers>[0]> = {}) => ({ pack: "implementing", writable: true, repoPath: "/repo", decide, overrides: {}, ...over });
+
+  it("asks loop_judge for the digest as data and answers stuck, with the judge's confidence and cause, for a confident yes", async () => {
+    const asked: unknown[] = [];
+    const decide: Decide = async (pack, check, repo) => (asked.push({ pack, check, repo }), pack === "loop_judge" ? stuck(0.92) : { redirect: "Read the failing test again." });
+    const verdict = await loopAnswers(deps(decide)).onLoopRequest({ n: 1, digest: "turns=30 edit_churn=9\nRecent actions" });
+    expect(verdict).toEqual({ stuck: true, confidence: 0.92, cause: "repeating_failure", redirect: "Read the failing test again." });
+    expect(asked[0]).toEqual({ pack: "loop_judge", repo: "/repo", check: { kind: "loop", loop: { digest: "turns=30 edit_churn=9\nRecent actions", pack: "implementing", calls: 30 } } });
+    expect(asked[1]).toMatchObject({ pack: "loop_redirect", check: { kind: "loop", loop: { cause: "repeating_failure", pack: "implementing" } } });
+  });
+
+  it("answers not stuck for a no, for a yes under the pack's bar, and for a cause it cannot read", async () => {
+    const answers = [{ stuck: no(0.05), cause: { choice: "productive", confidence: 0.9 } }, { stuck: yes(0.6), cause: { choice: "repeating_failure", confidence: 0.9 } }, { stuck: yes(0.9) }];
+    for (const answer of answers) {
+      const calls: string[] = [];
+      const verdict = await loopAnswers(deps(async (pack) => (calls.push(pack), answer))).onLoopRequest({ n: 1, digest: "turns=3" });
+      expect(verdict.stuck).toBe(false);
+      expect(calls).toEqual(["loop_judge"]);
+      expect(verdict).not.toHaveProperty("redirect");
+    }
+    expect((await loopAnswers(deps(async () => ({ stuck: yes(0.9) }))).onLoopRequest({ n: 1, digest: "turns=3" })).cause).toBe("productive");
+  });
+
+  it("answers not stuck, never throwing, when no decision can run, the decision throws or the digest is empty", async () => {
+    const calm = { stuck: false, confidence: 0, cause: "productive" };
+    expect(await loopAnswers(deps(null)).onLoopRequest({ n: 1, digest: "turns=30" })).toEqual(calm);
+    expect(await loopAnswers(deps((async () => { throw new Error("down"); }) as Decide)).onLoopRequest({ n: 1, digest: "turns=30" })).toEqual(calm);
+    const asked: string[] = [];
+    expect(await loopAnswers(deps(async (pack) => (asked.push(pack), stuck()))).onLoopRequest({ n: 1, digest: "" })).toEqual(calm);
+    expect(asked).toEqual([]);
+  });
+
+  it("writes no redirect for a pack that is not writable: nothing could act on it", async () => {
+    const asked: string[] = [];
+    const verdict = await loopAnswers(deps(async (pack) => (asked.push(pack), stuck()), { writable: false })).onLoopRequest({ n: 1, digest: "turns=30" });
+    expect(verdict).toMatchObject({ stuck: true, cause: "repeating_failure" });
+    expect(verdict).not.toHaveProperty("redirect");
+    expect(asked).toEqual(["loop_judge"]);
+  });
+
+  it("flattens the redirect to one paragraph and cuts it to 1,200 characters", async () => {
+    const decide: Decide = async (pack) => (pack === "loop_judge" ? stuck() : { redirect: `  First line.\n\n- second   line\t${"x".repeat(2000)}` });
+    const verdict = await loopAnswers(deps(decide)).onLoopRequest({ n: 1, digest: "turns=30" });
+    expect(verdict.redirect).toHaveLength(1200);
+    expect(verdict.redirect!.startsWith("First line. - second line xxx")).toBe(true);
+    expect(verdict.redirect).not.toMatch(/[\n\t]/);
+  });
+
+  it("leaves the redirect out when the writer fails, answers nothing usable, or takes longer than its budget", async () => {
+    const judge = (redirect: Decide): Decide => async (pack, check, repo) => (pack === "loop_judge" ? stuck() : redirect(pack, check, repo));
+    for (const redirect of [(async () => { throw new Error("down"); }) as Decide, async () => ({}), async () => ({ redirect: "   " }), async () => ({ redirect: 5 })]) {
+      const verdict = await loopAnswers(deps(judge(redirect))).onLoopRequest({ n: 1, digest: "turns=30" });
+      expect(verdict).toMatchObject({ stuck: true });
+      expect(verdict).not.toHaveProperty("redirect");
+    }
+    const started = Date.now();
+    const slow = await loopAnswers(deps(judge(() => new Promise(() => {})), { redirectMs: 20 })).onLoopRequest({ n: 1, digest: "turns=30" });
+    expect(slow).toMatchObject({ stuck: true, cause: "repeating_failure" });
+    expect(slow).not.toHaveProperty("redirect");
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 });
 

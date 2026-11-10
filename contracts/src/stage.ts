@@ -189,6 +189,10 @@ export const PackId = z.enum([
   "ticket_recommend",
   // Drafts the reply that declines a ticket, from the ticket and its assessment as data; the draft waits for a person.
   "ticket_reply",
+  // The loop guard's judge (a check context of kind loop, run on demand by the build watch): is a run stuck, and why.
+  "loop_judge",
+  // Writes the note that redirects a run the judge found stuck, from the same digest; an agent pack with no tools, on demand.
+  "loop_redirect",
   // Drafts the answer to a reviewer's question on a shipped PR from the Evidence Pack (runs in the shipping state, after the retro in PACKS order).
   "pr_reply",
 ]);
@@ -671,7 +675,9 @@ export type PlanContext = z.infer<typeof PlanContext>;
 
 /** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames"]),
+  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames", "loop"]),
+  /** loop: the guard's digest of a run's recent actions (counters, tool names, base names, error hashes: never file contents), the pack and how many calls it made; `cause` is what the judge found, for the redirect writer. All data. */
+  loop: z.object({ digest: z.string().max(6000), pack: z.string().max(60), calls: z.number().int().nonnegative(), cause: z.string().max(40).optional() }).optional(),
   /** frames: the distinct on-screen texts of a film or its screenshots, flattened and capped by the machine (40 texts of 1000 characters): data for frame_privacy. */
   frames: z.object({ texts: z.array(z.string().max(1000)).max(40) }).optional(),
   /** ci: the failing job and the tail of its log, flattened and capped by the machine: data for ci_failure_class. */
