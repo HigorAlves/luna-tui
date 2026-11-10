@@ -41,7 +41,7 @@ const FactSchema = z.object({
   lastRun: z.string(),
   streak: z.number().int(),
   detector: Detector.optional(),
-  files: z.array(z.string()).optional(),
+  fileSets: z.array(z.array(z.string())).optional(),
   section: ProjectContextSection.optional(),
   pending: z.object({ since: z.string(), branch: z.string() }).optional(),
 });

@@ -546,7 +546,7 @@ describe("economy: a proposed fact's life", () => {
 });
 
 describe("economy.promotable and economy.promoted", () => {
-  const seed = (over: Partial<FactRecord>): FactRecord => ({ id: "f1", family: "proposed", source: "proposed", key: "k", text: MANUAL_FACT, state: "active", confirmations: 3, contradictions: 0, score: 2, exercised: 9, fired: 9, cards: ["c1", "c2", "c3", "c4", "c5"], firstRun: "r0", lastRun: "r0", streak: 0, detector, files: [], section: "Commands", ...over });
+  const seed = (over: Partial<FactRecord>): FactRecord => ({ id: "f1", family: "proposed", source: "proposed", key: "k", text: MANUAL_FACT, state: "active", confirmations: 3, contradictions: 0, score: 2, exercised: 9, fired: 9, cards: ["c1", "c2", "c3", "c4", "c5"], firstRun: "r0", lastRun: "r0", streak: 0, detector, fileSets: [], section: "Commands", ...over });
   const withFacts = (...facts: FactRecord[]) => {
     const fake = fakeStore();
     fake.state.facts = { facts, injected: {} };
@@ -592,7 +592,7 @@ describe("economy.promotable and economy.promoted", () => {
 });
 
 describe("economy: a promoted fact waits for the default branch", () => {
-  const seed = (over: Partial<FactRecord>): FactRecord => ({ id: "f1", family: "proposed", source: "proposed", key: "k", text: MANUAL_FACT, state: "active", confirmations: 3, contradictions: 0, score: 2, exercised: 9, fired: 9, cards: ["c1", "c2", "c3", "c4", "c5"], firstRun: "r0", lastRun: "r0", streak: 0, detector, files: [], section: "Commands", ...over });
+  const seed = (over: Partial<FactRecord>): FactRecord => ({ id: "f1", family: "proposed", source: "proposed", key: "k", text: MANUAL_FACT, state: "active", confirmations: 3, contradictions: 0, score: 2, exercised: 9, fired: 9, cards: ["c1", "c2", "c3", "c4", "c5"], firstRun: "r0", lastRun: "r0", streak: 0, detector, fileSets: [], section: "Commands", ...over });
   const DAY = 24 * 60 * 60 * 1000;
   const ago = (days: number) => new Date(Date.now() - days * DAY).toISOString();
   const setup = (context: string | null, ...facts: FactRecord[]) => {

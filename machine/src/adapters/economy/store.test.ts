@@ -84,7 +84,7 @@ describe("fileStore: the proposer's state", () => {
   it("round-trips a proposed fact with its detector, files and section, and drops one whose detector is not valid", async () => {
     const store = fileStore(dir);
     const detector = { scope: { all: [{ intent: "test" as const }] }, confirm: { all: [{ commandIncludes: "pytest -q" }] }, contradict: { all: [{ errorClass: "command_missing" as const }] } };
-    const proposed = fact({ id: "p1", family: "proposed", source: "proposed", detector, files: ["a.ts"], section: "Commands" });
+    const proposed = fact({ id: "p1", family: "proposed", source: "proposed", detector, fileSets: [["a.ts"]], section: "Commands" });
     const bad = fact({ id: "p2", family: "proposed", source: "proposed", detector: { ...detector, scope: { all: [{ predicate: "nonsense" }] } } as never });
     await store.updateFacts(repo, (file) => ({ ...file, facts: [proposed, bad] }));
     expect((await store.facts(repo)).facts).toEqual([proposed]);

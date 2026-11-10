@@ -544,7 +544,7 @@ A detector is data, not a pattern. It has a `scope`, a `confirm` and a `contradi
 
 The machine evaluates a detector over a run's observed calls. With no scope, there is no verdict. A contradiction wins over a confirmation. The machine admits a fact only when its detector confirms on every cited run. The text must pass the lint below. The fact must not copy a fact that the repository holds. The new fact starts as if the window of digests had run through it. So it can be active at birth.
 
-A proposed fact counts a confirming run only when that run edited a file that no earlier confirming run edited. Three runs of one change cannot make it active. A proposed fact retires on its score alone.
+A proposed fact counts a confirming run when that run edited no file, or edited no file that an earlier counted run edited. The fact keeps the file sets of the runs that counted (at most 10 sets of 50 paths). A run that overlaps a kept set does not count, and its set is not kept. Three runs of one change cannot make it active. Three read-only runs can. A proposed fact retires on its score alone.
 
 **The two prompt blocks.** `core/render.ts` adds each block at the end of the stage prompt, as declared data. Each block has at most 4 lines and about 150 tokens, with its header counted.
 

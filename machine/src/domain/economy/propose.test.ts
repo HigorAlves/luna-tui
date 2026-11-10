@@ -28,7 +28,7 @@ const window = (runs: Array<[string, string, ObservedCall[]]>) => ({
 });
 
 const record = (over: Partial<FactRecord> = {}): FactRecord => ({
-  id: factId("proposed", normalised(text)), family: "proposed", source: "proposed", key: normalised(text), text, state: "candidate", confirmations: 0, contradictions: 0, score: 0, exercised: 0, fired: 0, cards: ["c1", "c2"], firstRun: "r0", lastRun: "r0", streak: 0, detector, files: [], section: "Commands", ...over,
+  id: factId("proposed", normalised(text)), family: "proposed", source: "proposed", key: normalised(text), text, state: "candidate", confirmations: 0, contradictions: 0, score: 0, exercised: 0, fired: 0, cards: ["c1", "c2"], firstRun: "r0", lastRun: "r0", streak: 0, detector, fileSets: [], section: "Commands", ...over,
 });
 /** Folds each run in order, as the machine does after a run. */
 const fold = (facts: FactRecord[], runs: Array<[string, string, ObservedCall[]]>) => runs.reduce((acc, [runId, cardId, calls]) => foldProposed(acc, { runId, cardId, calls }), facts);
@@ -106,20 +106,32 @@ describe("foldProposed: formation by the different-files rule", () => {
     expect(facts[0]).toMatchObject({ state: "candidate", confirmations: 1, exercised: 3 });
   });
 
-  it("counts a run that adds one new file to files an earlier run edited", () => {
+  it("does not count a confirming run whose files overlap a kept set, even when it adds a new file", () => {
     const facts = fold([record()], [["r1", "c1", good(["a.ts"])], ["r2", "c2", good(["a.ts", "b.ts"])]]);
+    expect(facts[0]).toMatchObject({ confirmations: 1, fileSets: [["a.ts"]] });
+  });
+
+  it("counts a confirming run whose files are disjoint from every kept set, and keeps only the sets of runs that counted", () => {
+    const facts = fold([record()], [["r1", "c1", good(["a.ts"])], ["r2", "c2", good(["a.ts", "b.ts"])], ["r3", "c3", good(["c.ts"])]]);
+    expect(facts[0]).toMatchObject({ confirmations: 2, fileSets: [["a.ts"], ["c.ts"]] });
+  });
+
+  it("counts a confirming run that edited nothing, and is active after three of them", () => {
+    const facts = fold([record()], [["r1", "c1", good([])], ["r2", "c2", good([])], ["r3", "c3", good([])]]);
+    expect(facts[0]).toMatchObject({ state: "active", confirmations: 3, exercised: 3 });
+  });
+
+  it("counts a read-only run beside runs that edited files", () => {
+    const facts = fold([record()], [["r1", "c1", good(["a.ts"])], ["r2", "c2", good([])], ["r3", "c3", good(["a.ts"])]]);
     expect(facts[0]!.confirmations).toBe(2);
   });
 
-  it("does not count a confirming run that edited nothing", () => {
-    expect(fold([record()], [["r1", "c1", good([])]])[0]).toMatchObject({ confirmations: 0, exercised: 1 });
-  });
-
-  it("keeps the set of edited files bounded", () => {
-    const many = Array.from({ length: 20 }, (_, i) => `f${i}.ts`);
+  it("keeps at most ten sets of at most fifty paths", () => {
     let facts = [record()];
-    for (let n = 0; n < 30; n++) facts = fold(facts, [[`r${n}`, `c${n}`, good(many.map((f) => `${n}/${f}`))]]);
-    expect(facts[0]!.files!.length).toBeLessThanOrEqual(200);
+    for (let n = 0; n < 15; n++) facts = fold(facts, [[`r${n}`, `c${n}`, good(Array.from({ length: 60 }, (_, i) => `${n}/f${i}.ts`))]]);
+    expect(facts[0]!.fileSets!.length).toBe(10);
+    expect(facts[0]!.fileSets!.every((set) => set.length <= 50)).toBe(true);
+    expect(facts[0]!.confirmations).toBe(15);
   });
 
   it("does not exercise or count a run the scope does not hold on", () => {

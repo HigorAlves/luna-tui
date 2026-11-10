@@ -52,9 +52,9 @@ export interface FactRecord {
   lastRun: string;
   /** Contradicting runs in a row (a form repair only). */
   streak: number;
-  /** A proposed fact's check on a run, and the files its confirming runs edited (bounded): the different-files rule reads them. */
+  /** A proposed fact's check on a run, and the edited-file sets of the confirming runs that counted (at most ten, each at most fifty paths): the different-files rule reads them. */
   detector?: Detector;
-  files?: string[];
+  fileSets?: string[][];
   /** The section of the project context the proposer named for it, a default for the retro. */
   section?: string;
   /** The retro opened a PR with the fact's text and the default branch does not hold it yet: the fact stays active and told, and is not offered again for `PENDING_DAYS`. */
