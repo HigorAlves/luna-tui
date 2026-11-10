@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { type ScriptStep, runScenario } from "../conformance/table.ts";
+import { AGENT_TABLE, type ScriptStep, runScenario } from "../conformance/table.ts";
 import { scriptedQuery } from "./fake.ts";
 import { type Transport, claudeRuntime } from "./run.ts";
 
@@ -47,5 +47,29 @@ describe("the loop guard's stop", () => {
   it("ends the run with its reason when the abort ends the stream with no result", async () => {
     const { run: outcome } = await run(endsCleanly());
     expect(outcome).toMatchObject({ ok: false, rateLimited: false, error: expect.stringContaining(LOOP_STUCK) });
+  });
+});
+
+describe("the run's token count", () => {
+  /** The scripted query, with a usage on its result as the SDK gives it. */
+  const withUsage = (usage: unknown): Transport => (params) => {
+    const inner = scriptedQuery([{ answer: AGENT_TABLE.valid }])(params);
+    async function* play() {
+      for await (const msg of inner) yield msg.type === "result" ? ({ ...msg, usage } as typeof msg) : msg;
+    }
+    return play() as unknown as Query;
+  };
+
+  it("prices cache writes by their lifetime when the result carries the split", async () => {
+    const root = mkdtempSync(join(tmpdir(), "usage-"));
+    try {
+      const usage = { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 5000, cache_creation_input_tokens: 4000, cache_creation: { ephemeral_5m_input_tokens: 1000, ephemeral_1h_input_tokens: 3000 } };
+      const { run: outcome } = await runScenario(claudeRuntime(withUsage(usage)), "claude:sonnet", root);
+      expect(outcome.tokens).toEqual({ input: 4100, output: 20, cached: 5000, cacheWrite5m: 1000, cacheWrite1h: 3000 });
+      const flat = await runScenario(claudeRuntime(withUsage({ ...usage, cache_creation: null })), "claude:sonnet", root);
+      expect(flat.run.tokens).toEqual({ input: 4100, output: 20, cached: 5000, cacheWrite5m: 4000 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

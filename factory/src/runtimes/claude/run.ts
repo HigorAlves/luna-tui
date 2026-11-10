@@ -226,7 +226,10 @@ async function drive(ctx: RunContext, transport: Transport | undefined, prompt: 
         run.turns = msg.num_turns ?? 0;
         run.costUsd = msg.total_cost_usd ?? null;
         run.durationMs = msg.duration_ms ?? 0;
-        const usage = msg.usage as { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } | undefined;
+        // The result's usage is the API's: its cache writes come whole and, when the API says, split by lifetime (5 minutes, 1 hour), which are priced apart.
+        const usage = msg.usage as
+          | { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number; cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number } | null }
+          | undefined;
         run.tokens = claudeTokens(usage);
         emit({
           kind: "usage",
