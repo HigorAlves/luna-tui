@@ -3,7 +3,7 @@
 // the runner wants (arg repair), a variable value that makes imported code work (env value), a checkout with no remote and no history
 // beyond HEAD (empty probe). Ported from TokenEconomizer's env facts (RFC 0007, te-spec 2.2): one run's calls in, candidate evidence out.
 // A fact's text is a fixed template filled with a command spelling, a host or a variable name, each checked again here against its own
-// strict pattern, so nothing a repository's output wrote ever reaches a prompt. The fold that turns evidence into lifecycle is lifecycle.ts.
+// strict pattern (a spelling against the observer's grammar, `knownForm`), so nothing a repository's output wrote ever reaches a prompt. The fold that turns evidence into lifecycle is lifecycle.ts.
 //
 // Where the container's observation cannot carry what upstream reads:
 // - `outcome` is the error class, or "ran" when there is none. `env` (the command was helped by `VAR=value`) is "the observation names a variable".
@@ -16,6 +16,8 @@
 // - A call's `ok` is the tool's, and not one whose output the observer read as a failure (a piped test run that exited 0); upstream's `ok` of
 //   an environment call also reads the output for a traceback, which the observer does by giving that call a failure fingerprint.
 import { createHash } from "node:crypto";
+
+import { knownForm } from "@hardness/contracts";
 
 import { findingKinds } from "../../../runner-video/tools/lib/findings.ts";
 import type { ObservedCall } from "./observe-run.ts";
@@ -52,8 +54,7 @@ export interface EvidenceContext {
 /** Stable across runs and machines: the family and the key. */
 export const factId = (family: Family | "proposed", key: string): string => createHash("sha1").update(`${family}\0${key}`).digest("hex").slice(0, 12);
 
-/** The only text a fact may hold that a repository wrote, each with the pattern that limits it. */
-const SPELLING = /^[A-Za-z0-9 ._:=/@+-]{1,120}$/;
+/** The only text a fact may hold that a repository wrote, each with the pattern that limits it. A command spelling is no such text: it must be one `knownForm` accepts, a shape the observer's own vocabulary writes. */
 const HOST = /^[A-Za-z0-9][A-Za-z0-9._-]{0,100}(?::\d{1,5})?$/;
 const VAR = /^[A-Z][A-Z0-9_]{2,59}$/;
 const VALUE = /^[\w.\-/:]{1,60}$/;
@@ -141,7 +142,7 @@ function formRepair(calls: ObservedCall[], known: readonly KnownFact[], injected
       const b = have.find((f) => !movesShell(f)) ?? have[0];
       let text = "";
       const errors = found.get(a);
-      if (errors && b !== undefined && SPELLING.test(a) && SPELLING.test(b)) {
+      if (errors && b !== undefined && knownForm(a) && knownForm(b)) {
         const e = top(errors) as string;
         text = `${usage(a)} fails here with ${ERROR_PHRASE[e] ?? e}; ${usage(b)} works.`;
       }
@@ -208,7 +209,7 @@ function argRepair(calls: ObservedCall[], known: readonly KnownFact[], injected:
     const goodLoaded = mine.some((c) => loaded(c) && labelOf(c).some((l) => !bad(l)));
     let text = "";
     const entry = found.get(key);
-    if (entry && SPELLING.test(entry.form)) {
+    if (entry && knownForm(entry.form)) {
       if (entry.kind === "sep") text = `${usage(entry.form, "")} takes dotted test labels (\`module.Class.test\`, not \`module::Class::test\`).`;
       else {
         const [a, b] = [...entry.examples.keys()].map((e) => e.split(" ") as [string, string]).sort((x, y) => x[0].length - y[0].length)[0] as [string, string];
@@ -274,7 +275,7 @@ const BUILD_LIKE: ReadonlySet<string> = new Set(["build", "test", "package"]);
 function absentTool(calls: ObservedCall[], known: readonly KnownFact[], injected: ReadonlySet<string>, repaired: ReadonlySet<string>): Evidence[] {
   const ranTools = new Set(calls.flatMap((c) => (c.form !== undefined && worked(c) ? [toolOf(c.form)] : [])));
   const missing = (c: ObservedCall): boolean => c.intent !== undefined && BUILD_LIKE.has(c.intent) && c.errorClass === "command_missing" && c.form !== undefined && !c.form.includes(" ");
-  const found = new Set(calls.flatMap((c) => (missing(c) && !repaired.has(c.form as string) && !ranTools.has(c.form as string) && TOOL.test(c.form as string) ? [c.form as string] : [])));
+  const found = new Set(calls.flatMap((c) => (missing(c) && !repaired.has(c.form as string) && !ranTools.has(c.form as string) && TOOL.test(c.form as string) && knownForm(c.form as string) ? [c.form as string] : [])));
   const keys = new Set(found);
   for (const k of known) if (k.family === "absent_tool") keys.add(k.key);
   const sawBuildLike = calls.some((c) => c.intent !== undefined && BUILD_LIKE.has(c.intent));

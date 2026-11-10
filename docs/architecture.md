@@ -531,7 +531,7 @@ A fact's text is a fixed template. The only foreign text in it is a command spel
 - A form repair counts a contradiction only after two runs in a row.
 - `retired`, `dropped` and `promoted` are final. The fact stays in the list, so its key is never learned again.
 
-The machine tells a free fact only while the fact is active. At least 4 runs must have used what it is about. It must have applied in at least 40% of them.
+The machine tells a fact only while the fact is active. At least 4 runs must have used what it is about. It must have applied in at least 40% of them. At least 2 distinct cards must have confirmed it, and a run with no card id is no card. The machine checks every command in a fact's text again when it renders the text, so a fact stored earlier is refused too.
 
 **The proposer.** `fact_propose` is an agent pack (`claude:haiku`, low effort, no tools, one turn). It runs with `economy.facts: on`. It runs after every `economy.propose_every`-th closed card (3 by default), and only with 2 digests or more. It reads the digests of the last 8 runs and the text of up to 20 facts that the repository holds. A digest line is `intent | command | how it ended`. It answers at most 4 facts. Each fact has a text, a section of the project context, two to four cited runs and a detector.
 
@@ -615,7 +615,8 @@ The files sit under `<state dir>/economy/<repo slug>/`. The slug is the folder n
 ### Trust
 
 - Facts and redirects come from what a container did. They enter a prompt only as declared data, with caps, from templates.
-- A fact never holds output text. Its only foreign text is a command spelling, a host or a variable name, each in a strict character set.
+- A fact never holds output text. Its only foreign text is a command spelling, a host or a variable name, each in a strict character set. A command spelling must also fit the observer's grammar (`knownForm` in `contracts/src/economy-vocabulary.ts`): optional `cd` and activation prefixes, an optional known launcher, a known runner, interpreter, task, build or package tool, and at most three plain arguments.
+- A fact's command is limited to the observer's known launchers and runners. Two cards must confirm it before any run is told it. A person can drop it.
 - The same finding list as the frame check filters fact text for secret shapes.
 - The judge and the redirect writer see commands and file base names. They never see output.
 - The guard can end a run. It cannot change a verdict, an approval or a risk level.
@@ -634,6 +635,7 @@ Nobody has measured these parts against a live model. The team made no model cal
 - A mask does not apply on eve. eve and Jev runs give no skill or subagent evidence.
 - A redirect on eve rides on the result of the call that triggered it. A result with no text of its own (a file write) cannot carry the note. The tool then holds the note for the next result that has text. The tool waits at most 2 seconds for the runner's answer. A later answer is lost.
 - The machine tells a fact learned on one engine to every engine.
+- A repository whose two cards are both hostile can still state a wrong spelling of a known runner. The grammar limits the spelling. It does not prove the spelling works.
 - The observer's regex tables know the common runners. A repository with an unusual runner teaches fewer facts.
 - The import of past runs gives envelopes and tool evidence only.
 - The paper's savings are for interactive agents with full tool sets. Nobody has measured a saving on Luna's runs. Luna's packs already load few tools, so pruning can save less here.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { type Evidence, evidenceOf, factId } from "./envfacts.ts";
-import { FIRE_GATE, FIRE_MIN_N, GAMMA, K_PROMOTE, LAMBDA, SCORE_FLOOR, dropFact, type FactRecord, fires, foldFacts } from "./lifecycle.ts";
+import { FIRE_GATE, FIRE_MIN_CARDS, FIRE_MIN_N, GAMMA, K_PROMOTE, LAMBDA, SCORE_FLOOR, dropFact, type FactRecord, fires, foldFacts } from "./lifecycle.ts";
 import type { ObservedCall } from "./observe-run.ts";
 
 const evidence = (over: Partial<Evidence> = {}): Evidence => ({ family: "env_value", key: "APP_ENV", text: "Code that imports the project needs `APP_ENV` set here: `APP_ENV=test` works.", confirms: true, contradicts: false, exercised: true, fired: true, ...over });
@@ -12,12 +12,12 @@ const confirm = evidence();
 const contradict = evidence({ text: "", confirms: false, contradicts: true });
 const quiet = evidence({ text: "", confirms: false, exercised: false, fired: false });
 const record = (over: Partial<FactRecord> = {}): FactRecord => ({
-  id: factId("env_value", "APP_ENV"), family: "env_value", source: "free", key: "APP_ENV", text: "t", state: "active", confirmations: 5, contradictions: 0, score: 3, exercised: 6, fired: 6, cards: [], firstRun: "r0", lastRun: "r0", streak: 0, ...over,
+  id: factId("env_value", "APP_ENV"), family: "env_value", source: "free", key: "APP_ENV", text: "t", state: "active", confirmations: 5, contradictions: 0, score: 3, exercised: 6, fired: 6, cards: ["c1", "c2"], firstRun: "r0", lastRun: "r0", streak: 0, ...over,
 });
 
 describe("the lifecycle's constants", () => {
   it("are upstream's validated replay constants", () => {
-    expect([K_PROMOTE, GAMMA, LAMBDA, SCORE_FLOOR, FIRE_GATE, FIRE_MIN_N]).toEqual([3, 0.8, 5, 0, 0.4, 4]);
+    expect([K_PROMOTE, GAMMA, LAMBDA, SCORE_FLOOR, FIRE_GATE, FIRE_MIN_N, FIRE_MIN_CARDS]).toEqual([3, 0.8, 5, 0, 0.4, 4, 2]);
   });
 });
 
@@ -131,6 +131,15 @@ describe("fires", () => {
     expect(fires(withRuns(5, 1))).toBe(false);
     expect(fires(withRuns(5, 2))).toBe(true);
     expect(fires(withRuns(4, 1))).toBe(false);
+  });
+
+  it("needs two distinct cards among those that confirmed it, so one card's retries cannot get a fact stated", () => {
+    expect(fires(record({ cards: [] }))).toBe(false);
+    expect(fires(record({ cards: ["c1"] }))).toBe(false);
+    expect(fires(record({ cards: ["c1", "c1"] }))).toBe(false);
+    expect(fires(record({ cards: ["c1", ""] }))).toBe(false);
+    expect(fires(record({ cards: ["", ""] }))).toBe(false);
+    expect(fires(record({ cards: ["c1", "c2"] }))).toBe(true);
   });
 
   it("is for an active free fact only", () => {

@@ -1,7 +1,7 @@
 // The facts a run is told (te-spec 2.2.5): the active free facts that keep applying, at most four lines and 600 characters with the header's
 // share counted, ordered as upstream orders them. A line that reads as completion or verification advice, or that is shaped like a secret,
 // is refused whatever its source. A line is kept whole or left out; it is never cut.
-import { FACTS_HEADER, manualHeader } from "@hardness/contracts";
+import { FACTS_HEADER, knownForm, manualHeader } from "@hardness/contracts";
 
 import { findingKinds } from "../../../runner-video/tools/lib/findings.ts";
 import type { Family } from "./envfacts.ts";
@@ -19,8 +19,13 @@ export const lintOk = (text: string): boolean => !LINT.test(text);
 
 const PRIORITY: Record<Family | "proposed", number> = { form_repair: 0, arg_repair: 1, env_value: 2, absent_tool: 3, empty_probe: 4, boundary: 5, proposed: 6 };
 
-/** A text that is one line, fits a stage input, reads as no advice about being done or checking, and is shaped like no secret. */
-export const sayableText = (text: string): boolean => text.trim() !== "" && text.length <= MAX_LINE && !/[\r\n]/.test(text) && lintOk(text) && findingKinds(text).length === 0;
+// The commands a fact's text states, as the templates write them: `form …` (in a subshell, `(cd x && form …)`) and an arg repair's leading `form`.
+const COMMAND_SPAN = /`\(?([^`()]+?) …\)?`|^`([^`]+)` takes /g;
+const commandsOf = (text: string): string[] => [...text.matchAll(COMMAND_SPAN)].map((m) => (m[1] ?? m[2] ?? "").replaceAll(" && ", " "));
+
+/** A text that is one line, fits a stage input, reads as no advice about being done or checking, is shaped like no secret, and states only commands the observer could have spelled: a fact stored before that check is refused here too. */
+export const sayableText = (text: string): boolean =>
+  text.trim() !== "" && text.length <= MAX_LINE && !/[\r\n]/.test(text) && lintOk(text) && findingKinds(text).length === 0 && commandsOf(text).every(knownForm);
 const sayable = (fact: FactRecord): boolean => sayableText(fact.text);
 const rate = (fact: FactRecord): number => (fact.exercised === 0 ? 0 : fact.fired / fact.exercised);
 

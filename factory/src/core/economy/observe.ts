@@ -4,7 +4,19 @@
 // micro-skill observer, with its generic vocabulary (RFC 0007).
 import path from "node:path";
 
-import type { Observation } from "@hardness/contracts";
+import {
+  BUILD_HEADS,
+  BUILD_SUBS,
+  INTERP_VERSIONED_RE,
+  INTERPRETERS,
+  type Observation,
+  PACKAGE_TOOLS,
+  RUNNER_HEADS,
+  RUNNER_MODULES,
+  RUNNER_SCRIPTS,
+  SCRIPT_HEADS,
+  TASK_HEADS,
+} from "@hardness/contracts";
 
 import { errorClassOf, failureSignature, isErrorOutput, NETWORK_ERRORS, splitLines } from "./fingerprint-failure.ts";
 import { shellEditTargets } from "./shell-edits.ts";
@@ -34,24 +46,9 @@ interface Segment {
   probe?: string;
 }
 
-// The generic vocabulary: every ecosystem at once.
-const INTERPRETERS = new Set(["python", "python2", "python3", "pypy", "pypy3", "node", "nodejs", "deno", "bun", "tsx", "ts-node", "ruby", "perl", "php", "Rscript", "julia", "lua", "elixir"]);
-const RUNNER_HEADS = new Set(["pytest", "py.test", "tox", "nox", "nosetests", "trial", "jest", "vitest", "mocha", "playwright", "cypress", "ava", "karma", "rspec", "phpunit", "ctest", "bats"]);
-const RUNNER_SCRIPTS = ["runtests.py", "bin/test", "bin/doctest", "manage.py"];
-const RUNNER_MODULES = new Set(["pytest", "unittest", "nose", "django", "tox", "nox"]);
-const PACKAGE_TOOLS = new Set([
-  "pip", "pip3", "conda", "mamba", "poetry", "pipenv", "uv", "apt", "apt-get", "npm", "yarn", "pnpm", "corepack",
-  "gem", "bundle", "composer", "cargo", "go", "mvn", "gradle", "dotnet", "brew", "rustup", "pyenv", "nvm", "asdf",
-]);
+// The generic vocabulary, every ecosystem at once, is in contracts: the machine checks a form against the same lists.
 const FETCH_HEADS = new Set(["curl", "wget"]);
 const PROBE_HEADS = new Set(["which", "command", "type", "whereis"]);
-const TASK_HEADS = new Set(["make", "npm", "yarn", "pnpm", "cargo", "go", "mvn", "gradle", "gradlew", "dotnet", "mix", "swift", "rake"]);
-const BUILD_HEADS = new Set([
-  "make", "cmake", "ninja", "bazel", "tsc", "eslint", "prettier", "ruff", "flake8", "pylint", "mypy", "pyright", "black", "isort",
-  "golangci-lint", "gcc", "g++", "clang", "javac", "webpack", "vite", "pre-commit", "shellcheck",
-]);
-const BUILD_SUBS = new Set(["build", "check", "compile", "lint", "vet", "typecheck", "type-check", "clippy", "package", "verify", "fmt", "format"]);
-const SCRIPT_HEADS = new Set(["npm", "yarn", "pnpm", "bun"]);
 const GIT_FETCH_SUBS = new Set(["fetch", "clone", "pull", "ls-remote"]);
 const GIT_PROBE_SUBS = new Set(["remote", "branch", "tag", "fsck", "stash", "show-ref", "for-each-ref"]);
 const PREFIX_HEADS = new Set(["sudo", "env", "time", "exec", "nice", "nohup", "timeout"]);
@@ -65,7 +62,6 @@ const CONDA_RUN_RE = /^(?:conda|mamba)\s+run\s+(?:--no-capture-output\s+|--live-
 const TOOL_RUN_RE = /^(poetry|pipenv|uv|npx|bundle|yarn|pnpm)\s+(?:run|exec)\s+/;
 const NPX_RE = /^npx\s+(?:(?:--yes|-y|--no-install|--no)\s+)*/;
 const TOOL_LAUNCH_RE = /^(uvx|uv\s+tool\s+run|pipx\s+run)\s+/;
-const INTERP_VERSIONED_RE = /^(?:python|node)\d(?:\.\d+)?$/;
 const ENV_ASSIGN_RE = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)+/;
 const ASSIGN_TOKEN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 // Upstream reads `/bin/sh -c` and `/bin/bash -lc`; a bare `bash -lc` (Codex) is the same shape.

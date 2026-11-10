@@ -28,7 +28,7 @@ const window = (runs: Array<[string, string, ObservedCall[]]>) => ({
 });
 
 const record = (over: Partial<FactRecord> = {}): FactRecord => ({
-  id: factId("proposed", normalised(text)), family: "proposed", source: "proposed", key: normalised(text), text, state: "candidate", confirmations: 0, contradictions: 0, score: 0, exercised: 0, fired: 0, cards: [], firstRun: "r0", lastRun: "r0", streak: 0, detector, files: [], section: "Commands", ...over,
+  id: factId("proposed", normalised(text)), family: "proposed", source: "proposed", key: normalised(text), text, state: "candidate", confirmations: 0, contradictions: 0, score: 0, exercised: 0, fired: 0, cards: ["c1", "c2"], firstRun: "r0", lastRun: "r0", streak: 0, detector, files: [], section: "Commands", ...over,
 });
 /** Folds each run in order, as the machine does after a run. */
 const fold = (facts: FactRecord[], runs: Array<[string, string, ObservedCall[]]>) => runs.reduce((acc, [runId, cardId, calls]) => foldProposed(acc, { runId, cardId, calls }), facts);
@@ -151,7 +151,7 @@ describe("foldProposed: contradiction and retirement", () => {
 
   it("never counts a contradicted run as a confirmation", () => {
     const both: ObservedCall[] = [...good(["z.ts"]), ...contradicting];
-    expect(fold([record()], [["r1", "c1", both]])[0]).toMatchObject({ confirmations: 0, contradictions: 1, cards: [] });
+    expect(fold([record()], [["r1", "c1", both]])[0]).toMatchObject({ confirmations: 0, contradictions: 1, cards: ["c1", "c2"] });
   });
 
   it("decays the score of a fact on a run that says nothing of it", () => {
@@ -160,6 +160,14 @@ describe("foldProposed: contradiction and retirement", () => {
 });
 
 describe("firesProposed", () => {
+  it("needs two distinct cards among those that confirmed the fact", () => {
+    const active = { state: "active" as const, exercised: 4, fired: 4 };
+    expect(firesProposed(record({ ...active, cards: [] }))).toBe(false);
+    expect(firesProposed(record({ ...active, cards: ["c1", "c1"] }))).toBe(false);
+    expect(firesProposed(record({ ...active, cards: ["c1", ""] }))).toBe(false);
+    expect(firesProposed(record({ ...active, cards: ["c1", "c2"] }))).toBe(true);
+  });
+
   it("states an active fact once it has been in scope in four runs", () => {
     expect(firesProposed(record({ state: "active", exercised: 4, fired: 4 }))).toBe(true);
     expect(firesProposed(record({ state: "active", exercised: 3, fired: 3 }))).toBe(false);

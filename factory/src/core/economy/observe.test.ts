@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Observation } from "@hardness/contracts";
+import { knownForm, Observation } from "@hardness/contracts";
 
 import { observe, type ObservedCall } from "./observe.ts";
 
@@ -413,5 +413,21 @@ describe("observe: unknown tools and bad input", () => {
 
   it("passes the contract for every shape above", () => {
     for (const c of ["", "   ", "&&", ";", "(", "cd", "cd ~ && ls", "git", "python -m", "npm run", "echo $(", "<<<"]) run(c, "x", false);
+  });
+});
+
+describe("observe: forms and the machine's grammar", () => {
+  it("emits, for the commands of the fixtures above, only forms of a runnable intent that knownForm accepts", () => {
+    const commands = [
+      "python -m pytest", "python -m unittest discover", "python -m mypy src", "python3 runtests.py foo", "python manage.py test app", "python script.py", "node app.js",
+      "pytest -q", "jest", "./runtests.py", "bin/test", "make test", "cargo test", "go test ./...", "npm run test", "npm run test:unit", "yarn test", "pnpm test",
+      "npm run build", "npm run lint", "cargo build", "tsc --noEmit", "eslint .", "pip list", "brew doctor", "pytest -q tests/", "python -m pytest -x",
+      "source .venv/bin/activate venv && pytest", "cd sub && pytest", "conda activate e1 && python -m pytest", "FOO=1 uv run pytest", "uv run pytest", "npx vitest run",
+      "sudo timeout 60 pytest", "/bin/bash -lc 'pytest -q'", "conda run -n env1 pytest", "uvx ruff check", "poetry run pytest", "pipx run tox", "bundle exec rspec",
+    ];
+    for (const command of commands) {
+      const o = run(command);
+      if (o.form !== undefined && o.intent !== undefined && ["interpreter", "test", "build", "package"].includes(o.intent)) expect(knownForm(o.form), `${command} -> ${o.form}`).toBe(true);
+    }
   });
 });

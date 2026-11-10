@@ -19,6 +19,8 @@ export const SCORE_FLOOR = 0;
 export const FIRE_GATE = 0.4;
 /** ...measured over at least this many of them. */
 export const FIRE_MIN_N = 4;
+/** ...and confirmed by this many distinct cards: one card's retries, or one hostile card, cannot get a fact stated. A run with no card id is no card. */
+export const FIRE_MIN_CARDS = 2;
 /** A form repair needs this many contradicting runs in a row to count one. */
 export const CONTRADICT_STREAK = 2;
 /** Cards a fact remembers as having confirmed it. */
@@ -63,11 +65,14 @@ export interface FactsFile {
   injected: Record<string, string[]>;
 }
 
-/** The fact is injected in the next run: active, free, and used often enough that it applied often enough. */
-export const fires = (fact: FactRecord): boolean => fact.state === "active" && fact.source === "free" && fact.exercised >= FIRE_MIN_N && fact.fired / fact.exercised >= FIRE_GATE;
+/** Whether enough distinct cards confirmed the fact. */
+export const confirmedByCards = (fact: FactRecord): boolean => new Set(fact.cards.filter((c) => c !== "")).size >= FIRE_MIN_CARDS;
 
-/** A proposed fact is told once active and in scope in at least four runs (upstream's gate; its firing rate is 1 while `fired` is the scope). */
-export const firesProposed = (fact: FactRecord): boolean => fact.source === "proposed" && fact.state === "active" && fact.exercised >= FIRE_MIN_N && fact.fired / fact.exercised >= FIRE_GATE;
+/** The fact is injected in the next run: active, free, confirmed by two cards, and used often enough that it applied often enough. */
+export const fires = (fact: FactRecord): boolean => fact.state === "active" && fact.source === "free" && confirmedByCards(fact) && fact.exercised >= FIRE_MIN_N && fact.fired / fact.exercised >= FIRE_GATE;
+
+/** A proposed fact is told once active and in scope in at least four runs (upstream's gate, and two distinct confirming cards; its firing rate is 1 while `fired` is the scope). */
+export const firesProposed = (fact: FactRecord): boolean => fact.source === "proposed" && fact.state === "active" && confirmedByCards(fact) && fact.exercised >= FIRE_MIN_N && fact.fired / fact.exercised >= FIRE_GATE;
 
 const folded = (fact: FactRecord): boolean => fact.source === "free" && (fact.state === "candidate" || fact.state === "active");
 
