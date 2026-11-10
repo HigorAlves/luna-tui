@@ -81,6 +81,18 @@ describe("economySession", () => {
     expect(asked).toHaveLength(2);
   });
 
+  it("observes a subagent's call but never folds it into the guard", () => {
+    const { session, events } = setup({ guard: { ...GUARD, judge: false, envelope: 4 } });
+    for (let i = 0; i < 80; i++) {
+      const r = session!.settled({ ...(i % 2 === 0 ? FAIL : EDIT), subagent: true });
+      expect(r.step).toEqual({ kind: "none" });
+      expect(r.observation).toBeDefined();
+    }
+    expect(events).toEqual([]);
+    // The main thread's count starts from nothing: the subagent's 80 calls were not its own.
+    expect(until(session!, 15)).toBeNull();
+  });
+
   it("with no judge port an ask is dropped and the run goes on", () => {
     const { session } = setup({ guard: { ...GUARD, envelope: 1000 } });
     for (let i = 0; i < 60; i++) expect(session!.settled(i % 2 === 0 ? FAIL : EDIT).step.kind).toBe("none");

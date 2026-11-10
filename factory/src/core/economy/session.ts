@@ -18,7 +18,8 @@ export interface JudgePort {
 
 export interface EconomySession {
   /** One finished tool call: its observation (for the tool_result event) and what the runtime does next. Never throws. */
-  settled(call: { id: string; tool: string; input: unknown; output: string; ok: boolean }): { observation: Observation | undefined; step: GuardStep };
+  /** `subagent`: the call is a subagent's. It is observed for its event but never folded into the guard, as upstream ignores it. */
+  settled(call: { id: string; tool: string; input: unknown; output: string; ok: boolean; subagent?: boolean }): { observation: Observation | undefined; step: GuardStep };
 }
 
 const NONE: GuardStep = { kind: "none" };
@@ -32,7 +33,7 @@ export function economySession(o: { economy: EconomyInput | undefined; work: str
     settled(call) {
       try {
         const observation = observe(call, { work: o.work });
-        if (!guard) return { observation, step: NONE };
+        if (!guard || call.subagent) return { observation, step: NONE };
         const verdict = o.judge?.poll();
         if (verdict === "expired") guard.expire();
         else if (verdict) guard.verdict(verdict);

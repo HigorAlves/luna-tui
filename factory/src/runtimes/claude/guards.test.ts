@@ -641,6 +641,16 @@ describe("postToolUseEconomy", () => {
     expect(await failure("x")).toEqual({ hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: "step back" } });
   });
 
+  it("hands a subagent's call to the session as one, and never gives its redirect back", async () => {
+    const seen: unknown[] = [];
+    const hooks = postToolUseEconomy({ settled: (call) => (seen.push(call), { observation: { intent: "test" }, step: { kind: "redirect", text: "step back" } }) }, () => undefined);
+    const hook = hooks.PostToolUse[0]!.hooks[0]!;
+    const base = { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "pnpm test" }, tool_response: "x", tool_use_id: "u" };
+    expect(await hook({ ...base, agent_id: "sub-1" } as unknown as HookInput, "u", { signal: new AbortController().signal })).toEqual({});
+    expect(await hook(base as unknown as HookInput, "u", { signal: new AbortController().signal })).toMatchObject({ hookSpecificOutput: { additionalContext: "step back" } });
+    expect(seen).toMatchObject([{ subagent: true }, { subagent: false }]);
+  });
+
   it("says nothing on a stop: the runtime ends the run itself", async () => {
     const { post, heard } = setup({ kind: "stop", reason: "stuck" });
     expect(await post("x")).toEqual({});

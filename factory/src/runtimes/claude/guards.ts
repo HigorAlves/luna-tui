@@ -109,9 +109,11 @@ export function postToolUseEconomy(session: EconomySession, onSettled: OnSettled
       const failed = input.hook_event_name === "PostToolUseFailure";
       const output = failed ? String(input.error ?? "") : outputText(input.tool_response);
       const callId = id ?? input.tool_use_id;
-      const { observation, step } = session.settled({ id: callId, tool: input.tool_name, input: input.tool_input, output, ok: !failed });
+      // A subagent's call is observed for its event; the guard counts the main thread's calls only, and a redirect would land in the wrong context.
+      const subagent = typeof input.agent_id === "string" && input.agent_id !== "";
+      const { observation, step } = session.settled({ id: callId, tool: input.tool_name, input: input.tool_input, output, ok: !failed, subagent });
       onSettled(callId, observation, step);
-      return step.kind === "redirect" ? { hookSpecificOutput: { hookEventName: event, additionalContext: step.text } } : {};
+      return !subagent && step.kind === "redirect" ? { hookSpecificOutput: { hookEventName: event, additionalContext: step.text } } : {};
     } catch {
       return {};
     }
