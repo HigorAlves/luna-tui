@@ -124,12 +124,30 @@ export type EconomyGuardEvent = z.infer<typeof EconomyGuardEvent>;
 export const GuardEventRow = EconomyGuardEvent.extend({ at: z.string(), runId: z.string(), pack: z.string() });
 export type GuardEventRow = z.infer<typeof GuardEventRow>;
 
-/** What the economy knows about one repository: the envelopes, what the guard did lately, what it cost. The facts, the mask and the proposal come with the slices that build them. */
+/** The line a prompt's learned-facts block opens with. The machine counts it in the block's size and the factory writes it, so both read it here. */
+export const FACTS_HEADER = "# environment facts learned from earlier sessions in this repository";
+
+/** One learned fact as the status shows it: where it came from, how far it got, what the next run is told. */
+export const FactStatus = z.object({
+  id: z.string(),
+  family: z.string(),
+  source: z.enum(["free", "proposed"]),
+  state: z.enum(["candidate", "active", "retired", "dropped", "promoted"]),
+  text: z.string(),
+  confirmations: z.number().int(),
+  contradictions: z.number().int(),
+  /** Runs that used what the fact is about, and the part of them in which it applied. */
+  exercised: z.number().int(),
+  fired: z.number().int(),
+});
+export type FactStatus = z.infer<typeof FactStatus>;
+
+/** What the economy knows about one repository: the envelopes, what the guard did lately, what it cost, the facts it learned. The mask and the proposal come with the slices that build them. */
 export const EconomyStatus = z.object({
   envelopes: z.record(z.string(), z.object({ samples: z.number().int(), envelope: z.number().nullable() })),
   guard: z.array(GuardEventRow),
   cost: z.object({ exec: z.number(), overhead: z.number(), overheadShare: z.number() }),
-  facts: z.array(z.unknown()).optional(),
+  facts: z.array(FactStatus).optional(),
   mask: z.record(z.string(), z.unknown()).optional(),
   proposal: z.array(z.unknown()).optional(),
 });

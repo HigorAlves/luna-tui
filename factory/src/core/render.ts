@@ -4,13 +4,13 @@
 // (runtimes/claude/run.ts, `outputFormat`). Pure: the caller passes the template and the
 // project context, so a test needs no files.
 import type { AgentPack, Pack, StageInput } from "@hardness/contracts";
-import { PACKS, type TaskClassification, answerJsonSchema, classificationLine, criteriaOf, scenarioText, verdictOf } from "@hardness/contracts";
+import { FACTS_HEADER, PACKS, type TaskClassification, answerJsonSchema, classificationLine, criteriaOf, scenarioText, verdictOf } from "@hardness/contracts";
 import type { TriageRecord } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
 import { CONVERSATION_VARIABLES, conversationText } from "./conversation-text.ts";
 import { renderCheck, renderSplit, renderTicket } from "./decide.ts";
-import { type Cut, DATA_NOTE, foreignBudget, foreignValueCut } from "./data-block.ts";
+import { type Cut, DATA_NOTE, dataBlock, flatLine, foreignBudget, foreignValueCut } from "./data-block.ts";
 import { callText } from "./transcript.ts";
 
 const NONE = "(none)";
@@ -537,7 +537,13 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     return `${offset > 0 && whole[offset - 1] !== "\n" ? "\n" : ""}${value}${whole[offset + key.length] !== undefined && whole[offset + key.length] !== "\n" ? "\n" : ""}`;
   });
   const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, DATA_NOTE, ""].join("\n");
-  return { prompt: header + body, cuts };
+  return { prompt: header + body + factsBlock(input.context.economy?.facts), cuts };
+}
+
+/** What the repository's earlier runs learned of its environment, at the end of the prompt so the text before it stays the same from run to run. Each line is the machine's own template filled with a command spelling, a host or a variable name that a repository's output once carried, so the block is quoted as data like any foreign text: the header line stays as upstream words it. Nothing at all without facts. */
+function factsBlock(facts: readonly string[] | undefined): string {
+  if (!facts?.length) return "";
+  return `\n${FACTS_HEADER}\n${dataBlock("context.economy.facts", facts.map((f) => `- ${flatLine(f, 240)}`).join("\n"))}\n`;
 }
 
 /** A ticket's signals on one line, in the pack's question order: `kind bug (0.90) · area board

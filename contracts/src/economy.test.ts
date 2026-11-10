@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { EconomyInput, LOOP_STUCK, Observation, access, effectiveTokens, narrow } from "./index.ts";
+import { EconomyInput, EconomyStatus, FACTS_HEADER, LOOP_STUCK, Observation, access, effectiveTokens, narrow } from "./index.ts";
 
 describe("economy", () => {
   it("weights tokens as they are billed: cache reads a tenth, cache writes above input, output five times", () => {
@@ -40,6 +40,18 @@ describe("economy", () => {
     const guard = { mode: "record", judge: true, envelope: null, judgeConfidence: 0.7, redirects: 1, backstopMult: 2.5 };
     expect(EconomyInput.parse({ guard, facts: ["use `python -m pytest`: `pytest` is not on PATH here"], mask: { web: true } }).guard).toEqual(guard);
     expect(EconomyInput.safeParse({ facts: Array(9).fill("f") }).success).toBe(false);
+  });
+
+  it("a run's facts open under one header line the factory and the machine share", () => {
+    expect(FACTS_HEADER).toBe("# environment facts learned from earlier sessions in this repository");
+  });
+
+  it("the status lists each fact with its state and its counts, and refuses a fact that is not one", () => {
+    const base = { envelopes: {}, guard: [], cost: { exec: 0, overhead: 0, overheadShare: 0 } };
+    const fact = { id: "a1b2c3d4e5f6", family: "form_repair", source: "free", state: "active", text: "`pytest …` fails here with command not found; `python -m pytest …` works.", confirmations: 3, contradictions: 0, exercised: 4, fired: 2 };
+    expect(EconomyStatus.parse({ ...base, facts: [fact] }).facts).toEqual([fact]);
+    expect(EconomyStatus.safeParse({ ...base, facts: [{ ...fact, state: "bogus" }] }).success).toBe(false);
+    expect(EconomyStatus.safeParse({ ...base, facts: [{ id: "x" }] }).success).toBe(false);
   });
 
   it("names the error a stopped run starts with", () => {

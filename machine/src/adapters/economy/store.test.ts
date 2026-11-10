@@ -4,7 +4,9 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { type FactRecord } from "../../domain/economy/lifecycle.ts";
 import { ledgerRecord } from "../../domain/economy/ledger.ts";
+import { type Digest } from "../../domain/economy/observe-run.ts";
 import { repoSlug } from "../graph/slug.ts";
 import { fileStore } from "./store.ts";
 
@@ -14,6 +16,51 @@ beforeEach(async () => void (dir = await mkdtemp(join(tmpdir(), "economy-store-"
 afterEach(() => rm(dir, { recursive: true, force: true }));
 const folder = () => join(dir, "economy", repoSlug(repo));
 const row = (n: number) => ({ action: "gate" as const, calls: n, at: "t", runId: `r${n}`, pack: "implementing" });
+
+const fact = (over: Partial<FactRecord> = {}): FactRecord => ({ id: "a1b2c3d4e5f6", family: "form_repair", source: "free", key: "test:pytest", text: "t", state: "active", confirmations: 3, contradictions: 0, score: 2, exercised: 4, fired: 4, cards: ["c1"], firstRun: "r1", lastRun: "r4", streak: 0, ...over });
+const digest = (n: number): Digest => ({ at: "t", runId: `r${n}`, pack: "implementing", cardId: "c1", outcome: "pass", calls: 1, lines: ["test | pytest | ok"] });
+
+describe("fileStore: facts and digests", () => {
+  it("reads no facts and no digests before anything is written", async () => {
+    const store = fileStore(dir);
+    expect(await store.facts(repo)).toEqual({ facts: [], injected: {} });
+    expect(await store.digests(repo)).toEqual([]);
+  });
+
+  it("round-trips the facts and what each pack was told, privately, and keeps every update when writes arrive together", async () => {
+    const store = fileStore(dir);
+    await store.updateFacts(repo, (file) => ({ ...file, facts: [fact()], injected: { implementing: ["a1b2c3d4e5f6"] } }));
+    expect(await store.facts(repo)).toEqual({ facts: [fact()], injected: { implementing: ["a1b2c3d4e5f6"] } });
+    expect((await stat(join(folder(), "facts.json"))).mode & 0o777).toBe(0o600);
+    await Promise.all(Array.from({ length: 20 }, (_, i) => store.updateFacts(repo, (file) => ({ ...file, facts: [...file.facts, fact({ id: `id${i}` })] }))));
+    expect((await store.facts(repo)).facts).toHaveLength(21);
+    expect((await readdir(folder())).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("reads a corrupt facts file as empty and drops a record that is not a fact", async () => {
+    const store = fileStore(dir);
+    await mkdir(folder(), { recursive: true });
+    await writeFile(join(folder(), "facts.json"), "{not json");
+    expect(await store.facts(repo)).toEqual({ facts: [], injected: {} });
+    await writeFile(join(folder(), "facts.json"), JSON.stringify({ facts: [fact(), { id: "x" }, fact({ id: "b" }), { ...fact({ id: "c" }), state: "bogus" }], injected: { a: ["i"], b: "no", c: [1] } }));
+    expect((await store.facts(repo)).facts.map((f) => f.id)).toEqual(["a1b2c3d4e5f6", "b"]);
+    expect((await store.facts(repo)).injected).toEqual({ a: ["i"] });
+  });
+
+  it("appends digests privately and keeps the last eight runs", async () => {
+    const store = fileStore(dir);
+    for (let i = 1; i <= 11; i++) await store.appendDigest(repo, digest(i));
+    expect((await store.digests(repo)).map((d) => d.runId)).toEqual(["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11"]);
+    expect((await stat(join(folder(), "digests.jsonl"))).mode & 0o777).toBe(0o600);
+  });
+
+  it("skips a digest line that is not a digest", async () => {
+    const store = fileStore(dir);
+    await mkdir(folder(), { recursive: true });
+    await writeFile(join(folder(), "digests.jsonl"), `garbage\n${JSON.stringify(digest(1))}\n${JSON.stringify({ runId: "x" })}\n`);
+    expect((await store.digests(repo)).map((d) => d.runId)).toEqual(["r1"]);
+  });
+});
 
 describe("fileStore", () => {
   it("reads empty before anything is written", async () => {
