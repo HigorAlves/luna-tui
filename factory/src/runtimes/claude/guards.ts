@@ -3,7 +3,10 @@
 // reason for the model. Every decision, allowed or refused, is also handed to `onDecision`, which
 // the runtime turns into the call's event.
 import type { HookCallbackMatcher, HookInput, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import type { Observation } from "@hardness/contracts";
 
+import type { GuardStep } from "../../core/economy/guard.ts";
+import type { EconomySession } from "../../core/economy/session.ts";
 import { type GuardContext, type GuardDecision, type GuardedCall, checkCall } from "../../core/guards.ts";
 
 export { branchPrefixFor, guardBash, guardWrite, type GuardContext } from "../../core/guards.ts";
@@ -70,4 +73,38 @@ export function preToolUseGuards(ctx: GuardContext, onDecision?: OnDecision): Ho
     { matcher: `^(${READ_TOOLS.join("|")})$`, hooks: [asHook((input) => ({ tool: "read", input: readPath(input) }), ctx, onDecision)] },
     { matcher: "^WebFetch$", hooks: [asHook((input) => ({ tool: "fetch", input: toolInput(input) }), ctx, onDecision)] },
   ];
+}
+
+/** Hears what the economy session made of a finished call: the SDK's call id, its observation, the step. */
+export type OnSettled = (id: string, observation: Observation | undefined, step: GuardStep) => void;
+
+/** A tool's response as text for the observer. A command gives its streams, a read or an MCP tool a
+ *  structure; the text is read and dropped, never emitted. */
+function outputText(response: unknown): string {
+  if (typeof response === "string") return response;
+  if (typeof response === "object" && response !== null && ("stdout" in response || "stderr" in response)) {
+    const { stdout, stderr } = response as { stdout?: unknown; stderr?: unknown };
+    return [stdout, stderr].filter((part): part is string => typeof part === "string" && part !== "").join("\n");
+  }
+  return JSON.stringify(response) ?? "";
+}
+
+/** The PostToolUse and PostToolUseFailure matchers of the token economy, for every tool: each
+ *  finished call goes to the session, and a redirect goes back to the model as the hook's additional
+ *  context. Fails open, unlike the guards: a fault here costs the economy, never the run. */
+export function postToolUseEconomy(session: EconomySession, onSettled: OnSettled): { PostToolUse: HookCallbackMatcher[]; PostToolUseFailure: HookCallbackMatcher[] } {
+  const hook = (event: "PostToolUse" | "PostToolUseFailure") => async (input: HookInput, id: string | undefined): Promise<HookJSONOutput> => {
+    try {
+      if (!("tool_name" in input) || input.hook_event_name !== event) return {};
+      const failed = input.hook_event_name === "PostToolUseFailure";
+      const output = failed ? String(input.error ?? "") : outputText(input.tool_response);
+      const callId = id ?? input.tool_use_id;
+      const { observation, step } = session.settled({ id: callId, tool: input.tool_name, input: input.tool_input, output, ok: !failed });
+      onSettled(callId, observation, step);
+      return step.kind === "redirect" ? { hookSpecificOutput: { hookEventName: event, additionalContext: step.text } } : {};
+    } catch {
+      return {};
+    }
+  };
+  return { PostToolUse: [{ hooks: [hook("PostToolUse")] }], PostToolUseFailure: [{ hooks: [hook("PostToolUseFailure")] }] };
 }

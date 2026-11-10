@@ -3,6 +3,7 @@
 import type { Pack, ResolvedEngine, RuntimeId, StageInput } from "@hardness/contracts";
 
 import type { DelegateTool } from "./delegate.ts";
+import type { JudgePort } from "./economy/session.ts";
 import type { Emit } from "./events.ts";
 import type { RunOutcome } from "./output.ts";
 import type { FactoryTelemetry } from "./telemetry.ts";
@@ -41,6 +42,9 @@ export interface RunContext {
   /** Laminar inside the container (core/telemetry.ts): wraps query(), registers the AI SDK; off
    *  (NO_TELEMETRY) when the machine passed no key, and when a test builds the context without it. */
   telemetry?: FactoryTelemetry;
+  /** Where the loop guard's question goes and its answer comes from (core/economy/session.ts). Without
+   *  one the guard asks nothing and keeps its backstop. */
+  judge?: JudgePort | null;
 }
 
 /** What a runtime gives the model besides the prompt, as its fingerprint reads it (core/fingerprint.ts). */

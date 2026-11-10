@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import { decisionSummary, renderDecision, stateOf } from "../../core/decide.ts";
 import { DELEGATE } from "../../core/delegate.ts";
+import { economySession } from "../../core/economy/session.ts";
 import { CallJoin } from "../../core/events.ts";
 import type { GuardContext } from "../../core/guards.ts";
 import { GRAPH_ROOT } from "../../core/roots.ts";
@@ -20,7 +21,7 @@ import { NO_TELEMETRY } from "../../core/telemetry.ts";
 import { type Instructions, NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { claudeTools } from "./access.ts";
 import { PLUGIN_NAME, agentDefinitions } from "./agents.ts";
-import { branchPrefixFor, isGuarded, preToolUseGuards } from "./guards.ts";
+import { branchPrefixFor, isGuarded, postToolUseEconomy, preToolUseGuards } from "./guards.ts";
 import { lunaServer } from "./luna.ts";
 
 const env = process.env;
@@ -70,6 +71,20 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   // A call's event joins the stream's tool_use and the hook's decision, whichever comes first.
   const calls = new CallJoin(emit, isGuarded);
+  // The token economy (RFC 0007), when the machine sent its input: each finished call is read and folded
+  // into the loop guard, which may redirect the run once through the hook or, on a stop, end it here.
+  const session = economySession({ economy: input.context.economy, work: paths.work, emit, judge: ctx.judge });
+  const end: Ending = { reason: null };
+  const economy = session
+    ? postToolUseEconomy(session, (id, observation, step) => {
+        calls.observed(id, observation);
+        if (step.kind === "stop" && end.reason === null) {
+          end.reason = step.reason;
+          // Not from inside the hook: it answers first, and the abort then ends the query from outside it, as the deadline's does.
+          setImmediate(() => end.abort?.());
+        }
+      })
+    : {};
   // `delegate` rides on the luna server when the pack hands work to a helper on another runtime.
   const { tools, allowedTools } = claudeTools(pack.access);
   const delegating = ctx.delegate ? [`mcp__luna__${DELEGATE}`] : [];
@@ -90,6 +105,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     mcpServers: { luna: lunaServer(luna.call, ctx.delegate ?? null) },
     hooks: {
       PreToolUse: preToolUseGuards(guardPolicy(ctx), (id, tool, toolInput, decision) => calls.decided(id, tool, toolInput, decision)),
+      ...economy,
     },
     // The pinned ID, never an alias: the model does not change under the stage between runs.
     model: engine.modelId,
@@ -99,11 +115,11 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   };
 
   if (dry) {
-    const { mcpServers: _m, hooks: _h, env: _e, agents, ...printable } = options;
-    return dryRun(ctx, JSON.stringify({ ...printable, agents: Object.keys(agents), hooks: ["PreToolUse"], mcpServers: ["luna"] }, null, 2));
+    const { mcpServers: _m, hooks, env: _e, agents, ...printable } = options;
+    return dryRun(ctx, JSON.stringify({ ...printable, agents: Object.keys(agents), hooks: Object.keys(hooks), mcpServers: ["luna"] }, null, 2));
   }
 
-  return drive(ctx, transport, prompt, options, calls);
+  return drive(ctx, transport, prompt, options, calls, end);
 }
 
 /** No attribution on a commit or a PR, from any run: they are the person's work. */
@@ -151,13 +167,21 @@ function dryRun({ engine, emit }: RunContext, printed: string): RunOutcome {
   return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
 }
 
-/** Follows `query()` to its result: the messages become run events, and the deadline ends the run cleanly. */
-async function drive(ctx: RunContext, transport: Transport | undefined, prompt: string, options: Options, calls: CallJoin): Promise<RunOutcome> {
+/** The loop guard's stop: why the run is to end, and how (set by `drive`, which owns the abort). */
+interface Ending {
+  reason: string | null;
+  abort?: () => void;
+}
+
+/** Follows `query()` to its result: the messages become run events, and the deadline, or the loop
+ *  guard's stop, ends the run cleanly. */
+async function drive(ctx: RunContext, transport: Transport | undefined, prompt: string, options: Options, calls: CallJoin, end: Ending = { reason: null }): Promise<RunOutcome> {
   const { engine, input, paths, emit } = ctx;
   const t0 = Date.now();
   const run: RunOutcome = { ...EMPTY_RUN };
   // The stage ends itself at its deadline, before the machine kills the container.
   const abortController = new AbortController();
+  end.abort = () => abortController.abort();
   const deadline = deadlineMs(input.limits.timeoutMs);
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -215,7 +239,9 @@ async function drive(ctx: RunContext, transport: Transport | undefined, prompt: 
     clearTimeout(timer);
     calls.flush();
   }
-  if (timedOut && !run.ok) Object.assign(run, { structured: null, rateLimited: false, error: timeRanOut(deadline) });
+  // An abort ends the query by a result, by an AbortError or by nothing; the stop's reason is the error in each.
+  if (end.reason !== null && !run.ok) Object.assign(run, { structured: null, rateLimited: false, error: end.reason });
+  else if (timedOut && !run.ok) Object.assign(run, { structured: null, rateLimited: false, error: timeRanOut(deadline) });
   if (!run.durationMs) run.durationMs = Date.now() - t0;
   return run;
 }

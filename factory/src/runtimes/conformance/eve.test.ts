@@ -29,7 +29,7 @@ conformance(
     writeFileSync(file, JSON.stringify(script));
     return eveRuntime({ agentsDir, serverEnv: { LUNA_EVE_SCRIPT: file } });
   },
-  { resetsAt: false, schemaIssue: false, tools: true, text: true, delegate: true },
+  { resetsAt: false, schemaIssue: false, tools: true, text: true, delegate: true, economy: false },
   { timeoutMs: 60_000 },
 );
 
@@ -41,7 +41,7 @@ conformance(
     writeFileSync(file, JSON.stringify(script));
     return eveRuntime({ agentsDir, serverEnv: { LUNA_EVE_SCRIPT: file } });
   },
-  { resetsAt: false, schemaIssue: false, ...CAPS_NO_TOOLS },
+  { resetsAt: false, schemaIssue: false, ...CAPS_NO_TOOLS, economy: false },
   { timeoutMs: 60_000, table: DECISION_TABLE },
 );
 
