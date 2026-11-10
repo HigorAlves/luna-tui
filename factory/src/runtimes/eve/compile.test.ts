@@ -79,6 +79,14 @@ describe("agentFiles", () => {
     expect(agentFiles(PACKS.implementing, options({ model: "scripted" }))["agent/agent.ts"]).toContain("model: scriptedModel()");
   });
 
+  it("hands the conformance fake's executor to bash, and only bash, when asked", () => {
+    const files = agentFiles(PACKS.implementing, options({ model: "scripted" }));
+    expect(files["agent/tools/bash.ts"]).toBe(
+      'import { bashTool } from "../../../../src/runtimes/eve/agent/tools.ts";\nimport { scriptedExec } from "../../../../src/runtimes/eve/fake.ts";\n\nexport default bashTool(scriptedExec);\n',
+    );
+    expect(files["agent/tools/glob.ts"]).toBe('export { glob as default } from "../../../../src/runtimes/eve/agent/tools.ts";\n');
+  });
+
   it("gives a pack with helpers a delegate tool over the bridge that names each helper, and a helper's run none", () => {
     const helper = { role: "security-reviewer", engine: "codex:sol" } as const;
     const pack = { ...triage, helpers: [helper] };

@@ -24,25 +24,29 @@ const WORKSPACE = process.env.LUNA_EVE_WORKSPACE || "/work";
 /** The run's scratch folder: HOME and TMPDIR for every command. */
 const SCRATCH = process.env.LUNA_EVE_SCRATCH || "/nonexistent";
 
-/** The conformance fake's stand-in for a command's result (fake.ts sets it inside the server); unset in a real run. */
-const fakeExec = (argv: string[]): ExecResult | undefined => (globalThis as { __lunaFakeExec?: (argv: string[]) => ExecResult | undefined }).__lunaFakeExec?.(argv);
+/** What runs a command's argv: exec.ts's runArgv, or the conformance fake's stand-in (fake.ts, wired in by compile.ts). */
+export type Executor = (argv: string[], options: { cwd: string; env: Record<string, string>; signal?: AbortSignal }) => Promise<ExecResult>;
 
-export const bash = defineTool({
-  description: [
-    "Run one command from this stage's allow-list in the worktree and return its exit code, stdout and stderr.",
-    "This is not a shell: the command runs as one process. Quote an argument with spaces ('...' or \"...\"); there are no pipes, redirection, globs, variables, substitution, chaining or cd.",
-  ].join("\n"),
-  inputSchema: z.object({ command: z.string().describe("The command line, e.g. git log --oneline -20") }),
-  approval: ({ toolInput }) => approve("exec", toolInput),
-  execute: withEconomy("bash", async ({ command }, { abortSignal }) => {
-    // The approval ran the same check; this one stands even if a call reaches execute without it.
-    const refused = refusal("exec", { command });
-    const parsed = splitArgv(command);
-    if (refused !== null || "refused" in parsed) return { exitCode: 126, stdout: "", stderr: refused ?? "refused", truncated: false };
-    const env = commandEnv(parsed.argv[0] as string, { home: SCRATCH, ghToken: secrets().ghToken });
-    return await (fakeExec(parsed.argv) ?? runArgv(parsed.argv, { cwd: WORKSPACE, env, signal: abortSignal }));
-  }),
-});
+/** The `bash` tool over an executor. */
+export function bashTool(exec: Executor = runArgv) {
+  return defineTool({
+    description: [
+      "Run one command from this stage's allow-list in the worktree and return its exit code, stdout and stderr.",
+      "This is not a shell: the command runs as one process. Quote an argument with spaces ('...' or \"...\"); there are no pipes, redirection, globs, variables, substitution, chaining or cd.",
+    ].join("\n"),
+    inputSchema: z.object({ command: z.string().describe("The command line, e.g. git log --oneline -20") }),
+    approval: ({ toolInput }) => approve("exec", toolInput),
+    execute: withEconomy("bash", async ({ command }, { abortSignal }) => {
+      // The approval ran the same check; this one stands even if a call reaches execute without it.
+      const refused = refusal("exec", { command });
+      const parsed = splitArgv(command);
+      if (refused !== null || "refused" in parsed) return { exitCode: 126, stdout: "", stderr: refused ?? "refused", truncated: false };
+      const env = commandEnv(parsed.argv[0] as string, { home: SCRATCH, ghToken: secrets().ghToken });
+      return await exec(parsed.argv, { cwd: WORKSPACE, env, signal: abortSignal });
+    }),
+  });
+}
+export const bash = bashTool();
 export const read_file = defineTool({ ...readFile, execute: withEconomy("read_file", readFile.execute), approval: ({ toolInput }) => approve("read", fileInput(toolInput)) });
 export const write_file = defineTool({ ...writeFile, execute: withEconomy("write_file", writeFile.execute), approval: ({ toolInput }) => approve("write", fileInput(toolInput)) });
 export const glob = defineTool({ ...eveGlob, execute: withEconomy("glob", eveGlob.execute), approval: ({ toolInput }) => approve("read", searchInput(toolInput)) });

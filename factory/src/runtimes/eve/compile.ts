@@ -109,7 +109,10 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
 
   const tools = Object.fromEntries(
     eveTools(pack.access).map((tool) => {
-      const body = GUARDED.has(tool)
+      const body =
+        tool === "bash" && options.model === "scripted"
+          ? `import { bashTool } from "${fromTools("agent/tools.ts")}";\nimport { scriptedExec } from "${fromTools("fake.ts")}";\n\nexport default bashTool(scriptedExec);\n`
+          : GUARDED.has(tool)
         ? `export { ${tool} as default } from "${fromTools("agent/tools.ts")}";\n`
         : tool in LUNA_TOOLS
           ? `import { lunaTool } from "${fromTools("agent/tools.ts")}";\n\nexport default lunaTool("${tool}");\n`

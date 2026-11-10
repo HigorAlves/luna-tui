@@ -9,6 +9,8 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ScriptStep } from "../conformance/table.ts";
+import type { Executor } from "./agent/tools.ts";
+import { runArgv } from "./exec.ts";
 
 /** The marker the economy's wrappers put before a redirect (agent/economy.ts). */
 const MARK = "--- process check ---\n";
@@ -22,13 +24,15 @@ function shellCall(command: string): { name: string; input: unknown } {
 
 const scriptOf = (): ScriptStep[] => JSON.parse(readFileSync(process.env.LUNA_EVE_SCRIPT ?? "", "utf8")) as ScriptStep[];
 
+/** The executor compile.ts hands the scripted agent's `bash`: a failing shell step's output comes from the
+ *  script, not from a process, and any other command runs for real. The command is the one the script
+ *  names, so the guard and the observer see it. */
+export const scriptedExec: Executor = (argv, options) => {
+  const step = scriptOf().find((s) => "call" in s && s.call === "bash" && s.fails !== undefined && s.command === argv.join(" "));
+  return step && "fails" in step ? Promise.resolve({ exitCode: 1, stdout: "", stderr: step.fails as string, truncated: false }) : runArgv(argv, options);
+};
+
 export function scriptedModel() {
-  // A failing shell step's output comes from here, not from a process: the tool's own bash asks this
-  // first (agent/tools.ts). The command is the one the script names, so the guard and the observer see it.
-  (globalThis as { __lunaFakeExec?: unknown }).__lunaFakeExec = (argv: string[]) => {
-    const step = scriptOf().find((s) => "call" in s && s.call === "bash" && s.fails !== undefined && s.command === argv.join(" "));
-    return step && "fails" in step ? { exitCode: 1, stdout: "", stderr: step.fails as string, truncated: false } : undefined;
-  };
   const told = new Set<string>();
   return mockModel({
     modelId: "scripted",
