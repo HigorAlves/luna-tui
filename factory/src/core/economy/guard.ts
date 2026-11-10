@@ -131,7 +131,7 @@ export class LoopGuard {
       else this.gap = Math.min(MAX_GAP, this.gap + GAP_GROWTH);
     }
     if (judged) return this.act(judged);
-    if (backstopHit(s, this.input.envelope, this.input.backstopMult)) return this.act({ stuck: true, confidence: 1, cause: "backstop" });
+    if (backstopHit(s, this.run, this.input.envelope, this.input.backstopMult)) return this.act({ stuck: true, confidence: 1, cause: "backstop" });
 
     if (this.input.judge && open && !this.asking && s.turns - this.lastAsk >= this.gap) {
       this.lastAsk = s.turns;

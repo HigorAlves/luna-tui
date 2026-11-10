@@ -80,11 +80,17 @@ describe("gateOpen", () => {
 });
 
 describe("backstopHit", () => {
-  it("needs more than the multiple of the envelope, and a stuck segment", () => {
+  it("needs the run's calls to reach the multiple of the envelope, and a stuck segment", () => {
     const stuck20 = segment(20, STUCK_SIGNS);
-    expect(backstopHit(stuck20, 8, 2.5)).toBe(false); // 20 is not more than 20
-    expect(backstopHit(stuck20, 7, 2.5)).toBe(true);
-    expect(backstopHit(segment(30, STUCK_SIGNS.slice(0, 9)), 4, 2.5)).toBe(false); // not stuck
+    expect(backstopHit(stuck20, stuck20, 8, 2.5)).toBe(true); // 20 reaches 20
+    expect(backstopHit(stuck20, stuck20, 9, 2.5)).toBe(false);
+    expect(backstopHit(segment(30, STUCK_SIGNS.slice(0, 9)), segment(30, []), 4, 2.5)).toBe(false); // not stuck
+    expect(backstopHit(stuck20, stuck20, null, 2.5)).toBe(false);
+  });
+
+  it("counts the run's calls over every segment, not the segment's alone", () => {
+    expect(backstopHit(segment(20, STUCK_SIGNS), segment(50, []), 20, 2.5)).toBe(true);
+    expect(backstopHit(segment(20, STUCK_SIGNS), segment(49, []), 20, 2.5)).toBe(false);
   });
 });
 

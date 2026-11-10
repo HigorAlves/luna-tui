@@ -292,7 +292,7 @@ export const SCENARIOS: Scenario[] = [
       expect(run.error).toMatch(new RegExp(`^${LOOP_STUCK}`));
       expect(events.flatMap((e) => (e.kind === "economy.guard" && e.payload.action !== "gate" ? [e.payload.action] : []))).toEqual(["redirect", "stop"]);
       const results = events.flatMap((e) => (e.kind === "tool_result" ? [e.payload] : []));
-      expect(results).toHaveLength(2 * 21);
+      expect(results).toHaveLength(2 * 20);
       expect(results.every((r) => r.observation !== undefined)).toBe(true);
       expect(results[0]).toMatchObject({ ok: false, observation: { intent: "test", failure: expect.stringMatching(/^.{10}$/) } });
       expect(results[1]).toMatchObject({ ok: true, observation: { edits: ["src/a.ts"] } });

@@ -99,9 +99,10 @@ export function isStuck(s: Spiral): boolean {
   return churny && s.errorOutputs >= THRESHOLDS.errorOutputs && stagnation(s) >= THRESHOLDS.stagnation;
 }
 
-/** The hard backstop: a stuck segment far past the usual length is stuck whatever the judge says. */
-export function backstopHit(s: Spiral, envelope: number | null, mult: number): boolean {
-  return envelope !== null && s.turns > envelope * mult && isStuck(s);
+/** The hard backstop, upstream's cumulative one: once the run's calls, over every segment, reach the envelope times the multiple, a stuck
+ *  segment is stuck whatever the judge says. After a redirect the fresh segment therefore gets a short rope. */
+export function backstopHit(s: Spiral, run: Spiral, envelope: number | null, mult: number): boolean {
+  return envelope !== null && run.turns >= envelope * mult && isStuck(s);
 }
 
 /** The redirect: the agent's own repeated actions mirrored back at it. Nothing in it but counts and a base name. */

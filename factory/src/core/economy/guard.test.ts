@@ -140,7 +140,7 @@ describe("LoopGuard redirect and stop", () => {
   });
 
   it("stops on the next stuck verdict, with a reason that starts with LOOP_STUCK and holds no output text", () => {
-    const { run, guard, next } = setup();
+    const { run, guard, next } = setup({ backstopMult: 100 });
     run(20);
     guard.verdict(stuck);
     next(); // redirect
@@ -185,11 +185,11 @@ describe("LoopGuard redirect and stop", () => {
 
 describe("LoopGuard backstop", () => {
   it("redirects without a judge once a stuck segment passes backstopMult times the envelope", () => {
-    // envelope 8, 2.5x: more than 20 calls.
+    // envelope 8, 2.5x: 20 calls, as upstream's `>=`.
     const { run, events } = setup({ judge: false, envelope: 8 });
-    const steps = run(21);
-    expect(steps.slice(0, 20).every((s) => s.kind === "none")).toBe(true);
-    expect(steps[20]!.kind).toBe("redirect");
+    const steps = run(20);
+    expect(steps.slice(0, 19).every((s) => s.kind === "none")).toBe(true);
+    expect(steps[19]!.kind).toBe("redirect");
     expect(guardEvents(events, "redirect")[0]).toMatchObject({ payload: { cause: "backstop", confidence: 1 } });
   });
 
@@ -200,16 +200,46 @@ describe("LoopGuard backstop", () => {
 
   it("stops at the backstop when no redirect is left", () => {
     const { run } = setup({ judge: false, envelope: 8, redirects: 0 });
-    const steps = run(21);
-    const last = steps[20]!;
+    const steps = run(20);
+    const last = steps[19]!;
     expect(last.kind === "stop" && last.reason).toContain(`${LOOP_STUCK}: backstop`);
   });
 
   it("is not defeated by a productive verdict", () => {
-    const { run, guard, next } = setup({ envelope: 8 });
+    const { run, guard, next } = setup({ envelope: 9 });
     run(20);
     guard.verdict({ stuck: false, confidence: 1, cause: "progress" });
+    expect(run(2).every((s) => s.kind === "none")).toBe(true);
     expect(next().kind).toBe("redirect");
+  });
+});
+
+describe("LoopGuard cumulative backstop", () => {
+  it("stops a run as soon as the fresh segment is stuck again, once the run's calls pass the backstop", () => {
+    // envelope 20, 2.5x: 50 calls. No judge: only the backstop acts.
+    const guard = new LoopGuard({ ...ON, judge: false, envelope: 20, backstopMult: 2.5 }, () => undefined);
+    let inSegment = 0;
+    let redirectAt = 0;
+    let stopAt = 0;
+    for (let call = 1; call <= 120 && stopAt === 0; call++) {
+      const step = guard.fold(SIGNS[inSegment] ?? {}, SIGNS[inSegment] ? BASH : READ);
+      inSegment++;
+      if (step.kind === "redirect") {
+        redirectAt = call;
+        inSegment = 0;
+      }
+      if (step.kind === "stop") stopAt = call;
+    }
+    expect(redirectAt).toBe(50);
+    expect(stopAt).toBe(redirectAt + 20);
+  });
+
+  it("does not stop a fresh segment that is not stuck, however many calls the run has made", () => {
+    const guard = new LoopGuard({ ...ON, judge: false, envelope: 20, backstopMult: 2.5 }, () => undefined);
+    const steps = Array.from({ length: 51 }, (_, i) => guard.fold(SIGNS[i] ?? {}, SIGNS[i] ? BASH : READ));
+    expect(steps[49]!.kind).toBe("redirect");
+    const calm = Array.from({ length: 60 }, () => guard.fold({}, READ));
+    expect(calm.every((s) => s.kind === "none")).toBe(true);
   });
 });
 

@@ -30,7 +30,7 @@ conformance(
     // What the model was told besides the tool results is written by the fake, inside the server.
     const told = `${file}.told`;
     const runtime = eveRuntime({ agentsDir, serverEnv: { LUNA_EVE_SCRIPT: file, LUNA_EVE_TOLD: told } });
-    // The looping row scripts 42 calls; eve ends a run at its model-call cap (maxTurns, 8 in the table's input) first,
+    // The looping row scripts 40 calls; eve ends a run at its model-call cap (maxTurns, 8 in the table's input) first,
     // which the Claude fake never does. An economy run gets room, so the guard's stop is what ends it.
     const roomy: typeof runtime = { ...runtime, run: (ctx) => runtime.run(ctx.input.context.economy ? { ...ctx, input: { ...ctx.input, limits: { ...ctx.input.limits, maxTurns: 100 } } } : ctx) };
     return Object.assign(roomy, { told: () => (existsSync(told) ? readFileSync(told, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string) : []) });

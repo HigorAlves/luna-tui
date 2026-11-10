@@ -41,7 +41,7 @@ describe("the loop guard's stop", () => {
   it("ends the run with its reason when the abort throws out of the stream", async () => {
     const { run: outcome, events } = await run(scriptedQuery(script));
     expect(outcome).toMatchObject({ ok: false, rateLimited: false, error: expect.stringContaining(LOOP_STUCK) });
-    expect(events.filter((e) => e.kind === "tool_result")).toHaveLength(42);
+    expect(events.filter((e) => e.kind === "tool_result")).toHaveLength(40);
   });
 
   it("ends the run with its reason when the abort ends the stream with no result", async () => {
