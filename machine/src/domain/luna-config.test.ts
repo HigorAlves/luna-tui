@@ -375,6 +375,14 @@ describe("the sections of the v2.2 config reach the policy", () => {
     expect(policy.factory.backlog.stale_days).toBe(3);
   });
 
+  it("takes the economy section from a real luna.yaml, and keeps the defaults when it is absent", () => {
+    const economy = parseLunaConfig(["economy:", "  facts: free", "  guard:", "    redirects: 2", ""].join("\n")).factory.economy;
+    expect(economy).toEqual({ ...FACTORY_DEFAULTS.economy, facts: "free", guard: { ...FACTORY_DEFAULTS.economy.guard, redirects: 2 } });
+    expect(parseLunaConfig("").factory.economy).toEqual(FACTORY_DEFAULTS.economy);
+    expect(() => parseLunaConfig(["economy:", "  loop_gaurd: off", ""].join("\n"))).toThrow(/economy/);
+    expect(() => parseLunaConfig(["economy:", "  facts: maybe", ""].join("\n"))).toThrow(/economy\.facts/);
+  });
+
   it("takes the learning section from a real luna.yaml, and keeps the defaults when it is absent", () => {
     expect(parseLunaConfig(["learning:", "  truth: false", "  traces: metadata", ""].join("\n")).factory.learning).toEqual({ records: true, context: "full", truth: false, traces: "metadata" });
     expect(parseLunaConfig("").factory.learning).toEqual({ records: true, context: "full", truth: true, traces: "host" });

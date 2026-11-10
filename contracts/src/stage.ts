@@ -3,6 +3,7 @@
 // the seam live in this repository; `factory-contract.test.ts` holds them together.
 import { z } from "zod";
 
+import { EconomyInput } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
 import { Scenario } from "./plan.ts";
@@ -1099,6 +1100,8 @@ export const StageInput = z.object({
   priorFindings: z.array(Finding),
   context: z.object({
     projectContext: z.string().nullable(),
+    /** What the token economy hands this run (RFC 0007): the loop guard's settings, the facts learned in this repository, the approved tool mask. Absent with `MACHINE_ECONOMY=off`. */
+    economy: EconomyInput.optional(),
     /** The cases approved at the test check, for implementing and verifying. */
     testCases: z.array(z.union([TestCase, LegacyTestCase])).optional(),
     /** Build's tests step: the test each scenario got (its id and the test file), for the implementer to build against and never weaken. */
@@ -1206,7 +1209,7 @@ export const StageOutput = z.object({
     turns: z.number().int(),
     costUsd: z.number().nullable(),
     /** The runtime's own count (input and output); null or absent where it cannot report one. */
-    tokens: z.object({ input: z.number().int().nonnegative(), output: z.number().int().nonnegative(), /** Input read from the cache: beside the count, never part of the budget. */ cached: z.number().int().nonnegative().optional() }).nullable().optional(),
+    tokens: z.object({ input: z.number().int().nonnegative(), output: z.number().int().nonnegative(), /** Input read from the cache: beside the count, never part of the budget. */ cached: z.number().int().nonnegative().optional(), /** The parts of `input` written to the cache, by lifetime, for pricing. */ cacheWrite5m: z.number().int().nonnegative().optional(), cacheWrite1h: z.number().int().nonnegative().optional() }).nullable().optional(),
     durationMs: z.number().int(),
     model: z.string(),
   }),

@@ -44,13 +44,28 @@ describe("the diagram's config defaults", () => {
     expect(keys.length).toBeGreaterThan(60);
     expect(keys.filter((k) => CONSUMED_FROM[k] === undefined)).toEqual([]);
     expect(Object.keys(CONSUMED_FROM).filter((k) => !keys.includes(k))).toEqual([]);
-    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]));
+    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]));
   });
 
   it("mark exactly the keys whose default already equals today's constant as wave 8", () => {
     expect(Object.entries(CONSUMED_FROM).filter(([, w]) => w === 8).map(([k]) => k).sort()).toEqual(
       ["plan.coverage_rounds", "plan.plan_check_retries", "ship.stale_days", "verify.auto_rebase", "verify.ci_flaky_reruns", "verify.env_flake_retries"].sort(),
     );
+  });
+});
+
+describe("the economy section", () => {
+  it("defaults to the guard on, facts on and pruning proposed, read from wave 19", () => {
+    expect(FACTORY_DEFAULTS.economy).toEqual({ loop_guard: "on", facts: "on", tool_prune: "propose", propose_every: 3, promote_cards: 5, guard: { judge_confidence: 0.7, redirects: 1, backstop_mult: 2.5, envelope_min_samples: 5 }, prune: { runs: 10, min_cards: 2, cards: 5 } });
+    for (const key of configKeys().filter((k) => k.startsWith("economy."))) expect(CONSUMED_FROM[key], key).toBe(19);
+  });
+
+  it("takes a repository's value over the default and refuses an unknown key or value", () => {
+    expect(factoryConfigOf({ economy: { facts: "free", guard: { redirects: 2 } } }).economy).toMatchObject({ facts: "free", loop_guard: "on", guard: { redirects: 2, judge_confidence: 0.7 } });
+    expect(LunaConfig.safeParse({ economy: { facts: "free" } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ economy: { fact: "free" } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ economy: { facts: "maybe" } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ economy: { guard: { judge_confidence: 2 } } }).success).toBe(false);
   });
 });
 
