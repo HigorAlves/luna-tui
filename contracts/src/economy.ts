@@ -104,7 +104,7 @@ export function effectiveTokens(t: Tokens): number {
 }
 
 /** The luna tools the machine relies on: the progress, the slice ledger, the settled decisions, the scope check and the scenario gate. A mask never removes one. */
-const PROTECTED_LUNA: ReadonlySet<string> = new Set(["step", "slice_init", "slice_set", "slice_list", "decision_get", "scope_check", "scenario_red"]);
+export const PROTECTED_LUNA: ReadonlySet<string> = new Set(["step", "slice_init", "slice_set", "slice_list", "decision_get", "scope_check", "scenario_red"]);
 
 /** `access` and the pack's skills with the units of `mask` removed. It only removes: a protected luna tool stays, and when every skill is masked the skills switch turns off. */
 export function narrow(access: Access, mask: ToolMask | undefined, packSkills: string[]): { access: Access; skills: string[] } {
@@ -232,13 +232,21 @@ export const FactStatus = z.object({
 });
 export type FactStatus = z.infer<typeof FactStatus>;
 
-/** What the economy knows about one repository: the envelopes, what the guard did lately, what it cost, the facts it learned. The mask and the proposal come with the slices that build them. */
+/** A unit proposed for removal (`web`, `agent`, `skill:<name>`, `luna:<tool>`) and what shows it is unused: the runs and the distinct cards it went unused over. */
+export const ToolProposal = z.object({ unit: z.string(), unusedRuns: z.number().int(), cards: z.number().int() });
+export type ToolProposal = z.infer<typeof ToolProposal>;
+
+/** One pack's tool pruning in a repository: the applied mask (units) and the proposal waiting for a person. */
+export const ToolsStatus = z.object({ mask: z.array(z.string()), proposal: z.array(ToolProposal) });
+export type ToolsStatus = z.infer<typeof ToolsStatus>;
+
+/** What the economy knows about one repository: the envelopes, what the guard did lately, what it cost, the facts it learned, the tools it proposes removing. */
 export const EconomyStatus = z.object({
   envelopes: z.record(z.string(), z.object({ samples: z.number().int(), envelope: z.number().nullable() })),
   guard: z.array(GuardEventRow),
   cost: z.object({ exec: z.number(), overhead: z.number(), overheadShare: z.number() }),
   facts: z.array(FactStatus).optional(),
-  mask: z.record(z.string(), z.unknown()).optional(),
-  proposal: z.array(z.unknown()).optional(),
+  /** Per pack: the units a person approved removing, and the ones proposed, with their evidence. */
+  tools: z.record(z.string(), ToolsStatus).optional(),
 });
 export type EconomyStatus = z.infer<typeof EconomyStatus>;

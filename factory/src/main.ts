@@ -122,7 +122,7 @@ async function runStage(): Promise<RunOutcome> {
   const engine = resolveEngine(input!.engine ?? pack.engines.default);
   const runtime = RUNTIMES[engine.runtime];
   if (!runtime) return { ...EMPTY_RUN, error: `engine ${engine.id} runs on ${engine.runtime}, which is not available in this factory yet` };
-  info = runInfo(runtime, engine, pack, template, FACTORY_ROOT);
+  info = runInfo(runtime, engine, pack, template, FACTORY_ROOT, input!.context.economy?.mask);
   const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch };
   // A helper the runtime does not run itself is a child run through `delegate`; the parent's turns
   // so far are its calls so far, which is never fewer.

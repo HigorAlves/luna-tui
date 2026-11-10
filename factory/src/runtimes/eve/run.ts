@@ -25,6 +25,7 @@ import { EMPTY_RUN, type RunOutcome, budgetSpent, timeRanOut } from "../../core/
 import { type Instructions, NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { DELEGATE, delegatedHelpers } from "../../core/delegate.ts";
 import { GRAPH_ROOT } from "../../core/roots.ts";
+import { maskKey } from "../../core/economy/mask.ts";
 import { economySession } from "../../core/economy/session.ts";
 import { EconomyTap } from "./economy.ts";
 import { GUARDED, appName, eveTools, instructionParts, tokenBudgetPerTurn } from "./compile.ts";
@@ -101,6 +102,8 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   if (pack.kind === "agent" && pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   // A decision pack is one turn: the questions as the message, the answer schema as the output schema.
   const decision = pack.kind === "decision" ? pack : null;
+  // A mask changes the Claude run's tools; eve's apps are built with the image, so it is said once and ignored.
+  if (pack.kind === "agent" && input.context.economy?.mask && maskKey(input.context.economy.mask) !== null) emit({ kind: "note", payload: { phase: "economy_mask_skipped", pack: pack.id, reason: "an eve app is built with the image; a mask does not narrow it" } });
   const message = decision ? renderDecision(decision.questions, stateOf(input)) : prompt;
   const maxTurns = decision ? 1 : input.limits.maxTurns;
   const app = join(options.agentsDir ?? join(paths.factoryRoot, ".eve-agents"), appName(pack));

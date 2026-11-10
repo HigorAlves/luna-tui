@@ -2,6 +2,7 @@ import { type EconomyConfig, EconomyStatus, type GuardEventRow } from "@hardness
 import { describe, expect, it } from "vitest";
 
 import { type LedgerRecord } from "../domain/economy/ledger.ts";
+import { type PackTools } from "../domain/economy/prune.ts";
 import { type FactRecord, type FactsFile } from "../domain/economy/lifecycle.ts";
 import { type Digest, type ObservedCall, keepDigests } from "../domain/economy/observe-run.ts";
 import { type EconomyStore, type Propose, type ProposerState, economy, noEconomy } from "./economy.ts";
@@ -17,7 +18,7 @@ const config: EconomyConfig = {
 };
 
 function fakeStore(events: Record<string, unknown[]> = {}) {
-  const state = { envelopes: {} as Record<string, number[]>, ledger: [] as LedgerRecord[], guard: [] as GuardEventRow[], facts: { facts: [], injected: {} } as FactsFile, digests: [] as Digest[], calls: {} as Record<string, ObservedCall[]>, proposer: { closed: 0, counted: [] } as ProposerState };
+  const state = { envelopes: {} as Record<string, number[]>, ledger: [] as LedgerRecord[], guard: [] as GuardEventRow[], facts: { facts: [], injected: {} } as FactsFile, digests: [] as Digest[], calls: {} as Record<string, ObservedCall[]>, proposer: { closed: 0, counted: [] } as ProposerState, tools: {} as Record<string, PackTools> };
   const store: EconomyStore = {
     envelopes: async () => state.envelopes,
     updateEnvelopes: async (_r, change) => void (state.envelopes = change(state.envelopes)),
@@ -34,6 +35,8 @@ function fakeStore(events: Record<string, unknown[]> = {}) {
     digests: async () => state.digests,
     calls: async () => state.calls,
     updateProposer: async (_r, change) => void (state.proposer = change(state.proposer)),
+    tools: async () => state.tools,
+    updateTools: async (_r, change) => void (state.tools = change(state.tools)),
     events: async (runId) => events[runId] ?? [],
   };
   return { state, store };
@@ -106,6 +109,96 @@ describe("economy.inputFor", () => {
     const eco = economy(store);
     expect((await eco.inputFor("/r", "verifying", config))?.guard?.envelope).toBeNull();
     expect((await eco.inputFor("/r", "implementing", config))?.guard?.envelope).not.toBeNull();
+  });
+});
+
+// Tool pruning: the `triage` pack has web, a subagent, one skill and `card_search`; the runs below use none of them unless they say so.
+const pruning: EconomyConfig = { ...config, loop_guard: "off", prune: { runs: 3, min_cards: 2, cards: 5 } };
+const TRIAGE = ["web", "agent", "skill:code-discovery", "luna:card_search"];
+const runOn = (n: number, cardId: string, extra: unknown[] = []) => ({ [`t${n}`]: [...calls(1), ...extra] });
+async function idleRuns(eco: ReturnType<typeof economy>, from: number, n: number, config = pruning) {
+  for (let i = from; i < from + n; i++) await eco.afterRun(finished(`t${i}`, { pack: "triage", cardId: `c${i % 2}`, config }));
+}
+
+describe("economy: tool pruning", () => {
+  const stage = () => fakeStore(Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`t${i}`, calls(1)])));
+
+  it("proposes the units a pack never used, with their evidence, and hands the next run nothing yet", async () => {
+    const { store } = stage();
+    const eco = economy(store);
+    await idleRuns(eco, 0, 3);
+    const tools = (await eco.status("/r")).tools?.triage;
+    expect(tools?.mask).toEqual([]);
+    expect(tools?.proposal.map((p) => p.unit).sort()).toEqual([...TRIAGE].sort());
+    expect(tools?.proposal[0]).toMatchObject({ unusedRuns: 3, cards: 2 });
+    expect((await eco.inputFor("/r", "triage", pruning))?.mask).toBeUndefined();
+  });
+
+  it("one use removes the unit from the proposal for good", async () => {
+    const { store } = fakeStore({ ...runOn(0, "c0", [{ kind: "tool_call", payload: { tool: "WebFetch", target: "u", allowed: true } }]), ...runOn(1, "c1"), ...runOn(2, "c0"), ...runOn(3, "c1"), ...runOn(4, "c0") });
+    const eco = economy(store);
+    await idleRuns(eco, 0, 5);
+    expect((await eco.status("/r")).tools?.triage?.proposal.map((p) => p.unit)).not.toContain("web");
+  });
+
+  it("approve sends the mask on the next input, even with the guard and facts off", async () => {
+    const { store } = stage();
+    const eco = economy(store);
+    await idleRuns(eco, 0, 3);
+    expect(await eco.approveMask("/r", "triage")).toBe(true);
+    expect((await eco.inputFor("/r", "triage", pruning))?.mask).toEqual({ web: true, agent: true, skills: ["code-discovery"], luna: ["card_search"] });
+    expect((await eco.status("/r")).tools?.triage).toMatchObject({ mask: expect.arrayContaining(TRIAGE), proposal: [] });
+    expect(EconomyStatus.safeParse(await eco.status("/r")).success).toBe(true);
+  });
+
+  it("approve with no proposal is false, and so is a pack the economy does not prune", async () => {
+    const eco = economy(stage().store);
+    expect(await eco.approveMask("/r", "triage")).toBe(false);
+    expect(await eco.approveMask("/r", "red_check")).toBe(false);
+  });
+
+  it("restore brings a unit back and it is never proposed again", async () => {
+    const { store } = stage();
+    const eco = economy(store);
+    await idleRuns(eco, 0, 3);
+    await eco.approveMask("/r", "triage");
+    expect(await eco.restore("/r", "triage", "web")).toBe(true);
+    expect((await eco.inputFor("/r", "triage", pruning))?.mask?.web).toBeUndefined();
+    await idleRuns(eco, 3, 9);
+    expect((await eco.status("/r")).tools?.triage?.proposal.map((p) => p.unit)).not.toContain("web");
+    expect(await eco.restore("/r", "triage", "nothing")).toBe(false);
+  });
+
+  it("a masked unit gathers no evidence", async () => {
+    const { state, store } = stage();
+    const eco = economy(store);
+    await idleRuns(eco, 0, 3);
+    await eco.approveMask("/r", "triage");
+    const before = state.tools.triage!.units.web;
+    await idleRuns(eco, 3, 4);
+    expect(state.tools.triage!.units.web).toEqual(before);
+  });
+
+  it("folds nothing with tool_prune off, or for a run with no events", async () => {
+    const { state, store } = fakeStore({ t0: calls(1) });
+    const eco = economy(store);
+    await idleRuns(eco, 0, 1, { ...pruning, tool_prune: "off" });
+    await eco.afterRun(finished("none", { pack: "triage", config: pruning }));
+    expect(state.tools).toEqual({});
+  });
+
+  it("a refused call is not a use", async () => {
+    const refused = [{ kind: "tool_call", payload: { tool: "WebFetch", target: "u", allowed: false } }];
+    const { store } = fakeStore({ t0: [...calls(1), ...refused], t1: [...calls(1), ...refused], t2: [...calls(1), ...refused] });
+    const eco = economy(store);
+    await idleRuns(eco, 0, 3);
+    expect((await eco.status("/r")).tools?.triage?.proposal.map((p) => p.unit)).toContain("web");
+  });
+
+  it("noEconomy approves and restores nothing", async () => {
+    const eco = noEconomy();
+    expect(await eco.approveMask("/r", "triage")).toBe(false);
+    expect(await eco.restore("/r", "triage", "web")).toBe(false);
   });
 });
 

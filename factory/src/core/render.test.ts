@@ -934,3 +934,9 @@ describe("renderPrompt for reviewing_memory's fact candidates", () => {
     expect(quoted.split("\n").filter((l) => l === "<<<end-data:context.factCandidates>>>")).toHaveLength(1);
   });
 });
+
+describe("callTarget: a skill", () => {
+  it("names the skill, so the economy can tell which one was invoked", () => {
+    expect(callTarget("Skill", { skill: "luna-factory:tdd" })).toEqual({ target: "luna-factory:tdd" });
+  });
+});

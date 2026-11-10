@@ -159,3 +159,23 @@ describe("fileStore", () => {
     expect(await store.events("r9")).toEqual([{ kind: "text" }]);
   });
 });
+
+describe("fileStore: tool pruning", () => {
+  it("reads nothing before anything is written, and round-trips a pack's state privately", async () => {
+    const store = fileStore(dir);
+    expect(await store.tools(repo)).toEqual({});
+    const state = { units: { web: { unusedRuns: 3, unusedCards: ["c1", "c2"], everUsed: false, kept: false } }, mask: ["agent"], proposal: ["web"] };
+    await store.updateTools(repo, (all) => ({ ...all, triage: state }));
+    expect(await store.tools(repo)).toEqual({ triage: state });
+    expect((await stat(join(folder(), "tools.json"))).mode & 0o777).toBe(0o600);
+  });
+
+  it("reads a corrupt file as empty and drops a pack whose state is not one", async () => {
+    const store = fileStore(dir);
+    await mkdir(folder(), { recursive: true });
+    await writeFile(join(folder(), "tools.json"), "{nope");
+    expect(await store.tools(repo)).toEqual({});
+    await writeFile(join(folder(), "tools.json"), JSON.stringify({ triage: { units: 3, mask: [], proposal: [] }, ok: { units: {}, mask: [], proposal: [] } }));
+    expect(await store.tools(repo)).toEqual({ ok: { units: {}, mask: [], proposal: [] } });
+  });
+});

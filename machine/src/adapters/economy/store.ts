@@ -1,6 +1,6 @@
 // The economy's state per repository, in the machine's own state: `<stateDir>/economy/<repo slug>/` holds `envelope.json` (the tool-call counts of
 // passing runs, per pack), `ledger.jsonl` (one record per run), `guard.jsonl` (what the loop guard did, the newest kept), `facts.json` (the learned
-// facts and what each pack was last told) and `digests.jsonl` (the last eight runs, for the proposer), `calls.json` (the observed calls of those runs, for its detectors) and `proposer.json` (closed cards counted since the start). Folders are 0700, files
+// facts and what each pack was last told) and `digests.jsonl` (the last eight runs, for the proposer), `calls.json` (the observed calls of those runs, for its detectors) and `proposer.json` (closed cards counted since the start) and `tools.json` (per pack, the unused-tool evidence, the proposal and the mask). Folders are 0700, files
 // 0600, a JSON file is replaced through tmp + rename, and writes to one file are served one at a time. A file that cannot be read or parsed reads as empty.
 import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import type { EconomyStore, ProposerState } from "../../application/economy.ts";
 import { FAMILIES } from "../../domain/economy/envfacts.ts";
+import type { PackTools } from "../../domain/economy/prune.ts";
 import type { LedgerRecord } from "../../domain/economy/ledger.ts";
 import type { FactRecord, FactsFile } from "../../domain/economy/lifecycle.ts";
 import { type Digest, type ObservedCall, keepDigests } from "../../domain/economy/observe-run.ts";
@@ -40,6 +41,11 @@ const FactSchema = z.object({
   detector: Detector.optional(),
   files: z.array(z.string()).optional(),
   section: ProjectContextSection.optional(),
+});
+const ToolsSchema = z.object({
+  units: z.record(z.string(), z.object({ unusedRuns: z.number().int().nonnegative(), unusedCards: z.array(z.string()), everUsed: z.boolean(), kept: z.boolean() })),
+  mask: z.array(z.string()),
+  proposal: z.array(z.string()),
 });
 const CallsSchema = Observation.extend({ ok: z.boolean() });
 const DigestSchema = z.object({ at: z.string(), runId: z.string(), pack: z.string(), cardId: z.string(), outcome: z.string(), calls: z.number().int(), lines: z.array(z.string()) });
@@ -129,6 +135,21 @@ export function fileStore(stateDir: string): EconomyStore {
       return {};
     }
   };
+  /** Each pack's tool-pruning state; a pack whose record is not one is dropped. */
+  const readTools = async (path: string): Promise<Record<string, PackTools>> => {
+    try {
+      const parsed = JSON.parse(await readText(path)) as unknown;
+      if (!isRecord(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).flatMap(([pack, state]) => {
+          const ok = ToolsSchema.safeParse(state);
+          return ok.success ? [[pack, ok.data]] : [];
+        }),
+      );
+    } catch {
+      return {};
+    }
+  };
   const readProposer = async (path: string): Promise<ProposerState> => {
     try {
       const parsed = JSON.parse(await readText(path)) as unknown;
@@ -195,6 +216,15 @@ export function fileStore(stateDir: string): EconomyStore {
       const path = join(folder(repoPath), "proposer.json");
       return serial(path, async () => {
         const next = change(await readProposer(path));
+        await ensure(folder(repoPath));
+        await replace(path, JSON.stringify(next));
+      });
+    },
+    tools: (repoPath) => readTools(join(folder(repoPath), "tools.json")),
+    updateTools: (repoPath, change) => {
+      const path = join(folder(repoPath), "tools.json");
+      return serial(path, async () => {
+        const next = change(await readTools(path));
         await ensure(folder(repoPath));
         await replace(path, JSON.stringify(next));
       });

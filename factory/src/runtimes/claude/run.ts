@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import { decisionSummary, renderDecision, stateOf } from "../../core/decide.ts";
 import { DELEGATE } from "../../core/delegate.ts";
+import { maskedPack } from "../../core/economy/mask.ts";
 import { economySession } from "../../core/economy/session.ts";
 import { CallJoin } from "../../core/events.ts";
 import type { GuardContext } from "../../core/guards.ts";
@@ -66,8 +67,11 @@ export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "i
 }
 
 async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> {
-  const { pack, engine, input, prompt, paths, luna, dry, emit } = ctx;
-  if (pack.kind === "decision") return decide(ctx, transport);
+  const { engine, input, prompt, paths, luna, dry, emit } = ctx;
+  if (ctx.pack.kind === "decision") return decide(ctx, transport);
+  // What a person approved removing (RFC 0007 §4) is gone before the tool lists, the subagents and the skills are built, so none of it is loaded.
+  const mask = input.context.economy?.mask;
+  const pack = maskedPack(ctx.pack, mask);
   if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   // A call's event joins the stream's tool_use and the hook's decision, whichever comes first.
   const calls = new CallJoin(emit, isGuarded);
@@ -94,6 +98,8 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId),
     systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: FACTORY_RULES },
     plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
+    // With skills masked the SDK offers only the rest (it hides the others from the model and rejects their calls); with no mask the key is absent.
+    ...(pack !== ctx.pack && ctx.pack.kind === "agent" && pack.skills.length !== ctx.pack.skills.length ? { skills: pack.skills.map((skill) => `${PLUGIN_NAME}:${skill}`) } : {}),
     settingSources: [] as [],
     // Commits and PRs are the person's: the SDK adds no Co-Authored-By trailer and no "Generated with" line (the guard still refuses one).
     settings: NO_ATTRIBUTION,
@@ -104,7 +110,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     outputFormat: { type: "json_schema" as const, schema: answerJsonSchema(pack) },
     mcpServers: { luna: lunaServer(luna.call, ctx.delegate ?? null) },
     hooks: {
-      PreToolUse: preToolUseGuards(guardPolicy(ctx), (id, tool, toolInput, decision) => calls.decided(id, tool, toolInput, decision)),
+      PreToolUse: preToolUseGuards(guardPolicy({ ...ctx, pack }), (id, tool, toolInput, decision) => calls.decided(id, tool, toolInput, decision)),
       ...economy,
     },
     // The pinned ID, never an alias: the model does not change under the stage between runs.

@@ -1,6 +1,6 @@
 // The token economy's port (RFC 0007): what the machine hands a run before it starts and what it learns from it once it is over, per repository.
 // The state lives behind `EconomyStore`; this file holds the rules, so they run over a fake store in tests.
-import { type EconomyConfig, type EconomyInput, type EconomyStatus, type FactStatus, FactProposal, type GuardEventRow, PACKS, type PackId, type ProposeContext, type Tokens, repoName } from "@hardness/contracts";
+import { type EconomyConfig, type EconomyInput, type EconomyStatus, type FactStatus, FactProposal, type GuardEventRow, PACKS, type PackId, type ProposeContext, type Tokens, type ToolsStatus, repoName } from "@hardness/contracts";
 
 import { addSample, envelopeOf } from "../domain/economy/envelope.ts";
 import { evidenceOf } from "../domain/economy/envfacts.ts";
@@ -9,6 +9,7 @@ import { type LedgerRecord, ledgerRecord, summary } from "../domain/economy/ledg
 import { type FactsFile, dropFact, foldFacts, promoteFacts } from "../domain/economy/lifecycle.ts";
 import { type Digest, type ObservedCall, digestOf, observedCalls } from "../domain/economy/observe-run.ts";
 import { admit, foldProposed } from "../domain/economy/propose.ts";
+import { type PackTools, approve, emptyTools, foldTools, maskOf, restoreUnit, unitsOf, usedUnits } from "../domain/economy/prune.ts";
 import { manual, selectInjected } from "../domain/economy/render-facts.ts";
 
 /** What the economy keeps for a repository. Every method is for one repository's folder; a corrupt file reads as empty. */
@@ -34,6 +35,10 @@ export interface EconomyStore {
   updateProposer(repoPath: string, change: (state: ProposerState) => ProposerState): Promise<void>;
   /** The kept digests, oldest first. */
   digests(repoPath: string): Promise<Digest[]>;
+  /** Each pack's tool-pruning state: the evidence per unit, the proposal and the applied mask. */
+  tools(repoPath: string): Promise<Record<string, PackTools>>;
+  /** Changes the tool-pruning state as one step. */
+  updateTools(repoPath: string, change: (all: Record<string, PackTools>) => Record<string, PackTools>): Promise<void>;
   /** The events a finished run wrote (`runs/<runId>/out/events.jsonl`); none when it left no file. */
   events(runId: string): Promise<unknown[]>;
 }
@@ -74,6 +79,10 @@ export interface Economy {
   promotable(repoPath: string, config: EconomyConfig): Promise<Array<{ id: string; text: string; section?: string }>>;
   /** The retro put these facts in the project context: they are not told again. Returns how many it marked. Never throws. */
   promoted(repoPath: string, ids: readonly string[]): Promise<number>;
+  /** A person approves the tools proposed for `pack`: they become its mask, which the next run narrows by. False when there is no proposal. Never throws. */
+  approveMask(repoPath: string, pack: PackId): Promise<boolean>;
+  /** A person brings back a unit of `pack` (`web`, `agent`, `skill:<name>`, `luna:<tool>`): out of the mask, never proposed again. False for a unit the pack does not have. Never throws. */
+  restore(repoPath: string, pack: PackId, unit: string): Promise<boolean>;
   /** `minSamples` is the repository's `economy.guard.envelope_min_samples` (the default, 5, when not given). */
   status(repoPath: string, minSamples?: number): Promise<EconomyStatus>;
 }
@@ -91,7 +100,7 @@ const EMPTY: EconomyStatus = { envelopes: {}, guard: [], cost: { exec: 0, overhe
 
 /** The economy of a machine with it off: no input, nothing kept. */
 export function noEconomy(): Economy {
-  return { inputFor: async () => undefined, afterRun: async () => {}, recordOverhead: async () => {}, dropFact: async () => false, cardClosed: async () => {}, promotable: async () => [], promoted: async () => 0, status: async () => EMPTY };
+  return { inputFor: async () => undefined, afterRun: async () => {}, recordOverhead: async () => {}, dropFact: async () => false, cardClosed: async () => {}, promotable: async () => [], promoted: async () => 0, approveMask: async () => false, restore: async () => false, status: async () => EMPTY };
 }
 
 export function economy(store: EconomyStore, log: (line: string) => void = () => {}): Economy {
@@ -139,8 +148,11 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
           // `free` is the free layer alone; `on` adds the proposer's manual.
           const facts = config.facts === "off" ? [] : await kept("facts", () => told(repoPath, pack), [] as string[]);
           const lines = config.facts === "on" ? await kept("manual", async () => manual((await store.facts(repoPath)).facts, repoPath), [] as string[]) : [];
-          if (!guard && facts.length === 0 && lines.length === 0) return undefined;
-          return { ...(guard ? { guard } : {}), ...(facts.length > 0 ? { facts } : {}), ...(lines.length > 0 ? { manual: lines } : {}) };
+          // The approved mask goes whatever the guard and the facts are; `tool_prune: off` stops it too.
+          const mask = config.tool_prune === "off" ? {} : maskOf((await kept("tools", () => store.tools(repoPath), {} as Record<string, PackTools>))[pack] ?? emptyTools());
+          const masked = Object.keys(mask).length > 0;
+          if (!guard && facts.length === 0 && lines.length === 0 && !masked) return undefined;
+          return { ...(guard ? { guard } : {}), ...(facts.length > 0 ? { facts } : {}), ...(lines.length > 0 ? { manual: lines } : {}), ...(masked ? { mask } : {}) };
         },
         undefined,
       ),
@@ -159,6 +171,20 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
         },
         undefined,
       );
+      // A run with no events says nothing about which tools were used.
+      if (run.config.tool_prune !== "off" && events.length > 0) {
+        await kept(
+          "tools",
+          async () => {
+            const spec = PACKS[run.pack];
+            const units = unitsOf(spec);
+            if (units.length === 0) return;
+            const used = usedUnits(events);
+            await store.updateTools(run.repoPath, (all) => ({ ...all, [run.pack]: foldTools(all[run.pack] ?? emptyTools(), { units, used, cardId: run.cardId, prune: run.config.prune }) }));
+          },
+          undefined,
+        );
+      }
       if (run.config.facts === "off") return;
       await kept(
         "facts",
@@ -245,17 +271,43 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
         },
         0,
       ),
+    approveMask: (repoPath, pack) =>
+      kept(
+        "approve",
+        async () => {
+          let found = false;
+          await store.updateTools(repoPath, (all) => {
+            const state = all[pack];
+            found = (state?.proposal.length ?? 0) > 0;
+            return found ? { ...all, [pack]: approve(state!) } : all;
+          });
+          return found;
+        },
+        false,
+      ),
+    restore: (repoPath, pack, unit) =>
+      kept(
+        "restore",
+        async () => {
+          if (!unitsOf(PACKS[pack]).includes(unit)) return false;
+          await store.updateTools(repoPath, (all) => ({ ...all, [pack]: restoreUnit(all[pack] ?? emptyTools(), unit) }));
+          return true;
+        },
+        false,
+      ),
     recordOverhead: (run) => kept("overhead", () => store.appendLedger(run.repoPath, ledgerRecord({ at: new Date().toISOString(), ...run })), undefined),
     status: (repoPath, minSamples = 5) =>
       kept<EconomyStatus>(
         "status",
         async () => {
           const envelopes = await store.envelopes(repoPath);
+          const tools = await store.tools(repoPath);
           return {
             envelopes: Object.fromEntries(Object.entries(envelopes).map(([pack, samples]) => [pack, { samples: samples.length, envelope: envelopeOf(samples, minSamples) }])),
             guard: (await store.guard(repoPath)).slice(-GUARD_KEEP),
             cost: summary(await store.ledger(repoPath)),
             facts: (await store.facts(repoPath)).facts.map<FactStatus>((f) => ({ id: f.id, family: f.family, source: f.source, state: f.state, text: f.text, confirmations: f.confirmations, contradictions: f.contradictions, exercised: f.exercised, fired: f.fired })),
+            tools: Object.fromEntries(Object.entries(tools).map<[string, ToolsStatus]>(([pack, t]) => [pack, { mask: t.mask, proposal: t.proposal.map((unit) => ({ unit, unusedRuns: t.units[unit]?.unusedRuns ?? 0, cards: t.units[unit]?.unusedCards.length ?? 0 })) }])),
           };
         },
         EMPTY,

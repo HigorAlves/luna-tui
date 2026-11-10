@@ -73,6 +73,9 @@ describe("economy", () => {
     expect(EconomyStatus.parse({ ...base, facts: [fact] }).facts).toEqual([fact]);
     expect(EconomyStatus.safeParse({ ...base, facts: [{ ...fact, state: "bogus" }] }).success).toBe(false);
     expect(EconomyStatus.safeParse({ ...base, facts: [{ id: "x" }] }).success).toBe(false);
+    const tools = { triage: { mask: ["web"], proposal: [{ unit: "agent", unusedRuns: 10, cards: 2 }] } };
+    expect(EconomyStatus.parse({ ...base, tools }).tools).toEqual(tools);
+    expect(EconomyStatus.safeParse({ ...base, tools: { triage: { mask: [1], proposal: [] } } }).success).toBe(false);
   });
 
   it("names the error a stopped run starts with", () => {

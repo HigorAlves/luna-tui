@@ -633,7 +633,7 @@ const CALL_TARGET_MAX = 160;
 export function callTarget(name: string, input: Record<string, unknown>): { target: string; fingerprint?: string } {
   // A search names its pattern and where it looks: four globs over /work are four calls, not a loop.
   const search = input.pattern !== undefined && input.path !== undefined ? `${input.pattern} in ${input.path}` : undefined;
-  const target = input.file_path ?? input.filePath ?? search ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? input.helper ?? "";
+  const target = input.file_path ?? input.filePath ?? search ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? input.helper ?? input.skill ?? "";
   // A paged read is a different call per page: a long file read in four pages is not a loop.
   const page = (name === "Read" || name === "read_file") && (input.offset !== undefined || input.limit !== undefined) ? `:${input.offset ?? 0}+${input.limit ?? ""}` : "";
   const whole = `${String(target)}${page}`;
