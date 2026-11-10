@@ -93,14 +93,15 @@ describe("LoopGuard judge requests", () => {
     expect(askedAt.slice(0, 6)).toEqual([20, 30, 45, 65, 85, 105]);
   });
 
-  it("treats a stuck verdict under the confidence bar as productive", () => {
+  it("resets the gap to 5 after a stuck verdict under the confidence bar, as upstream grows it only on a verdict that is not stuck", () => {
     const { run, guard } = setup({ backstopMult: 100 });
     run(20);
+    guard.verdict({ stuck: false, confidence: 0.9, cause: "progress" }); // the gap grows to 10
+    run(10);
     guard.verdict({ stuck: true, confidence: 0.69, cause: "maybe" });
-    const steps = run(10);
-    expect(steps.every((s) => s.kind === "none" || s.kind === "ask")).toBe(true);
-    expect(steps[9]!.kind).toBe("ask"); // the gap grew to 10: call 30
-    expect(steps.slice(0, 9).every((s) => s.kind === "none")).toBe(true);
+    const steps = run(5);
+    expect(steps.slice(0, 4).every((s) => s.kind === "none")).toBe(true);
+    expect(steps[4]!.kind).toBe("ask"); // 5 calls after the ask at 30, not 10
   });
 
   it("clears an outstanding ask on expire without growing the gap, so it asks again 5 calls later", () => {

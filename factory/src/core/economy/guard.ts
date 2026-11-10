@@ -121,14 +121,14 @@ export class LoopGuard {
     }
     if (!acting) return NONE;
 
-    // The verdict that arrived since the last call. A verdict that is not stuck, or not sure, is a productive one.
+    // The verdict that arrived since the last call. Only a verdict that is not stuck grows the gap; a stuck one under the bar resets it.
     let judged: Verdict | null = null;
     if (this.pending) {
       const v = this.pending;
       this.pending = null;
       this.asking = false;
       if (v.stuck && v.confidence >= this.input.judgeConfidence) judged = v;
-      else this.gap = Math.min(MAX_GAP, this.gap + GAP_GROWTH);
+      else this.gap = v.stuck ? BASE_GAP : Math.min(MAX_GAP, this.gap + GAP_GROWTH);
     }
     if (judged) return this.act(judged);
     if (backstopHit(s, this.run, this.input.envelope, this.input.backstopMult)) return this.act({ stuck: true, confidence: 1, cause: "backstop" });
