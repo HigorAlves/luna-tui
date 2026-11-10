@@ -46,10 +46,13 @@ export class LoopGuard {
   private lastVerify = 0;
   private lastVerifyFailed = false;
 
-  constructor(
-    private readonly input: GuardInput,
-    private readonly emit: (event: RunEvent) => void,
-  ) {}
+  private readonly input: GuardInput;
+  private readonly emit: (event: RunEvent) => void;
+
+  constructor(input: GuardInput, emit: (event: RunEvent) => void) {
+    this.input = input;
+    this.emit = emit;
+  }
 
   /** Folds one finished call and says what the runtime does next. */
   fold(observation: Observation, call: { tool: string; target: string }): GuardStep {
