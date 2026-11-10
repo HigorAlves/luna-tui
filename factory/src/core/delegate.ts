@@ -178,7 +178,9 @@ async function runChild(o: DelegationOptions, helper: Helper, message: string, n
       const prompt = template.replaceAll("{{agent}}", helper.role).replaceAll("{{parent}}", o.pack.id).replaceAll("{{message}}", () => message);
       writeFileSync(join(out, "prompt.md"), prompt);
       info = runInfo(runtime, engine, pack, template, o.paths.factoryRoot);
-      const input: StageInput = { ...o.input, engine: helper.engine, limits };
+      // A helper has its own pack: the parent's guard envelope, mask and facts are not its own, and it has no judge.
+      const { economy: _parents, ...context } = o.input.context;
+      const input: StageInput = { ...o.input, context, engine: helper.engine, limits };
       run = settle(await runtime.run({ pack, engine, input, prompt, paths: { ...o.paths, out, scratch }, luna, dry: false, emit, delegate: null }), pack);
     } catch (e) {
       run = refused(`the helper's run failed: ${e instanceof Error ? e.message : String(e)}`);
