@@ -38,6 +38,7 @@ pub enum Scope {
     Detail,
     Pulls,
     Backlog,
+    Economy,
     Tickets,
     Slack,
     Watches,
@@ -49,11 +50,12 @@ pub enum Scope {
 }
 
 impl Scope {
-    pub const ALL: [Scope; 12] = [
+    pub const ALL: [Scope; 13] = [
         Scope::Board,
         Scope::Detail,
         Scope::Pulls,
         Scope::Backlog,
+        Scope::Economy,
         Scope::Tickets,
         Scope::Slack,
         Scope::Watches,
@@ -71,6 +73,7 @@ impl Scope {
             Scope::Detail => "Ticket",
             Scope::Pulls => "Pulls",
             Scope::Backlog => "Backlog",
+            Scope::Economy => "Economy",
             Scope::Tickets => "Tickets",
             Scope::Slack => "Slack",
             Scope::Watches => "Watches",
@@ -89,6 +92,7 @@ impl Scope {
             Scope::Detail => "detail",
             Scope::Pulls => "pulls",
             Scope::Backlog => "backlog",
+            Scope::Economy => "economy",
             Scope::Tickets => "tickets",
             Scope::Slack => "slack",
             Scope::Watches => "watches",
@@ -133,6 +137,7 @@ impl Group {
             Group::Ticket => match scope {
                 Scope::Pulls => "Pull request",
                 Scope::Backlog => "Item",
+                Scope::Economy => "Row",
                 Scope::Slack => "Message",
                 Scope::Watches => "Watch",
                 _ => "Ticket",
@@ -596,6 +601,7 @@ const BOARD: &[Binding] = &[
     cmd(b("D", "Digest: what changed since last time", Group::Views, Scope::Board, on, 20), "digest"),
     cmd(b("P", "Pulls: every open PR involving you", Group::Views, Scope::Board, on, 20), "prs"),
     cmd(b("B", "Backlog: candidates, not tickets yet", Group::Views, Scope::Board, on, 20), "backlog"),
+    cmd(b("$", "Economy: facts, tool mask, guard, cost", Group::Views, Scope::Board, on, 20), "economy"),
     cmd(b("K", "Tickets: held, assessed, waiting on you", Group::Views, Scope::Board, on, 20), "tickets"),
     cmd(b("S", "Slack: mentions, DMs and watches", Group::Views, Scope::Board, on, 20), "slack"),
     // Marks & bulk.
@@ -630,6 +636,7 @@ const BOARD: &[Binding] = &[
     cmd(b(":digest", "open the Digest", Group::Commands, Scope::Board, on, 0), "digest"),
     cmd(b(":prs", "open Pulls", Group::Commands, Scope::Board, on, 0), "prs"),
     cmd(b(":backlog", "open the Backlog", Group::Commands, Scope::Board, on, 0), "backlog"),
+    cmd(b(":economy", "open the Economy", Group::Commands, Scope::Board, on, 0), "economy"),
     cmd(b(":tickets", "open the Tickets view", Group::Commands, Scope::Board, on, 0), "tickets"),
     cmd(b(":ticket-edit <text>", "post your text, not the draft's", Group::Commands, Scope::Tickets, on, 0), "ticket-edit"),
     cmd(b(":dedup duplicate <n> | related <ns> | neither", "answer the duplicate question", Group::Commands, Scope::Board, on, 0), "dedup"),
@@ -733,6 +740,30 @@ fn ticket_waiting(app: &App) -> Avail {
     }
 }
 
+/// The Economy view: a repository's facts, tool mask, loop guard and cost.
+const ECONOMY: &[Binding] = &[
+    b("d", "drop: the fact under the cursor", Group::Ticket, Scope::Economy, |app| match app.economy_row() {
+        Some(row) if row.can_drop(&app.economy_data) => Avail::On,
+        Some(_) => Avail::Off("only a candidate or active fact"),
+        None => Avail::Off("no row selected"),
+    }, 90),
+    b("a", "approve: the pack's proposed tool mask", Group::Ticket, Scope::Economy, |app| match app.economy_row() {
+        Some(row) if row.can_approve() => Avail::On,
+        Some(_) => Avail::Off("only on a proposed tool"),
+        None => Avail::Off("no row selected"),
+    }, 85),
+    b("r", "restore: a masked or proposed tool", Group::Ticket, Scope::Economy, |app| match app.economy_row() {
+        Some(row) if row.can_restore() => Avail::On,
+        Some(_) => Avail::Off("only on a masked or proposed tool"),
+        None => Avail::Off("no row selected"),
+    }, 80),
+    b("j / k", "previous / next row", Group::Move, Scope::Economy, on, 30),
+    b("esc / q", "close", Group::Move, Scope::Economy, on, 20),
+    b("R", "fetch the economy again", Group::App, Scope::Economy, on, 60),
+    b("I", "import past runs", Group::App, Scope::Economy, on, 50),
+    cmd(b("?", "keys", Group::App, Scope::Economy, on, 100), "help"),
+];
+
 /// The Backlog view: ranked candidates that are not tickets yet.
 const BACKLOG: &[Binding] = &[
     b("p", "promote: make it a ticket", Group::Ticket, Scope::Backlog, |app| if app.backlog_under_cursor().is_some() { Avail::On } else { Avail::Off("no item selected") }, 90),
@@ -821,7 +852,7 @@ const HELP: &[Binding] = &[
     b("esc / q", "close", Group::App, Scope::Help, on, 60),
 ];
 
-const TOTAL: usize = BOARD.len() + SHARED.len() + count_except(SHARED, "J") + count_except(SHARED, "A") + DETAIL.len() + INBOX.len() + PULLS.len() + BACKLOG.len() + TICKETS.len() + SLACK.len() + WATCHES.len() + DIGEST.len() + FLOOR.len() + EDITOR.len() + HELP.len();
+const TOTAL: usize = BOARD.len() + SHARED.len() + count_except(SHARED, "J") + count_except(SHARED, "A") + DETAIL.len() + INBOX.len() + PULLS.len() + BACKLOG.len() + ECONOMY.len() + TICKETS.len() + SLACK.len() + WATCHES.len() + DIGEST.len() + FLOOR.len() + EDITOR.len() + HELP.len();
 
 /// Copies `rows` into `out` under `scope`, skipping the key `except` (the view handles it
 /// itself: `A` approves the Inbox split, `J` scrolls the popup).
@@ -878,6 +909,7 @@ const fn build() -> [Binding; TOTAL] {
     copy_into(INBOX, Scope::Inbox, "", &mut out, &mut at);
     copy_into(PULLS, Scope::Pulls, "", &mut out, &mut at);
     copy_into(BACKLOG, Scope::Backlog, "", &mut out, &mut at);
+    copy_into(ECONOMY, Scope::Economy, "", &mut out, &mut at);
     copy_into(TICKETS, Scope::Tickets, "", &mut out, &mut at);
     copy_into(SLACK, Scope::Slack, "", &mut out, &mut at);
     copy_into(WATCHES, Scope::Watches, "", &mut out, &mut at);
@@ -915,6 +947,8 @@ pub fn active_scope(app: &App) -> Scope {
         Scope::Pulls
     } else if app.backlog.is_some() {
         Scope::Backlog
+    } else if app.economy.is_some() {
+        Scope::Economy
     } else if app.tickets.is_some() {
         Scope::Tickets
     } else if app.slack.is_some() {
@@ -1495,6 +1529,7 @@ mod tests {
         parity(Scope::Inbox, handled::INBOX);
         parity(Scope::Pulls, handled::PULLS);
         parity(Scope::Backlog, handled::BACKLOG);
+        parity(Scope::Economy, handled::ECONOMY);
         parity(Scope::Tickets, handled::TICKETS);
         parity(Scope::Slack, handled::SLACK);
         parity(Scope::Watches, handled::WATCHES);

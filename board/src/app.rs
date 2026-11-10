@@ -24,6 +24,7 @@ use crate::keys::{self, Scope};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
 use crate::backlog::{BacklogEntry, BacklogState};
+use crate::economy::{Economy, EconomyState, Row, RowKind};
 use crate::tickets::{TicketEntry, TicketsState};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
@@ -470,6 +471,9 @@ pub struct App {
     /// The Backlog view, open while this is `Some`, and the ranked items it fetched when it opened.
     pub backlog: Option<BacklogState>,
     pub backlog_items: Vec<BacklogEntry>,
+    /// The Economy view, open while this is `Some`, and what the machine said about its repository.
+    pub economy: Option<EconomyState>,
+    pub economy_data: Economy,
     /// The Tickets view, open while this is `Some`, and the tickets it fetched when it opened.
     pub tickets: Option<TicketsState>,
     pub ticket_items: Vec<TicketEntry>,
@@ -580,6 +584,8 @@ impl App {
             pulls: None,
             backlog: None,
             backlog_items: Vec::new(),
+            economy: None,
+            economy_data: Economy::default(),
             tickets: None,
             ticket_items: Vec::new(),
             pending_dispatch: None,
@@ -1945,6 +1951,9 @@ impl App {
         if self.backlog.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_backlog(key);
         }
+        if self.economy.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_economy(key);
+        }
         if self.tickets.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_tickets(key);
         }
@@ -2420,6 +2429,103 @@ impl App {
                         self.refresh_backlog();
                     }
                     Err(error) => self.notify(format!("backlog: {error}"), true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The row under the Economy cursor.
+    pub fn economy_row(&self) -> Option<Row> {
+        self.economy_data.row_at(self.economy.as_ref()?.cursor)
+    }
+
+    /// Fetches the repository's economy; a failure is a toast and the view keeps what it had.
+    fn refresh_economy(&mut self) -> bool {
+        let Some(repo) = self.economy.as_ref().map(|s| s.repo.clone()) else {
+            return false;
+        };
+        match self.machine.economy(&repo) {
+            Ok(data) => {
+                self.economy_data = data;
+                let last = self.economy_data.rows().len().saturating_sub(1);
+                if let Some(state) = self.economy.as_mut() {
+                    state.cursor = state.cursor.min(last);
+                }
+                true
+            }
+            Err(error) => {
+                self.notify(error, true);
+                false
+            }
+        }
+    }
+
+    /// Opens the view for the repository of the card under the cursor.
+    fn open_economy(&mut self) {
+        let Some(repo) = self.selected_task().and_then(|t| t.repo_path.clone()).filter(|p| !p.trim().is_empty()) else {
+            self.notify("select a card with a repository", true);
+            return;
+        };
+        self.economy_data = Economy::default();
+        self.economy = Some(EconomyState { repo, cursor: 0 });
+        if !self.refresh_economy() {
+            self.economy = None;
+        }
+    }
+
+    /// The keys `handle_economy` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_ECONOMY: &[&str] = &["esc", "q", "?", "j", "k", "R", "d", "a", "r", "I"];
+
+    /// The Economy view's keys: move, refetch, drop a fact, approve or restore the mask, import past runs.
+    fn handle_economy(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.economy.clone() else {
+            return Outcome::Continue;
+        };
+        let count = self.economy_data.rows().len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.economy = None,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('j') | KeyCode::Down => self.economy = Some(EconomyState { cursor: (state.cursor + 1).min(count.saturating_sub(1)), ..state }),
+            KeyCode::Char('k') | KeyCode::Up => self.economy = Some(EconomyState { cursor: state.cursor.saturating_sub(1), ..state }),
+            KeyCode::Char('R') => {
+                self.refresh_economy();
+            }
+            KeyCode::Char('I') => match self.machine.economy_act("import", &state.repo, serde_json::json!({})) {
+                Ok(body) => {
+                    self.refresh_economy();
+                    self.notify(format!("imported {} runs", body["runs"].as_u64().unwrap_or(0)), false);
+                }
+                Err(error) => self.notify(error, true),
+            },
+            KeyCode::Char(c @ ('d' | 'a' | 'r')) => {
+                let Some(row) = self.economy_row() else {
+                    self.notify("no row selected", true);
+                    return Outcome::Continue;
+                };
+                let call = match (c, &row.kind) {
+                    ('d', RowKind::Fact(i)) if row.can_drop(&self.economy_data) => Some((format!("facts/{}/drop", self.economy_data.facts[*i].id), serde_json::json!({}), "dropped", "nothing to drop", "dropped")),
+                    ('a', RowKind::Proposed { pack, .. }) => Some(("mask/approve".to_string(), serde_json::json!({ "pack": pack }), "approved", "nothing to approve", "approved")),
+                    ('r', RowKind::Masked { pack, unit } | RowKind::Proposed { pack, unit, .. }) => Some(("mask/restore".to_string(), serde_json::json!({ "pack": pack, "unit": unit }), "restored", "nothing to restore", "restored")),
+                    _ => None,
+                };
+                let Some((path, extra, done, nothing, field)) = call else {
+                    self.notify(match c {
+                        'd' => "only a candidate or active fact can be dropped",
+                        'a' => "only a proposed mask can be approved",
+                        _ => "only a masked or proposed tool can be restored",
+                    }, true);
+                    return Outcome::Continue;
+                };
+                match self.machine.economy_act(&path, &state.repo, extra) {
+                    Ok(body) => {
+                        let did = body.get(field).and_then(|v| v.as_bool()).unwrap_or(false);
+                        self.refresh_economy();
+                        self.notify(if did { done } else { nothing }, false);
+                    }
+                    Err(error) => self.notify(error, true),
                 }
             }
             _ => {}
@@ -3287,7 +3393,7 @@ impl App {
     /// everything `ticket_key` takes (`S` opens Slack here, so it is not ship).
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
-        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "B", "S", "v", "V", "?", ":",
+        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "B", "$", "S", "v", "V", "?", ":",
         "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "K",
     ];
 
@@ -3348,6 +3454,7 @@ impl App {
             KeyCode::Char('D') => self.digest = Some(DigestState::default()),
             KeyCode::Char('P') => self.open_pulls(),
             KeyCode::Char('B') => self.open_backlog(),
+            KeyCode::Char('$') => self.open_economy(),
             KeyCode::Char('K') => self.open_tickets(),
             KeyCode::Char('S') => self.open_slack(),
             KeyCode::Char('v') => {
@@ -3898,7 +4005,7 @@ impl App {
     /// The names `run_command` knows, aliases left out.
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
-        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "whole", "dismiss", "finding", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "whole", "dismiss", "finding", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "economy", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
         "help",
     ];
 
@@ -3996,6 +4103,7 @@ impl App {
             "digest" => self.digest = Some(DigestState::default()),
             "prs" | "pulls" => self.open_pulls(),
             "backlog" => self.open_backlog(),
+            "economy" => self.open_economy(),
             "tickets" => self.open_tickets(),
             "ticket-edit" => self.ticket_edit(rest),
             "context" => self.give_context(rest),
@@ -4350,6 +4458,7 @@ pub(crate) mod handled {
     pub(crate) const INBOX: &[&str] = App::HANDLED_INBOX;
     pub(crate) const PULLS: &[&str] = App::HANDLED_PULLS;
     pub(crate) const BACKLOG: &[&str] = App::HANDLED_BACKLOG;
+    pub(crate) const ECONOMY: &[&str] = App::HANDLED_ECONOMY;
     pub(crate) const TICKETS: &[&str] = App::HANDLED_TICKETS;
     pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
     pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
@@ -6496,6 +6605,79 @@ mod jira_tests {
 
     fn toast(app: &App) -> String {
         app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    fn economy_json() -> Economy {
+        serde_json::from_value(serde_json::json!({
+            "envelopes": {}, "guard": [{ "action": "gate", "calls": 3, "at": "2026-11-01T00:00:00Z", "runId": "r", "pack": "build" }],
+            "cost": { "exec": 1, "overhead": 1, "overheadShare": 0.5, "overheadUnpriced": 0 },
+            "facts": [{ "id": "f1", "state": "active", "text": "CI=1" }, { "id": "f2", "state": "promoted", "text": "kept" }],
+            "tools": { "build": { "mask": ["WebSearch"], "proposal": [{ "unit": "NotebookEdit", "unusedRuns": 8, "cards": 5 }] } }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_economy_does_not_open_without_a_card_that_has_a_repository() {
+        let mut app = app_with(&[]);
+        press(&mut app, KeyCode::Char('$'));
+        assert!(app.economy.is_none());
+        assert_eq!(toast(&app), "select a card with a repository");
+        let mut card = task("t1", None);
+        card.repo_path = None;
+        let mut app = app_with(&[card]);
+        app.toast = None;
+        app.run_command("economy");
+        assert!(app.economy.is_none());
+        assert_eq!(toast(&app), "select a card with a repository");
+    }
+
+    #[test]
+    fn the_economy_stays_closed_when_the_machine_cannot_answer() {
+        let mut card = task("t1", None);
+        card.repo_path = Some("/repo".into());
+        let mut app = app_with(&[card]);
+        app.machine = Machine::at("http://127.0.0.1:9");
+        press(&mut app, KeyCode::Char('$'));
+        assert!(app.economy.is_none(), "{}", toast(&app));
+        assert!(app.toast.as_ref().is_some_and(|t| t.error));
+    }
+
+    #[test]
+    fn in_the_economy_the_cursor_stays_in_bounds_and_a_key_off_for_the_row_says_why() {
+        let mut app = app_with(&[]);
+        app.economy_data = economy_json();
+        app.economy = Some(EconomyState { repo: "/repo".into(), cursor: 0 });
+        assert_eq!(keys::active_scope(&app), keys::Scope::Economy);
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        assert_eq!(app.economy.as_ref().unwrap().cursor, 4, "five rows, the last is the loop guard's");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.economy.as_ref().unwrap().cursor, 3);
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "only a candidate or active fact can be dropped");
+        app.economy.as_mut().unwrap().cursor = 0;
+        press(&mut app, KeyCode::Char('a'));
+        assert_eq!(toast(&app), "only a proposed mask can be approved");
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(toast(&app), "only a masked or proposed tool can be restored");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.economy.is_none());
+    }
+
+    #[test]
+    fn the_economy_keys_are_off_with_a_reason_except_on_their_own_rows() {
+        let mut app = app_with(&[]);
+        app.economy_data = economy_json();
+        app.economy = Some(EconomyState { repo: "/repo".into(), cursor: 0 });
+        let avail = |app: &App, key: &str| keys::BINDINGS.iter().find(|b| b.scope == keys::Scope::Economy && b.keys == key).map(|b| (b.when)(app)).unwrap();
+        assert_eq!(avail(&app, "d"), keys::Avail::On);
+        assert!(matches!(avail(&app, "a"), keys::Avail::Off(_)) && matches!(avail(&app, "r"), keys::Avail::Off(_)));
+        app.economy.as_mut().unwrap().cursor = 3;
+        assert_eq!(avail(&app, "a"), keys::Avail::On);
+        assert_eq!(avail(&app, "r"), keys::Avail::On);
+        assert!(matches!(avail(&app, "d"), keys::Avail::Off(_)));
     }
 
     fn task(id: &str, key: Option<&str>) -> Task {

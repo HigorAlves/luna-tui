@@ -148,6 +148,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `D` | Digest: what changed since last time |
 | `P` | Pulls: every open PR involving you |
 | `B` | Backlog: candidates, not tickets yet |
+| `$` | Economy: facts, tool mask, guard, cost |
 | `K` | Tickets: held, assessed, waiting on you |
 | `S` | Slack: mentions, DMs and watches |
 
@@ -198,6 +199,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `:digest` | open the Digest |
 | `:prs` | open Pulls |
 | `:backlog` | open the Backlog |
+| `:economy` | open the Economy |
 | `:tickets` | open the Tickets view |
 | `:ticket-edit <text>` | post your text, not the draft's |
 | `:dedup duplicate <n> \| related <ns> \| neither` | answer the duplicate question |
@@ -437,6 +439,36 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 | Key | Does |
 |---|---|
 | `R` | fetch the backlog again |
+| `?` | keys |
+
+<!-- keys:end -->
+
+## Economy
+
+`$` (or `:economy`) opens the Economy of the repository of the card under the cursor: what the machine learned about its token spend. The list on the left holds the repository's facts (active first, then candidates, promoted, retired and dropped), the tool mask each pack runs with (applied units are marked `masked`, proposals `proposed` with how many runs and cards never used the tool) and the newest twenty loop-guard events. The row's detail sits on the right, with the cost in effective tokens (execution, overhead and the overhead's share) and each pack's envelope, or how many samples it still needs. `d` drops a candidate or active fact, `a` approves the pack's proposed mask, `r` restores a masked or proposed tool, and `I` imports the repository's past runs. A machine running with the economy off answers 404 and the board says so. The board flattens text from outside before it draws it.
+
+<!-- keys:start economy -->
+**Row**
+
+| Key | Does |
+|---|---|
+| `d` | drop: the fact under the cursor |
+| `a` | approve: the pack's proposed tool mask |
+| `r` | restore: a masked or proposed tool |
+
+**Move**
+
+| Key | Does |
+|---|---|
+| `j / k` | previous / next row |
+| `esc / q` | close |
+
+**App**
+
+| Key | Does |
+|---|---|
+| `R` | fetch the economy again |
+| `I` | import past runs |
 | `?` | keys |
 
 <!-- keys:end -->

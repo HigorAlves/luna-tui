@@ -149,6 +149,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
+    if let Some(state) = app.economy.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+        render_economy(frame, body, app, state);
+        frame.render_widget(footer_line(app), footer);
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
+        }
+        return;
+    }
     if let Some(state) = app.backlog.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_backlog(frame, body, app, state);
         frame.render_widget(footer_line(app), footer);
@@ -432,6 +440,9 @@ fn header_line(app: &App) -> Line<'static> {
     if app.backlog.is_some() {
         spans.push(Span::from("  [backlog]").fg(c(BLUE)).bold());
     }
+    if app.economy.is_some() {
+        spans.push(Span::from("  [economy]").fg(c(BLUE)).bold());
+    }
     if app.tickets.is_some() {
         spans.push(Span::from("  [tickets]").fg(c(BLUE)).bold());
     }
@@ -555,6 +566,7 @@ fn view_footer(app: &App) -> Line<'static> {
         Scope::Inbox => hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]),
         Scope::Pulls => hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]),
         Scope::Backlog => hint(&[("j/k", "move"), ("p", "promote"), ("b", "bump"), ("d", "decline"), ("R", "refetch"), ("esc", "close")]),
+        Scope::Economy => hint(&[("j/k", "move"), ("d", "drop fact"), ("a", "approve mask"), ("r", "restore"), ("I", "import"), ("R", "refetch"), ("esc", "close")]),
         Scope::Tickets => hint(&[("j/k", "move"), ("a", "approve"), ("e", "edit"), ("x", "ignore"), ("c", "card"), ("s", "backlog"), ("R", "refetch"), ("esc", "close")]),
         Scope::Watches => hint(&[("j/k", "move"), ("n", "add"), ("e", "floor"), ("d", "delete"), ("space", "on/off"), ("esc", "close")]),
         Scope::Slack => hint(&[
@@ -992,7 +1004,11 @@ pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     let markdown = value["markdown"].as_str().unwrap_or("");
     let recalibration = value["recalibration"].as_array().map_or(0, Vec::len);
     let updates = value["promptUpdates"].as_array().map_or(0, Vec::len);
-    if markdown.trim().is_empty() && recalibration == 0 && updates == 0 {
+    let promotions: Vec<String> = value["factPromotions"]
+        .as_array()
+        .map(|a| a.iter().map(|p| format!("promote to {}: {}", crate::detail::plain(p["section"].as_str().unwrap_or("")).replace('\n', " "), crate::detail::plain(p["text"].as_str().unwrap_or("")).replace('\n', " "))).collect())
+        .unwrap_or_default();
+    if markdown.trim().is_empty() && recalibration == 0 && updates == 0 && promotions.is_empty() {
         return Vec::new();
     }
     const MAX: usize = 12;
@@ -1009,6 +1025,7 @@ pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     if recalibration > 0 || updates > 0 {
         lines.push(format!("recalibration: {recalibration} · prompt updates: {updates}"));
     }
+    lines.extend(promotions.iter().map(|l| l.chars().take(width).collect::<String>()));
     lines.extend(text.iter().take(MAX).map(|l| l.chars().take(width).collect::<String>()));
     if text.len() > MAX {
         lines.push(format!("… +{} more", text.len() - MAX));
@@ -1306,6 +1323,49 @@ fn render_backlog(frame: &mut Frame, area: Rect, app: &App, state: &crate::backl
         }
         None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
     };
+    frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
+}
+
+/// The Economy view: facts, tools and the loop guard as one list under headings; the row's detail, the cost and the envelopes beside it.
+fn render_economy(frame: &mut Frame, area: Rect, app: &App, state: &crate::economy::EconomyState) {
+    let data = &app.economy_data;
+    let rows = data.rows();
+    let selected = state.cursor.min(rows.len().saturating_sub(1));
+    let [list_area, detail_area] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let name = state.repo.trim_end_matches('/').rsplit('/').next().unwrap_or_default();
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).title(Line::from(format!(" Economy {} ", crate::detail::plain(name).replace('\n', " "))).bold());
+    let inner = block.inner(list_area);
+    let width = inner.width.saturating_sub(2) as usize;
+    // One display line per row, a heading line where the section changes; the cursor's line decides what scrolls into view.
+    let mut display: Vec<Line> = Vec::new();
+    let mut at = 0;
+    let mut section = "";
+    for (i, row) in rows.iter().enumerate() {
+        if row.section != section {
+            section = row.section;
+            display.push(Line::from(Span::from(section).fg(c(BLUE)).bold()));
+        }
+        if i == selected {
+            at = display.len();
+        }
+        let text = truncate(&row.text, width);
+        display.push(if i == selected { Line::from(Span::from(format!("▸ {text}")).fg(c(BASE)).bg(c(ACCENT)).bold()) } else { Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0))) });
+    }
+    if display.is_empty() {
+        display.push(Line::from(Span::from("  nothing learned yet").fg(c(SUBTEXT0))));
+    }
+    let visible = (inner.height as usize).max(1);
+    let start = at.saturating_sub(visible / 2).min(display.len().saturating_sub(visible));
+    let shown: Vec<Line> = display.into_iter().skip(start).take(visible).collect();
+    frame.render_widget(Paragraph::new(shown).block(block), list_area);
+    let side = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(MUTED))).padding(Padding::horizontal(1)).title(Line::from(" Detail ").bold());
+    let mut lines: Vec<Line> = match rows.get(selected) {
+        Some(row) => data.detail_lines(row).into_iter().enumerate().map(|(i, l)| if i == 0 { Line::from(Span::from(l).bold()) } else { Line::from(Span::from(l).fg(c(SUBTEXT0))) }).collect(),
+        None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+    };
+    lines.push(Line::default());
+    lines.push(Line::from(Span::from("Cost").fg(c(BLUE)).bold()));
+    lines.extend(data.cost_lines().into_iter().map(|l| Line::from(Span::from(l).fg(c(SUBTEXT0)))));
     frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
 }
 
@@ -3364,6 +3424,13 @@ mod tests {
         assert_eq!(lines[13], "… +3 more");
         assert!(rules_lines(&Value::Null, 20).is_empty());
         assert!(rules_lines(&serde_json::json!({"markdown": "  \n"}), 20).is_empty());
+    }
+
+    #[test]
+    fn rules_lines_list_the_fact_promotions_as_plain_text_even_with_nothing_else() {
+        let v: Value = serde_json::json!({"factPromotions": [{"id": "f1", "text": "CI=1\u{1b}[2J\nx", "section": "Commands"}, {"id": "f2", "text": "pnpm test", "section": "Tests"}]});
+        let lines = rules_lines(&v, 60);
+        assert_eq!(lines, vec!["0 incident(s) · 0 pattern(s)".to_string(), "promote to Commands: CI=1 [2J x".to_string(), "promote to Tests: pnpm test".to_string()]);
     }
 
     #[test]

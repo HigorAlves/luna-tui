@@ -11,6 +11,7 @@ mod tickets;
 mod client;
 mod detail;
 mod digest;
+mod economy;
 mod discover;
 mod herdr;
 mod inbox;
