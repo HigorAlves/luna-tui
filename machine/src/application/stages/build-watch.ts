@@ -2,8 +2,8 @@
 // cannot push and the machine reads the ledger only after the run, so a slice that turned
 // committed is handed to `onCommitted` as it lands.
 import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, PACKS, Slice, confidenceOf } from "@hardness/contracts";
-import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { constants, opendirSync } from "node:fs";
+import { lstat, mkdir, open, opendir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 
 import { type TruthSink, redCheckTruth, scopeFactsTruth } from "../decision-truth.ts";
@@ -72,12 +72,12 @@ export interface BuildWatchOptions {
   onScopeRequest?: (request: ScopeRequest) => Promise<void>;
   /** Called once per `checks/card-search-request.json` the triage agent writes (a rewritten request is a new one). */
   onCardSearch?: (query: string) => Promise<void>;
-  /** Called once per `checks/loop-request-<n>.json` the loop guard writes, in order; its verdict is written as `loop-answer-<n>.json`. Not awaited by the watch: a judge takes seconds, and a red slice or a commit does not wait for it. */
+  /** Called once per `checks/loop-request-<nonce>-<n>.json` the loop guard writes, in order of first sight and then `n`; its verdict is written as `loop-answer-<nonce>-<n>.json`. A request already there when the watch starts belongs to an earlier container and is never answered. Not awaited by the watch: a judge takes seconds, and a red slice or a commit does not wait for it. */
   onLoopRequest?: (request: LoopRequest) => Promise<LoopVerdict>;
   log?: (line: string) => void;
 }
 
-/** What the loop guard's question leaves for the machine: its number is the file's, never the content's. */
+/** What the loop guard's question leaves for the machine: its number is the file's, and the body must say the same. */
 export interface LoopRequest {
   n: number;
   digest: string;
@@ -112,6 +112,60 @@ export const MAX_SCOPE_REQUESTS = 3;
 export const MAX_CARD_SEARCHES = 5;
 /** Loop requests judged per run: the container writes the files, and each one is a metered decision. */
 export const MAX_LOOP_REQUESTS = 20;
+/** The most names of `checks/` one look reads. */
+const MAX_NAMES = 200;
+/** Looks at an unreadable request file before it is given up. */
+const UNREADABLE_LOOKS = 5;
+const LOOP_REQUEST_NAME = /^loop-request-([0-9a-f]{8})-(\d{1,4})\.json$/;
+
+/** The loop request files in a list of names, with the nonce and number their names carry; the order of `n`. */
+function loopNames(names: readonly string[]): Array<{ name: string; nonce: string; n: number }> {
+  return names
+    .flatMap((name) => {
+      const found = LOOP_REQUEST_NAME.exec(name);
+      return found ? [{ name, nonce: found[1]!, n: Number(found[2]) }] : [];
+    })
+    .sort((a, b) => a.n - b.n || (a.nonce < b.nonce ? -1 : a.nonce > b.nonce ? 1 : 0));
+}
+
+/** At most `MAX_NAMES` names of the run's `checks/` folder; none when it is missing or not a real directory. */
+async function checkNames(outDir: string): Promise<string[]> {
+  try {
+    const dir = join(outDir, "checks");
+    if (!(await lstat(dir)).isDirectory()) return [];
+    const names: string[] = [];
+    const handle = await opendir(dir);
+    try {
+      for await (const entry of handle) {
+        names.push(entry.name);
+        if (names.length >= MAX_NAMES) break;
+      }
+    } finally {
+      await handle.close().catch(() => {});
+    }
+    return names;
+  } catch {
+    return [];
+  }
+}
+
+/** The same, once and at once, for the watch's start. */
+function checkNamesNow(outDir: string): string[] {
+  try {
+    const dir = join(outDir, "checks");
+    const handle = opendirSync(dir);
+    const names: string[] = [];
+    try {
+      for (let entry = handle.readSync(); entry && names.length < MAX_NAMES; entry = handle.readSync()) names.push(entry.name);
+    } finally {
+      handle.closeSync();
+    }
+    return names;
+  } catch {
+    return [];
+  }
+}
+
 /** The longest digest a loop request may carry: what `loop_judge` accepts. */
 const MAX_LOOP_DIGEST = 6000;
 /** The tail of a red note a decision sees: the failing lines are at the end, and a note is agent-written. */
@@ -125,7 +179,11 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
   let lastRequest = "";
   let lastSearch = "";
   let cardSearches = 0;
-  let loopsSeen = 0;
+  // The requests of an earlier container are in the folder when the watch starts: they are handled already, and never answered.
+  const loopSeen = new Set<string>(options.onLoopRequest ? loopNames(checkNamesNow(options.outDir)).map((r) => r.name) : []);
+  const loopQueue: Array<{ name: string; nonce: string; n: number }> = [];
+  let loopsHandled = 0;
+  let unreadable = 0;
   let loopPending = false;
   let loopCapLogged = false;
   let stopped = false;
@@ -209,37 +267,58 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
     }
   };
 
-  /** The loop guard's questions, in order, one judge at a time: a request that arrives while one is pending waits for a later tick. Each is judged off the tick; once the watch stops its answer is dropped, for the run's folder may be gone. At most `MAX_LOOP_REQUESTS` files are read, and a file that is not JSON or holds an over-long digest is skipped and counts. */
+  /** The loop guard's questions, one judge at a time, in the order they were first seen and then by `n`: a request that arrives while one is pending waits for a later tick. Each is judged off the tick; once the watch stops its answer is dropped, for the run's folder may be gone. At most `MAX_LOOP_REQUESTS` files are handled per watch, and a file that is not JSON, names another nonce or number than its own, or holds an over-long digest is skipped and counts. */
   const loops = async (): Promise<void> => {
     if (!options.onLoopRequest) return;
-    while (!loopPending) {
-      if (loopsSeen >= MAX_LOOP_REQUESTS) {
+    for (const request of loopNames(await checkNames(options.outDir))) {
+      if (loopSeen.has(request.name)) continue;
+      loopSeen.add(request.name);
+      loopQueue.push(request);
+    }
+    while (!loopPending && loopQueue.length > 0) {
+      if (loopsHandled >= MAX_LOOP_REQUESTS) {
         if (!loopCapLogged) options.log?.(`build watch: loop request limit (${MAX_LOOP_REQUESTS}) reached; later requests are ignored`);
         loopCapLogged = true;
+        loopQueue.length = 0;
         return;
       }
-      const n = loopsSeen + 1;
-      const text = await readMailbox(options.outDir, `loop-request-${n}.json`);
-      if (text === null) return;
-      loopsSeen = n;
+      const { name, nonce, n } = loopQueue[0]!;
+      const text = await readMailbox(options.outDir, name);
+      // Not readable yet (half-written, or gone): the next tick looks again and it keeps its place. One still unreadable after a few looks (a file over the cap, a link) is skipped and counts.
+      if (text === null) {
+        unreadable += 1;
+        if (unreadable < UNREADABLE_LOOKS) return;
+        options.log?.(`build watch: loop request ${nonce}-${n} cannot be read; skipped`);
+      }
+      unreadable = 0;
+      loopQueue.shift();
+      if (text === null) {
+        loopsHandled += 1;
+        continue;
+      }
+      loopsHandled += 1;
       let digest = "";
       try {
-        const parsed = JSON.parse(text) as { digest?: unknown } | null;
-        if (typeof parsed?.digest === "string") digest = parsed.digest;
+        const parsed = JSON.parse(text) as { nonce?: unknown; n?: unknown; digest?: unknown } | null;
+        if (parsed?.nonce !== nonce || parsed?.n !== n) {
+          options.log?.(`build watch: loop request ${nonce}-${n} names another nonce or number than its file; skipped`);
+          continue;
+        }
+        if (typeof parsed.digest === "string") digest = parsed.digest;
       } catch {
-        options.log?.(`build watch: loop request ${n} is not JSON; skipped`);
+        options.log?.(`build watch: loop request ${nonce}-${n} is not JSON; skipped`);
         continue;
       }
       if (digest.length > MAX_LOOP_DIGEST) {
-        options.log?.(`build watch: loop request ${n} has a digest over ${MAX_LOOP_DIGEST} characters; skipped`);
+        options.log?.(`build watch: loop request ${nonce}-${n} has a digest over ${MAX_LOOP_DIGEST} characters; skipped`);
         continue;
       }
       loopPending = true;
       void options.onLoopRequest({ n, digest }).then(
         async (verdict) => {
-          if (!stopped) await writeMailbox(options.outDir, `loop-answer-${n}.json`, JSON.stringify(verdict));
+          if (!stopped) await writeMailbox(options.outDir, `loop-answer-${nonce}-${n}.json`, JSON.stringify(verdict));
         },
-        (error: unknown) => options.log?.(`build watch: loop request ${n}: ${error instanceof Error ? error.message : String(error)}`),
+        (error: unknown) => options.log?.(`build watch: loop request ${nonce}-${n}: ${error instanceof Error ? error.message : String(error)}`),
       ).catch(() => {}).finally(() => {
         loopPending = false;
       });

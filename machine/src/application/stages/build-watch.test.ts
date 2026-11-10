@@ -294,46 +294,95 @@ describe("the board search mailbox", () => {
 });
 
 describe("the loop judge's mailbox", () => {
-  const request = (out: string, n: number, body: unknown) => {
+  const NONCE = "a1b2c3d4";
+  const file = (nonce: string, n: number) => `loop-request-${nonce}-${n}.json`;
+  const answer = (out: string, n: number, nonce = NONCE) => join(out, "checks", `loop-answer-${nonce}-${n}.json`);
+  const request = (out: string, n: number, body: unknown, nonce = NONCE) => {
     mkdirSync(join(out, "checks"), { recursive: true });
-    writeFileSync(join(out, "checks", `loop-request-${n}.json`), JSON.stringify(body));
+    writeFileSync(join(out, "checks", file(nonce, n)), JSON.stringify(typeof body === "object" && body !== null && !("nonce" in body) && !("noNonce" in body) ? { nonce, n, ...body } : body));
   };
+  const calm = { stuck: false, confidence: 0, cause: "productive" };
 
-  it("hands each loop-request-<n>.json to the handler in order and writes its verdict as loop-answer-<n>.json", async () => {
+  it("hands each loop-request-<nonce>-<n>.json to the handler in order and writes its verdict as loop-answer-<nonce>-<n>.json", async () => {
     const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
     const seen: unknown[] = [];
     const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), { stuck: r.n === 1, confidence: 0.9, cause: "repeating_failure" }) });
-    request(out, 1, { n: 1, digest: "turns=30" });
-    expect(await waitFor(join(out, "checks", "loop-answer-1.json"))).toEqual({ stuck: true, confidence: 0.9, cause: "repeating_failure" });
-    request(out, 2, { n: 2, digest: "turns=40" });
-    expect(await waitFor(join(out, "checks", "loop-answer-2.json"))).toEqual({ stuck: false, confidence: 0.9, cause: "repeating_failure" });
+    request(out, 1, { digest: "turns=30" });
+    expect(await waitFor(answer(out, 1))).toEqual({ stuck: true, confidence: 0.9, cause: "repeating_failure" });
+    request(out, 2, { digest: "turns=40" });
+    expect(await waitFor(answer(out, 2))).toEqual({ stuck: false, confidence: 0.9, cause: "repeating_failure" });
     await watch.stop();
     expect(seen).toEqual([{ n: 1, digest: "turns=30" }, { n: 2, digest: "turns=40" }]);
   });
 
-  it("numbers a request by its file, and gives a request with no text digest an empty one", async () => {
+  it("answers under the nonce of the request, and tells two nonces apart", async () => {
     const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
-    const seen: unknown[] = [];
-    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), { stuck: false, confidence: 0, cause: "productive" }) });
-    request(out, 1, { n: 9, digest: 5 });
-    await waitFor(join(out, "checks", "loop-answer-1.json"));
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async () => calm });
+    request(out, 1, { digest: "a" }, "00000001");
+    request(out, 1, { digest: "b" }, "00000002");
+    await waitFor(answer(out, 1, "00000001"));
+    await waitFor(answer(out, 1, "00000002"));
     await watch.stop();
-    expect(seen).toEqual([{ n: 1, digest: "" }]);
+    expect(existsSync(answer(out, 1))).toBe(false);
   });
 
-  it("asks the judge about one request at a time, and takes the next when the answer is in", async () => {
+  it("leaves the requests an earlier container wrote unanswered, and answers the new ones", async () => {
+    const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    request(out, 1, { digest: "old" }, "deadbeef");
+    request(out, 2, { digest: "old" }, "deadbeef");
+    const seen: unknown[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), calm) });
+    request(out, 1, { digest: "new" }, "cafef00d");
+    await waitFor(answer(out, 1, "cafef00d"));
+    await settle(30);
+    await watch.stop();
+    expect(seen).toEqual([{ n: 1, digest: "new" }]);
+    expect(existsSync(answer(out, 1, "deadbeef"))).toBe(false);
+    expect(existsSync(answer(out, 2, "deadbeef"))).toBe(false);
+  });
+
+  it("skips a request whose body names another nonce or number than its file, and counts it", async () => {
+    const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    const seen: unknown[] = [];
+    const logs: string[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, log: (m) => logs.push(m), onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), calm) });
+    request(out, 1, { nonce: "ffffffff", n: 1, digest: "x" });
+    request(out, 2, { nonce: NONCE, n: 9, digest: "x" });
+    request(out, 3, { nonce: NONCE, n: 3, digest: "ok" });
+    await waitFor(answer(out, 3));
+    await watch.stop();
+    expect(seen).toEqual([{ n: 3, digest: "ok" }]);
+    expect(existsSync(answer(out, 1))).toBe(false);
+    expect(existsSync(answer(out, 2))).toBe(false);
+    expect(logs.filter((m) => m.includes("skipped"))).toHaveLength(2);
+  });
+
+  it("ignores files that are not requests of this shape", async () => {
+    const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    mkdirSync(join(out, "checks"), { recursive: true });
+    for (const name of ["loop-request-1.json", "loop-request-ABCDEF12-1.json", "loop-request-a1b2c3d4-12345.json", "loop-request-a1b2c3d4-1.json.tmp", "loop-request-a1b2c3d4-0x.json"]) writeFileSync(join(out, "checks", name), JSON.stringify({ nonce: NONCE, n: 1, digest: "x" }));
+    const seen: unknown[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), calm) });
+    request(out, 1, { digest: "real" });
+    await waitFor(answer(out, 1));
+    await watch.stop();
+    expect(seen).toEqual([{ n: 1, digest: "real" }]);
+  });
+
+  it("asks the judge about one request at a time, in the order of first sight and then n", async () => {
     const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
     const seen: number[] = [];
     let release: () => void = () => {};
     const first = new Promise<void>((resolve) => (release = resolve));
-    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r.n), r.n === 1 && (await first), { stuck: false, confidence: 0, cause: "productive" }) });
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r.n), r.n === 1 && (await first), calm) });
     request(out, 1, { digest: "a" });
-    request(out, 2, { digest: "b" });
+    await settle(30);
     request(out, 3, { digest: "c" });
+    request(out, 2, { digest: "b" });
     await settle(60);
     expect(seen).toEqual([1]);
     release();
-    expect(await waitFor(join(out, "checks", "loop-answer-3.json"))).not.toBeNull();
+    expect(await waitFor(answer(out, 3))).not.toBeNull();
     await watch.stop();
     expect(seen).toEqual([1, 2, 3]);
   });
@@ -342,30 +391,42 @@ describe("the loop judge's mailbox", () => {
     const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
     const seen: number[] = [];
     const logs: string[] = [];
-    const watch = buildWatch({ outDir: out, every: 2, onCommitted: async () => {}, log: (m) => logs.push(m), onLoopRequest: async (r) => (seen.push(r.n), { stuck: false, confidence: 0, cause: "productive" }) });
+    const watch = buildWatch({ outDir: out, every: 2, onCommitted: async () => {}, log: (m) => logs.push(m), onLoopRequest: async (r) => (seen.push(r.n), calm) });
     for (let n = 1; n <= MAX_LOOP_REQUESTS + 5; n++) request(out, n, { digest: "d" });
-    await waitFor(join(out, "checks", `loop-answer-${MAX_LOOP_REQUESTS}.json`));
+    await waitFor(answer(out, MAX_LOOP_REQUESTS));
     await settle(80);
     await watch.stop();
     expect(MAX_LOOP_REQUESTS).toBe(20);
     expect(seen).toHaveLength(MAX_LOOP_REQUESTS);
-    expect(existsSync(join(out, "checks", `loop-answer-${MAX_LOOP_REQUESTS + 1}.json`))).toBe(false);
+    expect(existsSync(answer(out, MAX_LOOP_REQUESTS + 1))).toBe(false);
     expect(logs.filter((m) => m.includes("loop request limit"))).toHaveLength(1);
   });
 
   it("skips a request file that is not JSON or has a digest past the schema's limit, and counts it against the cap", async () => {
     const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    const seen: unknown[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), calm) });
     mkdirSync(join(out, "checks"), { recursive: true });
-    writeFileSync(join(out, "checks", "loop-request-1.json"), "{not json");
+    writeFileSync(join(out, "checks", file(NONCE, 1)), "{not json");
     request(out, 2, { digest: "x".repeat(6001) });
     request(out, 3, { digest: "turns=30" });
-    const seen: unknown[] = [];
-    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), { stuck: false, confidence: 0, cause: "productive" }) });
-    await waitFor(join(out, "checks", "loop-answer-3.json"));
+    await waitFor(answer(out, 3));
     await watch.stop();
     expect(seen).toEqual([{ n: 3, digest: "turns=30" }]);
-    expect(existsSync(join(out, "checks", "loop-answer-1.json"))).toBe(false);
-    expect(existsSync(join(out, "checks", "loop-answer-2.json"))).toBe(false);
+    expect(existsSync(answer(out, 1))).toBe(false);
+    expect(existsSync(answer(out, 2))).toBe(false);
+  });
+
+  it("gives up on a request file that stays unreadable, and goes on to the next", async () => {
+    const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    const seen: unknown[] = [];
+    const watch = buildWatch({ outDir: out, every: 3, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), calm) });
+    mkdirSync(join(out, "checks"), { recursive: true });
+    writeFileSync(join(out, "checks", file(NONCE, 1)), "x".repeat(MAX_MAILBOX_BYTES + 1));
+    request(out, 2, { digest: "next" });
+    await waitFor(answer(out, 2));
+    await watch.stop();
+    expect(seen).toEqual([{ n: 2, digest: "next" }]);
   });
 
   it("does not wait on a slow judge: a red slice is still answered, and nothing is written after the watch stops", async () => {
@@ -375,12 +436,12 @@ describe("the loop judge's mailbox", () => {
     const c = checks(out, async () => ({ right_reason: yes(), not_tautological: yes() }));
     writeFileSync(join(out, "ledger.json"), redLedger("AssertionError: x"));
     const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onRed: c.onRed, onLoopRequest: async () => (await slow, { stuck: true, confidence: 1, cause: "x" }) });
-    request(out, 1, { n: 1, digest: "d" });
+    request(out, 1, { digest: "d" });
     expect(await waitFor(join(out, "checks", "red-1.json"))).not.toBeNull();
     await watch.stop();
     release();
     await settle(30);
-    expect(existsSync(join(out, "checks", "loop-answer-1.json"))).toBe(false);
+    expect(existsSync(answer(out, 1))).toBe(false);
   });
 });
 
