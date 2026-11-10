@@ -110,6 +110,10 @@ export const MAX_REDS_PER_SLICE = 2;
 export const MAX_SCOPE_REQUESTS = 3;
 /** Board searches answered per run: a triage agent that keeps asking is not helped by more. */
 export const MAX_CARD_SEARCHES = 5;
+/** Loop requests judged per run: the container writes the files, and each one is a metered decision. */
+export const MAX_LOOP_REQUESTS = 20;
+/** The longest digest a loop request may carry: what `loop_judge` accepts. */
+const MAX_LOOP_DIGEST = 6000;
 /** The tail of a red note a decision sees: the failing lines are at the end, and a note is agent-written. */
 export const NOTE_TAIL = 4096;
 
@@ -122,6 +126,8 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
   let lastSearch = "";
   let cardSearches = 0;
   let loopsSeen = 0;
+  let loopPending = false;
+  let loopCapLogged = false;
   let stopped = false;
   let tick: Promise<void> = Promise.resolve();
 
@@ -203,27 +209,40 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
     }
   };
 
-  /** The loop guard's questions, in order. Each is judged on its own, off the tick; once the watch stops its answer is dropped, for the run's folder may be gone. */
+  /** The loop guard's questions, in order, one judge at a time: a request that arrives while one is pending waits for a later tick. Each is judged off the tick; once the watch stops its answer is dropped, for the run's folder may be gone. At most `MAX_LOOP_REQUESTS` files are read, and a file that is not JSON or holds an over-long digest is skipped and counts. */
   const loops = async (): Promise<void> => {
     if (!options.onLoopRequest) return;
-    for (;;) {
+    while (!loopPending) {
+      if (loopsSeen >= MAX_LOOP_REQUESTS) {
+        if (!loopCapLogged) options.log?.(`build watch: loop request limit (${MAX_LOOP_REQUESTS}) reached; later requests are ignored`);
+        loopCapLogged = true;
+        return;
+      }
       const n = loopsSeen + 1;
       const text = await readMailbox(options.outDir, `loop-request-${n}.json`);
       if (text === null) return;
       loopsSeen = n;
       let digest = "";
       try {
-        const parsed = JSON.parse(text) as { digest?: unknown };
-        if (typeof parsed.digest === "string") digest = parsed.digest;
+        const parsed = JSON.parse(text) as { digest?: unknown } | null;
+        if (typeof parsed?.digest === "string") digest = parsed.digest;
       } catch {
-        // not JSON: an empty digest, which the judge answers as not stuck
+        options.log?.(`build watch: loop request ${n} is not JSON; skipped`);
+        continue;
       }
+      if (digest.length > MAX_LOOP_DIGEST) {
+        options.log?.(`build watch: loop request ${n} has a digest over ${MAX_LOOP_DIGEST} characters; skipped`);
+        continue;
+      }
+      loopPending = true;
       void options.onLoopRequest({ n, digest }).then(
         async (verdict) => {
           if (!stopped) await writeMailbox(options.outDir, `loop-answer-${n}.json`, JSON.stringify(verdict));
         },
         (error: unknown) => options.log?.(`build watch: loop request ${n}: ${error instanceof Error ? error.message : String(error)}`),
-      ).catch(() => {});
+      ).catch(() => {}).finally(() => {
+        loopPending = false;
+      });
     }
   };
 

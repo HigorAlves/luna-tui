@@ -492,7 +492,7 @@ The schema is strict. The schema refuses a field that can carry text. The output
 
 A pack with no shell commands has no judge. Only the backstop can act on it.
 
-**The judge.** `loop_judge` is a decision pack. Its questions are `stuck` (yes or no) and `cause` (`repeating_failure`, `wrong_approach`, `environment` or `productive`). It runs through the `/out/checks` mailbox, as `red_check` and `scope_check` do. The guard writes `loop-request-<n>.json` with a digest of the last 24 actions. Each action holds the tool, the command cut to 90 characters, file base names and the error class. The machine's build watch answers with `loop-answer-<n>.json`. The run does not wait. The guard reads the verdict on a later call.
+**The judge.** `loop_judge` is a decision pack. Its questions are `stuck` (yes or no) and `cause` (`repeating_failure`, `wrong_approach`, `environment` or `productive`). It runs through the `/out/checks` mailbox, as `red_check` and `scope_check` do. The guard writes `loop-request-<n>.json` with a digest of the last 24 actions. Each action holds the tool, the command cut to 90 characters, file base names and the error class. The machine's build watch answers with `loop-answer-<n>.json`. The run does not wait. The guard reads the verdict on a later call. The watch reads at most 20 request files a run and judges one at a time. It skips a file that is not JSON or holds a digest over 6000 characters, and the skipped file counts.
 
 A verdict counts as stuck when `stuck` is yes and its confidence passes two bars. The machine applies the pack's bar (`stuck` at 0.7, or the repository's `policy.decisions.loop_judge`). The guard applies `economy.guard.judge_confidence` (0.7). A verdict that does not pass both bars is a productive one.
 

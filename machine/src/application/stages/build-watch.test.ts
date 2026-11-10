@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { CheckContext } from "@hardness/contracts";
 
 import { type Learned, tagged } from "../decision-truth.ts";
-import { type Decide, MAX_CARD_SEARCHES, MAX_MAILBOX_BYTES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, loopAnswers, readMailbox, writeMailbox } from "./build-watch.ts";
+import { type Decide, MAX_CARD_SEARCHES, MAX_LOOP_REQUESTS, MAX_MAILBOX_BYTES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, loopAnswers, readMailbox, writeMailbox } from "./build-watch.ts";
 
 const ledger = (slices: Array<{ id: number; status: string; commit?: string | null }>) =>
   JSON.stringify({ schema: 1, slices: slices.map((s) => ({ id: s.id, title: `slice ${s.id}`, status: s.status, commit: s.commit ?? null })) });
@@ -319,6 +319,53 @@ describe("the loop judge's mailbox", () => {
     await waitFor(join(out, "checks", "loop-answer-1.json"));
     await watch.stop();
     expect(seen).toEqual([{ n: 1, digest: "" }]);
+  });
+
+  it("asks the judge about one request at a time, and takes the next when the answer is in", async () => {
+    const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    const seen: number[] = [];
+    let release: () => void = () => {};
+    const first = new Promise<void>((resolve) => (release = resolve));
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r.n), r.n === 1 && (await first), { stuck: false, confidence: 0, cause: "productive" }) });
+    request(out, 1, { digest: "a" });
+    request(out, 2, { digest: "b" });
+    request(out, 3, { digest: "c" });
+    await settle(60);
+    expect(seen).toEqual([1]);
+    release();
+    expect(await waitFor(join(out, "checks", "loop-answer-3.json"))).not.toBeNull();
+    await watch.stop();
+    expect(seen).toEqual([1, 2, 3]);
+  });
+
+  it("judges at most MAX_LOOP_REQUESTS requests per run, and says once that it ignores the rest", async () => {
+    const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    const seen: number[] = [];
+    const logs: string[] = [];
+    const watch = buildWatch({ outDir: out, every: 2, onCommitted: async () => {}, log: (m) => logs.push(m), onLoopRequest: async (r) => (seen.push(r.n), { stuck: false, confidence: 0, cause: "productive" }) });
+    for (let n = 1; n <= MAX_LOOP_REQUESTS + 5; n++) request(out, n, { digest: "d" });
+    await waitFor(join(out, "checks", `loop-answer-${MAX_LOOP_REQUESTS}.json`));
+    await settle(80);
+    await watch.stop();
+    expect(MAX_LOOP_REQUESTS).toBe(20);
+    expect(seen).toHaveLength(MAX_LOOP_REQUESTS);
+    expect(existsSync(join(out, "checks", `loop-answer-${MAX_LOOP_REQUESTS + 1}.json`))).toBe(false);
+    expect(logs.filter((m) => m.includes("loop request limit"))).toHaveLength(1);
+  });
+
+  it("skips a request file that is not JSON or has a digest past the schema's limit, and counts it against the cap", async () => {
+    const out = mkdtempSync(join(tmpdir(), "loop-watch-"));
+    mkdirSync(join(out, "checks"), { recursive: true });
+    writeFileSync(join(out, "checks", "loop-request-1.json"), "{not json");
+    request(out, 2, { digest: "x".repeat(6001) });
+    request(out, 3, { digest: "turns=30" });
+    const seen: unknown[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onLoopRequest: async (r) => (seen.push(r), { stuck: false, confidence: 0, cause: "productive" }) });
+    await waitFor(join(out, "checks", "loop-answer-3.json"));
+    await watch.stop();
+    expect(seen).toEqual([{ n: 3, digest: "turns=30" }]);
+    expect(existsSync(join(out, "checks", "loop-answer-1.json"))).toBe(false);
+    expect(existsSync(join(out, "checks", "loop-answer-2.json"))).toBe(false);
   });
 
   it("does not wait on a slow judge: a red slice is still answered, and nothing is written after the watch stops", async () => {
