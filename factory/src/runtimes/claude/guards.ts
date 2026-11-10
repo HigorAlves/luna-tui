@@ -78,15 +78,25 @@ export function preToolUseGuards(ctx: GuardContext, onDecision?: OnDecision): Ho
 /** Hears what the economy session made of a finished call: the SDK's call id, its observation, the step. */
 export type OnSettled = (id: string, observation: Observation | undefined, step: GuardStep) => void;
 
-/** A tool's response as text for the observer. A command gives its streams, a read or an MCP tool a
- *  structure; the text is read and dropped, never emitted. */
+const RESULT_CAP = 20000;
+/** The keys of a response object that hold its text, in the order upstream reads them. */
+const TEXT_KEYS = ["stdout", "stderr", "output", "aggregated_output", "formatted_output", "content", "result", "error", "message", "text_result_for_llm"];
+
+/** A tool's response as text for the observer, as upstream's host reads it: a string as is; a list by its items' `text`; an Edit or
+ *  Write response (a `structuredPatch`, or the file tools' `create`/`update` shape) as nothing, since its fields echo what was written;
+ *  any other object by its string values under the text keys. The text is read and dropped, never emitted. */
 function outputText(response: unknown): string {
+  return responseText(response).slice(0, RESULT_CAP);
+}
+
+function responseText(response: unknown): string {
   if (typeof response === "string") return response;
-  if (typeof response === "object" && response !== null && ("stdout" in response || "stderr" in response)) {
-    const { stdout, stderr } = response as { stdout?: unknown; stderr?: unknown };
-    return [stdout, stderr].filter((part): part is string => typeof part === "string" && part !== "").join("\n");
-  }
-  return JSON.stringify(response) ?? "";
+  if (Array.isArray(response)) return response.flatMap((item) => (typeof item === "object" && item !== null && typeof (item as { text?: unknown }).text === "string" ? [(item as { text: string }).text] : [])).join("\n");
+  if (typeof response !== "object" || response === null) return "";
+  const fields = response as Record<string, unknown>;
+  if ("structuredPatch" in fields) return "";
+  if ((fields.type === "create" || fields.type === "update") && (typeof fields.filePath === "string" || typeof fields.file_path === "string")) return "";
+  return TEXT_KEYS.flatMap((key) => (typeof fields[key] === "string" ? [fields[key] as string] : [])).join("\n");
 }
 
 /** The PostToolUse and PostToolUseFailure matchers of the token economy, for every tool: each

@@ -604,8 +604,28 @@ describe("postToolUseEconomy", () => {
     await post({ stdout: "out", stderr: "err", interrupted: false });
     await post("plain");
     await post({ type: "text", file: { content: "x" } });
-    expect(seen.map((s) => s.output)).toEqual(["out\nerr", "plain", '{"type":"text","file":{"content":"x"}}']);
+    expect(seen.map((s) => s.output)).toEqual(["out\nerr", "plain", ""]);
     expect(seen.every((s) => s.ok)).toBe(true);
+  });
+
+  it("reads the text keys upstream reads, in its order, and a list by its items' text", async () => {
+    const { seen, post } = setup();
+    await post({ content: "c", output: "o", stderr: "e", stdout: "s", count: 3, nested: { stdout: "no" } });
+    await post([{ type: "text", text: "one" }, { type: "text", text: "two" }, { type: "image" }]);
+    expect(seen.map((s) => s.output)).toEqual(["s\ne\no\nc", "one\ntwo"]);
+  });
+
+  it("reads an Edit or Write response as no text at all", async () => {
+    const { seen, post } = setup();
+    await post({ filePath: "/w/a.md", oldString: "a", newString: "command not found", structuredPatch: [{ lines: ["+command not found"] }], userModified: false });
+    await post({ type: "create", filePath: "/w/a.md", content: "bash: pytest: command not found" });
+    expect(seen.map((s) => s.output)).toEqual(["", ""]);
+  });
+
+  it("caps a response at 20000 characters", async () => {
+    const { seen, post } = setup();
+    await post("x".repeat(30000));
+    expect(seen[0]!.output).toHaveLength(20000);
   });
 
   it("reads a failed call's error and reports it as failed", async () => {

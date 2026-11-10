@@ -396,6 +396,53 @@ describe("observe: a test run whose exit status is not the runner's", () => {
   });
 });
 
+describe("observe: a call known to have succeeded has no error class", () => {
+  const tool = (name: string, input: unknown, output: string, ok = true) => observe({ tool: name, input, output, ok }, { work: WORK });
+
+  it("gives a successful Write of a document that mentions a missing command no class", () => {
+    const o = tool("Write", { file_path: "/work/repo/docs/setup.md" }, "bash: pytest: command not found", true);
+    expect(o.errorClass).toBeUndefined();
+    expect(o.failure).toBeUndefined();
+  });
+
+  it("gives a successful Agent result that mentions a missing module no class", () => {
+    const o = tool("Agent", { prompt: "find it" }, "The log said: ModuleNotFoundError: No module named 'numpy'", true);
+    expect(o.errorClass).toBeUndefined();
+    expect(o.failure).toBeUndefined();
+  });
+
+  it("gives no class to Skill, MCP and WebFetch results that succeeded, whatever they say", () => {
+    for (const name of ["Skill", "mcp__x__y", "WebFetch"]) {
+      const o = tool(name, { url: "https://docs.example.org/" }, "Traceback (most recent call last):\nTypeError: x", true);
+      expect(o.errorClass, name).toBeUndefined();
+      expect(o.failure, name).toBeUndefined();
+    }
+  });
+
+  it("gives a successful git log whose output holds a missing-command line no class", () => {
+    const o = run("git log --oneline -5", "a1b2c3d fix: pytest: command not found in CI", true);
+    expect(o.errorClass).toBeUndefined();
+    expect(o.failure).toBeUndefined();
+  });
+
+  it("still reads a test run whose status a pipe replaced by its failing summary", () => {
+    const o = run("npm test 2>&1 | tail -n 20", "FAIL src/a.test.ts\nAssertionError: expected 1 to be 2\nTests: 1 failed, 3 passed", true);
+    expect(o.failure).toMatch(/^[0-9a-f]{10}$/);
+  });
+
+  it("classifies a command whose exit status does not cover it by its output's markers", () => {
+    expect(run("pytest -q; git diff --stat", "bash: pytest: command not found", true).errorClass).toBeUndefined();
+    expect(run("python3 run.py 2>&1 | tail -n 5","ModuleNotFoundError: No module named x", true).errorClass).toBe("module_missing");
+  });
+
+  it("classifies a tool that failed, a Read among them", () => {
+    const read = tool("Read", { file_path: "a.log" }, "EACCES: permission denied, open 'a.log'", false);
+    expect(read.errorClass).toBe("permission_denied");
+    const agent = tool("Agent", { prompt: "x" }, "ModuleNotFoundError: No module named 'numpy'", false);
+    expect(agent.errorClass).toBe("module_missing");
+  });
+});
+
 describe("observe: unknown tools and bad input", () => {
   it("gives an empty observation for a tool it does not read", () => {
     expect(observe({ tool: "mcp__x__y", input: { a: 1 }, output: "ok", ok: true }, { work: WORK })).toEqual({});

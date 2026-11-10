@@ -389,9 +389,10 @@ export function observe(call: ObservedCall, roots: { work: string }): Observatio
     if (!failed && env && Object.keys(env.sets).length > 0 && ENV_FAILED_RE.test(output)) failed = true;
   }
 
-  // A content tool's text is a file or a search result, not an outcome: it is read only when the tool failed.
-  const readable = kind !== "content" || failed;
-  const hit = readable && output ? errorClassOf(output) : undefined;
+  // A call known to have succeeded has no error class, whatever its text says (a document written, a log read, a result
+  // reported); a shell call whose status does not cover its command was read above and is `failed` by its markers. Upstream's
+  // `failed is not False`, with every tool but the shell taking the tool's own word.
+  const hit = failed && output ? errorClassOf(output) : undefined;
   if (hit) o.errorClass = hit.name;
   if (failed && output) {
     const sig = failureSignature(output, hit?.pattern ?? also);
