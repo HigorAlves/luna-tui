@@ -1,6 +1,6 @@
 // The economy's state per repository, in the machine's own state: `<stateDir>/economy/<repo slug>/` holds `envelope.json` (the tool-call counts of
 // passing runs, per pack), `ledger.jsonl` (one record per run), `guard.jsonl` (what the loop guard did, the newest kept), `facts.json` (the learned
-// facts and what each pack was last told) and `digests.jsonl` (the last eight runs, for the proposer), `calls.json` (the observed calls of those runs, for its detectors) and `proposer.json` (closed cards counted since the start) and `tools.json` (per pack, the unused-tool evidence, the proposal and the mask). Folders are 0700, files
+// facts and what each pack was last told) and `digests.jsonl` (the last eight runs, for the proposer), `calls.json` (the observed calls of those runs, for its detectors) and `imported.json` (the ids of the runs already folded) and `proposer.json` (closed cards counted since the start) and `tools.json` (per pack, the unused-tool evidence, the proposal and the mask). Folders are 0700, files
 // 0600, a JSON file is replaced through tmp + rename, and writes to one file are served one at a time. A file that cannot be read or parsed reads as empty.
 import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -21,6 +21,8 @@ const READ_CAP = 16 * 1024 * 1024;
 /** The run's own events, as the factory wrote them. */
 const EVENTS_CAP = 32 * 1024 * 1024;
 const GUARD_KEEP = 200;
+/** The run ids the folded set keeps: far more than a repository's runs between two imports. */
+const IMPORTED_KEEP = 5000;
 
 const FactSchema = z.object({
   id: z.string(),
@@ -165,7 +167,25 @@ export function fileStore(stateDir: string): EconomyStore {
       await appendFile(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(""), { mode: 0o600 });
     });
 
+  const readImported = async (path: string): Promise<string[]> => {
+    try {
+      const ok = z.array(z.string()).safeParse(JSON.parse(await readText(path)));
+      return ok.success ? ok.data : [];
+    } catch {
+      return [];
+    }
+  };
+
   return {
+    imported: (repoPath) => readImported(join(folder(repoPath), "imported.json")),
+    markImported: (repoPath, ids) => {
+      const path = join(folder(repoPath), "imported.json");
+      return serial(path, async () => {
+        const next = [...new Set([...(await readImported(path)), ...ids])].slice(-IMPORTED_KEEP);
+        await ensure(folder(repoPath));
+        await replace(path, JSON.stringify(next));
+      });
+    },
     envelopes: (repoPath) => readEnvelopes(join(folder(repoPath), "envelope.json")),
     updateEnvelopes: (repoPath, change) => {
       const path = join(folder(repoPath), "envelope.json");

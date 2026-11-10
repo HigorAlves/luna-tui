@@ -244,7 +244,8 @@ export type ToolsStatus = z.infer<typeof ToolsStatus>;
 export const EconomyStatus = z.object({
   envelopes: z.record(z.string(), z.object({ samples: z.number().int(), envelope: z.number().nullable() })),
   guard: z.array(GuardEventRow),
-  cost: z.object({ exec: z.number(), overhead: z.number(), overheadShare: z.number() }),
+  /** What the work and the economy's own runs cost, in effective tokens; `overheadUnpriced` counts the overhead runs that reported no tokens, so `overhead` is a floor when it is above 0. */
+  cost: z.object({ exec: z.number(), overhead: z.number(), overheadShare: z.number(), overheadUnpriced: z.number().int() }),
   facts: z.array(FactStatus).optional(),
   /** Per pack: the units a person approved removing, and the ones proposed, with their evidence. */
   tools: z.record(z.string(), ToolsStatus).optional(),

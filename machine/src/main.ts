@@ -31,6 +31,7 @@ import { randomUUID } from "node:crypto";
 import { currentTask } from "./application/task-scope.ts";
 import { ownCalls } from "./application/pack-runs.ts";
 import { economy as economyOver, noEconomy, type Propose } from "./application/economy.ts";
+import { finishedRunsOf } from "./adapters/persistence/finished-runs.ts";
 import { fileStore as economyStore } from "./adapters/economy/store.ts";
 import { OVERHEAD_PACKS } from "./domain/economy/ledger.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
@@ -242,7 +243,7 @@ let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = as
 // The token economy (RFC 0007): each repository's envelope and cost ledger, folded from every finished run. `MACHINE_ECONOMY=off` keeps none and hands no run anything.
 /** The fact proposer: the `fact_propose` pack, run through PackRuns once it exists (bound below). */
 const factProposer: { run: Propose | null } = { run: null };
-const economy = config.economy ? economyOver(economyStore(config.stateDir), (line) => console.warn(line)) : noEconomy();
+const economy = config.economy ? economyOver(economyStore(config.stateDir), (line) => console.warn(line), (repoPath) => finishedRunsOf(db, repoPath)) : noEconomy();
 const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
 let graphWatch: GraphWatch | null = null;
@@ -728,14 +729,14 @@ buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
 if (packRuns)
   buildDecisions.decide = async (pack, check, repoPath) => {
     const out = await ownCalls(packRuns).run({ pack, context: { check }, stage: "build" }, "build");
-    // The loop guard's judge and redirect writer are the economy's own cost: a ledger line beside the work's. A pack run keeps its cost in dollars, not tokens.
-    if (repoPath && OVERHEAD_PACKS.includes(pack)) void economy.recordOverhead({ repoPath, runId: out.recordId ?? randomUUID(), pack, cardId: currentTask() ?? "", tokens: null, costUsd: out.usage.costUsd });
+    // The loop guard's judge and redirect writer are the economy's own cost: a ledger line beside the work's. A pack run's tokens are the runtime's own count; a run on a runtime that reports none keeps only its cost in dollars.
+    if (repoPath && OVERHEAD_PACKS.includes(pack)) void economy.recordOverhead({ repoPath, runId: out.recordId ?? randomUUID(), pack, cardId: currentTask() ?? "", tokens: out.usage.tokens ?? null, costUsd: out.usage.costUsd });
     return tagged(out);
   };
 // The proposer runs as an on-demand pack with no tools; the economy records its cost as overhead and validates what it answers.
 if (packRuns) factProposer.run = async (propose) => {
   const out = await ownCalls(packRuns).run({ pack: "fact_propose", context: { propose } }, "economy");
-  return { answer: out.answer, runId: out.recordId ?? randomUUID(), costUsd: out.usage.costUsd };
+  return { answer: out.answer, runId: out.recordId ?? randomUUID(), costUsd: out.usage.costUsd, tokens: out.usage.tokens ?? null };
 };
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 /** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
@@ -799,6 +800,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
 };
 const app = createApp({
   approveBase,
+  ...(config.economy ? { economy: { port: economy, knownRepos, configOf: async (repo: string) => (await policies.for(repo)).factory.economy } } : {}),
   repoHealth: () =>
     repoHealthOf({
       repos: [],

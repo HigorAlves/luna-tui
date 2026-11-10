@@ -14,6 +14,10 @@ import { manual, selectInjected } from "../domain/economy/render-facts.ts";
 
 /** What the economy keeps for a repository. Every method is for one repository's folder; a corrupt file reads as empty. */
 export interface EconomyStore {
+  /** The ids of the runs already folded (`afterRun` or an import), the newest kept. */
+  imported(repoPath: string): Promise<string[]>;
+  /** Adds run ids to the folded set, as one step. */
+  markImported(repoPath: string, ids: readonly string[]): Promise<void>;
   /** Passing runs' tool-call counts, per pack. */
   envelopes(repoPath: string): Promise<Record<string, number[]>>;
   /** Changes the envelopes as one step: two runs finishing together never lose a sample. */
@@ -50,7 +54,19 @@ export interface ProposerState {
 }
 
 /** Runs the fact_propose pack on a context and gives its validated answer and the run's id and cost, or null when it could not run. Bound by the machine. */
-export type Propose = (input: ProposeContext) => Promise<{ answer: unknown; runId: string; costUsd?: number | null } | null>;
+export type Propose = (input: ProposeContext) => Promise<{ answer: unknown; runId: string; costUsd?: number | null; tokens?: Tokens | null } | null>;
+
+/** A run already on disk, as the machine's database knows it: which pack and card it was, how it ended and on which runtime. */
+export interface PastRun {
+  runId: string;
+  pack: PackId;
+  cardId: string;
+  outcome: string;
+  runtime: string | null;
+}
+
+/** The repository's finished stage runs, oldest first. Bound by the machine, which owns the database. */
+export type RunsOf = (repoPath: string) => Promise<PastRun[]>;
 
 /** One finished run, as the economy folds it. */
 export interface FinishedRun {
@@ -61,6 +77,8 @@ export interface FinishedRun {
   /** The stage's outcome (`pass`, `fail`, ...): only a pass teaches the envelope. */
   outcome: string;
   tokens: Tokens | null;
+  /** The runtime the stage ran on. Skills and subagents cannot be seen on `eve` or `jev`, so their runs give no tool evidence. */
+  runtime?: "claude" | "eve" | "jev";
   config: EconomyConfig;
 }
 
@@ -83,6 +101,8 @@ export interface Economy {
   approveMask(repoPath: string, pack: PackId): Promise<boolean>;
   /** A person brings back a unit of `pack` (`web`, `agent`, `skill:<name>`, `luna:<tool>`): out of the mask, never proposed again. False for a unit the pack does not have. Never throws. */
   restore(repoPath: string, pack: PackId, unit: string): Promise<boolean>;
+  /** Folds the runs already on disk once: the envelope samples of the passing ones and the tool evidence of the Claude ones. They carry no observation, so they teach no fact and leave no ledger record. Idempotent. Returns the runs folded. Never throws. */
+  importRuns(repoPath: string, config: EconomyConfig): Promise<number>;
   /** `minSamples` is the repository's `economy.guard.envelope_min_samples` (the default, 5, when not given). */
   status(repoPath: string, minSamples?: number): Promise<EconomyStatus>;
 }
@@ -96,14 +116,15 @@ const COUNTED_KEPT = 20;
 /** Calls a run keeps for the detectors; a run's digest shows fewer. */
 const CALLS_KEPT = 300;
 
-const EMPTY: EconomyStatus = { envelopes: {}, guard: [], cost: { exec: 0, overhead: 0, overheadShare: 0 } };
+const EMPTY: EconomyStatus = { envelopes: {}, guard: [], cost: { exec: 0, overhead: 0, overheadShare: 0, overheadUnpriced: 0 } };
 
 /** The economy of a machine with it off: no input, nothing kept. */
 export function noEconomy(): Economy {
-  return { inputFor: async () => undefined, afterRun: async () => {}, recordOverhead: async () => {}, dropFact: async () => false, cardClosed: async () => {}, promotable: async () => [], promoted: async () => 0, approveMask: async () => false, restore: async () => false, status: async () => EMPTY };
+  return { inputFor: async () => undefined, afterRun: async () => {}, recordOverhead: async () => {}, dropFact: async () => false, cardClosed: async () => {}, promotable: async () => [], promoted: async () => 0, approveMask: async () => false, restore: async () => false, importRuns: async () => 0, status: async () => EMPTY };
 }
 
-export function economy(store: EconomyStore, log: (line: string) => void = () => {}): Economy {
+/** `runsOf` lists the runs an import folds; without it the import folds none. */
+export function economy(store: EconomyStore, log: (line: string) => void = () => {}, runsOf?: RunsOf): Economy {
   const kept = async <T>(what: string, work: () => Promise<T>, fallback: T): Promise<T> => {
     try {
       return await work();
@@ -157,6 +178,7 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
         undefined,
       ),
     afterRun: async (run) => {
+      await kept("imported", () => store.markImported(run.repoPath, [run.runId]), undefined);
       const events = await kept("events", () => store.events(run.runId), [] as unknown[]);
       await kept(
         "fold",
@@ -171,8 +193,8 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
         },
         undefined,
       );
-      // A run with no events says nothing about which tools were used.
-      if (run.config.tool_prune !== "off" && events.length > 0) {
+      // A run with no events says nothing about which tools were used, and eve and jev cannot show a skill or a subagent being used.
+      if (run.config.tool_prune !== "off" && events.length > 0 && (run.runtime === undefined || run.runtime === "claude")) {
         await kept(
           "tools",
           async () => {
@@ -236,7 +258,7 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
           const known = held.map((f) => f.text).filter((t) => t !== "" && t.length <= 240).slice(-KNOWN_SHOWN);
           const reply = await propose({ repo: repoName(repoPath), digests: digests.map((d) => ({ ...d, lines: d.lines.map((l) => l.slice(0, 300)) })), known });
           if (!reply) return;
-          await kept("overhead", () => store.appendLedger(repoPath, ledgerRecord({ at: new Date().toISOString(), runId: reply.runId, pack: "fact_propose", cardId, tokens: null, costUsd: reply.costUsd })), undefined);
+          await kept("overhead", () => store.appendLedger(repoPath, ledgerRecord({ at: new Date().toISOString(), runId: reply.runId, pack: "fact_propose", cardId, tokens: reply.tokens ?? null, costUsd: reply.costUsd })), undefined);
           const answer = FactProposal.safeParse(reply.answer);
           if (!answer.success) return;
           const calls = await store.calls(repoPath);
@@ -296,6 +318,32 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
         false,
       ),
     recordOverhead: (run) => kept("overhead", () => store.appendLedger(run.repoPath, ledgerRecord({ at: new Date().toISOString(), ...run })), undefined),
+    importRuns: (repoPath, config) =>
+      kept(
+        "import",
+        async () => {
+          if (!runsOf) return 0;
+          const done = new Set(await store.imported(repoPath));
+          const folded: string[] = [];
+          for (const run of await runsOf(repoPath)) {
+            if (done.has(run.runId)) continue;
+            const events = await kept("events", () => store.events(run.runId), [] as unknown[]);
+            // A run with no events file has nothing to give; it stays out of the set, though a second call would find it as empty.
+            if (events.length === 0) continue;
+            const calls = runFacts(events).calls;
+            if (run.outcome === "pass" && calls > 0) await store.updateEnvelopes(repoPath, (all) => ({ ...all, [run.pack]: addSample(all[run.pack] ?? [], calls) }));
+            const units = unitsOf(PACKS[run.pack]);
+            if (config.tool_prune !== "off" && run.runtime === "claude" && units.length > 0) {
+              const used = usedUnits(events);
+              await store.updateTools(repoPath, (all) => ({ ...all, [run.pack]: foldTools(all[run.pack] ?? emptyTools(), { units, used, cardId: run.cardId, prune: config.prune }) }));
+            }
+            folded.push(run.runId);
+          }
+          if (folded.length > 0) await store.markImported(repoPath, folded);
+          return folded.length;
+        },
+        0,
+      ),
     status: (repoPath, minSamples = 5) =>
       kept<EconomyStatus>(
         "status",

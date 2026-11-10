@@ -28,7 +28,7 @@ describe("ledger", () => {
       ledgerRecord({ ...run, pack: "implementing", tokens: { input: 900, output: 0, cached: 0 } }),
       ledgerRecord({ ...run, pack: "loop_judge", tokens: { input: 100, output: 0, cached: 0 } }),
     ];
-    expect(summary(records)).toEqual({ exec: 900, overhead: 100, overheadShare: 0.1 });
-    expect(summary([])).toEqual({ exec: 0, overhead: 0, overheadShare: 0 });
+    expect(summary(records)).toEqual({ exec: 900, overhead: 100, overheadShare: 0.1, overheadUnpriced: 0 });
+    expect(summary([])).toEqual({ exec: 0, overhead: 0, overheadShare: 0, overheadUnpriced: 0 });
   });
 });

@@ -30,13 +30,17 @@ export function ledgerRecord(run: { at: string; runId: string; pack: string; car
   };
 }
 
-export function summary(records: LedgerRecord[]): { exec: number; overhead: number; overheadShare: number } {
+/** The totals in effective tokens; `overheadUnpriced` counts the overhead records that carry no tokens (a runtime that reported none), which the totals cannot price. */
+export function summary(records: LedgerRecord[]): { exec: number; overhead: number; overheadShare: number; overheadUnpriced: number } {
   let exec = 0;
   let overhead = 0;
+  let overheadUnpriced = 0;
   for (const r of records) {
-    if (r.kind === "overhead") overhead += r.effective;
-    else exec += r.effective;
+    if (r.kind === "overhead") {
+      overhead += r.effective;
+      if (r.tokens === null) overheadUnpriced += 1;
+    } else exec += r.effective;
   }
   const total = exec + overhead;
-  return { exec, overhead, overheadShare: total === 0 ? 0 : overhead / total };
+  return { exec, overhead, overheadShare: total === 0 ? 0 : overhead / total, overheadUnpriced };
 }

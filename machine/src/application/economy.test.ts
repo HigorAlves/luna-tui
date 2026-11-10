@@ -18,8 +18,10 @@ const config: EconomyConfig = {
 };
 
 function fakeStore(events: Record<string, unknown[]> = {}) {
-  const state = { envelopes: {} as Record<string, number[]>, ledger: [] as LedgerRecord[], guard: [] as GuardEventRow[], facts: { facts: [], injected: {} } as FactsFile, digests: [] as Digest[], calls: {} as Record<string, ObservedCall[]>, proposer: { closed: 0, counted: [] } as ProposerState, tools: {} as Record<string, PackTools> };
+  const state = { imported: [] as string[], envelopes: {} as Record<string, number[]>, ledger: [] as LedgerRecord[], guard: [] as GuardEventRow[], facts: { facts: [], injected: {} } as FactsFile, digests: [] as Digest[], calls: {} as Record<string, ObservedCall[]>, proposer: { closed: 0, counted: [] } as ProposerState, tools: {} as Record<string, PackTools> };
   const store: EconomyStore = {
+    imported: async () => state.imported,
+    markImported: async (_r, ids) => void (state.imported = [...new Set([...state.imported, ...ids])]),
     envelopes: async () => state.envelopes,
     updateEnvelopes: async (_r, change) => void (state.envelopes = change(state.envelopes)),
     appendLedger: async (_r, record) => void state.ledger.push(record),
@@ -75,7 +77,7 @@ describe("economy.afterRun", () => {
     await eco.recordOverhead({ repoPath: "/r", runId: "j1", pack: "loop_judge", cardId: "c1", tokens: { input: 100, output: 0, cached: 0 } });
     const status = await eco.status("/r");
     expect(status.guard).toMatchObject([{ action: "stop", calls: 2, cause: "repeat", runId: "r1", pack: "implementing" }]);
-    expect(status.cost).toEqual({ exec: 100, overhead: 100, overheadShare: 0.5 });
+    expect(status.cost).toEqual({ exec: 100, overhead: 100, overheadShare: 0.5, overheadUnpriced: 0 });
   });
 
   it("never throws", async () => {
@@ -578,5 +580,88 @@ describe("economy.promotable and economy.promoted", () => {
     expect(after?.manual).toBeUndefined();
     expect(after?.facts).toBeUndefined();
     expect(await noEconomy().promoted("/r", ["f1"])).toBe(0);
+  });
+});
+
+describe("economy: overhead counted in tokens", () => {
+  it("prices an overhead run by its tokens and counts the ones that had none", async () => {
+    const { state, store } = fakeStore();
+    const eco = economy(store);
+    await eco.recordOverhead({ repoPath: "/r", runId: "j1", pack: "loop_judge", cardId: "c1", tokens: { input: 100, output: 10, cached: 0 }, costUsd: 0.01 });
+    await eco.recordOverhead({ repoPath: "/r", runId: "j2", pack: "loop_redirect", cardId: "c1", tokens: null, costUsd: 0.02 });
+    expect(state.ledger[0]).toMatchObject({ kind: "overhead", effective: 150, tokens: { input: 100, output: 10, cached: 0 }, costUsd: 0.01 });
+    expect(state.ledger[1]).toMatchObject({ kind: "overhead", effective: 0, tokens: null, costUsd: 0.02 });
+    expect((await eco.status("/r")).cost).toEqual({ exec: 0, overhead: 150, overheadShare: 1, overheadUnpriced: 1 });
+  });
+
+  it("takes the proposer's tokens into its overhead record", async () => {
+    const { state, store } = fakeStore(editedRuns(3));
+    const eco = economy(store);
+    await runs(eco, 1, 3);
+    const propose: Propose = async () => ({ answer: { facts: [] }, runId: "p1", costUsd: 0.01, tokens: { input: 40, output: 2, cached: 0 } });
+    for (let n = 1; n <= 3; n++) await eco.cardClosed("/r", `c${n}`, onCfg, propose);
+    expect(state.ledger.at(-1)).toMatchObject({ pack: "fact_propose", effective: 50, tokens: { input: 40, output: 2, cached: 0 } });
+  });
+});
+
+describe("economy: tool evidence by runtime", () => {
+  const stage = () => fakeStore(Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`t${i}`, calls(1)])));
+
+  it("folds the evidence of a claude run and of a run whose runtime is not known", async () => {
+    const { state, store } = stage();
+    const eco = economy(store);
+    await eco.afterRun(finished("t0", { pack: "triage", config: pruning, runtime: "claude" }));
+    await eco.afterRun(finished("t1", { pack: "triage", config: pruning }));
+    expect(state.tools.triage?.units.web?.unusedRuns).toBe(2);
+  });
+
+  it("skips the evidence of an eve or jev run, whose skills and agents cannot be seen, and still folds the rest", async () => {
+    const { state, store } = stage();
+    const eco = economy(store);
+    await eco.afterRun(finished("t0", { pack: "triage", config: pruning, runtime: "eve" }));
+    await eco.afterRun(finished("t1", { pack: "triage", config: pruning, runtime: "jev" }));
+    expect(state.tools).toEqual({});
+    expect(state.ledger).toHaveLength(2);
+    expect(state.envelopes.triage).toEqual([1, 1]);
+  });
+});
+
+describe("economy.importRuns", () => {
+  const past = [
+    { runId: "o1", pack: "implementing" as const, cardId: "c1", outcome: "pass", runtime: "claude" },
+    { runId: "o2", pack: "implementing" as const, cardId: "c2", outcome: "fail", runtime: "claude" },
+    { runId: "o3", pack: "triage" as const, cardId: "c3", outcome: "pass", runtime: "eve" },
+    { runId: "o4", pack: "triage" as const, cardId: "c4", outcome: "pass", runtime: "claude" },
+    { runId: "gone", pack: "triage" as const, cardId: "c5", outcome: "pass", runtime: "claude" },
+  ];
+  const store = () => fakeStore({ o1: calls(4), o2: calls(9), o3: calls(2), o4: calls(3) });
+  const importing = (s: ReturnType<typeof fakeStore>["store"]) => economy(s, () => {}, async () => past);
+
+  it("folds the envelope samples of passing runs and the evidence of claude runs, and nothing else", async () => {
+    const { state, store: s } = store();
+    const count = await importing(s).importRuns("/r", pruning);
+    expect(count).toBe(4);
+    expect(state.envelopes).toEqual({ implementing: [4], triage: [2, 3] });
+    // Only o4 (claude) is evidence for triage: o3 ran on eve.
+    expect(state.tools.triage?.units.web?.unusedRuns).toBe(1);
+    expect(state.ledger).toEqual([]);
+    expect(state.facts.facts).toEqual([]);
+    expect(state.digests).toEqual([]);
+  });
+
+  it("folds each run once: a second call gives 0, and a run afterRun folded is not folded again", async () => {
+    const { state, store: s } = store();
+    const eco = importing(s);
+    await eco.afterRun(finished("o1", { runtime: "claude" }));
+    expect(await eco.importRuns("/r", pruning)).toBe(3);
+    expect(await eco.importRuns("/r", pruning)).toBe(0);
+    expect(state.envelopes.implementing).toEqual([4]);
+  });
+
+  it("skips a run that left no events, and the import is nothing without a source of runs", async () => {
+    const { store: s } = fakeStore({ o1: calls(1) });
+    expect(await importing(s).importRuns("/r", pruning)).toBe(1);
+    expect(await economy(s).importRuns("/r", pruning)).toBe(0);
+    expect(await noEconomy().importRuns("/r", pruning)).toBe(0);
   });
 });

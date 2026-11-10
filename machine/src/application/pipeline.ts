@@ -3325,7 +3325,8 @@ export class Pipeline {
     const pack = packForState(stage);
     if (repo && pack) {
       const config = (await this.policyFor(repo)).factory.economy;
-      await this.economy.afterRun({ repoPath: repo, runId, pack, cardId: id, outcome, tokens: result.usage?.tokens ? { ...result.usage.tokens, cached: result.usage.tokens.cached ?? 0 } : null, config }).catch(() => {});
+      const runtime = result.run?.info?.runtime;
+      await this.economy.afterRun({ repoPath: repo, runId, pack, cardId: id, outcome, tokens: result.usage?.tokens ? { ...result.usage.tokens, cached: result.usage.tokens.cached ?? 0 } : null, ...(runtime === "claude" || runtime === "eve" || runtime === "jev" ? { runtime } : {}), config }).catch(() => {});
     }
     if (result.rateLimited) span.event("rate_limited", { resetsAt: result.detail?.resetsAt ?? null });
     if (result.outcome === "escalated") span.event("escalated", { reason: result.detail?.reason ?? null });

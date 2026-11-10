@@ -179,3 +179,21 @@ describe("fileStore: tool pruning", () => {
     expect(await store.tools(repo)).toEqual({ ok: { units: {}, mask: [], proposal: [] } });
   });
 });
+
+describe("fileStore: the folded runs", () => {
+  it("keeps the ids of the runs folded, each once, privately", async () => {
+    const store = fileStore(dir);
+    expect(await store.imported(repo)).toEqual([]);
+    await store.markImported(repo, ["a", "b"]);
+    await store.markImported(repo, ["b", "c"]);
+    expect(await store.imported(repo)).toEqual(["a", "b", "c"]);
+    expect((await stat(join(folder(), "imported.json"))).mode & 0o777).toBe(0o600);
+  });
+
+  it("reads a corrupt file as empty", async () => {
+    const store = fileStore(dir);
+    await store.markImported(repo, ["a"]);
+    await writeFile(join(folder(), "imported.json"), "{nope");
+    expect(await store.imported(repo)).toEqual([]);
+  });
+});

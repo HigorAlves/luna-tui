@@ -68,7 +68,7 @@ describe("economy", () => {
   });
 
   it("the status lists each fact with its state and its counts, and refuses a fact that is not one", () => {
-    const base = { envelopes: {}, guard: [], cost: { exec: 0, overhead: 0, overheadShare: 0 } };
+    const base = { envelopes: {}, guard: [], cost: { exec: 0, overhead: 0, overheadShare: 0, overheadUnpriced: 0 } };
     const fact = { id: "a1b2c3d4e5f6", family: "form_repair", source: "free", state: "active", text: "`pytest …` fails here with command not found; `python -m pytest …` works.", confirmations: 3, contradictions: 0, exercised: 4, fired: 2 };
     expect(EconomyStatus.parse({ ...base, facts: [fact] }).facts).toEqual([fact]);
     expect(EconomyStatus.safeParse({ ...base, facts: [{ ...fact, state: "bogus" }] }).success).toBe(false);
