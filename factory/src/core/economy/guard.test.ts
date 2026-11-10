@@ -103,6 +103,15 @@ describe("LoopGuard judge requests", () => {
     expect(steps.slice(0, 9).every((s) => s.kind === "none")).toBe(true);
   });
 
+  it("clears an outstanding ask on expire without growing the gap, so it asks again 5 calls later", () => {
+    const { run, guard } = setup({ backstopMult: 100 });
+    expect(run(20)[19]!.kind).toBe("ask");
+    expect(run(10).every((s) => s.kind === "none")).toBe(true);
+    guard.expire();
+    const steps = run(10);
+    expect(steps.findIndex((s) => s.kind === "ask")).toBe(0);
+  });
+
   it("never asks with judge false", () => {
     const { run } = setup({ judge: false, backstopMult: 100 });
     expect(run(80).every((s) => s.kind === "none")).toBe(true);

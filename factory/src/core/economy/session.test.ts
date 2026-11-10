@@ -66,6 +66,21 @@ describe("economySession", () => {
     expect(session!.settled(FAIL).step.kind).toBe("redirect");
   });
 
+  it("asks again after the judge reports the answer expired", () => {
+    const asked: string[] = [];
+    let answer: ReturnType<JudgePort["poll"]> = null;
+    const judge: JudgePort = { ask: (d) => void asked.push(d), poll: () => answer };
+    const { session } = setup({ guard: { ...GUARD, envelope: 1000 } }, judge);
+    for (let i = 0; asked.length === 0 && i < 60; i++) session!.settled(i % 2 === 0 ? FAIL : EDIT);
+    for (let i = 0; i < 10; i++) session!.settled(FAIL);
+    expect(asked).toHaveLength(1);
+    answer = "expired";
+    session!.settled(FAIL);
+    answer = null;
+    for (let i = 0; i < 6; i++) session!.settled(FAIL);
+    expect(asked).toHaveLength(2);
+  });
+
   it("with no judge port an ask is dropped and the run goes on", () => {
     const { session } = setup({ guard: { ...GUARD, envelope: 1000 } });
     for (let i = 0; i < 60; i++) expect(session!.settled(i % 2 === 0 ? FAIL : EDIT).step.kind).toBe("none");

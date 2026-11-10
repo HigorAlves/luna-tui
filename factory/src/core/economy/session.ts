@@ -12,7 +12,8 @@ import { observe } from "./observe.ts";
 /** Where the guard's question goes; the answer comes back later, or never. */
 export interface JudgePort {
   ask(digest: string): void;
-  poll(): Verdict | null;
+  /** The verdict that has come, "expired" when the outstanding ask will never be answered, else null. */
+  poll(): Verdict | "expired" | null;
 }
 
 export interface EconomySession {
@@ -33,7 +34,8 @@ export function economySession(o: { economy: EconomyInput | undefined; work: str
         const observation = observe(call, { work: o.work });
         if (!guard) return { observation, step: NONE };
         const verdict = o.judge?.poll();
-        if (verdict) guard.verdict(verdict);
+        if (verdict === "expired") guard.expire();
+        else if (verdict) guard.verdict(verdict);
         const asObject = typeof call.input === "object" && call.input !== null ? (call.input as Record<string, unknown>) : {};
         const step = guard.fold(observation, { tool: call.tool, target: callTarget(call.tool, asObject).target });
         if (step.kind !== "ask") return { observation, step };

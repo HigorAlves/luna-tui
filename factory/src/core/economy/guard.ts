@@ -70,6 +70,12 @@ export class LoopGuard {
     if (this.asking) this.pending = v;
   }
 
+  /** The outstanding ask will not be answered: the guard may ask again. No verdict was given, so the gap does not grow. */
+  expire(): void {
+    this.asking = false;
+    this.pending = null;
+  }
+
   /** The last 24 actions as the judge reads them: tool, command cut to 90 characters, base names only, error class. Never output text. */
   digest(): string {
     try {
