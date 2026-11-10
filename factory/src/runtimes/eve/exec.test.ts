@@ -32,6 +32,16 @@ describe("commandEnv", () => {
     expect(STAGE_PATH.split(":")).toEqual(expect.arrayContaining(["/usr/local/go/bin", "/usr/local/cargo/bin", "/usr/local/bin", "/usr/bin", "/bin"]));
   });
 
+  it("passes the egress proxy on, so pnpm, cargo and npm reach the registries the repo allows (the sandbox refuses a direct lookup)", () => {
+    const proxied = { ...source, HTTP_PROXY: "http://10.0.0.2:3128", HTTPS_PROXY: "http://10.0.0.2:3128", NO_PROXY: "localhost", no_proxy: "localhost", NODE_USE_ENV_PROXY: "1", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0", COREPACK_DEFAULT_TO_LATEST: "0" };
+    expect(commandEnv("pnpm", { source: proxied, home: "/tmp/s" })).toMatchObject({ HTTP_PROXY: "http://10.0.0.2:3128", HTTPS_PROXY: "http://10.0.0.2:3128", NO_PROXY: "localhost", no_proxy: "localhost", NODE_USE_ENV_PROXY: "1", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0", COREPACK_DEFAULT_TO_LATEST: "0" });
+  });
+
+  it("does not set NO_COLOR: it changes what a program does (a TUI's colour tests fail under it), and CI does not set it", () => {
+    expect(commandEnv("pnpm", { source: { ...source, NO_COLOR: "1" }, home: "/tmp/s" })).not.toHaveProperty("NO_COLOR");
+    expect(commandEnv("pnpm", { source, home: "/tmp/s" }).TERM).toBe("dumb");
+  });
+
   it("hands the GitHub token to gh alone", () => {
     expect(commandEnv("gh", { source, home: "/tmp/s", ghToken: "gh-secret" })).toMatchObject({ GH_TOKEN: "gh-secret" });
     expect(commandEnv("git", { source, home: "/tmp/s", ghToken: "gh-secret" })).not.toHaveProperty("GH_TOKEN");

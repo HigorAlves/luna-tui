@@ -75,11 +75,36 @@ const SCENARIO_TEXT_MAX = 300;
 
 /** The designer's scenarios as the scenarios the machine stores: `S1`... by position, the criterion's text by its ref (an unknown ref ties to nothing),
  *  a title from `then` (told apart by the id when another scenario has it) for the places that key on one, an approach that says the scenario in
- *  full, and the designer round as `version`. Pure. */
-export function scenariosOfAnswer(answer: readonly AnswerScenario[], criteria: readonly Criterion[], version: number): Scenario[] {
+ *  full, and the designer round as `version`. With `previous` (the scenarios of the plan approved before a re-plan), a scenario whose `when` and
+ *  `then` are the same keeps its id and a new one takes the next number after them: ids that moved with a re-plan's inserted scenario left a
+ *  tests commit tagged under the old numbers checking out against the wrong scenarios. Pure. */
+export function scenariosOfAnswer(answer: readonly AnswerScenario[], criteria: readonly Criterion[], version: number, previous: readonly Pick<Scenario, "id" | "when" | "then">[] = []): Scenario[] {
   const seen = new Map<string, number>();
+  const keyOf = (when: string | null | undefined, then: string | null | undefined) => `${(when ?? "").toLowerCase().replace(/\s+/g, " ").trim()}\u0000${(then ?? "").toLowerCase().replace(/\s+/g, " ").trim()}`;
+  const before = new Map<string, string>();
+  let top = 0;
+  for (const p of previous) {
+    const n = /^S(\d+)$/.exec(p.id ?? "")?.[1];
+    if (!n) continue;
+    top = Math.max(top, Number(n));
+    if (p.when || p.then) before.set(keyOf(p.when, p.then), p.id!);
+  }
+  const used = new Set<string>();
+  const ids = answer.map((a) => {
+    const kept = before.get(keyOf(oneLine(a.when, SCENARIO_TEXT_MAX), oneLine(a.then, SCENARIO_TEXT_MAX)));
+    if (kept && !used.has(kept)) {
+      used.add(kept);
+      return kept;
+    }
+    return null;
+  });
   return answer.map((a, i) => {
-    const id = `S${i + 1}`;
+    let id = ids[i];
+    if (!id) {
+      do id = `S${++top}`;
+      while (used.has(id));
+      used.add(id);
+    }
     const criterion = criteria.find((c) => c.id === a.criterion_ref) ?? null;
     const given = oneLine(a.given, SCENARIO_TEXT_MAX);
     const when = oneLine(a.when, SCENARIO_TEXT_MAX);

@@ -11,6 +11,7 @@
 // Each pack runs as a sub-run of the stage's own run, under a derived run id (`<runId>-plan`,
 // `<runId>-plan-<n>`, `<runId>-tests-<n>`): its own folder and container, not resumable (a
 // restart re-runs the stage), and on the pack's own engine, never the stage's.
+import { isDocsOnly } from "../../domain/docs-only.ts";
 import {
   CodeMapAnswer,
   type DecisionOverrides,
@@ -460,7 +461,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         testRuns += 1;
         const designed = await deps.runPack(lane === "fast" ? "test_design_fast" : "test_design", sub(`tests-${testRuns}`), {
           // The designer reads the criteria and the goal only: no steps, brief, assumptions, map or risk.
-          plan: { record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: [], ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), ...(notes.length ? { coverage_notes: notes } : {}), round: roundsOnThisPlan },
+          plan: { ...(isDocsOnly(plan.slices.flatMap((s) => s.touchpoints ?? [])) ? { docsOnly: true } : {}), record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: [], ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), ...(notes.length ? { coverage_notes: notes } : {}), round: roundsOnThisPlan },
         });
         if (designed.outcome !== "pass") return ended(designed);
         results.push(designed);

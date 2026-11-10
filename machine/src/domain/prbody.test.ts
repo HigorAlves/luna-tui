@@ -23,19 +23,31 @@ describe("buildPr", () => {
     expect(buildPr({ task: task(), plan, repoSlug: "acme/widgets" }).body).not.toContain("Closes");
   });
 
-  it("carries the brief and the criteria, with no attribution", () => {
+  it("is the caveman-pr shape: a short why and how tested, never the criteria as a checklist, and no attribution", () => {
     const { body } = buildPr({ task: task(), plan, repoSlug: null });
-    expect(body).toContain("- PRs open early so CI runs sooner.");
-    expect(body).toContain("- Ship only flips draft to ready.");
-    expect(body).toContain("- [ ] a (C1)");
+    expect(body).toContain("## Why\nPRs open early so CI runs sooner. Ship only flips draft to ready.");
+    expect(body).toContain("## How tested\n");
+    expect(body).not.toContain("- [ ]");
     expect(body).not.toMatch(/claude|generated with|co-authored|anthropic|\bAI\b/i);
   });
 
-  it("falls back to the description without a plan and caps the title at 60", () => {
-    const long = "x".repeat(80);
+  it("falls back to the description without a plan and caps the title at 72", () => {
+    const long = "x".repeat(90);
     const pr = buildPr({ task: task({ title: long }), plan: null, repoSlug: null });
-    expect(pr.title).toHaveLength(60);
-    expect(pr.body).toContain("- desc");
+    expect(pr.title).toHaveLength(72);
+    expect(pr.body).toContain("## Why\ndesc");
+  });
+
+  it("keeps a file name or a version whole when it cuts the why to two sentences", () => {
+    const goal = "Make docs/api.md follow STE, and add the STE rule to contributing.md so future docs keep it. Second sentence. Third one.";
+    expect(buildPr({ task: task(), plan: null, repoSlug: null, extra: { record: { goal } as never } }).body).toContain("## Why\nMake docs/api.md follow STE, and add the STE rule to contributing.md so future docs keep it. Second sentence.\n");
+  });
+
+  it("titles a card in conventional-commit form: its own when it is one, else its kind's type, docs for a docs-only plan", () => {
+    expect(buildPr({ task: task(), plan, repoSlug: null }).title).toBe("feat(machine): draft PR at delivering");
+    expect(buildPr({ task: task({ title: "Show the cart total" }), plan: null, repoSlug: null, extra: { record: { goal: "g", kind: "bug" } as never } }).title).toBe("fix: show the cart total");
+    const docs = { ...plan, slices: [{ title: "Rewrite", est_loc: 10, touchpoints: ["docs/api.md"], acceptance: ["a"] }] };
+    expect(buildPr({ task: task({ title: "Rewrite core docs in STE" }), plan: docs as never, repoSlug: null }).title).toBe("docs: rewrite core docs in STE");
   });
 });
 
@@ -46,8 +58,8 @@ describe("buildPr for a Jira-linked task", () => {
       source: null, jira: { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", issueType: "Bug", status: null, priority: null, dueAt: null, syncedAt: null, blocked: null },
     } as unknown as TaskRow;
     const pr = buildPr({ task, plan: null, repoSlug: "o/a" });
-    expect(pr.title).toBe("PLAT-123: Login page with email and password and a long tail");
-    expect(pr.title.length).toBeLessThanOrEqual(60);
+    expect(pr.title.startsWith("PLAT-123: feat: login page with email")).toBe(true);
+    expect(pr.title.length).toBeLessThanOrEqual(72);
     expect(pr.body.endsWith(`Jira: https://acme.atlassian.net/browse/PLAT-123\n${PR_END}`)).toBe(true);
     const imported = buildPr({ task: { ...task, jira: null, source: { kind: "jira", key: "PLAT-9", url: "https://acme.atlassian.net/browse/PLAT-9", issueType: null } } as unknown as TaskRow, plan: null, repoSlug: "o/a" });
     expect(imported.title.startsWith("PLAT-9: ")).toBe(true);
@@ -71,19 +83,38 @@ describe("the machine's section of the body", () => {
     head: "b".repeat(40),
   } as PrExtra;
 
-  it("holds, between its markers, why, the plan's version and criteria by id, each scenario with its test, the open findings by level, the files outside the map and the commits", () => {
+  it("holds a short why, a one-line how tested and the open findings, and leaves out the scenario list, the plan version, the out-of-map list and the shas", () => {
     const { body } = buildPr({ task: task(), plan, repoSlug: null, extra });
     const inside = body.slice(body.indexOf(PR_START), body.indexOf(PR_END));
-    expect(inside).toContain("- Readers export a report as CSV");
-    expect(inside).toContain("Plan version 2");
-    expect(inside).toContain("- [ ] a (C1)");
-    expect(inside).toContain("- S1 (C1): export downloads a file, test `src/export.test.ts`");
-    expect(inside).toContain("- S2: empty report, no test tagged");
-    expect(inside).toMatch(/### blocker\n- off by one \(a\.ts:3\)/);
-    expect(inside).toContain("### nit\n- naming &lt;b&gt; (b.ts:9)");
+    expect(inside).toContain("## Why\nReaders export a report as CSV");
+    expect(inside).toContain("Verify judged 2 scenarios, 1 with a test written before the code");
+    expect(inside).toMatch(/## Notes\n- 2 findings still open: off by one \(`a\.ts`\); naming &lt;b&gt; \(`b\.ts`\)/);
     expect(inside).not.toContain("fixed one");
-    expect(inside).toContain("- docs/x.md: the guide named the old flag");
-    expect(inside).toContain(`Base ${"a".repeat(7)}, head ${"b".repeat(7)}`);
+    for (const gone of ["Plan version", "export downloads a file", "docs/x.md", "a".repeat(7), "## Scenarios", "## Criteria"]) expect(inside).not.toContain(gone);
+  });
+
+  it("names the steps only when there is more than one, and a merge-danger line from the files the plan touches", () => {
+    const steps = { ...plan, slices: [{ title: "Add the export", est_loc: 30, touchpoints: ["web/export.ts"], acceptance: ["a"] }, { title: "Add the migration", est_loc: 10, touchpoints: ["db/migrations/0042.sql"], acceptance: ["b"] }] };
+    const { body } = buildPr({ task: task(), plan: steps as never, repoSlug: null });
+    expect(body).toContain("## What changed\n- Add the export\n- Add the migration");
+    expect(body).toContain("Door: one-way (a migration: a revert does not undo it) · Blast radius: `web`, `db`");
+    const one = { ...plan, slices: [{ title: "Add the export", est_loc: 30, touchpoints: ["web/export.ts"], acceptance: ["a"] }] };
+    const single = buildPr({ task: task(), plan: one as never, repoSlug: null }).body;
+    expect(single).not.toContain("## What changed");
+    expect(single).toContain("Door: two-way · Blast radius: `web`");
+  });
+
+  it("follows the repository's PR template when it has one: its headings filled, its checklist kept, its comments gone", () => {
+    const template = ["<!-- Thanks! -->", "## Summary", "<!-- what and why -->", "", "## How was this tested?", "", "## Checklist", "- [ ] I updated the docs", "", "## Related issues", ""].join("\n");
+    const t = task({ source });
+    const { body } = buildPr({ task: t, plan, repoSlug: "acme/widgets", extra: { ...extra, template } });
+    expect(body).toContain("## Summary\nReaders export a report as CSV");
+    expect(body).toContain("## How was this tested?\nVerify judged 2 scenarios");
+    expect(body).toContain("## Checklist\n- [ ] I updated the docs");
+    expect(body).toContain("## Related issues\nCloses #42");
+    const inside = body.slice(body.indexOf(PR_START) + PR_START.length, body.indexOf(PR_END));
+    expect(inside).not.toContain("<!--");
+    expect(inside).not.toContain("## Why");
   });
 
   it("caps the whole body", () => {
@@ -94,12 +125,12 @@ describe("the machine's section of the body", () => {
   it("a later update replaces only what is between the markers and keeps a person's text around it", () => {
     const first = buildPr({ task: task(), plan, repoSlug: null, extra }).body;
     const edited = `My own note on top\n\n${first}\n\nAnd a line after`;
-    const next = buildPr({ task: task(), plan, repoSlug: null, extra: { ...extra, planVersion: 3 } }).body;
+    const next = buildPr({ task: task(), plan, repoSlug: null, extra: { ...extra, record: { goal: "Readers export a report as JSON" } as never } }).body;
     const merged = mergePrSection(edited, next);
     expect(merged.startsWith("My own note on top\n\n")).toBe(true);
     expect(merged.endsWith("\n\nAnd a line after")).toBe(true);
-    expect(merged).toContain("Plan version 3");
-    expect(merged).not.toContain("Plan version 2");
+    expect(merged).toContain("as JSON");
+    expect(merged).not.toContain("as CSV");
     expect(merged.split(PR_START)).toHaveLength(2);
   });
 
@@ -127,8 +158,8 @@ describe("a stacked card's PR body", () => {
   it("says in fixed words what it is stacked on, and the body of any other card is unchanged", () => {
     const plain = buildPr({ task, plan: null, repoSlug: "o/a" }).body;
     const stacked = buildPr({ task, plan: null, repoSlug: "o/a", extra: { stack: { number: 12 } } }).body;
-    expect(stacked).toContain("Stacked on #12: this PR targets its branch and shows only this card's change. It is retargeted when #12 merges.");
-    expect(stacked.replace(/\n\nStacked on #12:[^\n]*/, "")).toBe(plain);
+    expect(stacked).toContain("- Stacked on #12: review that first; this PR shows only its own change and moves to the default branch when #12 merges.");
+    expect(plain).not.toContain("Stacked on");
     expect(buildPr({ task, plan: null, repoSlug: "o/a", extra: {} }).body).toBe(plain);
   });
 

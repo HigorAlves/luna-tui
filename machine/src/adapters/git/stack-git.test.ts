@@ -158,6 +158,50 @@ describe("rebasing a stacked card", () => {
     expect(existsSync(join(machineGitDir(workspace.path), "rebase-merge"))).toBe(false);
   });
 
+  it("settles a conflict in a file the card has no claim on by keeping the parent's version, and goes on", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace, { branch: PARENT });
+    // The card edits its own file and, by the way, the parent's prose test, which the parent then changes too.
+    writeFileSync(join(workspace.path, "docs.md"), "rewritten\n");
+    writeFileSync(join(workspace.path, "p4.txt"), "mine\n");
+    await commitAll(workspace.path, "docs: rewrite");
+    parentMoves(s, "p4.txt", "theirs\n");
+    const result = await rebaseOntoBase(exec, workspace.path, s.repo, undefined, { parentWins: (path) => path !== "docs.md" });
+    expect(result).toMatchObject({ ok: true, resolved: ["p4.txt"] });
+    expect(readFileSync(join(workspace.path, "p4.txt"), "utf8")).toBe("theirs\n");
+    expect(readFileSync(join(workspace.path, "docs.md"), "utf8")).toBe("rewritten\n");
+    expect(wgit(workspace.path, "status", "--porcelain")).toBe("");
+  });
+
+  it("still stops on a conflict in a file the card planned to change", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace, { branch: PARENT });
+    writeFileSync(join(workspace.path, "p4.txt"), "mine\n");
+    await commitAll(workspace.path, "feat: mine");
+    const before = wgit(workspace.path, "rev-parse", "HEAD");
+    parentMoves(s, "p4.txt", "theirs\n");
+    const result = await rebaseOntoBase(exec, workspace.path, s.repo, undefined, { parentWins: (path) => path !== "p4.txt" });
+    expect(result).toMatchObject({ ok: false, conflicts: ["p4.txt"] });
+    expect(wgit(workspace.path, "rev-parse", "HEAD")).toBe(before);
+    expect(existsSync(join(machineGitDir(workspace.path), "rebase-merge"))).toBe(false);
+  });
+
+  it("drops a commit that only touched a file the parent's version now wins", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace, { branch: PARENT });
+    writeFileSync(join(workspace.path, "docs.md"), "rewritten\n");
+    await commitAll(workspace.path, "docs: rewrite");
+    writeFileSync(join(workspace.path, "p4.txt"), "mine\n");
+    await commitAll(workspace.path, "test: touch the parent's test");
+    parentMoves(s, "p4.txt", "theirs\n");
+    const result = await rebaseOntoBase(exec, workspace.path, s.repo, undefined, { parentWins: (path) => path !== "docs.md" });
+    expect(result).toMatchObject({ ok: true, resolved: ["p4.txt"] });
+    expect(wgit(workspace.path, "log", "--format=%s", "-n", "2")).toBe("docs: rewrite\nparent p4.txt");
+  });
+
   it("refuses a parent whose new commits add a gitlink, and changes nothing", async () => {
     const s = stacked();
     const workspace = await child(s);

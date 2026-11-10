@@ -2,7 +2,7 @@ import { cleanup, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
 import { FinalCta } from "@/components/landing/final-cta"
 import { Hero } from "@/components/landing/hero"
-import { INSTALL_DOC, cta, finalCta, hero } from "@/content/landing"
+import { INSTALL_DOC, REPO, cta, finalCta, hero } from "@/content/landing"
 
 afterEach(cleanup)
 
@@ -30,6 +30,16 @@ describe("Hero", () => {
   it("renders the commit rain canvas behind the hero", () => {
     const { container } = render(<Hero />)
     expect(container.querySelector("section canvas")).toBeTruthy()
+  })
+})
+
+describe("Hero GitHub link", () => {
+  // @scenario:S19
+  it("S19 call to action links to REPO beside INSTALL_DOC", () => {
+    render(<Hero />)
+    const hrefs = screen.getAllByRole("link").map((a) => a.getAttribute("href"))
+    expect(hrefs).toContain(REPO)
+    expect(hrefs).toContain(INSTALL_DOC)
   })
 })
 

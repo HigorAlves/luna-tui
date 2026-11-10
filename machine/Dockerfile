@@ -6,11 +6,13 @@ FROM node:24-slim
 ARG GH_VERSION=2.63.2
 ARG PNPM_VERSION=12.14.0
 
+COPY machine/runner/fetch-release.sh /tmp/fetch-release.sh
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates curl \
  && arch="$(dpkg --print-architecture)" \
- && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz" \
-    | tar -xz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh" \
+ && sh /tmp/fetch-release.sh cli/cli "v${GH_VERSION}" "gh_${GH_VERSION}_linux_${arch}.tar.gz" /tmp/gh.tar.gz \
+ && tar -xzf /tmp/gh.tar.gz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh" && rm /tmp/gh.tar.gz \
+ && gh --version \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g "pnpm@${PNPM_VERSION}"
 

@@ -42,10 +42,13 @@ function hostOfUrl(candidate: string): string | null {
   return hostPatternProblem(host) === null ? host : null;
 }
 
-/** Each ecosystem's own hosts for a lockfile that is present, plus the hosts of the `https://` URLs its text names on a line with `resolved`, `url`, `tarball`, `remote` or `source`; at most 20, sorted. */
-export function registryHostsOf(lockfiles: readonly LockfileText[]): string[] {
+/** Each ecosystem's own hosts for a lockfile that is present (at the root, or by name in `nested`), plus the hosts of the `https://` URLs its text names on a line with `resolved`, `url`, `tarball`, `remote` or `source`; at most 20, sorted. */
+export function registryHostsOf(lockfiles: readonly LockfileText[], nested: readonly string[] = []): string[] {
   const own = new Set<string>();
   const named = new Set<string>();
+  // A lockfile in a subfolder (`board/Cargo.lock`) adds its ecosystem's own hosts and nothing it names: a vendored or planted lockfile deep in
+  // the tree cannot open an arbitrary host. A custom registry it uses is a `sandbox.egress.allow` entry.
+  for (const path of nested) for (const h of OWN_HOSTS[path.slice(path.lastIndexOf("/") + 1)] ?? []) own.add(h);
   for (const { name, text } of lockfiles) {
     const hosts = OWN_HOSTS[name];
     if (!hosts) continue;

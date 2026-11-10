@@ -206,8 +206,10 @@ const GIT_WRITES = new Set(["add", "commit", "stash", "apply", "am", "merge", "c
 
 /** Case-insensitive signs that a commit message credits an AI. The trailer form is matched
  *  first so the reason can name it. */
-const ATTRIBUTION_TRAILER = /co-authored-by:[^\n]*\b(claude|anthropic|ai)\b/i;
-const ATTRIBUTION_WORDS = /generated (by|with) claude|claude code|anthropic|🤖/iu;
+// Commits are the person's: no model, assistant or vendor is credited, whichever runtime ran the stage (the Claude SDK or eve's Codex and OpenAI models).
+const LLM = String.raw`(claude|anthropic|ai|codex|openai|chatgpt|gpt(-\d[\w.-]*)?|copilot|gemini|llm|assistant|bot|luna)`;
+const ATTRIBUTION_TRAILER = new RegExp(String.raw`co-authored-by:[^\n]*\b${LLM}\b`, "i");
+const ATTRIBUTION_WORDS = /generated (by|with) (claude|codex|chatgpt|openai|an? (ai|llm|model))|claude code|anthropic|openai codex|🤖/iu;
 
 /** The reason a Bash command is refused, or null when it may run. */
 export function guardBash(command: string, ctx: GuardContext): string | null {
@@ -342,7 +344,7 @@ function guardMessageFile(file: string, ctx: GuardContext): string | null {
 
 function attributionReason(message: string): string | null {
   if (ATTRIBUTION_TRAILER.test(message)) return "commits must not carry AI attribution; retry without the Co-Authored-By trailer";
-  if (ATTRIBUTION_WORDS.test(message)) return "commits must not carry AI attribution; retry without mentioning Claude or Anthropic in the message";
+  if (ATTRIBUTION_WORDS.test(message)) return "commits must not carry AI attribution; retry without crediting a model, an assistant or its vendor in the message";
   return null;
 }
 

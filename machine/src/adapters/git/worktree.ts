@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { branchLinkOf, jiraBranch, slug } from "../../domain/jira-link.ts";
 import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
+import { rustTestRegions } from "../../domain/rust-test-regions.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
 import { assertNoNestedRepository, at, isUnderWorkspaces, machineGitDir } from "./machine-repo.ts";
 
@@ -74,7 +75,13 @@ export type GitExec = (command: string, args: string[], options?: { cwd?: string
 
 const FETCH_TIMEOUT = 60_000;
 
-export type RebaseResult = { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] };
+export type RebaseResult = { ok: true; onto: string; /** Files in conflict the rebase settled by taking the parent's side (`RebaseOptions.parentWins`). */ resolved?: string[] } | { ok: false; error: string; conflicts: string[] };
+
+/** How a rebase may settle a conflict by itself: `parentWins(path)` says the card has no claim on a file, so the parent's version stands. A conflict
+ *  in any other file stops the rebase, which is aborted as before. */
+export interface RebaseOptions {
+  parentWins?: (path: string) => boolean;
+}
 
 /** A branch name git would accept as a positional: the default branch is read from a ref in the common git
  *  dir, which a writable stage can rewrite, so a name shaped like an option is never passed to git. */
@@ -119,12 +126,45 @@ async function defaultTarget(defaultBranchOf: (repoPath: string) => Promise<stri
 }
 
 /** The rebase of a card that is, or was, stacked: `--onto <onto> refs/luna/base` replays only the card's own commits; aborted when it stops (the folder is left as it was), with the files in conflict. Its commits are unsigned, as every commit the machine makes is. */
-async function replayOwn(run: GitExec, worktreePath: string, onto: string, label: string): Promise<RebaseResult> {
-  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), "-c", "commit.gpgsign=false", "rebase", "--onto", onto, BASE_REF]);
-  if (rebased.code === 0) return { ok: true, onto: label };
-  const unmerged = await run("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", "--diff-filter=U"]);
-  await run("git", [...HOST_GIT, ...at(worktreePath), "rebase", "--abort"]);
-  return { ok: false, error: (rebased.stderr || rebased.stdout).trim() || `exit code ${rebased.code}`, conflicts: conflictsOf(unmerged) };
+/** A stopped rebase, carried on while every file in conflict is one `parentWins` gives to the parent: that side is kept (or the file removed, when the
+ *  parent removed it) and the rebase continues; a commit left empty is dropped. Any other conflict, or any other stop, is aborted as before. */
+async function settleRebase(run: GitExec, worktreePath: string, first: { code: number; stdout: string; stderr: string }, options: RebaseOptions): Promise<{ ok: true; resolved: string[] } | { ok: false; error: string; conflicts: string[] }> {
+  const git = (...args: string[]) => run("git", [...HOST_GIT, ...at(worktreePath), ...args]);
+  const resolved = new Set<string>();
+  let step = first;
+  for (let n = 0; step.code !== 0 && n < 200; n++) {
+    const unmerged = conflictsOf(await git("diff", "--name-only", "--diff-filter=U"));
+    const said = `${step.stdout}\n${step.stderr}`;
+    if (unmerged.length === 0 && /nothing to commit|is now empty|empty commit|--allow-empty/i.test(said)) {
+      step = await git("-c", "core.editor=true", "rebase", "--skip");
+      continue;
+    }
+    if (!options.parentWins || unmerged.length === 0 || !unmerged.every(options.parentWins)) {
+      await git("rebase", "--abort");
+      return { ok: false, error: said.trim() || `exit code ${step.code}`, conflicts: unmerged };
+    }
+    for (const path of unmerged) {
+      // Stage 2 is the side being rebased onto: the parent's. Absent, the parent removed the file.
+      if ((await git("cat-file", "-e", `:2:${path}`)).code === 0) {
+        await git("checkout", "--ours", "--", path);
+        await git("add", "--", path);
+      } else await git("rm", "--quiet", "--", path);
+      resolved.add(path);
+    }
+    step = await git("-c", "core.editor=true", "-c", "commit.gpgsign=false", "rebase", "--continue");
+  }
+  if (step.code !== 0) {
+    await git("rebase", "--abort");
+    return { ok: false, error: `${step.stdout}\n${step.stderr}`.trim() || `exit code ${step.code}`, conflicts: [] };
+  }
+  return { ok: true, resolved: [...resolved] };
+}
+
+async function replayOwn(run: GitExec, worktreePath: string, onto: string, label: string, options: RebaseOptions = {}): Promise<RebaseResult> {
+  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), "-c", "commit.gpgsign=false", "rebase", "--empty=drop", "--onto", onto, BASE_REF]);
+  const settled = await settleRebase(run, worktreePath, rebased, options);
+  if (!settled.ok) return settled;
+  return { ok: true, onto: label, ...(settled.resolved.length ? { resolved: settled.resolved } : {}) };
 }
 
 /** The refusal a nested repository in the folder gets: a failed result, never a thrown error. */
@@ -150,6 +190,7 @@ export async function rebaseOntoBase(
   worktreePath: string,
   repoPath: string,
   defaultBranchOf: (repoPath: string) => Promise<string | null> = defaultBranch,
+  options: RebaseOptions = {},
 ): Promise<RebaseResult> {
   const recorded = await stackOf(worktreePath);
   if (recorded.sha && recorded.branch) {
@@ -161,7 +202,7 @@ export async function rebaseOntoBase(
     const tip = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", `refs/remotes/origin/${b}^{commit}`]);
     if (tip.code !== 0) return failed("reading the parent's branch", tip);
     if (await workspaceAddsGitlink(run, worktreePath, recorded.sha, tip.stdout.trim())) return { ok: false, error: "the parent's branch adds a nested repository (mode 160000): nothing was rebased", conflicts: [] };
-    const result = await replayOwn(run, worktreePath, `refs/remotes/origin/${b}`, `origin/${b}`);
+    const result = await replayOwn(run, worktreePath, `refs/remotes/origin/${b}`, `origin/${b}`, options);
     if (result.ok) await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, tip.stdout.trim()]);
     return result;
   }
@@ -170,17 +211,14 @@ export async function rebaseOntoBase(
   // `--end-of-options`: whatever the name, it is a ref, never an option.
   const fetched = await run("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--end-of-options", "origin", base], { timeoutMs: FETCH_TIMEOUT });
   if (fetched.code !== 0) return failed("git fetch", fetched);
-  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), ...(recorded.sha ? ["-c", "commit.gpgsign=false"] : []), "rebase", `origin/${base}`]);
-  if (rebased.code === 0) {
-    if (recorded.sha) {
-      const tip = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", `origin/${base}^{commit}`]);
-      if (tip.code === 0) await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, tip.stdout.trim()]);
-    }
-    return { ok: true, onto: `origin/${base}` };
+  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), ...(recorded.sha ? ["-c", "commit.gpgsign=false"] : []), "rebase", "--empty=drop", `origin/${base}`]);
+  const settled = await settleRebase(run, worktreePath, rebased, options);
+  if (!settled.ok) return settled;
+  if (recorded.sha) {
+    const tip = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", `origin/${base}^{commit}`]);
+    if (tip.code === 0) await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, tip.stdout.trim()]);
   }
-  const unmerged = await run("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", "--diff-filter=U"]);
-  await run("git", [...HOST_GIT, ...at(worktreePath), "rebase", "--abort"]);
-  return { ok: false, error: (rebased.stderr || rebased.stdout).trim() || `exit code ${rebased.code}`, conflicts: conflictsOf(unmerged) };
+  return { ok: true, onto: `origin/${base}`, ...(settled.resolved.length ? { resolved: settled.resolved } : {}) };
 }
 
 /** The same function, under the name every caller before the stack used. */
@@ -271,6 +309,18 @@ export async function isAncestor(repoPath: string, ancestor: string, descendant:
 async function lastKnownDefault(repoPath: string): Promise<string> {
   const head = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
   return head.code === 0 ? head.stdout.trim().replace(/^refs\/remotes\//, "") : "HEAD";
+}
+
+/** The paths of `paths` that exist on the repository's default branch (`origin/HEAD`, read in the user's checkout, never a card's folder):
+ *  the repo's own files, as opposed to ones only a card's branch has. With no known default branch, every path counts as the repo's. */
+export async function onDefaultBranch(repoPath: string, paths: readonly string[]): Promise<Set<string>> {
+  const ref = await lastKnownDefault(repoPath);
+  if (ref === "HEAD") return new Set(paths);
+  const found = new Set<string>();
+  for (const path of paths) {
+    if ((await exec("git", [...HOST_GIT, "-C", repoPath, "cat-file", "-e", `${ref}:${path}`])).code === 0) found.add(path);
+  }
+  return found;
 }
 
 /** How many commits the default branch has that `commit` lacks; null when either is unknown. */
@@ -465,6 +515,29 @@ export async function lockfilesAt(path: string, commit: string, names: readonly 
   return found;
 }
 
+/** The lockfiles below the root of `commit`'s tree in a card's repository (`board/Cargo.lock` → its blob id), at most 20: git's tree, never the
+ *  folder, so nothing a container wrote counts, and never under a `node_modules` or `vendor` folder (a dependency's own lockfile). */
+export async function nestedLockfilesAt(path: string, commit: string, names: readonly string[]): Promise<Record<string, string>> {
+  const found: Record<string, string> = {};
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) return found;
+  const out = await exec("git", [...HOST_GIT, ...at(path), "ls-tree", "-r", "-z", "--full-tree", commit]);
+  if (out.code !== 0) return found;
+  const wanted = new Set(names);
+  for (const entry of out.stdout.split("\0")) {
+    // `<mode> blob <sha>\t<path>`
+    const tab = entry.indexOf("\t");
+    if (tab === -1) continue;
+    const [, type, sha] = entry.slice(0, tab).split(" ");
+    const file = entry.slice(tab + 1);
+    if (type !== "blob" || !sha || !file.includes("/")) continue;
+    const parts = file.split("/");
+    if (!wanted.has(parts.at(-1)!) || parts.some((p) => p === "node_modules" || p === "vendor")) continue;
+    found[file] = sha;
+    if (Object.keys(found).length >= 20) break;
+  }
+  return found;
+}
+
 /** The blob id of each named file in the tree of `commit` in the USER's own repository (its own git directory, as `repoHead` reads it): what the commit holds, never a file in a folder. */
 export async function blobsAtRepo(repoPath: string, commit: string, names: readonly string[]): Promise<Record<string, string>> {
   const found: Record<string, string> = {};
@@ -568,8 +641,26 @@ function modesOf(raw: string): Record<string, string> {
   return modes;
 }
 
+/** The `.rs` files a name-status lists, as they are after the change (added or changed, by the new path) or before it (changed, by the old path). */
+function rustFilesOf(nameStatus: string, side: "after" | "before"): string[] {
+  const rows = nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => (side === "after" ? /^[AMCR]/ : /^[MCR]/).test(status));
+  return rows.map((cols) => (side === "after" ? cols[cols.length - 1] : cols[1]) ?? "").filter((f) => f.endsWith(".rs"));
+}
+
+/** The `#[cfg(test)]` line ranges of each of `files` as it is at `rev` (`""` is the index). A file over 1 MB or unreadable has none. */
+async function rustRegionsOf(path: string, files: readonly string[], rev: string): Promise<Record<string, Array<[number, number]>>> {
+  const regions: Record<string, Array<[number, number]>> = {};
+  for (const file of files) {
+    const shown = await exec("git", [...HOST_GIT, ...at(path), "show", `${rev}:${file}`]);
+    if (shown.code !== 0 || shown.stdout.length > 1_000_000) continue;
+    const found = rustTestRegions(shown.stdout);
+    if (found.length > 0) regions[file] = found;
+  }
+  return regions;
+}
+
 /** Stages everything a stage left in the worktree (new files too) and reads what that adds to `base`, the commit the run started from: the name-status, the unified diff and each path's new mode. */
-export async function stagePending(path: string, base: string, options: { untrackedLimit?: number } = {}): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> }> {
+export async function stagePending(path: string, base: string, options: { untrackedLimit?: number } = {}): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; testRegions: Record<string, Array<[number, number]>>; testRegionsBefore: Record<string, Array<[number, number]>> }> {
   assertNoNestedRepository(path);
   await refuseHugeUntracked(path, options.untrackedLimit);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
@@ -579,11 +670,11 @@ export async function stagePending(path: string, base: string, options: { untrac
     execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--no-color", "--no-ext-diff", base]),
     execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--raw", base]),
   ]);
-  return { nameStatus, diff, modes: modesOf(raw) };
+  return { nameStatus, diff, modes: modesOf(raw), testRegions: await rustRegionsOf(path, rustFilesOf(nameStatus, "after"), ""), testRegionsBefore: await rustRegionsOf(path, rustFilesOf(nameStatus, "before"), base) };
 }
 
 /** What the commit `sha` changed, only when it is an ancestor of HEAD (the machine's own tests commit, never one found by its subject); null otherwise. */
-export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; parent: string } | null> {
+export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; testRegions: Record<string, Array<[number, number]>>; testRegionsBefore: Record<string, Array<[number, number]>>; parent: string } | null> {
   if (!/^[0-9a-f]{7,64}$/.test(sha)) return null;
   if ((await exec("git", [...HOST_GIT, ...at(path), "merge-base", "--is-ancestor", sha, "HEAD"])).code !== 0) return null;
   const [nameStatus, diff, raw, parent] = await Promise.all([
@@ -592,7 +683,7 @@ export async function readCommitDiff(path: string, sha: string): Promise<{ nameS
     execOrThrow("git", [...HOST_GIT, ...at(path), "show", "--raw", "--format=", sha]),
     execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", `${sha}^`]).catch(() => ""),
   ]);
-  return { nameStatus, diff, modes: modesOf(raw), parent };
+  return { nameStatus, diff, modes: modesOf(raw), testRegions: await rustRegionsOf(path, rustFilesOf(nameStatus, "after"), sha), testRegionsBefore: parent ? await rustRegionsOf(path, rustFilesOf(nameStatus, "before"), parent) : {}, parent };
 }
 
 /** The branch the worktree is on (`HEAD` when detached). */
@@ -619,10 +710,13 @@ export async function commitsSince(path: string, sinceSha: string): Promise<Arra
   return commits;
 }
 
-/** What the worktree has uncommitted or untracked, one `git status --porcelain` line each. */
+/** What the worktree has uncommitted or untracked, one `git status --porcelain` line each: `XY path`, the path from the fourth character.
+ *  The first line keeps its leading space (` M path`): `execOrThrow` trims its output, which would turn it into `M path` and cut a letter off the path. */
 export async function dirtyFiles(path: string): Promise<string[]> {
   assertNoNestedRepository(path);
-  const status = await execOrThrow("git", [...HOST_GIT, ...at(path), "status", "--porcelain"]);
+  const result = await exec("git", [...HOST_GIT, ...at(path), "status", "--porcelain"]);
+  if (result.code !== 0) throw new Error(`git status failed: ${(result.stderr || result.stdout).trim()}`);
+  const status = result.stdout.trimEnd();
   return status === "" ? [] : status.split("\n");
 }
 

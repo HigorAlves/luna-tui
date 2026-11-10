@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { DATA_NOTE } from "./data-block.ts";
-import { EVE_TOOL_NAMES, FACTORY_RULES, callLine, escalationLine, factoryRules, renderPrompt as renderQuoted } from "./render.ts";
+import { EVE_TOOL_NAMES, FACTORY_RULES, callLine, callTarget, escalationLine, factoryRules, renderPrompt as renderQuoted, renderPromptReport } from "./render.ts";
 
 /** What a prompt says with the data notes, the block markers and the quoting taken off: the older tests read the values, not their quoting. */
 const unquote = (prompt: string): string => {
@@ -527,8 +527,9 @@ describe("callLine", () => {
     // eve's file tools name the target filePath; a read of four files is four lines, not a loop.
     expect(callLine("read_file", { filePath: "/work/b.ts" })).toBe("→ read_file /work/b.ts");
     expect(callLine("write_file", { filePath: "/work/b.ts", content: "a" })).not.toBe(callLine("write_file", { filePath: "/work/b.ts", content: "b" }));
-    expect(callLine("Bash", { command: "cargo test\n--verbose" })).toBe("→ Bash cargo test");
-    expect(callLine("Grep", { pattern: "x".repeat(200) })).toHaveLength("→ Grep ".length + 160);
+    // A target cut to one line or to 160 columns carries a fingerprint of all of it, so two commands that share a first line are two calls.
+    expect(callLine("Bash", { command: "cargo test\n--verbose" })).toMatch(/^→ Bash cargo test ·[0-9a-f]{8}$/);
+    expect(callLine("Grep", { pattern: "x".repeat(200) })).toMatch(new RegExp(`^→ Grep ${"x".repeat(160)} ·[0-9a-f]{8}$`));
     expect(callLine("mcp__luna__step", { label: "slice 1" })).toBe("→ mcp__luna__step slice 1");
   });
 
@@ -616,8 +617,8 @@ describe("ticket and model text in a prompt", () => {
     expect(out.some((l) => l.startsWith("# "))).toBe(false);
   });
 
-  it("caps a description at 8,000 characters and a plan's brief at 2,000", () => {
-    const out = render({ description: "d".repeat(20_000) }, { brief: "b".repeat(5000) });
+  it("caps a description at 40,000 characters and a plan's brief at 32,000", () => {
+    const out = render({ description: "d".repeat(52_000) }, { brief: "b".repeat(35_000) });
     expect(out).toContain("[cut: 12000 more characters]");
     expect(out).toContain("[cut: 3000 more characters]");
   });
@@ -685,5 +686,99 @@ describe("renderPrompt for decompose", () => {
     const prompt = renderQuoted({ pack: PACKS.decompose, input: { ...input, stage: "decompose", pack: "decompose", context: { projectContext: null } } as unknown as StageInput, template });
     expect(prompt).not.toContain("{{");
     expect(prompt).toContain("(none)");
+  });
+});
+
+describe("renderPromptReport: what a prompt lost", () => {
+  const template = readFileSync(new URL("../../prompts/build_tests.md", import.meta.url), "utf8");
+  const scenarios = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `S${i + 1}`, title: `scenario ${i + 1}`, criterion: "c ".repeat(200), type: "happy", layer: "unit", given: "g", when: "w", then: "t" }));
+  const report = (n: number) => renderPromptReport({ pack: PACKS.build_tests, input: { ...input, pack: "build_tests", stage: "implementing", context: { ...input.context, testCases: scenarios(n) } } as never, template });
+
+  it("a 13-scenario plan reaches the test-writer whole: the run that escalated twice lost S4-S13", () => {
+    const { prompt, cuts } = report(13);
+    expect(cuts).toEqual([]);
+    expect(prompt).toContain("S13 scenario 13");
+  });
+  it("a plan past the cap is reported, as the work that must be whole", () => {
+    // Past 200,000 characters (about 450 scenarios here); the 23aa189b plan, 192 characters over the old 12,000, renders whole.
+    const { cuts } = report(600);
+    expect(cuts.map((c: { name: string; whole: boolean }) => [c.name, c.whole])).toEqual([["context.testCases", true]]);
+  });
+  it("renderPrompt is the same prompt", () => {
+    expect(renderQuoted({ pack: PACKS.build_tests, input: { ...input, pack: "build_tests", stage: "implementing" } as never, template })).toBe(renderPromptReport({ pack: PACKS.build_tests, input: { ...input, pack: "build_tests", stage: "implementing" } as never, template }).prompt);
+  });
+});
+
+describe("verifying: the machine's tests commit", () => {
+  const template = readFileSync(new URL("../../prompts/verifying.md", import.meta.url), "utf8");
+  const verify = (testsCommit?: { sha: string; files: string[] }) =>
+    renderQuoted({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying", context: { ...input.context, baseCommit: "de1ae7a", ...(testsCommit ? { testsCommit } : {}) } } as never, template });
+
+  it("tells Verify the tests commit's files are the harness's, so a 'which files change' scenario is judged without them", () => {
+    const prompt = verify({ sha: "a7aa421", files: ["contracts/src/readme-ste.test.ts"] });
+    expect(prompt).toContain("The machine made commit `a7aa421` itself");
+    expect(prompt).toContain("judge it on the change without these files");
+    // The files are the writer's: quoted as data, never as the machine's words.
+    expect(prompt).toMatch(/<<<data:context\.testsCommit\.files>>>\n\| - contracts\/src\/readme-ste\.test\.ts\n<<<end-data:context\.testsCommit\.files>>>/);
+  });
+  it("says there is none when the card has no tests commit", () => {
+    expect(verify()).toContain("This card has no tests commit of the machine's");
+  });
+});
+
+describe("callTarget: a long search", () => {
+  const pattern = "\\b(is|are|was|were|be|been|being)\\s+(left|built|run|written|given|made|shown|kept|chosen|known|taken|done|seen|found|sent|read|held|stored|picked|cut|set|put|told)\\b";
+  it("tells four greps over four files apart when the pattern pushes the path past the cut (Verify was stopped as stuck)", () => {
+    const calls = [".github/README.md", "docs/README.md", "evals/README.md", "board/README.md"].map((path) => callTarget("grep", { pattern, path }));
+    expect(new Set(calls.map((c) => `${c.target}|${c.fingerprint}`)).size).toBe(4);
+  });
+  it("still reads the same long search four times as one call", () => {
+    const calls = Array.from({ length: 4 }, () => callTarget("grep", { pattern, path: "board/README.md" }));
+    expect(new Set(calls.map((c) => `${c.target}|${c.fingerprint}`)).size).toBe(1);
+  });
+  it("leaves a short call as it was: no fingerprint", () => {
+    expect(callTarget("grep", { pattern: "TODO", path: "src" })).toEqual({ target: "TODO in src" });
+  });
+});
+
+describe("test design: the criteria ids", () => {
+  const template = readFileSync(new URL("../../prompts/test_design.md", import.meta.url), "utf8");
+  it("numbers the plan under design, the list the machine checks coverage against, not the earlier approved plan", () => {
+    const approved = ["a", "b", "c"];
+    const underDesign = ["goal sentence", "a", "b", "c"];
+    const prompt = renderQuoted({ pack: PACKS.test_design, input: { ...input, pack: "test_design", stage: "test_design", plan: { ...input.plan, criteria: approved }, context: { ...input.context, plan: { record: null, brief: "", criteria: underDesign, assumptions: [], slices: [] } } } as never, template });
+    expect(prompt).toContain("C4: c");
+    expect(prompt).not.toContain("C3: c");
+  });
+  it("falls back to the approved plan's criteria when there is no plan under design", () => {
+    const prompt = renderQuoted({ pack: PACKS.test_design, input: { ...input, pack: "test_design", stage: "test_design", plan: { ...input.plan, criteria: ["x", "y"] } } as never, template });
+    expect(prompt).toContain("C2: y");
+  });
+});
+
+describe("a documentation-only change", () => {
+  const verifying = readFileSync(new URL("../../prompts/verifying.md", import.meta.url), "utf8");
+  const design = readFileSync(new URL("../../prompts/test_design.md", import.meta.url), "utf8");
+  it("tells Verify and the implementer to write no test, when the machine says the plan touches only documentation", () => {
+    const on = renderQuoted({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying", context: { ...input.context, docsOnly: true } } as never, template: verifying });
+    expect(on).toContain("Write no new test and no test file for it");
+    const off = renderQuoted({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying" } as never, template: verifying });
+    expect(off).not.toContain("Write no new test");
+  });
+  it("tells the test designer every scenario is a reading check", () => {
+    const prompt = renderQuoted({ pack: PACKS.test_design, input: { ...input, pack: "test_design", stage: "test_design", context: { ...input.context, plan: { docsOnly: true, record: null, brief: "", criteria: ["a"], assumptions: [], slices: [] } } } as never, template: design });
+    expect(prompt).toContain("never a new test or test file");
+  });
+});
+
+
+describe("verifying: the browser scenarios left to e2e", () => {
+  const verifying = readFileSync(new URL("../../prompts/verifying.md", import.meta.url), "utf8");
+  it("tells Verify not to prove them, and says nothing when there are none", () => {
+    const on = renderQuoted({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying", context: { ...input.context, browserScenarios: 3 } } as never, template: verifying });
+    expect(on).toContain("3 more scenarios are browser checks");
+    expect(on).toContain("the e2e stage runs them in a real browser after you");
+    const off = renderQuoted({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying" } as never, template: verifying });
+    expect(off).not.toContain("browser check");
   });
 });

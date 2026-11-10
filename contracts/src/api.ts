@@ -59,6 +59,10 @@ export interface RunResult {
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
 export const SetupRepoInput = z.object({ repoPath: z.string().trim().min(1) });
 export type SetupRepoInput = z.infer<typeof SetupRepoInput>;
+
+/** A luna.yaml's text to check (`POST /repos/config/check`): at most 256 KiB, as the machine reads the file. */
+export const ConfigCheckInput = z.object({ text: z.string().max(256 * 1024) });
+export type ConfigCheckInput = z.infer<typeof ConfigCheckInput>;
 export type NewTaskInput = z.infer<typeof NewTaskInput>;
 
 /** `PATCH /tasks/:id`: only the fields given change. */

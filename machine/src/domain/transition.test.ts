@@ -70,6 +70,14 @@ describe("typed escalations", () => {
     const step = transition(at(state, { retries: { ...NO_RETRIES, total: 2 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "the plan names a module that does not exist" });
     expect(step).toMatchObject({ state: "test_design", effect: { kind: "run", stage: "test_design" }, retries: { total: 2, planWrong: 1 }, escalation: "plan_wrong", reason: "the plan names a module that does not exist" });
   });
+  it("plan_wrong starts the Verify, browser and CI loops again for the new plan, and keeps the implementer's runs", () => {
+    // The site card (2026-11-08): two Verify failures on the old plan, a replan, then one finding on the new plan escalated "verify failed 3 times".
+    const set = { key: "k", rounds: 1 };
+    const step = transition(at("verifying", { retries: { ...NO_RETRIES, verify: 2, e2e: 1, ci: 1, total: 5, findingSet: set } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" });
+    expect(step.retries).toEqual({ ...NO_RETRIES, total: 5, planWrong: 1 });
+    const failed = transition({ ...at("verifying"), retries: step.retries }, { type: "stage_done", outcome: "fail", reason: "a blocker" });
+    expect(failed).toMatchObject({ state: "implementing", retries: { verify: 1 } });
+  });
   it("a second plan_wrong on the same card waits for a person", () => {
     const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, planWrong: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "still wrong" });
     expect(step).toMatchObject({ state: "escalated", resumeTo: "implementing", escalation: "plan_wrong" });
@@ -209,6 +217,11 @@ describe("gates", () => {
     expect(transition(at("awaiting_approval"), { type: "sent_back", from: "triage" }).state).toBe("triage");
     expect(transition(at("awaiting_approval"), { type: "sent_back", from: "plan" }).state).toBe("test_design");
     expect(transition(at("awaiting_approval"), sentBack).state).toBe("test_design");
+  });
+
+  it("plans an escalated feature card again when a person sends it back, with a fresh retry budget (approving reruns the stage on the same plan)", () => {
+    const moved = transition(at("escalated", { resumeTo: "verifying", retries: { ...NO_RETRIES, total: 3 } }), sentBack);
+    expect(moved).toMatchObject({ state: "test_design", effect: { kind: "run", stage: "test_design" }, retries: NO_RETRIES });
   });
 
   it("asks the plan stage's questions at awaiting_answers and returns to that stage when they are answered", () => {

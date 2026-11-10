@@ -10,7 +10,9 @@ Read the checkout at `/work` (read-only; it is the repository itself, not a task
 1. **checks**: the commands a maintainer runs before merging, one entry each, in the directory they run from. Tests, lint, type-check, build when the build is the test. Prefer the repo's own scripts (`package.json` scripts, a Makefile target, `cargo test`, `go test ./...`, `pytest`) over anything you invent. In a monorepo, one entry per package that has its own suite, with `paths` scoping it to that package and what it depends on.
 2. **services**: what the code needs beside it to run those checks: a database, a cache, a broker. Read compose files, CI workflows, `.env.example`, test setup files and connection strings. Each service exports the env the code reads, with the service's key as hostname (never `localhost`: the service runs in its own container).
 3. **toolchains**: what the repo builds with, by tool and version, from engines fields, `rust-toolchain`, `go.mod`, `.nvmrc`, `.python-version`, CI matrices.
-4. **policy** and **qa_targets**: only what the tree states (a `PIPELINE.md` to migrate, a documented staging URL). Never invent a budget or a target.
+4. **verify.e2e.start**: for a repo that renders pages, how to start the app for the browser check (the serving package's dev or start script, bound to `0.0.0.0`, its port and a ready path). None for a repo with no page, with `policy.qa: none`.
+5. **sandbox.egress.allow**: the hosts a check or the app reaches beyond GitHub and the registries of the repo's lockfiles (a subfolder's lockfile adds only its ecosystem's public registry): a custom registry a subfolder's lockfile names, a tool a script downloads, fonts or assets fetched at build time.
+6. **policy** and **qa_targets**: only what the tree states (a `PIPELINE.md` to migrate, a documented staging URL). Never invent a budget or a target.
 
 The machine proves every check you propose by running it once, with your services beside it, and shows the person pass or fail per check before they approve. A check you are unsure of is still worth proposing with a note; a check you know cannot run here (needs a credential, a device, a GUI) is not.
 

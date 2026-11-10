@@ -140,7 +140,8 @@ export function renderCheck(check: CheckContext): string {
         ? [`Scenario ${check.scenario.id}: ${check.scenario.given && check.scenario.when && check.scenario.then ? `given ${check.scenario.given}, when ${check.scenario.when}, then ${check.scenario.then}` : (check.scenario.approach ?? check.scenario.title)}`, `The tagged test exists in the diff: ${check.exists ? "yes" : "no"}`, "This test was written before the production code: what it exercises may not exist yet."]
         : []),
       ...(check.slice ? [`Slice ${check.slice.id}: ${check.slice.title}`, ...bullets("Acceptance", check.slice.acceptance)] : []),
-      `Failing output:\n${check.output ?? "(none)"}`,
+      ...(check.test ? [`The test, as the machine read it from the worktree:\n${check.test}`] : []),
+      `Failing output (the test writer's report):\n${check.output ?? "(none)"}`,
     ].join("\n");
   }
   if (check.kind === "escalation") {

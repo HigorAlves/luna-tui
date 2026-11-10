@@ -1,19 +1,23 @@
 // The delivering stage: push the task's branch and open a draft PR on the host, so CI starts
 // early. The push is git with your own credentials; the PR is the GitHub port.
 import { at } from "../../adapters/git/machine-repo.ts";
-import { HOST_GIT, type RebaseResult, branchBase, originSlugOf, rebaseOntoBase, stackOf, unstack as hostUnstack } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, type RebaseResult, branchBase, defaultBranchFile, originSlugOf, rebaseOntoBase, stackOf, unstack as hostUnstack } from "../../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../../adapters/process/exec.ts";
-import { type PrExtra, buildPr, mergePrSection } from "../../domain/prbody.ts";
+import { PR_TEMPLATE_PATHS, type PrExtra, buildPr, mergePrSection } from "../../domain/prbody.ts";
 import { approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
 import { type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import { cardOf } from "../../domain/card-fields.ts";
+import { isDocsOnly } from "../../domain/docs-only.ts";
+import { looksLikeTestPath } from "../../domain/locked-files.ts";
 import type { StackFacts } from "../stack.ts";
 
 export type ExecFn = (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<ExecResult>;
 
 export interface DeliverDeps {
+  /** The repository's PR template (default: read from its default branch); tests pass one. */
+  prTemplate?: (repoPath: string | null) => Promise<string | null>;
   exec: ExecFn;
   github: GitHub;
   /** The `owner/name` a worktree pushes to; tests inject one, the default reads the origin remote. */
@@ -67,9 +71,16 @@ export async function pushCheckpoint(exec: ExecFn, branch: string, cwd: string, 
 }
 
 /** What the record, the plan and the scenarios say, for the machine's section of the body. */
-export function prExtraOf(context: StageContext, commits: { base: string | null; head: string | null } | null): PrExtra {
+/** The repository's PR template, read from its default branch in the user's checkout (never a card's folder); null when it has none. */
+export async function prTemplateOf(repoPath: string | null): Promise<string | null> {
+  if (!repoPath) return null;
+  return defaultBranchFile(repoPath, PR_TEMPLATE_PATHS, 32_768).catch(() => null);
+}
+
+export function prExtraOf(context: StageContext, commits: { base: string | null; head: string | null } | null, template: string | null = null): PrExtra {
   const { task } = context;
   return {
+    ...(template ? { template } : {}),
     record: task.record,
     // The plan's version: how many times a plan was approved (a plan sent back and approved again counts).
     planVersion: context.approvals.filter((a) => a.kind === "awaiting_approval" && a.decision === "approved").length || null,
@@ -124,8 +135,9 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
       } else if (parent?.parent.head) {
         const recorded = await (deps.stacked.baseSha ?? (async (path: string) => (await stackOf(path)).sha))(task.worktreePath);
         if (recorded !== parent.parent.head) {
-          const done = await (deps.stacked.rebase ?? rebaseOntoBase)(deps.exec, task.worktreePath, task.repoPath, defaultOf);
+          const done = await (deps.stacked.rebase ?? rebaseOntoBase)(deps.exec, task.worktreePath, task.repoPath, defaultOf, parentWinsFor(context));
           const failed = stopped(done, "the rebase onto the parent's new tip");
+          if (done.ok && done.resolved?.length) await context.note?.(`rebased onto the parent's new tip; the parent's version kept for ${done.resolved.join(", ")} (not this card's to change)`).catch(() => {});
           if (failed) return failed;
           restacked = true;
         }
@@ -139,7 +151,8 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
     try {
       const existing = await deps.github.findPr(slug, task.branch);
       const commits = deps.commitsOf ? await deps.commitsOf(task.worktreePath, task.repoPath).catch(() => null) : null;
-      const extra = { ...prExtraOf(context, commits), ...(stackedOn?.number ? { stack: { number: stackedOn.number } } : {}) };
+      const template = await (deps.prTemplate ?? prTemplateOf)(task.repoPath);
+      const extra = { ...prExtraOf(context, commits, template), ...(stackedOn?.number ? { stack: { number: stackedOn.number } } : {}) };
       const ref = existing ?? (await openTaskPr(deps.github, slug, context, true, extra, stackedOn?.branch));
       // A PR that exists keeps whatever a person wrote: only the machine's own section is replaced.
       if (existing) {
@@ -196,3 +209,16 @@ export const realDeliverRunner = (github: GitHub, stacked?: DeliverDeps["stacked
       return { base: await branchBase(worktreePath, repoPath).catch(() => null), head: head && head.code === 0 ? head.stdout.trim() : null };
     },
   });
+
+/** Which files in a rebase conflict the parent's version wins, from the card's approved plan: a file the plan does not touch is not the card's,
+ *  and on a docs-only plan neither is a test (a docs card stacked on another kept both editing the first card's prose test, and every rebase
+ *  stopped on it). A file the plan touches still stops the rebase: settling it needs judgement. With no plan, nothing is settled by itself. */
+export function parentWinsFor(context: Pick<StageContext, "approvals">): { parentWins?: (path: string) => boolean } {
+  const plan = approvedPlan(context.approvals);
+  const touched = (plan?.slices ?? []).flatMap((s) => (s as { touchpoints?: string[] }).touchpoints ?? []);
+  if (touched.length === 0) return {};
+  const planned = new Set(touched);
+  const docs = isDocsOnly(touched);
+  return { parentWins: (path) => !planned.has(path) || (docs && looksLikeTestPath(path)) };
+}
+

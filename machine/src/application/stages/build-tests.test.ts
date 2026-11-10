@@ -27,7 +27,7 @@ function fakes(trees: Array<{ nameStatus: string; diff: string }>, over: Partial
   let headValue = "base0";
   const headNow = () => headValue;
   const reviews: Array<string[] | undefined> = [];
-  const implemented: Array<{ scenarioTests?: { scenario: string; file: string }[] }> = [];
+  const implemented: Array<{ scenarioTests?: { scenario: string; file: string }[]; testsFiles?: string[] }> = [];
   let tree = trees[0]!;
   let commit: { subject: string; body: string } | null = null;
   const deps: BuildTestsDeps = {
@@ -85,12 +85,49 @@ describe("the red check, per scenario", () => {
     expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
   });
 
-  it("sends the writer back with the problems of a scenario whose test fails for the wrong reason", async () => {
+  it("sends the writer back with the problems of a scenario whose test two askings say fails for the wrong reason", async () => {
     let n = 0;
-    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (c.scenario?.id === "S2" && n++ === 0 ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (c.scenario?.id === "S2" && n++ < 2 ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
     await buildTestsStep(f.deps)(context([v1]));
     expect(f.calls).toEqual(["writer", "writer", "commit", "checkpoint:red", "implement", "sweep"]);
     expect(f.reviews[1]!.join(" ")).toMatch(/S2.*import/);
+  });
+
+  it("does not send the writer back for one stray no: the judge is asked again and the majority stands", async () => {
+    const asked: string[] = [];
+    let n = 0;
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (asked.push(c.scenario!.id), c.scenario?.id === "S2" && n++ === 0 ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
+    const e = emitted();
+    await buildTestsStep(f.deps)({ ...context([v1]), emit: e.emit } as never);
+    expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(asked.filter((id) => id === "S2")).toHaveLength(3);
+    expect(asked.filter((id) => id === "S1")).toHaveLength(1);
+    expect(e.rows).toContainEqual(["scenario.red_check", expect.objectContaining({ scenario: "S2", verdict: "proceed", asked: 3, flagged: 1 })]);
+  });
+
+  it("puts each scenario's verdict on the stream, and on the escalation when the step gives up", async () => {
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (c.scenario?.id === "S2" ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
+    const e = emitted();
+    const result = await buildTestsStep(f.deps)({ ...context([v1]), emit: e.emit } as never);
+    expect(e.rows.filter(([k]) => k === "scenario.red_check").map(([, p]) => [p.scenario, p.verdict, p.asked, p.flagged])).toEqual(expect.arrayContaining([["S1", "proceed", 1, 0], ["S2", "flag", 2, 2]]));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { testsStep: { status: "failed", redChecks: [{ scenario: "S1", verdict: "proceed" }, { scenario: "S2", verdict: "flag" }] } } });
+  });
+
+  it("gives the judge the test's source, read by the machine, beside the writer's report", async () => {
+    const seen: Array<string | undefined> = [];
+    const f = fakes([tagged("S1")], {
+      readTest: async (_w, file, id) => `// ${file} ${id}\nit("x", () => {});`,
+      judgeRed: async (c) => (seen.push(c.test), { verdict: "proceed", problems: [] }),
+    });
+    await buildTestsStep(f.deps)(context([v2]));
+    expect(seen).toEqual([expect.stringContaining("it(\"x\"")]);
+  });
+
+  it("asks without the source when it cannot be read", async () => {
+    const seen: Array<string | undefined> = [];
+    const f = fakes([tagged("S1")], { readTest: async () => Promise.reject(new Error("EISDIR")), judgeRed: async (c) => (seen.push(c.test), { verdict: "proceed", problems: [] }) });
+    await buildTestsStep(f.deps)(context([v2]));
+    expect(seen).toEqual([undefined]);
   });
 
   it("sends the writer back for a scenario with no red reported, twice at most, and escalates the third time", async () => {
@@ -106,6 +143,153 @@ describe("the red check, per scenario", () => {
     const result = await buildTestsStep(f.deps)(context([v2]));
     expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
     expect(result.detail).toMatchObject({ testsStep: { status: "committed", redCheck: "skipped" } });
+  });
+});
+
+describe("Rust's inline tests", () => {
+  const rustTree = (outside = false) => ({
+    nameStatus: "M\tboard/src/ui.rs\nA\tboard/tests/extra.rs",
+    diff: [
+      "diff --git a/board/src/ui.rs b/board/src/ui.rs",
+      "--- a/board/src/ui.rs",
+      "+++ b/board/src/ui.rs",
+      ...(outside ? ["@@ -20,0 +20 @@", "+fn sneaky() {}"] : []),
+      "@@ -100,0 +101,5 @@",
+      "+#[cfg(test)]",
+      "+mod tests {",
+      "+    // @scenario:S1",
+      "+    // @scenario:S2",
+      "+}",
+      "diff --git a/board/tests/extra.rs b/board/tests/extra.rs",
+      "--- /dev/null",
+      "+++ b/board/tests/extra.rs",
+      "@@ -0,0 +1 @@",
+      "+// helper",
+    ].join("\n"),
+    testRegions: { "board/src/ui.rs": [[101, 105]] as Array<[number, number]> },
+  });
+
+  it("writes the tests in the source file, commits them, and leaves that file to the implementer: it holds production code", async () => {
+    const f = fakes([rustTree()]);
+    const result = await buildTestsStep(f.deps)(context([v1]));
+    expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(f.implemented[0]!.scenarioTests).toEqual([{ scenario: "S1", file: "board/src/ui.rs" }, { scenario: "S2", file: "board/src/ui.rs" }]);
+    // The test file beside it stays protected; the source file with inline tests does not.
+    expect(f.implemented[0]!.testsFiles).toEqual(["board/tests/extra.rs"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed" } });
+  });
+
+  it("sends the writer back when a line outside the test module was added", async () => {
+    const f = fakes([rustTree(true), rustTree()]);
+    await buildTestsStep(f.deps)(context([v1]));
+    expect(f.calls).toEqual(["writer", "writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(f.reviews[1]!.join(" ")).toMatch(/board\/src\/ui\.rs/);
+  });
+});
+
+describe("a scenario that only runs one of the repo's commands", () => {
+  const withCheck = gate({
+    plan: { goal: "g", steps: [], acceptance_criteria: [{ id: "C1", text: "c1" }, { id: "C9", text: "board:test and board:lint are clean" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: [
+      { id: "S1", title: "one", criterion: "c1", criterion_ref: "C1", approach: "a" },
+      // S13 of the split-card ticket, as its plan wrote it.
+      { id: "S13", title: "Both exit 0 with no warnings", criterion: null, criterion_ref: null, given: "The finished change", when: "pnpm board:test and pnpm board:lint run", then: "Both exit 0 with no warnings", approach: "a" },
+    ],
+  });
+
+  it("needs no test: the step commits S1's and goes on, and says S13 is a check", async () => {
+    const asked: string[] = [];
+    const f = fakes([tagged("S1")], { repoCommands: async () => ["pnpm board:test"], judgeRed: async (c) => (asked.push(c.scenario!.id), { verdict: "proceed", problems: [] }) }, [{ S1: "FAIL: no part marker" }]);
+    const result = await buildTestsStep(f.deps)(context([withCheck]));
+    expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(asked).toEqual(["S1"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed", commandChecks: ["S13"] } });
+  });
+
+  it("still asks for a test when the repo has no such command", async () => {
+    const f = fakes([tagged("S1")], { repoCommands: async () => [] }, [{ S1: "FAIL" }]);
+    const result = await buildTestsStep(f.deps)(context([withCheck]));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringMatching(/S13/) } });
+  });
+});
+
+describe("a plan that only rewrites documentation", () => {
+  const docsPlan = gate({
+    plan: { goal: "g", steps: [{ title: "Rewrite the READMEs", est_loc: 40, touchpoints: ["board/README.md", "docs/README.md", "contracts/src/readme-ste.test.ts"], acceptance: ["short sentences"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: [{ id: "S1", title: "No sentence over 25 words", criterion: "c1", criterion_ref: "C1", approach: "count the words" }],
+  });
+
+  it("runs the implementer without the tests step: no failing test is written for prose, and nothing is locked", async () => {
+    const f = fakes([tagged("S1")]);
+    const result = await buildTestsStep(f.deps)(context([docsPlan]));
+    expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(f.implemented[0]).toEqual({});
+    expect(result.detail).toMatchObject({ testsStep: { status: "skipped", why: "docs_only" } });
+  });
+
+  it("unlocks a card whose tests step already committed: the scope still starts there, the tests are the change's to fix", async () => {
+    const f = fakes([tagged("S1")]);
+    const result = await buildTestsStep(f.deps)(context([docsPlan], { testsCommit: "a7aa421" }));
+    expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(f.implemented[0]).toEqual({ scopeBase: "a7aa421" });
+    expect(result.detail).toMatchObject({ testsStep: { status: "skipped", why: "docs_only", commit: "a7aa421", unlocked: true } });
+  });
+
+  it("still runs the tests step for a plan that touches code", async () => {
+    const codePlan = gate({ ...JSON.parse(JSON.stringify(docsPlan.requested)), plan: { ...(docsPlan.requested.plan as object), steps: [{ title: "x", est_loc: 5, touchpoints: ["web/cart.ts", "docs/api.md"], acceptance: ["a"] }] } });
+    const f = fakes([tagged("S1")], {}, [{ S1: "FAIL: cart.export is not a function" }]);
+    await buildTestsStep(f.deps)(context([codePlan]));
+    expect(f.calls[0]).toBe("writer");
+  });
+});
+
+describe("scenarios no red test can be written for (the site card)", () => {
+  const sitePlan = gate({
+    plan: { goal: "g", steps: [{ title: "x", est_loc: 50, touchpoints: ["site/src/content/landing.ts"], acceptance: ["a"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "r", version: 3 },
+    cases: [
+      { id: "S1", title: "one", criterion: "c1", criterion_ref: "C1", approach: "a" },
+      { id: "S14", title: "No dependency is added", criterion: "c1", criterion_ref: "C1", when: "site/package.json and pnpm-lock.yaml are compared", then: "neither file adds a dependency", approach: "a", layer: "integration" },
+      { id: "S24", title: "Each new section shows its heading", criterion: "c1", criterion_ref: "C1", when: "a browser loads the page", then: "each of the four new sections shows its h2 heading", approach: "a", layer: "e2e" },
+    ],
+  });
+
+  it("asks no red for a browser scenario, nor for one the writer says already holds, with its reason", async () => {
+    const asked: string[] = [];
+    const f = fakes([tagged("S1")], {
+      runWriter: async () => ({ outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, run: { inputCommit: "base0" }, detail: { scenarioReds: { S1: "FAIL: no section" }, answer: { kind: "done", summary: "s", holdsToday: [{ scenario: "S14", reason: "no dependency is added today either" }] } } }),
+      judgeRed: async (c) => (asked.push(c.scenario!.id), { verdict: "proceed", problems: [] }),
+    });
+    const result = await buildTestsStep(f.deps)(context([sitePlan]));
+    expect(asked).toEqual(["S1"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed", browserChecks: ["S24"], holdsToday: [{ scenario: "S14", reason: "no dependency is added today either" }] } });
+  });
+
+  it("still asks for a test when the writer gives no reason", async () => {
+    const f = fakes([tagged("S1")], {
+      runWriter: async () => ({ outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, run: { inputCommit: "base0" }, detail: { scenarioReds: { S1: "FAIL" }, answer: { kind: "done", summary: "s", holdsToday: [{ scenario: "S14", reason: " " }] } } }),
+    });
+    const result = await buildTestsStep(f.deps)(context([sitePlan]));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringMatching(/S14/) } });
+  });
+});
+
+describe("a red judged right once", () => {
+  it("keeps its verdict in the next round while its test and output are the same; a changed red is judged again", async () => {
+    const asked: string[] = [];
+    let s2Calls = 0;
+    // Round one: S1 is right, S2 is flagged twice (sent back). Round two: S1 unchanged is not asked again; S2's new red is judged and passes.
+    const f = fakes([tagged("S1", "S2"), tagged("S1", "S2")], {
+      judgeRed: async (c) => {
+        asked.push(c.scenario!.id);
+        if (c.scenario!.id === "S2" && s2Calls++ < 2) return { verdict: "flag", problems: ["the test fails on an import"] };
+        return { verdict: "proceed", problems: [] };
+      },
+    }, [{ S1: "FAIL: no export", S2: "FAIL: cannot find module" }, { S1: "FAIL: no export", S2: "FAIL: no total" }]);
+    const e = { rows: [] as Array<[string, Record<string, unknown>]> };
+    await buildTestsStep(f.deps)({ ...context([v1]), emit: async (k: string, p: Record<string, unknown>) => void e.rows.push([k, p]) } as never);
+    expect(f.calls).toEqual(["writer", "writer", "commit", "checkpoint:red", "implement", "sweep"]);
+    expect(asked.filter((id) => id === "S1")).toHaveLength(1);
+    expect(e.rows).toContainEqual(["scenario.red_check", expect.objectContaining({ scenario: "S1", kept: true })]);
   });
 });
 
@@ -295,6 +479,26 @@ describe("Build's tests step", () => {
   });
 
   const recordedCommit = (parent = "base0", tree = tagged("S1")) => ({ ...tree, parent });
+
+  it("accepts a recorded tests commit with no tag for a scenario the step recorded as already holding (the site card's S9 and S14)", async () => {
+    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => recordedCommit("base0", tagged("S1")) } });
+    const result = await buildTestsStep(f.deps)(context([v1], { testsCommit: "def5678", firstInputCommit: "base0", testsHoldsToday: ["S2"] }));
+    expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed", resumed: true, holdsToday: [{ scenario: "S2" }] } });
+  });
+
+  it("accepts a scenario a re-plan added after the tests commit, with no tag in it: Verify judges it", async () => {
+    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => recordedCommit("base0", tagged("S1")) } });
+    const result = await buildTestsStep(f.deps)(context([v1], { testsCommit: "def5678", firstInputCommit: "base0", planChangedSinceTests: true }));
+    expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed", resumed: true, addedSinceTests: ["S2"] } });
+  });
+
+  it("says what is wrong when a recorded tests commit misses a tag, not that the branch moved", async () => {
+    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => recordedCommit("base0", tagged("S1")) } });
+    const result = await buildTestsStep(f.deps)(context([v1], { testsCommit: "def5678", firstInputCommit: "base0" }));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringMatching(/no longer passes its own check: .*S2/) } });
+  });
 
   it("does not write the tests twice: a card whose tests commit exists goes straight to the implementer, with the tests listed from that commit, the scope measured from it and every path in it protected", async () => {
     const reads: string[] = [];

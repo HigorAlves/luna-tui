@@ -31,8 +31,9 @@ describe("renderEvidenceSection", () => {
     expect(text.startsWith(SECTION_START)).toBe(true);
     expect(text.trimEnd().endsWith(SECTION_END)).toBe(true);
     expect(text).toContain("## Evidence");
-    expect(text).toContain("Show the cart total.");
-    expect(text).toContain("**Format** video · **Commit** `abc1234` · **Risk** medium");
+    // The summary repeats the PR's Why: the section opens with how the scenarios were proven, the commit and the risk.
+    expect(text).toContain("· **Commit** `abc1234` · **Risk** medium");
+    expect(text).toContain("<details><summary>Details</summary>");
     expect(text).toContain("| Scenario | Proof | Result |");
     expect(text).toContain("| Total shows after adding an item | qa-cart.webm#t=0 | pass |");
     expect(text).toContain("| Empty cart shows zero | none | partial |");
@@ -65,7 +66,7 @@ describe("renderEvidenceSection", () => {
   it("leaves out the sections a text pack has nothing for", () => {
     const text = renderEvidenceSection(pack({ format: "text", scenarios: [], findings: [], outOfMap: [], media: [], video: null }));
     expect(text).not.toContain("| Scenario |");
-    expect(text).not.toContain("### Findings");
+    expect(text).not.toContain("**Findings**");
     expect(text).not.toContain("### Media");
     expect(text).toContain("**Rollback.**");
   });
@@ -80,14 +81,15 @@ describe("renderEvidenceSection", () => {
   });
 
   it("escapes raw HTML in a model's text, so a tag cannot fold the rest of the section away", () => {
-    const text = renderEvidenceSection(pack({ summary: "<details><summary>ok</summary>", findings: ["bug: <img src=x onerror=1> (a.ts:1)"] }));
-    expect(text).not.toContain("<details>");
+    const text = renderEvidenceSection(pack({ findings: ["bug: <details><summary>ok</summary> <img src=x onerror=1> (a.ts:1)"] }));
+    // The section's own fold is the one raw <details>: a model's tag is escaped.
+    expect(text.split("<details>")).toHaveLength(2);
     expect(text).not.toContain("<img");
     expect(text).toContain("&lt;details&gt;");
   });
 
   it("keeps an issue reference in a model's text from closing or linking anything on merge", () => {
-    const text = renderEvidenceSection(pack({ findings: ["bug: Closes #12 and fixes #345 (src/a.ts:1)"], summary: "see GH #7" }));
+    const text = renderEvidenceSection(pack({ findings: ["bug: Closes #12 and fixes #345 (src/a.ts:1)"], rollback: "see GH #7" }));
     expect(text).not.toMatch(/#\d/);
     expect(text).toContain("#\u200b12");
     expect(text).toContain("#\u200b7");
@@ -99,7 +101,7 @@ describe("renderEvidenceSection", () => {
     expect(text.length).toBeLessThanOrEqual(6000);
     expect(text).toMatch(/… \d+ more/);
     expect(text).toContain("**Rollback.**");
-    expect(text).toContain("### Findings");
+    expect(text).toContain("**Findings**");
     expect(text.trimEnd().endsWith(SECTION_END)).toBe(true);
   });
 
@@ -232,7 +234,7 @@ describe("renderEvidenceSection of a v2.2 pack", () => {
     expect(text).toContain("- should_fix: memoise the total (fixed)");
     expect(text).toContain("- nit: naming (open)");
     expect(text).toContain("**Revision** 2");
-    expect(text).toContain("| Total shows | src/a.test.ts | not run |");
+    expect(text).toContain("| Total shows | src/a.test.ts | judged by Verify |");
     expect(text.startsWith(SECTION_START)).toBe(true);
     expect(text.trimEnd().endsWith(SECTION_END)).toBe(true);
   });
@@ -269,7 +271,7 @@ describe("Changes after review", () => {
     const { renderEvidenceSection } = await import("./evidence-markdown.ts");
     expect(renderEvidenceSection(base)).not.toContain("Changes after review");
     const text = renderEvidenceSection({ ...(base as object), fixes: [{ sha: "e".repeat(40), scope: "in_place", summary: "renamed <b>x</b> @all", at: "t" }] } as never);
-    expect(text).toContain("### Changes after review");
+    expect(text).toContain("**Changes after review**");
     expect(text).toContain("eeeeeee");
     expect(text).not.toContain("<b>");
     expect(text).not.toContain("@all");

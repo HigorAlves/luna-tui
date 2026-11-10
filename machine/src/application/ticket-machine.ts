@@ -141,6 +141,8 @@ export class TicketMachine implements TicketIntake {
     if (!ctx.force && prev?.machineStatus && prev.machineStatus !== "validity_failed" && prev.canonical.updatedAt === ticket.updatedAt) return;
     await store.read(ticket);
     const at = this.now();
+    // The acknowledge clock starts when the machine first saw the ticket, on the machine's own clock (the row's `createdAt` is the database's).
+    if (!prev) await this.mergeClocks(ticket.key, { firstSeenAt: at.toISOString() });
     let refused: string | null = null;
     const done = async (status: string, assessment: Record<string, unknown>, drafts: Draft[]) => {
       await store.appendAssessment(ticket.key, { at: at.toISOString(), ...assessment, ...(refused ? { draftRefused: refused } : {}) });
@@ -607,7 +609,7 @@ export class TicketMachine implements TicketIntake {
       const config = (await this.deps.config(repo)).tickets;
       const last = [...row.assessments].reverse().find((a) => a.outcome === "workable") as { priority?: "P0" | "P1" | "P2" | "P3" } | undefined;
       const since = typeof row.clocks.needsInfoSince === "string" ? new Date(row.clocks.needsInfoSince) : null;
-      const clocks = ticketClocks({ firstSeenAt: row.createdAt, acknowledgedAt: typeof row.clocks.acknowledgedAt === "string" ? new Date(row.clocks.acknowledgedAt) : null, priority: last?.priority ?? null, status: row.machineStatus, needsInfoSince: since, updatedAt: activityOf(row) }, now, config);
+      const clocks = ticketClocks({ firstSeenAt: typeof row.clocks.firstSeenAt === "string" ? new Date(row.clocks.firstSeenAt) : row.createdAt, acknowledgedAt: typeof row.clocks.acknowledgedAt === "string" ? new Date(row.clocks.acknowledgedAt) : null, priority: last?.priority ?? null, status: row.machineStatus, needsInfoSince: since, updatedAt: activityOf(row) }, now, config);
       const overdue = clocks.filter((c) => c.overdue).map((c) => c.name);
       const drafts = row.drafts as unknown as Draft[];
       const missing = ([...row.assessments].reverse().find((a) => a.outcome === "needs_info")?.missing as string[] | undefined) ?? [];

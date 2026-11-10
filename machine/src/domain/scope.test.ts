@@ -230,3 +230,34 @@ describe("scopeIssues", () => {
     expect(issues).toEqual([expect.objectContaining({ severity: "should_fix", kind: "unrelated_refactor" })]);
   });
 });
+
+describe("scopeFacts: a source file that holds Rust's inline tests", () => {
+  const tests = [{ scenario: "S1", file: "board/src/ui.rs" }];
+  const rs = { ...none, nameStatus: "M\tboard/src/ui.rs", scenarioTests: tests };
+
+  it("is not a weakened test when the implementer changes it: it holds production code too", () => {
+    expect(scopeFacts({ ...rs, inlineTests: ["board/src/ui.rs"], addedLines: [{ path: "board/src/ui.rs", line: "fn draw() {}" }] }).weakened).toEqual([]);
+  });
+  it("is still weakened when a scenario tag is removed from it", () => {
+    const removedLines = [{ path: "board/src/ui.rs", line: "    // @scenario:S1" }];
+    expect(scopeFacts({ ...rs, inlineTests: ["board/src/ui.rs"], removedLines }).weakened).toEqual(["S1"]);
+  });
+  it("any change to a file the step did not mark as inline stays a weakened test", () => {
+    expect(scopeFacts(rs).weakened).toEqual(["S1"]);
+  });
+});
+
+describe("scopeFacts: a token prefix in documentation", () => {
+  it("is not a secret: the install guide shows `xoxp-…` and `MACHINE_SLACK_USER_TOKEN=xoxp-...` (a docs card was refused twice)", () => {
+    const addedLines = [
+      { path: "docs/install.md", line: "Copy the **User OAuth Token** (`xoxp-…`)." },
+      { path: "docs/install.md", line: "   MACHINE_SLACK_USER_TOKEN=xoxp-..." },
+      { path: "docs/configuration.md", line: "a GitHub token (`ghp_...`) or a fine-grained one (`github_pat_…`)" },
+    ];
+    expect(scopeFacts({ ...none, nameStatus: status("M\tdocs/install.md", "M\tdocs/configuration.md"), addedLines }).secrets).toEqual([]);
+  });
+  it("still catches a real one: a Slack token with its body (built here, so no token-shaped literal sits in the file)", () => {
+    const slack = ["xox", "p-", "1234567890", "-", "abcdefghij"].join("");
+    expect(scopeFacts({ ...none, nameStatus: status("M\tdocs/install.md"), addedLines: [{ path: "docs/install.md", line: `TOKEN=${slack}` }] }).secrets).toEqual(["docs/install.md: xoxp…"]);
+  });
+});

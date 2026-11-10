@@ -167,7 +167,11 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         },
       };
     };
-    const scenarios = approvedScenarios(context.approvals).map((sc) => ({ id: sc.id ?? "", title: sc.title, criterion_ref: sc.criterion_ref ?? null }));
+    // The browser run grades the browser scenarios only (layer e2e; a plan with no layers keeps them all): a unit, diff or build scenario is not
+    // something a browser can see, and grading it made every run partial. Verify judges those.
+    const approved = approvedScenarios(context.approvals);
+    const layered = approved.some((sc) => sc.layer);
+    const scenarios = approved.filter((sc) => !layered || sc.layer === "e2e").map((sc) => ({ id: sc.id ?? "", title: sc.title, criterion_ref: sc.criterion_ref ?? null }));
     const qaDir = deps.stateDir ? join(deps.stateDir, "runs", context.runId, "files", "qa") : null;
     /** The manifest the machine checks by script: one row per approved scenario, artifacts only when they are plain-named regular files in the run's folder; a scenario that is not a pass (not run, failed or partial) fails a passing verdict. */
     const judged = async (r: StageResult): Promise<StageResult> => {
