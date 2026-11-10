@@ -66,6 +66,9 @@ async function report(taps: Taps, body: Record<string, unknown>): Promise<{ appe
   }
 }
 
+/** A redirect a result had no text to carry (write_file's, glob's): it waits here for the next result that has. */
+const held = new WeakMap<Taps, string>();
+
 const streams = (value: unknown): boolean => typeof value === "object" && value !== null && Symbol.asyncIterator in value;
 
 /** `execute` of the eve tool `tool`, reporting each finished call. A streaming result (eve allows one
@@ -83,7 +86,12 @@ export function withEconomy<I, R, C>(tool: string, execute: (input: I, ctx: C) =
     }
     if (streams(output)) return output;
     const answer = await report(taps, { tool, input, output: outputText(output).slice(0, OUTPUT_CAP), ok: succeeded(output) });
-    const text = answer.stop ? ENDING : answer.append;
-    return text === undefined ? output : appended(output, text);
+    const waiting = held.get(taps);
+    const text = answer.stop ? ENDING : [waiting, answer.append].filter((part) => part !== undefined).join("\n\n") || undefined;
+    if (text === undefined) return output;
+    const told = appended(output, text);
+    if (told === output && !answer.stop) held.set(taps, text);
+    else held.delete(taps);
+    return told;
   };
 }

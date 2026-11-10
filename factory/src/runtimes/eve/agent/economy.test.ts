@@ -41,6 +41,15 @@ describe("withEconomy", () => {
     expect(await withEconomy("read_file", async () => ({ content: "c", path: "p" }), t)({}, {})).toEqual({ content: "c\n--- process check ---\nStop looping.", path: "p" });
   });
 
+  it("holds a redirect a result has no text to carry, and tells it with the next result that has", async () => {
+    const answers = [{ append: "Change approach." }, {}, {}];
+    const t = taps({ send: async () => answers.shift() ?? {} });
+    const written = { existed: true, path: "src/a.ts" };
+    expect(await withEconomy("write_file", async () => written, t)({}, {})).toBe(written);
+    expect(await withEconomy("bash", run, t)({ command: "pnpm test" }, {})).toEqual({ ...RESULT, stdout: "out\n--- process check ---\nChange approach." });
+    expect(await withEconomy("bash", run, t)({ command: "pnpm test" }, {})).toBe(RESULT);
+  });
+
   it("tells the model the run is ending on a stop", async () => {
     const t = taps({ send: async () => ({ stop: true }) });
     const out = (await withEconomy("bash", run, t)({ command: "pnpm test" }, {})) as typeof RESULT;

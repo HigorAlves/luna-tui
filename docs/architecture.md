@@ -632,7 +632,7 @@ Nobody has measured these parts against a live model. The team made no model cal
 - The judge's verdict arrives on a later call. A run that ends first never uses it.
 - `loop_judge` has no measured default engine. It is in the `UNMEASURED` list of `contracts/src/decision-defaults.test.ts`, so it uses the built-in default (Jev, then `claude:haiku`). It has nine eval cases. Nobody has run its baseline or its scorecard.
 - A mask does not apply on eve. eve and Jev runs give no skill or subagent evidence.
-- A redirect on eve rides on the result of the call that triggered it. A result with no text of its own (a file write) drops the note, and the guard does not send it again. The tool waits at most 2 seconds for the runner's answer. A later answer is lost.
+- A redirect on eve rides on the result of the call that triggered it. A result with no text of its own (a file write) cannot carry the note. The tool then holds the note for the next result that has text. The tool waits at most 2 seconds for the runner's answer. A later answer is lost.
 - The machine tells a fact learned on one engine to every engine.
 - The observer's regex tables know the common runners. A repository with an unusual runner teaches fewer facts.
 - The import of past runs gives envelopes and tool evidence only.
