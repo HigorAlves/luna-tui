@@ -22,7 +22,7 @@ Every ticket moves through these stages, from Intake (not ready yet) to Done ([d
 
    **The clocks never merge or archive.** A PR quiet for two days (`ship.sla.reminder_days`) gets a reminder. After five days (`ship.sla.escalate_days`), the machine names its release owners, with fixed words. Activity starts the period again. There is no second total-time cap (`MACHINE_SHIP_MAX_WAIT_DAYS` is gone).
 
-   **What a retro may change.** It may change one file (`docs/agents/project-context.md`), in a draft PR on `luna/memory-<task id, 8 characters>`, after a person's approval (`a`). Everything else that it proposes is inert text in the body of that PR. This covers prompt updates, runbooks and ADRs. The machine records recalibration and graph misses where the eval loop and the graph read them. A graph miss counts only when the Build Report of the card declared the same path.
+   **What a retro may change.** It may change one file (`docs/agents/project-context.md`), in a draft PR on `luna/memory-<task id, 8 characters>`, after a person's approval (`a`). The file also gets the learned facts that the retro promotes (see [Token economy](#token-economy)). Everything else that it proposes is inert text in the body of that PR. This covers prompt updates, runbooks and ADRs. The machine records recalibration and graph misses where the eval loop and the graph read them. A graph miss counts only when the Build Report of the card declared the same path.
 
    **What leaves the machine in Ship.** These things leave. The section and comment of the pack (fixed words and facts, with model text only through `postable()`). Replies to questions. The push and summary of a fix. A merge request. A reminder and an escalation line. The close-the-loop summary. A draft PR after a retro approval. The machine never gives an approval. It calls `postReview` only on the review route. It never closes a PR.
 
@@ -128,7 +128,7 @@ A task whose `source.kind` is `notch` is a Luna Notch ticket that runs on the ma
 
 ### Packs on demand
 
-`POST /runs` (`application/pack-runs.ts`) runs one context-only pack on data that a client already read. It serves the Slack and Teams triage of the notch (`chat_triage`), labels (`triage_signals`) and Jira intake (`jira_intake`). A context-only pack is one that `packStates` maps to no task state, less a deny list (`domain/context-packs.ts`). `eval_judge` is only for the evals runner. Each pack reads one key of the context of the stage input. The machine checks that key against its schema before anything runs. The route runs the way the triage of the Slack inbox and Jira intake do, through `runPackOnce` (`application/stages/run-once.ts`). It uses the stage container over an empty `/work`, only the credential of the engine, and the answer validated against the schema of the pack. Calls have their own cap of two, apart from the stage pool. So a triage that someone waits on never queues behind a long stage. It never takes the slot of a task. Up to eight more calls wait. The machine drops a client that leaves from the queue, or stops its container (the signal of the request reaches `runPackOnce`). The machine refuses a call while the budget of the day has run out. Each call that ran is a `pack_runs` row (pack, engine, model, client, outcome, turns, duration, cost). Its cost counts toward the daily ceiling (`spendSinceUsd`). The machine never keeps the context and the answer. The run folder goes when the call ends and at start-up (`MACHINE_STATE_DIR/pack-runs/`, never the `runs/` of the stage runs). The route is off only with `MACHINE_AGENTS=off`. Each call needs just the credential of its own engine.
+`POST /runs` (`application/pack-runs.ts`) runs one context-only pack on data that a client already read. It serves the Slack and Teams triage of the notch (`chat_triage`), labels (`triage_signals`) and Jira intake (`jira_intake`). The token economy's `loop_judge`, `loop_redirect` and `fact_propose` are context-only packs too. A context-only pack is one that `packStates` maps to no task state, less a deny list (`domain/context-packs.ts`). `eval_judge` is only for the evals runner. Each pack reads one key of the context of the stage input. The machine checks that key against its schema before anything runs. The route runs the way the triage of the Slack inbox and Jira intake do, through `runPackOnce` (`application/stages/run-once.ts`). It uses the stage container over an empty `/work`, only the credential of the engine, and the answer validated against the schema of the pack. Calls have their own cap of two, apart from the stage pool. So a triage that someone waits on never queues behind a long stage. It never takes the slot of a task. Up to eight more calls wait. The machine drops a client that leaves from the queue, or stops its container (the signal of the request reaches `runPackOnce`). The machine refuses a call while the budget of the day has run out. Each call that ran is a `pack_runs` row (pack, engine, model, client, outcome, turns, duration, cost). Its cost counts toward the daily ceiling (`spendSinceUsd`). The machine never keeps the context and the answer. The run folder goes when the call ends and at start-up (`MACHINE_STATE_DIR/pack-runs/`, never the `runs/` of the stage runs). The route is off only with `MACHINE_AGENTS=off`. Each call needs just the credential of its own engine.
 
 ## Conversation Machine (Slack)
 
@@ -315,7 +315,7 @@ flowchart TD
 |---|---|
 | `board/` | The Luna TUI board, the Rust TUI and herdr plugin. A client of the machine. |
 | `machine/` | The orchestrator: TypeScript on Node 24+, HTTP API plus an SSE stream, Postgres for state. |
-| `factory/` | What runs inside a stage container: the runner and its three runtimes (`claude` on the Claude Agent SDK, `eve` on Vercel's eve, `jev` on TypeSafe's SDK or the AI SDK's decision API through the Vercel AI Gateway), the roles, the prompt templates, the skills plugin, the guards and the `luna` tools; with a Laminar key from the machine, the runner continues the machine's trace inside the container (`factory/src/core/telemetry.ts`, `runtimes/eve/agent/laminar.ts`). |
+| `factory/` | What runs inside a stage container: the runner and its three runtimes (`claude` on the Claude Agent SDK, `eve` on Vercel's eve, `jev` on TypeSafe's SDK or the AI SDK's decision API through the Vercel AI Gateway), the roles, the prompt templates, the skills plugin, the guards, the token economy's observer and loop guard, and the `luna` tools; with a Laminar key from the machine, the runner continues the machine's trace inside the container (`factory/src/core/telemetry.ts`, `runtimes/eve/agent/laminar.ts`). |
 | `contracts/` | Types shared by the machine, the factory and the board, including the pack registry. |
 | `fixtures/` | Fixture repos used by `pnpm golden` (one seeded bug or feature each). |
 | `evals/` | Replay evals (`pnpm eval`): eval cases per pack, graded by schema, checks and the `eval_judge` pack (an agent pack) or by label and confidence (a decision pack), with a scorecard per engine; `harvest`, `dataset push`/`pull`, `scorecard` and `defaults` close the loop from recorded decisions to a default engine per slot. See [evals/README.md](../evals/README.md) and [Evals and calibration](#evals-and-calibration). |
@@ -327,9 +327,9 @@ flowchart TD
 
 Grouped by layer, not by technology:
 
-- `domain/` — pure types and logic with no I/O. It holds task/stage-run/event rows, the transition engine, locked-files/pr-body/detect-checks helpers, memory-rule parsing and stage-input building.
-- `application/` — use cases and ports. `pipeline.ts` orchestrates the transition engine and the stage runners. `task-store.ts` is the persistence port that `pipeline.ts` depends on. `pipeline.ts` never makes a concrete DB call. `ports.ts` holds the `StageRunner`/`StageContext`/`StageResult` contract. The stage runners sit under `application/stages/` (`pack-runner.ts`, `verify.ts`, `deliver.ts`, `ship.ts`, `ci.ts`, `e2e.ts`, `evidence.ts`, `memory.ts`, `ingest.ts`, `stubs.ts`). `intake.ts` is the GitHub poll loop. The Jira pieces are `jira.ts` (the port), `jira-sync.ts`, `jira-intake.ts`, `jira-watch.ts`, `jira-tasks.ts` (behind the routes) and `sla.ts` (the ticket clocks).
-- `adapters/` — everything that talks to the outside world. `persistence/` holds Postgres via TypeORM and implements the `TaskStore` port. `http/` is the Hono API. `docker/` is the stage sandbox. `process/` is the generic subprocess runner. `git/` holds worktrees. `github/` is the GitHub API through Octokit, behind the `GitHub` port in `application/github.ts`. `jira/` is Jira Cloud REST v3 over `fetch` and the ADF converter, behind the `Jira` port in `application/jira.ts`. `laminar/` sends run traces and eval records to a local Laminar over `@lmnr-ai/lmnr`, behind the `Telemetry` port in `application/telemetry.ts`. It is a no-op without a key. `http/` also announces running stage containers on the event stream, which the board follows in herdr tabs.
+- `domain/` — pure types and logic with no I/O. It holds task/stage-run/event rows, the transition engine, locked-files/pr-body/detect-checks helpers, memory-rule parsing and stage-input building. `domain/economy/` holds the pure parts of the token economy. They are the fold after each run, the fact lifecycle, the envelope, the detectors, the pruning evidence and the cost ledger.
+- `application/` — use cases and ports. `pipeline.ts` orchestrates the transition engine and the stage runners. `task-store.ts` is the persistence port that `pipeline.ts` depends on. `pipeline.ts` never makes a concrete DB call. `ports.ts` holds the `StageRunner`/`StageContext`/`StageResult` contract. `economy.ts` is the token economy's port, with `noEconomy()` ([Token economy](#token-economy)). The stage runners sit under `application/stages/` (`pack-runner.ts`, `verify.ts`, `deliver.ts`, `ship.ts`, `ci.ts`, `e2e.ts`, `evidence.ts`, `memory.ts`, `ingest.ts`, `stubs.ts`). `intake.ts` is the GitHub poll loop. The Jira pieces are `jira.ts` (the port), `jira-sync.ts`, `jira-intake.ts`, `jira-watch.ts`, `jira-tasks.ts` (behind the routes) and `sla.ts` (the ticket clocks).
+- `adapters/` — everything that talks to the outside world. `persistence/` holds Postgres via TypeORM and implements the `TaskStore` port. `http/` is the Hono API. `docker/` is the stage sandbox. `process/` is the generic subprocess runner. `git/` holds worktrees. `github/` is the GitHub API through Octokit, behind the `GitHub` port in `application/github.ts`. `jira/` is Jira Cloud REST v3 over `fetch` and the ADF converter, behind the `Jira` port in `application/jira.ts`. `economy/` keeps the token economy's files under `<state dir>/economy/`, behind the `Economy` port. `laminar/` sends run traces and eval records to a local Laminar over `@lmnr-ai/lmnr`, behind the `Telemetry` port in `application/telemetry.ts`. It is a no-op without a key. `http/` also announces running stage containers on the event stream, which the board follows in herdr tabs.
 - `bootstrap/` — wires the above together at startup (`stages.ts`). `main.ts` itself is just the entry point.
 
 Dependencies point inward. `adapters` depend on `application` ports. `application` depends on `domain` types. Nothing in `domain` or `application` imports `typeorm`, `pg` or `hono`, or shells out to `docker` directly. Nothing but `adapters/github/` imports Octokit. Nothing but `adapters/laminar/` imports `@lmnr-ai/lmnr`.
@@ -440,6 +440,212 @@ A person turns the loop, one step at a time, today. Nothing below runs by itself
 - `pnpm eval calibrate --repo <path>` (a repository's own bars beside the pack's) does not exist yet.
 - The second reading of every hand-written case came in the same pass as the first, not independently. Read `pnpm eval cases --pack <p>` before a baseline counts on it.
 
+## Token economy
+
+### What it is
+
+The token economy cuts what a stage run costs in a repository where the machine works often. It learns from that repository's own finished runs. It removes three kinds of waste:
+
+- a run that loops on one failure
+- a fact that every run finds again
+- a tool that no run uses
+
+[RFC 0007](rfcs/0007-token-economy.md) holds the design. The code is a TypeScript port of [microsoft/TokenEconomizer](https://github.com/microsoft/TokenEconomizer) (Apache-2.0, commit `81e32e5`, [arXiv 2610.22732](https://arxiv.org/abs/2610.22732)). Upstream is a Python plugin for interactive CLIs. The port keeps its rules, its numbers and its regex tables. `factory/NOTICE` names the project and its licence.
+
+Every model call of the port is a pack: `loop_judge`, `loop_redirect` and `fact_propose`. The economy sits beside the stuck detector, the Build budget and the retro. It replaces none of them. It covers the stage runs of tasks. `POST /runs` calls and the Slack inbox get no economy input.
+
+Each mechanism has a switch per repository (see [configuration](configuration.md#the-economy-section-the-token-economy)). `MACHINE_ECONOMY=off` turns the whole port off for the machine. A fault in any mechanism never fails a run. The runtime or the machine logs a note and goes on as it did before.
+
+### The observation
+
+After each tool call, the Claude and eve runtimes read the result inside the container. They build one `Observation` (`contracts/src/economy.ts`) and put it on the call's `tool_result` event in `events.jsonl`. The machine reads that file after the run.
+
+An observation holds only classes and short safe strings:
+
+- the intent: `test`, `interpreter`, `build`, `package`, `fetch` or `vcs`
+- the form: the command as spelled, flattened, in a plain character set, 120 characters at most
+- the error class (such as `module_missing` or `connection_refused`) and a failure fingerprint
+- whether tests ran, and the test labels the runner got
+- the files the call wrote, as repo-relative paths, also from shell edits such as `sed -i` and redirects
+- a fetch's host, and the names of variables that the output asked for
+- the values a command set, in a small character set, never for a variable named like a credential
+- the answer of a VCS probe: `hit` or `empty`
+
+The schema is strict. The schema refuses a field that can carry text. The output text of a call never leaves the container. The observer reads the first 20,000 characters of an output and drops them. Nothing writes output text into an event, a fact or a prompt. A path outside the work folder is dropped.
+
+`tool_result` events stay in the run's event file. They are not on the task's log. The `economy.guard` events are on the task's log, as `stage.economy.guard` rows.
+
+### The loop guard
+
+**State.** The guard folds each observation into the state of the current segment. A segment is the stretch of a run between two redirects. The state holds the calls, the edits per file, the error outputs, the test runs and the repeated failures. A failure repeats when an earlier call in the segment had the same fingerprint.
+
+**Envelope.** The machine keeps, per repository and pack, the call count of each run that ended `pass`. It keeps the last 500. A call counts when the guard allowed it. The envelope is the 90th percentile of the counts, times 1.25. It is null under `economy.guard.envelope_min_samples` runs (5 by default). It reaches the run as `StageInput.context.economy.guard`.
+
+**Modes.** With no envelope, the guard is in `record` mode. It writes its `gate` events and does nothing else. So the guard is inert for a repository and pack until enough runs passed. With an envelope, the guard acts.
+
+**Decision, per call.** The numbers are upstream's defaults.
+
+1. The free gate opens at 20 calls in the segment and a repeated failure or 8 error outputs.
+2. The segment is stuck when all of these hold: 20 calls, 6 error outputs, and 4 edits of one file or 3 files edited. At least a fifth of its failures must repeat an earlier one.
+3. The backstop acts when the segment is stuck and past the envelope times `backstop_mult` (2.5). It needs no judge.
+4. The guard asks the judge when the gate is open and no question is pending. It asks at most every 5 calls. After a verdict that is not stuck, the gap grows by 5, up to 20.
+
+A pack with no shell commands has no judge. Only the backstop can act on it.
+
+**The judge.** `loop_judge` is a decision pack. Its questions are `stuck` (yes or no) and `cause` (`repeating_failure`, `wrong_approach`, `environment` or `productive`). It runs through the `/out/checks` mailbox, as `red_check` and `scope_check` do. The guard writes `loop-request-<n>.json` with a digest of the last 24 actions. Each action holds the tool, the command cut to 90 characters, file base names and the error class. The machine's build watch answers with `loop-answer-<n>.json`. The run does not wait. The guard reads the verdict on a later call.
+
+A verdict counts as stuck when `stuck` is yes and its confidence passes two bars. The machine applies the pack's bar (`stuck` at 0.7, or the repository's `policy.decisions.loop_judge`). The guard applies `economy.guard.judge_confidence` (0.7). A verdict that does not pass both bars is a productive one.
+
+**The redirect.** The first stuck verdict gives the run one note. The guard sends as many notes as `economy.guard.redirects` allows (1 by default). Then the segment starts again. The text is upstream's template (`Process check (automated): …`). It holds counts and one file base name. A writable pack can get a text from the `loop_redirect` agent pack instead (`claude:haiku`, low effort, no tools, one turn). The writer has 30 seconds. The machine flattens its text and cuts it to 1,200 characters. A failed or late writer gives the template.
+
+- On Claude, the note is the `additionalContext` of the `PostToolUse` hook. The `PostToolUseFailure` hook does the same for a failed call.
+- On eve, the tools `bash`, `read_file`, `write_file`, `glob`, `grep` and `web_fetch` report each call to the runner over the loopback bridge. The runner's answer can append the note to the tool's result.
+
+**The stop.** The next stuck verdict after the last redirect ends the run. The error starts with `the loop guard stopped the run` (`LOOP_STUCK`). It names the cause, the repeated failure count and the calls spent. The runtime still writes `result.json` and `events.jsonl`. On Claude, the hook aborts the query from outside the hook. On eve, the run cancels the turn when the stream shows the ending call as settled. A stop is never a rate limit.
+
+The machine escalates the task. In Build on the feature route, the guard's cause goes to the `escalation_reason` decision as one of its facts. In any other stage, the error is the reason. The stage does not retry. The stuck detector stays as the outer backstop.
+
+**Events.** `economy.guard` has four actions: `gate`, `judge`, `redirect` and `stop`. Each row holds the call count. The machine keeps the newest 200 rows per repository.
+
+### Learned facts
+
+A fact is one line about how a repository works, such as the spelling of a command that works here. The next run gets the facts that still hold.
+
+**Free facts.** Scripts form them from the observed calls, with no model. There are six families:
+
+- form repair: a spelling that failed, then one that worked
+- arg repair: the shape of a test label that the runner wants
+- env value: a variable value that made imported code work
+- absent tool: a tool that is not there
+- empty probe: a checkout with no remote and no history beyond `HEAD`
+- boundary: every fetch to a host refused
+
+A fact's text is a fixed template. The only foreign text in it is a command spelling, a host or a variable name, each checked against its own strict pattern.
+
+**Lifecycle.** The machine folds each run that observed something into every fact.
+
+- A candidate becomes active after 3 confirming runs.
+- A fact has a score. A confirming run adds 1. A contradicting run takes away 5. The score decays by 0.8 each run.
+- An active fact retires when its score goes below zero.
+- A fact of the absent tool, empty probe or boundary family retires on one contradiction. A candidate of those families dies at once.
+- A form repair counts a contradiction only after two runs in a row.
+- `retired`, `dropped` and `promoted` are final. The fact stays in the list, so its key is never learned again.
+
+The machine tells a free fact only while the fact is active. At least 4 runs must have used what it is about. It must have applied in at least 40% of them.
+
+**The proposer.** `fact_propose` is an agent pack (`claude:haiku`, low effort, no tools, one turn). It runs with `economy.facts: on`. It runs after every `economy.propose_every`-th closed card (3 by default), and only with 2 digests or more. It reads the digests of the last 8 runs and the text of up to 20 facts that the repository holds. A digest line is `intent | command | how it ended`. It answers at most 4 facts. Each fact has a text, a section of the project context, two to four cited runs and a detector.
+
+A detector is data, not a pattern. It has a `scope`, a `confirm` and a `contradict` clause. Each clause holds one to four atoms, and all must hold in the run. An atom is one of these:
+
+- a predicate: `ran_tests`, `tests_passed`, `tests_failed`, `ran_checks`, `ran_build`, `edited`, `command_failed`, `missing_command`, `missing_dependency` or `bad_usage`
+- `commandIncludes`: a literal of 2 to 80 characters in a plain character set
+- an error class
+- an intent
+
+The machine evaluates a detector over a run's observed calls. With no scope, there is no verdict. A contradiction wins over a confirmation. The machine admits a fact only when its detector confirms on every cited run. The text must pass the lint below. The fact must not copy a fact that the repository holds. The new fact starts as if the window of digests had run through it. So it can be active at birth.
+
+A proposed fact counts a confirming run only when that run edited a file that no earlier confirming run edited. Three runs of one change cannot make it active. A proposed fact retires on its score alone.
+
+**The two prompt blocks.** `core/render.ts` adds each block at the end of the stage prompt, as declared data. Each block has at most 4 lines and about 150 tokens, with its header counted.
+
+- The free facts go under the upstream header `# environment facts learned from earlier sessions in this repository`.
+- The proposed facts go under `# repo operating manual (<folder name>) — learned from earlier sessions in this repository`. The block shows a proposed fact when it is active and in scope in at least 4 runs.
+
+The machine keeps a line whole or leaves it out. The machine refuses a line that reads as advice about being done or about checking (words such as `skip`, `done`, `verify`). It also refuses a line shaped like a secret. This is a lint that upstream does not have.
+
+**Promotion through the retro.** The machine offers a fact to the retro when the fact is active and was never contradicted. It must also have `economy.promote_cards` distinct cards that confirmed it (5 by default). The retro sees at most 10 of them, by id, as data. `ReviewingMemoryAnswer.factPromotions` names the ones to keep and a section for each. The machine keeps only ids that it offered. It writes the fact's own stored text under that section of `docs/agents/project-context.md`, in the retro's draft PR. When the file holds the text, the fact becomes `promoted`. No run is told it again, because the file states it.
+
+**Drop.** A person can retire a wrong fact with `POST /economy/facts/:id/drop`. The fact is never told again and its key is never learned again.
+
+### Tool pruning
+
+**Units.** The machine counts, per repository and pack, the runs in which a unit was loaded and never used. The units are `web`, `agent`, each skill and each optional luna tool. An allowed `tool_call` event counts as a use. Never counted: reading, writing, shell commands and the luna tools the machine relies on (`step`, `slice_init`, `slice_set`, `slice_list`, `decision_get`, `scope_check` and `scenario_red`). `delegate` is no unit.
+
+**Evidence rule.** One use ever protects a unit for good. A run on a masked unit says nothing about that unit. Only Claude runs give evidence. eve and Jev runs show no skill or subagent use.
+
+**Proposal.** The machine proposes a unit that no run ever used when it went unused over `economy.prune.runs` runs (10) on at least `economy.prune.min_cards` cards (2). It also proposes a unit that went unused over `economy.prune.cards` cards (5).
+
+**Approval and mask.** The proposal waits. `POST /economy/mask/approve` makes it the pack's mask. The next run gets the mask as `context.economy.mask`. A mask only removes access. It never adds any. See [api.md](api.md) for the routes.
+
+- On Claude, `maskedPack` narrows the pack before the runtime builds the tool lists, the subagents and the skills. A masked `agent` unit also removes the helpers that run as Claude subagents. Helpers that run through `delegate` stay.
+- If a mask removes every skill, the skills switch turns off.
+- The run's fingerprint covers the mask, so a change in a run's tools shows in `GET /metrics?groupBy=fingerprint`.
+- eve ignores the mask. The image build makes an eve app. The run emits one `economy_mask_skipped` note.
+
+**Restore.** `POST /economy/mask/restore` takes a unit out of the mask and marks it kept. The machine never proposes it again. With `economy.tool_prune: off`, the machine collects no evidence, makes no proposal and applies no mask.
+
+### Cost
+
+Effective tokens price each kind of token as it is billed. The weights are ratios, so no file outside the catalog names a model:
+
+| Kind | Weight |
+|---|---|
+| fresh input | 1 |
+| cache reads | 0.10 |
+| cache writes, 5-minute | 1.25 |
+| cache writes, 1-hour | 2 |
+| output | 5 |
+
+`Tokens.input` still holds the cache writes. The weights take the writes off `input` first. Claude reports the writes, split by lifetime when the SDK says. A write with no split counts as a 5-minute write. eve reports cache reads only, so eve's cache writes count as fresh input. The Build budget keeps its own count, with cache reads off the budget.
+
+The machine appends one record to `ledger.jsonl` for each finished stage run. A run that reported no tokens counts as 0. A `loop_judge`, `loop_redirect` or `fact_propose` run is an `overhead` record. Every other run is an `exec` record. A runtime can report no tokens for an overhead run. Such a run keeps its cost in dollars and counts in `overheadUnpriced`. When `overheadUnpriced` is above 0, `overhead` is a floor.
+
+`GET /economy` shows the cost of one repository. `GET /metrics` adds an `economy` section. It holds effective tokens for work and overhead, the overhead share, the redirects and stops, the active and promoted facts and the masked units.
+
+### The files on disk
+
+The files sit under `<state dir>/economy/<repo slug>/`. The slug is the folder name in lower case plus 8 hex of the real path. Folders are mode 0700 and files are mode 0600. A JSON file is replaced through a temporary file and a rename. One write to a file runs at a time. A file that cannot be read or parsed reads as empty.
+
+| File | What it holds |
+|---|---|
+| `envelope.json` | the call counts of passing runs, per pack (the last 500) |
+| `ledger.jsonl` | one cost record per run |
+| `guard.jsonl` | what the loop guard did (the newest 200 rows) |
+| `facts.json` | every learned fact, and for each pack the ids of the facts its latest run was told |
+| `digests.jsonl` | the last 8 runs, for the proposer |
+| `calls.json` | the observed calls of those runs, for the detectors |
+| `proposer.json` | the closed cards counted for the proposer's cadence |
+| `tools.json` | per pack: the unused-tool evidence, the proposal and the mask |
+| `imported.json` | the ids of the runs already folded |
+
+### Importing past runs
+
+`POST /economy/import` folds the runs that are already in the database, once. It gives envelopes from the runs that passed. It gives tool evidence from Claude runs. Old runs carry no observation, so the import learns no fact and writes no cost record. A run with no events file stays out. A second call folds nothing.
+
+### Trust
+
+- Facts and redirects come from what a container did. They enter a prompt only as declared data, with caps, from templates.
+- A fact never holds output text. Its only foreign text is a command spelling, a host or a variable name, each in a strict character set.
+- The same finding list as the frame check filters fact text for secret shapes.
+- The judge and the redirect writer see commands and file base names. They never see output.
+- The guard can end a run. It cannot change a verdict, an approval or a risk level.
+- A mask only removes access. It never adds any.
+- A person approves every mask and every promotion into the project context. No fact reaches the project context without the retro's draft PR.
+- The container writes `events.jsonl` and the checks mailbox. So the machine reads both as untrusted input and skips a line that has the wrong shape.
+
+### Limits and not built
+
+Nobody has measured these parts against a live model. The team made no model call while it built the port. Every test runs on a fake.
+
+- The Agent SDK's behaviour when the hook's abort ends a query after a `PostToolUse` hook is proven on the fake only.
+- The guard is inert for a repository and pack until `economy.guard.envelope_min_samples` runs passed. The envelope counts tool calls. It does not count time or tokens.
+- The judge's verdict arrives on a later call. A run that ends first never uses it.
+- `loop_judge` has no measured default engine. It is in the `UNMEASURED` list of `contracts/src/decision-defaults.test.ts`, so it uses the built-in default (Jev, then `claude:haiku`). It has nine eval cases. Nobody has run its baseline or its scorecard.
+- A mask does not apply on eve. eve and Jev runs give no skill or subagent evidence.
+- A redirect on eve rides on the result of the call that triggered it. A result with no text of its own (a file write) drops the note, and the guard does not send it again. The tool waits at most 2 seconds for the runner's answer. A later answer is lost.
+- The machine tells a fact learned on one engine to every engine.
+- The observer's regex tables know the common runners. A repository with an unusual runner teaches fewer facts.
+- The import of past runs gives envelopes and tool evidence only.
+- The paper's savings are for interactive agents with full tool sets. Nobody has measured a saving on Luna's runs. Luna's packs already load few tools, so pruning can save less here.
+
+Upstream features that the port does not have:
+
+- host adapters for other CLIs (Codex capability packages, Copilot, Pi and others)
+- the repomap (Graphify serves the code map)
+- the detector language of model-written regexes (a detector here is structured data)
+- the proposer's revision of an existing fact
+- per-host state
+
 ## Shipping
 
 `awaiting_ship` holds either the watch of the PR (a running stage, nothing asked) or an open approval. The approval is the preview gate (`ship.preview: on`), the release question after readiness, or the verdict of the PR-review route. `reviewing_memory` likewise holds the retro or its proposal gate. The board shows "watching the PR" and "retro" when no approval is open. A person approves or sends back a card that already waits there when the machine upgrades, as before.
@@ -530,7 +736,7 @@ The machine gives a stage the credentials of its helpers beside the credential o
 
 The plan stage has these packs. `code_map` (haiku, reads the graph) runs first, as `<runId>-map`, only when the repo has one. `plan` (the planner) and the fast lane's `plan_fast` and `test_design_fast` are agent packs. They run in the `test_design` state beside `test_design` itself (`RUNS_IN`). The stage runs each as a sub-run under a derived run id (`<runId>-plan`, `<runId>-tests-<n>`). So each has its own run folder and container, and it runs on its own engine. A restart runs the stage again, so no sub-run resumes on its own.
 
-`triage_signals`, `risk_score`, `coverage_check` and `plan_check` are decision packs. So are Ship's `event_class`, `comment_intent`, `fix_scope`, `evidence_valid` and `worth_learning`. There are 38 packs in all, with the Ship decisions on a ship context. `risk_score`, `coverage_check` and `plan_check` read a plan context and run through `PackRuns`, like `triage_signals`. `reply-drafter` is a helper of `triage`.
+`triage_signals`, `risk_score`, `coverage_check` and `plan_check` are decision packs. So are Ship's `event_class`, `comment_intent`, `fix_scope`, `evidence_valid` and `worth_learning`. So is the token economy's `loop_judge`, on a check context of kind `loop`. `loop_redirect` and `fact_propose` are agent packs with no tools. There are 56 packs in all, with the Ship decisions on a ship context. `risk_score`, `coverage_check` and `plan_check` read a plan context and run through `PackRuns`, like `triage_signals`. `reply-drafter` is a helper of `triage`.
 
 A pack is an `agent` pack, a `script` pack or a `decision` pack. In an `agent` pack, a role works the stage from a prompt. A `script` pack has no model (evidence). A `decision` pack asks typed questions (`contracts/src/questions.ts`: a choice, a yes/no, a score on a rubric). It answers them in one call, with no role, tools, prompt or worktree. Its answer schema comes from the questions.
 
@@ -562,9 +768,9 @@ Claude's Bash runs a real shell. So the guards refuse a command that would expan
 
 The container stays the boundary for what a guard cannot see. An interpreter that a writable pack may run (`node -e`) can read whatever the container user can. So the machine mounts everything that the stage does not own read-only, or does not mount it at all.
 
-`main.ts` only reads the input, renders the prompt and writes the result. What does not depend on an SDK lives in `factory/src/core/`. That folder holds `stage-io.ts`, `render.ts`, `output.ts`, `events.ts`, `transcript.ts`, `fingerprint.ts`, `roles.ts` and `luna-tools.ts`. It also holds the guards with `roots.ts` and `argv.ts`. It holds `runtime.ts`, the interface that a runtime implements.
+`main.ts` only reads the input, renders the prompt and writes the result. What does not depend on an SDK lives in `factory/src/core/`. That folder holds `stage-io.ts`, `render.ts`, `output.ts`, `events.ts`, `transcript.ts`, `fingerprint.ts`, `roles.ts` and `luna-tools.ts`. It also holds the guards with `roots.ts` and `argv.ts`. The `economy/` folder holds the observer, the loop guard and its judge mailbox, and the mask. It holds `runtime.ts`, the interface that a runtime implements.
 
-The Claude runtime has `run.ts` (it builds the SDK options and follows `query()`), `agents.ts`, `guards.ts` and `luna.ts`. `agents.ts`, `guards.ts` and `luna.ts` hold the role definitions, the hooks and the tool server. The eve runtime has `run.ts`, `compile.ts`, `build.ts`, `exec.ts`, `sandbox.ts` and the agent's own files under `agent/`.
+The Claude runtime has `run.ts` (it builds the SDK options and follows `query()`), `agents.ts`, `guards.ts` and `luna.ts`. `agents.ts`, `guards.ts` and `luna.ts` hold the role definitions, the hooks and the tool server. The eve runtime has `run.ts`, `compile.ts`, `build.ts`, `exec.ts`, `sandbox.ts`, `economy.ts` (the bridge's side of the guard) and the agent's own files under `agent/`.
 
 The Jev runtime has these files:
 
@@ -589,8 +795,9 @@ A runtime ends its stage itself a little before the time limit of the pack (`dea
 - a path outside the roots
 - a ledger tool call
 - `delegate`: a child's answer, its events and cost, depth 1, a child's failure and a missing credential as the call's error
+- a looping run: one redirect, then the stop with `LOOP_STUCK`, a result and no rate limit. Only the Claude and eve runtimes play this row.
 
-A runtime reports its run as one event stream (`RunEvent`, `contracts/src/events.ts`: `session`, `text`, `tool_call`, `tool_result`, `step`, `usage`, `rate_limit`, the luna ledger's events, `note`, and `child` for a delegated helper's run) through `emit`. It writes no line itself. `core/transcript.ts` prints the readable transcript from it. The watch pane of the board follows it with `docker logs -f`. The stuck detector of the machine counts its `→ <Tool> <target>` lines. `core/output.ts` writes every event in order to `/out/events.jsonl`. The machine puts only the task-level ones (`step`, the ledger, notes) on the task's log.
+A runtime reports its run as one event stream (`RunEvent`, `contracts/src/events.ts`: `session`, `text`, `tool_call`, `tool_result`, `step`, `usage`, `rate_limit`, the luna ledger's events, `note`, and `child` for a delegated helper's run) through `emit`. The loop guard adds `economy.guard` events. A `tool_result` event can carry an `observation`, the class of the result with no output text. It writes no line itself. `core/transcript.ts` prints the readable transcript from it. The watch pane of the board follows it with `docker logs -f`. The stuck detector of the machine counts its `→ <Tool> <target>` lines. The loop guard of the [token economy](#token-economy) works beside it, inside the container. It reads each call's observation, can redirect a looping run once and can end it. `core/output.ts` writes every event in order to `/out/events.jsonl`. The machine puts only the task-level ones (`step`, the ledger, notes, `economy.guard`) on the task's log.
 
 Every guard decision is a `tool_call` with `allowed` and, when refused, its `reason`. For Claude, the decision comes from the `PreToolUse` hooks. For eve, it comes from the approvals as the session reports them (`core/events.ts` joins a call with its decision). So the file is the audit trail of allowed and denied calls.
 
@@ -602,6 +809,7 @@ Every run's `result.json` names what it ran on, `run: { runtime, engine, modelId
 - the access
 - the answer schema
 - the factory rules
+- the tool mask, when a person approved one and the runtime applies it (Claude only)
 
 It covers everything that shapes the input of the model apart from the task's data. The machine keeps `runtime`, `model_id`, `sdk_version` and `fingerprint` on `stage_runs`, `pack_runs` and `slack_triage_runs`. A change in quality between runs is then a diff between two fingerprints (`GET /metrics?groupBy=fingerprint`).
 
