@@ -28,6 +28,8 @@ const REDIRECT_CAP = 1200;
 const CAUSE_CAP = 60;
 
 const oneLine = (s: string, max: number): string => s.replace(/\s+/g, " ").trim().slice(0, max);
+/** A cause as the host's `EconomyGuardEvent` takes it: letters, digits and a little punctuation, at most `CAUSE_CAP` characters. */
+const causeOf = (s: string): string => oneLine(s.replace(/[^A-Za-z0-9_ ,.:-]/g, " "), CAUSE_CAP);
 /** Python's `{x:.0f}`: halves go to the even neighbour. */
 const whole = (x: number): string => (x % 1 === 0.5 ? String(2 * Math.round(x / 2)) : String(Math.round(x)));
 
@@ -137,7 +139,7 @@ export class LoopGuard {
   /** A stuck verdict: a redirect while any are left, then the stop. */
   private act(v: Verdict): GuardStep {
     const s = this.segment;
-    const cause = oneLine(v.cause, CAUSE_CAP);
+    const cause = causeOf(v.cause);
     const payload = { calls: s.turns, cause, confidence: v.confidence, ...(s.lastRepeat ? { failure: s.lastRepeat } : {}) };
     if (this.redirectsGiven < this.input.redirects) {
       const written = v.redirect?.trim().slice(0, REDIRECT_CAP);

@@ -126,12 +126,12 @@ export function narrow(access: Access, mask: ToolMask | undefined, packSkills: s
 /** What a run that the loop guard stopped says first in `StageOutput.error`, as `BUDGET_SPENT` does for the budget. */
 export const LOOP_STUCK = "the loop guard stopped the run";
 
-/** One thing the loop guard did in a run, as the machine keeps it (the `economy.guard` event's payload). */
+/** One thing the loop guard did in a run, as the machine keeps it (the `economy.guard` event's payload). The container writes it, so each field is bounded: a cause is the guard's own word (`backstop`, `repeat`, `errors`) or the judge's choice label, a failure the observer's ten-digit fingerprint. */
 export const EconomyGuardEvent = z.object({
   action: z.enum(["gate", "judge", "redirect", "stop"]),
-  calls: z.number().int(),
-  cause: z.string().optional(),
-  failure: z.string().optional(),
+  calls: z.number().int().min(0).max(1_000_000),
+  cause: z.string().max(60).regex(/^[a-z0-9_ ,.:-]*$/i).optional(),
+  failure: z.string().regex(/^[0-9a-f]{10}$/).optional(),
 });
 export type EconomyGuardEvent = z.infer<typeof EconomyGuardEvent>;
 

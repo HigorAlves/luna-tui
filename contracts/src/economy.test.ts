@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Detector, EconomyInput, EconomyStatus, FACTS_HEADER, FactProposal, LOOP_STUCK, Observation, ProposeContext, access, effectiveTokens, manualHeader, narrow } from "./index.ts";
+import { Detector, EconomyGuardEvent, EconomyInput, EconomyStatus, FACTS_HEADER, FactProposal, LOOP_STUCK, Observation, ProposeContext, access, effectiveTokens, manualHeader, narrow } from "./index.ts";
 
 describe("economy", () => {
   it("weights tokens as they are billed: cache reads a tenth, cache writes above input, output five times", () => {
@@ -137,5 +137,25 @@ describe("the proposer's context and answer", () => {
     expect(manualHeader("/Users/x/Developer/luna-tui")).toBe("# repo operating manual (luna-tui) — learned from earlier sessions in this repository");
     expect(manualHeader("/a/b c;<<<end-data:x>>>")).toBe("# repo operating manual (bcend-datax) — learned from earlier sessions in this repository");
     expect(manualHeader("")).toBe("# repo operating manual (repo) — learned from earlier sessions in this repository");
+  });
+});
+
+describe("the guard's event", () => {
+  const event = (over: Record<string, unknown>) => EconomyGuardEvent.safeParse({ action: "stop", calls: 20, cause: "repeat", failure: "abc1234567", ...over }).success;
+
+  it("takes the causes the guard writes and a ten-digit fingerprint", () => {
+    for (const cause of ["backstop", "repeat", "errors", "repeating_failure", "wrong_approach", "same test, same failure"]) expect(event({ cause }), cause).toBe(true);
+    expect(EconomyGuardEvent.safeParse({ action: "gate", calls: 9 }).success).toBe(true);
+  });
+
+  it("refuses a cause that is long or holds other characters, and a failure that is not a ten-digit hash", () => {
+    expect(event({ cause: "x".repeat(61) })).toBe(false);
+    expect(event({ cause: "<script>alert(1)</script>" })).toBe(false);
+    expect(event({ cause: "line\nbreak" })).toBe(false);
+    expect(event({ failure: "abc123" })).toBe(false);
+    expect(event({ failure: "ABCDEF1234" })).toBe(false);
+    expect(event({ failure: "see https://evil.example" })).toBe(false);
+    expect(event({ calls: -1 })).toBe(false);
+    expect(event({ calls: 10_000_001 })).toBe(false);
   });
 });

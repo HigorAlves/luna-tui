@@ -505,7 +505,7 @@ A verdict counts as stuck when `stuck` is yes and its confidence passes two bars
 
 The machine escalates the task. In Build on the feature route, the guard's cause goes to the `escalation_reason` decision as one of its facts. In any other stage, the error is the reason. The stage does not retry. The stuck detector stays as the outer backstop.
 
-**Events.** `economy.guard` has four actions: `gate`, `judge`, `redirect` and `stop`. Each row holds the call count. The machine keeps the newest 200 rows per repository.
+**Events.** `economy.guard` has four actions: `gate`, `judge`, `redirect` and `stop`. Each row holds the call count. The container writes the events, so the machine checks each one against `EconomyGuardEvent` and drops one that fails: a cause is at most 60 characters of letters, digits and `_ ,.:-`, and a failure is a ten-digit hash. The run and the pack on a row come from the machine. The machine keeps the newest 200 rows per repository.
 
 ### Learned facts
 

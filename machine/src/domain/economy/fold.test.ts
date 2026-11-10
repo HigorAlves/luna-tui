@@ -26,4 +26,14 @@ describe("runFacts", () => {
     const facts = runFacts([null, 3, "x", {}, { kind: 4 }, { kind: "tool_call" }, { kind: "tool_call", payload: { tool: 7, allowed: true } }, { kind: "economy.guard", payload: { action: "nope" } }, { kind: "economy.guard", payload: { action: "gate", calls: "x" } }, call("Read")]);
     expect(facts).toEqual({ calls: 1, guard: [], tools: { Read: 1 } });
   });
+
+  it("drops a guard event whose cause or failure is outside what the guard writes", () => {
+    const facts = runFacts([
+      { kind: "economy.guard", payload: { action: "stop", calls: 20, cause: "<b>x</b>", failure: "abc1234567" } },
+      { kind: "economy.guard", payload: { action: "stop", calls: 20, cause: "repeat", failure: "not a hash" } },
+      { kind: "economy.guard", payload: { action: "stop", calls: 20, cause: "x".repeat(500) } },
+      { kind: "economy.guard", payload: { action: "stop", calls: 20, cause: "repeat", failure: "abc1234567" } },
+    ]);
+    expect(facts.guard).toEqual([{ action: "stop", calls: 20, cause: "repeat", failure: "abc1234567" }]);
+  });
 });

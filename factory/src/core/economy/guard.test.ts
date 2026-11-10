@@ -1,5 +1,5 @@
 // The loop guard: what it asks, says and stops with as calls fold, in the modes that act and the modes that only record.
-import { LOOP_STUCK, type GuardInput, type Observation, type RunEvent } from "@hardness/contracts";
+import { EconomyGuardEvent, LOOP_STUCK, type GuardInput, type Observation, type RunEvent } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import { LoopGuard, type GuardStep } from "./guard.ts";
@@ -252,5 +252,25 @@ describe("LoopGuard failures", () => {
     const steps = Array.from({ length: 25 }, (_, i) => guard.fold(SIGNS[i] ?? {}, BASH));
     expect(steps.every((s) => s.kind === "none" || s.kind === "ask")).toBe(true);
     expect(() => guard.digest()).not.toThrow();
+  });
+});
+
+describe("LoopGuard events", () => {
+  it("writes a cause the host's schema takes, whatever the judge's choice label holds", () => {
+    const { guard, events, run } = setup({ redirects: 0, backstopMult: 100 });
+    run(20);
+    guard.verdict({ stuck: true, confidence: 0.9, cause: `  <b>bold</b>\n${"x".repeat(200)}` });
+    run(1);
+    const stop = guardEvents(events, "stop")[0];
+    expect(stop).toBeDefined();
+    expect(EconomyGuardEvent.safeParse(stop!.payload).success).toBe(true);
+  });
+
+  it("writes only events the schema takes: the gate, the judge request, the redirect and the stop", () => {
+    const { guard, events, run } = setup({ backstopMult: 100 });
+    run(20);
+    guard.verdict({ stuck: true, confidence: 0.9, cause: "repeating_failure" });
+    run(2);
+    for (const e of events.filter((x) => x.kind === "economy.guard")) expect(EconomyGuardEvent.safeParse(e.payload).success, JSON.stringify(e.payload)).toBe(true);
   });
 });
