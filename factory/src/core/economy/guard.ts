@@ -47,6 +47,8 @@ export class LoopGuard {
   private lastEdit = 0;
   private lastVerify = 0;
   private lastVerifyFailed = false;
+  /** The segment call at which the judge last said, sure of it, that the run is not stuck. */
+  private calmAt = -1;
 
   private readonly input: GuardInput;
   private readonly emit: (event: RunEvent) => void;
@@ -129,9 +131,12 @@ export class LoopGuard {
       this.asking = false;
       if (v.stuck && v.confidence >= this.input.judgeConfidence) judged = v;
       else this.gap = v.stuck ? BASE_GAP : Math.min(MAX_GAP, this.gap + GAP_GROWTH);
+      if (!v.stuck && v.confidence >= this.input.judgeConfidence) this.calmAt = s.turns;
     }
     if (judged) return this.act(judged);
-    if (backstopHit(s, this.run, this.input.envelope, this.input.backstopMult)) return this.act({ stuck: true, confidence: 1, cause: "backstop" });
+    // A sure "not stuck" holds the backstop off for a while (a passing suite that prints error markers reads as failing), never past twice its length.
+    const calm = this.calmAt >= 0 && s.turns - this.calmAt < MAX_GAP && this.input.envelope !== null && this.run.turns < 2 * this.input.envelope * this.input.backstopMult;
+    if (!calm && backstopHit(s, this.run, this.input.envelope, this.input.backstopMult)) return this.act({ stuck: true, confidence: 1, cause: "backstop" });
 
     if (this.input.judge && open && !this.asking && s.turns - this.lastAsk >= this.gap) {
       this.lastAsk = s.turns;
@@ -158,6 +163,7 @@ export class LoopGuard {
       this.asking = false;
       this.pending = null;
       this.gateSeen = false;
+      this.calmAt = -1;
       return { kind: "redirect", text };
     }
     this.emit({ kind: "economy.guard", payload: { action: "stop", ...payload } });

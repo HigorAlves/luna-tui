@@ -206,12 +206,33 @@ describe("LoopGuard backstop", () => {
     expect(last.kind === "stop" && last.reason).toContain(`${LOOP_STUCK}: backstop`);
   });
 
-  it("is not defeated by a productive verdict", () => {
+  it("is held off for 20 calls by a sure not-stuck verdict, and no longer", () => {
+    // envelope 9, 2.5x: the backstop is due at call 23. The verdict lands on call 21 and holds it off through call 40.
     const { run, guard, next } = setup({ envelope: 9 });
     run(20);
     guard.verdict({ stuck: false, confidence: 1, cause: "progress" });
+    expect(run(20).every((s) => s.kind === "none" || s.kind === "ask")).toBe(true);
+    expect(next().kind).toBe("redirect");
+  });
+
+  it("is not held off by a not-stuck verdict under the confidence bar", () => {
+    const { run, guard, next } = setup({ envelope: 9 });
+    run(20);
+    guard.verdict({ stuck: false, confidence: 0.5, cause: "progress" });
     expect(run(2).every((s) => s.kind === "none")).toBe(true);
     expect(next().kind).toBe("redirect");
+  });
+
+  it("is never held off past twice its length, however often the judge says not stuck", () => {
+    // envelope 9, 2.5x: due at call 23, so a calm judge cannot hold it past call 45.
+    const { guard, next } = setup({ envelope: 9 });
+    let redirectAt = 0;
+    for (let call = 1; call <= 80 && redirectAt === 0; call++) {
+      const step = next();
+      if (step.kind === "ask") guard.verdict({ stuck: false, confidence: 1, cause: "progress" });
+      if (step.kind === "redirect") redirectAt = call;
+    }
+    expect(redirectAt).toBe(45);
   });
 });
 

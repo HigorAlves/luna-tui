@@ -487,7 +487,7 @@ The schema is strict. The schema refuses a field that can carry text. The output
 
 1. The free gate opens at 20 calls in the segment and a repeated failure or 8 error outputs.
 2. The segment is stuck when all of these hold: 20 calls, 6 error outputs, and 4 edits of one file or 3 files edited. At least a fifth of its failures must repeat an earlier one.
-3. The backstop acts when the run's total calls reach the envelope times `backstop_mult` (2.5) and the current segment is stuck. It needs no judge.
+3. The backstop acts when the run's total calls reach the envelope times `backstop_mult` (2.5) and the current segment is stuck. It needs no judge. A judge that is sure the run is not stuck holds the backstop off for 20 calls. It never holds it past twice the backstop.
 4. The guard asks the judge when the gate is open and no question is pending. It asks at most every 5 calls. After a verdict that is not stuck, the gap grows by 5, up to 20.
 
 A pack with no shell commands has no judge. Only the backstop can act on it.
