@@ -113,7 +113,7 @@ The output text itself never leaves the container. The regex tables come from up
 
 ### 4. Tool pruning
 
-**Evidence.** Per repository and pack, the machine counts runs in which each unit loaded and went unused. The units are `web`, `agent`, each skill and each optional luna tool. One use ever protects a unit for good. These are never proposed: reading, writing, the shell commands, the ledger tools, `step`, `decision_get`, `scope_check`, `scenario_red` and `delegate`.
+**Evidence.** Per repository and pack, the machine counts runs in which each unit loaded and went unused. The units are `web`, `agent` and each optional luna tool. A skill is no unit: the runtime preloads a pack's skills, so no call shows one used. One use ever protects a unit for good. These are never proposed: reading, writing, the shell commands, the ledger tools, `step`, `decision_get`, `scope_check`, `scenario_red` and `delegate`.
 
 **Rule.** A card stands for upstream's session and a run for its prompt. A unit is proposed when it went unused over 10 runs across at least 2 cards, or over 5 cards.
 

@@ -170,6 +170,14 @@ describe("fileStore: tool pruning", () => {
     expect((await stat(join(folder(), "tools.json"))).mode & 0o777).toBe(0o600);
   });
 
+  it("drops the skill units a file written before skills left the pruning still holds", async () => {
+    const store = fileStore(dir);
+    await mkdir(folder(), { recursive: true });
+    const unit = { unusedRuns: 3, unusedCards: ["c1"], everUsed: false, kept: false };
+    await writeFile(join(folder(), "tools.json"), JSON.stringify({ triage: { units: { web: unit, "skill:tdd": unit }, mask: ["agent", "skill:tdd"], proposal: ["skill:tdd", "web"] } }));
+    expect(await store.tools(repo)).toEqual({ triage: { units: { web: unit }, mask: ["agent"], proposal: ["web"] } });
+  });
+
   it("reads a corrupt file as empty and drops a pack whose state is not one", async () => {
     const store = fileStore(dir);
     await mkdir(folder(), { recursive: true });

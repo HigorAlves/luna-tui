@@ -103,7 +103,7 @@ export interface Economy {
   promoted(repoPath: string, ids: readonly string[]): Promise<number>;
   /** A person approves the tools proposed for `pack`: they become its mask, which the next run narrows by. False when there is no proposal. Never throws. */
   approveMask(repoPath: string, pack: PackId): Promise<boolean>;
-  /** A person brings back a unit of `pack` (`web`, `agent`, `skill:<name>`, `luna:<tool>`): out of the mask, never proposed again. False for a unit the pack does not have. Never throws. */
+  /** A person brings back a unit of `pack` (`web`, `agent`, `luna:<tool>`; a skill is no unit): out of the mask, never proposed again. False for a unit the pack does not have. Never throws. */
   restore(repoPath: string, pack: PackId, unit: string): Promise<boolean>;
   /** Folds the runs already on disk once: the envelope samples of the passing ones and the tool evidence of the Claude ones. They carry no observation, so they teach no fact and leave no ledger record. Idempotent. Returns the runs folded. Never throws. */
   importRuns(repoPath: string, config: EconomyConfig): Promise<number>;

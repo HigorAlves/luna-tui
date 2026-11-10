@@ -559,7 +559,7 @@ The machine keeps a line whole or leaves it out. The machine refuses a line that
 
 ### Tool pruning
 
-**Units.** The machine counts, per repository and pack, the runs in which a unit was loaded and never used. The units are `web`, `agent`, each skill and each optional luna tool. An allowed `tool_call` event counts as a use. Never counted: reading, writing, shell commands and the luna tools the machine relies on (`step`, `slice_init`, `slice_set`, `slice_list`, `decision_get`, `scope_check` and `scenario_red`). `delegate` is no unit.
+**Units.** The machine counts, per repository and pack, the runs in which a unit was loaded and never used. The units are `web`, `agent` and each optional luna tool. A skill is no unit. The runtime preloads a pack's skills into the agent's context, so no `Skill` call ever shows one in use, and a count of unused skills would propose every skill. An allowed `tool_call` event counts as a use. Never counted: reading, writing, shell commands and the luna tools the machine relies on (`step`, `slice_init`, `slice_set`, `slice_list`, `decision_get`, `scope_check` and `scenario_red`). `delegate` is no unit.
 
 **Evidence rule.** One use ever protects a unit for good. A run on a masked unit says nothing about that unit. Only Claude runs give evidence. eve and Jev runs show no skill or subagent use.
 
@@ -567,8 +567,8 @@ The machine keeps a line whole or leaves it out. The machine refuses a line that
 
 **Approval and mask.** The proposal waits. `POST /economy/mask/approve` makes it the pack's mask. The next run gets the mask as `context.economy.mask`. A mask only removes access. It never adds any. See [api.md](api.md) for the routes.
 
-- On Claude, `maskedPack` narrows the pack before the runtime builds the tool lists, the subagents and the skills. A masked `agent` unit also removes the helpers that run as Claude subagents. Helpers that run through `delegate` stay.
-- If a mask removes every skill, the skills switch turns off.
+- On Claude, `maskedPack` narrows the pack before the runtime builds the tool lists and the subagents. A masked `agent` unit also removes the helpers that run as Claude subagents. Helpers that run through `delegate` stay.
+- A mask never holds a skill. `ToolMask.skills` stays in the contract, and the machine does not set it. The store drops any `skill:*` unit, mask entry or proposal that an older `tools.json` holds.
 - The run's fingerprint covers the mask, so a change in a run's tools shows in `GET /metrics?groupBy=fingerprint`.
 - eve ignores the mask. The image build makes an eve app. The run emits one `economy_mask_skipped` note.
 

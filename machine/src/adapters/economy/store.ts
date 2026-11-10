@@ -10,7 +10,7 @@ import { z } from "zod";
 
 import type { EconomyStore, ProposerState } from "../../application/economy.ts";
 import { FAMILIES } from "../../domain/economy/envfacts.ts";
-import type { PackTools } from "../../domain/economy/prune.ts";
+import { type PackTools, withoutSkills } from "../../domain/economy/prune.ts";
 import type { LedgerRecord } from "../../domain/economy/ledger.ts";
 import type { FactRecord, FactsFile } from "../../domain/economy/lifecycle.ts";
 import { type Digest, type ObservedCall, keepDigests } from "../../domain/economy/observe-run.ts";
@@ -145,7 +145,7 @@ export function fileStore(stateDir: string): EconomyStore {
       return Object.fromEntries(
         Object.entries(parsed).flatMap(([pack, state]) => {
           const ok = ToolsSchema.safeParse(state);
-          return ok.success ? [[pack, ok.data]] : [];
+          return ok.success ? [[pack, withoutSkills(ok.data)]] : [];
         }),
       );
     } catch {

@@ -114,9 +114,9 @@ describe("economy.inputFor", () => {
   });
 });
 
-// Tool pruning: the `triage` pack has web, a subagent, one skill and `card_search`; the runs below use none of them unless they say so.
+// Tool pruning: the `triage` pack has web, a subagent and `card_search` (and a skill, which is not a unit); the runs below use none of them unless they say so.
 const pruning: EconomyConfig = { ...config, loop_guard: "off", prune: { runs: 3, min_cards: 2, cards: 5 } };
-const TRIAGE = ["web", "agent", "skill:code-discovery", "luna:card_search"];
+const TRIAGE = ["web", "agent", "luna:card_search"];
 const runOn = (n: number, cardId: string, extra: unknown[] = []) => ({ [`t${n}`]: [...calls(1), ...extra] });
 async function idleRuns(eco: ReturnType<typeof economy>, from: number, n: number, config = pruning) {
   for (let i = from; i < from + n; i++) await eco.afterRun(finished(`t${i}`, { pack: "triage", cardId: `c${i % 2}`, config }));
@@ -148,9 +148,17 @@ describe("economy: tool pruning", () => {
     const eco = economy(store);
     await idleRuns(eco, 0, 3);
     expect(await eco.approveMask("/r", "triage")).toBe(true);
-    expect((await eco.inputFor("/r", "triage", pruning))?.mask).toEqual({ web: true, agent: true, skills: ["code-discovery"], luna: ["card_search"] });
+    expect((await eco.inputFor("/r", "triage", pruning))?.mask).toEqual({ web: true, agent: true, luna: ["card_search"] });
     expect((await eco.status("/r")).tools?.triage).toMatchObject({ mask: expect.arrayContaining(TRIAGE), proposal: [] });
     expect(EconomyStatus.safeParse(await eco.status("/r")).success).toBe(true);
+  });
+
+  it("never proposes a skill, and does not restore one", async () => {
+    const { store } = stage();
+    const eco = economy(store);
+    await idleRuns(eco, 0, 12);
+    expect((await eco.status("/r")).tools?.triage?.proposal.map((p) => p.unit).some((u) => u.startsWith("skill:"))).toBe(false);
+    expect(await eco.restore("/r", "triage", "skill:code-discovery")).toBe(false);
   });
 
   it("approve with no proposal is false, and so is a pack the economy does not prune", async () => {

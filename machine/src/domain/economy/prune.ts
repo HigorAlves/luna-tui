@@ -1,7 +1,7 @@
-// Tool pruning (RFC 0007 §4): which tools, subagents and skills a pack never reaches for in a repository. A run's allowed calls say which units it used;
+// Tool pruning (RFC 0007 §4): which tools and subagents a pack never reaches for in a repository. A run's allowed calls say which units it used;
 // a unit that stays unused over enough runs and cards is proposed, a person approves the proposal into a mask, and one tap restores a unit for good.
 // Pure: the state is a value, each step returns the next. Never tracked or proposed: reading, writing, shell commands and the luna tools the machine
-// relies on (`PROTECTED_LUNA`), nor `delegate`, which is no unit of the pack's own.
+// relies on (`PROTECTED_LUNA`), nor `delegate`, which is no unit of the pack's own. Nor skills: a pack's skills are preloaded into the agent's context, so no `Skill` call ever shows one used.
 import { type EconomyConfig, PACKS, type Pack, type PackId, PROTECTED_LUNA, type ToolMask } from "@hardness/contracts";
 
 /** What the evidence says of one unit in one pack of one repository. */
@@ -28,23 +28,28 @@ export type PruneConfig = EconomyConfig["prune"];
 
 /** Cards remembered per unit; the thresholds are far below it. */
 const CARDS_KEPT = 20;
-/** How the Claude runtime prefixes the plugin's skills, and its luna tools. */
-const PLUGIN_PREFIX = "luna-factory:";
+/** How the Claude runtime prefixes its luna tools. */
 const LUNA_PREFIX = "mcp__luna__";
 
 /** The luna tools some pack has that a mask may remove. */
 const OPTIONAL_LUNA: ReadonlySet<string> = new Set(Object.values(PACKS).flatMap((p) => (p.kind === "agent" ? p.access.luna : [])).filter((tool) => !PROTECTED_LUNA.has(tool)));
 
+const isSkill = (unit: string): boolean => unit.startsWith("skill:");
+
+/** `state` without skill units, which an earlier version kept: skills are no unit now. */
+export function withoutSkills(state: PackTools): PackTools {
+  return { units: Object.fromEntries(Object.entries(state.units).filter(([unit]) => !isSkill(unit))), mask: state.mask.filter((u) => !isSkill(u)), proposal: state.proposal.filter((u) => !isSkill(u)) };
+}
+
 export const emptyTools = (): PackTools => ({ units: {}, mask: [], proposal: [] });
 
-/** The units a pack has: `web`, `agent`, `skill:<name>` per skill, `luna:<tool>` per luna tool that is not protected. A pack without an agent has none. */
+/** The units a pack has: `web`, `agent`, `luna:<tool>` per luna tool that is not protected. A pack without an agent has none. */
 export function unitsOf(pack: Pack): string[] {
   if (pack.kind !== "agent") return [];
   const { access } = pack;
   return [
     ...(access.web ? ["web"] : []),
     ...(access.agent ? ["agent"] : []),
-    ...(access.skills ? pack.skills.map((name) => `skill:${name}`) : []),
     ...access.luna.filter((tool) => !PROTECTED_LUNA.has(tool)).map((tool) => `luna:${tool}`),
   ];
 }
@@ -61,7 +66,6 @@ export function usedUnits(events: unknown[]): Set<string> {
     const tool = call.tool;
     if (tool === "WebFetch" || tool === "web_fetch") used.add("web");
     else if (tool === "Agent" || tool === "Task") used.add("agent");
-    else if (tool === "Skill" && typeof call.target === "string" && call.target !== "") used.add(`skill:${call.target.replace(PLUGIN_PREFIX, "")}`);
     else if (tool.startsWith(LUNA_PREFIX)) used.add(`luna:${tool.slice(LUNA_PREFIX.length)}`);
     // eve names its luna tools bare: the same unit.
     else if (OPTIONAL_LUNA.has(tool)) used.add(`luna:${tool}`);
@@ -92,7 +96,8 @@ export function proposalOf(state: PackTools, cfg: PruneConfig): string[] {
 
 /** The proposal becomes the mask. */
 export function approve(state: PackTools): PackTools {
-  return state.proposal.length === 0 ? state : { ...state, mask: [...new Set([...state.mask, ...state.proposal])], proposal: [] };
+  const clean = withoutSkills(state);
+  return clean.proposal.length === 0 ? clean : { ...clean, mask: [...new Set([...clean.mask, ...clean.proposal])], proposal: [] };
 }
 
 /** `unit` is out of the mask and the proposal, and kept: it is never proposed again. */
@@ -103,13 +108,10 @@ export function restoreUnit(state: PackTools, unit: string): PackTools {
 
 /** The mask a runtime narrows the pack by. */
 export function maskOf(state: Pick<PackTools, "mask">): ToolMask {
-  const named = (prefix: string) => state.mask.filter((u) => u.startsWith(prefix)).map((u) => u.slice(prefix.length));
-  const skills = named("skill:");
-  const luna = named("luna:");
+  const luna = state.mask.filter((u) => u.startsWith("luna:")).map((u) => u.slice("luna:".length));
   return {
     ...(state.mask.includes("web") ? { web: true } : {}),
     ...(state.mask.includes("agent") ? { agent: true } : {}),
-    ...(skills.length > 0 ? { skills } : {}),
     ...(luna.length > 0 ? { luna } : {}),
   };
 }
