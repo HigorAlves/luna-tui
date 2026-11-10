@@ -2,7 +2,7 @@
 // and an observation finds the call the stream shows settled.
 import { describe, expect, it } from "vitest";
 
-import type { EconomySession } from "../../core/economy/session.ts";
+import { type EconomySession, economySession } from "../../core/economy/session.ts";
 import { EconomyTap } from "./economy.ts";
 import { serveLuna } from "./run.ts";
 
@@ -33,6 +33,18 @@ describe("EconomyTap", () => {
     expect(tap.take("bash", { command: "b" })).toMatchObject({ observation: { form: "bash#2" }, ok: true });
     expect(tap.take("bash", { command: "zzz" })).toMatchObject({ observation: { form: "bash#1" }, ok: false });
     expect(tap.take("bash", { command: "a" })).toBeUndefined();
+  });
+
+  it("keeps every field of a real observation on its way to the settled call, labels, variables and probe included", () => {
+    const tap = new EconomyTap(economySession({ economy: {}, work: "/w", emit: () => {} }) as EconomySession, () => {});
+    const input = { command: "APP_ENV=test python runtests.py tests.app | tail" };
+    tap.report({ tool: "bash", input, output: "FAILED (failures=1)\nModuleNotFoundError: No module named 'tests'", ok: true });
+    const taken = tap.take("bash", input);
+    expect(taken?.observation).toMatchObject({ intent: "test", labels: ["tests.app"], labelErr: true, sets: { APP_ENV: "test" } });
+    expect(taken?.observation.failure).toMatch(/^[0-9a-f]{10}$/);
+    const probe = { command: "git remote -v" };
+    tap.report({ tool: "bash", input: probe, output: "", ok: true });
+    expect(tap.take("bash", probe)?.observation.probe).toBe("empty");
   });
 
   it("stops once, names the call that ended the run, and reads nothing after", () => {

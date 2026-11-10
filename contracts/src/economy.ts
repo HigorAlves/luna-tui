@@ -19,6 +19,12 @@ export interface Tokens {
   cacheWrite1h?: number;
 }
 
+const TEST_LABEL = /^[A-Za-z_][\w.\-/]*(?:::[\w.\-[\]]+)*$/;
+const ENV_NAME = /^[A-Z][A-Z0-9_]{2,59}$/;
+const ENV_VALUE = /^[\w.\-/:]{1,60}$/;
+/** A name that may hold a secret: the observer never reads its value, and a result that carries one is refused. */
+const CREDENTIAL_NAME = /TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL|AUTH|COOKIE|SESSION/i;
+
 /** The class of one tool result, never its text: the output of a command can hold a secret, and the guard only needs to know what kind of call it was. Strict, so a field that carries text is refused. */
 export const Observation = z
   .object({
@@ -35,6 +41,15 @@ export const Observation = z
     host: z.string().max(120).optional(),
     /** The name of a missing or set variable. */
     envVar: z.string().max(60).optional(),
+    /** The test labels a runner was given (a module, a path, a test id), and whether it failed to load one. */
+    labels: z.array(z.string().max(120).regex(TEST_LABEL)).max(5).optional(),
+    labelErr: z.boolean().optional(),
+    /** The variables the output asked for. */
+    needs: z.array(z.string().regex(ENV_NAME)).max(5).optional(),
+    /** The values a command set, in a charset that cannot carry a sentence; never for a variable whose name looks like a credential. */
+    sets: z.record(z.string().regex(ENV_NAME), z.string().regex(ENV_VALUE)).refine((v) => Object.keys(v).length <= 5 && !Object.keys(v).some((k) => CREDENTIAL_NAME.test(k)), "at most five variables, none named like a credential").optional(),
+    /** A VCS probe's answer: it listed something (`hit`) or succeeded with nothing to list (`empty`). */
+    probe: z.enum(["hit", "empty"]).optional(),
   })
   .strict();
 export type Observation = z.infer<typeof Observation>;

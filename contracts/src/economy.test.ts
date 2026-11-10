@@ -35,6 +35,27 @@ describe("economy", () => {
     expect(Observation.safeParse({ output: "anything" }).success).toBe(false);
   });
 
+  it("an observation's labels, variables and probe are bounded and in a safe charset", () => {
+    const ok = { labels: ["tests.app.test_x", "a/b.py::T::t"], labelErr: true, needs: ["APP_ENV"], sets: { APP_ENV: "test", DB_URL: "pg:5432/x" }, probe: "empty" };
+    expect(Observation.parse(ok)).toEqual(ok);
+    const bad = (o: object): boolean => Observation.safeParse(o).success;
+    expect(bad({ labels: ["a b"] })).toBe(false);
+    expect(bad({ labels: ["a;rm"] })).toBe(false);
+    expect(bad({ labels: ["x".repeat(121)] })).toBe(false);
+    expect(bad({ labels: ["a", "b", "c", "d", "e", "f"] })).toBe(false);
+    expect(bad({ needs: ["lower"] })).toBe(false);
+    expect(bad({ sets: { APP_ENV: "has space" } })).toBe(false);
+    expect(bad({ sets: { APP_ENV: "x".repeat(61) } })).toBe(false);
+    expect(bad({ sets: { AA_1: "a", BB_1: "a", CC_1: "a", DD_1: "a", EE_1: "a", FF_1: "a" } })).toBe(false);
+    expect(bad({ probe: "maybe" })).toBe(false);
+  });
+
+  it("an observation never names a value for a credential-looking variable", () => {
+    for (const name of ["API_TOKEN", "GH_SECRET", "DB_PASSWORD", "OPENAI_API_KEY", "AWS_CREDENTIAL", "BASIC_AUTH", "SESSION_ID", "MY_COOKIE"]) {
+      expect(Observation.safeParse({ sets: { [name]: "abc" } }).success).toBe(false);
+    }
+  });
+
   it("a stage's economy input holds the guard, the facts and the mask, each optional", () => {
     expect(EconomyInput.parse({})).toEqual({});
     const guard = { mode: "record", judge: true, envelope: null, judgeConfidence: 0.7, redirects: 1, backstopMult: 2.5 };

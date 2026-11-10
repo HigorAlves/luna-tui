@@ -19,6 +19,21 @@ describe("observedCalls", () => {
     ]);
   });
 
+  it("maps the labels, variables and probe an observation carries, and takes a call whose output showed a failure as not ok", () => {
+    const calls = observedCalls([
+      result({ intent: "test", form: "pytest", labels: ["a.b"], labelErr: true }, false),
+      result({ intent: "interpreter", form: "python", needs: ["APP_ENV"], sets: { APP_ENV: "x" } }),
+      result({ intent: "vcs", form: "git remote", probe: "empty" }),
+      result({ intent: "test", form: "npm test", testsRan: true, failure: "0123456789" }, true),
+    ]);
+    expect(calls).toEqual([
+      { intent: "test", form: "pytest", labels: ["a.b"], labelErr: true, ok: false },
+      { intent: "interpreter", form: "python", needs: ["APP_ENV"], sets: { APP_ENV: "x" }, ok: true },
+      { intent: "vcs", form: "git remote", probe: "empty", ok: true },
+      { intent: "test", form: "npm test", testsRan: true, failure: "0123456789", ok: false },
+    ]);
+  });
+
   it("skips a result with no observation, an empty one, one that is not the shape and a garbled line", () => {
     const calls = observedCalls([null, 4, { kind: "tool_result" }, { kind: "tool_result", payload: { ok: true } }, result({}), result({ form: "ls", output: "text" }), result("x"), result({ form: "ls" }, true)]);
     expect(calls).toEqual([{ form: "ls", ok: true }]);

@@ -6,8 +6,9 @@ import path from "node:path";
 
 import type { Observation } from "@hardness/contracts";
 
-import { errorClassOf, failureSignature, NETWORK_ERRORS, splitLines } from "./fingerprint-failure.ts";
+import { errorClassOf, failureSignature, isErrorOutput, NETWORK_ERRORS, splitLines } from "./fingerprint-failure.ts";
 import { shellEditTargets } from "./shell-edits.ts";
+import { exitStatusCovers, HEREDOC_RE, runnerVerdict, RUN_FAILED_RE, statusOfTests } from "./test-status.ts";
 
 export interface ObservedCall {
   tool: string;
@@ -27,6 +28,10 @@ interface Segment {
   form: string;
   head: string;
   hosts: string[];
+  /** The words of the command, after its launchers and assignments: where a test label is read from. */
+  words: string[];
+  /** What a VCS probe looks for (`remote`, `branch`, ...). */
+  probe?: string;
 }
 
 // The generic vocabulary: every ecosystem at once.
@@ -65,7 +70,6 @@ const ENV_ASSIGN_RE = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)+/;
 const ASSIGN_TOKEN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 // Upstream reads `/bin/sh -c` and `/bin/bash -lc`; a bare `bash -lc` (Codex) is the same shape.
 const WRAP_RE = /^(?:\/bin\/)?(?:ba)?sh\s+-[a-z]*c\s+(.*)$/s;
-const HEREDOC_RE = /(?<!<)<<(?!<)-?\s*['"]?(\w+)['"]?[^\n]*\n.*?\n\s*\1\b/gs;
 const RTK_RE = /^rtk\s+(?:proxy\s+)?(?=\S)/;
 const HOST_RE = /https?:\/\/([^/\s'"`]+)/g;
 
@@ -75,6 +79,27 @@ const LOADED_GENERIC_RE =
 const ENV_NEED_RE = /environment variable\s+['"`]?([A-Z][A-Z0-9_]{2,})/;
 const ENV_PREFIX_RE = /(?:^|[\s;&(])(?:export\s+)?([A-Z][A-Z0-9_]{2,})=(['"]?)([\w.\-/:]+)\2/;
 const ENV_INCODE_RE = /os\.environ(?:\.setdefault\(\s*|\[\s*)['"]([A-Z][A-Z0-9_]{2,})['"]\s*(?:,|\]\s*=)\s*['"]([\w.\-/:]+)['"]/;
+const ENV_NAME = /^[A-Z][A-Z0-9_]{2,59}$/;
+const ENV_VALUE = /^[\w.\-/:]{1,60}$/;
+/** A name that may hold a secret: its value is never read, whatever it is set to. */
+const CREDENTIAL_NAME = /TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL|AUTH|COOKIE|SESSION/i;
+const ENV_FAILED_RE = /Traceback \(most recent call last\)|^\w*Error\b|\b[Ee]xit [Cc]ode[:=\s]+[1-9]/m;
+const EXIT_CODE_RE = /\bexit code[:=\s]+(\d+)/i;
+
+const LABEL_TOKEN_RE = /^[A-Za-z_][\w.\-/]*(?:::[\w.\-[\]]+)*$/;
+const LABEL_ERR_RE = /Failed to import test module|unittest\.loader\._FailedTest|ERROR: (?:file or directory )?not found|no tests ran|module '[\w.]+' has no attribute/i;
+const NO_MODULE_RE = /No module named ['"]?([\w.]+)/g;
+/** What "the probe returned something" looks like per probe kind; narrow, so another segment's output is not read as a hit. */
+const PROBE_HIT: Record<string, RegExp> = {
+  remote: /^\S+\s+\S+\s+\((?:fetch|push)\)\s*$/m,
+  branch: /^\s*remotes\/\S+/m,
+  tag: /^v?\d+(?:\.\d+)+(?:[a-z]+\d*|\.post\d+|-\S+)?\s*$/m,
+  fsck: /^(?:unreachable|dangling)\s+(?:commit|tree|blob|tag)\s+[0-9a-f]{7,}/m,
+  stash: /^stash@\{\d+\}/m,
+  refs: /^[0-9a-f]{7,}\s+refs\//m,
+};
+// Commands that carry a call's output on without rewriting it: they do not make a call mixed.
+const PASSTHROUGH = new Set(["cd", "echo", "head", "tail", "cat", "sort", "uniq", "tee", "true", "printf", "less", "more"]);
 
 const baseName = (head: string): string => head.slice(head.lastIndexOf("/") + 1);
 
@@ -149,7 +174,7 @@ const isScript = (arg: string, script: string): boolean => arg === script || arg
 function classify(head: string, rest: string[], body: string, prefix: string): Segment | undefined {
   const base = baseName(head);
   const form = (expr: string): string => (prefix ? `${prefix} ${expr}` : expr);
-  const seg = (kind: Kind, expr: string, hosts: string[] = []): Segment => ({ kind, form: form(expr), head, hosts });
+  const seg = (kind: Kind, expr: string, hosts: string[] = []): Segment => ({ kind, form: form(expr), head, hosts, words: [] });
   const interp = INTERPRETERS.has(base) || INTERP_VERSIONED_RE.test(base);
 
   if (interp) {
@@ -179,8 +204,8 @@ function classify(head: string, rest: string[], body: string, prefix: string): S
   if (base === "git") {
     const sub = rest[0];
     if (sub !== undefined && GIT_FETCH_SUBS.has(sub)) return seg("fetch", `git ${sub}`, hostsIn(body));
-    if (sub !== undefined && GIT_PROBE_SUBS.has(sub) && probeKind(sub, rest.slice(1)) !== undefined) return seg("vcs", `git ${sub}`);
-    return undefined;
+    const probe = sub !== undefined && GIT_PROBE_SUBS.has(sub) ? probeKind(sub, rest.slice(1)) : undefined;
+    return probe !== undefined ? { ...seg("vcs", `git ${sub}`), probe } : undefined;
   }
   if (PACKAGE_TOOLS.has(base)) {
     if (/^(?:pip|npm|yarn|pnpm)/.test(base) && rest[0] !== undefined && ["install", "download", "add", "ci"].includes(rest[0])) return seg("fetch", `${base} ${rest[0]}`, hostsIn(body));
@@ -243,7 +268,7 @@ function classifyCommand(cmd: string, work: string): Segment[] {
     while (toks.length && (PREFIX_HEADS.has(toks[0] as string) || ASSIGN_TOKEN_RE.test(toks[0] as string))) toks.splice(0, toks[0] === "timeout" ? 2 : 1);
     if (!toks.length) continue;
     const found = classify(toks[0] as string, toks.slice(1), seg, prefix);
-    if (found) out.push(found);
+    if (found) out.push({ ...found, words: toks });
   }
   return out;
 }
@@ -288,6 +313,68 @@ function relative(p: string, work: string): string | undefined {
 
 const safeForm = (s: string): string => s.replace(/[^A-Za-z0-9 ._:=/@+-]/g, "").replace(/\s+/g, " ").trim().slice(0, 120);
 
+/** The test labels a runner was given: words after its own token that look like a module, a path or a test id. A plain name right after an option is that option's value (`-k name`). */
+function testLabels(seg: Segment): string[] {
+  const last = seg.form.split(" ").at(-1) ?? "";
+  const at = seg.words.findIndex((t) => t === last || t.replace(/^[./]+/, "") === last || t.endsWith(`/${last}`));
+  const out: string[] = [];
+  let skip = false;
+  let prev = "";
+  for (const t of at < 0 ? [] : seg.words.slice(at + 1)) {
+    if (skip) {
+      skip = false;
+      prev = t;
+      continue;
+    }
+    if ([">", ">>", "2>", "<", "|"].includes(t) || /^(?:2>|>|<|\|)/.test(t)) {
+      skip = [">", ">>", "2>", "<"].includes(t);
+      prev = t;
+      continue;
+    }
+    const structured = t.includes(".") || t.includes("::") || t.includes("/");
+    const afterOption = prev.startsWith("-") && !prev.includes("=");
+    if (!t.startsWith("-") && LABEL_TOKEN_RE.test(t) && t.length <= 120 && (structured || !afterOption)) out.push(t);
+    prev = t;
+  }
+  return out;
+}
+
+/** Whether the runner could not load one of these labels: it says so, or the module it cannot import is a label's own (`tests` for `tests.app`), not a missing `pytest`. */
+function labelFailed(labels: string[], output: string): boolean {
+  if (LABEL_ERR_RE.test(output)) return true;
+  const heads = new Set(labels.map((l) => l.split(/[./:]/, 1)[0]));
+  return [...output.matchAll(NO_MODULE_RE)].some((m) => heads.has((m[1] as string).split(".")[0]));
+}
+
+/** The variables a call's output asks for, and the values its command sets (inline, exported or in the code it runs). A credential's name never gets a value. */
+function envCalls(cmd: string, output: string): { needs: string[]; sets: Record<string, string> } {
+  const needs = [...new Set([...output.matchAll(new RegExp(ENV_NEED_RE.source, "g"))].map((m) => m[1] as string))].filter((n) => ENV_NAME.test(n)).sort().slice(0, 5);
+  const found: [string, string][] = [
+    ...[...cmd.matchAll(new RegExp(ENV_PREFIX_RE.source, "g"))].map((m): [string, string] => [m[1] as string, m[3] as string]),
+    ...[...cmd.matchAll(new RegExp(ENV_INCODE_RE.source, "g"))].map((m): [string, string] => [m[1] as string, m[2] as string]),
+  ];
+  const sets: Record<string, string> = {};
+  for (const [name, value] of found) {
+    if (!ENV_NAME.test(name) || CREDENTIAL_NAME.test(name) || !ENV_VALUE.test(value)) continue;
+    if (Object.keys(sets).length < 5 || Object.hasOwn(sets, name)) sets[name] = value;
+  }
+  return { needs, sets };
+}
+
+/** Whether a shell call failed, and the runner pattern that names it when the output holds no other marker. A tool that failed did; one that did not is read as upstream's turn reader does: a test run whose status was replaced by a pipe, `||` or a report is read by its summary, then by the output's markers. */
+function shellFailed(cmd: string, output: string, ok: boolean): { failed: boolean; also?: RegExp } {
+  const status = statusOfTests(unwrap(cmd));
+  let verdict: boolean | undefined;
+  if (status === "hidden" || status === "mixed") verdict = runnerVerdict(output);
+  // `undefined`: the status says nothing, and the output's markers decide.
+  let code: boolean | undefined = ok ? (exitStatusCovers(unwrap(cmd)) ? false : undefined) : true;
+  if (verdict !== undefined) code = verdict;
+  else if (status === "hidden") code = undefined;
+  // Their output is in the result too, and what the agent reported is theirs.
+  else if (status === "mixed") code = !ok;
+  return { failed: code ?? isErrorOutput(output), ...(verdict === true ? { also: RUN_FAILED_RE } : {}) };
+}
+
 /** One tool call's result as its class: what later code may learn from, never the text. */
 export function observe(call: ObservedCall, roots: { work: string }): Observation {
   const o: Observation = {};
@@ -295,14 +382,23 @@ export function observe(call: ObservedCall, roots: { work: string }): Observatio
   const kind = family(call.tool);
   const output = typeof call.output === "string" ? call.output.slice(0, OUTPUT_CAP) : "";
   const cmd = kind === "shell" ? (str(input.command) ?? str(input.cmd)) : undefined;
-  const failed = !call.ok;
+  const env = cmd ? envCalls(cmd, output) : undefined;
+  let failed = !call.ok;
+  let also: RegExp | undefined;
+  if (cmd) {
+    const read = shellFailed(cmd, output, call.ok);
+    failed = read.failed;
+    also = read.also;
+    // A value that was set is taken as working only if the call did not show a failure of its own.
+    if (!failed && env && Object.keys(env.sets).length > 0 && ENV_FAILED_RE.test(output)) failed = true;
+  }
 
   // A content tool's text is a file or a search result, not an outcome: it is read only when the tool failed.
   const readable = kind !== "content" || failed;
   const hit = readable && output ? errorClassOf(output) : undefined;
   if (hit) o.errorClass = hit.name;
   if (failed && output) {
-    const sig = failureSignature(output, hit?.pattern);
+    const sig = failureSignature(output, hit?.pattern ?? also);
     if (sig) o.failure = sig;
   }
 
@@ -342,6 +438,27 @@ export function observe(call: ObservedCall, roots: { work: string }): Observatio
     const set = ENV_PREFIX_RE.exec(cmd)?.[1] ?? ENV_INCODE_RE.exec(cmd)?.[1];
     const envVar = (need ?? set)?.slice(0, 60);
     if (envVar) o.envVar = envVar;
+    if (env && env.needs.length > 0) o.needs = env.needs;
+    if (env && Object.keys(env.sets).length > 0) o.sets = env.sets;
+
+    const test = seg?.kind === "test" ? seg : segs.find((s) => s.kind === "test");
+    if (test) {
+      const labels = testLabels(test);
+      if (labels.length > 0) {
+        o.labels = labels.slice(0, 5);
+        if (labelFailed(labels, output)) o.labelErr = true;
+      }
+    }
+
+    // A probe is judged only when every command of the call is one: another's output would be read as its answer.
+    const probes = segs.filter((s) => s.probe !== undefined);
+    const commands = segments(unwrap(cmd)).filter((c) => !PASSTHROUGH.has(baseName((c.split(/\s+/)[0] as string) ?? "")));
+    if (probes.length > 0 && commands.length === segs.length && segs.every((s) => s.kind === "vcs")) {
+      const hint = EXIT_CODE_RE.exec(output)?.[1];
+      const success = hint === undefined ? call.ok : Number(hint) === 0;
+      if (probes.some((s) => PROBE_HIT[s.probe as string]?.test(output))) o.probe = "hit";
+      else if (success) o.probe = "empty";
+    }
   }
   return o;
 }

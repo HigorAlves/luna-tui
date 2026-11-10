@@ -241,10 +241,158 @@ describe("observe: environment variables", () => {
     expect(o.envVar).toBe("API_TOKEN");
   });
 
-  it("names a variable a command sets, never its value", () => {
-    const o = run("FOO_BAR=secretvalue pytest");
+  it("names a variable a command sets", () => {
+    const o = run("FOO_BAR=somevalue pytest");
     expect(o.envVar).toBe("FOO_BAR");
+    expect(o.sets).toEqual({ FOO_BAR: "somevalue" });
+  });
+
+  it("never gives the value of a credential's name, nor a value outside the safe charset", () => {
+    const o = run("FOO_TOKEN=secretvalue BAR_BAZ=$(cat /etc/passwd) pytest");
     expect(JSON.stringify(o)).not.toContain("secretvalue");
+    expect(JSON.stringify(o)).not.toContain("passwd");
+  });
+});
+
+describe("observe: test labels", () => {
+  it("names the labels a runner was given after its own token", () => {
+    expect(run("python -m pytest tests/test_a.py::TestX::test_y -q", "3 passed in 0.1s").labels).toEqual(["tests/test_a.py::TestX::test_y"]);
+    expect(run("python runtests.py tests.app.test_x", "Ran 1 test").labels).toEqual(["tests.app.test_x"]);
+  });
+
+  it("does not take the value of an option for a label, nor a redirect target", () => {
+    expect(run("pytest -k smoke tests/a.py > out.txt 2>&1", "1 passed in 1s").labels).toEqual(["tests/a.py"]);
+    expect(run("pytest -k smoke", "1 passed in 1s").labels).toBeUndefined();
+  });
+
+  it("gives no labels to a runner that was given none, nor to a command that is not a test", () => {
+    expect(run("pytest").labels).toBeUndefined();
+    expect(run("npm run build src/a.ts").labels).toBeUndefined();
+  });
+
+  it("keeps at most five labels", () => {
+    const o = run("pytest a/1.py a/2.py a/3.py a/4.py a/5.py a/6.py", "6 passed in 1s");
+    expect(o.labels).toEqual(["a/1.py", "a/2.py", "a/3.py", "a/4.py", "a/5.py"]);
+  });
+
+  it("flags a label the runner could not load, by its own message or by the module it names", () => {
+    expect(run("python runtests.py tests.app.test_x", "ImportError: Failed to import test module: tests.app", false).labelErr).toBe(true);
+    expect(run("python runtests.py tests.app.test_x", "ModuleNotFoundError: No module named 'tests'", false).labelErr).toBe(true);
+    expect(run("python runtests.py tests.app.test_x", "ERROR: not found: tests/app", false).labelErr).toBe(true);
+  });
+
+  it("does not flag a missing runner as a label error, nor a run that loaded its labels", () => {
+    expect(run("python -m pytest tests/a.py", "No module named pytest", false).labelErr).toBeUndefined();
+    expect(run("pytest tests/a.py", "1 passed in 1s").labelErr).toBeUndefined();
+  });
+});
+
+describe("observe: variables a call needs and sets", () => {
+  it("lists every variable the output asks for, sorted, at most five", () => {
+    const out = "set the environment variable ZED_ONE\nset the environment variable ALPHA_TWO";
+    expect(run("python app.py", out, false).needs).toEqual(["ALPHA_TWO", "ZED_ONE"]);
+  });
+
+  it("gives the value of a variable a command sets, inline, exported or in code", () => {
+    expect(run("DJANGO_SETTINGS_MODULE=tests.settings pytest", "1 passed in 1s").sets).toEqual({ DJANGO_SETTINGS_MODULE: "tests.settings" });
+    expect(run("export APP_ENV=test && pytest", "1 passed in 1s").sets).toEqual({ APP_ENV: "test" });
+    expect(run(`python -c "import os; os.environ['APP_MODE'] = 'ci'; import app"`, "").sets).toEqual({ APP_MODE: "ci" });
+  });
+
+  it("never gives a variable whose name looks like a credential, and keeps its name only as envVar", () => {
+    const names = ["API_TOKEN", "GITHUB_SECRET", "DB_PASSWORD", "DB_PASSWD", "OPENAI_API_KEY", "AWS_CREDENTIAL", "BASIC_AUTH", "SESSION_ID", "MY_COOKIE", "api_key_x"];
+    for (const name of names) {
+      const o = run(`${name}=abc123 pytest`, "1 passed in 1s");
+      expect(o.sets).toBeUndefined();
+      expect(JSON.stringify(o)).not.toContain("abc123");
+    }
+    const mixed = run("API_TOKEN=abc123 APP_ENV=test pytest", "1 passed in 1s");
+    expect(mixed.sets).toEqual({ APP_ENV: "test" });
+  });
+
+  it("drops a value outside the safe charset or longer than 60", () => {
+    expect(run("APP_ENV=$(whoami) pytest").sets).toBeUndefined();
+    expect(run(`APP_ENV=${"a".repeat(61)} pytest`).sets).toBeUndefined();
+  });
+
+  it("keeps at most five variables", () => {
+    const o = run("AA_1=a BB_1=b CC_1=c DD_1=d EE_1=e FF_1=f pytest", "1 passed in 1s");
+    expect(Object.keys(o.sets ?? {})).toHaveLength(5);
+  });
+
+  it("counts a call that shows a traceback despite its exit status as failed, so its values are not taken as working", () => {
+    const o = run("APP_ENV=bad python app.py | tee log", "Traceback (most recent call last):\n  File x\nValueError: no", true);
+    expect(o.failure).toMatch(/^[0-9a-f]{10}$/);
+  });
+});
+
+describe("observe: a version control probe", () => {
+  it("is a hit when the output lists what the probe looks for", () => {
+    expect(run("git remote -v", "origin\thttps://x/y.git (fetch)\norigin\thttps://x/y.git (push)").probe).toBe("hit");
+    expect(run("git branch -a", "* main\n  remotes/origin/main").probe).toBe("hit");
+    expect(run("git stash list", "stash@{0}: WIP on main").probe).toBe("hit");
+  });
+
+  it("is empty when the probe succeeded and listed nothing", () => {
+    expect(run("git remote -v", "").probe).toBe("empty");
+    expect(run("git branch -a", "* main").probe).toBe("empty");
+    expect(run("git stash list", "").probe).toBe("empty");
+  });
+
+  it("says nothing when the call failed without a hit, or held other work", () => {
+    expect(run("git remote -v", "fatal: not a git repository", false).probe).toBeUndefined();
+    expect(run("git remote -v && npm run build", "").probe).toBeUndefined();
+    expect(run("pytest").probe).toBeUndefined();
+  });
+});
+
+describe("observe: a test run whose exit status is not the runner's", () => {
+  const failing = "FAILED tests/a.py::t - AssertionError: x\n1 failed, 2 passed in 0.4s";
+
+  it("records the failure of a piped test run that exited 0", () => {
+    const o = run("npm test | tail -20", failing, true);
+    expect(o.failure).toMatch(/^[0-9a-f]{10}$/);
+    expect(o.testsRan).toBe(true);
+  });
+
+  it("does the same for || true, a reported status and a pipe to a filter", () => {
+    for (const cmd of ["pytest || true", 'pytest; echo "exit=$?"', "pytest 2>&1 | grep -v warn", "bash -lc 'pytest | tail'"]) {
+      expect(run(cmd, failing, true).failure, cmd).toMatch(/^[0-9a-f]{10}$/);
+    }
+  });
+
+  it("fingerprints a run's own summary when no line holds an error marker", () => {
+    expect(run("npx vitest run | tail", " Tests  2 failed | 3 passed (5)", true).failure).toMatch(/^[0-9a-f]{10}$/);
+  });
+
+  it("gives a repeated piped failure the same fingerprint as the unpiped one", () => {
+    expect(run("pytest | tail", failing, true).failure).toBe(run("pytest", failing, false).failure);
+  });
+
+  it("records no failure when the summary says the run passed, even if the pipe failed", () => {
+    expect(run("pytest | grep -q x", "3 passed in 0.2s", false).failure).toBeUndefined();
+    expect(run("npm test | tail", "3 passed in 0.2s", true).failure).toBeUndefined();
+  });
+
+  it("lets the output markers decide when a hidden run has no summary", () => {
+    expect(run("pytest | tail", "Traceback (most recent call last):\nValueError: x", true).failure).toMatch(/^[0-9a-f]{10}$/);
+    expect(run("pytest | tail", "collecting...", true).failure).toBeUndefined();
+  });
+
+  it("keeps the reported status of a run followed by other commands, and of a covered one", () => {
+    expect(run("pytest; git diff --stat", "FAILED x", true).failure).toBeUndefined();
+    expect(run("cd app && pytest", "FAILED x", true).failure).toBeUndefined();
+    expect(run("pytest", failing, true).failure).toBeUndefined();
+  });
+
+  it("keeps a content tool's text from counting as an error", () => {
+    const o = observe({ tool: "Read", input: { file_path: "a.log" }, output: failing, ok: true }, { work: WORK });
+    expect(o.failure).toBeUndefined();
+  });
+
+  it("keeps the failure of a tool that failed, test run or not", () => {
+    expect(run("pytest", failing, false).failure).toMatch(/^[0-9a-f]{10}$/);
+    expect(run("python x.py", "ValueError: x", false).failure).toMatch(/^[0-9a-f]{10}$/);
   });
 });
 

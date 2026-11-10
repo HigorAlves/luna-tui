@@ -13,8 +13,8 @@
 // - A known form-repair fact's working forms are read off its text, as the facts keep no counters; the working form a run states is the
 //   first that does not move the shell, in call order, so a fact's text is the newest run's, not the most counted.
 // - Upstream merges form-repair lines that share a root into one line; the lines here stay one per fact.
-// - Arg repair, env value and empty probe read labels, variable values and a probe's answer, which the observer does not emit yet
-//   (ObservedCall's optional fields). They stay quiet in production until it does, and are tested over the shape it will give.
+// - A call's `ok` is the tool's, and not one whose output the observer read as a failure (a piped test run that exited 0); upstream's `ok` of
+//   an environment call also reads the output for a traceback, which the observer does by giving that call a failure fingerprint.
 import { createHash } from "node:crypto";
 
 import { findingKinds } from "../../../runner-video/tools/lib/findings.ts";

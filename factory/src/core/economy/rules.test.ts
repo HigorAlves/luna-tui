@@ -2,6 +2,7 @@
 import type { Observation } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
+import { observe } from "./observe.ts";
 import { backstopHit, foldSpiral, gateOpen, isStuck, newSpiral, redirectText, stagnation, type Spiral } from "./rules.ts";
 
 const call = { tool: "bash", target: "pnpm test" };
@@ -121,5 +122,15 @@ describe("redirectText", () => {
 
   it("names one file when nothing was edited", () => {
     expect(redirectText(newSpiral())).toContain("(most to `one file`)");
+  });
+});
+
+describe("foldSpiral over a piped test run", () => {
+  it("counts the repeated failure of a run piped through tail, which exits 0, as the guard counts an unpiped one", () => {
+    const out = "FAILED tests/a.py::t - AssertionError: x\n1 failed in 0.4s";
+    const s = newSpiral();
+    for (let i = 0; i < 3; i++) foldSpiral(s, observe({ tool: "Bash", input: { command: "pnpm test | tail -20" }, output: out, ok: true }, { work: "/w" }), call);
+    expect(s.errorOutputs).toBe(3);
+    expect(s.repeatedFailures).toBe(2);
   });
 });
