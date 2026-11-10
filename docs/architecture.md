@@ -529,7 +529,7 @@ A fact's text is a fixed template. The only foreign text in it is a command spel
 - An active fact retires when its score goes below zero.
 - A fact of the absent tool, empty probe or boundary family retires on one contradiction. A candidate of those families dies at once.
 - A form repair counts a contradiction only after two runs in a row.
-- `retired`, `dropped` and `promoted` are final. The fact stays in the list, so its key is never learned again.
+- `retired`, `dropped` and `promoted` are final. `pending` is not a state: it marks an active fact whose retro PR is open. The fact stays in the list, so its key is never learned again.
 
 The machine tells a fact only while the fact is active. At least 4 runs must have used what it is about. It must have applied in at least 40% of them. At least 2 distinct cards must have confirmed it, and a run with no card id is no card. The machine checks every command in a fact's text again when it renders the text, so a fact stored earlier is refused too.
 
@@ -553,7 +553,7 @@ A proposed fact counts a confirming run only when that run edited a file that no
 
 The machine keeps a line whole or leaves it out. The machine refuses a line that reads as advice about being done or about checking (words such as `skip`, `done`, `verify`). It also refuses a line shaped like a secret. This is a lint that upstream does not have.
 
-**Promotion through the retro.** The machine offers a fact to the retro when the fact is active and was never contradicted. It must also have `economy.promote_cards` distinct cards that confirmed it (5 by default). The retro sees at most 10 of them, by id, as data. `ReviewingMemoryAnswer.factPromotions` names the ones to keep and a section for each. The machine keeps only ids that it offered. It writes the fact's own stored text under that section of `docs/agents/project-context.md`, in the retro's draft PR. When the file holds the text, the fact becomes `promoted`. No run is told it again, because the file states it.
+**Promotion through the retro.** The machine offers a fact to the retro when the fact is active and was never contradicted. It must also have `economy.promote_cards` distinct cards that confirmed it (5 by default). The retro sees at most 10 of them, by id, as data. `ReviewingMemoryAnswer.factPromotions` names the ones to keep and a section for each. The machine keeps only ids that it offered. It writes the fact's own stored text under that section of `docs/agents/project-context.md`, in the retro's draft PR. A fact becomes `promoted` only when the default branch's `docs/agents/project-context.md` holds its text. While the retro's PR is open, the fact is `pending` (`pending: { since, branch }`). It stays active and keeps being told, and the retro is not offered it again for 14 days. On the next close of a card in the repository, and each time the machine builds the candidates, it reads that file from the default branch of the repository (the last known ref, through git) and promotes the pending facts whose text it holds. If the PR closes unmerged, the fact is never lost. After 14 days the retro is offered it again. No run is told a promoted fact again, because the file states it.
 
 **Drop.** A person can retire a wrong fact with `POST /economy/facts/:id/drop`. The fact is never told again and its key is never learned again.
 

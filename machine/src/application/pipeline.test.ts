@@ -2358,9 +2358,10 @@ describe("the token economy around a stage", () => {
     expect(closed).toHaveLength(1);
   });
 
-  it("marks the facts the approved retro promoted, once the rules step wrote them, and not when the rules were skipped", async () => {
+  it("marks the facts the approved retro wrote as pending, not promoted, once the rules step wrote them, and not when the rules were skipped", async () => {
     const promoted: unknown[][] = [];
-    const economy: Economy = { ...noEconomy(), promoted: async (...a) => (promoted.push(a), a[1].length) };
+    const pending: unknown[][] = [];
+    const economy: Economy = { ...noEconomy(), promoted: async (...a) => (promoted.push(a), a[1].length), pending: async (...a) => (pending.push(a), a[1].length) };
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const run = async (applyRules: boolean) => {
@@ -2374,9 +2375,10 @@ describe("the token economy around a stage", () => {
       await p.decide(task.id, "approved", undefined, { applyRules });
     };
     await run(false);
-    expect(promoted).toEqual([]);
+    expect(pending).toEqual([]);
     await run(true);
-    expect(promoted).toEqual([["/r/a", ["aaaaaaaaaaaa"]]]);
+    expect(promoted).toEqual([]);
+    expect(pending).toEqual([["/r/a", ["aaaaaaaaaaaa"], expect.any(String)]]);
   });
 
   it("escalates a stopped run on a stage that is not Build too", async () => {

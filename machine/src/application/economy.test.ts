@@ -591,6 +591,66 @@ describe("economy.promotable and economy.promoted", () => {
   });
 });
 
+describe("economy: a promoted fact waits for the default branch", () => {
+  const seed = (over: Partial<FactRecord>): FactRecord => ({ id: "f1", family: "proposed", source: "proposed", key: "k", text: MANUAL_FACT, state: "active", confirmations: 3, contradictions: 0, score: 2, exercised: 9, fired: 9, cards: ["c1", "c2", "c3", "c4", "c5"], firstRun: "r0", lastRun: "r0", streak: 0, detector, files: [], section: "Commands", ...over });
+  const DAY = 24 * 60 * 60 * 1000;
+  const ago = (days: number) => new Date(Date.now() - days * DAY).toISOString();
+  const setup = (context: string | null, ...facts: FactRecord[]) => {
+    const fake = fakeStore();
+    fake.state.facts = { facts, injected: {} };
+    const reads: string[] = [];
+    return { ...fake, reads, eco: economy(fake.store, () => {}, undefined, async (repo) => (reads.push(repo), context)) };
+  };
+
+  it("keeps telling a fact whose PR is open, and marks it pending with the branch and the time", async () => {
+    const { state, eco } = setup(null, seed({}));
+    expect(await eco.pending("/r", ["f1", "nope"], "luna/memory-abc")).toBe(1);
+    expect(state.facts.facts[0]).toMatchObject({ state: "active", pending: { branch: "luna/memory-abc", since: expect.any(String) } });
+    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toEqual([MANUAL_FACT]);
+  });
+
+  it("does not offer a pending fact to the retro again for 14 days, then offers it again", async () => {
+    const fresh = setup(null, seed({ pending: { since: ago(13), branch: "b" } }));
+    expect(await fresh.eco.promotable("/r", onCfg)).toEqual([]);
+    const old = setup(null, seed({ pending: { since: ago(15), branch: "b" } }));
+    expect(await old.eco.promotable("/r", onCfg)).toEqual([{ id: "f1", text: MANUAL_FACT, section: "Commands" }]);
+  });
+
+  it("marks a pending fact promoted once the default branch's file holds its text, and tells no run it any more", async () => {
+    const file = `# Project context\n\n## Commands\n\n-   ${MANUAL_FACT.replace(/ /g, "  ")}\n`;
+    const { state, eco, reads } = setup(file, seed({ pending: { since: ago(1), branch: "b" } }), seed({ id: "f2", text: "Another fact.", pending: { since: ago(1), branch: "b" } }));
+    expect(await eco.promotable("/r", onCfg)).toEqual([]);
+    expect(reads).toEqual(["/r"]);
+    expect(state.facts.facts.map((f) => f.state)).toEqual(["promoted", "active"]);
+    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toEqual(["Another fact."]);
+  });
+
+  it("checks the pending facts on every later close of a card in the repository", async () => {
+    const { state, eco } = setup(`## Commands\n- ${MANUAL_FACT}\n`, seed({ pending: { since: ago(1), branch: "b" } }));
+    await eco.cardClosed("/r", "c9", onCfg, async () => null);
+    expect(state.facts.facts[0]!.state).toBe("promoted");
+  });
+
+  it("leaves a pending fact active when the file does not hold it, or cannot be read", async () => {
+    for (const context of [null, "## Commands\n- Something else.\n"]) {
+      const { state, eco } = setup(context, seed({ pending: { since: ago(1), branch: "b" } }));
+      await eco.promotable("/r", onCfg);
+      expect(state.facts.facts[0]!.state).toBe("active");
+    }
+    const broken = fakeStore();
+    broken.state.facts = { facts: [seed({ pending: { since: ago(1), branch: "b" } })], injected: {} };
+    const eco = economy(broken.store, () => {}, undefined, async () => Promise.reject(new Error("no git")));
+    await expect(eco.promotable("/r", onCfg)).resolves.toEqual([]);
+    expect(broken.state.facts.facts[0]!.state).toBe("active");
+  });
+
+  it("reads no file when no fact is pending", async () => {
+    const { reads, eco } = setup("x", seed({}));
+    await eco.promotable("/r", onCfg);
+    expect(reads).toEqual([]);
+  });
+});
+
 describe("economy: overhead counted in tokens", () => {
   it("prices an overhead run by its tokens and counts the ones that had none", async () => {
     const { state, store } = fakeStore();

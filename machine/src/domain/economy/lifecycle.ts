@@ -57,6 +57,8 @@ export interface FactRecord {
   files?: string[];
   /** The section of the project context the proposer named for it, a default for the retro. */
   section?: string;
+  /** The retro opened a PR with the fact's text and the default branch does not hold it yet: the fact stays active and told, and is not offered again for `PENDING_DAYS`. */
+  pending?: { since: string; branch: string };
 }
 
 /** What a repository keeps of its facts: every record (retired and dropped ones too, so a key is never learned again) and, per pack, the ids of the facts its latest run was told. */
@@ -125,7 +127,49 @@ export function promoteFacts(facts: FactRecord[], ids: readonly string[]): { fac
     facts: facts.map((f) => {
       if (!ids.includes(f.id) || f.state !== "active") return f;
       promoted += 1;
-      return { ...f, state: "promoted" as const };
+      const { pending: _pending, ...rest } = f;
+      return { ...rest, state: "promoted" as const };
+    }),
+    promoted,
+  };
+}
+
+/** Days a fact whose retro PR is open is not offered to the retro again. */
+export const PENDING_DAYS = 14;
+
+/** Whether the fact is waiting on a PR the retro opened less than `PENDING_DAYS` ago. */
+export const isPending = (fact: FactRecord, now: number): boolean => fact.pending !== undefined && now - Date.parse(fact.pending.since) < PENDING_DAYS * 24 * 60 * 60 * 1000;
+
+/** Marks the active facts `ids` as waiting on the retro's PR: they stay active and told. */
+export function markPending(facts: FactRecord[], ids: readonly string[], pending: { since: string; branch: string }): { facts: FactRecord[]; marked: number } {
+  let marked = 0;
+  return {
+    facts: facts.map((f) => {
+      if (!ids.includes(f.id) || f.state !== "active") return f;
+      marked += 1;
+      return { ...f, pending };
+    }),
+    marked,
+  };
+}
+
+const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
+
+/** Whether the project context holds the fact's text as one of its bullets (the retro writes `- <text>`, white space folded). */
+export const contextHolds = (context: string, text: string): boolean => {
+  const bullet = `- ${oneLine(text)}`;
+  return context.split("\n").some((line) => oneLine(line) === bullet);
+};
+
+/** Marks the pending facts whose text `context` now holds as promoted. */
+export function settlePending(facts: FactRecord[], context: string): { facts: FactRecord[]; promoted: number } {
+  let promoted = 0;
+  return {
+    facts: facts.map((f) => {
+      if (f.state !== "active" || !f.pending || !contextHolds(context, f.text)) return f;
+      promoted += 1;
+      const { pending: _pending, ...rest } = f;
+      return { ...rest, state: "promoted" as const };
     }),
     promoted,
   };

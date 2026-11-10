@@ -6,7 +6,7 @@ import { addSample, envelopeOf } from "../domain/economy/envelope.ts";
 import { evidenceOf } from "../domain/economy/envfacts.ts";
 import { runFacts } from "../domain/economy/fold.ts";
 import { type LedgerRecord, ledgerRecord, summary } from "../domain/economy/ledger.ts";
-import { type FactsFile, dropFact, foldFacts, promoteFacts } from "../domain/economy/lifecycle.ts";
+import { type FactsFile, dropFact, foldFacts, isPending, markPending, promoteFacts, settlePending } from "../domain/economy/lifecycle.ts";
 import { type Digest, type ObservedCall, digestOf, observedCalls } from "../domain/economy/observe-run.ts";
 import { admit, foldProposed } from "../domain/economy/propose.ts";
 import { type PackTools, approve, emptyTools, foldTools, maskOf, restoreUnit, unitsOf, usedUnits } from "../domain/economy/prune.ts";
@@ -99,8 +99,10 @@ export interface Economy {
   cardClosed(repoPath: string, cardId: string, config: EconomyConfig, propose: Propose): Promise<void>;
   /** The learned facts the retro may promote: active, confirmed on `config.promote_cards` distinct cards, never contradicted; ten at most. */
   promotable(repoPath: string, config: EconomyConfig): Promise<Array<{ id: string; text: string; section?: string }>>;
-  /** The retro put these facts in the project context: they are not told again. Returns how many it marked. Never throws. */
+  /** The retro put these facts in the project context of the default branch: they are not told again. Returns how many it marked. Never throws. */
   promoted(repoPath: string, ids: readonly string[]): Promise<number>;
+  /** The retro's PR with these facts is open on `branch`, and the default branch does not hold them yet: they stay active and told, and are not offered to the retro again for 14 days. Returns how many it marked. Never throws. */
+  pending(repoPath: string, ids: readonly string[], branch: string): Promise<number>;
   /** A person approves the tools proposed for `pack`: they become its mask, which the next run narrows by. False when there is no proposal. Never throws. */
   approveMask(repoPath: string, pack: PackId): Promise<boolean>;
   /** A person brings back a unit of `pack` (`web`, `agent`, `luna:<tool>`; a skill is no unit): out of the mask, never proposed again. False for a unit the pack does not have. Never throws. */
@@ -124,11 +126,14 @@ const EMPTY: EconomyStatus = { envelopes: {}, guard: [], cost: { exec: 0, overhe
 
 /** The economy of a machine with it off: no input, nothing kept. */
 export function noEconomy(): Economy {
-  return { inputFor: async () => undefined, afterRun: async () => {}, recordOverhead: async () => {}, dropFact: async () => false, cardClosed: async () => {}, promotable: async () => [], promoted: async () => 0, approveMask: async () => false, restore: async () => false, importRuns: async () => 0, status: async () => EMPTY };
+  return { inputFor: async () => undefined, afterRun: async () => {}, recordOverhead: async () => {}, dropFact: async () => false, cardClosed: async () => {}, promotable: async () => [], promoted: async () => 0, pending: async () => 0, approveMask: async () => false, restore: async () => false, importRuns: async () => 0, status: async () => EMPTY };
 }
 
-/** `runsOf` lists the runs an import folds; without it the import folds none. */
-export function economy(store: EconomyStore, log: (line: string) => void = () => {}, runsOf?: RunsOf): Economy {
+/** The text of the project context file on the repository's default branch; null when it has none. Bound by the machine, which reads the repository's object database. */
+export type ContextOf = (repoPath: string) => Promise<string | null>;
+
+/** `runsOf` lists the runs an import folds; without it the import folds none. `contextOf` reads the default branch's project context, which settles the facts a retro PR is waiting to land; without it none settles. */
+export function economy(store: EconomyStore, log: (line: string) => void = () => {}, runsOf?: RunsOf, contextOf?: ContextOf): Economy {
   const kept = async <T>(what: string, work: () => Promise<T>, fallback: T): Promise<T> => {
     try {
       return await work();
@@ -148,6 +153,21 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
     }
     return chosen.map((f) => f.text);
   };
+  /** Marks as promoted the pending facts that the default branch's file now holds. Never throws. */
+  const settle = (repoPath: string): Promise<void> =>
+    kept(
+      "settle",
+      async () => {
+        if (!contextOf || !(await store.facts(repoPath)).facts.some((f) => f.state === "active" && f.pending)) return;
+        const context = await contextOf(repoPath);
+        if (context === null) return;
+        await store.updateFacts(repoPath, (file) => {
+          const done = settlePending(file.facts, context);
+          return done.promoted > 0 ? { ...file, facts: done.facts } : file;
+        });
+      },
+      undefined,
+    );
   return {
     inputFor: (repoPath, pack, config) =>
       kept(
@@ -243,8 +263,9 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
         },
         false,
       ),
-    cardClosed: (repoPath, cardId, config, propose) =>
-      kept(
+    cardClosed: async (repoPath, cardId, config, propose) => {
+      if (config.facts !== "off") await settle(repoPath);
+      await kept(
         "propose",
         async () => {
           if (config.facts === "off") return;
@@ -272,16 +293,34 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
           });
         },
         undefined,
-      ),
-    promotable: (repoPath, config) =>
-      kept(
+      );
+    },
+    promotable: async (repoPath, config) => {
+      if (config.facts === "off") return [];
+      await settle(repoPath);
+      return kept(
         "promotable",
         async () => {
-          if (config.facts === "off") return [];
-          const facts = (await store.facts(repoPath)).facts.filter((f) => f.state === "active" && f.contradictions === 0 && new Set(f.cards).size >= config.promote_cards);
+          const now = Date.now();
+          const facts = (await store.facts(repoPath)).facts.filter((f) => f.state === "active" && f.contradictions === 0 && new Set(f.cards).size >= config.promote_cards && !isPending(f, now));
           return facts.slice(0, PROMOTABLE_MAX).map((f) => ({ id: f.id, text: f.text, ...(f.section ? { section: f.section } : {}) }));
         },
         [],
+      );
+    },
+    pending: (repoPath, ids, branch) =>
+      kept(
+        "pending",
+        async () => {
+          let count = 0;
+          await store.updateFacts(repoPath, (file) => {
+            const done = markPending(file.facts, ids, { since: new Date().toISOString(), branch });
+            count = done.marked;
+            return done.marked > 0 ? { ...file, facts: done.facts } : file;
+          });
+          return count;
+        },
+        0,
       ),
     promoted: (repoPath, ids) =>
       kept(

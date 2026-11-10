@@ -22,8 +22,10 @@ export interface CloseReport {
   steps: CloseStep[];
   /** True when the worktree was removed from disk, so the caller can clear its path. */
   worktreeRemoved: boolean;
-  /** The ids of the learned facts whose text is now in the project context (written, or already there); absent when the step wrote nothing. */
+  /** The ids of the learned facts whose text the default branch's project context already holds (a merged card's rules step found it there); absent otherwise. */
   promoted?: string[];
+  /** The ids of the learned facts the rules step wrote into a branch (a PR is open, or the task's own PR will carry them) and the default branch does not hold yet; with that branch. Absent when the step wrote nothing. */
+  pending?: { ids: string[]; branch: string };
 }
 
 export interface CloseDeps {
@@ -43,12 +45,17 @@ export interface CloseTarget {
   id: string;
   repoPath: string | null;
   worktreePath: string | null;
+  /** The task's own branch, for the pending facts of a close that is not a merge. */
+  branch?: string | null;
   /** The memory review's proposal; `apply` is false when the approval said to skip it. */
   rules?: { markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }>; factPromotions?: FactPromotion[] };
   title?: string;
   /** The task's PR, when it merged: the rules then go to their own branch, never the merged one. */
   merged?: { prUrl: string; number: number } | null;
 }
+
+/** The branch the rules of a merged card go on: the machine's name, never a model's. */
+const memoryBranch = (id: string): string => `luna/memory-${id.replace(/[^0-9a-f]/gi, "").slice(0, 8) || "task"}`;
 
 /** What the rules step says when the file already holds every rule and fact it was given. */
 const HOLDS = "skipped: the file already holds these rules";
@@ -115,8 +122,7 @@ async function applyRules(
 async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rules: { markdown: string; proposals?: Array<{ kind: string; title: string; body: string }>; factPromotions?: FactPromotion[] }, deps: CloseDeps): Promise<string> {
   const base = await (deps.defaultBranchOf ?? hostDefaultBranch)(target.repoPath ?? worktreePath);
   if (!base || !isBranchName(base)) throw new Error(`no usable default branch: ${JSON.stringify(base ?? null)}`);
-  const short = target.id.replace(/[^0-9a-f]/gi, "").slice(0, 8) || "task";
-  const branch = `luna/memory-${short}`;
+  const branch = memoryBranch(target.id);
   const slug = await (deps.slugOf ?? originSlugOf)(worktreePath);
   if (!deps.github || !slug) throw new Error("cannot open the rules PR: no GitHub token or origin");
   const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, ...at(worktreePath), ...args]);
@@ -188,7 +194,10 @@ export async function closeTask(task: CloseTarget, deps: CloseDeps): Promise<Clo
     return "worktree removed";
   });
 
-  // A fact is promoted once its text is in the file, written now or there before.
-  const promoted = rules?.ok && (rules.note === HOLDS || rules.note.startsWith("committed")) && task.rules?.factPromotions?.length ? task.rules.factPromotions.map((p) => p.id) : undefined;
-  return { steps: [...(rules ? [rules] : []), watchTab, worktree], worktreeRemoved, ...(promoted ? { promoted } : {}) };
+  // A fact is promoted only when the default branch's file holds its text: a merged card's rules step found it there already. A fact the step wrote is pending: a PR is open (or the task's own PR will carry it), and it may be closed unmerged.
+  const ids = task.rules?.factPromotions?.map((p) => p.id);
+  const done = rules?.ok && ids?.length ? rules : null;
+  const promoted = done && task.merged && done.note === HOLDS ? ids : undefined;
+  const pending = done && !promoted && (done.note === HOLDS || done.note.startsWith("committed")) ? { ids: ids!, branch: task.merged ? memoryBranch(task.id) : (task.branch ?? "") } : undefined;
+  return { steps: [...(rules ? [rules] : []), watchTab, worktree], worktreeRemoved, ...(promoted ? { promoted } : {}), ...(pending ? { pending } : {}) };
 }

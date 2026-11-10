@@ -43,6 +43,7 @@ const FactSchema = z.object({
   detector: Detector.optional(),
   files: z.array(z.string()).optional(),
   section: ProjectContextSection.optional(),
+  pending: z.object({ since: z.string(), branch: z.string() }).optional(),
 });
 const ToolsSchema = z.object({
   units: z.record(z.string(), z.object({ unusedRuns: z.number().int().nonnegative(), unusedCards: z.array(z.string()), everUsed: z.boolean(), kept: z.boolean() })),

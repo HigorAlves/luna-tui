@@ -2521,8 +2521,9 @@ export class Pipeline {
         await this.store.updateTask(id, { worktreePath: null });
       }
       await this.log(id, "task.closed", { ...report });
-      // Facts the retro put in the project context are no longer told to a run.
+      // A fact the default branch's project context holds is no longer told to a run; one the retro's PR is waiting to land stays told, and is settled later.
       if (report.promoted?.length && task.repoPath) await this.economy.promoted(task.repoPath, report.promoted);
+      if (report.pending?.ids.length && task.repoPath) await this.economy.pending(task.repoPath, report.pending.ids, report.pending.branch);
       // What the retro leaves behind, recorded where it is used (never written into prompts or rules here).
       const rulesWritten = report.steps.some((step) => step.step === "rules" && step.ok && !step.note.startsWith("skipped"));
       const misses = await this.recordRetroOutputs(id, task.repoPath, rulesWritten);
