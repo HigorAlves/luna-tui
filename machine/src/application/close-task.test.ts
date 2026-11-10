@@ -152,6 +152,44 @@ describe("closeTask rules step", () => {
   });
 });
 
+describe("closeTask: promoted facts", () => {
+  const promotions = [{ id: "aaaaaaaaaaaa", text: "Run the tests with `python -m pytest -q`.", section: "Commands" }, { id: "bbbbbbbbbbbb", text: "Generated clients live in `src/gen/`.", section: "Known landmines" }];
+  const exec: CloseDeps["exec"] = async (_c, args) => (args.includes("rev-parse") ? { code: 128, stdout: "", stderr: "no upstream" } : { code: 0, stdout: "", stderr: "" });
+
+  it("merges each fact's own text into its section beside the rules, and reports the ids as promoted", async () => {
+    const { readFileSync } = await import("node:fs");
+    const path = worktree();
+    const report = await closeTask({ ...task(path), rules: { markdown: "- Run pnpm verify.\n", apply: true, factPromotions: promotions } }, { exec, worktreeRemove: false });
+    const body = readFileSync(join(path, "docs/agents/project-context.md"), "utf8");
+    expect(body).toContain("## Commands\n\n- Run the tests with `python -m pytest -q`.");
+    expect(body).toContain("## Known landmines\n\n- Generated clients live in `src/gen/`.");
+    expect(body).toContain("- Run pnpm verify.");
+    expect(report.promoted).toEqual(["aaaaaaaaaaaa", "bbbbbbbbbbbb"]);
+  });
+
+  it("writes the facts when the retro proposed no rules at all", async () => {
+    const { readFileSync } = await import("node:fs");
+    const path = worktree();
+    const report = await closeTask({ ...task(path), rules: { markdown: "", apply: true, factPromotions: promotions } }, { exec, worktreeRemove: false });
+    expect(readFileSync(join(path, "docs/agents/project-context.md"), "utf8")).toContain("- Generated clients live in `src/gen/`.");
+    expect(report.promoted).toHaveLength(2);
+  });
+
+  it("reports them promoted when the file already holds their text, and not when the step was skipped or failed", async () => {
+    const path = worktree();
+    await closeTask({ ...task(path), rules: { markdown: "", apply: true, factPromotions: promotions } }, { exec, worktreeRemove: false });
+    const again = await closeTask({ ...task(path), rules: { markdown: "", apply: true, factPromotions: promotions } }, { exec, worktreeRemove: false });
+    expect(again.steps[0]!.note).toMatch(/^skipped: the file already holds/);
+    expect(again.promoted).toHaveLength(2);
+    const declined = await closeTask({ ...task(worktree()), rules: { markdown: "", apply: false, factPromotions: promotions } }, { exec, worktreeRemove: false });
+    expect(declined.promoted).toBeUndefined();
+    const big = Array.from({ length: 200 }, (_, i) => `- rule ${i}`).join("\n");
+    const failed = await closeTask({ ...task(worktree()), rules: { markdown: big, apply: true, factPromotions: promotions } }, { exec, worktreeRemove: false });
+    expect(failed.steps[0]!.ok).toBe(false);
+    expect(failed.promoted).toBeUndefined();
+  });
+});
+
 describe("closeTask after a merge: the rules go to their own branch and a draft PR", () => {
   const rules = { markdown: "- Run pnpm verify before any commit. @bob #12\n", apply: true };
   const target = (path: string) => ({ id: "0a1b2c3d-1111-2222-3333-444455556666", title: "Export CSV", repoPath: "/repo", worktreePath: path, rules, merged: { prUrl: "https://github.com/o/a/pull/7", number: 7 } });

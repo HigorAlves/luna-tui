@@ -504,3 +504,22 @@ describe("the loop_judge decision pack and the loop_redirect agent pack", () => 
     expect(pack.answer.safeParse({ redirect: "x".repeat(1201) }).success).toBe(false);
   });
 });
+
+describe("the fact_propose agent pack", () => {
+  it("proposes from digests with no tools, one turn, two minutes and one cheap engine", async () => {
+    const { PACKS, NO_ACCESS } = await import("./index.ts");
+    const pack = PACKS.fact_propose;
+    expect(pack).toMatchObject({ kind: "agent", agent: "fact-proposer", writable: false, maxTurns: 1, timeoutMs: 120_000, access: NO_ACCESS, template: "fact_propose.md", effort: "low" });
+    expect(pack.engines).toEqual({ default: "claude:haiku", allowed: ["claude:haiku"] });
+    expect(pack.answer.safeParse({ facts: [] }).success).toBe(true);
+  });
+
+  it("the retro may name learned facts to promote, by id and section, ten at most", async () => {
+    const { ReviewingMemoryAnswer } = await import("./index.ts");
+    const base = { summary: "s", incidents: [], patterns: [], proposedRules: [], calibration: { estLocBias: 0 } };
+    expect(ReviewingMemoryAnswer.safeParse(base).success).toBe(true);
+    expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: [{ id: "a1b2c3d4e5f6", section: "Commands" }] }).success).toBe(true);
+    expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: [{ id: "a1", section: "Elsewhere" }] }).success).toBe(false);
+    expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: Array(11).fill({ id: "a1", section: "Commands" }) }).success).toBe(false);
+  });
+});

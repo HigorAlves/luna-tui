@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { factId } from "./envfacts.ts";
 import type { FactRecord } from "./lifecycle.ts";
-import { MAX_FACTS, MAX_TOKENS, injected, lintOk, selectInjected } from "./render-facts.ts";
+import { MAX_FACTS, MAX_TOKENS, injected, lintOk, manual, selectInjected } from "./render-facts.ts";
 
 let n = 0;
 /** An active free fact that fires, of a family. */
@@ -98,5 +98,33 @@ describe("lintOk", () => {
   it("accepts a statement about the environment, and a word that only contains a refused one", () => {
     expect(lintOk("`pytest …` fails here with command not found; `python -m pytest …` works.")).toBe(true);
     expect(lintOk("The stopwatch tool is slow, and nothing is undone, skipper or verified.")).toBe(true);
+  });
+});
+
+describe("manual", () => {
+  const proposed = (over: Partial<FactRecord> = {}): FactRecord => fact({ family: "proposed", source: "proposed", ...over });
+
+  it("is the text of the active proposed facts that apply, nothing for the rest, and never a free fact", () => {
+    const good = proposed({ key: "pytest", text: "Run the tests with `python -m pytest`." });
+    const rest = [proposed({ state: "candidate" }), proposed({ state: "retired" }), proposed({ state: "dropped" }), proposed({ state: "promoted" }), proposed({ exercised: 3, fired: 3 }), fact({ key: "free" })];
+    expect(manual([good, ...rest], "/work/luna")).toEqual([good.text]);
+    expect(manual([], "/work/luna")).toEqual([]);
+    expect(injected([good])).toEqual([]);
+  });
+
+  it("gives at most four lines, the best confirmed first", () => {
+    const facts = [3, 9, 5, 7, 4].map((confirmations, i) => proposed({ key: `p${i}`, text: `Fact number ${i} about this repository.`, confirmations }));
+    expect(manual(facts, "/r")).toEqual([1, 3, 2, 4].map((i) => `Fact number ${i} about this repository.`));
+  });
+
+  it("counts the header with the repository's name in the 600 characters, and leaves a line out whole", () => {
+    const long = (i: number) => proposed({ key: `p${i}`, text: `${"x".repeat(180)} ${i}`, confirmations: 10 - i });
+    const lines = manual([long(0), long(1), long(2), long(3)], "/work/some-repository");
+    expect(lines.length).toBeLessThan(4);
+    expect(`# repo operating manual (some-repository) — learned from earlier sessions in this repository\n${lines.map((l) => `- ${l}`).join("\n")}`.length).toBeLessThanOrEqual(MAX_TOKENS * 4);
+  });
+
+  it("leaves out a line that reads as advice to skip or that is shaped like a secret", () => {
+    expect(manual([proposed({ text: "You can skip the slow tests." }), proposed({ text: "The token is sk-ant-abcdefghijklmnop." })], "/r")).toEqual([]);
   });
 });

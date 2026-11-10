@@ -2,9 +2,9 @@ import { type EconomyConfig, EconomyStatus, type GuardEventRow } from "@hardness
 import { describe, expect, it } from "vitest";
 
 import { type LedgerRecord } from "../domain/economy/ledger.ts";
-import { type FactsFile } from "../domain/economy/lifecycle.ts";
-import { type Digest, keepDigests } from "../domain/economy/observe-run.ts";
-import { type EconomyStore, economy, noEconomy } from "./economy.ts";
+import { type FactRecord, type FactsFile } from "../domain/economy/lifecycle.ts";
+import { type Digest, type ObservedCall, keepDigests } from "../domain/economy/observe-run.ts";
+import { type EconomyStore, type Propose, type ProposerState, economy, noEconomy } from "./economy.ts";
 
 const config: EconomyConfig = {
   loop_guard: "on",
@@ -17,7 +17,7 @@ const config: EconomyConfig = {
 };
 
 function fakeStore(events: Record<string, unknown[]> = {}) {
-  const state = { envelopes: {} as Record<string, number[]>, ledger: [] as LedgerRecord[], guard: [] as GuardEventRow[], facts: { facts: [], injected: {} } as FactsFile, digests: [] as Digest[] };
+  const state = { envelopes: {} as Record<string, number[]>, ledger: [] as LedgerRecord[], guard: [] as GuardEventRow[], facts: { facts: [], injected: {} } as FactsFile, digests: [] as Digest[], calls: {} as Record<string, ObservedCall[]>, proposer: { closed: 0, counted: [] } as ProposerState };
   const store: EconomyStore = {
     envelopes: async () => state.envelopes,
     updateEnvelopes: async (_r, change) => void (state.envelopes = change(state.envelopes)),
@@ -27,8 +27,13 @@ function fakeStore(events: Record<string, unknown[]> = {}) {
     guard: async () => state.guard,
     facts: async () => state.facts,
     updateFacts: async (_r, change) => void (state.facts = change(state.facts)),
-    appendDigest: async (_r, digest) => void (state.digests = keepDigests([...state.digests, digest])),
+    appendDigest: async (_r, digest, calls = []) => {
+      state.digests = keepDigests([...state.digests, digest]);
+      state.calls = Object.fromEntries(Object.entries({ ...state.calls, [digest.runId]: calls }).filter(([id]) => state.digests.some((d) => d.runId === id)));
+    },
     digests: async () => state.digests,
+    calls: async () => state.calls,
+    updateProposer: async (_r, change) => void (state.proposer = change(state.proposer)),
     events: async (runId) => events[runId] ?? [],
   };
   return { state, store };
@@ -263,5 +268,222 @@ describe("economy.status facts", () => {
     const [fact] = (await eco.status("/r")).facts ?? [];
     expect(Object.keys(fact ?? {}).sort()).toEqual(["confirmations", "contradictions", "exercised", "family", "fired", "id", "source", "state", "text"]);
     expect(EconomyStatus.safeParse(await eco.status("/r")).success).toBe(true);
+  });
+});
+
+// The proposer and promotion. A run of the module form, editing `file`; a run of another build; the detector that says the module form held.
+const detector = { scope: { all: [{ intent: "test" as const }] }, confirm: { all: [{ predicate: "tests_passed" as const }, { commandIncludes: "python -m pytest" }] }, contradict: { all: [{ errorClass: "command_missing" as const }] } };
+const editing = (file: string) => [result({ intent: "test", form: "python -m pytest -q", testsRan: true }), result({ intent: "vcs", form: "git status", edits: [file] })];
+const MANUAL_FACT = "Run the tests with `python -m pytest -q` from the repository root.";
+const answer = (over: Record<string, unknown> = {}) => ({ facts: [{ text: MANUAL_FACT, section: "Commands", detector, cites: ["r1", "r2"], ...over }] });
+const onCfg: EconomyConfig = { ...config, facts: "on", propose_every: 3 };
+const proposing = (reply: unknown): { propose: Propose; asked: Array<Parameters<Propose>[0]> } => {
+  const asked: Array<Parameters<Propose>[0]> = [];
+  return { asked, propose: async (input) => (asked.push(input), reply === null ? null : { answer: reply, runId: "p1", costUsd: 0.01 }) };
+};
+/** Folds `n` runs of the module form (run i edits `f<i>.ts`, on card c<i>) in a repository that proposes every third card. */
+async function runs(eco: ReturnType<typeof economy>, from: number, to: number, config: EconomyConfig = onCfg) {
+  for (let i = from; i <= to; i++) await eco.afterRun(finished(`r${i}`, { cardId: `c${i}`, config }));
+}
+const editedRuns = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`r${i + 1}`, editing(`f${i + 1}.ts`)]));
+
+describe("economy.cardClosed: the proposer's tick", () => {
+  it("asks on the 3rd and the 6th closed card of a repository, not on the others", async () => {
+    const { store } = fakeStore(editedRuns(6));
+    const eco = economy(store);
+    const { propose, asked } = proposing(answer());
+    await runs(eco, 1, 6);
+    const ticks: number[] = [];
+    for (let n = 1; n <= 7; n++) {
+      await eco.cardClosed("/r", `c${n}`, onCfg, propose);
+      ticks.push(asked.length);
+    }
+    expect(ticks).toEqual([0, 0, 1, 1, 1, 2, 2]);
+  });
+
+  it("counts each repository's cards on their own, and a card once", async () => {
+    const { store } = fakeStore(editedRuns(2));
+    const eco = economy(store);
+    await runs(eco, 1, 2);
+    const { propose, asked } = proposing(answer());
+    await eco.cardClosed("/r", "c1", onCfg, propose);
+    await eco.cardClosed("/r", "c1", onCfg, propose);
+    await eco.cardClosed("/other", "c1", onCfg, propose);
+    await eco.cardClosed("/r", "c2", onCfg, propose);
+    expect(asked).toHaveLength(0);
+  });
+
+  it("does not ask with facts: free or facts: off, though the cards are still counted for free", async () => {
+    const { store } = fakeStore(editedRuns(2));
+    const eco = economy(store);
+    await runs(eco, 1, 2);
+    const { propose, asked } = proposing(answer());
+    for (const facts of ["free", "off"] as const) for (let n = 1; n <= 6; n++) await eco.cardClosed(`/${facts}`, `c${n}`, { ...onCfg, facts }, propose);
+    expect(asked).toHaveLength(0);
+  });
+
+  it("does not ask while fewer than two runs are digested", async () => {
+    const { store } = fakeStore(editedRuns(1));
+    const eco = economy(store);
+    await runs(eco, 1, 1);
+    const { propose, asked } = proposing(answer());
+    for (let n = 1; n <= 3; n++) await eco.cardClosed("/r", `c${n}`, onCfg, propose);
+    expect(asked).toHaveLength(0);
+  });
+
+  it("shows the proposer the repository's name, its digests and the texts of the facts it holds", async () => {
+    const { state, store } = fakeStore({ ...learnedFrom(3), ...editedRuns(0) });
+    const eco = economy(store);
+    await learn(eco, 3);
+    const { propose, asked } = proposing({ facts: [] });
+    for (let n = 1; n <= 3; n++) await eco.cardClosed("/work/my repo;x", `c${n}`, onCfg, propose);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ repo: "myrepox", known: [PYTEST_FACT] });
+    expect(asked[0]!.digests.map((d) => d.runId)).toEqual(state.digests.map((d) => d.runId));
+  });
+
+  it("admits a proposed fact whose detector confirms on the runs it cites, and records the run as overhead", async () => {
+    const { state, store } = fakeStore(editedRuns(3));
+    const eco = economy(store);
+    await runs(eco, 1, 3);
+    const { propose } = proposing(answer());
+    for (let n = 1; n <= 3; n++) await eco.cardClosed("/r", `c${n}`, onCfg, propose);
+    expect(state.facts.facts).toMatchObject([{ source: "proposed", family: "proposed", state: "active", text: MANUAL_FACT, confirmations: 3 }]);
+    expect(state.ledger.at(-1)).toMatchObject({ kind: "overhead", pack: "fact_propose", card: "c3", costUsd: 0.01 });
+    expect((await eco.status("/r")).facts).toMatchObject([{ source: "proposed", text: MANUAL_FACT }]);
+  });
+
+  it("changes nothing when the proposer fails, answers null or answers garbage, and still never throws", async () => {
+    for (const reply of [null, "words", { facts: "no" }, { facts: [{ text: MANUAL_FACT }] }, answer({ cites: ["r1", "r99"] }), answer({ detector: { ...detector, scope: { all: [{ predicate: "ran_everything" }] } } })]) {
+      const { state, store } = fakeStore(editedRuns(3));
+      const eco = economy(store);
+      await runs(eco, 1, 3);
+      const { propose } = proposing(reply);
+      for (let n = 1; n <= 3; n++) await expect(eco.cardClosed("/r", `c${n}`, onCfg, propose)).resolves.toBeUndefined();
+      expect(state.facts.facts, JSON.stringify(reply)).toEqual([]);
+    }
+    const { state, store } = fakeStore(editedRuns(3));
+    const eco = economy(store);
+    await runs(eco, 1, 3);
+    const boom: Propose = async () => Promise.reject(new Error("no credential"));
+    for (let n = 1; n <= 3; n++) await expect(eco.cardClosed("/r", `c${n}`, onCfg, boom)).resolves.toBeUndefined();
+    expect(state.facts.facts).toEqual([]);
+    expect(state.ledger.filter((r) => r.kind === "overhead")).toEqual([]);
+  });
+
+  it("is nothing for noEconomy", async () => {
+    const { propose, asked } = proposing(answer());
+    for (let n = 1; n <= 3; n++) await noEconomy().cardClosed("/r", `c${n}`, onCfg, propose);
+    expect(asked).toHaveLength(0);
+  });
+});
+
+describe("economy: a proposed fact's life", () => {
+  /** A repository where a proposed fact was admitted after three runs on cards c1..c3. */
+  async function admitted(runCount: number) {
+    const fake = fakeStore(editedRuns(runCount));
+    const eco = economy(fake.store);
+    await runs(eco, 1, 2);
+    const { propose } = proposing(answer());
+    for (let n = 1; n <= 3; n++) await eco.cardClosed("/r", `c${n}`, onCfg, propose);
+    return { ...fake, eco };
+  }
+
+  it("is a candidate that three runs on different files make active, and is told only after four runs in scope", async () => {
+    const { state, eco } = await admitted(6);
+    expect(state.facts.facts[0]).toMatchObject({ state: "candidate", confirmations: 2 });
+    await runs(eco, 3, 3);
+    expect(state.facts.facts[0]).toMatchObject({ state: "active", confirmations: 3, exercised: 3 });
+    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toBeUndefined();
+    await runs(eco, 4, 4);
+    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toEqual([MANUAL_FACT]);
+  });
+
+  it("is told with facts: on only, never with free or off, and not to a decision pack", async () => {
+    const { eco } = await admitted(6);
+    await runs(eco, 3, 4);
+    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toEqual([MANUAL_FACT]);
+    expect((await eco.inputFor("/r", "implementing", { ...onCfg, facts: "free" }))?.manual).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", { ...onCfg, facts: "off" }))?.manual).toBeUndefined();
+    expect(await eco.inputFor("/r", "red_check", onCfg)).toBeUndefined();
+  });
+
+  it("stays a candidate when three confirming runs edited the same file", async () => {
+    const same = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`r${i + 1}`, editing("same.ts")]));
+    const { state, store } = fakeStore(same);
+    const eco = economy(store);
+    await runs(eco, 1, 2);
+    const { propose } = proposing(answer());
+    for (let n = 1; n <= 3; n++) await eco.cardClosed("/r", `c${n}`, onCfg, propose);
+    await runs(eco, 3, 6);
+    expect(state.facts.facts[0]).toMatchObject({ state: "candidate", confirmations: 1, exercised: 6 });
+  });
+
+  it("is retired by a contradicting run and then no longer told", async () => {
+    const missing = [result({ intent: "test", form: "pytest", errorClass: "command_missing" }, false)];
+    const { state, store } = fakeStore({ ...editedRuns(4), r5: missing });
+    const eco = economy(store);
+    await runs(eco, 1, 2);
+    const { propose } = proposing(answer());
+    for (let n = 1; n <= 3; n++) await eco.cardClosed("/r", `c${n}`, onCfg, propose);
+    await runs(eco, 3, 4);
+    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toEqual([MANUAL_FACT]);
+    await runs(eco, 5, 5);
+    expect(state.facts.facts[0]).toMatchObject({ state: "retired", contradictions: 1 });
+    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toBeUndefined();
+  });
+
+  it("is dropped by a person and never told again", async () => {
+    const { eco } = await admitted(6);
+    await runs(eco, 3, 4);
+    const id = (await eco.status("/r")).facts![0]!.id;
+    expect(await eco.dropFact("/r", id)).toBe(true);
+    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toBeUndefined();
+  });
+});
+
+describe("economy.promotable and economy.promoted", () => {
+  const seed = (over: Partial<FactRecord>): FactRecord => ({ id: "f1", family: "proposed", source: "proposed", key: "k", text: MANUAL_FACT, state: "active", confirmations: 3, contradictions: 0, score: 2, exercised: 9, fired: 9, cards: ["c1", "c2", "c3", "c4", "c5"], firstRun: "r0", lastRun: "r0", streak: 0, detector, files: [], section: "Commands", ...over });
+  const withFacts = (...facts: FactRecord[]) => {
+    const fake = fakeStore();
+    fake.state.facts = { facts, injected: {} };
+    return { ...fake, eco: economy(fake.store) };
+  };
+
+  it("offers an active fact confirmed on five distinct cards with no contradiction, with its section", async () => {
+    const { eco } = withFacts(seed({}));
+    expect(await eco.promotable("/r", onCfg)).toEqual([{ id: "f1", text: MANUAL_FACT, section: "Commands" }]);
+  });
+
+  it("offers a free fact too, with no section of its own", async () => {
+    const free = seed({ id: "f2", source: "free", family: "env_value", section: undefined, text: "Code needs `APP_ENV=test` here." });
+    expect(await withFacts(free).eco.promotable("/r", onCfg)).toEqual([{ id: "f2", text: "Code needs `APP_ENV=test` here." }]);
+  });
+
+  it("offers nothing short of the bar: fewer cards, repeated cards, a contradiction, or a state other than active", async () => {
+    const rest = [seed({ id: "a", cards: ["c1", "c2", "c3", "c4"] }), seed({ id: "b", cards: ["c1", "c1", "c1", "c1", "c1"] }), seed({ id: "c", contradictions: 1 }), ...(["candidate", "retired", "dropped", "promoted"] as const).map((state) => seed({ id: state, state }))];
+    expect(await withFacts(...rest).eco.promotable("/r", onCfg)).toEqual([]);
+    expect(await withFacts(seed({ id: "a", cards: ["c1", "c2", "c3"] })).eco.promotable("/r", { ...onCfg, promote_cards: 3 })).toHaveLength(1);
+  });
+
+  it("offers at most ten, and nothing with facts: off or for noEconomy", async () => {
+    const many = Array.from({ length: 12 }, (_, i) => seed({ id: `f${i}`, text: `Fact ${i}.` }));
+    const { eco } = withFacts(...many);
+    expect(await eco.promotable("/r", onCfg)).toHaveLength(10);
+    expect(await eco.promotable("/r", { ...onCfg, facts: "off" })).toEqual([]);
+    expect(await noEconomy().promotable("/r", onCfg)).toEqual([]);
+  });
+
+  it("marks the facts promoted by id, so no later run is told them, and counts only the ones it held as active", async () => {
+    const free = seed({ id: "f2", source: "free", family: "form_repair", key: "test:pytest", text: PYTEST_FACT, section: undefined });
+    const { state, eco } = withFacts(seed({ exercised: 9 }), free, seed({ id: "f3", state: "retired", text: "Old." }));
+    expect(await eco.inputFor("/r", "implementing", onCfg)).toMatchObject({ manual: [MANUAL_FACT], facts: [PYTEST_FACT] });
+    expect(await eco.promoted("/r", ["f1", "f2", "f3", "nope"])).toBe(2);
+    expect(state.facts.facts.map((f) => f.state)).toEqual(["promoted", "promoted", "retired"]);
+    expect(await eco.inputFor("/r", "implementing", onCfg)).toMatchObject({ guard: expect.anything() });
+    const after = await eco.inputFor("/r", "implementing", onCfg);
+    expect(after?.manual).toBeUndefined();
+    expect(after?.facts).toBeUndefined();
+    expect(await noEconomy().promoted("/r", ["f1"])).toBe(0);
   });
 });

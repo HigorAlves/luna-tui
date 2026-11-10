@@ -52,7 +52,7 @@ import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 import type { CommitFact, PriorityTruthEntry } from "./ground-truth.ts";
 import { budgetRowsOf, buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
 import { DECIDED_REASONS, type DecidedEscalation, decideEscalation } from "./stages/escalation.ts";
-import { type Economy, noEconomy } from "./economy.ts";
+import { type Economy, type Propose, noEconomy } from "./economy.ts";
 import { type LoopStop, loopStop } from "../domain/economy/stop.ts";
 import { type Decide } from "./stages/check-decide.ts";
 import { withTask } from "./task-scope.ts";
@@ -228,6 +228,8 @@ export interface PipelineOptions {
   escalationDecide?: { decide: Decide | null };
   /** The token economy: folds each finished stage run into the repository's envelope and ledger; absent, nothing is kept. */
   economy?: Economy;
+  /** Runs the fact_propose pack when a card closes; bound late (once PackRuns exists). Absent or null, no card asks for facts. */
+  proposer?: { run: Propose | null };
   /** Whether the repo already has a luna.yaml; a task on one without runs setup first. Tests pass a fake. */
   hasConfig?: (repoPath: string) => boolean;
   /** Resolves a card's repository, project, owners and history by script when it starts; absent, a card starts as it is. */
@@ -426,6 +428,7 @@ export class Pipeline {
   private readonly knownRepos: (() => Promise<string[]>) | null;
   private readonly escalationDecide: { decide: Decide | null };
   private readonly economy: Economy;
+  private readonly proposer: { run: Propose | null } | undefined;
   private readonly escalationTruth: NonNullable<PipelineOptions["escalationTruth"]> | undefined;
   private readonly commitsSince: NonNullable<PipelineOptions["commitsSince"]> | undefined;
   private readonly headOf: PipelineOptions["headOf"];
@@ -487,6 +490,7 @@ export class Pipeline {
     this.onEvent = options.onEvent ?? (() => {});
     this.escalationDecide = options.escalationDecide ?? { decide: null };
     this.economy = options.economy ?? noEconomy();
+    this.proposer = options.proposer;
     this.escalationTruth = options.escalationTruth;
     this.commitsSince = options.commitsSince;
     this.headOf = options.headOf;
@@ -2441,12 +2445,14 @@ export class Pipeline {
   }
 
   /** The memory review's proposal and whether the approval kept it, if the gate carried one. */
-  private async approvedRules(id: string): Promise<{ markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }> } | undefined> {
+  private async approvedRules(id: string): Promise<{ markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }>; factPromotions?: Array<{ id: string; text: string; section: string }> } | undefined> {
     const gate = (await this.approvals(id)).filter((a) => a.kind === "reviewing_memory" && a.decision === "approved").at(-1);
-    const rules = (gate?.requested as { rules?: { markdown?: unknown; proposals?: unknown } } | undefined)?.rules;
-    if (!gate || typeof rules?.markdown !== "string" || rules.markdown.trim() === "") return undefined;
-    const proposals = Array.isArray(rules.proposals) ? (rules.proposals as Array<{ kind: string; title: string; body: string }>).filter((p) => typeof p?.kind === "string" && typeof p.title === "string" && typeof p.body === "string") : [];
-    return { markdown: rules.markdown, apply: gate.response?.applyRules !== false, ...(proposals.length > 0 ? { proposals } : {}) };
+    const rules = (gate?.requested as { rules?: { markdown?: unknown; proposals?: unknown; factPromotions?: unknown } } | undefined)?.rules;
+    const promotions = Array.isArray(rules?.factPromotions) ? (rules.factPromotions as Array<{ id: string; text: string; section: string }>).filter((p) => typeof p?.id === "string" && typeof p.text === "string" && typeof p.section === "string") : [];
+    const markdown = typeof rules?.markdown === "string" ? rules.markdown : "";
+    if (!gate || (markdown.trim() === "" && promotions.length === 0)) return undefined;
+    const proposals = Array.isArray(rules?.proposals) ? (rules.proposals as Array<{ kind: string; title: string; body: string }>).filter((p) => typeof p?.kind === "string" && typeof p.title === "string" && typeof p.body === "string") : [];
+    return { markdown, apply: gate.response?.applyRules !== false, ...(proposals.length > 0 ? { proposals } : {}), ...(promotions.length > 0 ? { factPromotions: promotions } : {}) };
   }
 
   /** A merged card's retro: the truth file for the eval loop (written whether or not a retro ran) and the graph misses the Build Report also declared. Returns how many misses were recorded. Never throws. */
@@ -2489,7 +2495,20 @@ export class Pipeline {
   /** Runs the host-side close step for a task that just closed and logs what it did. Never throws. */
   private async close(id: string): Promise<void> {
     await this.closeOut(id);
+    await this.factTick(id);
     await this.releaseHeld();
+  }
+
+  /** A card closed: the economy counts it and, on every few, asks the proposer for facts. Never throws. */
+  private async factTick(id: string): Promise<void> {
+    const propose = this.proposer?.run;
+    if (!propose) return;
+    try {
+      const repo = (await this.get(id)).repoPath;
+      if (repo) await this.economy.cardClosed(repo, id, (await this.policyFor(repo)).factory.economy, propose);
+    } catch (error) {
+      console.error(`could not tick the fact proposer for ${id}`, error);
+    }
   }
 
   private async closeOut(id: string): Promise<void> {
@@ -2502,6 +2521,8 @@ export class Pipeline {
         await this.store.updateTask(id, { worktreePath: null });
       }
       await this.log(id, "task.closed", { ...report });
+      // Facts the retro put in the project context are no longer told to a run.
+      if (report.promoted?.length && task.repoPath) await this.economy.promoted(task.repoPath, report.promoted);
       // What the retro leaves behind, recorded where it is used (never written into prompts or rules here).
       const rulesWritten = report.steps.some((step) => step.step === "rules" && step.ok && !step.note.startsWith("skipped"));
       const misses = await this.recordRetroOutputs(id, task.repoPath, rulesWritten);

@@ -142,6 +142,81 @@ export type GuardEventRow = z.infer<typeof GuardEventRow>;
 /** The line a prompt's learned-facts block opens with. The machine counts it in the block's size and the factory writes it, so both read it here. */
 export const FACTS_HEADER = "# environment facts learned from earlier sessions in this repository";
 
+/** The line a prompt's manual block opens with: the facts the proposer found and three runs confirmed. The repository is named by the base name of its path, cut to a safe charset, so a folder name cannot end the line or the block. */
+export const manualHeader = (repoPath: string): string => `# repo operating manual (${repoName(repoPath)}) — learned from earlier sessions in this repository`;
+
+/** A repository's folder name, cut to `[A-Za-z0-9._-]` (at most 120 characters); `repo` when nothing is left. */
+export function repoName(repoPath: string): string {
+  const name = (repoPath.split(/[\\/]/).filter(Boolean).at(-1) ?? "").replace(/[^A-Za-z0-9._-]/g, "").slice(0, 120);
+  return name === "" ? "repo" : name;
+}
+
+/** The sections of `docs/agents/project-context.md`, in the order the file keeps them. */
+export const PROJECT_CONTEXT_SECTIONS = ["Stack & versions", "Commands", "Critical rules", "Patterns to follow", "Patterns to avoid", "Known landmines"] as const;
+export const ProjectContextSection = z.enum(PROJECT_CONTEXT_SECTIONS);
+export type ProjectContextSection = z.infer<typeof ProjectContextSection>;
+
+/** The classes of environment error the observer names (`Observation.errorClass`). */
+export const ERROR_CLASSES = ["module_missing", "command_missing", "script_missing", "permission_denied", "usage_error", "connection_refused", "name_resolution", "unreachable"] as const;
+
+/** What a run's observed calls can say, as the proposer's detectors name it. Each is decided by the machine over the run's calls; none runs a pattern. */
+export const DETECTOR_PREDICATES = ["ran_tests", "tests_passed", "tests_failed", "ran_checks", "ran_build", "edited", "command_failed", "missing_command", "missing_dependency", "bad_usage"] as const;
+
+/** A literal of a command's spelling: letters, digits, space and `. _ - / : = @`, so it can never be read as a pattern or break a line. */
+const COMMAND_LITERAL = /^[A-Za-z0-9 ._\-/:=@]{2,80}$/;
+
+/** One thing a run's calls either show or do not. Strict: a field that is not one of these is refused. */
+export const DetectorAtom = z.union([
+  z.object({ predicate: z.enum(DETECTOR_PREDICATES) }).strict(),
+  z.object({ commandIncludes: z.string().regex(COMMAND_LITERAL) }).strict(),
+  z.object({ errorClass: z.enum(ERROR_CLASSES) }).strict(),
+  z.object({ intent: Observation.shape.intent.unwrap() }).strict(),
+]);
+export type DetectorAtom = z.infer<typeof DetectorAtom>;
+
+/** Holds on a run when every atom does. */
+export const DetectorClause = z.object({ all: z.array(DetectorAtom).min(1).max(4) }).strict();
+export type DetectorClause = z.infer<typeof DetectorClause>;
+
+/** How a proposed fact is checked on a run, with no model: `scope` says the fact is about this run, `confirm` that it held, `contradict` that it did not. */
+export const Detector = z.object({ scope: DetectorClause, confirm: DetectorClause, contradict: DetectorClause }).strict();
+export type Detector = z.infer<typeof Detector>;
+
+/** One run as the proposer reads it (the machine's digest of the run's observed calls). */
+export const ProposeDigest = z.object({
+  at: z.string().max(40),
+  runId: z.string().max(100),
+  pack: z.string().max(60),
+  cardId: z.string().max(100),
+  outcome: z.string().max(40),
+  calls: z.number().int().nonnegative(),
+  lines: z.array(z.string().max(300)).max(40),
+});
+export type ProposeDigest = z.infer<typeof ProposeDigest>;
+
+/** `StageInput.context.propose` for fact_propose: the repository's name, its last runs and the texts of the facts it already holds. All data. */
+export const ProposeContext = z.object({
+  repo: z.string().max(120),
+  digests: z.array(ProposeDigest).max(8),
+  known: z.array(z.string().max(240)).max(20),
+});
+export type ProposeContext = z.infer<typeof ProposeContext>;
+
+/** fact_propose: up to four facts, each one line grounded in at least two of the runs it was shown. The machine admits one only when its detector confirms on those runs. */
+export const FactProposal = z.object({
+  facts: z
+    .array(
+      z.object({
+        text: z.string().min(1).max(200),
+        section: ProjectContextSection,
+        detector: Detector,
+        cites: z.array(z.string().max(100)).min(2).max(4),
+      }),
+    )
+    .max(4),
+});
+export type FactProposal = z.infer<typeof FactProposal>;
+
 /** One learned fact as the status shows it: where it came from, how far it got, what the next run is told. */
 export const FactStatus = z.object({
   id: z.string(),

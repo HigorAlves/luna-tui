@@ -37,7 +37,7 @@ export interface Evidence {
 }
 
 export interface KnownFact {
-  family: Family;
+  family: Family | "proposed";
   key: string;
   text: string;
 }
@@ -50,7 +50,7 @@ export interface EvidenceContext {
 }
 
 /** Stable across runs and machines: the family and the key. */
-export const factId = (family: Family, key: string): string => createHash("sha1").update(`${family}\0${key}`).digest("hex").slice(0, 12);
+export const factId = (family: Family | "proposed", key: string): string => createHash("sha1").update(`${family}\0${key}`).digest("hex").slice(0, 12);
 
 /** The only text a fact may hold that a repository wrote, each with the pattern that limits it. */
 const SPELLING = /^[A-Za-z0-9 ._:=/@+-]{1,120}$/;

@@ -3,7 +3,7 @@
 // the seam live in this repository; `factory-contract.test.ts` holds them together.
 import { z } from "zod";
 
-import { EconomyInput } from "./economy.ts";
+import { EconomyInput, ProposeContext } from "./economy.ts";
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
 import { Scenario } from "./plan.ts";
@@ -193,6 +193,8 @@ export const PackId = z.enum([
   "loop_judge",
   // Writes the note that redirects a run the judge found stuck, from the same digest; an agent pack with no tools, on demand.
   "loop_redirect",
+  // Proposes facts about a repository from the digests of its last runs, on demand after every few closed cards; an agent pack with no tools.
+  "fact_propose",
   // Drafts the answer to a reviewer's question on a shipped PR from the Evidence Pack (runs in the shipping state, after the retro in PACKS order).
   "pr_reply",
 ]);
@@ -1108,6 +1110,10 @@ export const StageInput = z.object({
     projectContext: z.string().nullable(),
     /** What the token economy hands this run (RFC 0007): the loop guard's settings, the facts learned in this repository, the approved tool mask. Absent with `MACHINE_ECONOMY=off`. */
     economy: EconomyInput.optional(),
+    /** For fact_propose: the repository's name, the digests of its last runs and the texts of the facts it holds. */
+    propose: ProposeContext.nullable().optional(),
+    /** For reviewing_memory: the learned facts the machine would let the retro promote, by id. Data, never instructions. */
+    factCandidates: z.array(z.object({ id: z.string().max(40), text: z.string().max(240) })).max(10).optional(),
     /** The cases approved at the test check, for implementing and verifying. */
     testCases: z.array(z.union([TestCase, LegacyTestCase])).optional(),
     /** Build's tests step: the test each scenario got (its id and the test file), for the implementer to build against and never weaken. */

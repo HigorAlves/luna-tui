@@ -10,7 +10,7 @@ import { at } from "../adapters/git/machine-repo.ts";
 import { HOST_GIT, defaultBranch as hostDefaultBranch, isBranchName, originSlugOf, removeWorktree } from "../adapters/git/worktree.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import type { GitHub } from "./github.ts";
-import { CAP_BYTES, CAP_LINES, CONTEXT_FILE, mergeRules } from "./stages/memory.ts";
+import { CAP_BYTES, CAP_LINES, CONTEXT_FILE, type FactPromotion, mergeRules, promotionsMarkdown } from "./stages/memory.ts";
 
 export interface CloseStep {
   step: "rules" | "watch-tab" | "worktree";
@@ -22,6 +22,8 @@ export interface CloseReport {
   steps: CloseStep[];
   /** True when the worktree was removed from disk, so the caller can clear its path. */
   worktreeRemoved: boolean;
+  /** The ids of the learned facts whose text is now in the project context (written, or already there); absent when the step wrote nothing. */
+  promoted?: string[];
 }
 
 export interface CloseDeps {
@@ -42,11 +44,14 @@ export interface CloseTarget {
   repoPath: string | null;
   worktreePath: string | null;
   /** The memory review's proposal; `apply` is false when the approval said to skip it. */
-  rules?: { markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }> };
+  rules?: { markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }>; factPromotions?: FactPromotion[] };
   title?: string;
   /** The task's PR, when it merged: the rules then go to their own branch, never the merged one. */
   merged?: { prUrl: string; number: number } | null;
 }
+
+/** What the rules step says when the file already holds every rule and fact it was given. */
+const HOLDS = "skipped: the file already holds these rules";
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -65,10 +70,13 @@ async function requireInside(worktreePath: string, file: string): Promise<void> 
   if ((await realpath(dirname(file))) !== join(await realpath(worktreePath), "docs", "agents")) throw new Error("docs/agents is not inside the worktree: the rules are not written");
 }
 
+/** The approved rules and the promoted facts, as the one text `mergeRules` merges. */
+const rulesText = (rules: { markdown: string; factPromotions?: FactPromotion[] }): string => (rules.factPromotions?.length ? `${rules.markdown.replace(/\n*$/, "\n")}\n${promotionsMarkdown(rules.factPromotions)}` : rules.markdown);
+
 /** Writes the approved rules into project-context.md and commits them on the task branch. */
 async function applyRules(
   target: CloseTarget,
-  rules: { markdown: string; apply: boolean },
+  rules: { markdown: string; apply: boolean; factPromotions?: FactPromotion[] },
   deps: CloseDeps,
 ): Promise<string> {
   const { worktreePath } = target;
@@ -82,8 +90,8 @@ async function applyRules(
   } catch {
     existing = null;
   }
-  const merged = mergeRules(existing, rules.markdown);
-  if (merged === existing) return "skipped: the file already holds these rules";
+  const merged = mergeRules(existing, rulesText(rules));
+  if (merged === existing) return HOLDS;
   const lines = merged.split("\n").length - 1;
   const bytes = Buffer.byteLength(merged);
   if (lines > CAP_LINES || bytes > CAP_BYTES) throw new Error(`cap exceeded: ${lines}/${bytes}`);
@@ -104,7 +112,7 @@ async function applyRules(
 }
 
 /** After a merge the task's branch is gone: the rules go on `luna/memory-<task8>`, cut from origin's default branch, pushed with -u and opened as a draft PR. The branch name is the machine's, never from a model. */
-async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rules: { markdown: string; proposals?: Array<{ kind: string; title: string; body: string }> }, deps: CloseDeps): Promise<string> {
+async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rules: { markdown: string; proposals?: Array<{ kind: string; title: string; body: string }>; factPromotions?: FactPromotion[] }, deps: CloseDeps): Promise<string> {
   const base = await (deps.defaultBranchOf ?? hostDefaultBranch)(target.repoPath ?? worktreePath);
   if (!base || !isBranchName(base)) throw new Error(`no usable default branch: ${JSON.stringify(base ?? null)}`);
   const short = target.id.replace(/[^0-9a-f]/gi, "").slice(0, 8) || "task";
@@ -126,8 +134,8 @@ async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rul
   } catch {
     existing = null;
   }
-  const merged = mergeRules(existing, rules.markdown);
-  if (merged === existing) return "skipped: the file already holds these rules";
+  const merged = mergeRules(existing, rulesText(rules));
+  if (merged === existing) return HOLDS;
   const lines = merged.split("\n").length - 1;
   if (lines > CAP_LINES || Buffer.byteLength(merged) > CAP_BYTES) throw new Error(`cap exceeded: ${lines}/${Buffer.byteLength(merged)}`);
   await mkdir(dirname(file), { recursive: true });
@@ -137,7 +145,7 @@ async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rul
   await must("commit", ["-c", "commit.gpgsign=false", "commit", "-m", "docs(context): rules from the memory review"]);
   await must("push", ["push", "-u", "origin", branch]);
   const title = `docs(agents): rules from ${(target.title ?? "the task").replace(/\s+/g, " ").trim().slice(0, 100)}`;
-  const body = `Rules proposed by the retro of the task whose PR merged: ${target.merged!.prUrl}\n\n${inert(rules.markdown).slice(0, 20_000)}${rules.proposals?.length ? `\n\n${proposalsSection(rules.proposals)}` : ""}`;
+  const body = `Rules proposed by the retro of the task whose PR merged: ${target.merged!.prUrl}\n\n${inert(rulesText(rules)).slice(0, 20_000)}${rules.proposals?.length ? `\n\n${proposalsSection(rules.proposals)}` : ""}`;
   const pr = await deps.github.openPr(slug, { title, body, head: branch, draft: true });
   return `committed ${CONTEXT_FILE} (${lines} lines) on ${branch}, pushed, and opened the draft PR ${pr.url}`;
 }
@@ -180,5 +188,7 @@ export async function closeTask(task: CloseTarget, deps: CloseDeps): Promise<Clo
     return "worktree removed";
   });
 
-  return { steps: [...(rules ? [rules] : []), watchTab, worktree], worktreeRemoved };
+  // A fact is promoted once its text is in the file, written now or there before.
+  const promoted = rules?.ok && (rules.note === HOLDS || rules.note.startsWith("committed")) && task.rules?.factPromotions?.length ? task.rules.factPromotions.map((p) => p.id) : undefined;
+  return { steps: [...(rules ? [rules] : []), watchTab, worktree], worktreeRemoved, ...(promoted ? { promoted } : {}) };
 }

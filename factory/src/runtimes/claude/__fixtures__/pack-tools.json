@@ -858,5 +858,9 @@
   "loop_redirect": {
     "allowedTools": [],
     "tools": []
+  },
+  "fact_propose": {
+    "allowedTools": [],
+    "tools": []
   }
 }

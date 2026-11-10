@@ -62,6 +62,47 @@ describe("fileStore: facts and digests", () => {
   });
 });
 
+describe("fileStore: the proposer's state", () => {
+  const calls = [{ intent: "test" as const, form: "python -m pytest", testsRan: true, ok: true }];
+
+  it("keeps the calls of the kept digests' runs only, privately", async () => {
+    const store = fileStore(dir);
+    for (let i = 1; i <= 10; i++) await store.appendDigest(repo, digest(i), calls);
+    expect(Object.keys(await store.calls(repo)).sort()).toEqual(["r10", "r3", "r4", "r5", "r6", "r7", "r8", "r9"].sort());
+    expect((await store.calls(repo)).r10).toEqual(calls);
+    expect((await stat(join(folder(), "calls.json"))).mode & 0o777).toBe(0o600);
+  });
+
+  it("reads no calls before any, and skips a run whose calls are not observations", async () => {
+    const store = fileStore(dir);
+    expect(await store.calls(repo)).toEqual({});
+    await mkdir(folder(), { recursive: true });
+    await writeFile(join(folder(), "calls.json"), JSON.stringify({ good: calls, bad: [{ output: "text" }], worse: "x" }));
+    expect(await store.calls(repo)).toEqual({ good: calls });
+  });
+
+  it("round-trips a proposed fact with its detector, files and section, and drops one whose detector is not valid", async () => {
+    const store = fileStore(dir);
+    const detector = { scope: { all: [{ intent: "test" as const }] }, confirm: { all: [{ commandIncludes: "pytest -q" }] }, contradict: { all: [{ errorClass: "command_missing" as const }] } };
+    const proposed = fact({ id: "p1", family: "proposed", source: "proposed", detector, files: ["a.ts"], section: "Commands" });
+    const bad = fact({ id: "p2", family: "proposed", source: "proposed", detector: { ...detector, scope: { all: [{ predicate: "nonsense" }] } } as never });
+    await store.updateFacts(repo, (file) => ({ ...file, facts: [proposed, bad] }));
+    expect((await store.facts(repo)).facts).toEqual([proposed]);
+  });
+
+  it("counts closed cards across reads, and starts again from zero on a corrupt file", async () => {
+    const store = fileStore(dir);
+    await store.updateProposer(repo, (s) => ({ closed: s.closed + 1, counted: [...s.counted, "c1"] }));
+    await store.updateProposer(repo, (s) => ({ closed: s.closed + 1, counted: [...s.counted, "c2"] }));
+    let seen = { closed: -1, counted: [] as string[] };
+    await store.updateProposer(repo, (s) => ((seen = s), s));
+    expect(seen).toEqual({ closed: 2, counted: ["c1", "c2"] });
+    await writeFile(join(folder(), "proposer.json"), "{ not json");
+    await store.updateProposer(repo, (s) => ((seen = s), s));
+    expect(seen).toEqual({ closed: 0, counted: [] });
+  });
+});
+
 describe("fileStore", () => {
   it("reads empty before anything is written", async () => {
     const store = fileStore(dir);

@@ -1,18 +1,18 @@
 // The economy's state per repository, in the machine's own state: `<stateDir>/economy/<repo slug>/` holds `envelope.json` (the tool-call counts of
 // passing runs, per pack), `ledger.jsonl` (one record per run), `guard.jsonl` (what the loop guard did, the newest kept), `facts.json` (the learned
-// facts and what each pack was last told) and `digests.jsonl` (the last eight runs, for the proposer). Folders are 0700, files
+// facts and what each pack was last told) and `digests.jsonl` (the last eight runs, for the proposer), `calls.json` (the observed calls of those runs, for its detectors) and `proposer.json` (closed cards counted since the start). Folders are 0700, files
 // 0600, a JSON file is replaced through tmp + rename, and writes to one file are served one at a time. A file that cannot be read or parsed reads as empty.
 import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { GuardEventRow } from "@hardness/contracts";
+import { Detector, type GuardEventRow, Observation, ProjectContextSection } from "@hardness/contracts";
 import { z } from "zod";
 
-import type { EconomyStore } from "../../application/economy.ts";
+import type { EconomyStore, ProposerState } from "../../application/economy.ts";
 import { FAMILIES } from "../../domain/economy/envfacts.ts";
 import type { LedgerRecord } from "../../domain/economy/ledger.ts";
 import type { FactRecord, FactsFile } from "../../domain/economy/lifecycle.ts";
-import { type Digest, keepDigests } from "../../domain/economy/observe-run.ts";
+import { type Digest, type ObservedCall, keepDigests } from "../../domain/economy/observe-run.ts";
 import { repoSlug } from "../graph/slug.ts";
 import { readRegularFile } from "../fs/bounded.ts";
 
@@ -23,7 +23,7 @@ const GUARD_KEEP = 200;
 
 const FactSchema = z.object({
   id: z.string(),
-  family: z.enum(FAMILIES),
+  family: z.enum([...FAMILIES, "proposed"]),
   source: z.enum(["free", "proposed"]),
   key: z.string(),
   text: z.string(),
@@ -37,7 +37,11 @@ const FactSchema = z.object({
   firstRun: z.string(),
   lastRun: z.string(),
   streak: z.number().int(),
+  detector: Detector.optional(),
+  files: z.array(z.string()).optional(),
+  section: ProjectContextSection.optional(),
 });
+const CallsSchema = Observation.extend({ ok: z.boolean() });
 const DigestSchema = z.object({ at: z.string(), runId: z.string(), pack: z.string(), cardId: z.string(), outcome: z.string(), calls: z.number().int(), lines: z.array(z.string()) });
 
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -110,6 +114,30 @@ export function fileStore(stateDir: string): EconomyStore {
       const ok = DigestSchema.safeParse(row);
       return ok.success ? [ok.data] : [];
     });
+  /** The calls of each kept run, by run id: a run whose calls do not parse is left out. */
+  const readCalls = async (path: string): Promise<Record<string, ObservedCall[]>> => {
+    try {
+      const parsed = JSON.parse(await readText(path)) as unknown;
+      if (!isRecord(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).flatMap(([runId, calls]) => {
+          const ok = z.array(CallsSchema).safeParse(calls);
+          return ok.success ? [[runId, ok.data as ObservedCall[]]] : [];
+        }),
+      );
+    } catch {
+      return {};
+    }
+  };
+  const readProposer = async (path: string): Promise<ProposerState> => {
+    try {
+      const parsed = JSON.parse(await readText(path)) as unknown;
+      const ok = z.object({ closed: z.number().int().nonnegative(), counted: z.array(z.string()) }).safeParse(parsed);
+      return ok.success ? ok.data : { closed: 0, counted: [] };
+    } catch {
+      return { closed: 0, counted: [] };
+    }
+  };
   const append = (path: string, rows: unknown[]) =>
     serial(path, async () => {
       await ensure(join(path, ".."));
@@ -149,15 +177,28 @@ export function fileStore(stateDir: string): EconomyStore {
         await replace(path, JSON.stringify(next));
       });
     },
-    appendDigest: (repoPath, digest) => {
+    appendDigest: (repoPath, digest, calls = []) => {
       const path = join(folder(repoPath), "digests.jsonl");
-      // The file is rewritten to the last eight runs, since a digest is read whole and never grows past that.
+      const callsPath = join(folder(repoPath), "calls.json");
+      // The file is rewritten to the last eight runs, since a digest is read whole and never grows past that; the calls file keeps the same runs.
       return serial(path, async () => {
         await ensure(folder(repoPath));
-        await replace(path, keepDigests([...(await readDigests(path)), digest]).map((d) => `${JSON.stringify(d)}\n`).join(""));
+        const kept = keepDigests([...(await readDigests(path)), digest]);
+        await replace(path, kept.map((d) => `${JSON.stringify(d)}\n`).join(""));
+        const all = { ...(await readCalls(callsPath)), [digest.runId]: calls };
+        await replace(callsPath, JSON.stringify(Object.fromEntries(Object.entries(all).filter(([runId]) => kept.some((d) => d.runId === runId)))));
       });
     },
     digests: (repoPath) => readDigests(join(folder(repoPath), "digests.jsonl")),
+    calls: (repoPath) => readCalls(join(folder(repoPath), "calls.json")),
+    updateProposer: (repoPath, change) => {
+      const path = join(folder(repoPath), "proposer.json");
+      return serial(path, async () => {
+        const next = change(await readProposer(path));
+        await ensure(folder(repoPath));
+        await replace(path, JSON.stringify(next));
+      });
+    },
     events: async (runId) => lines(await readText(join(stateDir, "runs", runId, "out", "events.jsonl"), EVENTS_CAP)),
   };
 }

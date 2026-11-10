@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { EconomyInput, EconomyStatus, FACTS_HEADER, LOOP_STUCK, Observation, access, effectiveTokens, narrow } from "./index.ts";
+import { Detector, EconomyInput, EconomyStatus, FACTS_HEADER, FactProposal, LOOP_STUCK, Observation, ProposeContext, access, effectiveTokens, manualHeader, narrow } from "./index.ts";
 
 describe("economy", () => {
   it("weights tokens as they are billed: cache reads a tenth, cache writes above input, output five times", () => {
@@ -77,5 +77,62 @@ describe("economy", () => {
 
   it("names the error a stopped run starts with", () => {
     expect(LOOP_STUCK).toBe("the loop guard stopped the run");
+  });
+});
+
+describe("the proposer's detector", () => {
+  const clause = (...atoms: object[]) => ({ all: atoms });
+  const ok = { scope: clause({ intent: "test" }), confirm: clause({ predicate: "tests_passed" }, { commandIncludes: "python -m pytest" }), contradict: clause({ errorClass: "command_missing" }) };
+
+  it("is structured data over a closed set of atoms", () => {
+    expect(Detector.parse(ok)).toEqual(ok);
+    const bad = (d: object): boolean => Detector.safeParse(d).success;
+    expect(bad({ ...ok, scope: clause({ predicate: "ran_nothing" }) })).toBe(false);
+    expect(bad({ ...ok, scope: clause({ errorClass: "bogus_class" }) })).toBe(false);
+    expect(bad({ ...ok, scope: clause({ intent: "deploy" }) })).toBe(false);
+    expect(bad({ ...ok, scope: clause({ regex: "pytest.*" }) })).toBe(false);
+    expect(bad({ ...ok, scope: clause({ predicate: "edited", extra: 1 }) })).toBe(false);
+    expect(bad({ ...ok, extra: clause({ intent: "test" }) })).toBe(false);
+    expect(bad({ scope: ok.scope, confirm: ok.confirm })).toBe(false);
+  });
+
+  it("refuses a literal that looks like a pattern, is too short or too long", () => {
+    const lit = (commandIncludes: string): boolean => Detector.safeParse({ ...ok, scope: clause({ commandIncludes }) }).success;
+    expect(lit("pytest -q")).toBe(true);
+    expect(lit("x".repeat(80))).toBe(true);
+    for (const text of ["x".repeat(81), "a", "py.*test", "(a|b)c", "^pytest", "a\\d+", "pytest$", "[ab]c", "a;b", "a\nb", "a`b"]) expect(lit(text), text).toBe(false);
+  });
+
+  it("holds one to four atoms per clause", () => {
+    const atoms = (n: number) => clause(...Array.from({ length: n }, () => ({ intent: "test" })));
+    expect(Detector.safeParse({ ...ok, scope: atoms(4) }).success).toBe(true);
+    expect(Detector.safeParse({ ...ok, scope: atoms(5) }).success).toBe(false);
+    expect(Detector.safeParse({ ...ok, scope: atoms(0) }).success).toBe(false);
+  });
+});
+
+describe("the proposer's context and answer", () => {
+  const digest = { at: "2026-01-01T00:00:00Z", runId: "r1", pack: "implementing", cardId: "c1", outcome: "pass", calls: 3, lines: ["test | pytest | ok"] };
+  const detector = { scope: { all: [{ intent: "test" }] }, confirm: { all: [{ predicate: "tests_passed" }] }, contradict: { all: [{ errorClass: "command_missing" }] } };
+  const fact = { text: "Run tests with `python -m pytest`.", section: "Commands", detector, cites: ["r1", "r2"] };
+
+  it("bounds the digests it is shown and the known texts", () => {
+    expect(ProposeContext.safeParse({ repo: "luna", digests: [digest], known: ["a"] }).success).toBe(true);
+    expect(ProposeContext.safeParse({ repo: "luna", digests: Array(9).fill(digest), known: [] }).success).toBe(false);
+    expect(ProposeContext.safeParse({ repo: "luna", digests: [], known: Array(21).fill("a") }).success).toBe(false);
+  });
+
+  it("allows at most four facts of one line each, two citations, and a section of the project context", () => {
+    expect(FactProposal.safeParse({ facts: [fact] }).success).toBe(true);
+    expect(FactProposal.safeParse({ facts: Array(5).fill(fact) }).success).toBe(false);
+    expect(FactProposal.safeParse({ facts: [{ ...fact, text: "x".repeat(201) }] }).success).toBe(false);
+    expect(FactProposal.safeParse({ facts: [{ ...fact, section: "Other" }] }).success).toBe(false);
+    expect(FactProposal.safeParse({ facts: [{ ...fact, cites: ["r1"] }] }).success).toBe(false);
+  });
+
+  it("writes the manual's header with a repository name cut to a safe charset", () => {
+    expect(manualHeader("/Users/x/Developer/luna-tui")).toBe("# repo operating manual (luna-tui) — learned from earlier sessions in this repository");
+    expect(manualHeader("/a/b c;<<<end-data:x>>>")).toBe("# repo operating manual (bcend-datax) — learned from earlier sessions in this repository");
+    expect(manualHeader("")).toBe("# repo operating manual (repo) — learned from earlier sessions in this repository");
   });
 });

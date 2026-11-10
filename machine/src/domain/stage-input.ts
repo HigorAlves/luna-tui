@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type ChatTriageContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -175,6 +175,8 @@ export function buildStageInput(opts: {
   blastRadius?: string[];
   /** For verifying: how much of the change's added lines the repo's lcov report saw run. */
   coverage?: CoverageSummary;
+  /** For reviewing_memory: the learned facts the retro may promote (id and text). */
+  factCandidates?: Array<{ id: string; text: string }>;
   /** What the token economy hands the run: the loop guard's settings, learned facts, the approved tool mask. Absent with the economy off. */
   economy?: EconomyInput;
 }): StageInput {
@@ -258,6 +260,7 @@ export function buildStageInput(opts: {
       // A retry continues the ledger the last attempt left: committed slices are not redone.
       ...(pack === "implementing" && opts.history?.ledger ? { ledger: opts.history.ledger } : {}),
       ...(opts.economy ? { economy: opts.economy } : {}),
+      ...(pack === "reviewing_memory" && opts.factCandidates?.length ? { factCandidates: opts.factCandidates } : {}),
     },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
@@ -329,17 +332,18 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   // The ticket and conversation packs: their whole context is the ticket or the thread. Left out, a pack runs blind.
   const ticket: TicketContext | null = "ticket" in context ? context.ticket : null;
   const conversation: ConversationContext | null = "conversation" in context ? context.conversation : null;
+  const propose: ProposeContext | null = "propose" in context ? context.propose : null;
   return {
     schema: 3,
     stage: pack,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(propose ? { propose } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

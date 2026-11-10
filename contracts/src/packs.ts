@@ -14,6 +14,7 @@ import { AnswerScenario, AnswerStep } from "./plan.ts";
 import { DiffSummaryAnswer } from "./reports.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
+import { FactProposal, ProjectContextSection } from "./economy.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
 import { SplitChild } from "./split.ts";
 import { CodeMapAnswer, EscalationReason, Finding, LunaConfig, PackId, Risk, Slice, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
@@ -54,6 +55,8 @@ export const AgentRole = z.enum([
   "ticket-writer",
   // The loop guard's redirect: a short note to a run that repeats one failure; no tools.
   "redirect-writer",
+  // The fact proposer: reads the digests of a repository's last runs and proposes the facts they ground; no tools.
+  "fact-proposer",
   "thread-writer",
   "code-fixer",
   "second-opinion",
@@ -291,6 +294,8 @@ export const ReviewingMemoryAnswer = z.object({
   promptUpdates: z.array(z.object({ pack: z.string(), change: z.string() })).optional(),
   /** A runbook or an ADR the retro proposes: it reaches the repository only as a section of the draft PR a person approved. */
   proposals: z.array(z.object({ kind: z.enum(["runbook", "adr"]), title: z.string().max(200), body: z.string().max(2000) })).max(5).optional(),
+  /** The learned facts (listed as data, by id) worth stating in the project context, and the section of each. The machine keeps an id only if it is a candidate and writes the fact's own text. */
+  factPromotions: z.array(z.object({ id: z.string().max(40), section: ProjectContextSection })).max(10).optional(),
 });
 
 /** reviewing (PR task): a comment review the host posts at once; approve / request_changes wait for you. */
@@ -1251,6 +1256,22 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: LoopRedirectAnswer,
     template: "loop_redirect.md",
+  },
+  // Proposes the facts a repository's last runs ground, from their digests as data; on demand after every few closed cards, never in a task state. No tools at all and one turn.
+  fact_propose: {
+    id: "fact_propose",
+    kind: "agent",
+    agent: "fact-proposer",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 1,
+    timeoutMs: 2 * MINUTE,
+    engines: only("claude:haiku"),
+    effort: "low",
+    answer: FactProposal,
+    template: "fact_propose.md",
   },
   // Drafts the reply to a Slack thread from the card's state, its Evidence Pack and the docs as data; on demand, never in a task state, only ever a draft. It reads hostile text: no tools at all.
   conversation_reply: {

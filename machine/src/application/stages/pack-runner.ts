@@ -174,6 +174,8 @@ export interface AgentExtra {
   baseCommit?: string;
   /** pr_reply: the thread and the pack, built by the host; a reviewer's text only ever rides here. */
   ship?: ShipContext;
+  /** reviewing_memory: the learned facts the retro may promote. */
+  factCandidates?: Array<{ id: string; text: string }>;
   /** implementing: every path of the tests commit, protected from change. */
   testsFiles?: string[];
   /** implementing: the source files that hold Rust's inline tests, which the implementer may change. */
@@ -401,6 +403,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
     ...(economyInput ? { economy: economyInput } : {}),
+    ...(extra.factCandidates?.length ? { factCandidates: extra.factCandidates } : {}),
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
   });
 

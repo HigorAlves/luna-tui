@@ -30,7 +30,7 @@ import { DecisionLog } from "./application/decision-log.ts";
 import { randomUUID } from "node:crypto";
 import { currentTask } from "./application/task-scope.ts";
 import { ownCalls } from "./application/pack-runs.ts";
-import { economy as economyOver, noEconomy } from "./application/economy.ts";
+import { economy as economyOver, noEconomy, type Propose } from "./application/economy.ts";
 import { fileStore as economyStore } from "./adapters/economy/store.ts";
 import { OVERHEAD_PACKS } from "./domain/economy/ledger.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
@@ -240,6 +240,8 @@ let pipeline: Pipeline;
 // once the stages (and with them the repository images) exist.
 let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = async () => config.runnerImage;
 // The token economy (RFC 0007): each repository's envelope and cost ledger, folded from every finished run. `MACHINE_ECONOMY=off` keeps none and hands no run anything.
+/** The fact proposer: the `fact_propose` pack, run through PackRuns once it exists (bound below). */
+const factProposer: { run: Propose | null } = { run: null };
 const economy = config.economy ? economyOver(economyStore(config.stateDir), (line) => console.warn(line)) : noEconomy();
 const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
@@ -456,6 +458,7 @@ const channelClaims = new ChannelClaims(
 
 pipeline = new Pipeline(db, runnerFor, {
   economy,
+  proposer: factProposer,
   // A card that came from a ticket is split into child tickets, created only after a person approves the split gate (never by a clock or a retry).
   splitTickets: {
     knows: (task) => ticketMachine.ticketOfCard(task),
@@ -729,6 +732,11 @@ if (packRuns)
     if (repoPath && OVERHEAD_PACKS.includes(pack)) void economy.recordOverhead({ repoPath, runId: out.recordId ?? randomUUID(), pack, cardId: currentTask() ?? "", tokens: null, costUsd: out.usage.costUsd });
     return tagged(out);
   };
+// The proposer runs as an on-demand pack with no tools; the economy records its cost as overhead and validates what it answers.
+if (packRuns) factProposer.run = async (propose) => {
+  const out = await ownCalls(packRuns).run({ pack: "fact_propose", context: { propose } }, "economy");
+  return { answer: out.answer, runId: out.recordId ?? randomUUID(), costUsd: out.usage.costUsd };
+};
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 /** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
 const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources), stackOf: (sources) => ticketMachine.stackOfSources(sources) });

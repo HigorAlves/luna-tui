@@ -2349,6 +2349,47 @@ describe("the token economy around a stage", () => {
     expect(asked[0]![1].escalation.facts).toContain("the loop guard stopped the run: the same test fails after each edit after 31 calls");
   });
 
+  it("tells the economy each card that closes, with its repository's config and the proposer; with no proposer it tells nothing", async () => {
+    const closed: unknown[][] = [];
+    const economy: Economy = { ...noEconomy(), cardClosed: async (...a) => void closed.push(a) };
+    const propose = async () => null;
+    const run = async (proposer?: { run: typeof propose | null }) => {
+      const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, economy, ...(proposer ? { proposer } : {}) });
+      const task = await p.createTask({ title: "Login page", criteria: ["x"], repoPath: "/r/a" });
+      await p.start(task.id);
+      for (let i = 0; i < 2; i++) await p.decide(task.id, "approved");
+      expect((await p.get(task.id)).state).toBe("closed");
+      return task.id;
+    };
+    const id = await run({ run: propose });
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject(["/r/a", id, { facts: expect.any(String), propose_every: expect.any(Number) }, propose]);
+    await run();
+    await run({ run: null });
+    expect(closed).toHaveLength(1);
+  });
+
+  it("marks the facts the approved retro promoted, once the rules step wrote them, and not when the rules were skipped", async () => {
+    const promoted: unknown[][] = [];
+    const economy: Economy = { ...noEconomy(), promoted: async (...a) => (promoted.push(a), a[1].length) };
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const run = async (applyRules: boolean) => {
+      const worktree = await mkdtemp(join(tmpdir(), "promoted-"));
+      const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: previewOn, hasConfig: () => true, economy, closeDeps: { exec: async (_c, args) => (args.includes("rev-parse") ? { code: 128, stdout: "", stderr: "" } : { code: 0, stdout: "", stderr: "" }), worktreeRemove: false } });
+      stubs.plan("reviewing_memory", { outcome: "pass", detail: { rules: { markdown: "", factPromotions: [{ id: "aaaaaaaaaaaa", text: "Run the tests with `python -m pytest -q`.", section: "Commands" }] } } });
+      const task = await p.createTask({ title: "Login page", criteria: ["x"], repoPath: "/r/a" });
+      await p.start(task.id);
+      for (let i = 0; i < 2; i++) await p.decide(task.id, "approved");
+      await (p as unknown as { store: { updateTask: (id: string, patch: object) => Promise<void> } }).store.updateTask(task.id, { worktreePath: worktree });
+      await p.decide(task.id, "approved", undefined, { applyRules });
+    };
+    await run(false);
+    expect(promoted).toEqual([]);
+    await run(true);
+    expect(promoted).toEqual([["/r/a", ["aaaaaaaaaaaa"]]]);
+  });
+
   it("escalates a stopped run on a stage that is not Build too", async () => {
     const p = new Pipeline(db, (stage) => (stage === "verifying" ? async () => stuck : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
     const id = await approvedCard(p);

@@ -2,7 +2,9 @@
 // after, and injected only while it keeps being used (four runs that used what it is about, a fifth of them at least two-fifths where it
 // applied). A contradiction counts five times a confirmation, and an active fact whose recency score goes below zero is retired; so is a
 // high-stakes one on a single contradiction. Retired and dropped are final: the fact stays in the list, so its key is never made again.
-// Pure: the facts and one run's evidence in, the facts out. The proposer's facts (`source: "proposed"`) and promoted ones are not folded here.
+// Pure: the facts and one run's evidence in, the facts out. The proposer's facts (`source: "proposed"`, folded in propose.ts) and promoted ones are not folded here.
+import type { Detector } from "@hardness/contracts";
+
 import { type Evidence, type Family, factId } from "./envfacts.ts";
 
 /** Confirming runs that make a candidate active. */
@@ -23,13 +25,14 @@ export const CONTRADICT_STREAK = 2;
 const CARDS_KEPT = 20;
 
 /** Facts that are wrong more expensively than they are right: one clean contradiction retires them. */
-const HIGH: ReadonlySet<Family> = new Set(["absent_tool", "boundary", "empty_probe"]);
+const HIGH: ReadonlySet<string> = new Set(["absent_tool", "boundary", "empty_probe"]);
 
 export type FactState = "candidate" | "active" | "retired" | "dropped" | "promoted";
 
 export interface FactRecord {
   id: string;
-  family: Family;
+  /** A free fact's family; a proposed fact has none of its own. */
+  family: Family | "proposed";
   source: "free" | "proposed";
   key: string;
   text: string;
@@ -47,6 +50,11 @@ export interface FactRecord {
   lastRun: string;
   /** Contradicting runs in a row (a form repair only). */
   streak: number;
+  /** A proposed fact's check on a run, and the files its confirming runs edited (bounded): the different-files rule reads them. */
+  detector?: Detector;
+  files?: string[];
+  /** The section of the project context the proposer named for it, a default for the retro. */
+  section?: string;
 }
 
 /** What a repository keeps of its facts: every record (retired and dropped ones too, so a key is never learned again) and, per pack, the ids of the facts its latest run was told. */
@@ -57,6 +65,9 @@ export interface FactsFile {
 
 /** The fact is injected in the next run: active, free, and used often enough that it applied often enough. */
 export const fires = (fact: FactRecord): boolean => fact.state === "active" && fact.source === "free" && fact.exercised >= FIRE_MIN_N && fact.fired / fact.exercised >= FIRE_GATE;
+
+/** A proposed fact is told once active and in scope in at least four runs (upstream's gate; its firing rate is 1 while `fired` is the scope). */
+export const firesProposed = (fact: FactRecord): boolean => fact.source === "proposed" && fact.state === "active" && fact.exercised >= FIRE_MIN_N && fact.fired / fact.exercised >= FIRE_GATE;
 
 const folded = (fact: FactRecord): boolean => fact.source === "free" && (fact.state === "candidate" || fact.state === "active");
 
@@ -100,6 +111,19 @@ export function foldFacts(facts: FactRecord[], evidence: Evidence[], run: { runI
     out.push(step(born, ev, run));
   }
   return out;
+}
+
+/** Marks the facts promoted: the retro put their text in the project context, so no run is told them any more. Only an active fact is promoted. */
+export function promoteFacts(facts: FactRecord[], ids: readonly string[]): { facts: FactRecord[]; promoted: number } {
+  let promoted = 0;
+  return {
+    facts: facts.map((f) => {
+      if (!ids.includes(f.id) || f.state !== "active") return f;
+      promoted += 1;
+      return { ...f, state: "promoted" as const };
+    }),
+    promoted,
+  };
 }
 
 /** Marks a fact dropped: a person said it is wrong. It stays in the list so the same key is never learned again. */

@@ -546,7 +546,9 @@ export async function buildRealStages(
     shipping: mergeRunner({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch, ...(stack.hasChildren ? { hasChildren: stack.hasChildren } : {}) } } : {}), policies, evidence: { load: evidenceDeps.load }, truth: truth ?? null, stateDir: config.stateDir, ...(graphs?.rebuild ? { onMerged: graphs.rebuild } : {}), pollMs: config.shipPoll.intervalMs ?? FACTORY_DEFAULTS.ship.poll_minutes * 60_000 }),
     // The retro, after the merge: its proposal waits at the same state for a person, and a card with nothing to learn closes by itself.
     reviewing_memory: memoryReviewRunner({
-      runPack: async (context, ship) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}) }),
+      runPack: async (context, ship, factCandidates) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}), ...(factCandidates?.length ? { factCandidates } : {}) }),
+      // The learned facts that earned a place in the project context: the retro names them, a person approves.
+      candidates: async (context) => (context.task.repoPath && economy ? economy.promotable(context.task.repoPath, (await policies.for(context.task.repoPath)).factory.economy) : []),
       stateDir: config.stateDir,
       ...(retroFacts ? { facts: retroFacts } : {}),
       // worth_learning binds late, with the other ship decisions.
