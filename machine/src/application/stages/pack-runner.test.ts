@@ -16,6 +16,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
 import type { SecretStore } from "../secrets.ts";
+import { noEconomy } from "../economy.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
 import type { StageContext } from "../ports.ts";
 import type { Graph, GraphStamp } from "../graph.ts";
@@ -464,6 +465,27 @@ describe("agent stages through packs", () => {
     const run = runners(fakeSandbox(output()));
     await run.implementing!(context("implementing"));
     expect((seen!.input as unknown as StageInput).context.checks).toEqual([{ name: "board tests", run: "cargo test", cwd: "board" }]);
+  });
+
+  it("hands the run what the economy gives it, and nothing when there is none", async () => {
+    const guard = { mode: "record" as const, judge: true, envelope: null, judgeConfidence: 0.8, redirects: 1, backstopMult: 1.5 };
+    const asked: unknown[][] = [];
+    const economy = { ...noEconomy(), inputFor: async (...args: unknown[]) => (asked.push(args), { guard }) };
+    await runAgent({ ...deps(fakeSandbox(output())), economy }, context("implementing"), "implementing");
+    expect((seen!.input as unknown as StageInput).context.economy).toEqual({ guard });
+    expect(asked[0]![0]).toBe(repo);
+    expect(asked[0]![1]).toBe("implementing");
+    expect(asked[0]![2]).toMatchObject({ loop_guard: "on" });
+    await runAgent({ ...deps(fakeSandbox(output())), economy: noEconomy() }, context("implementing"), "implementing");
+    expect("economy" in (seen!.input as unknown as StageInput).context).toBe(false);
+    await runAgent(deps(fakeSandbox(output())), context("implementing"), "implementing");
+    expect("economy" in (seen!.input as unknown as StageInput).context).toBe(false);
+  });
+
+  it("starts the run without the economy's input when the economy fails", async () => {
+    const economy = { ...noEconomy(), inputFor: async () => Promise.reject(new Error("disk")) };
+    await runAgent({ ...deps(fakeSandbox(output())), economy }, context("implementing"), "implementing");
+    expect("economy" in (seen!.input as unknown as StageInput).context).toBe(false);
   });
 
   it("runs the repo's services from its luna.yaml beside the stage container", async () => {

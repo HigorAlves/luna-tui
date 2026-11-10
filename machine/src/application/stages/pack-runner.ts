@@ -60,6 +60,7 @@ import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, approvedScenarios, buildStageInput } from "../../domain/stage-input.ts";
 import { reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
+import type { Economy } from "../economy.ts";
 import type { Graph } from "../graph.ts";
 import { PolicyStore } from "../policy.ts";
 import { RepoImageError } from "../repo-images.ts";
@@ -98,6 +99,8 @@ export interface AgentDeps {
   history?: (taskId: string) => Promise<{ ledger: Ledger | null; runs: RunSummary[] }>;
   /** The machine's code graphs: a repo's current one is mounted read-only at /graph in every stage. */
   graph?: Graph;
+  /** The token economy: what each run starts with (the loop guard's envelope), folded again when it ends (the pipeline does that). Absent, a run gets none. */
+  economy?: Economy;
   /** Asked for when a repo has no graph yet, so the first build starts without a stage waiting on it. */
   ensureGraph?: (repoPath: string) => void;
   /** Waits for the repository's code graph before triage reads it (see plan.ts); absent, triage never waits. */
@@ -368,6 +371,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const testsCommit = testsRead
     ? { sha: context.testsCommit!, files: testsRead.nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => /^[AMCR]/.test(status)).map((cols) => cols[cols.length - 1] ?? "").filter(Boolean) }
     : null;
+  // What the economy hands this run; a run with no repository, or an economy that fails, starts without it.
+  const economyInput = task.repoPath ? await deps.economy?.inputFor(task.repoPath, pack, policy.factory.economy).catch(() => undefined) : undefined;
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -395,6 +400,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : pack === "e2e" ? (e2eTarget ? [e2eTarget] : []) : policy.qaTargets,
     ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
+    ...(economyInput ? { economy: economyInput } : {}),
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
   });
 

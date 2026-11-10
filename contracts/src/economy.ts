@@ -110,3 +110,27 @@ export function narrow(access: Access, mask: ToolMask | undefined, packSkills: s
 
 /** What a run that the loop guard stopped says first in `StageOutput.error`, as `BUDGET_SPENT` does for the budget. */
 export const LOOP_STUCK = "the loop guard stopped the run";
+
+/** One thing the loop guard did in a run, as the machine keeps it (the `economy.guard` event's payload). */
+export const EconomyGuardEvent = z.object({
+  action: z.enum(["gate", "judge", "redirect", "stop"]),
+  calls: z.number().int(),
+  cause: z.string().optional(),
+  failure: z.string().optional(),
+});
+export type EconomyGuardEvent = z.infer<typeof EconomyGuardEvent>;
+
+/** A guard event with the run it happened in. */
+export const GuardEventRow = EconomyGuardEvent.extend({ at: z.string(), runId: z.string(), pack: z.string() });
+export type GuardEventRow = z.infer<typeof GuardEventRow>;
+
+/** What the economy knows about one repository: the envelopes, what the guard did lately, what it cost. The facts, the mask and the proposal come with the slices that build them. */
+export const EconomyStatus = z.object({
+  envelopes: z.record(z.string(), z.object({ samples: z.number().int(), envelope: z.number().nullable() })),
+  guard: z.array(GuardEventRow),
+  cost: z.object({ exec: z.number(), overhead: z.number(), overheadShare: z.number() }),
+  facts: z.array(z.unknown()).optional(),
+  mask: z.record(z.string(), z.unknown()).optional(),
+  proposal: z.array(z.unknown()).optional(),
+});
+export type EconomyStatus = z.infer<typeof EconomyStatus>;

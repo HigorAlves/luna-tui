@@ -1,4 +1,5 @@
-import { factoryConfigOf } from "@hardness/contracts";
+import { LOOP_STUCK, factoryConfigOf } from "@hardness/contracts";
+import { type Economy, noEconomy } from "./economy.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2292,6 +2293,67 @@ describe("the stuck detector", () => {
     const done = await startAndApprove(task.id);
     expect(done.state).not.toBe("escalated");
     expect((await pipeline.stageRuns(task.id)).filter((r) => r.stage === "implementing")).toHaveLength(4);
+  });
+});
+
+describe("the token economy around a stage", () => {
+  const stuck = { outcome: "fail" as const, detail: { error: `${LOOP_STUCK}: the same test fails after each edit, the same failure 4 times over 31 calls`, runFailed: true } };
+  const fake = (over: Partial<Economy> = {}) => {
+    const folded: Parameters<Economy["afterRun"]>[0][] = [];
+    const economy: Economy = { ...noEconomy(), afterRun: async (run) => void folded.push(run), ...over };
+    return { folded, economy };
+  };
+  const build = (economy: Economy, implementing: StageRunner, decide: unknown = null) =>
+    new Pipeline(db, (stage) => (stage === "implementing" ? implementing : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true, economy, escalationDecide: { decide: decide as never } });
+  const approvedCard = async (p: Pipeline) => {
+    const task = await p.createTask({ title: "Login", repoPath: "/r/a" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    return task.id;
+  };
+
+  it("folds each finished stage run with its pack, card, outcome and tokens", async () => {
+    const { folded, economy } = fake();
+    const tokens = { input: 10, output: 2, cached: 5 };
+    const p = build(economy, async () => ({ outcome: "pass" as const, usage: { turns: 3, costUsd: 0.1, tokens } }));
+    const id = await approvedCard(p);
+    const run = folded.find((f) => f.pack === "implementing");
+    expect(run).toMatchObject({ cardId: id, repoPath: "/r/a", outcome: "pass", tokens });
+    expect(run?.runId).toBeTruthy();
+    expect(folded.every((f) => f.cardId === id)).toBe(true);
+  });
+
+  it("does not fail a stage because the fold threw", async () => {
+    const { economy } = fake({ afterRun: async () => Promise.reject(new Error("disk full")) });
+    const p = build(economy, async () => ({ outcome: "pass" as const }));
+    const id = await approvedCard(p);
+    expect((await p.get(id)).state).not.toBe("failed");
+    expect((await p.stageRuns(id)).filter((r) => r.stage === "implementing")[0]).toMatchObject({ status: "passed" });
+  });
+
+  it("runs the same with no economy at all", async () => {
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => ({ outcome: "pass" as const }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const id = await approvedCard(p);
+    expect((await p.stageRuns(id)).filter((r) => r.stage === "implementing")[0]).toMatchObject({ status: "passed" });
+  });
+
+  it("escalates a run the loop guard stopped, with no retry, and tells the decision what stopped it", async () => {
+    const asked: Array<[string, Record<string, any>]> = [];
+    const ran: number[] = [];
+    const p = build(noEconomy(), async () => (ran.push(1), stuck), async (pack: string, check: Record<string, any>) => (asked.push([pack, check]), { reason: { choice: "flaky_tests", confidence: 0.9 } }));
+    const id = await approvedCard(p);
+    expect(ran).toHaveLength(1);
+    expect((await p.get(id)).state).toBe("escalated");
+    expect((await p.get(id)).reason).toContain(LOOP_STUCK);
+    expect(asked[0]![0]).toBe("escalation_reason");
+    expect(asked[0]![1].escalation.facts).toContain("the loop guard stopped the run: the same test fails after each edit after 31 calls");
+  });
+
+  it("escalates a stopped run on a stage that is not Build too", async () => {
+    const p = new Pipeline(db, (stage) => (stage === "verifying" ? async () => stuck : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const id = await approvedCard(p);
+    expect((await p.get(id)).state).toBe("escalated");
+    expect((await p.get(id)).reason).toContain(LOOP_STUCK);
   });
 });
 

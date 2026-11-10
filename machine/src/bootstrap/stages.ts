@@ -140,6 +140,8 @@ export async function buildRealStages(
   cards?: AgentDeps["cards"],
   /** What a stacked card's workspace is cut from (`Pipeline.baseOf`) and the base it drops (`Pipeline.clearBase`). */
   stack?: { baseFor: NonNullable<AgentDeps["baseFor"]>; clearBase: NonNullable<AgentDeps["clearBase"]>; /** The checklist's and the merge rule's view of the parent. */ facts: NonNullable<ShipMonitorDeps["stack"]>["facts"]; defaultBranch: NonNullable<ShipMonitorDeps["stack"]>["defaultBranch"]; /** Whether another open card is stacked on a card (its branch is kept). */ hasChildren?: (id: string) => Promise<boolean> },
+  /** The token economy: what each run starts with; absent, a run gets none. */
+  economy?: AgentDeps["economy"],
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -292,6 +294,7 @@ export async function buildRealStages(
     policies,
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure, graphReady } : {}),
+    ...(economy ? { economy } : {}),
   };
   const verifyPack = (context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) =>
     runAgent(deps, context, "verifying", { ...(extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}), ...(extra?.coverage ? { coverage: extra.coverage } : {}), ...(extra?.image ? { image: extra.image } : {}) });

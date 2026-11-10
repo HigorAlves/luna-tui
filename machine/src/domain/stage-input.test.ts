@@ -454,3 +454,17 @@ describe("Verify and the browser scenarios", () => {
     expect(withoutBrowserCases(cases as never[])).toHaveLength(1);
   });
 });
+
+describe("buildStageInput's economy", () => {
+  const economy = { guard: { mode: "record" as const, judge: true, envelope: null, judgeConfidence: 0.8, redirects: 1, backstopMult: 1.5 } };
+  const build = (extra: object) => buildStageInput({ task, stage: "implementing", attempt: 1, approvals: [], priorFindings: [], ...extra });
+
+  it("carries what the economy gave", () => {
+    expect(build({ economy }).context.economy).toEqual(economy);
+  });
+
+  it("has no economy key without one", () => {
+    expect("economy" in build({}).context).toBe(false);
+    expect("economy" in build({ economy: undefined }).context).toBe(false);
+  });
+});
