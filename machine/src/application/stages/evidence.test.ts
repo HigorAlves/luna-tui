@@ -447,6 +447,18 @@ describe("evidenceStage", () => {
       }
     });
 
+    it("films only the browser run's scenarios: the others are proven by their tests and get no demo scene", async () => {
+      // The site card (2026-11-08): 25 scenarios, 3 in the browser; the film was asked for 25 demo scenes and fell back to captures.
+      browserRun();
+      const video = vi.fn(async (_c: unknown, _input: { scenarios: Array<{ title: string }> }) => failedFilm);
+      const { run } = stage({ decideFormat: async () => ({ format: { choice: "video", confidence: 0.95 } }), videoImage: async () => true, video, changedBetween: async () => [] });
+      const ctx = taskContext({ evidence: null });
+      (ctx.approvals[0] as unknown as { requested: { cases: unknown[] } }).requested.cases = scenarios.map((sc, i) => ({ ...sc, layer: i === 0 ? "e2e" : "unit" }));
+      await run(ctx);
+      expect(video).toHaveBeenCalledTimes(1);
+      expect(video.mock.calls[0]![1].scenarios.map((sc) => sc.title)).toEqual([scenarios[0]!.title]);
+    });
+
     it("entered at the same commit nothing is stale and today's path runs", async () => {
       browserRun();
       const emitted: unknown[] = [];
