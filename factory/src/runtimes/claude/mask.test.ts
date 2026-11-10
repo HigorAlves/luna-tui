@@ -52,6 +52,10 @@ describe("the Claude runtime with a mask", () => {
       expect(list).toContain("mcp__luna__decision_get");
       expect(list).toContain("Read");
     }
+    // The masked luna tool is not registered on the server, so its definition is not sent at all.
+    const registered = Object.keys((options?.mcpServers?.luna as { instance?: { _registeredTools?: Record<string, unknown> } }).instance?._registeredTools ?? {});
+    expect(registered).toContain("decision_get");
+    expect(registered).not.toContain("card_search");
     expect(Object.keys(options!.agents!)).toEqual(["triage-planner"]);
     expect(options?.agents?.["triage-planner"]?.skills).toEqual([]);
     expect(options?.skills).toEqual([]);
