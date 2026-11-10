@@ -419,6 +419,37 @@ describe("scopeStartOf", () => {
     expect(wgit(workspace.path, "diff", "--name-only", `${from}..HEAD`)).toBe("card.md");
   });
 
+  it("takes the machine's own base ref when the branch holds it, even when the start is in no default-branch history (a squash-merged parent)", async () => {
+    // PR #214: the card started on its parent's tip; the parent was squash-merged, so that tip never reached the default branch.
+    const { repo, dir } = repository("scope-squash-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    writeFileSync(join(workspace.path, "parent.md"), "the parent's change\n");
+    wgit(workspace.path, "add", "-A");
+    wgit(workspace.path, "commit", "-q", "-m", "parent");
+    const start = wgit(workspace.path, "rev-parse", "HEAD");
+    writeFileSync(join(workspace.path, "card.md"), "the card's change\n");
+    wgit(workspace.path, "add", "-A");
+    wgit(workspace.path, "commit", "-q", "-m", "card");
+    // The parent lands on main squashed, with more of main's work; the machine merges main and records it as the card's base.
+    writeFileSync(join(repo, "parent.md"), "the parent's change\n");
+    writeFileSync(join(repo, "theirs.ts"), "x\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "parent (squashed) and more");
+    const main = git(repo, "rev-parse", "HEAD");
+    wgit(workspace.path, "fetch", "-q", repo, "main");
+    wgit(workspace.path, "merge", "-q", "--no-edit", "FETCH_HEAD");
+    wgit(workspace.path, "update-ref", "refs/luna/base", main);
+    const from = await scopeStartOf(workspace.path, repo, start);
+    expect(from).toBe(main);
+    expect(wgit(workspace.path, "diff", "--name-only", `${from}..HEAD`)).toBe("card.md");
+    // A base ref the branch does not hold (main moved on, not merged) is not taken.
+    git(repo, "commit", "-q", "--allow-empty", "-m", "later");
+    wgit(workspace.path, "fetch", "-q", repo, "main");
+    wgit(workspace.path, "update-ref", "refs/luna/base", wgit(workspace.path, "rev-parse", "FETCH_HEAD"));
+    expect(await scopeStartOf(workspace.path, repo, start)).not.toBe(wgit(workspace.path, "rev-parse", "FETCH_HEAD"));
+  });
+
   it("keeps the start when nothing was merged, and for a value that is not a commit id", async () => {
     const { repo, dir } = repository("scope-keep-");
     const workspace = workspaceFor(task, repo, dir);

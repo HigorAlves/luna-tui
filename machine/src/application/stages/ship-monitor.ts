@@ -8,7 +8,7 @@ import { shipSla, quietDays } from "../../domain/ship-sla.ts";
 import { viewSnapshot } from "../ship-view.ts";
 import { PrReplyAnswer, type EvidencePack, type Risk, type ShipContext, type ShipEventClass, type TaskState, eventClassOf } from "@hardness/contracts";
 
-import { HOST_GIT, type RebaseResult, isBranchName, rebaseOntoBase, rebaseOntoDefault, stackOf, unstack as hostUnstack, forgetBase } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, type RebaseResult, isBranchName, leaveStack, rebaseOntoBase, rebaseOntoDefault, stackOf, unstack as hostUnstack, forgetBase } from "../../adapters/git/worktree.ts";
 import { at } from "../../adapters/git/machine-repo.ts";
 import { mergeRound } from "./ship-merge.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
@@ -601,6 +601,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
           if (merged && !("failed" in merged)) {
             if (merged.result?.detail?.escalation === "head_moved") {
               if (target && prBase !== target) await deps.github.retargetPr(slug, number, target).catch(() => {});
+              // Off the stack, as `unstack` leaves a card: no parent's branch to follow, the merged default branch as its base.
+              await leaveStack(runOf(), wt);
               await stack.clearBase?.(task.id);
             }
             return merged;
