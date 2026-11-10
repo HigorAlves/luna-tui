@@ -1,4 +1,4 @@
-import { type EconomyConfig, EconomyStatus, type GuardEventRow } from "@hardness/contracts";
+import { type EconomyConfig, EconomyStatus, type GuardEventRow, PACKS, type PackId } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import { type LedgerRecord } from "../domain/economy/ledger.ts";
@@ -45,16 +45,16 @@ function fakeStore(events: Record<string, unknown[]> = {}) {
 }
 
 const calls = (n: number) => Array.from({ length: n }, () => ({ kind: "tool_call", payload: { tool: "Bash", target: "x", allowed: true } }));
-const finished = (runId: string, over: Partial<Parameters<ReturnType<typeof economy>["afterRun"]>[0]> = {}) => ({ repoPath: "/r", runId, pack: "implementing" as const, cardId: "c1", outcome: "pass", tokens: null, config, ...over });
+const finished = (runId: string, over: Partial<Parameters<ReturnType<typeof economy>["afterRun"]>[0]> = {}) => ({ repoPath: "/r", runId, pack: "implementing" as const, cardId: "c1", outcome: "pass", tokens: null, runtime: "claude" as const, config, ...over });
 
 describe("economy.afterRun", () => {
   it("gives an envelope of p90 x 1.25 after five passing runs, none after four", async () => {
     const { state, store } = fakeStore(Object.fromEntries([10, 20, 30, 40, 50].map((n, i) => [`r${i}`, calls(n)])));
     const eco = economy(store);
     for (let i = 0; i < 4; i++) await eco.afterRun(finished(`r${i}`));
-    expect((await eco.inputFor("/r", "implementing", config))?.guard).toMatchObject({ mode: "record", envelope: null });
+    expect((await eco.inputFor("/r", "implementing", config, "t"))?.guard).toMatchObject({ mode: "record", envelope: null });
     await eco.afterRun(finished("r4"));
-    const guard = (await eco.inputFor("/r", "implementing", config))?.guard;
+    const guard = (await eco.inputFor("/r", "implementing", config, "t"))?.guard;
     expect(guard?.mode).toBe("on");
     expect(guard?.envelope).toBeCloseTo(57.5, 6);
     expect(state.ledger).toHaveLength(5);
@@ -90,27 +90,27 @@ describe("economy.afterRun", () => {
 describe("economy.inputFor", () => {
   it("asks the judge only for packs with shell access", async () => {
     const eco = economy(fakeStore().store);
-    expect((await eco.inputFor("/r", "implementing", config))?.guard?.judge).toBe(true);
-    expect((await eco.inputFor("/r", "ticket_reply", config))?.guard?.judge).toBe(false);
+    expect((await eco.inputFor("/r", "implementing", config, "t"))?.guard?.judge).toBe(true);
+    expect((await eco.inputFor("/r", "ticket_reply", config, "t"))?.guard?.judge).toBe(false);
   });
 
   it("carries the config's settings", async () => {
-    const guard = (await economy(fakeStore().store).inputFor("/r", "implementing", config))?.guard;
+    const guard = (await economy(fakeStore().store).inputFor("/r", "implementing", config, "t"))?.guard;
     expect(guard).toMatchObject({ judgeConfidence: 0.8, redirects: 1, backstopMult: 1.5 });
   });
 
   it("is undefined with the guard off and for a decision pack", async () => {
     const eco = economy(fakeStore().store);
-    expect(await eco.inputFor("/r", "implementing", { ...config, loop_guard: "off" })).toBeUndefined();
-    expect(await eco.inputFor("/r", "red_check", config)).toBeUndefined();
+    expect(await eco.inputFor("/r", "implementing", { ...config, loop_guard: "off" }, "t")).toBeUndefined();
+    expect(await eco.inputFor("/r", "red_check", config, "t")).toBeUndefined();
   });
 
   it("keeps an envelope for each pack on its own", async () => {
     const { store } = fakeStore();
     await store.updateEnvelopes("/r", () => ({ implementing: [1, 2, 3, 4, 5] }));
     const eco = economy(store);
-    expect((await eco.inputFor("/r", "verifying", config))?.guard?.envelope).toBeNull();
-    expect((await eco.inputFor("/r", "implementing", config))?.guard?.envelope).not.toBeNull();
+    expect((await eco.inputFor("/r", "verifying", config, "t"))?.guard?.envelope).toBeNull();
+    expect((await eco.inputFor("/r", "implementing", config, "t"))?.guard?.envelope).not.toBeNull();
   });
 });
 
@@ -133,7 +133,7 @@ describe("economy: tool pruning", () => {
     expect(tools?.mask).toEqual([]);
     expect(tools?.proposal.map((p) => p.unit).sort()).toEqual([...TRIAGE].sort());
     expect(tools?.proposal[0]).toMatchObject({ unusedRuns: 3, cards: 2 });
-    expect((await eco.inputFor("/r", "triage", pruning))?.mask).toBeUndefined();
+    expect((await eco.inputFor("/r", "triage", pruning, "t"))?.mask).toBeUndefined();
   });
 
   it("one use removes the unit from the proposal for good", async () => {
@@ -148,7 +148,7 @@ describe("economy: tool pruning", () => {
     const eco = economy(store);
     await idleRuns(eco, 0, 3);
     expect(await eco.approveMask("/r", "triage")).toBe(true);
-    expect((await eco.inputFor("/r", "triage", pruning))?.mask).toEqual({ web: true, agent: true, luna: ["card_search"] });
+    expect((await eco.inputFor("/r", "triage", pruning, "t"))?.mask).toEqual({ web: true, agent: true, luna: ["card_search"] });
     expect((await eco.status("/r")).tools?.triage).toMatchObject({ mask: expect.arrayContaining(TRIAGE), proposal: [] });
     expect(EconomyStatus.safeParse(await eco.status("/r")).success).toBe(true);
   });
@@ -173,7 +173,7 @@ describe("economy: tool pruning", () => {
     await idleRuns(eco, 0, 3);
     await eco.approveMask("/r", "triage");
     expect(await eco.restore("/r", "triage", "web")).toBe(true);
-    expect((await eco.inputFor("/r", "triage", pruning))?.mask?.web).toBeUndefined();
+    expect((await eco.inputFor("/r", "triage", pruning, "t"))?.mask?.web).toBeUndefined();
     await idleRuns(eco, 3, 9);
     expect((await eco.status("/r")).tools?.triage?.proposal.map((p) => p.unit)).not.toContain("web");
     expect(await eco.restore("/r", "triage", "nothing")).toBe(false);
@@ -215,7 +215,7 @@ describe("economy: tool pruning", () => {
 describe("noEconomy", () => {
   it("gives no input and keeps nothing", async () => {
     const eco = noEconomy();
-    expect(await eco.inputFor("/r", "implementing", config)).toBeUndefined();
+    expect(await eco.inputFor("/r", "implementing", config, "t")).toBeUndefined();
     await eco.afterRun(finished("r1"));
     expect((await eco.status("/r")).guard).toEqual([]);
   });
@@ -246,18 +246,18 @@ describe("economy: learning facts", () => {
     const { store } = fakeStore(learnedFrom(4));
     const eco = economy(store);
     await learn(eco, 3);
-    expect((await eco.inputFor("/r", "implementing", config))?.facts).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", config, "t"))?.facts).toBeUndefined();
     await eco.afterRun(finished("r4", { cardId: "c4" }));
-    expect((await eco.inputFor("/r", "implementing", config))?.facts).toEqual([PYTEST_FACT]);
-    expect(await eco.inputFor("/r", "red_check", config)).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", config, "t"))?.facts).toEqual([PYTEST_FACT]);
+    expect(await eco.inputFor("/r", "red_check", config, "t")).toBeUndefined();
   });
 
   it("gives facts without the guard when only the guard is off, and the guard without facts when facts are off", async () => {
     const { store } = fakeStore(learnedFrom(4));
     const eco = economy(store);
     await learn(eco, 4);
-    expect(await eco.inputFor("/r", "implementing", { ...config, loop_guard: "off" })).toEqual({ facts: [PYTEST_FACT] });
-    const off = await eco.inputFor("/r", "implementing", { ...config, facts: "off" });
+    expect(await eco.inputFor("/r", "implementing", { ...config, loop_guard: "off" }, "t")).toEqual({ facts: [PYTEST_FACT] });
+    const off = await eco.inputFor("/r", "implementing", { ...config, facts: "off" }, "t");
     expect(off?.facts).toBeUndefined();
     expect(off?.guard).toBeDefined();
   });
@@ -267,7 +267,7 @@ describe("economy: learning facts", () => {
       const { store } = fakeStore(learnedFrom(4));
       const eco = economy(store);
       await learn(eco, 4, { config: { ...config, facts } });
-      return [(await eco.status("/r")).facts, await eco.inputFor("/r", "implementing", { ...config, facts })];
+      return [(await eco.status("/r")).facts, await eco.inputFor("/r", "implementing", { ...config, facts }, "t")];
     };
     expect(await run("free")).toEqual(await run("on"));
   });
@@ -279,7 +279,7 @@ describe("economy: learning facts", () => {
     expect(state.facts).toEqual({ facts: [], injected: {} });
     expect(state.digests).toEqual([]);
     state.facts = { injected: {}, facts: [{ id: "a", family: "form_repair", source: "free", key: "test:pytest", text: PYTEST_FACT, state: "active", confirmations: 5, contradictions: 0, score: 3, exercised: 9, fired: 9, cards: [], firstRun: "r0", lastRun: "r0", streak: 0 }] };
-    expect((await eco.inputFor("/r", "implementing", { ...config, facts: "off" }))?.facts).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", { ...config, facts: "off" }, "t"))?.facts).toBeUndefined();
     expect(state.facts.injected).toEqual({});
   });
 
@@ -288,11 +288,48 @@ describe("economy: learning facts", () => {
     const { state, store } = fakeStore({ ...learnedFrom(4), r5: run4, r6: run4, r7: run4, r8: run4, r9: run4 });
     const eco = economy(store);
     await learn(eco, 4);
-    // The input records what the pack was told; the runs after it that never hit the old form still count, because they were told it.
-    expect((await eco.inputFor("/r", "implementing", config))?.facts).toEqual([PYTEST_FACT]);
-    expect(state.facts.injected).toEqual({ implementing: [state.facts.facts[0]?.id] });
-    for (const id of ["r5", "r6", "r7", "r8", "r9"]) await eco.afterRun(finished(id));
+    // The input records what each run was told, under its own id; the runs that never hit the old form still count, because they were told it.
+    expect((await eco.inputFor("/r", "implementing", config, "r5"))?.facts).toEqual([PYTEST_FACT]);
+    expect(state.facts.injected).toEqual({ r5: [state.facts.facts[0]?.id] });
+    for (const id of ["r5", "r6", "r7", "r8", "r9"]) {
+      if (id !== "r5") await eco.inputFor("/r", "implementing", config, id);
+      await eco.afterRun(finished(id));
+    }
     expect(state.facts.facts[0]).toMatchObject({ state: "active", exercised: 9, fired: 9 });
+    expect(state.facts.injected).toEqual({});
+  });
+
+  it("keeps what two concurrent runs of one pack were told apart, and a fold takes only its own run's entry", async () => {
+    const { state, store } = fakeStore({ ...learnedFrom(4), a: [result({ intent: "test", form: "python -m pytest", testsRan: true })] });
+    const eco = economy(store);
+    await learn(eco, 4);
+    await eco.inputFor("/r", "implementing", config, "a");
+    await eco.inputFor("/r", "implementing", config, "b");
+    expect(Object.keys(state.facts.injected)).toEqual(["a", "b"]);
+    await eco.afterRun(finished("a"));
+    expect(Object.keys(state.facts.injected)).toEqual(["b"]);
+  });
+
+  it("keeps at most 200 runs' entries, the newest", async () => {
+    const { state, store } = fakeStore(learnedFrom(4));
+    const eco = economy(store);
+    await learn(eco, 4);
+    for (let i = 0; i < 205; i++) await eco.inputFor("/r", "implementing", config, `run${i}`);
+    const keys = Object.keys(state.facts.injected);
+    expect(keys).toHaveLength(200);
+    expect(keys[199]).toBe("run204");
+    expect(keys).not.toContain("run0");
+  });
+
+  it("tells no fact and no manual to a pack that has no read, no write and no commands", async () => {
+    const { store } = fakeStore(learnedFrom(4));
+    const eco = economy(store);
+    await learn(eco, 4);
+    const bare = Object.entries(PACKS).find(([, p]) => p.kind === "agent" && !p.access.read && !p.access.write && p.access.commands.length === 0)?.[0] as PackId | undefined;
+    expect(bare).toBeDefined();
+    const input = await eco.inputFor("/r", bare!, { ...config, facts: "on" }, "t");
+    expect(input?.facts).toBeUndefined();
+    expect(input?.manual).toBeUndefined();
   });
 
   it("retires the fact when the old form runs the tests, and stops telling it", async () => {
@@ -301,10 +338,10 @@ describe("economy: learning facts", () => {
     const eco = economy(store);
     await learn(eco, 4);
     await eco.afterRun(finished("r5"));
-    expect((await eco.inputFor("/r", "implementing", config))?.facts).toEqual([PYTEST_FACT]);
+    expect((await eco.inputFor("/r", "implementing", config, "t"))?.facts).toEqual([PYTEST_FACT]);
     await eco.afterRun(finished("r6"));
     expect((await eco.status("/r")).facts?.[0]?.state).toBe("retired");
-    expect((await eco.inputFor("/r", "implementing", config))?.facts).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", config, "t"))?.facts).toBeUndefined();
   });
 
   it("folds a run with no observed call as nothing: no decay, no digest", async () => {
@@ -337,8 +374,8 @@ describe("economy: learning facts", () => {
   it("gives no facts when the facts file cannot be read", async () => {
     const { store } = fakeStore();
     const eco = economy({ ...store, facts: async () => Promise.reject(new Error("unreadable")) });
-    expect((await eco.inputFor("/r", "implementing", config))?.guard).toBeDefined();
-    expect((await eco.inputFor("/r", "implementing", config))?.facts).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", config, "t"))?.guard).toBeDefined();
+    expect((await eco.inputFor("/r", "implementing", config, "t"))?.facts).toBeUndefined();
   });
 });
 
@@ -350,7 +387,7 @@ describe("economy.dropFact", () => {
     const id = (await eco.status("/r")).facts?.[0]?.id as string;
     expect(await eco.dropFact("/r", id)).toBe(true);
     expect((await eco.status("/r")).facts?.[0]?.state).toBe("dropped");
-    expect((await eco.inputFor("/r", "implementing", config))?.facts).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", config, "t"))?.facts).toBeUndefined();
     for (const run of ["r5", "r6", "r7", "r8"]) await eco.afterRun(finished(run));
     const facts = (await eco.status("/r")).facts;
     expect(facts).toHaveLength(1);
@@ -497,18 +534,18 @@ describe("economy: a proposed fact's life", () => {
     expect(state.facts.facts[0]).toMatchObject({ state: "candidate", confirmations: 2 });
     await runs(eco, 3, 3);
     expect(state.facts.facts[0]).toMatchObject({ state: "active", confirmations: 3, exercised: 3 });
-    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", onCfg, "t"))?.manual).toBeUndefined();
     await runs(eco, 4, 4);
-    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toEqual([MANUAL_FACT]);
+    expect((await eco.inputFor("/r", "implementing", onCfg, "t"))?.manual).toEqual([MANUAL_FACT]);
   });
 
   it("is told with facts: on only, never with free or off, and not to a decision pack", async () => {
     const { eco } = await admitted(6);
     await runs(eco, 3, 4);
-    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toEqual([MANUAL_FACT]);
-    expect((await eco.inputFor("/r", "implementing", { ...onCfg, facts: "free" }))?.manual).toBeUndefined();
-    expect((await eco.inputFor("/r", "implementing", { ...onCfg, facts: "off" }))?.manual).toBeUndefined();
-    expect(await eco.inputFor("/r", "red_check", onCfg)).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", onCfg, "t"))?.manual).toEqual([MANUAL_FACT]);
+    expect((await eco.inputFor("/r", "implementing", { ...onCfg, facts: "free" }, "t"))?.manual).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", { ...onCfg, facts: "off" }, "t"))?.manual).toBeUndefined();
+    expect(await eco.inputFor("/r", "red_check", onCfg, "t")).toBeUndefined();
   });
 
   it("stays a candidate when three confirming runs edited the same file", async () => {
@@ -530,10 +567,10 @@ describe("economy: a proposed fact's life", () => {
     const { propose } = proposing(answer());
     for (let n = 1; n <= 3; n++) await eco.cardClosed("/r", `c${n}`, onCfg, propose);
     await runs(eco, 3, 4);
-    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toEqual([MANUAL_FACT]);
+    expect((await eco.inputFor("/r", "implementing", onCfg, "t"))?.manual).toEqual([MANUAL_FACT]);
     await runs(eco, 5, 5);
     expect(state.facts.facts[0]).toMatchObject({ state: "retired", contradictions: 1 });
-    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", onCfg, "t"))?.manual).toBeUndefined();
   });
 
   it("is dropped by a person and never told again", async () => {
@@ -541,7 +578,7 @@ describe("economy: a proposed fact's life", () => {
     await runs(eco, 3, 4);
     const id = (await eco.status("/r")).facts![0]!.id;
     expect(await eco.dropFact("/r", id)).toBe(true);
-    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toBeUndefined();
+    expect((await eco.inputFor("/r", "implementing", onCfg, "t"))?.manual).toBeUndefined();
   });
 });
 
@@ -580,11 +617,11 @@ describe("economy.promotable and economy.promoted", () => {
   it("marks the facts promoted by id, so no later run is told them, and counts only the ones it held as active", async () => {
     const free = seed({ id: "f2", source: "free", family: "form_repair", key: "test:pytest", text: PYTEST_FACT, section: undefined });
     const { state, eco } = withFacts(seed({ exercised: 9 }), free, seed({ id: "f3", state: "retired", text: "Old." }));
-    expect(await eco.inputFor("/r", "implementing", onCfg)).toMatchObject({ manual: [MANUAL_FACT], facts: [PYTEST_FACT] });
+    expect(await eco.inputFor("/r", "implementing", onCfg, "t")).toMatchObject({ manual: [MANUAL_FACT], facts: [PYTEST_FACT] });
     expect(await eco.promoted("/r", ["f1", "f2", "f3", "nope"])).toBe(2);
     expect(state.facts.facts.map((f) => f.state)).toEqual(["promoted", "promoted", "retired"]);
-    expect(await eco.inputFor("/r", "implementing", onCfg)).toMatchObject({ guard: expect.anything() });
-    const after = await eco.inputFor("/r", "implementing", onCfg);
+    expect(await eco.inputFor("/r", "implementing", onCfg, "t")).toMatchObject({ guard: expect.anything() });
+    const after = await eco.inputFor("/r", "implementing", onCfg, "t");
     expect(after?.manual).toBeUndefined();
     expect(after?.facts).toBeUndefined();
     expect(await noEconomy().promoted("/r", ["f1"])).toBe(0);
@@ -606,7 +643,7 @@ describe("economy: a promoted fact waits for the default branch", () => {
     const { state, eco } = setup(null, seed({}));
     expect(await eco.pending("/r", ["f1", "nope"], "luna/memory-abc")).toBe(1);
     expect(state.facts.facts[0]).toMatchObject({ state: "active", pending: { branch: "luna/memory-abc", since: expect.any(String) } });
-    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toEqual([MANUAL_FACT]);
+    expect((await eco.inputFor("/r", "implementing", onCfg, "t"))?.manual).toEqual([MANUAL_FACT]);
   });
 
   it("does not offer a pending fact to the retro again for 14 days, then offers it again", async () => {
@@ -622,7 +659,7 @@ describe("economy: a promoted fact waits for the default branch", () => {
     expect(await eco.promotable("/r", onCfg)).toEqual([]);
     expect(reads).toEqual(["/r"]);
     expect(state.facts.facts.map((f) => f.state)).toEqual(["promoted", "active"]);
-    expect((await eco.inputFor("/r", "implementing", onCfg))?.manual).toEqual(["Another fact."]);
+    expect((await eco.inputFor("/r", "implementing", onCfg, "t"))?.manual).toEqual(["Another fact."]);
   });
 
   it("checks the pending facts on every later close of a card in the repository", async () => {
@@ -675,12 +712,12 @@ describe("economy: overhead counted in tokens", () => {
 describe("economy: tool evidence by runtime", () => {
   const stage = () => fakeStore(Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`t${i}`, calls(1)])));
 
-  it("folds the evidence of a claude run and of a run whose runtime is not known", async () => {
+  it("folds the evidence of a claude run only, not of a run whose runtime is not known", async () => {
     const { state, store } = stage();
     const eco = economy(store);
     await eco.afterRun(finished("t0", { pack: "triage", config: pruning, runtime: "claude" }));
-    await eco.afterRun(finished("t1", { pack: "triage", config: pruning }));
-    expect(state.tools.triage?.units.web?.unusedRuns).toBe(2);
+    await eco.afterRun(finished("t1", { pack: "triage", config: pruning, runtime: undefined }));
+    expect(state.tools.triage?.units.web?.unusedRuns).toBe(1);
   });
 
   it("skips the evidence of an eve or jev run, whose skills and agents cannot be seen, and still folds the rest", async () => {

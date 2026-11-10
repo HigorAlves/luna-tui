@@ -27,7 +27,7 @@ export interface EconomyStore {
   appendGuard(repoPath: string, rows: GuardEventRow[]): Promise<void>;
   /** The newest guard events, oldest first. */
   guard(repoPath: string): Promise<GuardEventRow[]>;
-  /** The learned facts, and for each pack the ids of the facts its latest run was told. */
+  /** The learned facts, and for each run not folded yet the ids of the facts it was told. */
   facts(repoPath: string): Promise<FactsFile>;
   /** Changes the facts file as one step: two runs finishing together never lose an update. */
   updateFacts(repoPath: string, change: (file: FactsFile) => FactsFile): Promise<void>;
@@ -87,8 +87,8 @@ export interface FinishedRun {
 }
 
 export interface Economy {
-  /** What the next run of this pack in this repository starts with; undefined when the economy is off for it. */
-  inputFor(repoPath: string, pack: PackId, config: EconomyConfig): Promise<EconomyInput | undefined>;
+  /** What the run `runId` of this pack in this repository starts with (the facts it is told are kept under that id until its fold); undefined when the economy is off for it. */
+  inputFor(repoPath: string, pack: PackId, config: EconomyConfig, runId: string): Promise<EconomyInput | undefined>;
   /** Folds one finished run. Never throws. */
   afterRun(run: FinishedRun): Promise<void>;
   /** An on-demand run of the economy's own (the judge, the redirect writer) cost this much: an overhead record, no fold. Never throws. */
@@ -116,6 +116,8 @@ export interface Economy {
 const GUARD_KEEP = 50;
 /** Texts of held facts the proposer is shown, the newest. */
 const KNOWN_SHOWN = 20;
+/** Runs whose told facts the facts file keeps: a run that never folds leaves its entry, and the oldest go. */
+export const INJECTED_KEEP = 200;
 /** The most the retro is offered, and the most cards a counter remembers. */
 const PROMOTABLE_MAX = 10;
 const COUNTED_KEPT = 20;
@@ -143,13 +145,15 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
     }
   };
   /** The lines the next run of `pack` is told, with the ids of the facts they are recorded under: the run's fold counts a fact as applied only if it was told. */
-  const told = async (repoPath: string, pack: PackId): Promise<string[]> => {
+  const told = async (repoPath: string, runId: string): Promise<string[]> => {
     const file = await store.facts(repoPath);
     const chosen = selectInjected(file.facts);
     const ids = chosen.map((f) => f.id);
-    const had = file.injected[pack] ?? [];
-    if (ids.length !== had.length || ids.some((id, i) => id !== had[i])) {
-      await store.updateFacts(repoPath, (now) => ({ ...now, injected: { ...now.injected, [pack]: ids } }));
+    if (ids.length > 0) {
+      await store.updateFacts(repoPath, (now) => {
+        const { [runId]: _old, ...rest } = now.injected;
+        return { ...now, injected: Object.fromEntries(Object.entries({ ...rest, [runId]: ids }).slice(-INJECTED_KEEP)) };
+      });
     }
     return chosen.map((f) => f.text);
   };
@@ -169,7 +173,7 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
       undefined,
     );
   return {
-    inputFor: (repoPath, pack, config) =>
+    inputFor: (repoPath, pack, config, runId) =>
       kept(
         "input",
         async () => {
@@ -190,9 +194,10 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
                   };
                 })()
               : undefined;
-          // `free` is the free layer alone; `on` adds the proposer's manual.
-          const facts = config.facts === "off" ? [] : await kept("facts", () => told(repoPath, pack), [] as string[]);
-          const lines = config.facts === "on" ? await kept("manual", async () => manual((await store.facts(repoPath)).facts, repoPath), [] as string[]) : [];
+          // Facts and the manual go to a pack that has tools: one with no read, no write and no commands has nothing to apply them to. `free` is the free layer alone; `on` adds the proposer's manual.
+          const tooled = spec.access.read || spec.access.write || spec.access.commands.length > 0;
+          const facts = config.facts === "off" || !tooled ? [] : await kept("facts", () => told(repoPath, runId), [] as string[]);
+          const lines = config.facts === "on" && tooled ? await kept("manual", async () => manual((await store.facts(repoPath)).facts, repoPath), [] as string[]) : [];
           // The approved mask goes whatever the guard and the facts are; `tool_prune: off` stops it too.
           const mask = config.tool_prune === "off" ? {} : maskOf((await kept("tools", () => store.tools(repoPath), {} as Record<string, PackTools>))[pack] ?? emptyTools());
           const masked = Object.keys(mask).length > 0;
@@ -218,7 +223,7 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
         undefined,
       );
       // A run with no events says nothing about which tools were used, and eve and jev cannot show a skill or a subagent being used.
-      if (run.config.tool_prune !== "off" && events.length > 0 && (run.runtime === undefined || run.runtime === "claude")) {
+      if (run.config.tool_prune !== "off" && events.length > 0 && run.runtime === "claude") {
         await kept(
           "tools",
           async () => {
@@ -240,9 +245,12 @@ export function economy(store: EconomyStore, log: (line: string) => void = () =>
           if (calls.length === 0) return;
           await store.updateFacts(run.repoPath, (file) => {
             const known = file.facts.filter((f) => f.source === "free").map(({ family, key, text }) => ({ family, key, text }));
-            const evidence = evidenceOf(calls, { known, injected: new Set(file.injected[run.pack] ?? []) });
+            // The facts this run was told are under its folder's id; the fold takes them out.
+            const told = run.folder ?? run.runId;
+            const { [told]: ids = [], ...injected } = file.injected;
+            const evidence = evidenceOf(calls, { known, injected: new Set(ids) });
             const folded = foldFacts(file.facts, evidence, { runId: run.runId, cardId: run.cardId });
-            return { ...file, facts: foldProposed(folded, { runId: run.runId, cardId: run.cardId, calls }) };
+            return { ...file, injected, facts: foldProposed(folded, { runId: run.runId, cardId: run.cardId, calls }) };
           });
           await store.appendDigest(run.repoPath, digestOf({ at: new Date().toISOString(), runId: run.runId, pack: run.pack, cardId: run.cardId, outcome: run.outcome }, calls), calls.slice(0, CALLS_KEPT));
         },

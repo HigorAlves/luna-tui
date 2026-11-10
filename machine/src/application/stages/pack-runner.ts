@@ -410,7 +410,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     ? { sha: context.testsCommit!, files: testsRead.nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => /^[AMCR]/.test(status)).map((cols) => cols[cols.length - 1] ?? "").filter(Boolean) }
     : null;
   // What the economy hands this run; a run with no repository, or an economy that fails, starts without it.
-  const economyInput = task.repoPath ? await deps.economy?.inputFor(task.repoPath, pack, policy.factory.economy).catch(() => undefined) : undefined;
+  const economyInput = task.repoPath ? await deps.economy?.inputFor(task.repoPath, pack, policy.factory.economy, context.runId).catch(() => undefined) : undefined;
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,

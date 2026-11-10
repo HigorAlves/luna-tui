@@ -487,7 +487,7 @@ The schema is strict. The schema refuses a field that can carry text. The output
 
 1. The free gate opens at 20 calls in the segment and a repeated failure or 8 error outputs.
 2. The segment is stuck when all of these hold: 20 calls, 6 error outputs, and 4 edits of one file or 3 files edited. At least a fifth of its failures must repeat an earlier one.
-3. The backstop acts when the segment is stuck and past the envelope times `backstop_mult` (2.5). It needs no judge.
+3. The backstop acts when the run's total calls reach the envelope times `backstop_mult` (2.5) and the current segment is stuck. It needs no judge.
 4. The guard asks the judge when the gate is open and no question is pending. It asks at most every 5 calls. After a verdict that is not stuck, the gap grows by 5, up to 20.
 
 A pack with no shell commands has no judge. Only the backstop can act on it.
@@ -549,6 +549,7 @@ A proposed fact counts a confirming run when that run edited no file, or edited 
 **The two prompt blocks.** `core/render.ts` adds each block at the end of the stage prompt, as declared data. Each block has at most 4 lines and about 150 tokens, with its header counted.
 
 - The free facts go under the upstream header `# environment facts learned from earlier sessions in this repository`.
+- Facts and the manual go only to an agent pack that has tools: a pack with no read, no write and no commands gets neither.
 - The proposed facts go under `# repo operating manual (<folder name>) — learned from earlier sessions in this repository`. The block shows a proposed fact when it is active and in scope in at least 4 runs.
 
 The machine keeps a line whole or leaves it out. The machine refuses a line that reads as advice about being done or about checking (words such as `skip`, `done`, `verify`). It also refuses a line shaped like a secret. This is a lint that upstream does not have.
@@ -561,7 +562,7 @@ The machine keeps a line whole or leaves it out. The machine refuses a line that
 
 **Units.** The machine counts, per repository and pack, the runs in which a unit was loaded and never used. The units are `web`, `agent` and each optional luna tool. A skill is no unit. The runtime preloads a pack's skills into the agent's context, so no `Skill` call ever shows one in use, and a count of unused skills would propose every skill. An allowed `tool_call` event counts as a use. Never counted: reading, writing, shell commands and the luna tools the machine relies on (`step`, `slice_init`, `slice_set`, `slice_list`, `decision_get`, `scope_check` and `scenario_red`). `delegate` is no unit.
 
-**Evidence rule.** One use ever protects a unit for good. A run on a masked unit says nothing about that unit. Only Claude runs give evidence. eve and Jev runs show no skill or subagent use.
+**Evidence rule.** One use ever protects a unit for good. A run on a masked unit says nothing about that unit. Only runs known to be on Claude give evidence. eve and Jev runs show no subagent use, and a run with no known runtime gives none.
 
 **Proposal.** The machine proposes a unit that no run ever used when it went unused over `economy.prune.runs` runs (10) on at least `economy.prune.min_cards` cards (2). It also proposes a unit that went unused over `economy.prune.cards` cards (5).
 
@@ -601,7 +602,7 @@ The files sit under `<state dir>/economy/<repo slug>/`. The slug is the folder n
 | `envelope.json` | the call counts of passing runs, per pack (the last 500) |
 | `ledger.jsonl` | one cost record per run |
 | `guard.jsonl` | what the loop guard did (the newest 200 rows) |
-| `facts.json` | every learned fact, and for each pack the ids of the facts its latest run was told |
+| `facts.json` | every learned fact, and for each run still running, under its run id, the ids of the facts it was told (at most 200 runs; the run's fold removes its entry) |
 | `digests.jsonl` | the last 8 runs, for the proposer |
 | `calls.json` | the observed calls of those runs, for the detectors |
 | `proposer.json` | the closed cards counted for the proposer's cadence |
@@ -610,7 +611,7 @@ The files sit under `<state dir>/economy/<repo slug>/`. The slug is the folder n
 
 ### Importing past runs
 
-`POST /economy/import` folds the runs that are already in the database, once. The sub-run folders of a finished run (`<runId>-<suffix>`) count too, under the pack in their `in/stage.json`. A folder with no readable pack is skipped. A folder holds the events of its last container only, so the import of a Build folds that container under the run id. It gives envelopes from the runs that passed. It gives tool evidence from Claude runs. Old runs carry no observation, so the import learns no fact and writes no cost record. A run with no events file stays out. A second call folds nothing.
+`POST /economy/import` folds the runs that are already in the database, once. The sub-run folders of a finished run (`<runId>-<suffix>`) count too, under the pack in their `in/stage.json`. A folder with no readable pack is skipped. A folder holds the events of its last container only, so the import of a Build folds that container under the run id. It gives envelopes from the runs that passed. It gives tool evidence from Claude runs. Old runs carry no observation, so the import learns no fact and writes no cost record. A run with no events file stays out. A second call folds nothing. The folded set keeps the newest 50,000 run ids. A repository with more runs than that folds its oldest runs again on a later import.
 
 ### Trust
 
