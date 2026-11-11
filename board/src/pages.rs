@@ -838,3 +838,95 @@ mod first_page_tests {
         }
     }
 }
+
+/// The rail's groups and the accent, and the four cards at the two sizes the owner uses.
+#[cfg(test)]
+mod rail_tests {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use crate::{
+        app::App,
+        detail::Section,
+        testkit::{escalated_app, plan_gate_app, render, running_build_app, ship_stage_app},
+        theme, ui,
+    };
+
+    fn rail_of(screen: &str) -> Vec<String> {
+        screen.lines().skip(8).take(16).map(|r| r.chars().skip(9).take(14).collect::<String>().trim_end().to_string()).collect()
+    }
+
+    #[test]
+    fn sections_with_nothing_yet_sit_under_a_dim_later_label_below_the_ones_with_content() {
+        let mut app = ship_stage_app();
+        let screen = render(&mut app, 180, 50);
+        let rail = rail_of(&screen);
+        let at = |name: &str| rail.iter().position(|r| r.contains(name)).unwrap_or_else(|| panic!("no {name} in {rail:?}"));
+        assert!(at("Result") < at("Runs") && at("Runs") < at("Evidence") && at("Evidence") < at("later"), "{rail:?}");
+        assert!(at("later") < at("Diff") && at("later") < at("Activity"), "no diff and no events yet: {rail:?}");
+        assert!(at("PR") < at("later"), "the ship gate's PR is content: {rail:?}");
+    }
+
+    #[test]
+    fn digits_number_the_sections_with_content_and_l_still_reaches_the_later_ones() {
+        let mut app = ship_stage_app();
+        let key = |app: &mut App, c: char| app.handle_key(ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Char(c)));
+        render(&mut app, 180, 50);
+        key(&mut app, '2');
+        assert_eq!(app.detail_section, Section::Overview);
+        key(&mut app, '9');
+        assert_eq!(app.detail_section, Section::Overview, "9 is past the last numbered section");
+        app.set_section(Section::Engines);
+        key(&mut app, 'l');
+        assert!(matches!(app.detail_section, Section::Plan | Section::Tests | Section::Diff | Section::Activity), "after the numbered ones come the later ones: {:?}", app.detail_section);
+    }
+
+    #[test]
+    fn the_narrow_strip_lists_what_has_content_and_counts_the_rest() {
+        let mut app = ship_stage_app();
+        let screen = render(&mut app, 100, 30);
+        let strip = screen.lines().find(|l| l.contains("Result")).unwrap();
+        assert!(strip.contains("+4 later") && !strip.contains("Diff") && !strip.contains("Activity"), "{strip}");
+    }
+
+    #[test]
+    fn only_a_waiting_marker_and_flag_lines_take_the_accent_and_headings_are_neutral() {
+        let app = plan_gate_app();
+        let mut terminal = Terminal::new(TestBackend::new(180, 50)).unwrap();
+        terminal.draw(|f| ui::draw(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let find = |needle: &str| {
+            (0..50u16).find_map(|y| {
+                let row: String = (0..180u16).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+                row.find(needle).map(|i| (row[..i].chars().count() as u16, y))
+            })
+        };
+        let (x, y) = find("Brief").expect("Brief");
+        assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Reset, "a heading has no colour of its own");
+        let (x, y) = find("⚑ plan:").expect("the flag line");
+        assert_eq!(buffer[(x, y)].fg, theme::flag().fg.unwrap(), "a flag line is in the flag style");
+        let (x, y) = find("▌Review").expect("the active section's marker");
+        assert_eq!(buffer[(x, y)].fg, theme::needs_you().fg.unwrap(), "Review waits for the person");
+        let (x, y) = find("Code map").expect("a reference group");
+        assert_ne!(buffer[(x, y)].fg, theme::needs_you().fg.unwrap(), "reference never takes the accent");
+    }
+
+    #[test]
+    fn at_100x30_each_card_opens_on_its_own_first_line() {
+        for (name, mut app, first) in [("plan gate", plan_gate_app(), "⚑ plan:"), ("running", running_build_app(), "Stage"), ("escalated", escalated_app(), "✗ escalated · the same migration"), ("ship", ship_stage_app(), "Summary")] {
+            let screen = render(&mut app, 100, 30);
+            assert!(screen.contains(first), "{name}: {first} on the first screen\n{screen}");
+        }
+    }
+
+    #[test]
+    fn at_180x50_each_card_shows_its_headings_in_order_and_none_of_the_others() {
+        let mut app = running_build_app();
+        let screen = render(&mut app, 180, 50);
+        let at = |needle: &str| screen.find(needle).unwrap_or_else(|| panic!("no {needle:?}\n{screen}"));
+        assert!(at("Build") < at("Budget") && at("Budget") < at("Latest activity"), "{screen}");
+        assert!(!screen.contains("What you can do") && !screen.contains("Findings"), "{screen}");
+        let mut app = escalated_app();
+        let screen = render(&mut app, 180, 50);
+        assert!(!screen.contains("Budget") && !screen.contains("Latest activity"), "{screen}");
+    }
+}

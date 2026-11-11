@@ -3672,7 +3672,7 @@ impl App {
             KeyCode::Char('l') | KeyCode::Right => self.step_section(true),
             KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.step_section(false),
             KeyCode::Char(digit @ '1'..='9') => {
-                let order = self.detail_order();
+                let (order, _) = self.detail_rail();
                 if let Some(section) = Section::from_digit(digit, &order) {
                     self.set_section(section);
                 }
@@ -3757,17 +3757,18 @@ impl App {
         Outcome::Continue
     }
 
-    /// The sections the open card's rail lists, in order.
-    fn detail_order(&self) -> Vec<Section> {
-        match &self.mode {
-            Mode::Detail(id) => self.task(id).map(crate::detail::order).unwrap_or_else(|| Section::ALL.to_vec()),
-            _ => Section::ALL.to_vec(),
-        }
+    /// The open card's rail: the sections with content (numbered for `1`-`9`) and those that come later.
+    fn detail_rail(&self) -> (Vec<Section>, Vec<Section>) {
+        let Mode::Detail(id) = &self.mode else { return (Section::ALL.to_vec(), Vec::new()) };
+        let Some(task) = self.task(id) else { return (Section::ALL.to_vec(), Vec::new()) };
+        let has_diff = task.diff.is_some() || self.diff.as_ref().is_some_and(|(for_id, _)| for_id == id);
+        crate::detail::rail(task, self.detail.as_ref(), has_diff, &self.prs.prs)
     }
 
-    /// `l` / `h`: the next or previous section of the rail.
+    /// `l` / `h`: the next or previous section of the rail, those with content first and then the ones that come later.
     fn step_section(&mut self, forward: bool) {
-        let order = self.detail_order();
+        let (mut order, later) = self.detail_rail();
+        order.extend(later);
         let to = if forward { self.detail_section.next(&order) } else { self.detail_section.prev(&order) };
         self.set_section(to);
     }
@@ -6313,7 +6314,7 @@ mod workspace_key_tests {
     fn j_k_pick_a_run_in_runs_and_scroll_elsewhere_and_plus_toggles_the_size() {
         let mut app = open("implementing");
         app.detail = Some(detail_with_runs(&app.tasks[0], 3));
-        press(&mut app, KeyCode::Char('4'));
+        app.set_section(Section::Runs);
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
@@ -6321,7 +6322,7 @@ mod workspace_key_tests {
         assert_eq!(app.detail_scroll.get(), 0, "picking does not scroll");
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(app.detail_cursor, 1);
-        press(&mut app, KeyCode::Char('2'));
+        app.set_section(Section::Plan);
         assert_eq!(app.detail_cursor, 0, "a new section starts at its first row");
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.detail_scroll.get(), 1, "the Plan section scrolls");
@@ -6398,7 +6399,7 @@ mod workspace_key_tests {
     fn capital_j_k_and_the_page_keys_scroll_a_cursor_section_and_equals_is_not_size() {
         let mut app = open("implementing");
         app.detail = Some(detail_with_runs(&app.tasks[0], 3));
-        press(&mut app, KeyCode::Char('4'));
+        app.set_section(Section::Runs);
         press(&mut app, KeyCode::Char('j'));
         let cursor = app.detail_row();
         press(&mut app, KeyCode::Char('J'));
@@ -6497,9 +6498,9 @@ mod workspace_key_tests {
         assert_eq!(app.detail_row(), 2, "the latest run, not the oldest");
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(app.detail_row(), 1);
-        press(&mut app, KeyCode::Char('6'));
+        app.set_section(Section::Diff);
         assert_eq!(app.detail_row(), 0, "the Diff starts on the first file");
-        press(&mut app, KeyCode::Char('5'));
+        app.set_section(Section::Runs);
         assert_eq!(app.detail_row(), 2, "coming back to Runs lands on the latest run again");
     }
 
@@ -6527,7 +6528,7 @@ mod workspace_key_tests {
         detail.approvals = serde_json::from_str(r#"[{"id":"s1","kind":"awaiting_ship","requested":{"prUrl":"https://github.com/acme/app/pull/9"},"decision":null,"reason":null,"createdAt":"2026-10-22T10:11:00Z","decidedAt":null}]"#).unwrap();
         app.detail = Some(detail);
         assert_eq!(app.detail_open_target().as_deref(), Some("/out/files/verify.log"));
-        press(&mut app, KeyCode::Char('7'));
+        app.set_section(Section::Pr);
         assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/9"), "the ship gate's URL when the inbox has no row");
         let mut pr: PullRequest = serde_json::from_str(
             r#"{"repo":"acme/app","number":412,"title":"t","url":"https://github.com/acme/app/pull/412","author":"me","mine":true,"reviewRequested":false,

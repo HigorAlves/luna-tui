@@ -193,6 +193,28 @@ pub fn order(task: &Task) -> Vec<Section> {
         .collect()
 }
 
+/// Whether `section` has anything to show yet: a plan, cases, runs, a diff, a PR, evidence, events.
+fn has_content(section: Section, task: &Task, detail: &TaskDetail, has_diff: bool, prs: &[PullRequest]) -> bool {
+    match section {
+        Section::Plan => detail.latest_approval("awaiting_approval").is_some(),
+        Section::Tests => detail.cases_approval().is_some(),
+        Section::Runs => !detail.stage_runs.is_empty(),
+        Section::Diff => has_diff,
+        Section::Evidence => !detail.artifacts.is_empty() || task.evidence.is_some(),
+        Section::Pr => pr_for(task, prs).is_some() || pr_url(detail).is_some() || detail.ship.is_some(),
+        Section::Activity => !detail.events.is_empty(),
+        _ => true,
+    }
+}
+
+/// The rail's two groups: the sections with content, numbered for the `1`-`9` keys, and the ones with nothing yet, listed under
+/// `later` and reached with `h`/`l`. Without the card's detail nothing is held back.
+pub fn rail(task: &Task, detail: Option<&TaskDetail>, has_diff: bool, prs: &[PullRequest]) -> (Vec<Section>, Vec<Section>) {
+    let all = order(task);
+    let Some(detail) = detail.filter(|d| d.task.id == task.id) else { return (all, Vec::new()) };
+    all.into_iter().partition(|s| has_content(*s, task, detail, has_diff, prs))
+}
+
 /// A terminal this wide or wider lays the rail beside the pane; narrower, the rail becomes a
 /// tab strip above it.
 const RAIL_FROM: u16 = 100;
@@ -211,10 +233,10 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         .padding(Padding::new(1, 1, 0, 0))
         .title(Line::from(vec![
             Span::from(format!(" #{} ", task.short_id())).bold(),
-            Span::from(task.source.as_ref().and_then(TaskSource::notch_tag).map(|t| format!("{t} ")).unwrap_or_default()).fg(c(SUBTEXT0)),
+            Span::from(task.source.as_ref().and_then(TaskSource::notch_tag).map(|t| format!("{t} ")).unwrap_or_default()).style(theme::label()),
             Span::from(format!("{} ", crate::model::plain(&task.title, 400))).bold(),
         ]))
-        .title_bottom(Line::from(format!(" {} · {} ago ", task.column, age(&task.updated_at, now))).fg(c(SUBTEXT0)).right_aligned());
+        .title_bottom(Line::from(format!(" {} · {} ago ", task.column, age(&task.updated_at, now))).style(theme::label()).right_aligned());
 
     frame.render_widget(Clear, area);
     let inner = block.inner(area);
@@ -231,17 +253,20 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     let rule = Rect { x: area.x, width: area.width, ..rule_area };
     frame.render_widget(Paragraph::new(rule_line(area.width as usize, tee).style(Style::new().fg(c(look_color(look))))), rule);
 
-    let cells: Vec<(Section, String, Span<'static>)> = order(task).iter().map(|s| (*s, s.label().to_string(), rail_status(*s, view, detail))).collect();
+    let (shown, later) = rail(task, detail, view.diff.is_some() || task.diff.is_some(), view.prs);
+    let cell = |s: &Section| (*s, s.label().to_string(), rail_status(*s, view, detail));
+    let cells: Vec<(Section, String, Span<'static>)> = shown.iter().map(cell).collect();
+    let later_cells: Vec<(Section, String, Span<'static>)> = later.iter().map(cell).collect();
     let pane_area = if wide {
         let [rail_area, sep, pane_area] =
             Layout::horizontal([Constraint::Length(RAIL_WIDTH), Constraint::Length(2), Constraint::Min(0)]).areas(body);
-        render_rail(frame, rail_area, &cells, view.section);
+        render_rail(frame, rail_area, &cells, &later_cells, view.section);
         let rule: Vec<Line> = (0..sep.height).map(|_| Line::from(Span::from("│ ").fg(c(MUTED)))).collect();
         frame.render_widget(Paragraph::new(rule), sep);
         pane_area
     } else {
         let [strip, rule, pane_area] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)]).areas(body);
-        render_strip(frame, strip, &cells, view.section);
+        render_strip(frame, strip, &cells, later_cells.len(), view.section);
         frame.render_widget(Paragraph::new(Line::from(Span::from("─".repeat(rule.width as usize)).fg(c(MUTED)))), rule);
         pane_area
     };
@@ -399,34 +424,42 @@ fn patch_line(line: &str) -> Line<'static> {
     Line::from(Span::from(line.to_string()).fg(c(color)))
 }
 
-/// The rail: one row per section, the active one marked, its status glyph right-aligned.
-fn render_rail(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'static>)], active: Section) {
-    let lines: Vec<Line> = cells
-        .iter()
-        .map(|(section, label, status)| {
-            let on = *section == active;
-            let width = RAIL_WIDTH as usize - 1 - status.width();
-            let name = Span::from(format!("{label:<width$}"));
-            let name = if on { name.bold().fg(c(ACCENT)) } else { name };
-            Line::from(vec![Span::from(if on { "▌" } else { " " }).fg(c(ACCENT)), name, status.clone()])
-        })
-        .collect();
+/// The rail: one row per section with content, the active one marked, its status glyph right-aligned; then the sections with nothing yet
+/// under a dim `later`. The marker is bold text, and the accent only where the section waits for the person.
+fn render_rail(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'static>)], later: &[(Section, String, Span<'static>)], active: Section) {
+    let row = |(section, label, status): &(Section, String, Span<'static>), dimmed: bool| {
+        let on = *section == active;
+        let waits = status.style.fg == theme::needs_you().fg || status.style.fg == theme::flag().fg;
+        let width = RAIL_WIDTH as usize - 1 - status.width();
+        let name = Span::styled(format!("{label:<width$}"), if on { theme::heading() } else if dimmed { theme::dim() } else { theme::text() });
+        let marker = Span::styled(if on { "▌" } else { " " }, if waits { theme::needs_you() } else { theme::heading() });
+        Line::from(vec![marker, name, status.clone()])
+    };
+    let mut lines: Vec<Line> = cells.iter().map(|c| row(c, false)).collect();
+    if !later.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(" later", theme::dim())));
+        lines.extend(later.iter().map(|c| row(c, true)));
+    }
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The narrow form of the rail: `Overview │ Plan ✓ │▌Tests 5 ✓│ …`, cut to the width.
-fn render_strip(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'static>)], active: Section) {
+/// The narrow form of the rail: `Overview │ Plan ✓ │▌Tests 5 ✓│ … +2 later`, the sections with content only, cut to the width.
+fn render_strip(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'static>)], later: usize, active: Section) {
     let build = |pad: &str, label_w: usize| -> Vec<Span<'static>> {
         let mut spans = Vec::new();
         for (i, (section, label, status)) in cells.iter().enumerate() {
             if i > 0 {
-                spans.push(Span::from("│").fg(c(MUTED)));
+                spans.push(Span::styled("│", theme::dim()));
             }
             let on = *section == active;
             let status_text = status.content.trim().to_string();
             let label = truncate(label, label_w);
             let text = if status_text.is_empty() { format!("{pad}{label}{pad}") } else { format!("{pad}{label} {status_text}{pad}") };
-            spans.push(if on { Span::from(text).bold().fg(c(ACCENT)).underlined() } else { Span::from(text) });
+            spans.push(if on { Span::styled(text, theme::heading().underlined()) } else { Span::from(text) });
+        }
+        if later > 0 {
+            spans.push(Span::styled(format!(" +{later} later"), theme::dim()));
         }
         spans
     };
@@ -444,14 +477,14 @@ fn render_strip(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'
 
 /// What the rail says beside a section: approved, waiting, a count, a verdict, or nothing.
 fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>) -> Span<'static> {
-    let dim = |text: String| Span::from(text).fg(c(SUBTEXT0));
+    let dim = |text: String| Span::from(text).style(theme::label());
     let gate = |approval: Option<&Approval>, count: Option<usize>| -> Span<'static> {
         let count = count.map(|n| format!("{n} ")).unwrap_or_default();
         match approval {
             None => dim("–".to_string()),
-            Some(a) if a.decision.is_none() => Span::from(format!("{count}⏸")).fg(c(PEACH)),
-            Some(a) if a.decision.as_deref() == Some("sent_back") => Span::from(format!("{count}↩")).fg(c(PEACH)),
-            Some(_) => Span::from(format!("{count}✓")).fg(c(GREEN)),
+            Some(a) if a.decision.is_none() => Span::from(format!("{count}⏸")).style(theme::flag()),
+            Some(a) if a.decision.as_deref() == Some("sent_back") => Span::from(format!("{count}↩")).style(theme::flag()),
+            Some(_) => Span::from(format!("{count}✓")).style(theme::done()),
         }
     };
     let Some(d) = detail else {
@@ -502,13 +535,13 @@ fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>)
                 };
                 Span::from(pr.checks_label().chars().next().unwrap_or('·').to_string()).fg(c(color))
             }
-            None if pr_url(d).is_some() => Span::from("✓").fg(c(GREEN)),
+            None if pr_url(d).is_some() => Span::from("✓").style(theme::done()),
             None => dim("–".to_string()),
         },
         Section::Activity => dim(d.events.len().to_string()),
         Section::Engines => match view.task.stages.len() {
             0 => Span::raw(""),
-            n => Span::from(n.to_string()).fg(c(PEACH)),
+            n => Span::from(n.to_string()).style(theme::flag()),
         },
     }
 }
@@ -540,11 +573,11 @@ fn engines_lines(task: &Task, detail: Option<&TaskDetail>, catalog: Option<&Resu
         let ran = detail.and_then(|d| d.last_run_of(pack)).map(|r| r.engine.clone().unwrap_or_else(|| "–".into())).unwrap_or_default();
         let missing = task.stages.get(&pack.id).and_then(|id| catalog.engines.iter().find(|e| e.id == *id && !e.available)).map_or("", |_| "  no credential here");
         lines.push(Line::from(vec![
-            Span::from(if i == selected { "  ▌ " } else { "    " }).fg(c(ACCENT)),
+            Span::from(if i == selected { "  ▌ " } else { "    " }).style(theme::border_focus()),
             Span::from(format!("{:<16} ", truncate(&pack.id, 16))).bold(),
             Span::from(format!("{engine:<24} ")).fg(c(color)),
-            Span::from(ran).fg(c(SUBTEXT0)),
-            Span::from(missing).fg(c(RED)),
+            Span::from(ran).style(theme::label()),
+            Span::from(missing).style(theme::lost()),
         ]));
     }
     lines.push(Line::default());
@@ -750,7 +783,7 @@ pub(crate) fn ship_risk_is_high(detail: Option<&TaskDetail>) -> bool {
 }
 
 pub(crate) fn heading(text: &str) -> Line<'static> {
-    Line::from(Span::from(text.to_string()).fg(c(ACCENT)).bold())
+    Line::from(Span::styled(text.to_string(), theme::heading()))
 }
 
 /// A facts row for a reference group: a label column and the value wrapped under itself.
@@ -873,7 +906,7 @@ pub(crate) fn card_group(task: &Task, detail: Option<&TaskDetail>, width: usize,
 }
 
 pub(crate) fn proposal_heading(text: &str) -> Line<'static> {
-    Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold())
+    Line::from(Span::styled(text.to_string(), theme::heading()))
 }
 
 /// `Ticket     the ticket changed since this was written: scope edited, priority changed (2026-11-05 12:00)`: the field names and the time the machine kept, through `plain`.
@@ -898,7 +931,7 @@ pub fn ticket_changed_line(requested: &serde_json::Value) -> Option<String> {
 }
 
 pub(crate) fn muted(text: String) -> Line<'static> {
-    Line::from(Span::from(text).fg(c(SUBTEXT0)))
+    Line::from(Span::from(text).style(theme::label()))
 }
 
 /// `Plan · triage #2 · approved 2h ago`: which run produced a gate's content and what you did.
@@ -920,9 +953,9 @@ pub(crate) fn gate_header(title: &str, stage: &str, approval: Option<&Approval>,
         (Some(decision), None) => (decision.replace('_', " "), GREEN),
     };
     Line::from(vec![
-        Span::from(title.to_string()).fg(c(ACCENT)).bold(),
-        Span::from(attempt).fg(c(SUBTEXT0)),
-        Span::from(" · ").fg(c(SUBTEXT0)),
+        Span::from(title.to_string()).style(theme::heading()),
+        Span::from(attempt).style(theme::label()),
+        Span::from(" · ").style(theme::label()),
         Span::from(what).fg(c(color)),
     ])
 }
@@ -934,26 +967,26 @@ pub(crate) fn criteria_table(rows: &[CriterionRow], width: usize) -> Vec<Line<'s
     }
     let name_w = rows.iter().map(|r| r.criterion.chars().count()).max().unwrap_or(8).clamp(8, width.saturating_sub(28).max(8));
     let mut lines = vec![Line::from(vec![
-        Span::from(format!("{:<w$}", "Criteria", w = name_w + 2)).fg(c(ACCENT)).bold(),
-        Span::from("  plan   cases   verify").fg(c(SUBTEXT0)),
+        Span::from(format!("{:<w$}", "Criteria", w = name_w + 2)).style(theme::heading()),
+        Span::from("  plan   cases   verify").style(theme::label()),
     ])];
     for row in rows {
         let plan = match row.planned {
-            Some(true) => Span::from("  ✓   ").fg(c(GREEN)),
-            Some(false) => Span::from("  ✗   ").fg(c(RED)),
-            None => Span::from("  –   ").fg(c(SUBTEXT0)),
+            Some(true) => Span::from("  ✓   ").style(theme::done()),
+            Some(false) => Span::from("  ✗   ").style(theme::lost()),
+            None => Span::from("  –   ").style(theme::label()),
         };
         let cases = if row.cases == 0 {
-            Span::from("   –     ").fg(c(SUBTEXT0))
+            Span::from("   –     ").style(theme::label())
         } else {
             Span::from(format!("  {:<3}    ", row.cases))
         };
         let verify = match row.verify {
-            Some((ok, total)) if ok == total => Span::from("✓").fg(c(GREEN)),
-            Some((ok, total)) => Span::from(format!("✗ {ok} of {total}")).fg(c(RED)),
-            None if row.planned == Some(false) => Span::from("–    not in the plan").fg(c(SUBTEXT0)),
-            None if row.cases == 0 && row.planned.is_some() => Span::from("–    no case proves it").fg(c(SUBTEXT0)),
-            None => Span::from("–").fg(c(SUBTEXT0)),
+            Some((ok, total)) if ok == total => Span::from("✓").style(theme::done()),
+            Some((ok, total)) => Span::from(format!("✗ {ok} of {total}")).style(theme::lost()),
+            None if row.planned == Some(false) => Span::from("–    not in the plan").style(theme::label()),
+            None if row.cases == 0 && row.planned.is_some() => Span::from("–    no case proves it").style(theme::label()),
+            None => Span::from("–").style(theme::label()),
         };
         lines.push(Line::from(vec![
             Span::from(format!("  {:<w$}", truncate(&plain(&row.criterion), name_w), w = name_w)),
@@ -1058,8 +1091,8 @@ pub(crate) fn gate_blocks(approval: &Approval, width: usize) -> Vec<Line<'static
     let mut lines = Vec::new();
     let requested = &approval.requested;
     if let Some(error) = requested["error"].as_str() {
-        lines.extend([Line::default(), Line::from(Span::from("Error").fg(c(RED)).bold())]);
-        lines.extend(plain(error).lines().map(|l| Line::from(format!("  {l}")).fg(c(RED))));
+        lines.extend([Line::default(), Line::from(Span::from("Error").style(theme::lost()).bold())]);
+        lines.extend(plain(error).lines().map(|l| Line::from(format!("  {l}")).style(theme::lost())));
     }
     if let Some(note) = requested["note"].as_str() {
         lines.push(muted(plain(note)));
@@ -1075,7 +1108,7 @@ pub(crate) fn gate_blocks(approval: &Approval, width: usize) -> Vec<Line<'static
         // The base image, singled out of the long proposal: it runs the stage's process, and approving the setup does not approve it.
         if let Some(base) = requested["sandboxBase"].as_str() {
             lines.extend([Line::default(), proposal_heading("Base image (not approved by this gate)")]);
-            lines.push(Line::from(format!("  {}", crate::model::plain(base, 400))).fg(c(RED)));
+            lines.push(Line::from(format!("  {}", crate::model::plain(base, 400))).style(theme::lost()));
         }
         let proof = proof_lines(&requested["proof"]);
         if !proof.is_empty() {
@@ -1097,19 +1130,19 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     let look = task.look();
     let mut status = vec![Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(c(look_color(look))).bold()];
     if let Some(run) = detail.and_then(|d| d.stage_runs.last()) {
-        status.push(Span::from(format!(" #{}", run.attempt)).fg(c(SUBTEXT0)));
+        status.push(Span::from(format!(" #{}", run.attempt)).style(theme::label()));
     }
     if task.retries.total > 1 {
-        status.push(Span::from(format!(" · run {} of 3", task.retries.total)).fg(c(PEACH)));
+        status.push(Span::from(format!(" · run {} of 3", task.retries.total)).style(theme::flag()));
     }
     if task.retries.stronger > 0 {
         let note = if task.retries.stronger_next { " · stronger engine next" } else { " · stronger engine used" };
-        status.push(Span::from(note).fg(c(PEACH)));
+        status.push(Span::from(note).style(theme::flag()));
     }
     if let Some(spent) = detail.and_then(TaskDetail::spent_usd).or(task.spent_usd) {
-        status.push(Span::from(format!(" · ${spent:.2}")).fg(c(SUBTEXT0)));
+        status.push(Span::from(format!(" · ${spent:.2}")).style(theme::label()));
     }
-    status.push(Span::from(format!(" · {}", age(&task.updated_at, now))).fg(c(SUBTEXT0)));
+    status.push(Span::from(format!(" · {}", age(&task.updated_at, now))).style(theme::label()));
     let mut lines = vec![Line::from(status)];
 
     if let Some(d) = detail {
@@ -1167,9 +1200,9 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     match &task.jira {
         Some(jira) => {
-            lines.push(Line::from(vec![Span::from("Jira       ").fg(c(SUBTEXT0)), Span::from(jira.summary(now))]));
+            lines.push(Line::from(vec![Span::from("Jira       ").style(theme::label()), Span::from(jira.summary(now))]));
             if let Some(blocked) = &jira.blocked {
-                lines.push(Line::from(Span::from(format!("           ⚠ blocked: {}", blocked.line())).fg(c(RED)).bold()));
+                lines.push(Line::from(Span::from(format!("           ⚠ blocked: {}", blocked.line())).style(theme::lost()).bold()));
             }
         }
         None => lines.push(muted("Jira       —  J links an issue".to_string())),
@@ -1177,14 +1210,14 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
     if let Some(sla) = &task.sla {
         let parts = sla.parts(now);
         if !parts.is_empty() {
-            let mut spans = vec![Span::from("SLA        ").fg(c(SUBTEXT0))];
+            let mut spans = vec![Span::from("SLA        ").style(theme::label())];
             for (i, (text, tone)) in parts.into_iter().enumerate() {
                 if i > 0 {
-                    spans.push(Span::from(" · ").fg(c(SUBTEXT0)));
+                    spans.push(Span::from(" · ").style(theme::label()));
                 }
                 spans.push(match tone {
-                    Tone::Over => Span::from(text).fg(c(RED)).bold(),
-                    Tone::Warn => Span::from(text).fg(c(YELLOW)),
+                    Tone::Over => Span::from(text).style(theme::lost()).bold(),
+                    Tone::Warn => Span::from(text).style(theme::working()),
                     Tone::Plain => Span::from(text),
                 });
             }
@@ -1301,7 +1334,7 @@ pub(crate) fn checks_group(approval: &Approval) -> Option<RefGroup> {
 
 /// The gate's own words that the person reads with the plan: the rule on who may approve, who has, and a split's children.
 pub(crate) fn gate_main_facts(approval: &Approval) -> Vec<Line<'static>> {
-    let label = |name: &str| Span::from(format!("{name:<11}")).fg(c(SUBTEXT0));
+    let label = |name: &str| Span::from(format!("{name:<11}")).style(theme::label());
     let mut lines = Vec::new();
     if let Some(approvals) = approval.approvals_line() {
         lines.push(Line::from(vec![label("Approvals"), Span::from(approvals)]));
@@ -1316,19 +1349,19 @@ fn split_facts(approval: &Approval) -> Vec<Line<'static>> {
     if !matches!(approval.outcome(), Some("split" | "split_failed")) {
         return Vec::new();
     }
-    let label = |name: &str| Span::from(format!("{name:<11}")).fg(c(SUBTEXT0));
+    let label = |name: &str| Span::from(format!("{name:<11}")).style(theme::label());
     let r = &approval.requested;
     let mut lines = Vec::new();
     let size = &r["size"];
     let loc = size["planned"].as_f64().or_else(|| size["estLoc"].as_f64());
     if let (Some(loc), Some(hard)) = (loc, size["limit"]["hard"].as_f64()) {
-        lines.push(Line::from(vec![label("Size"), Span::from(format!("about {loc:.0} lines, over the limit of {hard:.0} by {:.0}", (loc - hard).max(0.0))).fg(c(PEACH))]));
+        lines.push(Line::from(vec![label("Size"), Span::from(format!("about {loc:.0} lines, over the limit of {hard:.0} by {:.0}", (loc - hard).max(0.0))).style(theme::flag())]));
     }
     if let Some(reason) = r["reason"].as_str() {
-        lines.push(Line::from(vec![label("Reason"), Span::from(plain(reason)).fg(c(RED))]));
+        lines.push(Line::from(vec![label("Reason"), Span::from(plain(reason)).style(theme::lost())]));
     }
     for issue in r["split"]["issues"].as_array().into_iter().flatten().filter_map(|i| i.as_str()) {
-        lines.push(Line::from(vec![label("Issue"), Span::from(plain(issue)).fg(c(PEACH))]));
+        lines.push(Line::from(vec![label("Issue"), Span::from(plain(issue)).style(theme::flag())]));
     }
     for (i, child) in approval.split_children().iter().enumerate() {
         let after: Vec<String> = child["depends_on"].as_array().into_iter().flatten().filter_map(|d| d.as_u64()).map(|d| d.to_string()).collect();
@@ -1423,8 +1456,8 @@ fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64)
     for (criterion, cases) in &groups {
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::from(plain(criterion)).fg(c(ACCENT)).bold(),
-            Span::from(format!("   {} case{}", cases.len(), if cases.len() == 1 { "" } else { "s" })).fg(c(SUBTEXT0)),
+            Span::from(plain(criterion)).style(theme::heading()),
+            Span::from(format!("   {} case{}", cases.len(), if cases.len() == 1 { "" } else { "s" })).style(theme::label()),
         ]));
         for case in cases {
             lines.push(case_line(case, title_w));
@@ -1450,7 +1483,7 @@ fn case_line(case: &TestCase, title_w: usize) -> Line<'static> {
     Line::from(vec![
         Span::from(format!("  {glyph} ")).fg(c(color)),
         Span::from(format!("{:<w$}", truncate(&plain(&case.title), title_w), w = title_w)),
-        Span::from(format!("   {}", plain(&case.approach))).fg(c(SUBTEXT0)),
+        Span::from(format!("   {}", plain(&case.approach))).style(theme::label()),
     ])
 }
 
@@ -1460,12 +1493,12 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
     let Some(d) = detail else {
         return (vec![heading("Runs"), Line::default(), muted("  loading…".into())], None);
     };
-    let mut head = vec![Span::from("Runs").fg(c(ACCENT)).bold(), Span::from(format!(" · {}", d.stage_runs.len())).fg(c(SUBTEXT0))];
+    let mut head = vec![Span::from("Runs").style(theme::heading()), Span::from(format!(" · {}", d.stage_runs.len())).style(theme::label())];
     if let Some(spent) = d.spent_usd() {
-        head.push(Span::from(format!(" · ${spent:.2} spent")).fg(c(SUBTEXT0)));
+        head.push(Span::from(format!(" · ${spent:.2} spent")).style(theme::label()));
     }
     if let Some(worked) = task.worked_ms {
-        head.push(Span::from(format!(" · {} worked", crate::model::fmt_ms(Some(worked)))).fg(c(SUBTEXT0)));
+        head.push(Span::from(format!(" · {} worked", crate::model::fmt_ms(Some(worked)))).style(theme::label()));
     }
     let mut lines = vec![Line::from(head), Line::default()];
     if d.stage_runs.is_empty() {
@@ -1479,7 +1512,7 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
         let (_, color) = run_glyph(run);
         let on = i == selected;
         lines.push(Line::from(vec![
-            Span::from(if on { "  ▌ " } else { "    " }).fg(c(ACCENT)),
+            Span::from(if on { "  ▌ " } else { "    " }).style(theme::border_focus()),
             Span::from(format!("{:<14} {:>2}  ", truncate(&run.stage, 14), run.attempt)).bold(),
             Span::from(format!("{:<8}", run.status)).fg(c(color)),
             Span::from(format!(
@@ -1488,17 +1521,17 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
                 run.cost_usd.map_or("–".to_string(), |v| format!("${v:.2}")),
                 run.turns.map_or("–".to_string(), |t| t.to_string())
             ))
-            .fg(c(SUBTEXT0)),
+            .style(theme::label()),
         ]));
     }
     let run = &d.stage_runs[selected];
     lines.push(Line::default());
     lines.push(Line::from(vec![
-        Span::from(format!("─ {} #{} ", run.stage, run.attempt)).fg(c(ACCENT)).bold(),
+        Span::from(format!("─ {} #{} ", run.stage, run.attempt)).style(theme::heading()),
         Span::from("─".repeat(width.saturating_sub(run.stage.chars().count() + 8))).fg(c(MUTED)),
     ]));
     match run_error(d, run) {
-        Some(error) => lines.extend(plain(&error).lines().take(8).map(|l| Line::from(format!("  {l}")).fg(c(RED)))),
+        Some(error) => lines.extend(plain(&error).lines().take(8).map(|l| Line::from(format!("  {l}")).style(theme::lost()))),
         None if run.status == "running" => lines.push(muted("  running · f follows its container in herdr".into())),
         None => lines.push(muted("  no error recorded".into())),
     }
@@ -1552,11 +1585,11 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
     let added: u64 = diff.files.iter().map(|f| f.added).sum();
     let removed: u64 = diff.files.iter().map(|f| f.removed).sum();
     let mut lines = vec![Line::from(vec![
-        Span::from("Diff").fg(c(ACCENT)).bold(),
+        Span::from("Diff").style(theme::heading()),
         Span::from(format!(" · {} against {} · {} file{} · ", diff.head, diff.base, diff.files.len(), if diff.files.len() == 1 { "" } else { "s" }))
-            .fg(c(SUBTEXT0)),
-        Span::from(format!("+{added}")).fg(c(GREEN)),
-        Span::from(format!(" −{removed}")).fg(c(RED)),
+            .style(theme::label()),
+        Span::from(format!("+{added}")).style(theme::done()),
+        Span::from(format!(" −{removed}")).style(theme::lost()),
     ])];
     lines.push(Line::default());
     if diff.files.is_empty() {
@@ -1569,21 +1602,21 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
     for (i, file) in diff.files.iter().enumerate() {
         let on = i == selected;
         lines.push(Line::from(vec![
-            Span::from(if on { "  ▌ " } else { "    " }).fg(c(ACCENT)),
+            Span::from(if on { "  ▌ " } else { "    " }).style(theme::border_focus()),
             Span::from(format!("{} ", file.status)).fg(c(match file.status.as_str() {
                 "A" => GREEN,
                 "D" => RED,
                 _ => YELLOW,
             })),
             Span::from(format!("{:<w$}", truncate(&file.path, path_w), w = path_w)),
-            Span::from(format!("  +{:<4}", file.added)).fg(c(GREEN)),
-            Span::from(format!(" −{}", file.removed)).fg(c(RED)),
+            Span::from(format!("  +{:<4}", file.added)).style(theme::done()),
+            Span::from(format!(" −{}", file.removed)).style(theme::lost()),
         ]));
     }
     let file = &diff.files[selected];
     lines.push(Line::default());
     lines.push(Line::from(vec![
-        Span::from(format!("─ {} ", file.path)).fg(c(ACCENT)).bold(),
+        Span::from(format!("─ {} ", file.path)).style(theme::heading()),
         Span::from("─".repeat(width.saturating_sub(file.path.chars().count() + 4))).fg(c(MUTED)),
     ]));
     let patch = diff.patch.as_deref().filter(|_| diff.file.as_deref() == Some(file.path.as_str()));
@@ -1604,7 +1637,7 @@ fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
     let open: Vec<_> = report.findings.iter().filter(|f| f.resolution.is_none()).collect();
     if !open.is_empty() {
         lines.push(Line::default());
-        lines.push(Line::from(Span::from("Verify findings").fg(c(ACCENT)).bold()));
+        lines.push(Line::from(Span::from("Verify findings").style(theme::heading())));
         for level in ["blocker", "should_fix", "nit"] {
             let at: Vec<_> = open.iter().filter(|f| f.level() == level).collect();
             if at.is_empty() {
@@ -1615,7 +1648,7 @@ fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
                 "should_fix" => YELLOW,
                 _ => SUBTEXT0,
             };
-            lines.push(Line::from(vec![Span::from(format!("  {level}")).fg(c(color)).bold(), Span::from(format!("  {}", at.len())).fg(c(SUBTEXT0))]));
+            lines.push(Line::from(vec![Span::from(format!("  {level}")).fg(c(color)).bold(), Span::from(format!("  {}", at.len())).style(theme::label())]));
             for f in at.iter().take(30) {
                 let place = if f.path.is_empty() { String::new() } else { format!("  {}:{}", truncate(&plain(&f.path), 60), f.line) };
                 let criterion = f.criterion_ref.as_deref().map(|r| format!("  {}", truncate(&plain(r), 20))).unwrap_or_default();
@@ -1626,8 +1659,8 @@ fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
     if let Some(e2e) = report.e2e.as_ref().filter(|e| !e.rows.is_empty()) {
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::from("Browser run").fg(c(ACCENT)).bold(),
-            Span::from(format!("  {}", plain(e2e.verdict.as_deref().unwrap_or("no verdict")))).fg(c(SUBTEXT0)),
+            Span::from("Browser run").style(theme::heading()),
+            Span::from(format!("  {}", plain(e2e.verdict.as_deref().unwrap_or("no verdict")))).style(theme::label()),
         ]));
         for row in e2e.rows.iter().take(40) {
             let (glyph, color) = match row.result.as_str() {
@@ -1691,7 +1724,7 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
         if artifact.kind != last_kind {
             last_kind = &artifact.kind;
             let count = d.artifacts.iter().filter(|a| a.kind == artifact.kind).count();
-            lines.push(Line::from(vec![Span::from(artifact.kind.clone()).fg(c(ACCENT)).bold(), Span::from(format!("   {count}")).fg(c(SUBTEXT0))]));
+            lines.push(Line::from(vec![Span::from(artifact.kind.clone()).style(theme::heading()), Span::from(format!("   {count}")).style(theme::label())]));
         }
         let on = i == selected;
         if on {
@@ -1699,9 +1732,9 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
         }
         let label = if artifact.label.is_empty() { String::new() } else { format!("{}  ", artifact.label) };
         lines.push(Line::from(vec![
-            Span::from(if on { "  ▌ " } else { "    " }).fg(c(ACCENT)),
+            Span::from(if on { "  ▌ " } else { "    " }).style(theme::border_focus()),
             Span::from(label).bold(),
-            Span::from(artifact.path.clone()).fg(c(SUBTEXT0)),
+            Span::from(artifact.path.clone()).style(theme::label()),
         ]));
     }
     lines.push(Line::default());
@@ -1725,18 +1758,18 @@ pub(crate) fn pr_url(detail: &TaskDetail) -> Option<String> {
 /// Every text is the machine's and goes through `plain`.
 pub(crate) fn ship_lines(ship: &crate::model::ShipView, now: u64) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![
-        Span::from("Watching  ").fg(c(SUBTEXT0)),
+        Span::from("Watching  ").style(theme::label()),
         Span::from(if ship.ready { "✓ every item passes" } else { "◐ waiting on the items below" }).fg(c(if ship.ready { GREEN } else { YELLOW })),
     ])];
     for item in &ship.checklist {
         let (glyph, color) = if item.ok { ("✓", GREEN) } else { ("✗", RED) };
-        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(format!("{:<16}", plain(&item.id).replace('_', " "))), Span::from(plain(&item.detail)).fg(c(SUBTEXT0))]));
+        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(format!("{:<16}", plain(&item.id).replace('_', " "))), Span::from(plain(&item.detail)).style(theme::label())]));
         if !item.ok && matches!(item.id.as_str(), "freeze" | "blocked" | "stack") {
             lines.push(muted(format!("    the machine keeps waiting and goes on when it ends: {}", plain(&item.detail))));
         }
     }
     lines.push(Line::from(vec![
-        Span::from("Merge      ").fg(c(SUBTEXT0)),
+        Span::from("Merge      ").style(theme::label()),
         Span::from(if ship.auto_merge.allowed { format!("✓ the machine will merge: {}", plain(&ship.auto_merge.reason)) } else { format!("a person merges, or the machine waits: {}", plain(&ship.auto_merge.reason)) }).fg(c(if ship.auto_merge.allowed { GREEN } else { YELLOW })),
     ]));
     let review = match (ship.review.required, ship.review.by.as_deref()) {
@@ -1745,7 +1778,7 @@ pub(crate) fn ship_lines(ship: &crate::model::ShipView, now: u64) -> Vec<Line<'s
         (Some(false), _) => "not required here: the machine never merges without one".to_string(),
         (None, _) => "unreadable: a person merges".to_string(),
     };
-    lines.push(Line::from(vec![Span::from("Review     ").fg(c(SUBTEXT0)), Span::from(review)]));
+    lines.push(Line::from(vec![Span::from("Review     ").style(theme::label()), Span::from(review)]));
     let mut clocks = vec![format!("{} fix round{}", ship.fix_rounds, if ship.fix_rounds == 1 { "" } else { "s" })];
     if ship.queued {
         clocks.push("in the merge queue".to_string());
@@ -1757,7 +1790,7 @@ pub(crate) fn ship_lines(ship: &crate::model::ShipView, now: u64) -> Vec<Line<'s
     if let Some(event) = &ship.last_event {
         clocks.push(format!("last event: {}", plain(&event.class).replace('_', " ")));
     }
-    lines.push(Line::from(vec![Span::from("Clocks     ").fg(c(SUBTEXT0)), Span::from(clocks.join(" · "))]));
+    lines.push(Line::from(vec![Span::from("Clocks     ").style(theme::label()), Span::from(clocks.join(" · "))]));
     lines.push(muted("  a reminder after two quiet days, the release owners named after five; neither merges or archives".to_string()));
     lines.push(muted("  :dismiss <finding id> [reason] · :finding <blocker|should_fix|nit> <title>".to_string()));
     lines
@@ -1781,8 +1814,8 @@ fn pr_lines(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], now: 
                     .and_then(|d| d.latest_approval("awaiting_ship"))
                     .is_some_and(|a| a.requested["reused"].as_bool().unwrap_or(false));
                 lines.push(Line::from(vec![
-                    Span::from(if reused { "PR (already open)  " } else { "PR opened  " }).fg(c(SUBTEXT0)),
-                    Span::from(url).fg(c(ACCENT)),
+                    Span::from(if reused { "PR (already open)  " } else { "PR opened  " }).style(theme::label()),
+                    Span::from(url).style(theme::border_focus()),
                 ]));
                 lines.push(muted("  not in your inbox: o opens it in the browser".into()));
             }
@@ -1803,12 +1836,12 @@ pub fn pr_widget(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
         _ => SUBTEXT0,
     };
     let mut lines = vec![
-        Line::from(vec![Span::from(format!("{}  ", pr.key())).fg(c(SUBTEXT0)), Span::from(crate::model::plain(&pr.title, 400)).bold()]),
+        Line::from(vec![Span::from(format!("{}  ", pr.key())).style(theme::label()), Span::from(crate::model::plain(&pr.title, 400)).bold()]),
         muted(format!("@{} · {} → {}{} · {} ago", pr.author, pr.head_ref, pr.base_ref, if pr.from_fork { " (fork)" } else { "" }, age(&pr.updated_at, now))),
         muted(pr.url.clone()),
         Line::default(),
         Line::from(vec![
-            Span::from("Checks     ").fg(c(SUBTEXT0)),
+            Span::from("Checks     ").style(theme::label()),
             Span::from(match pr.checks.state.as_str() {
                 "none" => "no checks".to_string(),
                 "failure" => format!("✗ {} of {} failed", pr.checks.failed.len().max(1), pr.checks.total),
@@ -1835,13 +1868,13 @@ pub fn pr_widget(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
     if pr.unresolved_threads > 0 {
         review.push_str(&format!(" · {} unresolved thread{}", pr.unresolved_threads, if pr.unresolved_threads == 1 { "" } else { "s" }));
     }
-    lines.push(Line::from(vec![Span::from("Review     ").fg(c(SUBTEXT0)), Span::from(review).fg(c(crate::ui::LAVENDER))]));
+    lines.push(Line::from(vec![Span::from("Review     ").style(theme::label()), Span::from(review).fg(c(crate::ui::LAVENDER))]));
     match (&pr.task, pr.local_path.is_some()) {
         (Some(task), _) => lines.push(Line::from(vec![
-            Span::from("Task       ").fg(c(SUBTEXT0)),
-            Span::from(format!("⚙ {} · {} · #{}", task.route.replace('_', " "), task.state.replace('_', " "), crate::model::short_id(&task.id))).fg(c(YELLOW)),
+            Span::from("Task       ").style(theme::label()),
+            Span::from(format!("⚙ {} · {} · #{}", task.route.replace('_', " "), task.state.replace('_', " "), crate::model::short_id(&task.id))).style(theme::working()),
         ])),
-        (None, false) => lines.push(Line::from(vec![Span::from("Checkout   ").fg(c(SUBTEXT0)), Span::from("none on this machine · a dispatch asks where to clone").fg(c(SUBTEXT0))])),
+        (None, false) => lines.push(Line::from(vec![Span::from("Checkout   ").style(theme::label()), Span::from("none on this machine · a dispatch asks where to clone").style(theme::label())])),
         _ => {}
     }
     lines
@@ -1852,7 +1885,7 @@ fn activity_lines(detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
     let Some(d) = detail else {
         return vec![heading("Activity"), Line::default(), muted("  loading…".into())];
     };
-    let mut lines = vec![Line::from(vec![Span::from("Activity").fg(c(ACCENT)).bold(), Span::from(format!(" · {}", d.events.len())).fg(c(SUBTEXT0))]), Line::default()];
+    let mut lines = vec![Line::from(vec![Span::from("Activity").style(theme::heading()), Span::from(format!(" · {}", d.events.len())).style(theme::label())]), Line::default()];
     if d.events.is_empty() {
         lines.push(muted("  nothing yet".into()));
     }
