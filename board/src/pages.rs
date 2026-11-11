@@ -497,7 +497,11 @@ pub(crate) fn result_page(task: &Task, detail: Option<&TaskDetail>, prs: &[PullR
         main.push(Line::from(vec![Span::styled(format!("{:<11}", "PR"), theme::label()), Span::raw(plain(&pr))]));
     }
     if !d.artifacts.is_empty() {
-        main.push(Line::from(vec![Span::styled(format!("{:<11}", "Evidence"), theme::label()), Span::raw(format!("{} file{}", d.artifacts.len(), if d.artifacts.len() == 1 { "" } else { "s" }))]));
+        let mut line = vec![Span::styled(format!("{:<11}", "Evidence"), theme::label()), Span::raw(format!("{} file{}", d.artifacts.len(), if d.artifacts.len() == 1 { "" } else { "s" }))];
+        if crate::open::opener().is_some() {
+            line.push(Span::styled(" · o opens the folder", theme::label()));
+        }
+        main.push(Line::from(line));
     }
     if let Some(ship) = d.ship.as_ref().filter(|s| !s.checklist.is_empty()) {
         main.extend([Line::default(), title("Ship checklist")]);

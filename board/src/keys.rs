@@ -280,6 +280,40 @@ pub(crate) fn rejectable(app: &App, task: &Task) -> bool {
     (task.state == "awaiting_approval" && app.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome()).is_none_or(|o| matches!(o, "split" | "split_failed"))) || open_ship_approval(app, task)
 }
 
+/// `o` in the task view: the evidence folder, the selected file (Diff), the PR (PR) or the linked issue, by section.
+fn open_key(app: &App) -> Avail {
+    if crate::open::opener().is_none() {
+        return Avail::Off("no opener on this system");
+    }
+    if app.detail_section == Section::Evidence && app.detail_rows() == 0 {
+        return Avail::Off("no evidence yet");
+    }
+    with_task(app, |_| Avail::On)
+}
+
+/// `O`: the PR in the browser, from any section.
+fn open_pr_key(app: &App) -> Avail {
+    if crate::open::opener().is_none() {
+        return Avail::Off("no opener on this system");
+    }
+    match app.detail_pr_url() {
+        Some(_) => Avail::On,
+        None => Avail::Off("no PR yet"),
+    }
+}
+
+/// `enter` opens the file under the cursor in the Evidence section; in the others it closes the view, which is no offer.
+fn enter_key(app: &App) -> Avail {
+    if crate::open::opener().is_none() {
+        return Avail::Off("no opener on this system");
+    }
+    match app.detail_rows() {
+        _ if app.detail_section != Section::Evidence => Avail::Off("only in the Evidence section"),
+        0 => Avail::Off("no evidence yet"),
+        _ => Avail::On,
+    }
+}
+
 fn with_task(app: &App, f: fn(&Task) -> Avail) -> Avail {
     match task_of(app) {
         Some(task) => f(task),
@@ -659,7 +693,9 @@ const BOARD: &[Binding] = &[
 const DETAIL: &[Binding] = &[
     SHIP,
     b("e", "edit: the plan, the cases or the ticket", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 80),
-    b("o", "open: the file, the PR or the issue", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 50),
+    b("o", "open: the folder, file, PR or issue", Group::Ticket, Scope::Detail, open_key, 50),
+    b("O", "open the PR in the browser", Group::Ticket, Scope::Detail, open_pr_key, 38),
+    b("enter", "open the file here; close elsewhere", Group::Ticket, Scope::Detail, enter_key, 41),
     b("y", "Evidence Pack was useful", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.evidence.is_some() { Avail::On } else { Avail::Off("no Evidence Pack yet") }), 40),
     b("n", "Evidence Pack was not useful (note)", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.evidence.is_some() { Avail::On } else { Avail::Off("no Evidence Pack yet") }), 39),
     b(
@@ -699,7 +735,7 @@ const DETAIL: &[Binding] = &[
     b("ctrl+d / ctrl+u", "half a page", Group::Move, Scope::Detail, on, 10),
     b("+", "popup: most of the screen, or all", Group::Move, Scope::Detail, on, 26),
     b(":", "command palette: acts on this ticket", Group::App, Scope::Detail, on, 9),
-    b("esc / q / enter", "close; esc leaves the reference first", Group::Move, Scope::Detail, on, 27),
+    b("esc / q", "close; esc leaves the reference first", Group::Move, Scope::Detail, on, 27),
     cmd(b("?", "keys", Group::App, Scope::Detail, on, 100), "help"),
 ];
 
@@ -1023,6 +1059,7 @@ fn detail_offered(app: &App, b: &Binding) -> bool {
     match b.first() {
         "e" => task_of(app).is_some_and(at_gate),
         "J" => app.detail_section.has_cursor(),
+        "enter" => app.detail_section == Section::Evidence,
         _ => true,
     }
 }
@@ -1070,6 +1107,8 @@ pub fn terse_label(app: &App, b: &Binding) -> String {
         "M" => return "duplicate".into(),
         "U" => return "restore".into(),
         "E" => return "engine".into(),
+        "O" => return "PR".into(),
+        "enter" => return "open file".into(),
         "A" => return "skip rules".into(),
         "T" => return "correct record".into(),
         "f" => return "watch".into(),
@@ -1124,7 +1163,7 @@ pub fn card_action_help(app: &App) -> Vec<(String, String)> {
 /// lists them crowds out scrolling. `?` and `esc` are not here: `ui` ends the footer with them,
 /// whatever the width.
 pub fn detail_footer(app: &App) -> Vec<(String, String)> {
-    terse_pairs(app, detail_keys(app).into_iter().filter(|b| acts_on_card(b) || b.group == Group::Move || matches!(b.first(), "o" | ":")))
+    terse_pairs(app, detail_keys(app).into_iter().filter(|b| acts_on_card(b) || b.group == Group::Move || matches!(b.first(), "o" | "O" | "enter" | ":")))
 }
 
 /// Bindings of every scope whose keys, label or command contain `query`, case-insensitively.

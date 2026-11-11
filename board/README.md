@@ -237,7 +237,7 @@ While a gate is open, its strip sits on top of every section with the keys that 
 | Tests | test_design's cases under the criterion each proves, with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
 | Runs | every stage run with how long it took, its cost and turns. The selected run's error, per-case verdicts and files. It opens on the latest run | `j`/`k` pick a run, `J`/`K` scroll |
 | Diff | the branch against its base: files with +/−, the selected file's patch. The machine sends at most 512 KB of it. The pane says when it cut | `j`/`k` pick a file, `J`/`K` scroll the patch, `o` opens the file from the worktree |
-| Evidence | the QA verdict and every artifact the stages produced, by kind; opens on the latest | `j`/`k` pick a file, `J`/`K` scroll, `o` opens it |
+| Evidence | every artifact the stages produced, by run, under the folder they live in; then the QA verdict. Opens on the latest | `j`/`k` pick a file, `J`/`K` scroll, `enter` opens the file, `o` the folder, `O` the PR; a click selects a row, a second click opens it, a click on `Folder` opens the folder |
 | PR | the branch's pull request as the Pulls inbox sees it: checks by name, review state, threads, the task in flight. Or the URL the ship gate reported | `o` opens it, `S` ships at the gate |
 | Activity | every event | |
 | Engines | each stage the ticket runs (from `GET /packs`), the engine it is set to (yours, else `default: <engine>`) and the one it ran on. The bottom line names the running stage's (`implementing on codex:sol`). A machine from before engines says it offers none | `j`/`k` pick a stage. `E` picks its engine: the default, or one the stage allows. An engine with no credential on this machine is dim and shows what is missing. You cannot pick it. A stage that already ran keeps its engine |
@@ -270,7 +270,9 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 | `f` | open or focus the agent's watch tab |
 | `R` | set the repo (search) |
 | `e` | edit: the plan, the cases or the ticket |
-| `o` | open: the file, the PR or the issue |
+| `o` | open: the folder, file, PR or issue |
+| `O` | open the PR in the browser |
+| `enter` | open the file here; close elsewhere |
 | `y` | Evidence Pack was useful |
 | `n` | Evidence Pack was not useful (note) |
 | `E` | pick the selected stage's engine |
@@ -289,7 +291,7 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 | `J / K` | scroll a line where j / k pick |
 | `ctrl+d / ctrl+u` | half a page |
 | `+` | popup: most of the screen, or all |
-| `esc / q / enter` | close; esc leaves the reference first |
+| `esc / q` | close; esc leaves the reference first |
 
 **App**
 

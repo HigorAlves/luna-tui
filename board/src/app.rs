@@ -3,6 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    path::{Path, PathBuf},
     process::Command,
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -17,7 +18,7 @@ use tui_textarea::TextArea;
 
 use std::collections::BTreeSet;
 
-use crate::detail::Section;
+use crate::detail::{EvidenceHit, Section};
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::keys::{self, Scope};
@@ -41,25 +42,17 @@ use crate::{
     vim::Vim,
 };
 
+/// Two clicks on one file row within this long open it.
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
 /// How long a prefix key (`g`, `z`) waits before the footer lists its second keys.
 pub const WHICH_KEY_DELAY: Duration = Duration::from_millis(400);
-/// The platform's "open this URL" program and its arguments.
 /// The PATCH body of a done tap: `done: true`, and the reason a draft was dismissed when there is one.
 fn dismiss_patch(reason: Option<&str>) -> serde_json::Value {
     match reason {
         Some(reason) => serde_json::json!({ "done": true, "reason": reason }),
         None => serde_json::json!({ "done": true }),
     }
-}
-
-fn opener_command(url: &str) -> (&'static str, Vec<String>) {
-    let program = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    (program, vec![url.to_string()])
 }
 
 /// The local zone's seconds east of UTC, from `date +%z` (`+0100` → 3600); 0 when it cannot
@@ -430,6 +423,14 @@ pub enum Outcome {
     Quit,
 }
 
+/// What `o` opens in the task view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenTarget {
+    Url(String),
+    Path { path: String, what: String },
+    EvidenceFolder,
+}
+
 pub struct Toast {
     pub text: String,
     pub error: bool,
@@ -519,6 +520,12 @@ pub struct App {
     pub home_repo: Option<String>,
     /// Column rectangles from the last frame, for mouse clicks.
     pub column_rects: RefCell<Vec<(usize, Rect)>>,
+    /// The Evidence section's folder line and file rows from the last frame, for mouse clicks.
+    pub evidence_hits: RefCell<Vec<(Rect, EvidenceHit)>>,
+    /// The file row last clicked and when, for the double click that opens it.
+    last_click: Option<(usize, Instant)>,
+    /// What starts the platform's opener; tests record the call instead of spawning.
+    pub(crate) launch: crate::open::Launcher,
     /// How far the open ticket's detail popup is scrolled. `ui` clamps it to the content's
     /// actual height, which only it knows (it depends on the terminal width).
     pub detail_scroll: Cell<u16>,
@@ -616,6 +623,9 @@ impl App {
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
+            evidence_hits: RefCell::new(Vec::new()),
+            last_click: None,
+            launch: Box::new(crate::open::spawn_detached),
             detail_scroll: Cell::new(0),
             detail_viewport: Cell::new(0),
             detail_follow: Cell::new(false),
@@ -1493,6 +1503,9 @@ impl App {
 
     /// Clicking a card focuses its column and selects it. Ignores list scrolling.
     pub fn click(&mut self, x: u16, y: u16) {
+        if matches!(self.mode, Mode::Detail(_)) {
+            return self.click_detail(x, y);
+        }
         if !matches!(self.mode, Mode::Normal) {
             return;
         }
@@ -1793,13 +1806,7 @@ impl App {
             'd' => self.mode = Mode::ConfirmDelete(id.to_string()),
             'f' => self.watch(&task),
             'o' => match task.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| task.jira.as_ref().map(|j| j.url.clone())) {
-                Some(url) => {
-                    let (program, args) = opener_command(&url);
-                    // Detached: spawn and move on, never wait on the browser.
-                    if Command::new(program).args(args).spawn().is_err() {
-                        self.notify(format!("could not open {url}"), true);
-                    }
-                }
+                Some(url) => self.open_url(&url),
                 None => self.notify("no issue linked", false),
             },
             'J' => match task.jira_key() {
@@ -2265,12 +2272,7 @@ impl App {
             .and_then(|d| d.approvals.iter().find_map(|a| a.requested["prUrl"].as_str().map(String::from)));
         let issue = self.task(id).and_then(|t| t.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| t.jira.as_ref().map(|j| j.url.clone())));
         match pr.or(issue) {
-            Some(url) => {
-                let (program, args) = opener_command(&url);
-                if Command::new(program).args(args).spawn().is_err() {
-                    self.notify(format!("could not open {url}"), true);
-                }
-            }
+            Some(url) => self.open_url(&url),
             None => self.notify("no PR or issue linked to this ticket yet", false),
         }
     }
@@ -2749,11 +2751,23 @@ impl App {
         }
     }
 
-    /// Opens a URL in the browser, detached; says so when it cannot.
+    /// Opens a link in the browser through `open`, which refuses anything but a plain https link; says so when it cannot.
     fn open_url(&mut self, url: &str) {
-        let (program, args) = opener_command(url);
-        if Command::new(program).args(args).spawn().is_err() {
-            self.notify(format!("could not open {url}"), true);
+        if let Err(why) = crate::open::open_url_with(&mut *self.launch, url) {
+            self.notify(why, true);
+        }
+    }
+
+    /// Opens a file or folder; `what` is what the toast says it opened. The card's roots are the machine's state folder and
+    /// the repository and worktree of the card (`open::open_path` refuses anything that resolves outside them).
+    fn open_file(&mut self, id: &str, path: &str, what: &str) {
+        let mut roots: Vec<PathBuf> = crate::open::state_dir().into_iter().collect();
+        if let Some(task) = self.task(id) {
+            roots.extend(task.repo_path.iter().chain(task.worktree_path.iter()).map(PathBuf::from));
+        }
+        match crate::open::open_path_with(&mut *self.launch, Path::new(path), &roots) {
+            Ok(()) => self.notify(format!("opened {what}"), false),
+            Err(why) => self.notify(why, true),
         }
     }
 
@@ -3677,7 +3691,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "tab", "space", "1-9", "+", "?", ":", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "tab", "space", "1-9", "+", "?", ":", "o", "O", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3707,6 +3721,7 @@ impl App {
 
     fn handle_detail_main(&mut self, key: KeyEvent, id: &str, half_page: i16) -> Outcome {
         match key.code {
+            KeyCode::Enter if self.detail_section == Section::Evidence && self.detail_rows() > 0 => self.open_artifact(id, self.detail_row()),
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Tab => {
                 self.detail_refs.flip_focus();
@@ -3732,9 +3747,14 @@ impl App {
                 self.open_help();
             }
             KeyCode::Char('o') => match self.detail_open_target() {
-                Some(target) => self.open_url(&target),
+                Some(target) => self.open_target(id, target),
+                None if self.detail_section == Section::Evidence => self.notify("no evidence yet", false),
                 None if self.detail_section.has_cursor() => self.notify("nothing to open here", false),
                 None => return self.ticket_key('o', id),
+            },
+            KeyCode::Char('O') => match self.detail_pr_url() {
+                Some(url) => self.open_target(id, OpenTarget::Url(url)),
+                None => self.notify("no PR yet", false),
             },
             KeyCode::Char('E') => self.open_engine_picker(id),
             KeyCode::Char(':') => self.open_card_command(id, ""),
@@ -3859,7 +3879,7 @@ impl App {
     }
 
     /// How many rows the open section's cursor can land on.
-    fn detail_rows(&self) -> usize {
+    pub(crate) fn detail_rows(&self) -> usize {
         let detail = self.open_detail_of();
         match self.detail_section {
             Section::Runs => detail.map_or(0, |d| d.stage_runs.len()),
@@ -3870,10 +3890,10 @@ impl App {
         }
     }
 
-    /// What `o` opens in the popup, by section: the selected file inside the worktree (Diff),
-    /// the selected artifact (Evidence), the PR's URL from the inbox or the ship gate (PR).
-    /// `None` elsewhere: `o` then means what it means on the board, the linked issue.
-    pub fn detail_open_target(&self) -> Option<String> {
+    /// What `o` opens in the popup, by section: the selected file inside the worktree (Diff), the evidence folder (Evidence, and
+    /// every other section of a card that has artifacts), the PR's URL (PR). `None` elsewhere: `o` then means what it means on
+    /// the board, the linked issue.
+    pub fn detail_open_target(&self) -> Option<OpenTarget> {
         let Mode::Detail(id) = &self.mode else { return None };
         let task = self.task(id)?;
         match self.detail_section {
@@ -3881,13 +3901,76 @@ impl App {
                 let (_, diff) = self.diff.as_ref().filter(|(for_id, _)| for_id == id)?;
                 let file = diff.files.get(self.detail_row())?;
                 let root = task.worktree_path.as_deref()?;
-                Some(format!("{}/{}", root.trim_end_matches('/'), file.path))
+                Some(OpenTarget::Path { path: format!("{}/{}", root.trim_end_matches('/'), file.path), what: crate::model::plain(&file.path, 80) })
             }
-            Section::Evidence => self.open_detail_of()?.artifacts.get(self.detail_row()).map(|a| a.path.clone()),
-            Section::Pr => crate::detail::pr_for(task, &self.prs.prs)
-                .map(|pr| pr.url.clone())
-                .or_else(|| self.open_detail_of().and_then(|d| d.latest_approval("awaiting_ship")).and_then(|a| a.requested["prUrl"].as_str().map(str::to_string))),
+            Section::Pr => self.detail_pr_url().map(OpenTarget::Url),
+            _ if self.open_detail_of().is_some_and(|d| !d.artifacts.is_empty()) => Some(OpenTarget::EvidenceFolder),
             _ => None,
+        }
+    }
+
+    /// The open card's PR: the inbox's row for its branch, else what the ship gate reported.
+    pub fn detail_pr_url(&self) -> Option<String> {
+        let Mode::Detail(id) = &self.mode else { return None };
+        let task = self.task(id)?;
+        let detail = self.open_detail_of();
+        crate::detail::pr_for(task, &self.prs.prs)
+            .map(|pr| pr.url.clone())
+            .or_else(|| detail.and_then(crate::detail::pr_url))
+            .or_else(|| detail.and_then(|d| d.ship.as_ref()).filter(|s| s.pr.number > 0).map(|s| s.pr.url.clone()))
+    }
+
+    /// Opens what `o` or `O` named, and says in fixed words what it did.
+    fn open_target(&mut self, id: &str, target: OpenTarget) {
+        match target {
+            OpenTarget::Url(url) => match crate::open::open_url_with(&mut *self.launch, &url) {
+                Ok(()) => self.notify("opened the PR", false),
+                Err(why) => self.notify(why, true),
+            },
+            OpenTarget::Path { path, what } => self.open_file(id, &path, &what),
+            OpenTarget::EvidenceFolder => self.open_evidence_folder(id),
+        }
+    }
+
+    /// Opens the folder the evidence lives in: the cursor's run's while the Evidence section is open, else the latest run's.
+    fn open_evidence_folder(&mut self, id: &str) {
+        let focus = (self.detail_section == Section::Evidence).then(|| self.detail_row());
+        let Some(detail) = self.open_detail_of() else { return };
+        match crate::detail::evidence_folder(detail, focus) {
+            Some(folder) => self.open_file(id, &folder.to_string_lossy(), "the evidence folder"),
+            None if detail.artifacts.is_empty() => self.notify("no evidence yet", false),
+            None => self.notify("the evidence files share no folder", false),
+        }
+    }
+
+    /// Opens artifact `index` (a place in `ordered_artifacts`).
+    fn open_artifact(&mut self, id: &str, index: usize) {
+        let Some(detail) = self.open_detail_of() else { return };
+        let Some(artifact) = crate::detail::ordered_artifacts(detail).get(index).map(|a| (a.path.clone(), a.label.clone())) else { return };
+        let what = if artifact.1.trim().is_empty() { "the file".to_string() } else { crate::model::plain(&artifact.1, 80) };
+        self.open_file(id, &artifact.0, &what);
+    }
+
+    /// A left click in the task view: on a file row of the Evidence section it moves the cursor there, and a second click on the same
+    /// row within half a second opens it; on the `Folder` line it opens the folder. Anywhere else it does nothing.
+    fn click_detail(&mut self, x: u16, y: u16) {
+        let Mode::Detail(id) = &self.mode else { return };
+        let id = id.clone();
+        let hit = self.evidence_hits.borrow().iter().find(|(rect, _)| x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()).map(|(_, hit)| *hit);
+        match hit {
+            Some(EvidenceHit::Folder) => self.open_evidence_folder(&id),
+            Some(EvidenceHit::File(i)) => {
+                let again = self.last_click.is_some_and(|(row, at)| row == i && at.elapsed() <= DOUBLE_CLICK);
+                self.detail_cursor = i;
+                self.detail_follow.set(true);
+                if again {
+                    self.last_click = None;
+                    self.open_artifact(&id, i);
+                } else {
+                    self.last_click = Some((i, Instant::now()));
+                }
+            }
+            None => self.last_click = None,
         }
     }
 
@@ -4796,17 +4879,6 @@ mod tests {
 
         app.handle_key(KeyEvent::new(KeyCode::Char('s'), ratatui::crossterm::event::KeyModifiers::CONTROL));
         assert!(matches!(app.mode, Mode::Normal));
-    }
-
-    #[test]
-    fn opener_command_uses_open_on_macos_and_xdg_open_elsewhere() {
-        let (program, args) = opener_command("https://github.com/acme/app/issues/42");
-        if cfg!(target_os = "macos") {
-            assert_eq!(program, "open");
-        } else {
-            assert_eq!(program, "xdg-open");
-        }
-        assert_eq!(args, vec!["https://github.com/acme/app/issues/42".to_string()]);
     }
 
     #[test]
@@ -6606,21 +6678,21 @@ mod workspace_key_tests {
     }
 
     #[test]
-    fn o_targets_the_selected_file_the_artifact_or_the_pr_by_section() {
+    fn o_targets_the_selected_file_the_evidence_folder_or_the_pr_by_section() {
         let mut app = open("implementing");
-        assert_eq!(app.detail_open_target(), None, "Overview falls through to the linked issue");
+        assert_eq!(app.detail_open_target(), None, "Overview with no artifacts falls through to the linked issue");
         press(&mut app, KeyCode::Char('5'));
         app.diff = Some(("abcdef123456".into(), files()));
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.detail_open_target().as_deref(), Some("/w/b.rs"), "the selected file inside the worktree");
+        assert_eq!(app.detail_open_target(), Some(OpenTarget::Path { path: "/w/b.rs".into(), what: "b.rs".into() }), "the selected file inside the worktree");
         press(&mut app, KeyCode::Char('6'));
         let mut detail = detail_with_runs(&app.tasks[0], 1);
         detail.artifacts = serde_json::from_str(r#"[{"id":"a1","stageRunId":"r1","kind":"log","path":"/out/files/verify.log","label":"verify","sha256":"x","createdAt":"2026-10-22T10:11:00Z"}]"#).unwrap();
         detail.approvals = serde_json::from_str(r#"[{"id":"s1","kind":"awaiting_ship","requested":{"prUrl":"https://github.com/acme/app/pull/9"},"decision":null,"reason":null,"createdAt":"2026-10-22T10:11:00Z","decidedAt":null}]"#).unwrap();
         app.detail = Some(detail);
-        assert_eq!(app.detail_open_target().as_deref(), Some("/out/files/verify.log"));
+        assert_eq!(app.detail_open_target(), Some(OpenTarget::EvidenceFolder), "Evidence: the folder, the file is enter's");
         app.set_section(Section::Pr);
-        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/9"), "the ship gate's URL when the inbox has no row");
+        assert_eq!(app.detail_open_target(), Some(OpenTarget::Url("https://github.com/acme/app/pull/9".into())), "the ship gate's URL when the inbox has no row");
         let mut pr: PullRequest = serde_json::from_str(
             r#"{"repo":"acme/app","number":412,"title":"t","url":"https://github.com/acme/app/pull/412","author":"me","mine":true,"reviewRequested":false,
             "isDraft":false,"headRef":"task/abcdef12","baseRef":"main","fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE",
@@ -6629,7 +6701,7 @@ mod workspace_key_tests {
         .unwrap();
         pr.head_ref = "task/abcdef12".into();
         app.prs.prs.push(pr);
-        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/412"), "the inbox's PR first");
+        assert_eq!(app.detail_open_target(), Some(OpenTarget::Url("https://github.com/acme/app/pull/412".into())), "the inbox's PR first");
     }
 
     #[test]
@@ -7644,5 +7716,253 @@ mod confirm_tests {
         let mut app = plan_gate_app();
         app.mode = Mode::Normal;
         assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Char('Q'))), Outcome::Quit));
+    }
+}
+
+#[cfg(test)]
+mod evidence_open_tests {
+    use std::{ffi::OsString, fs, rc::Rc};
+
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+    use super::*;
+    use crate::{
+        keys::{self, Avail, Scope},
+        testkit::{open_card, render, ship_stage_app, task_json},
+    };
+
+    type Calls = Rc<RefCell<Vec<(String, OsString)>>>;
+
+    /// The ship-stage card with its three artifacts in real files under a fresh folder that is the card's worktree,
+    /// and an opener that records its calls. Runs: verifying (r1) wrote `verify.log`, evidence (r2) the other two.
+    fn card(name: &str) -> (App, PathBuf, Calls) {
+        let root = std::env::temp_dir().join(format!("board-evidence-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut app = ship_stage_app();
+        let paths = [("r2", "runs/r2/files/limit-429.png"), ("r1", "runs/r1/files/verify.log"), ("r2", "runs/r2/files/evidence.md")];
+        for (artifact, (_, rel)) in app.detail.as_mut().unwrap().artifacts.iter_mut().zip(paths) {
+            let path = root.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"x").unwrap();
+            artifact.path = path.to_string_lossy().into_owned();
+        }
+        app.tasks[0].worktree_path = Some(root.to_string_lossy().into_owned());
+        let calls: Calls = Rc::default();
+        let log = calls.clone();
+        app.launch = Box::new(move |program, target| {
+            log.borrow_mut().push((program.to_string(), target.to_os_string()));
+            Ok(())
+        });
+        (app, root, calls)
+    }
+
+    fn press(app: &mut App, c: char) {
+        app.handle_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    fn launched(calls: &Calls) -> Vec<OsString> {
+        calls.borrow().iter().map(|(_, target)| target.clone()).collect()
+    }
+
+    fn canon(path: &Path) -> OsString {
+        fs::canonicalize(path).unwrap().into_os_string()
+    }
+
+    #[test]
+    fn o_opens_the_evidence_folder_from_any_section_of_a_card_that_has_files() {
+        let (mut app, root, calls) = card("o-anywhere");
+        assert_eq!(app.detail_section, Section::Result);
+        press(&mut app, 'o');
+        assert_eq!(launched(&calls), vec![canon(&root.join("runs/r2/files"))], "the latest run's folder: the runs wrote to different ones");
+        assert_eq!(toast(&app), "opened the evidence folder");
+        assert!(!app.toast.as_ref().unwrap().error);
+    }
+
+    #[test]
+    fn in_the_evidence_section_o_opens_the_folder_of_the_run_under_the_cursor_and_enter_the_file() {
+        let (mut app, root, calls) = card("o-enter");
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 0;
+        assert_eq!(crate::detail::ordered_artifacts(app.detail.as_ref().unwrap())[0].label, "verify", "listed by run: verifying first");
+        press(&mut app, 'o');
+        assert_eq!(launched(&calls), vec![canon(&root.join("runs/r1/files"))]);
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(launched(&calls)[1], canon(&root.join("runs/r1/files/verify.log")));
+        assert_eq!(toast(&app), "opened verify");
+        assert!(matches!(app.mode, Mode::Detail(_)), "enter opened the file and did not close the view");
+        app.detail_cursor = 2;
+        press(&mut app, 'o');
+        assert_eq!(launched(&calls)[2], canon(&root.join("runs/r2/files")));
+    }
+
+    #[test]
+    fn enter_in_the_other_sections_still_closes_the_view() {
+        let (mut app, _, calls) = card("enter-closes");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(launched(&calls).is_empty());
+    }
+
+    #[test]
+    fn capital_o_opens_the_pr_and_says_so_when_there_is_none() {
+        let (mut app, _, calls) = card("pr");
+        press(&mut app, 'O');
+        assert_eq!(launched(&calls), vec![OsString::from("https://github.com/acme/app/pull/412")]);
+        assert_eq!(toast(&app), "opened the PR");
+        let (mut bare, _, calls) = card("no-pr");
+        bare.detail.as_mut().unwrap().ship = None;
+        press(&mut bare, 'O');
+        assert!(launched(&calls).is_empty());
+        assert_eq!(toast(&bare), "no PR yet");
+    }
+
+    #[test]
+    fn a_file_that_resolves_outside_the_card_is_refused_in_fixed_words() {
+        let (mut app, root, calls) = card("outside");
+        let stray = root.parent().unwrap().join(format!("board-evidence-stray-{}.txt", std::process::id()));
+        fs::write(&stray, b"secret").unwrap();
+        app.detail.as_mut().unwrap().artifacts[0].path = stray.to_string_lossy().into_owned();
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 1;
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let said = toast(&app);
+        let _ = fs::remove_file(&stray);
+        assert!(launched(&calls).is_empty());
+        assert_eq!(said, crate::open::REFUSE_OUTSIDE);
+        assert!(app.toast.as_ref().unwrap().error);
+    }
+
+    #[test]
+    fn a_missing_file_is_refused_and_a_card_without_files_says_so() {
+        let (mut app, root, calls) = card("gone");
+        fs::remove_dir_all(root.join("runs/r1")).unwrap();
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 0;
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(toast(&app), crate::open::REFUSE_MISSING);
+        let mut bare = open_card(task_json("bbbbbbbb2222", "Bare", "implementing", "Build", serde_json::json!({})), serde_json::json!({}));
+        bare.set_section(Section::Evidence);
+        press(&mut bare, 'o');
+        assert_eq!(toast(&bare), "no evidence yet");
+        assert!(launched(&calls).is_empty());
+    }
+
+    #[test]
+    fn the_registry_gives_each_key_its_reason() {
+        let reason = |app: &App, key: &str| keys::bindings_for(app, Scope::Detail).into_iter().find(|(b, _)| b.first() == key).map(|(_, a)| a).unwrap();
+        let (mut app, _, _) = card("avail");
+        assert_eq!(reason(&app, "O"), Avail::On);
+        assert_eq!(reason(&app, "o"), Avail::On);
+        assert_eq!(reason(&app, "enter"), Avail::Off("only in the Evidence section"));
+        app.set_section(Section::Evidence);
+        assert_eq!(reason(&app, "enter"), Avail::On);
+        app.detail.as_mut().unwrap().artifacts.clear();
+        app.detail.as_mut().unwrap().ship = None;
+        assert_eq!(reason(&app, "enter"), Avail::Off("no evidence yet"));
+        assert_eq!(reason(&app, "o"), Avail::Off("no evidence yet"));
+        assert_eq!(reason(&app, "O"), Avail::Off("no PR yet"));
+        let footer = |app: &App| keys::detail_footer(app).into_iter().map(|(k, l)| format!("{k} {l}")).collect::<Vec<_>>();
+        let (mut app, _, _) = card("footer");
+        assert!(footer(&app).contains(&"o open".to_string()), "{:?}", footer(&app));
+        assert!(footer(&app).contains(&"O PR".to_string()), "{:?}", footer(&app));
+        app.set_section(Section::Evidence);
+        assert!(footer(&app).contains(&"enter open file".to_string()), "{:?}", footer(&app));
+    }
+
+    /// The card on the Evidence section, drawn once so the rows have rectangles.
+    fn drawn(name: &str) -> (App, PathBuf, Calls) {
+        let (mut app, root, calls) = card(name);
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 0;
+        render(&mut app, 140, 40);
+        (app, root, calls)
+    }
+
+    fn rect_of(app: &App, hit: crate::detail::EvidenceHit) -> Rect {
+        app.evidence_hits.borrow().iter().find(|(_, h)| *h == hit).map(|(r, _)| *r).unwrap_or_else(|| panic!("no rectangle for {hit:?}: {:?}", app.evidence_hits.borrow()))
+    }
+
+    #[test]
+    fn a_click_selects_a_file_row_and_a_second_click_within_half_a_second_opens_it() {
+        use crate::detail::EvidenceHit::File;
+        let (mut app, root, calls) = drawn("click");
+        assert_eq!(app.evidence_hits.borrow().len(), 4, "the folder line and three rows");
+        let row = rect_of(&app, File(2));
+        app.click(row.x + 3, row.y);
+        assert_eq!(app.detail_row(), 2);
+        assert!(launched(&calls).is_empty(), "one click only selects");
+        app.click(row.x + 3, row.y);
+        assert_eq!(launched(&calls), vec![canon(&root.join("runs/r2/files/evidence.md"))]);
+        assert_eq!(toast(&app), "opened evidence pack");
+    }
+
+    #[test]
+    fn a_slow_second_click_or_a_click_on_another_row_only_selects() {
+        use crate::detail::EvidenceHit::File;
+        let (mut app, _, calls) = drawn("slow");
+        let (a, b) = (rect_of(&app, File(1)), rect_of(&app, File(2)));
+        app.click(a.x, a.y);
+        app.last_click = app.last_click.map(|(i, at)| (i, at - Duration::from_millis(600)));
+        app.click(a.x, a.y);
+        app.click(b.x, b.y);
+        assert_eq!(app.detail_row(), 2);
+        assert!(launched(&calls).is_empty());
+    }
+
+    #[test]
+    fn a_click_on_the_folder_line_opens_the_folder_and_a_click_elsewhere_changes_nothing() {
+        use crate::detail::EvidenceHit::Folder;
+        let (mut app, root, calls) = drawn("folder-click");
+        let line = rect_of(&app, Folder);
+        app.click(line.x + 2, line.y);
+        assert_eq!(launched(&calls), vec![canon(&root.join("runs/r1/files"))], "the folder of the run under the cursor");
+        let (cursor, mode_open) = (app.detail_row(), matches!(app.mode, Mode::Detail(_)));
+        app.click(0, 0);
+        app.click(line.x, line.y.saturating_sub(2));
+        assert_eq!((app.detail_row(), matches!(app.mode, Mode::Detail(_)), launched(&calls).len()), (cursor, mode_open, 1));
+    }
+
+    #[test]
+    fn rows_are_found_after_the_pane_scrolls() {
+        use crate::detail::EvidenceHit::File;
+        let (mut app, _, _) = card("scrolled");
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 2;
+        render(&mut app, 100, 22);
+        let hits = app.evidence_hits.borrow().clone();
+        assert!(hits.iter().any(|(_, h)| *h == File(2)), "the cursor's row is on screen and clickable: {hits:?}");
+        assert!(hits.iter().all(|(r, _)| r.y >= 1 && r.height == 1));
+    }
+
+    #[test]
+    fn the_evidence_section_draws_the_folder_and_the_rows_by_run_wide_and_narrow() {
+        for (w, h) in [(180u16, 50u16), (100, 30)] {
+            let mut app = ship_stage_app();
+            app.set_section(Section::Evidence);
+            let screen = render(&mut app, w, h);
+            for needle in ["Folder  /out/files", "verifying · run 1", "evidence · run 1", "log", "verify", "/out/files/verify.log", "screenshot", "429 after the limit", "/out/files/limit-429.png", "report", "evidence pack"] {
+                assert!(screen.contains(needle), "{w}x{h}: {needle} missing in\n{screen}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_hostile_label_or_path_is_neutralised_and_a_long_path_is_cut_in_the_middle() {
+        let mut app = ship_stage_app();
+        let artifacts = &mut app.detail.as_mut().unwrap().artifacts;
+        artifacts[0].label = "shot\u{1b}[2J\r\u{7}\u{202e}x".into();
+        artifacts[0].path = "/out/files/\u{1b}]0;pwned\u{7}/a\u{85}b.png".into();
+        artifacts[2].path = format!("/out/files/{}/deep/er/report.md", "very-long-folder-name/".repeat(12));
+        app.set_section(Section::Evidence);
+        let screen = render(&mut app, 100, 30);
+        for bad in ['\u{1b}', '\r', '\u{7}', '\u{202e}', '\u{85}'] {
+            assert!(!screen.contains(bad), "{bad:?} reached the screen");
+        }
+        assert!(screen.contains("shot [2J"), "{screen}");
+        assert!(screen.contains("report.md") && screen.contains('…'), "the tail of a long path stays: {screen}");
     }
 }

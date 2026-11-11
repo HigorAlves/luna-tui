@@ -2,7 +2,10 @@
 //! left (a tab strip on a narrow terminal), one pane on the right, drawn from everything the
 //! machine knows about the ticket, whether or not a gate was decided. Reads, never changes.
 
-use std::cell::Cell;
+use std::{
+    cell::{Cell, RefCell},
+    path::{Path, PathBuf},
+};
 
 use ratatui::{
     Frame,
@@ -12,7 +15,7 @@ use ratatui::{
     widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap},
 };
 use crate::model::{
-    Approval, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TaskSource, TestCase, Tone, age, criteria_summary, now_secs,
+    Approval, Artifact, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TaskSource, TestCase, Tone, age, criteria_summary, now_secs,
     plan_history, questions_of,
 };
 use crate::reference::{self, Page, RefGroup, RefState, SIDE_FROM, SIDE_WIDTH};
@@ -152,6 +155,8 @@ pub struct DetailView<'a> {
     pub can: &'a [(String, String)],
     /// Which reference groups are open and where their focus is.
     pub refs: &'a RefState,
+    /// Where the Evidence section drew its folder line and file rows this frame, for mouse clicks.
+    pub hits: &'a RefCell<Vec<(Rect, EvidenceHit)>>,
 }
 
 /// A card that ended without shipping: the machine escalated it, a run failed or was aborted, or the usage window paused it.
@@ -287,6 +292,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     // Reference lines wrap to the side pane, or to the text's width when they are folded under it.
     let ref_width = if side { SIDE_WIDTH as usize - 2 } else { width.saturating_sub(2) };
     view.viewport.set(pane_area.height);
+    view.hits.borrow_mut().clear();
     let mut lines: Vec<Line> = Vec::new();
     let follow = view.follow.replace(false);
 
@@ -315,6 +321,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         return;
     }
 
+    let mut evidence_hits: Vec<(usize, EvidenceHit)> = Vec::new();
     let (page, cursor_row) = match view.section {
         Section::Overview => (Page::of(overview_lines(task, detail, width, now, view.tasks)), None),
         Section::Review => (crate::pages::review_page(task, detail, width, ref_width), None),
@@ -330,7 +337,8 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         }
         Section::Diff => unreachable!("drawn above"),
         Section::Evidence => {
-            let (lines, row) = evidence_section_lines(detail, view.cursor);
+            let (lines, row, hits) = evidence_section_lines(detail, view.cursor, width);
+            evidence_hits = hits;
             (Page::of(lines), row)
         }
         Section::Pr => (Page::of(pr_lines(task, detail, view.prs, now)), None),
@@ -361,6 +369,10 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         }
     }
 
+    let heights: Vec<usize> = match evidence_hits.is_empty() {
+        true => Vec::new(),
+        false => lines.iter().map(|l| Paragraph::new(l.clone()).wrap(Wrap { trim: false }).line_count(pane_area.width).max(1)).collect(),
+    };
     // One paragraph: counted at this width, then clamped so j/k never scroll past the end.
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     let total = paragraph.line_count(pane_area.width);
@@ -372,6 +384,16 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     view.scroll.set(offset as u16);
     frame.render_widget(paragraph.scroll((offset as u16, 0)), pane_area);
     scroll_markers(frame, pane_area, offset, total);
+    // Rows are one line each and `lines` is the page itself, so a hit's screen row is its wrapped height above it, less the scroll.
+    for (line, hit) in evidence_hits {
+        let above: usize = heights.iter().take(line).sum();
+        let Some(y) = above.checked_sub(offset).filter(|y| *y < height) else { continue };
+        // A scroll marker replaces the first or last row it covers.
+        if (offset > 0 && y == 0) || (total.saturating_sub(offset + height) > 0 && y + 1 == height) {
+            continue;
+        }
+        view.hits.borrow_mut().push((Rect { y: pane_area.y + y as u16, height: 1, ..pane_area }, hit));
+    }
 }
 
 /// Whether a section hands its reference over as groups (a side pane when wide, folds under the text when narrow).
@@ -1680,11 +1702,85 @@ fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
     lines
 }
 
-/// Evidence: the QA verdict from the ship gate and every artifact the stages produced. With
-/// the index of the selected row, so the pane can keep it in view.
-fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+/// What a click in the Evidence section can land on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvidenceHit {
+    /// The `Folder` line: opens the folder.
+    Folder,
+    /// An artifact row, by its place in `ordered_artifacts`.
+    File(usize),
+}
+
+/// The card's artifacts in the order the Evidence section lists them and its cursor walks them: grouped by the
+/// stage run that made them, the runs in the order the machine lists them, a file with no known run last.
+pub fn ordered_artifacts(d: &TaskDetail) -> Vec<&Artifact> {
+    let mut unknown: Vec<&str> = Vec::new();
+    let mut ranked: Vec<(usize, &Artifact)> = d
+        .artifacts
+        .iter()
+        .map(|a| {
+            let id = a.stage_run_id.as_deref();
+            let rank = match d.stage_runs.iter().position(|r| id.is_some() && r.id.as_deref() == id) {
+                Some(at) => at,
+                None => {
+                    let key = id.unwrap_or("");
+                    let at = unknown.iter().position(|k| *k == key).unwrap_or_else(|| {
+                        unknown.push(key);
+                        unknown.len() - 1
+                    });
+                    d.stage_runs.len() + at
+                }
+            };
+            (rank, a)
+        })
+        .collect();
+    ranked.sort_by_key(|(rank, _)| *rank);
+    ranked.into_iter().map(|(_, a)| a).collect()
+}
+
+/// The group header of a run's artifacts: `verifying · run 2`, or `other files` when the run is not listed.
+fn run_heading(d: &TaskDetail, artifact: &Artifact) -> String {
+    let id = artifact.stage_run_id.as_deref();
+    match d.stage_runs.iter().find(|r| id.is_some() && r.id.as_deref() == id) {
+        Some(run) => format!("{} · run {}", crate::model::plain(&run.stage.replace('_', " "), 40), run.attempt),
+        None => "other files".to_string(),
+    }
+}
+
+/// The deepest folder every path shares, or none when they share only the root.
+fn common_folder<'a>(paths: impl Iterator<Item = &'a str>) -> Option<PathBuf> {
+    let mut common: Option<Vec<std::path::Component>> = None;
+    for path in paths {
+        let parts: Vec<std::path::Component> = Path::new(path).parent()?.components().collect();
+        common = Some(match common {
+            None => parts,
+            Some(have) => have.into_iter().zip(parts).take_while(|(a, b)| a == b).map(|(a, _)| a).collect(),
+        });
+    }
+    let folder: PathBuf = common?.into_iter().collect();
+    (folder.components().count() > 1).then_some(folder)
+}
+
+/// The folder the evidence lives in: the one every artifact of the card shares when the runs all wrote to the same place,
+/// else the folder of the run the cursor is on (`focus`, an index in `ordered_artifacts`), else of the latest run listed.
+pub fn evidence_folder(d: &TaskDetail, focus: Option<usize>) -> Option<PathBuf> {
+    let files = ordered_artifacts(d);
+    let key = |a: &&Artifact| a.stage_run_id.clone();
+    let mut runs: Vec<Option<String>> = files.iter().map(key).collect();
+    runs.dedup();
+    let of_run = |run: &Option<String>| common_folder(files.iter().filter(|a| a.stage_run_id == *run).map(|a| a.path.as_str()));
+    let folders: Vec<Option<PathBuf>> = runs.iter().map(of_run).collect();
+    if folders.windows(2).all(|w| w[0] == w[1]) {
+        return folders.into_iter().next().flatten();
+    }
+    let run = focus.and_then(|i| files.get(i)).map(key).unwrap_or_else(|| runs.last().cloned().flatten());
+    of_run(&run)
+}
+/// Evidence: the QA verdict from the ship gate and every artifact the stages produced, by run, under the folder they live in.
+/// With the index of the selected row, so the pane can keep it in view, and each clickable line's index with what it opens.
+fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize, width: usize) -> (Vec<Line<'static>>, Option<usize>, Vec<(usize, EvidenceHit)>) {
     let Some(d) = detail else {
-        return (vec![heading("Evidence"), Line::default(), muted("  loading…".into())], None);
+        return (vec![heading("Evidence"), Line::default(), muted("  loading…".into())], None, Vec::new());
     };
     let mut lines = vec![heading("Evidence")];
     // The release question first: the checklist as it was when it was asked, then the pack it is about.
@@ -1699,47 +1795,80 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
             ]));
         }
     }
+    // The files first: they are what the section is for. The pack and the verify report are read after them.
+    let mut after: Vec<Line<'static>> = Vec::new();
     // The pack from the open or last awaiting_ship gate when there is one, else the task's own (Evidence publishes with no gate).
     let verdict = match d.latest_approval("awaiting_ship") {
         Some(a) => evidence_lines(&a.requested["evidence"]),
         None => d.task.evidence.as_ref().map(crate::ui::pack_lines).unwrap_or_default(),
     };
     if !verdict.is_empty() {
-        lines.push(Line::default());
-        lines.extend(verdict.iter().map(|l| Line::from(format!("  {}", plain(l)))));
+        after.push(Line::default());
+        after.extend(verdict.iter().map(|l| Line::from(format!("  {}", plain(l)))));
         if d.task.evidence.is_some() {
-            lines.push(muted("  y useful · n not useful (with a note)".into()));
+            after.push(muted("  y useful · n not useful (with a note)".into()));
         }
     }
-    lines.extend(verify_report_lines(d));
+    after.extend(verify_report_lines(d));
     lines.push(Line::default());
-    if d.artifacts.is_empty() {
-        lines.push(muted("  nothing yet: E2E and Evidence write screenshots, a recording and the manifest here".into()));
-        return (lines, None);
+    let files = ordered_artifacts(d);
+    if files.is_empty() {
+        lines.push(muted("  no evidence yet".into()));
+        lines.push(Line::from(Span::styled("  screenshots, a recording and the manifest appear here once Verify and E2E have run", theme::dim())));
+        lines.extend(after);
+        return (lines, None, Vec::new());
     }
-    let selected = cursor.min(d.artifacts.len() - 1);
+    let selected = cursor.min(files.len() - 1);
+    let mut hits = Vec::new();
+    if let Some(folder) = evidence_folder(d, Some(selected)) {
+        hits.push((lines.len(), EvidenceHit::Folder));
+        let room = width.saturating_sub("Folder  ".len());
+        lines.push(Line::from(vec![Span::styled("Folder  ", theme::label()), Span::raw(truncate_middle(&crate::model::plain(&folder.to_string_lossy(), 1_000), room))]));
+        lines.push(Line::default());
+    }
     let mut cursor_row = None;
-    let mut last_kind = "";
-    for (i, artifact) in d.artifacts.iter().enumerate() {
-        if artifact.kind != last_kind {
-            last_kind = &artifact.kind;
-            let count = d.artifacts.iter().filter(|a| a.kind == artifact.kind).count();
-            lines.push(Line::from(vec![Span::from(artifact.kind.clone()).style(theme::heading()), Span::from(format!("   {count}")).style(theme::label())]));
+    let mut last_heading = String::new();
+    for (i, artifact) in files.iter().enumerate() {
+        let heading_text = run_heading(d, artifact);
+        if heading_text != last_heading {
+            if !last_heading.is_empty() {
+                lines.push(Line::default());
+            }
+            lines.push(Line::from(Span::styled(heading_text.clone(), theme::dim())));
+            last_heading = heading_text;
         }
         let on = i == selected;
         if on {
             cursor_row = Some(lines.len());
         }
-        let label = if artifact.label.is_empty() { String::new() } else { format!("{}  ", artifact.label) };
-        lines.push(Line::from(vec![
-            Span::from(if on { "  ▌ " } else { "    " }).style(theme::border_focus()),
-            Span::from(label).bold(),
-            Span::from(artifact.path.clone()).style(theme::label()),
-        ]));
+        hits.push((lines.len(), EvidenceHit::File(i)));
+        lines.push(artifact_row(artifact, on, width));
     }
     lines.push(Line::default());
-    lines.push(muted("j/k pick a file · J/K scroll · o opens it · r send back with a note".into()));
-    (lines, cursor_row)
+    let open = crate::open::opener().is_some();
+    lines.push(muted(format!("j/k pick a file · J/K scroll{} · r send back with a note", if open { " · enter opens it · o opens the folder" } else { "" })));
+    lines.extend(after);
+    (lines, cursor_row, hits)
+}
+
+/// One artifact: its kind, label and path, each cut to fit one line of `width` cells; the cursor's row is filled.
+fn artifact_row(artifact: &Artifact, on: bool, width: usize) -> Line<'static> {
+    const KIND: usize = 11;
+    let kind = truncate_middle(&crate::model::plain(&artifact.kind, 40), KIND - 1);
+    let label_room = width.saturating_sub(2 + KIND + 2) / 2;
+    let label = truncate_middle(&crate::model::plain(&artifact.label, 400), label_room.max(8));
+    let left = 2 + KIND + cells(&label);
+    let path = crate::model::plain(&artifact.path, 1_000);
+    let mut spans = vec![
+        Span::styled(if on { "▌ " } else { "  " }, theme::border_focus()),
+        Span::styled(format!("{kind:<KIND$}"), theme::label()),
+        Span::styled(label, theme::heading()),
+    ];
+    if let Some(room) = width.checked_sub(left + 2).filter(|room| *room >= 8) {
+        spans.push(Span::styled(format!("  {}", truncate_middle(&path, room)), theme::label()));
+    }
+    let line = Line::from(spans);
+    if on { line.style(theme::selection()) } else { line }
 }
 
 /// The PR for this ticket's branch, if the inbox has it.
@@ -1961,7 +2090,7 @@ mod tests {
     fn draw(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>, section: Section, cursor: usize, (prs, diff): (&[PullRequest], Option<&TaskDiff>), refs: &RefState) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let scroll = Cell::new(0);
-        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], can: &[], refs };
+        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], can: &[], refs, hits: &RefCell::new(Vec::new()) };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect()
@@ -2249,16 +2378,17 @@ mod tests {
     }
 
     #[test]
-    fn the_evidence_section_lists_artifacts_by_kind_and_says_so_when_there_are_none() {
+    fn the_evidence_section_lists_artifacts_by_run_and_says_so_when_there_are_none() {
         let (task, detail) = fixture();
         let text = render(120, 30, &task, Some(&detail), Section::Evidence, 0).join("\n");
-        assert!(text.contains("log   1"), "{text}");
-        assert!(text.contains("verify  /out/files/verify.log"), "{text}");
-        assert!(text.contains("j/k pick a file · J/K scroll · o opens it"), "{text}");
+        assert!(text.contains("Folder  /out/files"), "{text}");
+        assert!(text.contains("log        verify  /out/files/verify.log"), "{text}");
+        assert!(text.contains("j/k pick a file · J/K scroll · enter opens it · o opens the folder"), "{text}");
         let mut bare = detail.clone();
         bare.artifacts.clear();
         let text = render(120, 30, &task, Some(&bare), Section::Evidence, 0).join("\n");
-        assert!(text.contains("nothing yet"), "{text}");
+        assert!(text.contains("no evidence yet") && text.contains("once Verify and E2E have run"), "{text}");
+        assert!(!text.contains("Folder"), "{text}");
     }
 
     #[test]
@@ -2349,7 +2479,7 @@ mod tests {
         for part in ["format: captures", "Show the cart total.", "verdict: pass", "3 artifacts", "/a.png", "/b.png", "✓ Total shows", "media: a.png  https://x/a.png"] {
             assert!(text.contains(part), "{part}: {text}");
         }
-        assert!(text.contains("j/k pick a file · J/K scroll · o opens it · r send back with a note"), "{text}");
+        assert!(text.contains("j/k pick a file · J/K scroll · enter opens it · o opens the folder · r send back with a note"), "{text}");
     }
 
     fn pr(head: &str) -> PullRequest {
@@ -2413,7 +2543,7 @@ mod tests {
         .unwrap();
         let (width, height) = (120, 20);
         let scroll = Cell::new(300);
-        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], can: &[], refs: &RefState::default() };
+        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], can: &[], refs: &RefState::default(), hits: &RefCell::new(Vec::new()) };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -2926,6 +3056,7 @@ mod tests {
             actions: &[],
             can: &[],
             refs: &RefState::default(),
+            hits: &RefCell::new(Vec::new()),
         };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();

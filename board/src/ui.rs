@@ -225,6 +225,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             actions: &actions,
             can: &can,
             refs: &app.detail_refs,
+            hits: &app.evidence_hits,
         };
         detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
     }
