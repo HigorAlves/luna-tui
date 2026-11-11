@@ -1,0 +1,226 @@
+//! Test helpers for the screens: draw the whole app into a test terminal and read it back as text, and
+//! cards at the four moments the task view is built around. No machine is needed; the app is built the way
+//! the app tests build it, against whatever `Machine::from_env` finds, and its detail is set by hand.
+
+// Later slices use these; until each is used, some are not.
+#![allow(dead_code)]
+
+use ratatui::{Terminal, backend::TestBackend};
+use serde_json::{Value, json};
+
+use crate::{
+    app::App,
+    client::Machine,
+    model::{Task, TaskDetail},
+    ui,
+};
+
+/// Titles of the fixture cards, for `render(..).contains(TITLE)` checks.
+pub const PLAN_GATE_TITLE: &str = "Add CSV export to reports";
+pub const RUNNING_BUILD_TITLE: &str = "Retry failed webhook deliveries";
+pub const ESCALATED_TITLE: &str = "Migrate sessions to the new store";
+pub const SHIP_STAGE_TITLE: &str = "Rate limit the public API";
+
+/// Draws `ui::draw` into a `width` x `height` terminal and returns the screen, one string per row.
+pub fn render(app: &mut App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+}
+
+/// A ticket as the machine sends it; `extra` is merged over the defaults.
+pub fn task_json(id: &str, title: &str, state: &str, column: &str, extra: Value) -> Value {
+    let mut task = json!({
+        "id": id, "title": title, "description": "Users ask for the report as a file they can open in a spreadsheet.",
+        "criteria": [], "repoPath": "/work/app", "branch": format!("task/{}", &id[..8]), "worktreePath": "/work/wt",
+        "state": state, "column": column, "waitingOnYou": false, "running": false, "queued": false,
+        "retries": {"verify": 0, "e2e": 0, "ci": 0, "total": 0}, "resumeTo": null, "reason": null,
+        "createdAt": "2026-10-22T09:00:00.000Z", "updatedAt": "2026-10-22T10:00:00.000Z"
+    });
+    for (key, value) in extra.as_object().into_iter().flatten() {
+        task[key] = value.clone();
+    }
+    task
+}
+
+fn stage_run(id: &str, stage: &str, attempt: u32, status: &str, cost: f64) -> Value {
+    json!({"id": id, "stage": stage, "attempt": attempt, "status": status, "costUsd": cost, "turns": 12,
+        "startedAt": "2026-10-22T09:00:00Z", "endedAt": if status == "running" { Value::Null } else { json!("2026-10-22T09:30:00Z") }})
+}
+
+/// An app with `task` listed and its popup open on `detail`.
+pub fn open_card(task: Value, detail_rest: Value) -> App {
+    let mut detail = json!({"task": task, "stageRuns": [], "approvals": [], "events": [], "artifacts": []});
+    for (key, value) in detail_rest.as_object().into_iter().flatten() {
+        detail[key] = value.clone();
+    }
+    let task: Task = serde_json::from_value(task).unwrap();
+    let detail: TaskDetail = serde_json::from_value(detail).unwrap();
+    let mut app = App::new(Machine::from_env());
+    app.tasks.push(task.clone());
+    app.detail = Some(detail);
+    app.open_detail(task.id);
+    app
+}
+
+/// A feature card at the plan gate: 5 criteria, 3 assumptions, 4 slices, 6 cases, 5 mapped files and one flagged check.
+pub fn plan_gate_app() -> App {
+    let criteria = [
+        "exports every column the report shows",
+        "escapes commas, quotes and newlines",
+        "declares UTF-8 with a byte-order mark",
+        "streams a large report without loading it whole",
+        "a person without access gets a 403",
+    ];
+    let task = task_json("aaaaaaaa1111", PLAN_GATE_TITLE, "awaiting_approval", "Plan", json!({"waitingOnYou": true, "criteria": criteria}));
+    let cases: Vec<Value> = (0..6)
+        .map(|i| json!({"title": format!("case {} proves criterion {}", i + 1, i % 5 + 1), "criterion": criteria[i % 5], "approach": "run the suite and read the output"}))
+        .collect();
+    open_card(
+        task,
+        json!({
+            "stageRuns": [stage_run("r1", "triage", 1, "passed", 0.42), stage_run("r2", "plan", 1, "passed", 0.71), stage_run("r3", "test_design", 1, "passed", 0.35)],
+            "approvals": [
+                {"id": "t1", "kind": "awaiting_test_check", "requested": {"cases": cases}, "decision": "approved", "createdAt": "2026-10-22T09:40:00Z", "decidedAt": "2026-10-22T09:45:00Z"},
+                {"id": "p1", "kind": "awaiting_approval", "decision": null, "createdAt": "2026-10-22T09:50:00Z", "requested": {
+                    "lane": "plan", "risk": {"level": "medium"}, "verdicts": {"coverage": "proceed", "plan": "flag", "risk": "proceed"},
+                    "brief": "Add a CSV export endpoint to the reports API and a button on the report page.",
+                    "criteria": criteria,
+                    "assumptions": ["CSV only, no XLSX", "the report page already knows the report id", "the export uses the viewer's permissions"],
+                    "slices": [
+                        {"title": "Add the CSV writer", "est_loc": 90}, {"title": "Add GET /api/reports/:id/export.csv", "est_loc": 120},
+                        {"title": "Stream large reports", "est_loc": 80}, {"title": "Add the export button", "est_loc": 60}
+                    ],
+                    "map": {"components": ["reports"], "files": [
+                        {"path": "src/reports/api.ts", "role": "change"}, {"path": "src/reports/csv.ts", "role": "change"},
+                        {"path": "src/reports/page.tsx", "role": "change"}, {"path": "src/reports/model.ts", "role": "read"},
+                        {"path": "src/reports/__tests__/api.test.ts", "role": "test"}
+                    ]},
+                    "flagged": ["plan"]
+                }}
+            ]
+        }),
+    )
+}
+
+/// A running Build card: 3 slices (scenarios) and the budget used against its limits.
+pub fn running_build_app() -> App {
+    let task = task_json("bbbbbbbb2222", RUNNING_BUILD_TITLE, "implementing", "Build", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z", "spentUsd": 0.63}));
+    open_card(
+        task,
+        json!({
+            "stageRuns": [stage_run("r1", "triage", 1, "passed", 0.2), stage_run("r2", "implementing", 1, "running", 0.63)],
+            "buildProgress": {
+                "scenarios": [{"id": "S1", "state": "green"}, {"id": "S2", "state": "green"}, {"id": "S3", "state": "red"}],
+                "budget": {"iterations": 4, "tokens": 52000, "minutes": 7.5, "limits": {"max_iterations": 12, "max_tokens": 400000, "max_minutes": 45.0}},
+                "lastCheckpoint": {"sha": "9f3c2a1d5e", "follows": "green scenario"}
+            }
+        }),
+    )
+}
+
+/// An escalated card: the machine's reason with its confidence, a summary and the tail of the failing output.
+pub fn escalated_app() -> App {
+    let task = task_json("cccccccc3333", ESCALATED_TITLE, "escalated", "Build", json!({"reason": "build budget spent", "retries": {"verify": 2, "e2e": 0, "ci": 0, "total": 2}}));
+    open_card(
+        task,
+        json!({
+            "stageRuns": [stage_run("r1", "implementing", 1, "failed", 1.1), stage_run("r2", "implementing", 2, "failed", 1.4)],
+            "approvals": [{"id": "e1", "kind": "escalated", "decision": null, "createdAt": "2026-10-22T10:00:00Z", "requested": {
+                "escalationDecision": {"reason": "the same migration test failed three times", "confidence": 0.82, "source": "classifier"},
+                "summary": "The session table migration cannot run twice; the test seeds rows the migration rejects.",
+                "outputTail": "FAIL migrate.test.ts\n  expected 3 rows, received 2\n  at migrate (src/sessions/migrate.ts:41)\nTests: 1 failed, 11 passed"
+            }}]
+        }),
+    )
+}
+
+/// A ship-stage card: the watched PR, the evidence artifacts and the verify findings.
+pub fn ship_stage_app() -> App {
+    let task = task_json("dddddddd4444", SHIP_STAGE_TITLE, "awaiting_ship", "Ship", json!({"waitingOnYou": true}));
+    open_card(
+        task,
+        json!({
+            "stageRuns": [stage_run("r1", "verifying", 1, "passed", 0.5), stage_run("r2", "evidence", 1, "passed", 0.3)],
+            "artifacts": [
+                {"id": "a1", "kind": "screenshot", "path": "/out/files/limit-429.png", "label": "429 after the limit", "stageRunId": "r2"},
+                {"id": "a2", "kind": "log", "path": "/out/files/verify.log", "label": "verify", "stageRunId": "r1"},
+                {"id": "a3", "kind": "report", "path": "/out/files/evidence.md", "label": "evidence pack", "stageRunId": "r2"}
+            ],
+            "reports": {"verify": {"findings": [
+                {"severity": "should_fix", "title": "the limiter keys on the proxy address", "path": "src/limit.ts", "line": 31},
+                {"severity": "nit", "title": "name the window constant", "path": "src/limit.ts", "line": 8}
+            ]}},
+            "ship": {
+                "pr": {"number": 412, "url": "https://github.com/acme/app/pull/412"}, "head": "9f3c2a1", "ready": false,
+                "checklist": [{"id": "checks", "ok": true, "detail": "12 of 12 passed"}, {"id": "review", "ok": false, "detail": "waiting for a reviewer"}],
+                "autoMerge": {"allowed": false, "reason": "review is required"}, "review": {"required": true, "by": "platform"}, "fixRounds": 1
+            }
+        }),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_plan_gate_card_renders_its_title() {
+        let mut app = plan_gate_app();
+        assert!(render(&mut app, 120, 40).contains(PLAN_GATE_TITLE));
+    }
+
+    #[test]
+    fn the_running_build_card_renders_its_title() {
+        let mut app = running_build_app();
+        assert!(render(&mut app, 120, 40).contains(RUNNING_BUILD_TITLE));
+    }
+
+    #[test]
+    fn the_escalated_card_renders_its_title() {
+        let mut app = escalated_app();
+        assert!(render(&mut app, 120, 40).contains(ESCALATED_TITLE));
+    }
+
+    #[test]
+    fn the_ship_stage_card_renders_its_title() {
+        let mut app = ship_stage_app();
+        assert!(render(&mut app, 120, 40).contains(SHIP_STAGE_TITLE));
+    }
+
+    #[test]
+    fn the_fixtures_carry_the_data_the_task_view_will_show() {
+        let mut app = plan_gate_app();
+        let screen = render(&mut app, 120, 50);
+        for needle in ["Add the CSV writer", "CSV only, no XLSX", "plan flag"] {
+            assert!(screen.contains(needle), "{needle} missing in\n{screen}");
+        }
+        let mut app = running_build_app();
+        app.detail_section = crate::detail::Section::Overview;
+        assert!(render(&mut app, 120, 50).contains("4 of 12 iterations"));
+        let mut app = escalated_app();
+        app.detail_section = crate::detail::Section::Overview;
+        assert!(render(&mut app, 120, 50).contains("confidence 0.82"));
+        let mut app = ship_stage_app();
+        assert!(render(&mut app, 120, 50).contains("waiting for a reviewer"));
+    }
+
+    #[test]
+    fn a_hostile_title_is_clean_on_the_board_and_in_the_popup() {
+        let hostile = "A\u{1b}[31mB\rC\u{7}D\u{202e}E\u{200b}F";
+        let mut app = plan_gate_app();
+        app.tasks[0].title = hostile.into();
+        let board = {
+            app.mode = crate::app::Mode::Normal;
+            render(&mut app, 120, 40)
+        };
+        assert!(board.contains("A [31mB C D E F"), "{board}");
+        app.open_detail(app.tasks[0].id.clone());
+        let popup = render(&mut app, 120, 40);
+        assert!(popup.contains("A [31mB C D E F"), "{popup}");
+        for bad in ['\u{1b}', '\r', '\u{7}', '\u{202e}', '\u{200b}'] {
+            assert!(!board.contains(bad) && !popup.contains(bad), "{bad:?} reached the screen");
+        }
+    }
+}

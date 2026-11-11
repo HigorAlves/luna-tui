@@ -138,7 +138,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         .title(Line::from(vec![
             Span::from(format!(" #{} ", task.short_id())).bold(),
             Span::from(task.source.as_ref().and_then(TaskSource::notch_tag).map(|t| format!("{t} ")).unwrap_or_default()).fg(c(SUBTEXT0)),
-            Span::from(format!("{} ", task.title)).bold(),
+            Span::from(format!("{} ", crate::model::plain(&task.title, 400))).bold(),
         ]))
         .title_bottom(
             Line::from(format!(
@@ -491,9 +491,9 @@ fn record_lines(task: &Task, requested: &serde_json::Value) -> Vec<Line<'static>
     };
     let mut lines = vec![Line::default(), proposal_heading(&format!("Triage record v{} · {who}", record.version.unwrap_or(1)))];
     if let Some(summary) = record.summary.as_deref().filter(|s| !s.trim().is_empty()) {
-        lines.extend(summary.lines().map(|l| Line::from(format!("  {l}"))));
+        lines.extend(plain(summary).lines().map(|l| Line::from(format!("  {l}"))));
     }
-    let row = |label: &str, value: String| Line::from(vec![Span::from(format!("  {label:<11}")).fg(c(SUBTEXT0)), Span::from(value)]);
+    let row = |label: &str, value: String| Line::from(vec![Span::from(format!("  {label:<11}")).fg(c(SUBTEXT0)), Span::from(plain(&value))]);
     lines.push(row("Kind", record.kind.clone()));
     if let Some(t) = &record.type_of_work {
         lines.push(row("Type", t.clone()));
@@ -508,7 +508,7 @@ fn record_lines(task: &Task, requested: &serde_json::Value) -> Vec<Line<'static>
     }
     let flagged: Vec<String> = requested["flagged"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).filter_map(|v| v.strip_prefix("triage.")).map(str::to_string).collect()).unwrap_or_default();
     if !flagged.is_empty() {
-        lines.push(Line::from(vec![Span::from(format!("  {:<11}", "Flagged")).fg(c(SUBTEXT0)), Span::from(format!("{} (T corrects the record)", flagged.join(", "))).fg(c(YELLOW))]));
+        lines.push(Line::from(vec![Span::from(format!("  {:<11}", "Flagged")).fg(c(SUBTEXT0)), Span::from(format!("{} (T corrects the record)", plain(&flagged.join(", ")))).fg(c(YELLOW))]));
     }
     lines
 }
@@ -519,11 +519,11 @@ fn map_lines(requested: &serde_json::Value) -> Vec<Line<'static>> {
     if !requested["lane"].is_string() {
         return Vec::new();
     }
-    let row = |label: &str, value: String| Line::from(vec![Span::from(format!("  {label:<11}")).fg(c(SUBTEXT0)), Span::from(value)]);
+    let row = |label: &str, value: String| Line::from(vec![Span::from(format!("  {label:<11}")).fg(c(SUBTEXT0)), Span::from(plain(&value))]);
     let mut lines = vec![Line::default(), proposal_heading("Code map")];
     let map = &requested["map"];
     if !map.is_object() {
-        lines.push(muted(format!("  no code map: {}", requested["mapNote"].as_str().unwrap_or("the plan was written without one"))));
+        lines.push(muted(format!("  no code map: {}", plain(requested["mapNote"].as_str().unwrap_or("the plan was written without one")))));
         return lines;
     }
     let list = |v: &serde_json::Value| -> String { json_list(v).join(", ") };
@@ -634,7 +634,7 @@ fn criteria_table(rows: &[CriterionRow], width: usize) -> Vec<Line<'static>> {
             None => Span::from("–").fg(c(SUBTEXT0)),
         };
         lines.push(Line::from(vec![
-            Span::from(format!("  {:<w$}", truncate(&row.criterion, name_w), w = name_w)),
+            Span::from(format!("  {:<w$}", truncate(&plain(&row.criterion), name_w), w = name_w)),
             plan,
             cases,
             verify,
@@ -782,10 +782,10 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         let requested = &approval.requested;
         if let Some(error) = requested["error"].as_str() {
             lines.extend([Line::default(), Line::from(Span::from("Error").fg(c(RED)).bold())]);
-            lines.extend(error.lines().map(|l| Line::from(format!("  {l}")).fg(c(RED))));
+            lines.extend(plain(error).lines().map(|l| Line::from(format!("  {l}")).fg(c(RED))));
         }
         if let Some(note) = requested["note"].as_str() {
-            lines.push(muted(note.to_string()));
+            lines.push(muted(plain(note)));
         }
         let rules = rules_lines(&requested["rules"], width.saturating_sub(4).max(20));
         if !rules.is_empty() {
@@ -794,7 +794,7 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         }
         if let Some(config) = requested["config"].as_str() {
             lines.extend([Line::default(), proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)")]);
-            lines.extend(config.lines().map(|l| Line::from(format!("  {l}"))));
+            lines.extend(plain(config).lines().map(|l| Line::from(format!("  {l}"))));
             // The base image, singled out of the long proposal: it runs the stage's process, and approving the setup does not approve it.
             if let Some(base) = requested["sandboxBase"].as_str() {
                 lines.extend([Line::default(), proposal_heading("Base image (not approved by this gate)")]);
@@ -817,8 +817,8 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         if !questions.is_empty() {
             lines.extend([Line::default(), proposal_heading("Questions (a to answer)")]);
             for (question, recommended) in questions {
-                lines.push(Line::from(format!("  ? {question}")));
-                lines.push(muted(format!("    recommended: {recommended}")));
+                lines.push(Line::from(format!("  ? {}", plain(&question))));
+                lines.push(muted(format!("    recommended: {}", plain(&recommended))));
             }
         }
     }
@@ -827,7 +827,7 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     if task.description.trim().is_empty() {
         lines.push(muted("  (none yet, e adds one)".into()));
     } else {
-        lines.extend(task.description.lines().map(|l| Line::from(format!("  {l}"))));
+        lines.extend(plain(&task.description).lines().map(|l| Line::from(format!("  {l}"))));
     }
     lines.extend([Line::default(), heading("Acceptance criteria")]);
     if task.criteria.is_empty() {
@@ -876,7 +876,7 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
 /// Plan: the latest triage plan, decided or not, then what happened to it.
 /// Text from a run or a model, made safe for a terminal: every control character (an escape sequence included) becomes a space.
 pub(crate) fn plain(text: &str) -> String {
-    text.chars().map(|ch| if ch.is_control() && ch != '\n' { ' ' } else { ch }).collect()
+    text.chars().map(|ch| if crate::text::is_unsafe(ch) && ch != '\n' { ' ' } else { ch }).collect()
 }
 
 /// Build while it runs: each scenario red or green, the budget used against its limits and the last checkpoint pushed. Empty without progress.
@@ -956,15 +956,15 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
     lines.extend(map_lines(requested));
     if let Some(reply) = approval.reply() {
         lines.extend([Line::default(), proposal_heading("Reply (a posts it where the ticket came from and closes it)")]);
-        lines.extend(reply.lines().map(|l| Line::from(format!("  {l}"))));
+        lines.extend(plain(&reply).lines().map(|l| Line::from(format!("  {l}"))));
     }
     if approval.outcome() == Some("archive") {
         lines.extend([Line::default(), proposal_heading("Archive (a archives the ticket)")]);
-        lines.push(Line::from(format!("  {}", approval.archive_reason().unwrap_or_else(|| "no reason given".into()))));
+        lines.push(Line::from(format!("  {}", plain(&approval.archive_reason().unwrap_or_else(|| "no reason given".into())))));
     }
     lines.extend([Line::default(), proposal_heading("Brief")]);
     match requested["brief"].as_str().filter(|b| !b.trim().is_empty()) {
-        Some(brief) => lines.extend(brief.lines().map(|l| Line::from(format!("  {l}")))),
+        Some(brief) => lines.extend(plain(brief).lines().map(|l| Line::from(format!("  {l}")))),
         None => lines.push(muted("  (none)".into())),
     }
     for (title, items) in [
@@ -999,7 +999,7 @@ fn gate_facts(approval: &Approval) -> Vec<Line<'static>> {
     let label = |name: &str| Span::from(format!("{name:<11}")).fg(c(SUBTEXT0));
     let mut lines = Vec::new();
     if let Some(outcome) = approval.outcome_line() {
-        lines.push(Line::from(vec![label("Outcome"), Span::from(outcome)]));
+        lines.push(Line::from(vec![label("Outcome"), Span::from(plain(&outcome))]));
     }
     if let Some(risk) = approval.risk_line() {
         let high = approval.requested["risk"]["level"].as_str() == Some("high");
@@ -1151,7 +1151,7 @@ fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64)
     for (criterion, cases) in &groups {
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::from(criterion.clone()).fg(c(ACCENT)).bold(),
+            Span::from(plain(criterion)).fg(c(ACCENT)).bold(),
             Span::from(format!("   {} case{}", cases.len(), if cases.len() == 1 { "" } else { "s" })).fg(c(SUBTEXT0)),
         ]));
         for case in cases {
@@ -1177,8 +1177,8 @@ fn case_line(case: &TestCase, title_w: usize) -> Line<'static> {
     };
     Line::from(vec![
         Span::from(format!("  {glyph} ")).fg(c(color)),
-        Span::from(format!("{:<w$}", truncate(&case.title, title_w), w = title_w)),
-        Span::from(format!("   {}", case.approach)).fg(c(SUBTEXT0)),
+        Span::from(format!("{:<w$}", truncate(&plain(&case.title), title_w), w = title_w)),
+        Span::from(format!("   {}", plain(&case.approach))).fg(c(SUBTEXT0)),
     ])
 }
 
@@ -1226,7 +1226,7 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
         Span::from("─".repeat(width.saturating_sub(run.stage.chars().count() + 8))).fg(c(MUTED)),
     ]));
     match run_error(d, run) {
-        Some(error) => lines.extend(error.lines().take(8).map(|l| Line::from(format!("  {l}")).fg(c(RED)))),
+        Some(error) => lines.extend(plain(&error).lines().take(8).map(|l| Line::from(format!("  {l}")).fg(c(RED)))),
         None if run.status == "running" => lines.push(muted("  running · f follows its container in herdr".into())),
         None => lines.push(muted("  no error recorded".into())),
     }
@@ -1234,14 +1234,14 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
         lines.push(Line::default());
         for case in &run.cases {
             let (glyph, color) = if case.ok { ("✓", GREEN) } else { ("✗", RED) };
-            lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(case.title.clone())]));
+            lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(plain(&case.title))]));
         }
     }
     let files: Vec<&crate::model::Artifact> = d.artifacts.iter().filter(|a| a.stage_run_id.is_some() && a.stage_run_id == run.id).collect();
     if !files.is_empty() {
         lines.push(Line::default());
         lines.push(muted(format!("  {} file{}", files.len(), if files.len() == 1 { "" } else { "s" })));
-        lines.extend(files.iter().map(|a| muted(format!("    {} {}", a.kind, a.path))));
+        lines.extend(files.iter().map(|a| muted(format!("    {} {}", plain(&a.kind), plain(&a.path)))));
     }
     lines.push(Line::default());
     lines.push(muted("j/k pick a run · J/K scroll · f follows the running one in herdr".into()));
@@ -1531,7 +1531,7 @@ pub fn pr_widget(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
         _ => SUBTEXT0,
     };
     let mut lines = vec![
-        Line::from(vec![Span::from(format!("{}  ", pr.key())).fg(c(SUBTEXT0)), Span::from(pr.title.clone()).bold()]),
+        Line::from(vec![Span::from(format!("{}  ", pr.key())).fg(c(SUBTEXT0)), Span::from(crate::model::plain(&pr.title, 400)).bold()]),
         muted(format!("@{} · {} → {}{} · {} ago", pr.author, pr.head_ref, pr.base_ref, if pr.from_fork { " (fork)" } else { "" }, age(&pr.updated_at, now))),
         muted(pr.url.clone()),
         Line::default(),
@@ -1585,7 +1585,7 @@ fn activity_lines(detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
         lines.push(muted("  nothing yet".into()));
     }
     lines.extend(d.events.iter().map(|e| {
-        let text = describe(e);
+        let text = plain(&describe(e));
         let color = if text.contains(" failed") || e.kind == "loop.crashed" { RED } else { SUBTEXT0 };
         Line::from(Span::from(format!("  {text}")).fg(c(color)))
     }));
@@ -1661,6 +1661,89 @@ mod tests {
         let task: Task = serde_json::from_str(TASK).unwrap();
         let detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
         (task, detail)
+    }
+
+    /// An ANSI escape, a bare carriage return, a bell, a bidi override and a zero-width space around letters.
+    const HOSTILE: &str = "A\u{1b}[31mB\rC\u{7}D\u{202e}E\u{200b}F";
+    /// What `HOSTILE` becomes once every unsafe character is a space.
+    const TAMED: &str = "A [31mB C D E F";
+
+    fn text_of(lines: &[Line]) -> String {
+        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    fn assert_safe(site: &str, text: &str) {
+        assert!(text.contains(TAMED), "{site}: the text did not reach the screen\n{text}");
+        for bad in ['\u{1b}', '\r', '\u{7}', '\u{202e}', '\u{200b}'] {
+            assert!(!text.contains(bad), "{site}: {bad:?} reached the screen\n{text}");
+        }
+    }
+
+    /// A card whose every model and ticket string is hostile.
+    fn hostile() -> (Task, TaskDetail) {
+        let mut task: serde_json::Value = serde_json::from_str(TASK).unwrap();
+        task["title"] = HOSTILE.into();
+        task["description"] = HOSTILE.into();
+        task["criteria"] = serde_json::json!([HOSTILE]);
+        task["record"] = serde_json::json!({"kind": HOSTILE, "summary": HOSTILE, "size": HOSTILE, "riskPrelim": HOSTILE, "typeOfWork": HOSTILE});
+        let mut detail: serde_json::Value = serde_json::from_str(&detail_json(TASK)).unwrap();
+        detail["task"] = task.clone();
+        detail["approvals"].as_array_mut().unwrap().push(serde_json::json!({
+            "id": "p9", "kind": "awaiting_approval", "decision": null, "createdAt": "2026-10-22T11:00:00Z",
+            "requested": {
+                "lane": "plan", "outcome": "archive", "archiveReason": HOSTILE, "reply": HOSTILE, "brief": HOSTILE,
+                "criteria": [HOSTILE], "assumptions": [HOSTILE], "slices": [{"title": HOSTILE, "est_loc": 10}],
+                "error": HOSTILE, "note": HOSTILE, "config": HOSTILE, "notes": [HOSTILE],
+                "proof": [{"name": HOSTILE, "cmd": HOSTILE, "ok": false, "tail": HOSTILE}],
+                "questions": [{"question": HOSTILE, "recommended": HOSTILE}],
+                "map": {"components": [HOSTILE], "files": [HOSTILE]}, "mapNote": HOSTILE
+            }
+        }));
+        let approvals = detail["approvals"].as_array_mut().unwrap();
+        let cases = approvals.iter_mut().find(|a| a["kind"] == "awaiting_test_check").unwrap();
+        cases["requested"]["cases"][0] = serde_json::json!({"title": HOSTILE, "criterion": HOSTILE, "approach": HOSTILE});
+        detail["events"][0]["payload"]["error"] = HOSTILE.into();
+        detail["events"][1]["payload"]["to"] = HOSTILE.into();
+        detail["stageRuns"][2]["cases"][0]["title"] = HOSTILE.into();
+        detail["artifacts"][0]["path"] = HOSTILE.into();
+        (serde_json::from_value(task).unwrap(), serde_json::from_value(detail).unwrap())
+    }
+
+    #[test]
+    fn the_title_description_and_criteria_are_drawn_without_unsafe_characters() {
+        let (task, detail) = hostile();
+        assert_safe("overview", &text_of(&overview_lines(&task, Some(&detail), 100, 0, &[])));
+        assert_safe("popup title", &render(120, 40, &task, Some(&detail), Section::Overview, 0)[0]);
+    }
+
+    #[test]
+    fn a_gate_s_error_note_config_proof_notes_and_questions_are_drawn_without_unsafe_characters() {
+        let (task, detail) = hostile();
+        let text = text_of(&overview_lines(&task, Some(&detail), 100, 0, &[]));
+        assert_safe("overview gate", &text);
+        for needle in [format!("? {TAMED}"), format!("recommended: {TAMED}"), format!("✗ {TAMED}: {TAMED}")] {
+            assert!(text.contains(&needle), "{needle} missing in\n{text}");
+        }
+    }
+
+    #[test]
+    fn the_plan_s_record_reply_brief_lists_and_map_are_drawn_without_unsafe_characters() {
+        let (task, detail) = hostile();
+        let text = text_of(&plan_lines(&task, Some(&detail), 0));
+        assert_safe("plan", &text);
+        for needle in [format!("  • {TAMED}"), format!("Kind       {TAMED}"), format!("{TAMED} (~10 LOC)"), format!("change     {TAMED}")] {
+            assert!(text.contains(&needle), "{needle} missing in\n{text}");
+        }
+    }
+
+    #[test]
+    fn the_test_cases_runs_and_activity_are_drawn_without_unsafe_characters() {
+        let (task, detail) = hostile();
+        assert_safe("tests", &text_of(&tests_lines(&task, Some(&detail), 100, 0)));
+        // The failed verifying run is the second row; the cursor picks it so its error and cases show.
+        let (runs, _) = runs_lines(&task, Some(&detail), 2, 100, 0);
+        assert_safe("runs", &text_of(&runs));
+        assert_safe("activity", &text_of(&activity_lines(Some(&detail))));
     }
 
     #[test]

@@ -1987,7 +1987,7 @@ pub struct GraphHealth {
 
 /// Text from outside on one line: control characters become spaces, at most `max` characters.
 pub fn plain(text: &str, max: usize) -> String {
-    let flat: String = text.chars().map(|ch| if ch.is_control() { ' ' } else { ch }).collect();
+    let flat: String = text.chars().map(|ch| if crate::text::is_unsafe(ch) { ' ' } else { ch }).collect();
     let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max { flat } else { format!("{}…", flat.chars().take(max.saturating_sub(1)).collect::<String>()) }
 }

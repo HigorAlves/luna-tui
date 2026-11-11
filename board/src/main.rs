@@ -22,6 +22,10 @@ mod notify;
 mod pulls;
 mod slack;
 mod store;
+mod text;
+mod theme;
+#[cfg(test)]
+mod testkit;
 mod ui;
 mod vim;
 

@@ -29,35 +29,12 @@ use crate::{
     },
 };
 
-// Catppuccin Mocha, the theme herdr is configured with.
-pub(crate) const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
-pub(crate) const SURFACE0: Color = Color::Rgb(0x31, 0x32, 0x44);
-pub(crate) const SURFACE1: Color = Color::Rgb(0x45, 0x47, 0x5a);
-pub(crate) const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-pub(crate) const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
-pub(crate) const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
-pub(crate) const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
-pub(crate) const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
-pub(crate) const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
-pub(crate) const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
-
-pub(crate) const ACCENT: Color = BLUE;
-pub(crate) const MUTED: Color = SURFACE1;
-const SELECTED_BG: Color = SURFACE0;
+pub(crate) use crate::theme::{ACCENT, BASE, BLUE, GREEN, LAVENDER, MUTED, PEACH, RED, SELECTED_BG, SUBTEXT0, SURFACE0, SURFACE1, YELLOW, c};
 
 /// Narrowest a column may get before the board scrolls instead of squeezing.
 const MIN_COLUMN_WIDTH: u16 = 18;
 /// Width of a collapsed column in folded mode: wide enough for its header bar, not its cards.
 const FOLD_WIDTH: u16 = 14;
-
-/// Colours are dropped when `NO_COLOR` is set. States still read from their glyph and label.
-pub(crate) fn c(color: Color) -> Color {
-    if env::var_os("NO_COLOR").is_some() {
-        Color::Reset
-    } else {
-        color
-    }
-}
 
 pub(crate) fn look_color(look: Look) -> Color {
     match look {
@@ -767,7 +744,7 @@ fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
         spans.push(Span::from("⚙ ").fg(c(SUBTEXT0)));
     }
     spans.push(Span::from(task.issue_prefix()).fg(c(SUBTEXT0)));
-    let title = Span::from(task.title.clone()).bold();
+    let title = Span::from(crate::model::plain(&task.title, 400)).bold();
     spans.push(if task.overdue() { title.fg(c(RED)) } else { title });
     Line::from(spans)
 }
@@ -803,7 +780,7 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
         }
         spans.push(Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)));
         let used: usize = spans.iter().map(Span::width).sum::<usize>() + age.chars().count() + 1;
-        let title = Span::from(truncate(&task.title, width.saturating_sub(used).max(4))).bold();
+        let title = Span::from(truncate(&crate::model::plain(&task.title, 400), width.saturating_sub(used).max(4))).bold();
         spans.push(if task.overdue() { title.fg(c(RED)) } else { title });
         spans.push(Span::from(format!(" {age}")).fg(c(age_colour)));
         return vec![Line::from(spans)];
@@ -851,13 +828,13 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
 }
 
 pub(crate) fn bullets(items: &[String]) -> Vec<Line<'static>> {
-    items.iter().map(|item| Line::from(format!("  • {item}"))).collect()
+    items.iter().map(|item| Line::from(format!("  • {}", detail::plain(item)))).collect()
 }
 
 pub(crate) fn json_list(value: &Value) -> Vec<String> {
     value
         .as_array()
-        .map(|items| items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect())
+        .map(|items| items.iter().filter_map(|i| i.as_str().map(detail::plain)).collect())
         .unwrap_or_default()
 }
 
@@ -869,10 +846,10 @@ pub(crate) fn slice_lines(value: &Value) -> Vec<String> {
             items
                 .iter()
                 .filter_map(|item| {
-                    let title = item["title"].as_str()?;
+                    let title = detail::plain(item["title"].as_str()?);
                     Some(match item["est_loc"].as_u64() {
                         Some(loc) => format!("{title} (~{loc} LOC)"),
-                        None => title.to_string(),
+                        None => title,
                     })
                 })
                 .collect()
@@ -1041,13 +1018,13 @@ pub(crate) fn proof_lines(value: &Value) -> Vec<(bool, String)> {
     let mut lines = Vec::new();
     for item in items {
         let ok = item["ok"].as_bool().unwrap_or(false);
-        let name = item["name"].as_str().unwrap_or("check");
-        let cmd = item["cmd"].as_str().unwrap_or("");
+        let name = detail::plain(item["name"].as_str().unwrap_or("check"));
+        let cmd = detail::plain(item["cmd"].as_str().unwrap_or(""));
         lines.push((ok, format!("{} {name}: {cmd}", if ok { "✓" } else { "✗" })));
         if !ok && let Some(tail) = item["tail"].as_str() {
             let shown: Vec<&str> = tail.lines().filter(|l| !l.trim().is_empty()).collect();
             for line in shown.iter().rev().take(TAIL).rev() {
-                lines.push((ok, format!("    {line}")));
+                lines.push((ok, format!("    {}", detail::plain(line))));
             }
         }
     }
@@ -1106,13 +1083,13 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
 
 /// Popup asking to confirm a delete or an abort.
 fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
-    render_confirm_box(frame, &format!("#{} {}", task.short_id(), task.title), title, note, RED);
+    render_confirm_box(frame, &format!("#{} {}", task.short_id(), crate::model::plain(&task.title, 400)), title, note, RED);
 }
 
 /// Popup asking to confirm a PR merge or close, in the same box as a ticket delete: the
 /// item's name in bold, what happens in muted text, then the yes / no chips.
 fn render_confirm_pr(frame: &mut Frame, app: &App, repo: &str, number: u64, title: &str, note: &str, accent: Color) {
-    let name = app.prs.prs.iter().find(|p| p.repo == repo && p.number == number).map_or(String::new(), |p| format!("  {}", p.title));
+    let name = app.prs.prs.iter().find(|p| p.repo == repo && p.number == number).map_or(String::new(), |p| format!("  {}", crate::model::plain(&p.title, 400)));
     render_confirm_box(frame, &format!("{repo}#{number}{name}"), title, note, accent);
 }
 
@@ -1273,7 +1250,7 @@ fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
             Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)),
             Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)),
             Span::from(repo).fg(c(SUBTEXT0)),
-            Span::from(task.title.clone()).bold(),
+            Span::from(crate::model::plain(&task.title, 400)).bold(),
             Span::from(format!("   {what}")).fg(look_color(look)),
             Span::from(format!(" · {}", age(&task.updated_at, now))).fg(c(SUBTEXT0)),
         ];
@@ -1521,7 +1498,7 @@ fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'sta
         Span::from("▌").fg(c(repo_colour)),
         Span::from(format!("{:<10} ", truncate(repo_name, 10))).fg(c(repo_colour)),
         Span::from(format!("{number:>5} ")).fg(c(SUBTEXT0)),
-        Span::from(format!("{:<room$}", truncate(&pr.title, room))).bold(),
+        Span::from(format!("{:<room$}", truncate(&crate::model::plain(&pr.title, 400), room))).bold(),
         Span::from(format!("  {age:>3}  ")).fg(c(SUBTEXT0)),
         Span::from(format!("{tag:<PR_TAG_WIDTH$}")).fg(c(tag_color)).bold(),
     ];
@@ -2312,7 +2289,7 @@ fn render_digest(frame: &mut Frame, area: Rect, app: &App, digest: &DigestState)
             Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)),
             Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)),
             Span::from(repo).fg(c(SUBTEXT0)),
-            Span::from(task.title.clone()).bold(),
+            Span::from(crate::model::plain(&task.title, 400)).bold(),
             Span::from(format!("   {what}")).fg(look_color(look)),
             Span::from(format!(" · {}", age(&task.updated_at, now))).fg(c(SUBTEXT0)),
         ];
