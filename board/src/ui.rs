@@ -114,14 +114,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(inbox) = app.inbox.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::ConfirmApprove(_) | Mode::Help { .. })) {
+    if let Some(inbox) = app.inbox.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::Help { .. })) {
         render_inbox(frame, body, app, inbox);
         frame.render_widget(footer_line(app, footer.width), footer);
-        if let Mode::ConfirmApprove(id) = &app.mode
-            && let Some(task) = app.task(id)
-        {
-            render_approve(frame, app, task);
-        }
         if let Mode::ConfirmApproveAll(ids) = &app.mode {
             render_note(frame, " Approve them all? ", &format!("{} ticket(s) in Approve get a yes, each with no guidance.  y / n", ids.len()));
         }
@@ -275,9 +270,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 render_prompt(frame, app, &format!("#{short} — why was the pack not useful?"), text, "", "enter send · esc cancel", PEACH);
             }
         }
-        Mode::ConfirmApprove(id) => {
-            if let Some(task) = app.task(id) {
-                render_approve(frame, app, task);
+        Mode::ConfirmApprove(held) => {
+            if let Some(task) = app.task(&held.id) {
+                render_approve(frame, &held.question, task);
             }
         }
         Mode::ConfirmQuit => render_confirm_box(frame, &app.quit_question(), " Quit? ", "The machine keeps working; only the board closes.", PEACH),
@@ -1357,9 +1352,8 @@ fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
 }
 
 /// Popup asking to confirm an approval: what is approved and the card, in the delete box's shape.
-fn render_approve(frame: &mut Frame, app: &App, task: &Task) {
-    let question = app.approval_question(task).unwrap_or_else(|| format!("approve #{}?", task.short_id()));
-    render_confirm_box(frame, &question, " Approve ", &crate::model::plain(&task.title, 400), GREEN);
+fn render_approve(frame: &mut Frame, question: &str, task: &Task) {
+    render_confirm_box(frame, question, " Approve ", &crate::model::plain(&task.title, 400), GREEN);
 }
 
 /// The box over marked cards at gates: `approve 3 cards? 2 plans · 1 ship`, up to five of them by short id and

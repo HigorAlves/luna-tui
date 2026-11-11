@@ -23,7 +23,7 @@ The board connects to whichever machine is up: the one from `pnpm dev` on `http:
 the container from `pnpm start` on `:4318`. It checks again on every reconnect, so switching between
 the two needs no restart. `HARDNESS_MACHINE_URL` pins one address instead. `LUNA_APPROVER` names you on every approval and send-back. A plan of High risk needs two distinct names. So the first `a` keeps your name on the gate (`Approvals  1 of 2 (ana)`), and a second person's `a` closes it.
 
-On the board, `a` at a plan, split, ship, release or memory gate opens the task so you read what you approve; inside the task `a` asks once (`y` or `enter` approves, `n` or `esc` cancels). `a` over marked cards at those gates asks once, with the count and the kinds. `q` asks before quitting while a card needs you or is running, and `Q` quits at once. `tab` on the board jumps to the next card that needs you. Columns collapse by width: empty ones first, then Done, and the header says where the rest are.
+From the board, the `x` menu, the Inbox or `:start`, `a` (and `A` at the retro) at any gate opens the task so you read what you approve; inside the task it asks once, naming the gate (`y` or `enter` approves, `n` or `esc` cancels), and sends nothing if the card moved to another gate meanwhile. `a` over marked cards at a plan, split, ship or release gate asks once, with the count and the kinds; the other gates are approved inside their card. `q` asks before quitting while a card needs you or is running, and `Q` quits at once. `tab` on the board jumps to the next card that needs you. Columns collapse by width: empty ones first, then Done, and the header says where the rest are.
 
 ## Install as a herdr plugin (local link)
 
@@ -91,7 +91,7 @@ generates the tables below. A test fails when they drift from the registry.
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; open to approve; archive the ticket (one click); post the reply and close the ticket; approve the tests; retry the escalation, with guidance; resume after the usage limit; advance |
+| `a` | start; open to approve; answer triage's questions; retry the escalation, with guidance; resume after the usage limit; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
@@ -255,7 +255,7 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket; post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
@@ -640,7 +640,7 @@ What the ticket shows:
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket; post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |

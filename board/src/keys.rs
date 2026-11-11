@@ -270,6 +270,27 @@ pub(crate) fn open_ship_approval(app: &App, t: &Task) -> bool {
     t.state == "awaiting_ship" && t.waiting_on_you && app.detail.as_ref().filter(|d| d.task.id == t.id).and_then(|d| d.open_approval()).is_some_and(|a| a.is_ship_approval())
 }
 
+/// Why `e` has nothing to edit on this card, when it has not: a split proposes new cards, and the release question is
+/// asked of a PR that is already open. The ticket editor would open there and change nothing that matters.
+pub(crate) fn edit_blocked(app: &App, t: &Task) -> Option<&'static str> {
+    let outcome = app.detail.as_ref().filter(|d| d.task.id == t.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome());
+    if t.state == "awaiting_approval" && matches!(outcome, Some("split" | "split_failed")) {
+        Some("a split has no plan to edit; :whole keeps it one card")
+    } else if open_ship_approval(app, t) {
+        Some("the release question has nothing to edit")
+    } else {
+        None
+    }
+}
+
+/// `e` in the task view: `On` where something can be edited.
+fn edit_key(app: &App) -> Avail {
+    match task_of(app) {
+        None => Avail::Off("no ticket selected"),
+        Some(t) => edit_blocked(app, t).map_or(Avail::On, Avail::Off),
+    }
+}
+
 /// Whether the ticket is at a gate. `awaiting_ship` and `reviewing_memory` also hold a running stage (the watch, the retro): they are gates only when the machine waits on you.
 pub(crate) fn at_gate(t: &Task) -> bool {
     GATE_STATES.contains(&t.state.as_str()) && (!matches!(t.state.as_str(), "awaiting_ship" | "reviewing_memory") || t.waiting_on_you)
@@ -345,7 +366,7 @@ fn gate_is(app: &App, states: &[&str]) -> Avail {
 
 /// `On` at the plan gate: with `outcome` None the plan stage's own gate (or one whose detail is not
 /// loaded yet), with `Some(outcome)` the gate triage opened to confirm a reply or an archive in
-/// one click. `Hidden` anywhere else, so the three meanings of `a` there never show together.
+/// one yes. `Hidden` anywhere else, so the three meanings of `a` there never show together.
 fn plan_gate(app: &App, outcome: Option<&str>) -> Avail {
     let Some(task) = task_of(app) else { return Avail::Hidden };
     if task.state != "awaiting_approval" {
@@ -447,13 +468,13 @@ const fn cmd(binding: Binding, command: &'static str) -> Binding {
 /// is set when the table is built.
 const SHARED: &[Binding] = &[
     cmd(b("a", "start", Group::Gate, Scope::Board, |app| gate_is(app, &["draft"]), 90), "start"),
-    b("a", "approve the setup", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_setup"]), 90),
+    opens_on_board(b("a", "approve the setup", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_setup"]), 90)),
     b("a", "answer triage's questions", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_answers"]), 90),
     opens_on_board(b("a", "approve the plan", Group::Gate, Scope::Board, |app| plan_gate(app, None), 90)),
     opens_on_board(b("a", "approve the split", Group::Gate, Scope::Board, |app| plan_gate(app, Some("split")), 90)),
-    b("a", "archive the ticket (one click)", Group::Gate, Scope::Board, |app| plan_gate(app, Some("archive")), 90),
-    b("a", "post the reply and close the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90),
-    b("a", "approve the tests", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_test_check"]), 90),
+    opens_on_board(b("a", "archive the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("archive")), 90)),
+    opens_on_board(b("a", "post the reply and close the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90)),
+    opens_on_board(b("a", "approve the tests", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_test_check"]), 90)),
     opens_on_board(b("a", "ship: publish, watch the PR", Group::Gate, Scope::Board, |app| ship_gate(app, false), 90)),
     opens_on_board(b("a", "ship: approve the release", Group::Gate, Scope::Board, |app| ship_gate(app, true), 90)),
     b("a", "retry the escalation, with guidance", Group::Gate, Scope::Board, |app| gate_is(app, &["escalated"]), 90),
@@ -601,13 +622,14 @@ const BOARD: &[Binding] = &[
     cmd(b("x -", "one slot fewer", Group::App, Scope::Board, on, 5), "slots"),
     Binding { scope: Scope::Board, keys: "x S", ..SHIP },
     // The ticket keys whose meaning is the board's own.
-    b("e", "edit the plan and the ticket", Group::Ticket, Scope::Board, |app| gate_is(app, &["awaiting_approval"]), 80),
+    b("e", "edit the plan and the ticket", Group::Ticket, Scope::Board, |app| if task_of(app).is_some_and(|t| edit_blocked(app, t).is_some()) { Avail::Hidden } else { gate_is(app, &["awaiting_approval"]) }, 80),
     b(
         "e",
         "edit title, description and criteria",
         Group::Ticket,
         Scope::Board,
         |app| match task_of(app) {
+            Some(t) if edit_blocked(app, t).is_some() => Avail::Hidden,
             Some(t) if t.state != "awaiting_approval" => Avail::On,
             Some(_) => Avail::Hidden,
             None => Avail::Off("no ticket selected"),
@@ -706,7 +728,7 @@ const BOARD: &[Binding] = &[
 
 const DETAIL: &[Binding] = &[
     SHIP,
-    b("e", "edit: the plan, the cases or the ticket", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 80),
+    b("e", "edit: the plan, the cases or the ticket", Group::Ticket, Scope::Detail, edit_key, 80),
     b("o", "open: the folder, file or PR", Group::Ticket, Scope::Detail, open_key, 50),
     b("i", "open the issue", Group::Ticket, Scope::Detail, open_issue_key, 37),
     b("O", "open the PR in the browser", Group::Ticket, Scope::Detail, open_pr_key, 38),
@@ -1072,7 +1094,7 @@ pub fn footer_keys(app: &App, scope: Scope, n: usize) -> Vec<&'static Binding> {
 /// sections where `j / k` pick a row.
 fn detail_offered(app: &App, b: &Binding) -> bool {
     match b.first() {
-        "e" => task_of(app).is_some_and(at_gate),
+        "e" => task_of(app).is_some_and(|t| at_gate(t) && edit_blocked(app, t).is_none()),
         "J" => app.detail_section.has_cursor(),
         "enter" => app.detail_section == Section::Evidence,
         _ => true,
@@ -1568,8 +1590,8 @@ mod tests {
         assert_eq!((a.0.label, a.1), ("open to approve", Avail::On), "on the board `a` opens the gate to read it");
         let in_task = bindings_for(&approval, Scope::Detail).into_iter().find(|(b, _)| b.keys == "a").unwrap();
         assert_eq!((in_task.0.label, in_task.1), ("approve the plan", Avail::On), "inside the task it approves");
-        // A gate triage opened for a reply or an archive says what `a` does there, once its detail is loaded.
-        for (outcome, label) in [("archive", "archive the ticket (one click)"), ("conversation", "post the reply and close the ticket")] {
+        // A gate triage opened for a reply or an archive says what `a` does inside the task, once its detail is loaded; the board opens it.
+        for (outcome, label) in [("archive", "archive the ticket"), ("conversation", "post the reply and close the ticket")] {
             let mut gate = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
             let task_json = r#"{"id":"t1","title":"Login page","description":"","criteria":[],"repoPath":"/r/app","branch":null,"worktreePath":"/w/app","state":"awaiting_approval","column":"Build",
                 "waitingOnYou":true,"running":false,"queued":false,"retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
@@ -1581,7 +1603,9 @@ mod tests {
                 .unwrap(),
             );
             let shown: Vec<&str> = bindings_for(&gate, Scope::Board).into_iter().filter(|(b, _)| b.keys == "a").map(|(b, _)| b.label).collect();
-            assert_eq!(shown, [label], "{outcome}");
+            assert_eq!(shown, ["open to approve"], "{outcome}: the board opens it");
+            let inside: Vec<&str> = bindings_for(&gate, Scope::Detail).into_iter().filter(|(b, a)| b.keys == "a" && *a != Avail::Hidden).map(|(b, _)| b.label).collect();
+            assert_eq!(inside, [label], "{outcome}: the task approves it");
         }
         let running = app_with(vec![task("t1", "implementing", true, true, true)]);
         let a = bindings_for(&running, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();

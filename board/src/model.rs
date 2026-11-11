@@ -558,6 +558,9 @@ impl StageRun {
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Approval {
+    /// The machine's id for this ask: a withdrawn gate asked again is a different approval.
+    #[serde(default)]
+    pub id: Option<String>,
     /// The gate this is (`awaiting_approval`, `awaiting_test_check`, ...); absent from machines
     /// that predate it, in which case `kind_or_guess` reads it off the request's shape.
     #[serde(default)]
