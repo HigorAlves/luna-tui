@@ -923,26 +923,6 @@ impl TaskDetail {
         self.latest_approval("awaiting_test_check")
             .or_else(|| self.latest_approval("awaiting_approval").filter(|a| a.requested["cases"].is_array()))
     }
-
-    /// The cases grouped under the criterion each proves, criteria in first-seen order; cases
-    /// that name none gather under `(no criterion)` at the end.
-    pub fn cases_by_criterion(&self) -> Vec<(String, Vec<TestCase>)> {
-        let mut groups: Vec<(String, Vec<TestCase>)> = Vec::new();
-        let mut loose: Vec<TestCase> = Vec::new();
-        for case in self.cases() {
-            match &case.criterion {
-                Some(criterion) => match groups.iter_mut().find(|(c, _)| c == criterion) {
-                    Some((_, cases)) => cases.push(case),
-                    None => groups.push((criterion.clone(), vec![case])),
-                },
-                None => loose.push(case),
-            }
-        }
-        if !loose.is_empty() {
-            groups.push(("(no criterion)".to_string(), loose));
-        }
-        groups
-    }
 }
 
 /// `GET /packs`: the engine a pack runs on unless a task names another, and the ones it may.
@@ -3571,17 +3551,18 @@ mod detail_tests {
     }
 
     #[test]
-    fn cases_group_under_the_criterion_they_prove_and_carry_verifying_s_verdict() {
+    fn cases_name_the_criterion_they_prove_and_carry_verifying_s_verdict() {
         let d = detail();
-        let groups = d.cases_by_criterion();
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].0, "handles a/b & c");
-        assert_eq!(groups[0].1.len(), 2);
-        assert_eq!(groups[0].1[0].title, "rejects a bad password");
-        assert_eq!(groups[0].1[0].approach, "run the suite");
-        assert_eq!(groups[0].1[0].result, Some(true));
-        assert_eq!(groups[0].1[1].result, Some(false));
-        assert_eq!(groups[1].1[0].approach, "hexdump", "an older `test` field still reads as the approach");
+        let cases = d.cases();
+        assert_eq!(cases.len(), 3);
+        assert_eq!(cases[0].criterion.as_deref(), Some("handles a/b & c"));
+        assert_eq!(cases[1].criterion.as_deref(), Some("handles a/b & c"));
+        assert_eq!(cases[2].criterion.as_deref(), Some("exports UTF-8 with a BOM"));
+        assert_eq!(cases[0].title, "rejects a bad password");
+        assert_eq!(cases[0].approach, "run the suite");
+        assert_eq!(cases[0].result, Some(true));
+        assert_eq!(cases[1].result, Some(false));
+        assert_eq!(cases[2].approach, "hexdump", "an older `test` field still reads as the approach");
     }
 
     #[test]

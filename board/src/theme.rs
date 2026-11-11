@@ -1,9 +1,6 @@
 //! The board's colours and what they mean. Ten palette constants, then roles over them: a screen asks for
 //! `needs_you()` or `dim()`, not for PEACH or SURFACE1, so a state reads the same wherever it is drawn.
 
-// The task view is rebuilt on these in the slices that follow; until each is used, some are not.
-#![allow(dead_code)]
-
 use std::env;
 
 use ratatui::style::{Color, Modifier, Style};
@@ -52,6 +49,11 @@ pub(crate) fn lost() -> Style {
     fg(RED)
 }
 
+/// Something is held until a limit lifts: a rate limit, a window.
+pub(crate) fn paused() -> Style {
+    fg(LAVENDER)
+}
+
 /// Something finished well.
 pub(crate) fn done() -> Style {
     fg(GREEN)
@@ -87,11 +89,6 @@ pub(crate) fn selection() -> Style {
     if env::var_os("NO_COLOR").is_some() { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new().bg(SELECTED_BG) }
 }
 
-/// An unfocused border.
-pub(crate) fn border() -> Style {
-    fg(MUTED)
-}
-
 /// The focused border and the selection bar.
 pub(crate) fn border_focus() -> Style {
     fg(ACCENT)
@@ -111,10 +108,10 @@ mod tests {
         assert_eq!(needs_you().fg, Some(PEACH));
         assert_eq!(working().fg, Some(YELLOW));
         assert_eq!(lost().fg, Some(RED));
+        assert_eq!(paused().fg, Some(LAVENDER));
         assert_eq!(done().fg, Some(GREEN));
         assert_eq!(label().fg, Some(SUBTEXT0));
         assert_eq!(dim().fg, Some(SURFACE1));
-        assert_eq!(border().fg, Some(SURFACE1));
         assert_eq!(border_focus().fg, Some(BLUE));
         assert_eq!(flag().fg, Some(PEACH));
         assert_eq!(selection().bg, Some(SURFACE0));

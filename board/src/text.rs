@@ -1,9 +1,6 @@
 //! Text for the screen: making outside text safe, wrapping it to a readable measure, a light markdown
 //! for what models write, and cutting strings to fit. Pure functions, no drawing.
 
-// The task view is rebuilt on these in the slices that follow; until each is used, some are not.
-#![allow(dead_code)]
-
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},

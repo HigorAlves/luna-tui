@@ -21,7 +21,7 @@ fn title(text: &str) -> Line<'static> {
 }
 
 /// `prefix` then `text` wrapped under itself: the first line starts with the prefix spans, the rest with as many spaces.
-fn hanging(prefix: Vec<Span<'static>>, text: &str, width: usize) -> Vec<Line<'static>> {
+pub(crate) fn hanging(prefix: Vec<Span<'static>>, text: &str, width: usize) -> Vec<Line<'static>> {
     let used: usize = prefix.iter().map(|s| text::cells(&s.content)).sum();
     let parts = text::wrap(&plain(text), width.saturating_sub(used).max(10), 0);
     let mut out = Vec::new();
@@ -103,17 +103,18 @@ fn flags(approval: &Approval, width: usize) -> Vec<Line<'static>> {
 }
 
 /// One of the plan's scenarios, read off the gate's cases.
-struct Scenario {
-    id: String,
-    kind: String,
-    layer: String,
-    title: String,
-    criterion: Option<String>,
+pub(crate) struct Scenario {
+    pub id: String,
+    pub kind: String,
+    pub layer: String,
+    pub title: String,
+    pub approach: String,
+    pub criterion: Option<String>,
 }
 
 impl Scenario {
     /// `S1 happy · unit`
-    fn tag(&self) -> String {
+    pub(crate) fn tag(&self) -> String {
         let mut tag = format!("{} {}", self.id, self.kind);
         if !self.layer.is_empty() {
             tag.push_str(&format!(" · {}", self.layer));
@@ -122,7 +123,7 @@ impl Scenario {
     }
 }
 
-fn scenarios(detail: Option<&TaskDetail>) -> Vec<Scenario> {
+pub(crate) fn scenarios(detail: Option<&TaskDetail>) -> Vec<Scenario> {
     let Some(gate) = detail.and_then(TaskDetail::cases_approval) else { return Vec::new() };
     gate.requested["cases"]
         .as_array()
@@ -135,6 +136,7 @@ fn scenarios(detail: Option<&TaskDetail>) -> Vec<Scenario> {
                 kind: c["type"].as_str().map_or("happy".to_string(), plain),
                 layer: c["layer"].as_str().map(plain).unwrap_or_default(),
                 title: plain(c["title"].as_str()?),
+                approach: c["approach"].as_str().or_else(|| c["test"].as_str()).map(plain).unwrap_or_default(),
                 criterion: c["criterion"].as_str().map(str::to_string),
             })
         })
@@ -142,7 +144,7 @@ fn scenarios(detail: Option<&TaskDetail>) -> Vec<Scenario> {
 }
 
 /// The criteria with their ids: the plan's own (`plan.acceptance_criteria`, `C1`…), else the gate's list numbered in order.
-fn criteria(approval: &Approval, task: &Task) -> Vec<(String, String)> {
+pub(crate) fn criteria(approval: &Approval, task: &Task) -> Vec<(String, String)> {
     let planned: Vec<(String, String)> = approval.requested["plan"]["acceptance_criteria"]
         .as_array()
         .into_iter()
@@ -198,6 +200,59 @@ fn block(name: &str, text: &str, width: usize) -> Vec<Line<'static>> {
     out
 }
 
+/// The plan's decision material, the same on the Review page and in the Plan section after the gate: the brief, each criterion once
+/// with its id, the steps with their size and files, rollback, out of scope and migration. With `with_scenarios` each criterion lists
+/// the scenarios that prove it; when it has more than two they go to the second value, `(criterion id, "tag  title")`, for a reference group.
+pub(crate) fn plan_material(task: &Task, approval: &Approval, detail: Option<&TaskDetail>, width: usize, with_scenarios: bool) -> (Vec<Line<'static>>, Vec<(String, String)>) {
+    let r = &approval.requested;
+    let mut main = vec![title("Brief")];
+    match r["brief"].as_str().filter(|b| !b.trim().is_empty()) {
+        Some(brief) => main.extend(text::markdown(brief, width, 2)),
+        None => main.push(muted("  (none)".into())),
+    }
+
+    let all = if with_scenarios { scenarios(detail) } else { Vec::new() };
+    let mut long: Vec<(String, String)> = Vec::new();
+    let rows = criteria(approval, task);
+    if !rows.is_empty() {
+        main.extend([Line::default(), title("Criteria")]);
+    }
+    for (id, text) in &rows {
+        main.extend(hanging(vec![Span::raw("  "), Span::styled(format!("{id:<4}"), theme::label())], text, width));
+        if !with_scenarios {
+            continue;
+        }
+        let mine: Vec<&Scenario> = all.iter().filter(|s| s.criterion.as_deref() == Some(text.as_str())).collect();
+        let indent = Span::raw("      ");
+        match mine.len() {
+            0 => main.push(Line::from(vec![indent, Span::styled("⚑ no scenario", theme::flag())])),
+            1..=2 => {
+                for s in &mine {
+                    main.extend(hanging(vec![indent.clone(), Span::styled(format!("{}  ", s.tag()), theme::label())], &s.title, width));
+                }
+            }
+            n => {
+                main.push(Line::from(vec![indent, Span::styled(format!("✓ {n} scenarios"), theme::label())]));
+                long.extend(mine.into_iter().map(|s| (id.clone(), format!("{}  {}", s.tag(), s.title))));
+            }
+        }
+    }
+
+    let steps = steps(approval, width);
+    if !steps.is_empty() {
+        main.push(Line::default());
+        main.extend(steps);
+    }
+    let rollback = r["rollback"].as_str().or_else(|| r["plan"]["rollback"].as_str()).unwrap_or_default();
+    main.extend(block("Rollback", rollback, width));
+    let out_of_scope = strings(&r["plan"]["out_of_scope"]);
+    if !out_of_scope.is_empty() {
+        main.extend(block("Out of scope", &out_of_scope.iter().map(|i| format!("- {i}")).collect::<Vec<_>>().join("\n"), width));
+    }
+    main.extend(block("Migration", r["plan"]["migration"].as_str().or_else(|| r["migration"].as_str()).unwrap_or_default(), width));
+    (main, long)
+}
+
 /// The plan gate's page: what to look at first (flags), then the decision material (brief, criteria with their scenarios, steps, rollback),
 /// with the triage record, risk, checks, code map, assumptions and the card's facts as reference.
 pub(crate) fn review_page(task: &Task, detail: Option<&TaskDetail>, width: usize, ref_width: usize) -> Page {
@@ -224,48 +279,8 @@ pub(crate) fn review_page(task: &Task, detail: Option<&TaskDetail>, width: usize
     if !main.is_empty() {
         main.push(Line::default());
     }
-    main.push(title("Brief"));
-    match r["brief"].as_str().filter(|b| !b.trim().is_empty()) {
-        Some(brief) => main.extend(text::markdown(brief, width, 2)),
-        None => main.push(muted("  (none)".into())),
-    }
-
-    let all = scenarios(detail);
-    let mut long: Vec<(String, &Scenario)> = Vec::new();
-    let rows = criteria(approval, task);
-    if !rows.is_empty() {
-        main.extend([Line::default(), title("Criteria")]);
-    }
-    for (id, text) in &rows {
-        main.extend(hanging(vec![Span::raw("  "), Span::styled(format!("{id:<4}"), theme::label())], text, width));
-        let mine: Vec<&Scenario> = all.iter().filter(|s| s.criterion.as_deref() == Some(text.as_str())).collect();
-        let indent = Span::raw("      ");
-        match mine.len() {
-            0 => main.push(Line::from(vec![indent, Span::styled("⚑ no scenario", theme::flag())])),
-            1..=2 => {
-                for s in &mine {
-                    main.extend(hanging(vec![indent.clone(), Span::styled(format!("{}  ", s.tag()), theme::label())], &s.title, width));
-                }
-            }
-            n => {
-                main.push(Line::from(vec![indent, Span::styled(format!("✓ {n} scenarios"), theme::label())]));
-                long.extend(mine.into_iter().map(|s| (id.clone(), s)));
-            }
-        }
-    }
-
-    let steps = steps(approval, width);
-    if !steps.is_empty() {
-        main.push(Line::default());
-        main.extend(steps);
-    }
-    let rollback = r["rollback"].as_str().or_else(|| r["plan"]["rollback"].as_str()).unwrap_or_default();
-    main.extend(block("Rollback", rollback, width));
-    let out_of_scope = strings(&r["plan"]["out_of_scope"]);
-    if !out_of_scope.is_empty() {
-        main.extend(block("Out of scope", &out_of_scope.iter().map(|i| format!("- {i}")).collect::<Vec<_>>().join("\n"), width));
-    }
-    main.extend(block("Migration", r["plan"]["migration"].as_str().or_else(|| r["migration"].as_str()).unwrap_or_default(), width));
+    let (material, long) = plan_material(task, approval, detail, width, true);
+    main.extend(material);
     if approval.names_needed() > 1 || approval.rule_line().is_some() {
         let given = approval.approvers();
         let names = if given.is_empty() { String::new() } else { format!(" ({})", plain(&given.join(", "))) };
@@ -280,7 +295,7 @@ pub(crate) fn review_page(task: &Task, detail: Option<&TaskDetail>, width: usize
     if !long.is_empty() {
         let lines: Vec<Line<'static>> = long
             .iter()
-            .map(|(id, s)| Line::from(vec![Span::styled(format!("{id:<4}"), theme::label()), Span::raw(ellipsis(&format!("{}  {}", s.tag(), s.title), ref_width.saturating_sub(4)))]))
+            .map(|(id, text)| Line::from(vec![Span::styled(format!("{id:<4}"), theme::label()), Span::raw(ellipsis(text, ref_width.saturating_sub(4)))]))
             .collect();
         groups.push(RefGroup::new("scenarios", "Scenarios", format!("{} listed", long.len()), lines));
     }

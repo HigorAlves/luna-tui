@@ -15,7 +15,7 @@ use ratatui::{
     widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap},
 };
 use crate::model::{
-    Approval, Artifact, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TaskSource, TestCase, Tone, age, criteria_summary, now_secs,
+    Approval, Artifact, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TaskSource, Tone, age, criteria_summary, now_secs,
     plan_history, questions_of,
 };
 use crate::reference::{self, Page, RefGroup, RefState, SIDE_FROM, SIDE_WIDTH};
@@ -23,7 +23,7 @@ use crate::text::{cells, ellipsis, truncate_middle};
 use crate::theme;
 use crate::ui::{
     ACCENT, GREEN, MUTED, PEACH, RED, SUBTEXT0, YELLOW, bullets, c, centered, continues_line, describe, evidence_lines,
-    json_list, look_color, look_glyph, proof_lines, rules_lines, slice_lines, truncate,
+    json_list, look_color, look_glyph, look_style, proof_lines, rules_lines, truncate,
 };
 
 /// The sections of the workspace, in rail order. `1`…`9` jump to them.
@@ -329,7 +329,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         Section::Stopped => (crate::pages::stopped_page(task, detail, view.can, width, ref_width), None),
         Section::Result => (crate::pages::result_page(task, detail, view.prs, view.can, width, ref_width, now), None),
         Section::Gate => (crate::pages::gate_page(task, detail, view.can, width, ref_width, now), None),
-        Section::Plan => (plan_page(task, detail, ref_width, now), None),
+        Section::Plan => (plan_page(task, detail, width, ref_width, now), None),
         Section::Tests => (Page::of(tests_lines(task, detail, width, now)), None),
         Section::Runs => {
             let (lines, row) = runs_lines(task, detail, view.cursor, width, now);
@@ -676,19 +676,6 @@ pub struct BarStatus {
     pub text: String,
     pub style: Style,
     pub note: String,
-}
-
-/// The role style of a card's `Look`: the one colour for "needs you", one for running, for stopped, for done.
-fn look_style(look: crate::model::Look) -> Style {
-    use crate::model::Look;
-    match look {
-        Look::Escalated => theme::lost(),
-        Look::NeedsYou | Look::Stale => theme::needs_you(),
-        Look::Working => theme::working(),
-        Look::Done => theme::done(),
-        Look::Archived => theme::dim(),
-        Look::Queued | Look::Paused | Look::Draft => theme::label(),
-    }
 }
 
 /// `S3 of 4`: the scenario Build is on, from the progress the machine reports; None without any.
@@ -1254,16 +1241,17 @@ pub(crate) fn plain(text: &str) -> String {
     text.chars().map(|ch| if crate::text::is_unsafe(ch) && ch != '\n' { ' ' } else { ch }).collect()
 }
 
-/// Plan: the latest triage plan, decided or not, then what happened to it. The brief, the criteria and the slices are the
-/// page; the outcome and risk, the triage record, the checks, the code map, the assumptions and the card's facts are reference.
-pub(crate) fn plan_page(task: &Task, detail: Option<&TaskDetail>, ref_width: usize, now: u64) -> Page {
+/// Plan: the latest triage plan, decided or not, then what happened to it. The page reads like the Review page: the brief, each
+/// criterion once with its id, the steps with their size and files, rollback, out of scope and migration. The outcome and risk,
+/// the triage record, the checks, the code map, the assumptions and the card's facts are reference.
+pub(crate) fn plan_page(task: &Task, detail: Option<&TaskDetail>, width: usize, ref_width: usize, now: u64) -> Page {
     let approval = detail.and_then(|d| d.latest_approval("awaiting_approval"));
     // A gate that carries triage's outcome came from triage; the plan stage's has a lane or a risk.
     let stage = if approval.is_some_and(|a| a.outcome().is_none() && (a.requested["lane"].is_string() || a.requested["risk"].is_object())) { "test_design" } else { "triage" };
     let mut lines = vec![gate_header("Plan", stage, approval, detail, now)];
     let Some(approval) = approval else {
         lines.push(Line::default());
-        lines.push(muted("  no plan yet: triage and the planner write one once the ticket starts".into()));
+        lines.push(muted(if detail.is_none() { "  loading…" } else { "  no plan yet: triage and the planner write one once the ticket starts" }.into()));
         return Page::of(lines);
     };
     let requested = &approval.requested;
@@ -1280,17 +1268,10 @@ pub(crate) fn plan_page(task: &Task, detail: Option<&TaskDetail>, ref_width: usi
         lines.extend([Line::default(), proposal_heading("Archive (a archives the ticket)")]);
         lines.push(Line::from(format!("  {}", plain(&approval.archive_reason().unwrap_or_else(|| "no reason given".into())))));
     }
-    lines.extend([Line::default(), proposal_heading("Brief")]);
-    match requested["brief"].as_str().filter(|b| !b.trim().is_empty()) {
-        Some(brief) => lines.extend(plain(brief).lines().map(|l| Line::from(format!("  {l}")))),
-        None => lines.push(muted("  (none)".into())),
-    }
-    for (title, items) in [("Criteria to build", json_list(&requested["criteria"])), ("Slices", slice_lines(&requested["slices"]))] {
-        if !items.is_empty() {
-            lines.extend([Line::default(), proposal_heading(title)]);
-            lines.extend(bullets(&items));
-        }
-    }
+    // The scenarios that prove each criterion are the Tests section's.
+    let (material, _) = crate::pages::plan_material(task, approval, detail, width, false);
+    lines.push(Line::default());
+    lines.extend(material);
     let history = detail.map(plan_history).unwrap_or_default();
     if !history.is_empty() {
         lines.extend([Line::default(), heading("History")]);
@@ -1448,18 +1429,35 @@ fn stack_lines(task: &Task, detail: Option<&TaskDetail>, tasks: &[Task]) -> Vec<
     lines
 }
 
-/// Tests: the cases under the criterion each proves, with verifying's verdict on each.
+/// Tests: the scenarios under the criterion each proves (id, type, layer, title), with verifying's verdict on each.
 fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64) -> Vec<Line<'static>> {
     let approval = detail.and_then(|d| d.cases_approval());
     let mut lines = vec![gate_header("Tests", "test_design", approval, detail, now)];
     let Some(d) = detail.filter(|_| approval.is_some()) else {
         lines.push(Line::default());
-        lines.push(muted("  no cases yet: test_design writes them with the plan".into()));
+        lines.push(muted(if detail.is_none() { "  loading…" } else { "  no cases yet: test_design writes them with the plan" }.into()));
         return lines;
     };
-    let groups = d.cases_by_criterion();
-    let total: usize = groups.iter().map(|(_, cases)| cases.len()).sum();
-    let judged: Vec<bool> = groups.iter().flat_map(|(_, cases)| cases.iter().filter_map(|c| c.result)).collect();
+    let results = d.cases();
+    let verdict = |title: &str| results.iter().find(|c| c.title == title).and_then(|c| c.result);
+    // Criteria in first-seen order, the ones that name none last; the plan's ids where it lists them.
+    let ids: Vec<(String, String)> = d.latest_approval("awaiting_approval").map(|a| crate::pages::criteria(a, task)).unwrap_or_default();
+    let mut groups: Vec<(String, Vec<crate::pages::Scenario>)> = Vec::new();
+    let mut loose = Vec::new();
+    for s in crate::pages::scenarios(detail) {
+        match s.criterion.clone() {
+            Some(criterion) => match groups.iter_mut().find(|(c, _)| *c == criterion) {
+                Some((_, mine)) => mine.push(s),
+                None => groups.push((criterion, vec![s])),
+            },
+            None => loose.push(s),
+        }
+    }
+    if !loose.is_empty() {
+        groups.push(("(no criterion)".to_string(), loose));
+    }
+    let total: usize = groups.iter().map(|(_, mine)| mine.len()).sum();
+    let judged: Vec<bool> = groups.iter().flat_map(|(_, mine)| mine.iter().filter_map(|s| verdict(&s.title))).collect();
     let mut summary = format!("{total} case{} over {} criteri{}", if total == 1 { "" } else { "s" }, groups.len(), if groups.len() == 1 { "on" } else { "a" });
     if !judged.is_empty() {
         summary.push_str(&format!(" · verifying {}/{}", judged.iter().filter(|ok| **ok).count(), judged.len()));
@@ -1469,20 +1467,24 @@ fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64)
         summary.push_str(&format!(" {glyph}"));
     }
     lines.push(muted(summary));
+    let tag_w = groups.iter().flat_map(|(_, mine)| mine.iter().map(|s| s.tag().chars().count())).max().unwrap_or(2);
     let title_w = groups
         .iter()
-        .flat_map(|(_, cases)| cases.iter().map(|c| c.title.chars().count()))
+        .flat_map(|(_, mine)| mine.iter().map(|s| s.title.chars().count()))
         .max()
         .unwrap_or(10)
-        .clamp(10, width.saturating_sub(30).max(10));
-    for (criterion, cases) in &groups {
+        .clamp(10, width.saturating_sub(tag_w + 30).max(10));
+    for (criterion, mine) in &groups {
         lines.push(Line::default());
-        lines.push(Line::from(vec![
-            Span::from(plain(criterion)).style(theme::heading()),
-            Span::from(format!("   {} case{}", cases.len(), if cases.len() == 1 { "" } else { "s" })).style(theme::label()),
-        ]));
-        for case in cases {
-            lines.push(case_line(case, title_w));
+        let id = ids.iter().find(|(_, text)| text == &plain(criterion)).map(|(id, _)| id.clone()).unwrap_or_default();
+        let prefix = if id.is_empty() { Vec::new() } else { vec![Span::styled(format!("{id:<4}"), theme::label())] };
+        let mut head = crate::pages::hanging(prefix, criterion, width);
+        if let Some(last) = head.last_mut() {
+            last.spans.push(Span::from(format!("   {} case{}", mine.len(), if mine.len() == 1 { "" } else { "s" })).style(theme::label()));
+        }
+        lines.extend(head.into_iter().map(|l| Line::from(l.spans.into_iter().map(|s| if s.style == Style::default() { Span::styled(s.content, theme::heading()) } else { s }).collect::<Vec<_>>())));
+        for s in mine {
+            lines.push(case_line(s, verdict(&s.title), tag_w, title_w));
         }
     }
     lines.push(Line::default());
@@ -1496,16 +1498,17 @@ fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64)
     lines
 }
 
-fn case_line(case: &TestCase, title_w: usize) -> Line<'static> {
-    let (glyph, color) = match case.result {
+fn case_line(case: &crate::pages::Scenario, result: Option<bool>, tag_w: usize, title_w: usize) -> Line<'static> {
+    let (glyph, color) = match result {
         Some(true) => ("✓", GREEN),
         Some(false) => ("✗", RED),
         None => ("–", SUBTEXT0),
     };
     Line::from(vec![
         Span::from(format!("  {glyph} ")).fg(c(color)),
-        Span::from(format!("{:<w$}", truncate(&plain(&case.title), title_w), w = title_w)),
-        Span::from(format!("   {}", plain(&case.approach))).style(theme::label()),
+        Span::styled(format!("{:<w$}  ", case.tag(), w = tag_w), theme::label()),
+        Span::from(format!("{:<w$}", truncate(&case.title, title_w), w = title_w)),
+        Span::from(format!("   {}", case.approach)).style(theme::label()),
     ])
 }
 
@@ -2106,7 +2109,7 @@ mod tests {
 
     /// The plan page as one run of lines: the main text, then each reference group open under its title.
     fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'static>> {
-        let page = plan_page(task, detail, 100, now);
+        let page = plan_page(task, detail, 100, 100, now);
         let mut lines = page.main;
         for group in page.groups {
             lines.push(Line::from(group.title));
@@ -2204,7 +2207,7 @@ mod tests {
         let (task, detail) = hostile();
         let text = text_of(&plan_lines(&task, Some(&detail), 0));
         assert_safe("plan", &text);
-        for needle in [format!("  • {TAMED}"), format!("Kind       {TAMED}"), format!("{TAMED} (~10 LOC)"), format!("change {TAMED}")] {
+        for needle in [format!("C1  {TAMED}"), format!("Kind       {TAMED}"), "~10 lines".to_string(), format!("change {TAMED}")] {
             assert!(text.contains(&needle), "{needle} missing in\n{text}");
         }
     }
@@ -2297,9 +2300,9 @@ mod tests {
         let text = render_open(120, 36, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("Plan · triage #1 · approved"), "{text}");
         assert!(text.contains("Add a CSV export endpoint."), "{text}");
-        assert!(text.contains("• exports UTF-8 with a BOM"), "{text}");
-        assert!(text.contains("• CSV only"), "{text}");
-        assert!(text.contains("Add route (~80 LOC)"), "{text}");
+        assert!(text.contains("C1  handles a/b & c") && text.contains("C2  exports UTF-8 with a BOM"), "{text}");
+        assert!(text.contains("Add route") && text.contains("~80 lines"), "{text}");
+        assert!(!text.contains("Criteria to build") && !text.contains("Slices"), "{text}");
         assert!(text.contains("09:40  sent back · criteria too vague"), "{text}");
         assert!(text.contains("09:58  approved"), "{text}");
         assert!(text.contains("read-only now that Build has started"), "{text}");
@@ -2355,9 +2358,9 @@ mod tests {
         assert!(text.contains("Tests · test_design"), "{text}");
         assert!(text.contains("3 cases over 2 criteria · verifying 1/2"), "{text}");
         let crit = rows.iter().position(|r| r.contains("handles a/b & c") && r.contains("2 cases")).expect("criterion heading");
-        assert!(rows[crit + 1].contains("✓ rejects a bad password") && rows[crit + 1].contains("run the suite"), "{}", rows[crit + 1]);
-        assert!(rows[crit + 2].contains("✗ escapes a quoted comma"), "{}", rows[crit + 2]);
-        assert!(text.contains("– writes EF BB BF first"), "{text}");
+        assert!(rows[crit + 1].contains("✓ S1 happy") && rows[crit + 1].contains("rejects a bad password") && rows[crit + 1].contains("run the suite"), "{}", rows[crit + 1]);
+        assert!(rows[crit + 2].contains("✗ S2 happy") && rows[crit + 2].contains("escapes a quoted comma"), "{}", rows[crit + 2]);
+        assert!(text.contains("– S3 happy") && text.contains("writes EF BB BF first"), "{text}");
     }
 
     #[test]
@@ -3197,6 +3200,106 @@ mod frame_tests {
         app.handle_key(ratatui::crossterm::event::KeyEvent::from(code));
     }
 
+    /// The plan gate's card once the plan is approved and Build runs.
+    fn past_the_gate() -> crate::app::App {
+        let mut app = plan_gate_app();
+        app.tasks[0].state = "implementing".into();
+        app.tasks[0].column = "Build".into();
+        app.tasks[0].waiting_on_you = false;
+        for approval in &mut app.detail.as_mut().unwrap().approvals {
+            approval.decision = Some("approved".into());
+        }
+        app
+    }
+
+    #[test]
+    fn the_plan_past_the_gate_reads_like_the_review_page_with_each_criterion_once() {
+        let mut app = past_the_gate();
+        app.detail_section = Section::Plan;
+        let screen = render(&mut app, 180, 50);
+        for want in ["Brief", "Criteria", "C1  exports every column the report shows", "C5  a person without access gets a 403", "Steps", "~90 lines", "src/reports/csv.ts", "Rollback", "Out of scope", "Migration"] {
+            assert!(screen.contains(want), "{want} missing in\n{screen}");
+        }
+        assert!(!screen.contains("Criteria to build") && !screen.contains("Slices"), "{screen}");
+        assert!(screen.contains("• the endpoint streams rows"), "the brief is markdown, its list a list: {screen}");
+        assert_eq!(screen.matches("exports every column the report shows").count(), 1, "a criterion is printed once: {screen}");
+    }
+
+    #[test]
+    fn the_tests_section_groups_scenarios_under_their_criterion_id_with_type_layer_and_title() {
+        let mut app = past_the_gate();
+        app.detail_section = Section::Tests;
+        let screen = render(&mut app, 180, 50);
+        let at = |needle: &str| screen.lines().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"));
+        let c1 = at("C1  exports every column the report shows");
+        assert!(screen.lines().nth(c1).unwrap().contains("2 cases"), "{screen}");
+        let first = screen.lines().nth(c1 + 1).unwrap();
+        assert!(first.contains("S1 happy") && first.contains("case 1 proves criterion 1"), "{first}");
+        assert_eq!(screen.matches("exports every column the report shows").count(), 1, "{screen}");
+    }
+
+    #[test]
+    fn plan_review_tests_and_runs_say_loading_until_the_detail_arrives_and_then_the_empty_wording() {
+        for (section, empty) in [(Section::Plan, "no plan yet"), (Section::Tests, "no cases yet"), (Section::Runs, "no runs")] {
+            let mut app = past_the_gate();
+            app.detail_section = section;
+            let ready = app.detail.take();
+            let screen = render(&mut app, 140, 40);
+            assert!(screen.contains("loading…") && !screen.contains(empty), "{section:?} while fetching:\n{screen}");
+            app.detail = ready;
+            app.detail.as_mut().unwrap().approvals.clear();
+            app.detail.as_mut().unwrap().stage_runs.clear();
+            let screen = render(&mut app, 140, 40);
+            assert!(!screen.contains("loading…"), "{section:?} once loaded:\n{screen}");
+            if section != Section::Runs {
+                assert!(screen.contains(empty), "{section:?}:\n{screen}");
+            }
+        }
+        let mut app = plan_gate_app();
+        let ready = app.detail.take();
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("loading…") && !screen.contains("no plan yet"), "Review while fetching:\n{screen}");
+        app.detail = ready;
+        app.detail.as_mut().unwrap().approvals.clear();
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("no plan yet") && !screen.contains("loading…"), "Review once loaded:\n{screen}");
+    }
+
+    /// The foreground of every cell showing `glyph`, over the whole screen: the board card, the border, the bar, the rail, the page.
+    fn glyph_colours(app: &mut crate::app::App, glyph: &str, section: Section) -> Vec<Option<ratatui::style::Color>> {
+        use ratatui::{Terminal, backend::TestBackend};
+        app.detail_section = section;
+        let mut terminal = Terminal::new(TestBackend::new(160, 45)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        buffer.content().iter().filter(|cell| cell.symbol() == glyph).map(|cell| Some(cell.fg).filter(|fg| *fg != ratatui::style::Color::Reset)).collect()
+    }
+
+    #[test]
+    fn an_escalated_card_wears_the_lost_role_on_the_card_the_bar_the_rail_and_the_stopped_heading() {
+        let mut app = escalated_app();
+        let want = theme::lost().fg;
+        let found = glyph_colours(&mut app, "✗", Section::Stopped);
+        // The board card, the bar, the rail's Stopped marker and the page's heading.
+        assert!(found.len() >= 4, "{found:?}");
+        assert!(found.iter().all(|fg| *fg == want), "every ✗ is the lost role {want:?}: {found:?}");
+        let screen = render(&mut app, 160, 45);
+        assert!(screen.contains("✗ escalated"), "{screen}");
+    }
+
+    #[test]
+    fn a_card_paused_on_the_rate_limit_wears_one_role_on_the_card_and_the_bar() {
+        let mut app = escalated_app();
+        app.tasks[0].state = "paused_rate_limit".into();
+        app.tasks[0].column = "Build".into();
+        let want = theme::paused().fg;
+        let found = glyph_colours(&mut app, "⏳", Section::Overview);
+        assert!(found.len() >= 2, "{found:?}");
+        assert!(found.iter().all(|fg| *fg == want), "every ⏳ is the paused role {want:?}: {found:?}");
+        let bar = crate::detail::bar_status(&app.tasks[0], app.detail.as_ref(), 0);
+        assert_eq!(bar.style.fg, want);
+    }
+
     #[test]
     fn a_wide_plan_has_a_side_pane_of_reference_groups_and_the_main_text_keeps_the_plan() {
         let mut app = plan_gate_app();
@@ -3216,11 +3319,11 @@ mod frame_tests {
         app.detail_section = Section::Plan;
         let screen = render(&mut app, 100, 60);
         let at = |needle: &str| screen.find(needle).unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"));
-        assert!(at("Slices") < at("── reference") && at("── reference") < at("▸ Code map  5 files"), "{screen}");
+        assert!(at("Steps") < at("── reference") && at("── reference") < at("▸ Code map  5 files"), "{screen}");
         for folded in ["▸ Risk", "▸ Checks", "▸ Card"] {
             assert!(screen.contains(folded), "{folded} is a folded header: {screen}");
         }
-        assert!(!screen.contains("src/reports/csv.ts"), "folded: the files stay out of sight\n{screen}");
+        assert!(screen.contains("src/reports/csv.ts") && !screen.contains("src/reports/model.ts"), "the steps name their files; the folded code map keeps its own out of sight\n{screen}");
     }
 
     #[test]

@@ -40,18 +40,21 @@ const MAX_COLUMN_WIDTH: u16 = 44;
 /// Width of a collapsed column: wide enough for its header bar (`Ship 1 ⏸1`), not its cards.
 const FOLD_WIDTH: u16 = 14;
 
-pub(crate) fn look_color(look: Look) -> Color {
+/// The role a card's look is drawn in, everywhere it shows: the board card, the task view's border, bar and rail.
+pub(crate) fn look_style(look: Look) -> Style {
     match look {
-        Look::Escalated => c(RED),
-        Look::NeedsYou => c(PEACH),
-        Look::Stale => c(PEACH),
-        Look::Working => c(YELLOW),
-        Look::Queued => c(SUBTEXT0),
-        Look::Paused => c(LAVENDER),
-        Look::Draft => c(SUBTEXT0),
-        Look::Done => c(GREEN),
-        Look::Archived => c(MUTED),
+        Look::Escalated => theme::lost(),
+        Look::NeedsYou | Look::Stale => theme::needs_you(),
+        Look::Working => theme::working(),
+        Look::Paused => theme::paused(),
+        Look::Queued | Look::Draft => theme::label(),
+        Look::Done => theme::done(),
+        Look::Archived => theme::dim(),
     }
+}
+
+pub(crate) fn look_color(look: Look) -> Color {
+    look_style(look).fg.unwrap_or(Color::Reset)
 }
 
 pub(crate) fn look_glyph(look: Look) -> &'static str {
@@ -1121,25 +1124,6 @@ pub(crate) fn json_list(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// "title (~N LOC)" per proposed slice; entries without a title are skipped.
-pub(crate) fn slice_lines(value: &Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    let title = detail::plain(item["title"].as_str()?);
-                    Some(match item["est_loc"].as_u64() {
-                        Some(loc) => format!("{title} (~{loc} LOC)"),
-                        None => title,
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// The reason prompt's hint at a gate that takes a structured note, if it does.
 pub(crate) fn reason_placeholder(state: &str) -> Option<&'static str> {
     (state == "awaiting_ship").then_some("what to change (t=12.5 scene=<id> el=<id> …)")
@@ -1261,7 +1245,8 @@ pub(crate) fn pack_lines(value: &Value) -> Vec<String> {
 /// Counts, calibration and the proposed rules text from `requested.rules`, at most 12 lines of
 /// it, each cut to `width` columns. Empty when the review proposed nothing.
 pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
-    let markdown = value["markdown"].as_str().unwrap_or("");
+    // The rules text is a model's: every control character, an escape sequence included, becomes a space.
+    let markdown = detail::plain(value["markdown"].as_str().unwrap_or(""));
     let recalibration = value["recalibration"].as_array().map_or(0, Vec::len);
     let updates = value["promptUpdates"].as_array().map_or(0, Vec::len);
     let promotions: Vec<String> = value["factPromotions"]
@@ -3622,13 +3607,6 @@ mod tests {
     }
 
     #[test]
-    fn slice_lines_show_title_and_size() {
-        let v: Value = serde_json::json!([{"title":"Add route","est_loc":80},{"title":"No size"},{"est_loc":5},"junk"]);
-        assert_eq!(slice_lines(&v), ["Add route (~80 LOC)", "No size"]);
-        assert!(slice_lines(&Value::Null).is_empty());
-    }
-
-    #[test]
     fn evidence_lines_show_verdict_count_and_three_paths() {
         let v: Value = serde_json::json!({"verdict":"pass","artifactCount":5,
             "thumbnails":["/a.png","/b.png","/c.png","/d.png"]});
@@ -3718,6 +3696,18 @@ mod tests {
         let v: Value = serde_json::json!({"factPromotions": [{"id": "f1", "text": "CI=1\u{1b}[2J\nx", "section": "Commands"}, {"id": "f2", "text": "pnpm test", "section": "Tests"}]});
         let lines = rules_lines(&v, 60);
         assert_eq!(lines, vec!["0 incident(s) · 0 pattern(s)".to_string(), "promote to Commands: CI=1 [2J x".to_string(), "promote to Tests: pnpm test".to_string()]);
+    }
+
+    #[test]
+    fn the_rules_text_of_a_retro_is_plain_whatever_the_model_wrote() {
+        let hostile = "A\u{1b}[31mB\rC\u{7}D\u{202e}E";
+        let v: Value = serde_json::json!({"markdown": format!("- {hostile}\n- ok"), "factPromotions": [{"text": hostile, "section": hostile}]});
+        let lines = rules_lines(&v, 80);
+        let all = lines.join("\n");
+        for bad in ['\u{1b}', '\r', '\u{7}', '\u{202e}'] {
+            assert!(!all.contains(bad), "{bad:?} reached a rules line: {all:?}");
+        }
+        assert!(lines.contains(&"- A [31mB C D E".to_string()) && lines.contains(&"- ok".to_string()), "{lines:?}");
     }
 
     #[test]
