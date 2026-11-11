@@ -911,6 +911,9 @@ impl App {
                 // herdr calls are subprocesses, so they stay off the UI thread.
                 // Recorded for `f`; an existing watch tab is re-pointed, none is ever opened.
                 Incoming::Message(StreamMessage::StageStarted { task_id, label, cwd, container }) => {
+                    if !herdr::valid_container(&container) {
+                        self.notify(herdr::REFUSE_CONTAINER, true);
+                    }
                     self.stages.insert(task_id.clone(), herdr::Stage { label, cwd, container: container.clone() });
                     thread::spawn(move || herdr::follow(short_id(&task_id), &container));
                 }
@@ -1231,6 +1234,7 @@ impl App {
             herdr::WatchAction::FocusExisting => {
                 herdr::focus_task_tab(&short);
             }
+            herdr::WatchAction::OpenAndFocus(stage) if !herdr::valid_container(&stage.container) => self.notify(herdr::REFUSE_CONTAINER, true),
             herdr::WatchAction::OpenAndFocus(stage) => {
                 thread::spawn(move || herdr::open_and_focus(&short, &stage));
             }
@@ -5761,6 +5765,18 @@ mod tests {
         let toast = app.toast.as_ref().expect("a toast");
         assert!(!toast.error);
         assert!(!toast.text.contains("opens when an agent runs"), "{}", toast.text);
+    }
+
+    #[test]
+    fn f_on_a_stage_whose_container_name_is_not_a_plain_name_refuses_with_a_fixed_message() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        let task = ticket("aaaaaaaa0000", "building", true, true);
+        app.tasks.push(task.clone());
+        app.stages.insert(task.id.clone(), herdr::Stage { label: "#aaaaaaaa app".into(), cwd: "/w".into(), container: "c1; rm -rf ~".into() });
+        app.watch_with(&task, false);
+        let toast = app.toast.as_ref().expect("a toast");
+        assert!(toast.error && toast.text == herdr::REFUSE_CONTAINER, "{}", toast.text);
+        assert!(!toast.text.contains("rm"), "the message never repeats the name");
     }
 
     #[test]

@@ -83,13 +83,53 @@ pub(crate) fn spawn_detached(program: &str, args: &[OsString]) -> io::Result<()>
     Ok(())
 }
 
-/// A root the board may open from: an absolute, canonical directory at least two folders deep that is not the home folder.
-/// `/`, `/Users`, `/home` and `$HOME` are refused, so nothing under them opens through that root.
+/// The directories no root may be, once normalised: the disk, the system's own folders and the places homes live.
+/// A folder deeper inside any of them (a worktree under `/private/tmp/x/y`, a repo under `$HOME/dev/app`) is fine.
+const BROAD_ROOTS: [&str; 18] = [
+    "/", "/etc", "/var", "/tmp", "/private", "/private/etc", "/private/var", "/private/tmp", "/usr", "/bin", "/sbin", "/opt", "/System", "/Library", "/Applications", "/Users", "/home", "/Volumes",
+];
+
+/// `path` without macOS's data-volume prefix: `/System/Volumes/Data/Users/me` is `/Users/me` spelled the long way.
+fn strip_data_volume(path: &Path) -> PathBuf {
+    match path.strip_prefix("/System/Volumes/Data") {
+        Ok(rest) => Path::new("/").join(rest),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
+/// A path as the checks see it: canonical, and without the data-volume prefix.
+fn normalised(path: &Path) -> Option<PathBuf> {
+    fs::canonicalize(path).ok().map(|real| strip_data_volume(&real))
+}
+
+/// Whether a normalised `root` is one of the system directories, the home folder, or an ancestor of the home folder.
+fn broad_root(root: &Path, home: Option<&Path>) -> bool {
+    BROAD_ROOTS.iter().any(|dir| root == Path::new(dir)) || home.is_some_and(|home| home.starts_with(root))
+}
+
+/// A root the board may open from: an absolute, canonical directory at least two folders deep that is neither a system
+/// directory nor the home folder or any ancestor of it. Judged after normalising (`..`, symlinks, the data-volume prefix).
 fn usable_root(root: &Path) -> Option<PathBuf> {
-    let real = fs::canonicalize(root).ok()?;
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).and_then(|h| normalised(Path::new(&h)));
+    usable_root_in(root, home.as_deref())
+}
+
+fn usable_root_in(root: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    let real = normalised(root)?;
     let depth = real.components().filter(|c| matches!(c, std::path::Component::Normal(_))).count();
-    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).and_then(|h| fs::canonicalize(h).ok());
-    (real.is_absolute() && real.is_dir() && depth >= 2 && home.as_ref() != Some(&real)).then_some(real)
+    (real.is_absolute() && real.is_dir() && depth >= 2 && !broad_root(&real, home)).then_some(real)
+}
+
+/// Whether a folder name has an extension: a `.` after its first character (`.git` and `.orc` are hidden, not extended).
+fn has_extension(name: &OsStr) -> bool {
+    name.to_string_lossy().chars().skip(1).any(|c| c == '.')
+}
+
+/// Whether the folder `real`, or a folder between it and `root`, has an extension: `.app`, `.playground`, `.xcodeproj`, `v1.2`.
+/// What lies above the root does not count.
+fn extension_below(real: &Path, root: &Path) -> bool {
+    let below = real.strip_prefix(root).unwrap_or(real);
+    below.components().any(|c| matches!(c, std::path::Component::Normal(name) if has_extension(name))) || (below.as_os_str().is_empty() && real.file_name().is_some_and(has_extension))
 }
 
 /// Whether `name` ends in a package extension (case-insensitive).
@@ -122,18 +162,19 @@ fn reveal(launch: Launch, program: &str, real: &Path) -> Result<Opened, String> 
 }
 
 /// Opens or reveals `path` (a file or a folder) when it is absolute, exists and, with symlinks and `..` resolved, lies under one of `roots`.
-/// A folder opens unless a package is in its path; a file opens only when it is a plain viewable kind; everything else is revealed.
+/// A folder opens unless it, or a folder between it and its root, has an extension (a package, a project, `v1.2`); a file opens
+/// only when it is a plain viewable kind outside a package; everything else is revealed.
 pub(crate) fn open_path_with(launch: Launch, path: &Path, roots: &[PathBuf]) -> Result<Opened, String> {
     let program = opener().ok_or(REFUSE_NO_OPENER)?;
     if !path.is_absolute() {
         return Err(REFUSE_RELATIVE.into());
     }
     // Canonical: it proves the path exists, and settles `..` and symlinks before the root check.
-    let real = fs::canonicalize(path).map_err(|_| REFUSE_MISSING.to_string())?;
-    if !roots.iter().filter_map(|root| usable_root(root)).any(|root| real.starts_with(root)) {
+    let real = normalised(path).ok_or_else(|| REFUSE_MISSING.to_string())?;
+    let Some(root) = roots.iter().filter_map(|root| usable_root(root)).find(|root| real.starts_with(root)) else {
         return Err(REFUSE_OUTSIDE.into());
-    }
-    let plain = !inside_bundle(&real) && (if real.is_dir() { true } else { viewable(&real) });
+    };
+    let plain = if real.is_dir() { !extension_below(&real, &root) } else { !inside_bundle(&real) && viewable(&real) };
     if plain {
         launch(program, &[real.as_os_str().to_os_string()]).map(|()| Opened::Opened).map_err(|_| STARTING.to_string())
     } else {
@@ -491,6 +532,112 @@ mod tests {
         }
         let (result, _) = run(&file, &[PathBuf::from("/"), s.0.clone()]);
         assert_eq!(result, Ok(Opened::Opened), "a good root next to a bad one still works");
+    }
+
+    fn home_dir() -> PathBuf {
+        fs::canonicalize(std::env::var("HOME").unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_macos_data_volume_prefix_is_stripped_before_a_root_is_judged() {
+        assert_eq!(strip_data_volume(Path::new("/System/Volumes/Data/Users/me")), PathBuf::from("/Users/me"));
+        assert_eq!(strip_data_volume(Path::new("/System/Volumes/Data")), PathBuf::from("/"));
+        assert_eq!(strip_data_volume(Path::new("/System/Volumes/Datafoo/x")), PathBuf::from("/System/Volumes/Datafoo/x"));
+        assert_eq!(strip_data_volume(Path::new("/Users/me")), PathBuf::from("/Users/me"));
+    }
+
+    #[test]
+    fn the_system_directories_are_not_roots_but_a_folder_deeper_in_them_is() {
+        for dir in ["/", "/etc", "/var", "/tmp", "/private", "/private/etc", "/private/var", "/private/tmp", "/usr", "/bin", "/sbin", "/opt", "/System", "/Library", "/Applications", "/Users", "/home", "/Volumes"] {
+            assert!(broad_root(Path::new(dir), None), "{dir} is too broad to be a root");
+        }
+        for dir in ["/private/tmp/x/y", "/tmp/x/y", "/var/folders/ab/cd/T/x", "/opt/tool", "/Users/me/dev"] {
+            assert!(!broad_root(Path::new(dir), None), "{dir} is a fine root");
+        }
+    }
+
+    #[test]
+    fn the_home_folder_and_every_ancestor_of_it_are_not_roots() {
+        let home = Path::new("/Users/me");
+        for dir in ["/Users/me", "/Users", "/"] {
+            assert!(broad_root(Path::new(dir), Some(home)), "{dir}");
+        }
+        for dir in ["/Users/me/dev/app", "/Users/me/dev", "/Users/other"] {
+            assert!(!broad_root(Path::new(dir), Some(home)), "{dir}");
+        }
+    }
+
+    #[test]
+    fn a_root_in_the_home_folder_works_and_the_home_folder_itself_does_not() {
+        let s = Scratch::new("fakehome");
+        let home = fs::canonicalize(&s.0).unwrap();
+        let app = home.join("dev/app");
+        fs::create_dir_all(&app).unwrap();
+        assert_eq!(usable_root_in(&app, Some(&home)), Some(app.clone()), "$HOME/dev/app is a root");
+        assert_eq!(usable_root_in(&home, Some(&home)), None);
+        assert_eq!(usable_root_in(home.parent().unwrap(), Some(&home)), None, "an ancestor of home is no root");
+        assert_eq!(usable_root_in(&home.join("dev/../dev/.."), Some(&home)), None, "dotdot is settled first");
+    }
+
+    #[test]
+    fn the_data_volume_spelling_of_the_home_folder_or_the_disk_is_refused() {
+        let data = Path::new("/System/Volumes/Data");
+        if !data.join("Users").exists() {
+            return;
+        }
+        let home = home_dir();
+        let spelled = data.join(home.strip_prefix("/").unwrap());
+        assert_eq!(usable_root_in(&spelled, Some(&home)), None, "{spelled:?}");
+        assert_eq!(usable_root_in(data, Some(&home)), None);
+        assert_eq!(usable_root_in(&data.join("Users"), Some(&home)), None);
+    }
+
+    #[test]
+    fn etc_and_var_open_nothing() {
+        for root in ["/etc", "/var", "/private/etc"] {
+            if !Path::new(root).exists() {
+                continue;
+            }
+            let (result, calls) = run(Path::new("/etc/hosts"), &[PathBuf::from(root)]);
+            assert_eq!(result, Err(REFUSE_OUTSIDE.to_string()), "{root}");
+            assert!(calls.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_folder_with_an_extension_is_revealed_and_a_hidden_or_plain_one_opens() {
+        let s = Scratch::new("extensions");
+        for name in ["App.playground", "x.xcodeproj", "v1.2", "notes.scptd", "a.", "weird.thing"] {
+            let dir = s.0.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            let (result, args) = one(&dir, std::slice::from_ref(&s.0));
+            assert_eq!(result, Ok(Opened::Revealed), "{name}");
+            assert_eq!(args, revealed_args(&fs::canonicalize(&dir).unwrap()), "{name}");
+        }
+        for name in [".git", ".orc", "plain", "app", "my runs"] {
+            let dir = s.0.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            assert_eq!(one(&dir, std::slice::from_ref(&s.0)).0, Ok(Opened::Opened), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_folder_under_a_folder_with_an_extension_is_revealed_too() {
+        let s = Scratch::new("ancestor-ext");
+        let deep = s.0.join("Proj.xcodeproj/inner/deeper");
+        fs::create_dir_all(&deep).unwrap();
+        assert_eq!(one(&deep, std::slice::from_ref(&s.0)).0, Ok(Opened::Revealed));
+    }
+
+    #[test]
+    fn the_extension_check_stops_at_the_root() {
+        let s = Scratch::new("under-app");
+        let root = s.0.join("Foo.app/work");
+        let plain = root.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        let (result, args) = one(&plain, std::slice::from_ref(&root));
+        assert_eq!(result, Ok(Opened::Opened), "a root that sits under Foo.app opens a plain folder inside it");
+        assert_eq!(args, vec![fs::canonicalize(&plain).unwrap().into_os_string()]);
     }
 
     #[test]
