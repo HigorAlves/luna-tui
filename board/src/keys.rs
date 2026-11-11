@@ -309,7 +309,14 @@ fn open_key(app: &App) -> Avail {
     if app.detail_section == Section::Evidence && app.detail_rows() == 0 {
         return Avail::Off("no evidence yet");
     }
-    with_task(app, |_| Avail::On)
+    if app.detail_open_target().is_some() {
+        return Avail::On;
+    }
+    // Nothing of the section's own to open: `o` falls back to the linked issue, where the section has no rows of its own.
+    if app.detail_section.has_cursor() {
+        return Avail::Off("nothing to open here");
+    }
+    with_task(app, |t| if crate::app::issue_link(t).is_some() { Avail::On } else { Avail::Off("no issue linked") })
 }
 
 /// `i`: the linked issue (Jira or the source's) in the browser, from any section: `o` opens the evidence folder where there is one.
@@ -1497,7 +1504,6 @@ pub fn splice_markdown(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::app::handled;
-    use crate::client::Machine;
     use crate::model::Task;
 
     fn task(id: &str, state: &str, repo: bool, running: bool, worktree: bool) -> Task {
@@ -1515,7 +1521,7 @@ mod tests {
     }
 
     fn app_with(tasks: Vec<Task>) -> App {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks = tasks;
         app.focus = app.tasks.first().map(|t| t.column_index()).unwrap_or(0);
         app

@@ -302,6 +302,8 @@ pub enum Mode {
         area: TextArea<'static>,
         vim: Vim,
     },
+    /// `e` on the Review page while the cases wait for your check: which of the plan, the cases or the ticket to edit.
+    EditChoice(String),
     /// Which side of `EditPlan` has keyboard focus. Tab switches; a save covers both.
     /// Editing triage's plan and the ticket side by side: left the plan (brief, criteria,
     /// assumptions — slices stay as triage wrote them), right the ticket's own text. Open
@@ -478,7 +480,7 @@ pub struct Toast {
 }
 
 pub struct App {
-    machine: Machine,
+    pub(crate) machine: Machine,
     stream: Receiver<Incoming>,
     /// Our end of the stream, for work that answers from another thread (the detail fetch).
     tx: Sender<Incoming>,
@@ -1759,6 +1761,23 @@ impl App {
         Outcome::Continue
     }
 
+    /// The chooser `e` opens on the Review page: `p` the plan, `c` the cases, `t` the ticket; esc goes back to the task.
+    fn handle_edit_choice(&mut self, key: KeyEvent, id: &str) -> Outcome {
+        let Some(task) = self.task(id).cloned() else {
+            self.mode = Mode::Normal;
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char('p') if plan_editable(&task, self.detail.as_ref()) || has_open_plan(&task, self.detail.as_ref()) => self.open_plan_editor(id),
+            KeyCode::Char('p') => self.notify("the plan can no longer be edited", false),
+            KeyCode::Char('c') => self.open_cases_editor(id),
+            KeyCode::Char('t') => self.open_ticket_editor(id),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
     /// Opens the repo search for `id`: type to filter, enter to set it on the ticket.
     fn open_repo_picker(&mut self, id: &str) {
         let all = repos_root().map(|root| discover_repos(&root)).unwrap_or_default();
@@ -1862,7 +1881,9 @@ impl App {
                 }
                 let in_popup = matches!(&self.mode, Mode::Detail(open) if open == id);
                 let section = self.detail_section;
-                if in_popup && section == Section::Tests && cases_editable(&task, self.detail.as_ref()) {
+                if in_popup && section == Section::Review && cases_editable(&task, self.detail.as_ref()) {
+                    self.mode = Mode::EditChoice(id.to_string());
+                } else if in_popup && section == Section::Tests && cases_editable(&task, self.detail.as_ref()) {
                     self.open_cases_editor(id);
                 } else if (in_popup && section == Section::Plan && plan_editable(&task, self.detail.as_ref())) || has_open_plan(&task, self.detail.as_ref()) {
                     self.open_plan_editor(id);
@@ -2155,6 +2176,10 @@ impl App {
             Mode::Adding(_) => self.handle_adding(key),
             Mode::EditTicket { .. } => self.handle_edit_ticket(key),
             Mode::EditCases { .. } => self.handle_edit_cases(key),
+            Mode::EditChoice(id) => {
+                let id = id.clone();
+                self.handle_edit_choice(key, &id)
+            }
             Mode::Answer { .. } => self.handle_answer(key),
             Mode::EditPlan { .. } => self.handle_edit_plan(key),
             Mode::Filter => self.handle_filter(key),
@@ -5088,7 +5113,7 @@ mod tests {
     fn warns_when_the_machine_is_unreachable_on_startup() {
         // SAFETY: this test does not run alongside another that reads this var.
         unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
-        let app = App::new(Machine::from_env());
+        let app = App::new(crate::testkit::dead_machine());
         assert!(!app.online);
         let toast = app.toast.expect("a warning toast on startup");
         assert!(toast.error);
@@ -5114,7 +5139,7 @@ mod tests {
     fn tab_switches_focus_between_the_plan_and_ticket_panes() {
         // SAFETY: every test here sets the same value, so a parallel run can't race on it.
         unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.mode = plan_editor();
 
         app.handle_key(key(KeyCode::Tab));
@@ -5130,7 +5155,7 @@ mod tests {
     fn esc_in_normal_mode_cancels_the_whole_plan_editor() {
         // SAFETY: every test here sets the same value, so a parallel run can't race on it.
         unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.mode = plan_editor();
 
         app.handle_key(key(KeyCode::Esc));
@@ -5141,7 +5166,7 @@ mod tests {
     fn ctrl_s_returns_to_normal_whether_or_not_the_save_reaches_the_machine() {
         // SAFETY: every test here sets the same value, so a parallel run can't race on it.
         unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.mode = plan_editor();
 
         app.handle_key(KeyEvent::new(KeyCode::Char('s'), ratatui::crossterm::event::KeyModifiers::CONTROL));
@@ -5150,7 +5175,7 @@ mod tests {
 
     #[test]
     fn the_filter_matches_the_repo_name_as_well_as_title_and_id() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let mut task: Task = serde_json::from_str(
             r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
             "repoPath":"/Developer/projects/luna-tui","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
@@ -5170,7 +5195,7 @@ mod tests {
 
     #[test]
     fn a_ticket_reaching_a_gate_queues_a_notice_once_and_going_offline_queues_one() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let json = |state: &str, waiting: bool| -> Task {
             serde_json::from_str(&format!(
                 r#"{{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
@@ -5201,7 +5226,7 @@ mod tests {
 
     #[test]
     fn the_inbox_opens_with_i_moves_within_its_split_switches_splits_and_closes() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         for (id, state) in [("aaaaaaaa0000", "awaiting_approval"), ("bbbbbbbb0000", "awaiting_approval"), ("cccccccc0000", "escalated")] {
             app.tasks.push(serde_json::from_str(&format!(
                 r#"{{"id":"{id}","title":"t","description":"","criteria":[],
@@ -5290,7 +5315,7 @@ mod tests {
     fn the_setup_command_asks_the_machine_and_reports_its_answer() {
         let root = std::env::temp_dir().join(format!("luna-setup-cmd-{}", std::process::id()));
         std::fs::create_dir_all(root.join("app").join(".git")).unwrap();
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         type_command(&mut app, &format!("setup {}", root.join("app").display()));
         // Offline machine: the call fails and the toast carries the error, which proves it was made.
         assert!(app.toast.as_ref().is_some_and(|t| t.error), "an offline machine answers with an error toast: {:?}", app.toast.as_ref().map(|t| &t.text));
@@ -5301,7 +5326,7 @@ mod tests {
 
     #[test]
     fn v_marks_a_ticket_capital_v_marks_the_column_and_esc_clears_the_marks() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.tasks.push(ticket("bbbbbbbb0000", "implementing", true, true));
         app.tasks.push(ticket("cccccccc0000", "draft", false, false));
@@ -5325,7 +5350,7 @@ mod tests {
 
     #[test]
     fn c_opens_the_escalation_reason_picker_on_an_escalated_ticket_moves_and_esc_cancels_and_any_other_refuses() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "escalated", true, false));
         app.tasks.push(ticket("bbbbbbbb0000", "implementing", false, true));
         app.focus = app.tasks[0].column_index();
@@ -5346,7 +5371,7 @@ mod tests {
 
     #[test]
     fn z_opens_the_archive_reason_picker_on_a_live_ticket_moves_and_esc_cancels_and_an_ended_one_refuses() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "awaiting_approval", true, false));
         app.tasks.push(ticket("bbbbbbbb0000", "archived", false, false));
         app.focus = app.tasks[0].column_index();
@@ -5380,7 +5405,7 @@ mod tests {
 
     #[test]
     fn a_ticket_is_new_when_it_changed_after_the_board_was_last_open() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let closed = ticket("aaaaaaaa0000", "closed", false, false);
         app.last_seen_secs = None;
         assert!(!app.is_new(&closed), "a first run has no since");
@@ -5392,7 +5417,7 @@ mod tests {
 
     #[test]
     fn the_digest_opens_with_d_moves_and_closes() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.last_seen_secs = crate::model::unix_secs("2026-10-22T21:00:00Z");
         app.tasks.push(ticket("aaaaaaaa0000", "closed", false, false));
         app.tasks.push(ticket("bbbbbbbb0000", "escalated", false, false));
@@ -5408,7 +5433,7 @@ mod tests {
 
     #[test]
     fn done_is_sorted_newest_first_and_z_prefix_folds_a_column() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let done = COLUMNS.iter().position(|c| *c == "Done").unwrap();
         assert!(!app.folded.contains(&done), "Done is not folded by hand; the board narrows it when the width is short");
         let mut old = ticket("aaaaaaaa0000", "closed", false, false);
@@ -5436,7 +5461,7 @@ mod tests {
 
     #[test]
     fn g_prefix_groups_a_column_by_stage_repo_or_age() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let mut a = ticket("aaaaaaaa0000", "implementing", true, true);
         a.repo_path = Some("/r/zeta".into());
         a.created_at = "2026-10-22T10:00:00.000Z".into();
@@ -5466,7 +5491,7 @@ mod tests {
 
     #[test]
     fn the_detail_is_fetched_off_the_ui_thread_and_lands_through_the_stream() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.online = true;
         let task = ticket("aaaaaaaa0000", "awaiting_approval", false, false);
         app.tasks.push(task.clone());
@@ -5495,7 +5520,7 @@ mod tests {
 
     #[test]
     fn tab_in_the_floor_cycles_through_all_then_each_repo() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.floor = Some(FloorState::default());
         let repos: Vec<crate::model::RepoMetrics> = serde_json::from_str(
             r#"[{"repo":"/r/alpha","tasks":{"created":1,"closed":0,"open":1,"waitingOnYou":0,"running":0,"queued":0},
@@ -5518,7 +5543,7 @@ mod tests {
 
     #[test]
     fn tab_reaches_a_repository_with_no_task_numbers_and_a_approves_its_base() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.floor = Some(FloorState::default());
         let floor = app.floor.as_mut().unwrap();
         floor.repos = serde_json::from_str(
@@ -5545,7 +5570,7 @@ mod tests {
 
     #[test]
     fn a_started_stage_is_recorded_for_f_and_closing_or_deleting_forgets_it() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let started = |id: &str| {
             serde_json::from_str::<StreamMessage>(&format!(
                 r##"{{"type":"stage.started","taskId":"{id}","label":"#aaaaaaaa app","cwd":"/w","container":"c1"}}"##
@@ -5565,7 +5590,7 @@ mod tests {
 
     #[test]
     fn f_with_nothing_to_watch_shows_a_plain_notice() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "building", true, false));
         app.ticket_key('f', "aaaaaaaa0000");
         let toast = app.toast.as_ref().expect("a toast");
@@ -5575,7 +5600,7 @@ mod tests {
 
     #[test]
     fn the_nothing_to_watch_branch_notices_without_error() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = ticket("aaaaaaaa0000", "building", true, true);
         app.tasks.push(task.clone());
         app.watch_with(&task, false);
@@ -5589,7 +5614,7 @@ mod tests {
         if herdr::available() {
             return;
         }
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = ticket("aaaaaaaa0000", "implementing", true, true);
         app.tasks.push(task.clone());
         let stage = herdr::Stage { label: "#aaaaaaaa app · t".into(), cwd: "/wt".into(), container: "c1".into() };
@@ -5604,7 +5629,7 @@ mod tests {
 
     #[test]
     fn a_stage_of_a_task_that_stopped_running_is_not_opened_by_f() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = ticket("aaaaaaaa0000", "awaiting_approval", false, true);
         app.tasks.push(task.clone());
         let stage = herdr::Stage { label: "#aaaaaaaa app".into(), cwd: "/wt".into(), container: "c1".into() };
@@ -5616,7 +5641,7 @@ mod tests {
 
     #[test]
     fn the_connect_scan_records_a_stage_without_overwriting_a_newer_one() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let stage = |c: &str| herdr::Stage { label: "#a".into(), cwd: "/w".into(), container: c.into() };
         app.stages.insert("t1".into(), stage("new"));
         app.scan_tx.send(("t1".into(), stage("old"))).unwrap();
@@ -5628,7 +5653,7 @@ mod tests {
 
     #[test]
     fn reconnecting_drops_stages_recorded_before_the_outage() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let stage = herdr::Stage { label: "#a".into(), cwd: "/w".into(), container: "finished".into() };
         app.stages.insert("t1".into(), stage);
         app.tx.send(Incoming::Online).unwrap();
@@ -5641,7 +5666,7 @@ mod tests {
         if herdr::available() {
             return;
         }
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.select("aaaaaaaa0000", true);
         let started = r##"{"type":"stage.started","taskId":"aaaaaaaa0000","label":"#aaaaaaaa app · t","cwd":"/wt","container":"c1"}"##;
@@ -5657,7 +5682,7 @@ mod tests {
 
     #[test]
     fn uppercase_f_opens_and_closes_the_floor_view() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.select("aaaaaaaa0000", true);
         app.handle_key(KeyEvent::from(KeyCode::Char('F')));
@@ -5669,7 +5694,7 @@ mod tests {
 
     #[test]
     fn a_later_stage_replaces_the_recorded_one_so_f_opens_the_newest_container() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = ticket("aaaaaaaa0000", "implementing", true, true);
         app.tasks.push(task.clone());
         for container in ["c1", "c2"] {
@@ -5689,7 +5714,7 @@ mod tests {
         if herdr::available() {
             return;
         }
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = ticket("aaaaaaaa0000", "implementing", true, true);
         app.tasks.push(task.clone());
         let stage = herdr::Stage { label: "#aaaaaaaa app · t".into(), cwd: "/wt".into(), container: "c1".into() };
@@ -5702,7 +5727,7 @@ mod tests {
 
     #[test]
     fn a_budget_alert_becomes_a_notice_and_a_toast_that_turns_red_at_the_ceiling() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let alert = |pct: u8| {
             serde_json::from_str::<StreamMessage>(&format!(
                 r#"{{"type":"budget.alert","alert":{{"scope":"repo","taskId":"aaaaaaaa0000","repo":"/r/luna-tui","pct":{pct},"spentUsd":18,"limitUsd":20}}}}"#
@@ -5724,7 +5749,7 @@ mod tests {
 
     #[test]
     fn a_shipped_task_becomes_a_notice_and_a_toast() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let shipped = serde_json::from_str::<StreamMessage>(
             r##"{"type":"task.shipped","shipped":{"id":"aaaaaaaa0000","title":"Export CSV","prUrl":"https://github.com/o/a/pull/7","number":7,"mergedSha":null,"format":null,"howToVerify":null,"media":[],"at":"t"}}"##,
         )
@@ -5740,7 +5765,7 @@ mod tests {
 
     #[test]
     fn an_engine_budget_alert_names_the_engine_with_or_without_a_task_or_repo() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         for line in [
             r#"{"type":"budget.alert","alert":{"scope":"engine","engine":"openai","taskId":null,"repo":null,"pct":80,"spentUsd":16,"limitUsd":20}}"#,
             r#"{"type":"budget.alert","alert":{"scope":"engine","engine":"openai:sol","taskId":"aaaaaaaa0000","repo":"/r/luna-tui","pct":100,"spentUsd":10,"limitUsd":10}}"#,
@@ -5768,7 +5793,7 @@ mod tests {
 
     #[test]
     fn a_on_a_ticket_awaiting_answers_opens_the_answers_in_place_and_ctrl_s_sends_them() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let mut task = ticket("aaaaaaaa0000", "awaiting_answers", false, false);
         task.waiting_on_you = true;
         app.tasks.push(task);
@@ -5798,7 +5823,7 @@ mod tests {
 
     #[test]
     fn gg_and_g_jump_within_the_column_and_a_digit_jumps_to_that_column() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         for (i, id) in ["aaaaaaaa0000", "bbbbbbbb0000", "cccccccc0000"].iter().enumerate() {
             let mut t = ticket(id, "implementing", true, true);
             t.created_at = format!("2026-10-2{i}T00:00:00.000Z");
@@ -5821,7 +5846,7 @@ mod tests {
 
     #[test]
     fn bracket_keys_hop_between_the_tickets_that_need_you_across_the_board() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         let mut plan = ticket("bbbbbbbb0000", "awaiting_approval", false, false);
         plan.waiting_on_you = true;
@@ -5855,7 +5880,7 @@ mod tests {
 
     #[test]
     fn the_colon_palette_runs_board_commands_by_name() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.tasks.push(ticket("bbbbbbbb0000", "implementing", true, true));
         app.toast = None;
@@ -5910,7 +5935,7 @@ mod tests {
 
     #[test]
     fn help_cursor_moves_with_j_and_k_and_clamps() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.focus = app.tasks[0].column_index();
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
@@ -5933,7 +5958,7 @@ mod tests {
 
     #[test]
     fn question_mark_opens_the_sheet_for_the_view_you_are_in() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
         assert!(matches!(app.mode, Mode::Help { scope: Scope::Board, .. }));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
@@ -5965,7 +5990,7 @@ mod tests {
 
     #[test]
     fn a_bright_key_closes_the_sheet_and_runs_a_dim_or_unknown_one_only_says_why() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.focus = app.tasks[0].column_index();
         app.toast = None;
@@ -5993,7 +6018,7 @@ mod tests {
 
     #[test]
     fn enter_runs_the_cursor_row_in_its_own_view_only() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.focus = app.tasks[0].column_index();
         app.toast = None;
@@ -6027,7 +6052,7 @@ mod tests {
 
     #[test]
     fn a_prefix_key_shows_its_second_keys_after_the_delay() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.handle_key(KeyEvent::from(KeyCode::Char('g')));
         assert!(app.which_key().is_none(), "nothing before the delay");
         app.age_prefix();
@@ -6045,7 +6070,7 @@ mod tests {
 
     #[test]
     fn the_colon_prompt_completes_commands() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.handle_key(KeyEvent::from(KeyCode::Char(':')));
         for ch in "fo".chars() {
             app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
@@ -6068,7 +6093,7 @@ mod tests {
 
     #[test]
     fn capital_r_searches_only_on_a_ticket_without_a_repo() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "draft", false, false));
         app.focus = app.tasks[0].column_index();
         app.toast = None;
@@ -6088,7 +6113,7 @@ mod tests {
 
     #[test]
     fn column_order_is_cached_per_frame_and_still_sees_a_new_ticket() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         let build = app.tasks[0].column_index();
         assert_eq!(app.indices(build), vec![0]);
@@ -6141,7 +6166,7 @@ mod pr_tests {
     }
 
     fn app_with(prs: Vec<PullRequest>) -> App {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.clear();
         app.toast = None;
         app.take_notices();
@@ -6715,7 +6740,7 @@ mod workspace_key_tests {
     }
 
     fn open(state: &str) -> App {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = task(state);
         app.tasks.push(task.clone());
         app.open_detail(task.id);
@@ -7024,7 +7049,7 @@ mod edit_route_tests {
     }
 
     fn open(state: &str) -> App {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = task(state);
         app.tasks.push(task.clone());
         app.detail = Some(detail(state));
@@ -7665,7 +7690,7 @@ mod task_view_return_tests {
         name: &'static str,
         app: App,
         title: &'static str,
-        open: KeyCode,
+        open: Vec<KeyCode>,
         is_open: fn(&Mode) -> bool,
         confirm: Vec<KeyEvent>,
     }
@@ -7680,38 +7705,76 @@ mod task_view_return_tests {
         let mut with_record = plan_gate_app();
         with_record.tasks[0].record = Some(crate::model::TriageRecord::default());
         let mut cases_gate = plan_gate_app();
-        cases_gate.detail_section = Section::Tests;
         if let Some(detail) = cases_gate.detail.as_mut() {
             for approval in detail.approvals.iter_mut().filter(|a| a.kind.as_deref() == Some("awaiting_test_check")) {
                 approval.decision = None;
             }
         }
         vec![
-            Case { name: "send back", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: KeyCode::Char('r'), is_open: |m| matches!(m, Mode::Reason { approve: false, .. }), confirm: [keys_of("too wide"), vec![enter()]].concat() },
-            Case { name: "reject", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: KeyCode::Char('N'), is_open: |m| matches!(m, Mode::Reject { .. }), confirm: [keys_of("no"), vec![enter()]].concat() },
-            Case { name: "escalation guidance", app: escalated_app(), title: ESCALATED_TITLE, open: KeyCode::Char('a'), is_open: |m| matches!(m, Mode::Reason { approve: true, .. }), confirm: vec![enter()] },
-            Case { name: "evidence note", app: ship_stage_app(), title: SHIP_STAGE_TITLE, open: KeyCode::Char('n'), is_open: |m| matches!(m, Mode::EvidenceNote { .. }), confirm: vec![enter()] },
-            Case { name: "plan editor", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: KeyCode::Char('e'), is_open: |m| matches!(m, Mode::EditPlan { .. }), confirm: vec![save()] },
-            Case { name: "cases editor", app: cases_gate, title: PLAN_GATE_TITLE, open: KeyCode::Char('e'), is_open: |m| matches!(m, Mode::EditCases { .. }), confirm: vec![save()] },
-            Case { name: "ticket editor", app: running_build_app(), title: RUNNING_BUILD_TITLE, open: KeyCode::Char('e'), is_open: |m| matches!(m, Mode::EditTicket { .. }), confirm: vec![save()] },
-            Case { name: "answers editor", app: questions_app(), title: "Fix the invoice rounding", open: KeyCode::Char('a'), is_open: |m| matches!(m, Mode::Answer { .. }), confirm: vec![save()] },
-            Case { name: "archive reason", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: KeyCode::Char('Z'), is_open: |m| matches!(m, Mode::ArchiveReason { .. }), confirm: vec![enter()] },
-            Case { name: "escalation reason", app: escalated_app(), title: ESCALATED_TITLE, open: KeyCode::Char('C'), is_open: |m| matches!(m, Mode::EscalationReason { .. }), confirm: vec![enter()] },
-            Case { name: "record picker", app: with_record, title: PLAN_GATE_TITLE, open: KeyCode::Char('T'), is_open: |m| matches!(m, Mode::RecordEdit { .. }), confirm: vec![enter()] },
-            Case { name: "delete", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: KeyCode::Char('d'), is_open: |m| matches!(m, Mode::ConfirmDelete(_)), confirm: keys_of("y") },
-            Case { name: "abort", app: running_build_app(), title: RUNNING_BUILD_TITLE, open: KeyCode::Char('X'), is_open: |m| matches!(m, Mode::ConfirmAbort(_)), confirm: keys_of("y") },
-            Case { name: "kill the worktree", app: ship_stage_app(), title: SHIP_STAGE_TITLE, open: KeyCode::Char('w'), is_open: |m| matches!(m, Mode::ConfirmWorktree(_)), confirm: keys_of("y") },
+            Case { name: "send back", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('r')], is_open: |m| matches!(m, Mode::Reason { approve: false, .. }), confirm: [keys_of("too wide"), vec![enter()]].concat() },
+            Case { name: "reject", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('N')], is_open: |m| matches!(m, Mode::Reject { .. }), confirm: [keys_of("no"), vec![enter()]].concat() },
+            Case { name: "escalation guidance", app: escalated_app(), title: ESCALATED_TITLE, open: vec![KeyCode::Char('a')], is_open: |m| matches!(m, Mode::Reason { approve: true, .. }), confirm: vec![enter()] },
+            Case { name: "evidence note", app: ship_stage_app(), title: SHIP_STAGE_TITLE, open: vec![KeyCode::Char('n')], is_open: |m| matches!(m, Mode::EvidenceNote { .. }), confirm: vec![enter()] },
+            Case { name: "plan editor", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('e')], is_open: |m| matches!(m, Mode::EditPlan { .. }), confirm: vec![save()] },
+            Case { name: "cases editor", app: cases_gate, title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('e'), KeyCode::Char('c')], is_open: |m| matches!(m, Mode::EditCases { .. }), confirm: vec![save()] },
+            Case { name: "ticket editor", app: running_build_app(), title: RUNNING_BUILD_TITLE, open: vec![KeyCode::Char('e')], is_open: |m| matches!(m, Mode::EditTicket { .. }), confirm: vec![save()] },
+            Case { name: "answers editor", app: questions_app(), title: "Fix the invoice rounding", open: vec![KeyCode::Char('a')], is_open: |m| matches!(m, Mode::Answer { .. }), confirm: vec![save()] },
+            Case { name: "archive reason", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('Z')], is_open: |m| matches!(m, Mode::ArchiveReason { .. }), confirm: vec![enter()] },
+            Case { name: "escalation reason", app: escalated_app(), title: ESCALATED_TITLE, open: vec![KeyCode::Char('C')], is_open: |m| matches!(m, Mode::EscalationReason { .. }), confirm: vec![enter()] },
+            Case { name: "record picker", app: with_record, title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('T')], is_open: |m| matches!(m, Mode::RecordEdit { .. }), confirm: vec![enter()] },
+            Case { name: "delete", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('d')], is_open: |m| matches!(m, Mode::ConfirmDelete(_)), confirm: keys_of("y") },
+            Case { name: "abort", app: running_build_app(), title: RUNNING_BUILD_TITLE, open: vec![KeyCode::Char('X')], is_open: |m| matches!(m, Mode::ConfirmAbort(_)), confirm: keys_of("y") },
+            Case { name: "kill the worktree", app: ship_stage_app(), title: SHIP_STAGE_TITLE, open: vec![KeyCode::Char('w')], is_open: |m| matches!(m, Mode::ConfirmWorktree(_)), confirm: keys_of("y") },
         ]
     }
 
     #[test]
     fn every_prompt_editor_and_picker_keeps_the_card_on_screen_when_it_opens() {
         for mut case in cases() {
-            press(&mut case.app, case.open);
+            for key in case.open.clone() {
+                press(&mut case.app, key);
+            }
             assert!((case.is_open)(&case.app.mode), "{}: did not open", case.name);
             let screen = render(&mut case.app, 140, 40);
             assert!(screen.contains(case.title), "{}: the card's title left the screen:\n{screen}", case.name);
         }
+    }
+
+    fn plan_gate_with_cases_waiting() -> App {
+        let mut app = plan_gate_app();
+        if let Some(detail) = app.detail.as_mut() {
+            for approval in detail.approvals.iter_mut().filter(|a| a.kind.as_deref() == Some("awaiting_test_check")) {
+                approval.decision = None;
+            }
+        }
+        app
+    }
+
+    #[test]
+    fn e_on_the_review_page_asks_what_to_edit_and_names_the_three_things() {
+        let mut app = plan_gate_with_cases_waiting();
+        assert_eq!(app.detail_section, Section::Review);
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditChoice(_)), "e asks first");
+        let screen = render(&mut app, 140, 40);
+        for needle in ["edit", "p  the plan", "c  the cases", "t  the ticket", PLAN_GATE_TITLE] {
+            assert!(screen.contains(needle), "{needle} missing in\n{screen}");
+        }
+    }
+
+    #[test]
+    fn the_chooser_reaches_each_editor_by_its_key_and_esc_returns_to_the_task() {
+        for (key, is_open) in [('p', (|m: &Mode| matches!(m, Mode::EditPlan { .. })) as fn(&Mode) -> bool), ('c', |m| matches!(m, Mode::EditCases { .. })), ('t', |m| matches!(m, Mode::EditTicket { .. }))] {
+            let mut app = plan_gate_with_cases_waiting();
+            press(&mut app, KeyCode::Char('e'));
+            press(&mut app, KeyCode::Char(key));
+            assert!(is_open(&app.mode), "{key} did not open its editor");
+        }
+        let mut app = plan_gate_with_cases_waiting();
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char('e'));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "esc returns to the task");
     }
 
     #[test]
@@ -7720,7 +7783,9 @@ mod task_view_return_tests {
             let id = case.app.tasks[0].id.clone();
             let section = case.app.detail_section;
             case.app.detail_scroll.set(2);
-            press(&mut case.app, case.open);
+            for key in case.open.clone() {
+                press(&mut case.app, key);
+            }
             assert!((case.is_open)(&case.app.mode), "{}: did not open", case.name);
             press(&mut case.app, KeyCode::Esc);
             assert!(matches!(&case.app.mode, Mode::Detail(open) if *open == id), "{}: esc ended in another mode", case.name);
@@ -7735,7 +7800,9 @@ mod task_view_return_tests {
             let id = case.app.tasks[0].id.clone();
             let section = case.app.detail_section;
             case.app.detail_scroll.set(2);
-            press(&mut case.app, case.open);
+            for key in case.open.clone() {
+                press(&mut case.app, key);
+            }
             assert!((case.is_open)(&case.app.mode), "{}: did not open", case.name);
             for key in case.confirm.clone() {
                 case.app.handle_key(key);
@@ -8572,6 +8639,18 @@ mod evidence_open_tests {
         assert_eq!(toast(&bare), "no issue linked");
         let off = crate::keys::bindings_for(&bare, crate::keys::Scope::Detail).into_iter().find(|(b, _)| b.keys == "i").unwrap().1;
         assert!(matches!(off, crate::keys::Avail::Off("no linked issue")));
+    }
+
+    #[test]
+    fn o_says_in_the_key_sheet_what_it_will_do_when_there_is_nothing_to_open() {
+        let mut app = crate::testkit::plan_gate_app();
+        let o = |app: &App| crate::keys::bindings_for(app, crate::keys::Scope::Detail).into_iter().find(|(b, _)| b.keys == "o").unwrap().1;
+        assert!(matches!(o(&app), crate::keys::Avail::Off("no issue linked")), "a card with no artifacts, PR or issue: {:?}", o(&app));
+        let link = serde_json::json!({"key": "PLAT-1", "url": "https://acme.atlassian.net/browse/PLAT-1"});
+        app.tasks[0].jira = Some(serde_json::from_value(link).unwrap());
+        assert!(o(&app).is_on(), "a linked issue gives it something to open");
+        app.set_section(Section::Diff);
+        assert!(matches!(o(&app), crate::keys::Avail::Off("nothing to open here")), "{:?}", o(&app));
     }
 
     #[test]

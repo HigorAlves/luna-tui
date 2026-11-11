@@ -15,6 +15,14 @@ use crate::{
     ui,
 };
 
+/// Where nothing listens (the discard port): the machine every test app talks to.
+pub const DEAD_MACHINE: &str = "http://127.0.0.1:9";
+
+/// A machine client pointed at `DEAD_MACHINE`; every call fails at once, as it does offline.
+pub fn dead_machine() -> Machine {
+    Machine::at(DEAD_MACHINE)
+}
+
 /// Titles of the fixture cards, for `render(..).contains(TITLE)` checks.
 pub const PLAN_GATE_TITLE: &str = "Add CSV export to reports";
 pub const RUNNING_BUILD_TITLE: &str = "Retry failed webhook deliveries";
@@ -57,7 +65,7 @@ pub fn open_card(task: Value, detail_rest: Value) -> App {
     }
     let task: Task = serde_json::from_value(task).unwrap();
     let detail: TaskDetail = serde_json::from_value(detail).unwrap();
-    let mut app = App::new(Machine::from_env());
+    let mut app = App::new(dead_machine());
     app.tasks.push(task.clone());
     app.detail = Some(detail);
     app.open_detail(task.id);
@@ -207,7 +215,7 @@ pub fn full_board_app() -> App {
         ("h3", "Fix the flaky session test", "closed", "Done", json!({})),
         ("h4", "Document the retry policy", "closed", "Done", json!({})),
     ];
-    let mut app = App::new(Machine::from_env());
+    let mut app = App::new(dead_machine());
     app.tasks.clear();
     for (i, (key, title, state, column, extra)) in rows.into_iter().enumerate() {
         let id = format!("{key}{:010}", i);
@@ -220,6 +228,13 @@ pub fn full_board_app() -> App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_fixture_talks_to_the_dead_machine_and_never_to_the_environment() {
+        for app in [plan_gate_app(), running_build_app(), escalated_app(), ship_stage_app(), questions_app(), release_question_app(), full_board_app()] {
+            assert_eq!(app.machine.base(), DEAD_MACHINE);
+        }
+    }
 
     #[test]
     fn the_plan_gate_card_renders_its_title() {

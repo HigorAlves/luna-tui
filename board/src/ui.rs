@@ -301,6 +301,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 render_archive_reason(frame, task, *cursor);
             }
         }
+        Mode::EditChoice(id) => {
+            if let Some(task) = app.task(id) {
+                render_edit_choice(frame, task, app.detail.as_ref());
+            }
+        }
         Mode::EscalationReason { id, cursor } => {
             if let Some(task) = app.task(id) {
                 render_escalation_reason(frame, task, *cursor);
@@ -590,6 +595,7 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
         Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
         Mode::RecordEdit { .. } => hint(&[("j/k", "field"), ("h/l", "value"), ("enter", "send what changed"), ("esc", "cancel")]),
         Mode::ArchiveReason { .. } => hint(&[(&format!("j/k 1-{}", crate::model::ARCHIVE_REASONS.len()), "pick"), ("enter", "archive"), ("esc", "cancel")]),
+        Mode::EditChoice(_) => hint(&[("p/c/t", "pick"), ("esc", "back to the task")]),
         Mode::EscalationReason { .. } => hint(&[(&format!("j/k 1-{}", crate::model::ESCALATION_REASONS.len()), "pick"), ("enter", "correct the reason"), ("esc", "cancel")]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::EnginePicker { .. } => hint(&[("j/k", "move"), ("enter", "set"), ("esc", "back")]),
@@ -2370,6 +2376,24 @@ fn render_archive_reason(frame: &mut Frame, task: &Task, cursor: usize) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// `e` on the Review page: `edit   p the plan   c the cases   t the ticket`, over the task.
+fn render_edit_choice(frame: &mut Frame, task: &Task, detail: Option<&crate::model::TaskDetail>) {
+    let area = centered(frame.area(), 40, 7);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" edit #{} ", task.short_id())).bold());
+    let plan = detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some());
+    let row = |key: &'static str, what: &'static str, on: bool| {
+        let style = if on { Style::new() } else { Style::new().fg(c(SUBTEXT0)) };
+        Line::from(vec![Span::from(format!("{key}  ")).fg(c(ACCENT)).bold(), Span::from(what).style(style)])
+    };
+    let lines = vec![row("p", "the plan", plan), row("c", "the cases", true), row("t", "the ticket", true)];
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 /// `E`: the reason the escalation really had, one of the six, one per line.
 fn render_escalation_reason(frame: &mut Frame, task: &Task, cursor: usize) {
     let area = centered(frame.area(), 64, crate::model::ESCALATION_REASONS.len() as u16 + 4);
@@ -3328,7 +3352,7 @@ mod tests {
             "waitingOnYou":false,"running":false,"queued":false,
             "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         for (i, spent) in [0.1, 0.2, 0.3, 5.0].into_iter().enumerate() {
             let mut task: Task = serde_json::from_str(&CARD_TASK.replace("Login page", &format!("Ticket {i}"))).unwrap();
             task.spent_usd = Some(spent);
@@ -3405,7 +3429,7 @@ mod tests {
 
     #[test]
     fn ordering_by_repo_names_each_group_and_keeps_the_selection_on_its_card() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         for (i, repo) in ["/r/notch", "/r/luna-tui", "/r/notch"].iter().enumerate() {
             let task: Task = serde_json::from_str(&format!(
                 r#"{{"id":"{i}{i}{i}{i}{i}{i}{i}{i}0000","title":"Ticket {i}","description":"","criteria":[],
@@ -3435,7 +3459,7 @@ mod tests {
 
     #[test]
     fn the_inbox_says_caught_up_when_empty_and_lists_the_split_s_tickets_otherwise() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let render = |app: &App| {
             let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
             terminal.draw(|f| render_inbox(f, f.area(), app, app.inbox.as_ref().unwrap())).unwrap();
@@ -3462,7 +3486,7 @@ mod tests {
 
     #[test]
     fn a_marked_card_wears_a_diamond_and_the_header_counts_the_marks() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task: Task = serde_json::from_str(
             r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
             "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
@@ -3482,7 +3506,7 @@ mod tests {
 
     #[test]
     fn the_header_shows_running_over_slots_and_a_draining_chip() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.online = true;
         let text = |app: &App| header_line(app).spans.iter().map(|s| s.content.to_string()).collect::<String>();
         assert!(text(&app).contains("0 running"), "{}", text(&app));
@@ -3509,7 +3533,7 @@ mod tests {
 
     #[test]
     fn the_digest_groups_what_changed_newest_first() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.last_seen_secs = crate::model::unix_secs("2026-10-22T21:00:00Z");
         let task: Task = serde_json::from_str(
             r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
@@ -3533,7 +3557,7 @@ mod tests {
 
     #[test]
     fn header_names_the_product_luna_tui() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("Luna TUI"), "{text}");
         assert!(!text.contains("Hardness"), "{text}");
@@ -3593,7 +3617,7 @@ mod tests {
 
     #[test]
     fn the_header_counts_the_overdue_tickets_with_a_red_bang() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.online = true;
         let task: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
         app.tasks.push(task);
@@ -3746,7 +3770,6 @@ mod pr_tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
-    use crate::client::Machine;
     use crate::model::{PrSnapshot, PullRequest};
 
     fn pr(number: u64, title: &str, split: &str, checks: &str, local: bool, task: bool) -> PullRequest {
@@ -3763,7 +3786,7 @@ mod pr_tests {
     }
 
     fn app_with(prs: Vec<PullRequest>) -> App {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.clear();
         app.prs = PrSnapshot { prs, polled_at: Some("2026-10-27T10:00:00Z".to_string()), error: None };
         app.pulls = Some(PullsState::default());
@@ -3885,12 +3908,11 @@ mod slack_render_tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
-    use crate::client::Machine;
     use crate::model::{SlackMetrics, SlackSnapshot, unix_secs};
     use crate::slack::{WatchesState, fixtures::snapshot};
 
     fn app_with(snapshot: SlackSnapshot) -> App {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.clear();
         app.slack_snapshot = snapshot;
         app.slack = Some(SlackState::default());
@@ -4101,7 +4123,6 @@ mod help_sheet_tests {
     };
 
     use super::*;
-    use crate::client::Machine;
     use crate::model::Task;
 
     fn task(id: &str, state: &str, repo: bool) -> Task {
@@ -4118,7 +4139,7 @@ mod help_sheet_tests {
     }
 
     fn app_with(state: &str, repo: bool) -> App {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks = vec![task("a1b2c3d4e5f6", state, repo)];
         app.focus = app.tasks[0].column_index();
         app.toast = None;
@@ -4280,7 +4301,7 @@ mod help_sheet_tests {
 
     #[test]
     fn floor_and_digest_stay_open_after_closing_help_and_the_sheet_draws_over_them() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.floor = Some(FloorState::default());
         press(&mut app, KeyCode::Char('?'));
         assert!(matches!(app.mode, Mode::Help { scope: Scope::Floor, .. }));
@@ -4306,12 +4327,12 @@ mod help_sheet_tests {
         let mut quiet = app_with("implementing", false);
         quiet.tasks[0].waiting_on_you = false;
         assert!(!footer(&quiet).contains("next to do"), "the jump key is offered only while a card needs you");
-        let mut pulls = App::new(Machine::from_env());
+        let mut pulls = App::new(crate::testkit::dead_machine());
         pulls.pulls = Some(PullsState::default());
         pulls.toast = None;
         let line = footer(&pulls);
         assert!(line.contains(" R  poll ") && !line.contains(" m  merge "), "no PR selected: only the keys that work are offered: {line}");
-        let mut floor = App::new(Machine::from_env());
+        let mut floor = App::new(crate::testkit::dead_machine());
         floor.floor = Some(FloorState::default());
         floor.toast = None;
         assert!(footer(&floor).contains(" R  refresh ") && !footer(&floor).contains(" r  refresh "), "{}", footer(&floor));
@@ -4430,7 +4451,7 @@ mod help_sheet_tests {
         let origin = split_task("aaaaaaaa", "Export everything", r#""archiveReason":"split","splitInto":["bbbbbbbb-0000-4000-8000-000000000000","cccccccc-0000-4000-8000-000000000000"],"#);
         let one = split_task("bbbbbbbb", "Export CSV rows", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":1,"of":2},"#);
         let two = split_task("cccccccc", "Export JSON rows", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":2},"#);
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks = vec![origin.clone(), one.clone(), two];
         app.mode = Mode::Detail(origin.id.clone());
         let text = drawn(&app, 160, 50);
