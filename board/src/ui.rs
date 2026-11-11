@@ -24,7 +24,7 @@ use crate::keys::{self, Avail, HelpRow, Scope};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState};
 use crate::{
-    app::{App, Density, FloorState, GroupBy, Mode},
+    app::{App, Density, FloorState, GroupBy, Mode, View},
     model::{
         COLUMNS, EngineInfo, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
         fmt_usd, repo_colour_slot, sla_targets, spend_p90, now_secs, unix_secs,
@@ -98,7 +98,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     .areas(frame.area());
 
     frame.render_widget(header_line(app), header);
-    if let Some(floor) = &app.floor {
+    if let Some(floor) = app.floor.as_ref().filter(|_| app.active_view() == Some(View::Floor)) {
         render_floor(frame, body, floor);
         frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
@@ -106,7 +106,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(digest) = app.digest.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+    if let Some(digest) = app.digest.as_ref().filter(|_| app.active_view() == Some(View::Digest) && matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_digest(frame, body, app, digest);
         frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
@@ -114,7 +114,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(inbox) = app.inbox.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::Help { .. })) {
+    if let Some(inbox) = app.inbox.as_ref().filter(|_| app.active_view() == Some(View::Inbox) && matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::Help { .. })) {
         render_inbox(frame, body, app, inbox);
         frame.render_widget(footer_line(app, footer.width), footer);
         if let Mode::ConfirmApproveAll(ids) = &app.mode {
@@ -125,7 +125,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.tickets.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::Command { .. })) {
+    if let Some(state) = app.tickets.as_ref().filter(|_| app.active_view() == Some(View::Tickets) && matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::Command { .. })) {
         render_tickets(frame, body, app, state);
         frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
@@ -133,7 +133,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.economy.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+    if let Some(state) = app.economy.as_ref().filter(|_| app.active_view() == Some(View::Economy) && matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_economy(frame, body, app, state);
         frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
@@ -141,7 +141,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.backlog.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+    if let Some(state) = app.backlog.as_ref().filter(|_| app.active_view() == Some(View::Backlog) && matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_backlog(frame, body, app, state);
         frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
@@ -149,7 +149,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.pulls.as_ref().filter(|_| {
+    if let Some(state) = app.pulls.as_ref().filter(|_| app.active_view() == Some(View::Pulls) && {
         matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ConfirmClose { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help { .. })
     }) {
         render_pulls(frame, body, app, state);
@@ -168,7 +168,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.slack.as_ref().filter(|_| {
+    if let Some(state) = app.slack.as_ref().filter(|_| app.active_view() == Some(View::Slack) && {
         matches!(
             app.mode,
             Mode::Normal
@@ -491,23 +491,17 @@ fn header_line(app: &App) -> Line<'static> {
     if !app.filter.trim().is_empty() {
         spans.push(Span::from(format!("  [filter: {}]", app.filter)).fg(c(ACCENT)).bold());
     }
-    if app.floor.is_some() {
-        spans.push(Span::from("  [floor]").fg(c(BLUE)).bold());
-    }
-    if app.backlog.is_some() {
-        spans.push(Span::from("  [backlog]").fg(c(BLUE)).bold());
-    }
-    if app.economy.is_some() {
-        spans.push(Span::from("  [economy]").fg(c(BLUE)).bold());
-    }
-    if app.tickets.is_some() {
-        spans.push(Span::from("  [tickets]").fg(c(BLUE)).bold());
-    }
-    if app.pulls.is_some() {
-        spans.push(Span::from("  [pulls]").fg(c(BLUE)).bold());
-    }
-    if app.slack.is_some() {
-        spans.push(Span::from("  [slack]").fg(c(BLUE)).bold());
+    let tag = match app.active_view() {
+        Some(View::Floor) => Some("  [floor]"),
+        Some(View::Backlog) => Some("  [backlog]"),
+        Some(View::Economy) => Some("  [economy]"),
+        Some(View::Tickets) => Some("  [tickets]"),
+        Some(View::Pulls) => Some("  [pulls]"),
+        Some(View::Slack) => Some("  [slack]"),
+        Some(View::Inbox | View::Digest) | None => None,
+    };
+    if let Some(tag) = tag {
+        spans.push(Span::from(tag).fg(c(BLUE)).bold());
     }
     if app.fold {
         spans.push(Span::from("  [folded]").fg(c(BLUE)).bold());

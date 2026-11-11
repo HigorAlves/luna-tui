@@ -8,7 +8,7 @@
 //! that never hold at once, so the sheet shows the one that applies and the footer says
 //! `a approve the plan` instead of `a advance`.
 
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, View};
 use crate::detail::Section;
 use crate::model::Task;
 use crate::pulls::{self, PrKey};
@@ -1042,24 +1042,16 @@ pub fn active_scope(app: &App) -> Scope {
     if app.slack.as_ref().is_some_and(|s| s.watches.is_some()) {
         return Scope::Watches;
     }
-    if app.floor.is_some() {
-        Scope::Floor
-    } else if app.inbox.is_some() {
-        Scope::Inbox
-    } else if app.digest.is_some() {
-        Scope::Digest
-    } else if app.pulls.is_some() {
-        Scope::Pulls
-    } else if app.backlog.is_some() {
-        Scope::Backlog
-    } else if app.economy.is_some() {
-        Scope::Economy
-    } else if app.tickets.is_some() {
-        Scope::Tickets
-    } else if app.slack.is_some() {
-        Scope::Slack
-    } else {
-        Scope::Board
+    match app.active_view() {
+        Some(View::Floor) => Scope::Floor,
+        Some(View::Inbox) => Scope::Inbox,
+        Some(View::Digest) => Scope::Digest,
+        Some(View::Pulls) => Scope::Pulls,
+        Some(View::Backlog) => Scope::Backlog,
+        Some(View::Economy) => Scope::Economy,
+        Some(View::Tickets) => Scope::Tickets,
+        Some(View::Slack) => Scope::Slack,
+        None => Scope::Board,
     }
 }
 

@@ -271,6 +271,20 @@ pub struct Gate {
     pub question: String,
 }
 
+/// The full-screen views. At most one is open: opening one closes the others, and `App::active_view` is the one
+/// place that says which takes the keys and the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Floor,
+    Inbox,
+    Digest,
+    Pulls,
+    Backlog,
+    Economy,
+    Tickets,
+    Slack,
+}
+
 /// What the box says when the card changed under it.
 const MOVED_ON: &str = "the card moved on; nothing was approved";
 
@@ -1505,6 +1519,35 @@ impl App {
         self.selected_task().map(|t| t.id.clone())
     }
 
+    /// The full-screen view that owns the screen and the keys: the one function draw, dispatch and the key tables ask.
+    pub fn active_view(&self) -> Option<View> {
+        [
+            (View::Floor, self.floor.is_some()),
+            (View::Inbox, self.inbox.is_some()),
+            (View::Digest, self.digest.is_some()),
+            (View::Pulls, self.pulls.is_some()),
+            (View::Backlog, self.backlog.is_some()),
+            (View::Economy, self.economy.is_some()),
+            (View::Tickets, self.tickets.is_some()),
+            (View::Slack, self.slack.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(view, open)| open.then_some(view))
+    }
+
+    /// Closes every full-screen view; a view that opens calls this first, so two are never open at once. (A task opened
+    /// from a view does not: the view waits under it and `esc` brings it back.)
+    fn close_views(&mut self) {
+        self.floor = None;
+        self.inbox = None;
+        self.digest = None;
+        self.pulls = None;
+        self.backlog = None;
+        self.economy = None;
+        self.tickets = None;
+        self.slack = None;
+    }
+
     /// The card a command on "the ticket" acts on: the open task's when the command was typed over one, else the board's selection.
     fn card_target(&self) -> Option<String> {
         self.command_card.clone().or_else(|| self.selected_id())
@@ -2069,29 +2112,18 @@ impl App {
         if self.toast.as_ref().is_some_and(|t| t.error) {
             self.toast = None;
         }
-        if self.floor.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_floor(key);
-        }
-        if self.inbox.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_inbox(key);
-        }
-        if self.digest.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_digest(key);
-        }
-        if self.pulls.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_pulls(key);
-        }
-        if self.backlog.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_backlog(key);
-        }
-        if self.economy.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_economy(key);
-        }
-        if self.tickets.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_tickets(key);
-        }
-        if self.slack.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_slack(key);
+        if matches!(self.mode, Mode::Normal) {
+            match self.active_view() {
+                Some(View::Floor) => return self.handle_floor(key),
+                Some(View::Inbox) => return self.handle_inbox(key),
+                Some(View::Digest) => return self.handle_digest(key),
+                Some(View::Pulls) => return self.handle_pulls(key),
+                Some(View::Backlog) => return self.handle_backlog(key),
+                Some(View::Economy) => return self.handle_economy(key),
+                Some(View::Tickets) => return self.handle_tickets(key),
+                Some(View::Slack) => return self.handle_slack(key),
+                None => {}
+            }
         }
         match &self.mode {
             Mode::Normal => self.handle_normal(key),
@@ -2423,6 +2455,7 @@ impl App {
         {
             self.take_prs(snapshot);
         }
+        self.close_views();
         self.pulls = Some(PullsState::default());
     }
 
@@ -2521,6 +2554,7 @@ impl App {
     }
 
     fn open_backlog(&mut self) {
+        self.close_views();
         self.backlog = Some(BacklogState::default());
         self.refresh_backlog();
     }
@@ -2597,6 +2631,7 @@ impl App {
             return;
         };
         self.economy_data = Economy::default();
+        self.close_views();
         self.economy = Some(EconomyState { repo, cursor: 0 });
         if !self.refresh_economy() {
             self.economy = None;
@@ -2681,6 +2716,7 @@ impl App {
     }
 
     fn open_tickets(&mut self) {
+        self.close_views();
         self.tickets = Some(TicketsState::default());
         self.refresh_tickets();
     }
@@ -2995,6 +3031,7 @@ impl App {
         {
             self.take_slack(snapshot);
         }
+        self.close_views();
         self.slack = Some(SlackState::default());
         self.prefetch_slack_catalog();
     }
@@ -3587,11 +3624,18 @@ impl App {
             KeyCode::Char(']') | KeyCode::Tab => self.hop_needs_you(true),
             KeyCode::Char('[') | KeyCode::BackTab => self.hop_needs_you(false),
             KeyCode::Char('F') => {
+                self.close_views();
                 self.floor = Some(FloorState::default());
                 self.refresh_floor();
             }
-            KeyCode::Char('I') => self.inbox = Some(InboxState::default()),
-            KeyCode::Char('D') => self.digest = Some(DigestState::default()),
+            KeyCode::Char('I') => {
+                self.close_views();
+                self.inbox = Some(InboxState::default());
+            }
+            KeyCode::Char('D') => {
+                self.close_views();
+                self.digest = Some(DigestState::default());
+            }
             KeyCode::Char('P') => self.open_pulls(),
             KeyCode::Char('B') => self.open_backlog(),
             KeyCode::Char('$') => self.open_economy(),
@@ -4449,11 +4493,18 @@ impl App {
                 Err(error) => self.notify(error, true),
             },
             "floor" => {
+                self.close_views();
                 self.floor = Some(FloorState::default());
                 self.refresh_floor();
             }
-            "inbox" => self.inbox = Some(InboxState::default()),
-            "digest" => self.digest = Some(DigestState::default()),
+            "inbox" => {
+                self.close_views();
+                self.inbox = Some(InboxState::default());
+            }
+            "digest" => {
+                self.close_views();
+                self.digest = Some(DigestState::default());
+            }
             "prs" | "pulls" => self.open_pulls(),
             "backlog" => self.open_backlog(),
             "economy" => self.open_economy(),
@@ -7475,6 +7526,41 @@ mod task_view_command_tests {
         type_text(&mut app, "inbox");
         press(&mut app, KeyCode::Enter);
         assert!(app.inbox.is_some() && matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn a_view_opened_from_a_task_that_was_opened_from_another_view_leaves_only_one() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        app.inbox = Some(crate::inbox::InboxState::default());
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Detail(_)) && app.inbox.is_some(), "the task opened over the Inbox, which waits under it");
+        command(&mut app, "digest");
+        assert!(app.inbox.is_none() && app.digest.is_some(), "opening the Digest closed the Inbox");
+        assert_eq!(app.active_view(), Some(View::Digest));
+        assert_eq!(keys::active_scope(&app), keys::Scope::Digest);
+        let screen = crate::testkit::render(&mut app, 120, 30);
+        assert!(screen.contains("Digest · since"), "the view on screen is the Digest:\n{screen}");
+        press(&mut app, KeyCode::Char('A'));
+        assert!(!matches!(app.mode, Mode::ConfirmApproveAll(_)), "A reached the hidden Inbox");
+    }
+
+    #[test]
+    fn opening_any_view_closes_the_others_and_draw_and_keys_agree_on_the_one_left() {
+        let opens: [(&str, View); 4] = [("floor", View::Floor), ("inbox", View::Inbox), ("digest", View::Digest), ("tickets", View::Tickets)];
+        for (first, _) in opens {
+            for (second, view) in opens {
+                let mut app = plan_gate_app();
+                app.mode = Mode::Normal;
+                command(&mut app, first);
+                let id = app.tasks[0].id.clone();
+                app.open_detail(id);
+                command(&mut app, second);
+                let open = [app.floor.is_some(), app.inbox.is_some(), app.digest.is_some(), app.tickets.is_some()].iter().filter(|o| **o).count();
+                assert_eq!(open, 1, "{first} then {second}");
+                assert_eq!(app.active_view(), Some(view), "{first} then {second}");
+            }
+        }
     }
 
     #[test]
