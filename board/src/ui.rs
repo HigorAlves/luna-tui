@@ -206,10 +206,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if !app.fold
         && let Some(note) = board_note(app, body.width)
     {
-        // Right-aligned on the header; it takes its cells from the left side when the two meet.
+        // Right-aligned on the header; the indicator has priority, so the left side is cut with `…` where the two meet.
         let w = (note.width() as u16 + 1).min(header.width);
+        let left = Rect { width: header.width - w, ..header };
+        frame.render_widget(Clear, header);
+        frame.render_widget(clip_line(header_line(app), left.width as usize), left);
         let rect = Rect { x: header.right() - w, width: w, ..header };
-        frame.render_widget(Clear, rect);
         frame.render_widget(note, Rect { x: rect.x + 1, width: w - 1, ..rect });
     }
     frame.render_widget(footer_line(app, footer.width), footer);
@@ -420,6 +422,29 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
+/// `line` cut to `max` cells: whole spans while they fit, the one that crosses the edge shortened with `…`.
+fn clip_line(line: Line<'static>, max: usize) -> Line<'static> {
+    if line.width() <= max {
+        return line;
+    }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for span in line.spans {
+        let w = span.width();
+        if used + w <= max {
+            used += w;
+            spans.push(span);
+            continue;
+        }
+        let rest = max - used;
+        if rest > 0 {
+            spans.push(Span::styled(text::ellipsis(&span.content, rest), span.style));
+        }
+        break;
+    }
+    Line::from(spans)
+}
+
 fn header_line(app: &App) -> Line<'static> {
     let mut spans = vec![Span::from(" Luna TUI ").fg(c(BASE)).bg(c(ACCENT)).bold()];
     if app.online {
@@ -571,8 +596,8 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
         Mode::ConfirmClose { .. } => hint(&[("y", "close the PR"), ("n", "cancel")]),
         Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
         Mode::RecordEdit { .. } => hint(&[("j/k", "field"), ("h/l", "value"), ("enter", "send what changed"), ("esc", "cancel")]),
-        Mode::ArchiveReason { .. } => hint(&[("j/k 1-5", "pick"), ("enter", "archive"), ("esc", "cancel")]),
-        Mode::EscalationReason { .. } => hint(&[("j/k 1-6", "pick"), ("enter", "correct the reason"), ("esc", "cancel")]),
+        Mode::ArchiveReason { .. } => hint(&[(&format!("j/k 1-{}", crate::model::ARCHIVE_REASONS.len()), "pick"), ("enter", "archive"), ("esc", "cancel")]),
+        Mode::EscalationReason { .. } => hint(&[(&format!("j/k 1-{}", crate::model::ESCALATION_REASONS.len()), "pick"), ("enter", "correct the reason"), ("esc", "cancel")]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::EnginePicker { .. } => hint(&[("j/k", "move"), ("enter", "set"), ("esc", "back")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
@@ -597,35 +622,8 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
 
 fn view_footer(app: &App, width: u16) -> Line<'static> {
     match keys::active_scope(app) {
-        Scope::Floor => hint(&[("tab", "next repo"), ("r", "refresh"), ("esc", "close")]),
-        Scope::Digest => hint(&[("j/k", "move"), ("enter", "jump to the ticket"), ("o", "open the PR"), ("esc", "close")]),
-        Scope::Inbox => hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]),
-        Scope::Pulls => hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]),
-        Scope::Backlog => hint(&[("j/k", "move"), ("p", "promote"), ("b", "bump"), ("d", "decline"), ("R", "refetch"), ("esc", "close")]),
-        Scope::Economy => hint(&[("j/k", "move"), ("d", "drop fact"), ("a", "approve mask"), ("r", "restore"), ("I", "import"), ("R", "refetch"), ("esc", "close")]),
-        Scope::Tickets => hint(&[("j/k", "move"), ("a", "approve"), ("e", "edit"), ("x", "ignore"), ("c", "card"), ("s", "backlog"), ("R", "refetch"), ("esc", "close")]),
-        Scope::Watches => hint(&[("j/k", "move"), ("n", "add"), ("e", "floor"), ("d", "delete"), ("space", "on/off"), ("esc", "close")]),
-        Scope::Slack => hint(&[
-            ("j/k", "move"),
-            ("h/l 1-6", "split"),
-            ("r", "reply"),
-            ("t", "ticket"),
-            ("d", "done"),
-            ("s", "snooze"),
-            ("! -", "priority"),
-            ("W", "watches"),
-            ("o", "open"),
-            ("R", "poll"),
-            ("esc", "close"),
-        ]),
         Scope::Detail => detail_footer(app, width),
-        _ => {
-            let mut keys = vec![("?", "help"), ("n", "new"), ("a", keys::board_a_label(app)), ("enter", "open"), ("x", "actions"), ("=", "density"), ("/", "filter"), ("q", "quit")];
-            if keys::someone_needs_you(app).is_on() {
-                keys.insert(3, ("tab", "next to do"));
-            }
-            hint(&keys)
-        }
+        scope => fitted_footer(&keys::view_footer(app, scope), &[("?", "all keys")], width),
     }
 }
 
@@ -634,14 +632,20 @@ fn view_footer(app: &App, width: u16) -> Line<'static> {
 /// repeated here, so a key the bar had no room for is still on screen; nothing else is listed that
 /// does not work (an edit on a running card, a send back at no gate).
 fn detail_footer(app: &App, width: u16) -> Line<'static> {
+    fitted_footer(&keys::detail_footer(app), &[("?", "all keys"), ("esc", "back")], width)
+}
+
+/// A footer fitted to `width`: `keys` in priority order while they fit beside `tail`, whole hints only,
+/// then `tail`. On a terminal too narrow for the tail, its first hint alone.
+fn fitted_footer(keys: &[(String, String)], tail: &[(&str, &str)], width: u16) -> Line<'static> {
     let seg = |key: &str, desc: &str| vec![Span::from(format!(" {key} ")).fg(c(BASE)).bg(c(ACCENT)), Span::from(format!(" {desc}  ")).fg(c(SUBTEXT0))];
-    let tail: Vec<Span<'static>> = [seg("?", "all keys"), seg("esc", "back")].concat();
+    let tail_spans: Vec<Span<'static>> = tail.iter().flat_map(|(k, d)| seg(k, d)).collect();
     let room = (width as usize).saturating_sub(1);
     let mut spans = vec![Span::raw(" ")];
     let mut used = 0;
-    let tail_w: usize = tail.iter().map(Span::width).sum();
-    for (key, desc) in keys::detail_footer(app) {
-        let one = seg(&key, &desc);
+    let tail_w: usize = tail_spans.iter().map(Span::width).sum();
+    for (key, desc) in keys {
+        let one = seg(key, desc);
         let w: usize = one.iter().map(Span::width).sum();
         if used + w + tail_w > room {
             break;
@@ -651,9 +655,9 @@ fn detail_footer(app: &App, width: u16) -> Line<'static> {
     }
     // The tail keeps its place when it fits; on a terminal too narrow for it, `?` alone.
     if used + tail_w <= room {
-        spans.extend(tail);
-    } else {
-        spans.extend(seg("?", "all keys"));
+        spans.extend(tail_spans);
+    } else if let Some((k, d)) = tail.first() {
+        spans.extend(seg(k, d));
     }
     Line::from(spans)
 }
@@ -2338,8 +2342,7 @@ fn render_slack_watch_add(frame: &mut Frame, app: &App, query: &str, cursor: usi
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// `s`: how long the item sleeps.
-/// `Z`: why the ticket is archived. The five reasons the machine knows, one per line.
+/// `Z`: why the ticket is archived. The reasons the machine knows, one per line.
 fn render_archive_reason(frame: &mut Frame, task: &Task, cursor: usize) {
     let area = centered(frame.area(), 52, crate::model::ARCHIVE_REASONS.len() as u16 + 4);
     frame.render_widget(Clear, area);
@@ -3852,6 +3855,22 @@ mod pr_tests {
         assert!(text.contains("↳ threads are answered on your own PRs"), "{text}");
         assert!(text.contains("@them · h → main"), "the menu carries the PR widget: {text}");
     }
+
+    /// The study measured this footer at 113 cells: at 100 columns it drops its lowest hints whole and ends with the help hint.
+    #[test]
+    fn the_footer_fits_a_hundred_columns_and_ends_with_the_help_hint() {
+        let mut app = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, false)]);
+        app.pulls = Some(PullsState { split: crate::pulls::PrSplit::ReadyToMerge, cursor: 0 });
+        for width in [40u16, 60, 80, 100, 140] {
+            let line = footer_line(&app, width);
+            let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+            assert!(line.width() <= width as usize, "{width}: {} cells: {text}", line.width());
+            assert!(text.trim_end().ends_with("?  all keys"), "{width}: {text}");
+        }
+        let text: String = footer_line(&app, 100).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains(" m  merge ") && text.contains(" o  open ") && text.contains(" R  poll "), "{text}");
+        assert!(!text.contains("threads"), "the lowest hints went first: {text}");
+    }
 }
 
 #[cfg(test)]
@@ -4047,6 +4066,22 @@ mod slack_render_tests {
         let buffer = terminal.backend().buffer().clone();
         let text: String = (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect();
         assert!(!text.contains("Slack ·"), "nothing without the metrics");
+    }
+
+    /// The study measured this footer at 135 cells: at 100 columns it drops its lowest hints whole and ends with the help hint.
+    #[test]
+    fn the_footer_fits_a_hundred_columns_and_ends_with_the_help_hint() {
+        let app = app_with(snapshot());
+        for width in [40u16, 60, 80, 100, 140] {
+            let line = footer_line(&app, width);
+            let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+            assert!(line.width() <= width as usize, "{width}: {} cells: {text}", line.width());
+            assert!(text.trim_end().ends_with("?  all keys"), "{width}: {text}");
+        }
+        let text: String = footer_line(&app, 100).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains(" r  reply ") && text.contains(" t  ticket ") && !text.contains("priority down"), "{text}");
+        let wide: String = footer_line(&app, 200).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(wide.contains(" R  poll ") && wide.contains(" j/k  move "), "{wide}");
     }
 }
 
@@ -4259,7 +4294,8 @@ mod help_sheet_tests {
     #[test]
     fn the_footer_is_a_few_short_words_per_view() {
         let board = footer(&app_with("awaiting_approval", true));
-        assert!(board.starts_with("  ?  help   n  new   a  open to approve   tab  next to do   enter  open   x  actions   =  density   /  filter   q  quit"), "{board}");
+        assert!(board.starts_with("  a  open to approve   r  send back   N  reject   e  edit   enter  open   x  actions   /  filter   q  quit   tab  next to do   n  new"), "{board}");
+        assert!(board.trim_end().ends_with("?  all keys"), "{board}");
         let mut quiet = app_with("implementing", false);
         quiet.tasks[0].waiting_on_you = false;
         assert!(!footer(&quiet).contains("next to do"), "the jump key is offered only while a card needs you");
@@ -4267,15 +4303,37 @@ mod help_sheet_tests {
         pulls.pulls = Some(PullsState::default());
         pulls.toast = None;
         let line = footer(&pulls);
-        assert!(line.contains(" m  merge ") && line.contains(" c/v/t  CI fix / review / threads ") && line.contains(" R  poll "), "{line}");
+        assert!(line.contains(" R  poll ") && !line.contains(" m  merge "), "no PR selected: only the keys that work are offered: {line}");
         let mut floor = App::new(Machine::from_env());
         floor.floor = Some(FloorState::default());
         floor.toast = None;
-        assert!(footer(&floor).contains(" r  refresh "), "{}", footer(&floor));
+        assert!(footer(&floor).contains(" R  refresh ") && !footer(&floor).contains(" r  refresh "), "{}", footer(&floor));
         let mut help = app_with("draft", true);
         press(&mut help, KeyCode::Char('?'));
         let line = footer(&help);
         assert!(line.contains(" enter  run the row's key ") && line.contains(" /  search every view's keys "), "{line}");
+    }
+
+    #[test]
+    fn the_reason_pickers_footers_count_their_real_reasons() {
+        let mut app = app_with("awaiting_approval", true);
+        app.mode = Mode::ArchiveReason { id: "a1b2c3d4e5f6".into(), cursor: 0 };
+        assert!(footer(&app).contains(" j/k 1-7  pick "), "{}", footer(&app));
+        app.mode = Mode::EscalationReason { id: "a1b2c3d4e5f6".into(), cursor: 0 };
+        assert!(footer(&app).contains(" j/k 1-6  pick "), "{}", footer(&app));
+    }
+
+    #[test]
+    fn the_hidden_columns_indicator_keeps_its_place_and_the_offline_message_is_cut_with_an_ellipsis() {
+        let mut app = app_with("awaiting_approval", true);
+        app.online = false;
+        app.offline_reason = "connection refused while reaching the machine".into();
+        let row = screen(&app, 110, 24)[0].clone();
+        let note = board_note(&app, 110).expect("110 columns hide some").spans.iter().map(|s| s.content.to_string()).collect::<String>();
+        assert!(row.trim_end().ends_with(note.trim_end()), "the indicator is whole at the right: {row}");
+        assert!(row.contains("…") && row.contains("Luna TUI") && row.contains("machine offline"), "the left text is shortened: {row}");
+        let before_note = row.trim_end().strip_suffix(note.trim_end()).unwrap();
+        assert!(before_note.trim_end().ends_with('…'), "cut at the edge of the indicator, not clipped under it: {row}");
     }
 
     #[test]
@@ -4401,6 +4459,37 @@ mod help_sheet_tests {
         let plain = split_task("abcdef12", "Login page", "");
         let lines: Vec<String> = card_lines(&plain, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect();
         assert!(!lines.iter().any(|l| l.contains("part ")), "{lines:?}");
+    }
+
+    #[test]
+    fn every_view_footer_comes_from_the_registry_fits_and_ends_with_the_help_hint() {
+        use crate::{app::FloorState, backlog::BacklogState, digest::DigestState, economy::EconomyState, inbox::InboxState, tickets::TicketsState};
+        let board = || app_with("awaiting_approval", true);
+        let views: Vec<(&str, App)> = vec![
+            ("board", board()),
+            ("floor", { let mut a = board(); a.floor = Some(FloorState::default()); a }),
+            ("inbox", { let mut a = board(); a.inbox = Some(InboxState::default()); a }),
+            ("digest", { let mut a = board(); a.digest = Some(DigestState { cursor: 0 }); a }),
+            ("pulls", { let mut a = board(); a.pulls = Some(PullsState::default()); a }),
+            ("backlog", { let mut a = board(); a.backlog = Some(BacklogState { cursor: 0 }); a }),
+            ("economy", { let mut a = board(); a.economy = Some(EconomyState { repo: "/repo".into(), cursor: 0 }); a }),
+            ("tickets", { let mut a = board(); a.tickets = Some(TicketsState { cursor: 0 }); a }),
+            ("slack", { let mut a = board(); a.slack = Some(crate::slack::SlackState::default()); a }),
+        ];
+        for (name, app) in &views {
+            for width in [30u16, 50, 80, 100, 140, 200] {
+                let line = footer_line(app, width);
+                let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+                assert!(line.width() <= width as usize, "{name} at {width}: {} cells: {text}", line.width());
+                assert!(text.contains("?  all keys") || width < 40, "{name} at {width}: {text}");
+            }
+            // Only keys that work: the first hint is the heaviest `On` binding of the scope.
+            let scope = keys::active_scope(app);
+            let first = keys::view_footer(app, scope);
+            assert!(!first.is_empty() && first.iter().all(|(k, _)| k != "?"), "{name}: {first:?}");
+        }
+        let text: String = footer_line(&views[0].1, 80).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.starts_with("  a  open to approve   r  send back") && text.trim_end().ends_with("?  all keys"), "{text}");
     }
 
     // The task view's footer: the keys that work on this card, cut to the width, ending with the help hint.

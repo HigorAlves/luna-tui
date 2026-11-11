@@ -1172,6 +1172,67 @@ pub fn detail_footer(app: &App) -> Vec<(String, String)> {
     terse_pairs(app, detail_keys(app).into_iter().filter(|b| acts_on_card(b) || b.group == Group::Move || matches!(b.first(), "o" | "O" | "enter" | ":")))
 }
 
+/// What a full-screen view's footer calls a key: the label cut to a word or two (`CI fix: an agent
+/// repairs ...` is `CI fix`, `poll Slack now` is `poll`), with a few overrides where the cut reads badly.
+fn view_label(app: &App, scope: Scope, b: &Binding) -> String {
+    let first = b.first();
+    if scope == Scope::Board {
+        match first {
+            "a" => return board_a_label(app).into(),
+            "tab" => return "next to do".into(),
+            "enter" => return "open".into(),
+            "x" => return "actions".into(),
+            "/" => return "filter".into(),
+            "n" => return "new".into(),
+            "=" => return "density".into(),
+            "q" => return "quit".into(),
+            "h" => return "column".into(),
+            "j" => return "ticket".into(),
+            "!" => return "needs you".into(),
+            "@" => return "this repo".into(),
+            "v" => return "mark".into(),
+            _ => {}
+        }
+    }
+    match first {
+        "tab" => return "next repo".into(),
+        "esc" => return "close".into(),
+        "j" => return "move".into(),
+        "h" => return "split".into(),
+        "1-5" | "1-6" => return "jump".into(),
+        "!" => return "priority up".into(),
+        "-" => return "priority down".into(),
+        "x" if b.label.starts_with("the same actions") => return "menu".into(),
+        _ => {}
+    }
+    let head = b.label.split([':', ',']).next().unwrap_or(b.label).split(" (").next().unwrap_or(b.label);
+    if head.starts_with("send back") {
+        return "send back".into();
+    }
+    if b.label.contains(':') { head.to_string() } else { head.split(' ').next().unwrap_or(head).to_string() }
+}
+
+/// The footer of a full-screen view, in priority order: the scope's `On` bindings, heaviest first
+/// (ties keep table order), as `(keys, label)`. `?` is left to the footer's tail, and the menu chords
+/// and `:` commands are not keys you press. `ui` cuts the list to the width.
+pub fn view_footer(app: &App, scope: Scope) -> Vec<(String, String)> {
+    let mut found: Vec<&Binding> = bindings_for(app, scope)
+        .into_iter()
+        .filter(|(b, avail)| avail.is_on() && b.menu_key().is_none() && b.group != Group::Commands && b.first() != "?")
+        .map(|(b, _)| b)
+        .collect();
+    found.sort_by_key(|b| std::cmp::Reverse(b.weight));
+    let mut out: Vec<(String, String)> = Vec::new();
+    for b in found {
+        // The close row lists three keys (`esc / S / q`); the footer names the one all views share.
+        let keys = if b.first() == "esc" { "esc".to_string() } else if b.first() == "tab" { "tab".to_string() } else { b.short_keys() };
+        if !out.iter().any(|(k, _)| *k == keys) {
+            out.push((keys, view_label(app, scope, b)));
+        }
+    }
+    out
+}
+
 /// Bindings of every scope whose keys, label or command contain `query`, case-insensitively.
 pub fn search(query: &str) -> Vec<(Scope, &'static Binding)> {
     let needle = query.trim().to_lowercase();

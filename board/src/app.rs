@@ -4441,7 +4441,7 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(ARCHIVE_REASONS.len() - 1),
             KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
             KeyCode::Enter => chosen = Some(*cursor),
-            KeyCode::Char(d @ '1'..='5') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Char(d @ '1'..='9') if (d as usize) - ('0' as usize) <= ARCHIVE_REASONS.len() => chosen = Some((d as usize) - ('1' as usize)),
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
             _ => {}
         }
@@ -4464,7 +4464,7 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(crate::model::ESCALATION_REASONS.len() - 1),
             KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
             KeyCode::Enter => chosen = Some(*cursor),
-            KeyCode::Char(d @ '1'..='6') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Char(d @ '1'..='9') if (d as usize) - ('0' as usize) <= crate::model::ESCALATION_REASONS.len() => chosen = Some((d as usize) - ('1' as usize)),
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
             _ => {}
         }
