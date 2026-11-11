@@ -780,6 +780,10 @@ mod first_page_tests {
 
     #[test]
     fn a_budget_bar_turns_to_the_flag_style_from_eighty_percent_and_says_the_run_is_not_counting_tokens_when_it_is_not() {
+        // The colours are what this asserts; with NO_COLOR there are none.
+        if std::env::var_os("NO_COLOR").is_some() {
+            return;
+        }
         let spans = |used: f64, max: f64| super::budget_row("iterations", used, max, format!("{used} of {max}"));
         let flagged = |line: ratatui::text::Line| line.spans.iter().any(|s| s.style == crate::theme::flag());
         assert!(!flagged(spans(4.0, 12.0)));
@@ -909,6 +913,10 @@ mod rail_tests {
 
     #[test]
     fn only_a_waiting_marker_and_flag_lines_take_the_accent_and_headings_are_neutral() {
+        // The colours are what this asserts; with NO_COLOR there are none.
+        if std::env::var_os("NO_COLOR").is_some() {
+            return;
+        }
         let app = plan_gate_app();
         let mut terminal = Terminal::new(TestBackend::new(180, 50)).unwrap();
         terminal.draw(|f| ui::draw(f, &app)).unwrap();

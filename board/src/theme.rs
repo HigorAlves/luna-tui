@@ -105,6 +105,10 @@ mod tests {
 
     #[test]
     fn roles_map_to_the_colours_the_screens_use_for_that_meaning() {
+        // The colours are what this asserts; with NO_COLOR there are none.
+        if std::env::var_os("NO_COLOR").is_some() {
+            return;
+        }
         assert_eq!(needs_you().fg, Some(PEACH));
         assert_eq!(working().fg, Some(YELLOW));
         assert_eq!(lost().fg, Some(RED));
@@ -119,6 +123,10 @@ mod tests {
 
     #[test]
     fn a_heading_is_bold_and_has_no_colour_of_its_own() {
+        // The colours are what this asserts; with NO_COLOR there are none.
+        if std::env::var_os("NO_COLOR").is_some() {
+            return;
+        }
         assert_eq!(heading().fg, None);
         assert!(heading().add_modifier.contains(Modifier::BOLD));
         assert_eq!(text(), Style::new());
