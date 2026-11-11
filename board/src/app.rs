@@ -3922,7 +3922,9 @@ impl App {
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            let down = key.code == KeyCode::Char('d');
             match key.code {
+                KeyCode::Char('d' | 'u') if self.detail_refs.focus && self.detail_refs.page(if down { 1 } else { -1 }) => {}
                 KeyCode::Char('d') => self.scroll_detail(half_page),
                 KeyCode::Char('u') => self.scroll_detail(-half_page),
                 _ => {}
@@ -3935,8 +3937,16 @@ impl App {
             match key.code {
                 KeyCode::Esc | KeyCode::Tab => self.detail_refs.focus = false,
                 KeyCode::Enter | KeyCode::Char(' ') => self.detail_refs.toggle(section),
-                KeyCode::Char('j') | KeyCode::Down => self.detail_refs.step(1),
-                KeyCode::Char('k') | KeyCode::Up => self.detail_refs.step(-1),
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if !self.detail_refs.scroll_into(1) {
+                        self.detail_refs.step(1);
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if !self.detail_refs.scroll_into(-1) {
+                        self.detail_refs.step(-1);
+                    }
+                }
                 _ => return self.handle_detail_main(key, id, half_page),
             }
             self.detail_follow.set(true);
@@ -4080,6 +4090,7 @@ impl App {
             self.detail_cursor = start_cursor(section);
             self.detail_refs.focus = false;
             self.detail_refs.cursor = 0;
+            self.detail_refs.side_offset.set(0);
             self.detail_follow.set(true);
             self.diff_failed = None;
             if section == Section::Engines {
@@ -4209,8 +4220,8 @@ impl App {
     /// Scrolls the open detail popup. `ui` clamps this to the content's actual height on the
     /// next frame, since only it knows that (it depends on the terminal width).
     fn scroll_detail(&self, delta: i16) {
-        let next = self.detail_scroll.get() as i16 + delta;
-        self.detail_scroll.set(next.max(0) as u16);
+        let next = i32::from(self.detail_scroll.get()) + i32::from(delta);
+        self.detail_scroll.set(next.clamp(0, i32::from(u16::MAX)) as u16);
     }
 
     /// Vim-style modal editing, like `$EDITOR` gave before editing moved in place: normal mode

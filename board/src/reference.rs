@@ -3,7 +3,10 @@
 //! over beside its main text; a wide terminal draws them in a side pane, a narrow one folds them under
 //! the main text. A group longer than `FOLD_ABOVE` lines starts folded.
 
-use std::{cell::RefCell, collections::HashSet};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+};
 
 use ratatui::text::{Line, Span};
 
@@ -58,6 +61,20 @@ pub struct RefState {
     pub focus: bool,
     pub cursor: usize,
     pub ids: RefCell<Vec<&'static str>>,
+    /// The side pane's scroll, in rows. Each draw clamps it.
+    pub side_offset: Cell<usize>,
+    /// The focus moved to a header (or a group opened): the next draw brings that header into view.
+    pub reveal: Cell<bool>,
+    /// What the last draw made of the side pane; None when no side pane was drawn.
+    pub side: RefCell<Option<SideShape>>,
+}
+
+/// The side pane as drawn: its height, its rows in all, and the rows each group takes (header row, end row).
+#[derive(Clone, Debug, Default)]
+pub struct SideShape {
+    pub height: usize,
+    pub total: usize,
+    pub spans: Vec<(usize, usize)>,
 }
 
 impl RefState {
@@ -66,6 +83,9 @@ impl RefState {
         self.focus = false;
         self.cursor = 0;
         self.ids.borrow_mut().clear();
+        self.side_offset.set(0);
+        self.reveal.set(false);
+        *self.side.borrow_mut() = None;
     }
 
     /// Whether the open section has reference groups (as of the last frame).
@@ -93,7 +113,41 @@ impl RefState {
         if let Some(at) = self.at() {
             let last = self.ids.borrow().len() as i64 - 1;
             self.cursor = (at as i64 + delta).clamp(0, last) as usize;
+            self.reveal.set(true);
         }
+    }
+
+    /// `j`/`k` inside a long open group of the side pane: a row of scroll while the group's far end (for `j`) or its header (for `k`)
+    /// is off the pane, so the focus can read the whole group before it moves to the next header. False when there is nothing to scroll,
+    /// and the key moves the focus.
+    pub fn scroll_into(&mut self, delta: i64) -> bool {
+        let shape = self.side.borrow().clone();
+        let (Some(shape), Some(at)) = (shape, self.at()) else { return false };
+        let Some(&(start, end)) = shape.spans.get(at) else { return false };
+        let offset = self.side_offset.get().min(shape.total.saturating_sub(shape.height));
+        if delta > 0 {
+            // The last row of the group must sit above the marker that covers the pane's bottom row.
+            let more = offset + shape.height < shape.total;
+            let usable_end = offset + shape.height - usize::from(more);
+            if end > usable_end && offset + shape.height < shape.total {
+                self.side_offset.set(offset + 1);
+                return true;
+            }
+        } else if start < offset + usize::from(offset > 0) && offset > 0 {
+            self.side_offset.set(offset - 1);
+            return true;
+        }
+        false
+    }
+
+    /// `ctrl+d`/`ctrl+u` while the reference has the keys: half a pane of scroll. False when no side pane is drawn.
+    pub fn page(&mut self, delta: i64) -> bool {
+        let shape = self.side.borrow().clone();
+        let Some(shape) = shape else { return false };
+        let half = (shape.height / 2).max(1) as i64;
+        let max = shape.total.saturating_sub(shape.height) as i64;
+        self.side_offset.set((self.side_offset.get() as i64 + delta * half).clamp(0, max) as usize);
+        true
     }
 
     /// `enter` or `space` on the focused group's header.
@@ -103,6 +157,7 @@ impl RefState {
             if !self.toggled.remove(&(section, id)) {
                 self.toggled.insert((section, id));
             }
+            self.reveal.set(true);
         }
     }
 

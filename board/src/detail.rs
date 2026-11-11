@@ -305,7 +305,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         let total = head.lines.len() + body_len + head.tail.len();
         let mut offset = view.scroll.get() as usize;
         if follow && let Some(row) = head.cursor_row {
-            offset = keep_visible(offset, row, height);
+            offset = keep_visible(offset, row, height, total);
         }
         let offset = offset.min(total.saturating_sub(height));
         view.scroll.set(offset as u16);
@@ -349,13 +349,31 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         }
     };
     *view.refs.ids.borrow_mut() = page.groups.iter().map(|g| g.id).collect();
+    if side_area.is_none() {
+        *view.refs.side.borrow_mut() = None;
+    }
     let mut cursor_row = cursor_row;
     lines.extend(page.main);
     if !page.groups.is_empty() {
         match side_area {
             Some(area) => {
-                let (rows, _) = reference::layout(&page.groups, view.section, view.refs, true, area.width as usize);
-                frame.render_widget(Paragraph::new(Text::from(rows)).wrap(Wrap { trim: false }), area);
+                let (rows, headers) = reference::layout(&page.groups, view.section, view.refs, true, area.width as usize);
+                // Lines wrap in the pane, so a group's place is counted in rows, not lines.
+                let row_heights: Vec<usize> = rows.iter().map(|l| Paragraph::new(l.clone()).wrap(Wrap { trim: false }).line_count(area.width).max(1)).collect();
+                let row_of = |line: usize| row_heights.iter().take(line).sum::<usize>();
+                let total: usize = row_heights.iter().sum();
+                let spans: Vec<(usize, usize)> = headers.iter().enumerate().map(|(i, h)| (row_of(*h), row_of(headers.get(i + 1).copied().unwrap_or(rows.len())))).collect();
+                let pane = area.height as usize;
+                let mut offset = view.refs.side_offset.get();
+                // The focus moved to a header, or a group opened: bring its header into the rows no marker covers.
+                if view.refs.reveal.replace(false) && view.refs.focus && let Some((start, _)) = spans.get(view.refs.cursor.min(spans.len().saturating_sub(1))) {
+                    offset = keep_visible(offset, *start, pane, total);
+                }
+                let offset = offset.min(total.saturating_sub(pane));
+                view.refs.side_offset.set(offset);
+                *view.refs.side.borrow_mut() = Some(reference::SideShape { height: pane, total, spans });
+                frame.render_widget(Paragraph::new(Text::from(rows)).wrap(Wrap { trim: false }).scroll((offset as u16, 0)), area);
+                scroll_markers(frame, area, offset, total);
             }
             None => {
                 lines.push(Line::default());
@@ -378,7 +396,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     let total = paragraph.line_count(pane_area.width);
     let mut offset = view.scroll.get() as usize;
     if follow && let Some(row) = cursor_row {
-        offset = keep_visible(offset, row, height);
+        offset = keep_visible(offset, row, height, total);
     }
     let offset = offset.min(total.saturating_sub(height));
     view.scroll.set(offset as u16);
@@ -423,13 +441,26 @@ fn scroll_markers(frame: &mut Frame, pane: Rect, offset: usize, total: usize) {
     }
 }
 
-/// The scroll offset that keeps `row` inside a window of `height` rows, moving as little as
-/// possible from `offset`.
-fn keep_visible(offset: usize, row: usize, height: usize) -> usize {
-    if row < offset {
-        row
-    } else if row >= offset + height.max(1) {
-        row + 1 - height.max(1)
+/// The scroll offset that keeps `row` inside a window of `height` rows over `total`, moving as little as possible from `offset`.
+/// The marker rows are outside the window: `▲ N above` covers the first row once it is scrolled, `▼ N more` the last while more
+/// follows, so a row there is as good as off screen.
+fn keep_visible(offset: usize, row: usize, height: usize, total: usize) -> usize {
+    let h = height.max(1);
+    let offset = offset.min(total.saturating_sub(h));
+    if h < 4 {
+        return if row < offset {
+            row
+        } else if row >= offset + h {
+            row + 1 - h
+        } else {
+            offset
+        };
+    }
+    if row < offset + usize::from(offset > 0) {
+        row.saturating_sub(1)
+    } else if row + usize::from(offset + h < total) >= offset + h {
+        let next = row + 2 - h;
+        if next + h < total { next } else { total.saturating_sub(h) }
     } else {
         offset
     }
@@ -3558,5 +3589,169 @@ mod frame_tests {
         task.reason = Some("boom\u{1b}[31m red".into());
         let status = bar_status(&task, None, 0);
         assert!(!status.text.contains('\u{1b}') && status.text.contains("escalated · boom"), "{}", status.text);
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use crate::{
+        app::App,
+        detail::Section,
+        testkit::{open_card, plan_gate_app, render, task_json},
+    };
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use serde_json::json;
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn ctrl(app: &mut App, c: char) {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+    }
+
+    fn evidence_app(files: usize) -> App {
+        let task = task_json("dddddddd4444", "Rate limit the public API", "awaiting_ship", "Ship", json!({"waitingOnYou": true}));
+        let artifacts: Vec<_> = (0..files).map(|i| json!({"id": format!("a{i}"), "kind": "screenshot", "path": format!("/out/files/qa/shot-{i}.png"), "label": format!("shot {i}"), "stageRunId": "r2"})).collect();
+        let runs = json!([{"id": "r2", "stage": "evidence", "attempt": 1, "status": "passed", "costUsd": 0.3, "turns": 3, "startedAt": "2026-10-22T09:00:00Z", "endedAt": "2026-10-22T09:30:00Z"}]);
+        let mut app = open_card(task, json!({"artifacts": artifacts, "stageRuns": runs}));
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 0;
+        app
+    }
+
+    /// The row the selection marker is on, as the screen shows it; None when no row wears it.
+    fn selected(screen: &str) -> Option<String> {
+        screen.lines().find(|l| l.contains("▌ screenshot")).map(|l| l.to_string())
+    }
+
+    #[test]
+    fn the_selected_evidence_row_is_on_screen_and_not_under_a_marker_at_every_step_down_and_up() {
+        let mut app = evidence_app(60);
+        let screen = render(&mut app, 180, 30);
+        assert!(selected(&screen).is_some_and(|l| l.contains("shot 0  ")), "{screen}");
+        for step in 1..60 {
+            press(&mut app, KeyCode::Char('j'));
+            let screen = render(&mut app, 180, 30);
+            let row = selected(&screen).unwrap_or_else(|| panic!("down {step}: the selected row is not on screen:\n{screen}"));
+            assert!(row.contains(&format!("shot {step}  ")), "down {step}: {row}");
+        }
+        for step in (0..59).rev() {
+            press(&mut app, KeyCode::Char('k'));
+            let screen = render(&mut app, 180, 30);
+            let row = selected(&screen).unwrap_or_else(|| panic!("up {step}: the selected row is not on screen:\n{screen}"));
+            assert!(row.contains(&format!("shot {step}  ")), "up {step}: {row}");
+        }
+    }
+
+    fn map_app(files: usize) -> App {
+        let mut app = plan_gate_app();
+        let gate = app.detail.as_mut().unwrap().approvals.iter_mut().find(|a| a.kind.as_deref() == Some("awaiting_approval")).unwrap();
+        gate.requested["map"]["files"] = json!((0..files).map(|i| json!({"path": format!("src/mod/file{i:02}.rs"), "role": "change"})).collect::<Vec<_>>());
+        app
+    }
+
+    /// The side pane's columns of a 180-wide render.
+    fn side(screen: &str) -> String {
+        screen.lines().map(|l| l.chars().skip(136).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    fn focus_map(app: &mut App) {
+        press(app, KeyCode::Tab);
+        render(app, 180, 50);
+        for _ in 0..8 {
+            if app.detail_refs.ids.borrow().get(app.detail_refs.cursor).is_some_and(|id| *id == "map") {
+                break;
+            }
+            press(app, KeyCode::Char('j'));
+            render(app, 180, 50);
+        }
+        press(app, KeyCode::Enter);
+        render(app, 180, 50);
+    }
+
+    #[test]
+    fn an_unfolded_code_map_of_sixty_files_scrolls_line_by_line_and_says_how_much_is_off_screen() {
+        let mut app = map_app(60);
+        render(&mut app, 180, 50);
+        focus_map(&mut app);
+        let screen = render(&mut app, 180, 50);
+        assert!(side(&screen).contains("file00.rs") && !side(&screen).contains("file59.rs"), "{}", side(&screen));
+        assert!(side(&screen).contains("▼") && side(&screen).contains("more"), "the pane's own marker:\n{}", side(&screen));
+        for _ in 0..80 {
+            press(&mut app, KeyCode::Char('j'));
+            render(&mut app, 180, 50);
+            if app.detail_refs.cursor > 0 && app.detail_refs.ids.borrow()[app.detail_refs.cursor] != "map" {
+                break;
+            }
+        }
+        let screen = render(&mut app, 180, 50);
+        assert!(side(&screen).contains("file59.rs"), "j scrolled the pane to the end of the group:\n{}", side(&screen));
+        assert!(side(&screen).contains("▲") && side(&screen).contains("above"), "{}", side(&screen));
+        for _ in 0..80 {
+            press(&mut app, KeyCode::Char('k'));
+            render(&mut app, 180, 50);
+        }
+        let screen = render(&mut app, 180, 50);
+        assert!(side(&screen).contains("file00.rs") && !side(&screen).contains("▲"), "k scrolled it back:\n{}", side(&screen));
+    }
+
+    #[test]
+    fn the_focused_header_is_always_on_screen_as_j_walks_through_the_groups_and_into_the_long_one() {
+        let mut app = map_app(60);
+        render(&mut app, 180, 50);
+        focus_map(&mut app);
+        let title = |id: &'static str| match id {
+            "risk" => "Risk",
+            "checks" => "Checks",
+            "map" => "Code map",
+            "assumptions" => "Assumptions",
+            "card" => "Card",
+            other => other,
+        };
+        for step in 0..200 {
+            press(&mut app, KeyCode::Char('j'));
+            let screen = render(&mut app, 180, 50);
+            let ids = app.detail_refs.ids.borrow().clone();
+            let focused = title(ids[app.detail_refs.cursor.min(ids.len() - 1)]);
+            // Inside the long group the header scrolls away under the marker while its rows are read; anywhere else it is on screen.
+            let inside = focused == "Code map" && side(&screen).contains("file");
+            assert!(inside || side(&screen).contains(focused), "step {step}: {focused} is off screen:\n{}", side(&screen));
+        }
+        assert_eq!(app.detail_refs.ids.borrow()[app.detail_refs.cursor], "card", "the walk reached the last group");
+    }
+
+    #[test]
+    fn ctrl_d_and_ctrl_u_page_the_side_pane_while_the_reference_has_focus() {
+        let mut app = map_app(60);
+        render(&mut app, 180, 50);
+        focus_map(&mut app);
+        let before = render(&mut app, 180, 50);
+        ctrl(&mut app, 'd');
+        let after = render(&mut app, 180, 50);
+        assert!(side(&before).contains("file00.rs") && !side(&after).contains("file00.rs"), "paged down:\n{}", side(&after));
+        assert!(side(&after).contains("▲"), "{}", side(&after));
+        ctrl(&mut app, 'u');
+        assert!(side(&render(&mut app, 180, 50)).contains("file00.rs"));
+        assert_eq!(app.detail_scroll.get(), 0, "the main text did not move");
+    }
+
+    #[test]
+    fn keep_visible_never_leaves_the_row_under_a_marker_and_moves_no_further_than_it_must() {
+        for height in 4..9usize {
+            for total in height..24usize {
+                for offset in 0..=(total - height) {
+                    for row in 0..total {
+                        let next = super::keep_visible(offset, row, height, total);
+                        assert!(next + height <= total.max(height), "offset in range: {height} {total} {offset} {row} -> {next}");
+                        let covered_top = next > 0 && row == next;
+                        let covered_bottom = next + height < total && row == next + height - 1;
+                        assert!(row >= next && row < next + height && !covered_top && !covered_bottom, "row {row} of {total} in a window of {height} from {offset} -> {next}");
+                        let was_fine = row >= offset + usize::from(offset > 0) && row < offset + height - usize::from(offset + height < total);
+                        assert!(!was_fine || next == offset, "a row already in view does not scroll");
+                    }
+                }
+            }
+        }
     }
 }
