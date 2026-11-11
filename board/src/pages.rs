@@ -931,7 +931,7 @@ mod rail_tests {
         assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Reset, "a heading has no colour of its own");
         let (x, y) = find("⚑ plan:").expect("the flag line");
         assert_eq!(buffer[(x, y)].fg, theme::flag().fg.unwrap(), "a flag line is in the flag style");
-        let (x, y) = find("▌Review").expect("the active section's marker");
+        let (x, y) = find("▌1 Review").expect("the active section's marker");
         assert_eq!(buffer[(x, y)].fg, theme::needs_you().fg.unwrap(), "Review waits for the person");
         let (x, y) = find("Code map").expect("a reference group");
         assert_ne!(buffer[(x, y)].fg, theme::needs_you().fg.unwrap(), "reference never takes the accent");

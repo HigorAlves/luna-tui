@@ -736,6 +736,7 @@ impl App {
                 if let Some(id) = selected {
                     self.select(&id, false);
                 }
+                self.follow_open_card();
                 self.import_legacy();
             }
             Err(error) => {
@@ -1090,6 +1091,26 @@ impl App {
         if let Some(id) = selected {
             self.select(&id, false);
         }
+        self.follow_open_card();
+    }
+
+    /// The open card changed state under the view: when the page it is on is no longer in its rail, the view moves to the
+    /// card's first page and says so. A page that still exists stays where it is.
+    fn follow_open_card(&mut self) {
+        let id = match &self.mode {
+            Mode::Detail(id) => id.clone(),
+            _ => match self.over_task() {
+                Some(id) => id.to_string(),
+                None => return,
+            },
+        };
+        let Some(task) = self.task(&id) else { return };
+        if crate::detail::order(task).contains(&self.detail_section) {
+            return;
+        }
+        let (first, column) = (Section::for_task(task), task.column.clone());
+        self.set_section(first);
+        self.notify(format!("the card moved to {}", crate::model::plain(&column, 40)), false);
     }
 
     /// The machine stopped answering: remembered, and told once per outage.
@@ -3967,7 +3988,9 @@ impl App {
     /// `E`: the picker for the selected stage of the Engines section.
     fn open_engine_picker(&mut self, id: &str) {
         if self.detail_section != Section::Engines {
-            return self.notify("E picks an engine in the Engines section (9)", false);
+            let (order, _) = self.detail_rail();
+            let how = order.iter().position(|s| *s == Section::Engines).filter(|i| *i < 9).map_or("h/l".to_string(), |i| (i + 1).to_string());
+            return self.notify(format!("E picks an engine in the Engines section ({how})"), false);
         }
         let pack = match &self.engine_catalog {
             Some(Ok(catalog)) => catalog.task_packs().get(self.detail_row()).map(|p| p.id.clone()),
@@ -7560,6 +7583,62 @@ mod task_view_command_tests {
                 assert_eq!(open, 1, "{first} then {second}");
                 assert_eq!(app.active_view(), Some(view), "{first} then {second}");
             }
+        }
+    }
+
+    #[test]
+    fn the_open_page_follows_a_card_whose_state_took_it_out_of_the_rail() {
+        let mut app = plan_gate_app();
+        assert_eq!(app.detail_section, Section::Review);
+        let mut moved = app.tasks[0].clone();
+        moved.state = "implementing".into();
+        moved.column = "Build".into();
+        moved.waiting_on_you = false;
+        moved.running = true;
+        app.upsert(moved);
+        assert_eq!(app.detail_section, Section::Now, "the card's first page now");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("the card moved to Build"));
+        let (shown, later) = app.detail_rail();
+        assert!(shown.iter().chain(&later).any(|s| *s == app.detail_section), "the rail has an active row");
+    }
+
+    #[test]
+    fn a_page_that_still_exists_stays_when_the_card_changes() {
+        let mut app = plan_gate_app();
+        app.set_section(Section::Overview);
+        let mut changed = app.tasks[0].clone();
+        changed.title = "A new title".into();
+        app.toast = None;
+        app.upsert(changed);
+        assert_eq!(app.detail_section, Section::Overview);
+        assert!(app.toast.is_none());
+    }
+
+    #[test]
+    fn the_digit_the_rail_shows_is_the_digit_that_works() {
+        for mut app in [plan_gate_app(), running_build_app()] {
+            let (shown, later) = app.detail_rail();
+            let screen = crate::testkit::render(&mut app, 140, 40);
+            for (i, section) in shown.iter().enumerate().take(9) {
+                assert!(screen.contains(&format!("{} {}", i + 1, section.label())), "{} is numbered {}:\n{screen}", section.label(), i + 1);
+                press(&mut app, KeyCode::Char(char::from_digit(i as u32 + 1, 10).unwrap()));
+                assert_eq!(app.detail_section, *section, "digit {} goes where the rail says", i + 1);
+            }
+            for section in later {
+                assert!(!(1..=9).any(|d| screen.contains(&format!("{d} {}", section.label()))), "{} sits under later and has no digit", section.label());
+            }
+        }
+    }
+
+    #[test]
+    fn the_engines_hint_names_the_digit_the_rail_gives() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('E'));
+        let (order, _) = app.detail_rail();
+        let text = app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+        match order.iter().position(|s| *s == Section::Engines).filter(|i| *i < 9) {
+            Some(i) => assert!(text.contains(&format!("Engines section ({})", i + 1)), "{text}"),
+            None => assert!(text.contains("Engines section (h/l)"), "{text}"),
         }
     }
 

@@ -224,7 +224,7 @@ columns, a tab strip replaces the rail. One pane sits on the right, and it opens
 the card's state: Review at the plan gate, Now while a stage runs, Stopped when it failed, Result when
 it is done, Question when it asks you something. The rail lists the sections that have something to show.
 Facts such as risk, checks, the code map and the card itself sit in reference groups: `tab` moves to them and `space` folds one.
-`h`/`l` or `1`…`9` switch sections.
+`h`/`l` or `1`…`9` switch sections; the rail prints the digit of each row, and the sections under `later` have none (`h`/`l` reach them). When the card changes state and the page you are on leaves the rail, the view moves to the card's first page and says so.
 `j`/`k` scroll the pane or pick a row where the section lists some.
 `J`/`K` scroll a line there. `ctrl+d`/`ctrl+u` and PgDn/PgUp scroll half a page anywhere.
 Picking a row brings it into view.

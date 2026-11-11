@@ -223,7 +223,7 @@ pub fn rail(task: &Task, detail: Option<&TaskDetail>, has_diff: bool, prs: &[Pul
 /// A terminal this wide or wider lays the rail beside the pane; narrower, the rail becomes a
 /// tab strip above it.
 const RAIL_FROM: u16 = 100;
-const RAIL_WIDTH: u16 = 12;
+const RAIL_WIDTH: u16 = 14;
 
 /// The popup over `area`.
 pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
@@ -449,19 +449,24 @@ fn patch_line(line: &str) -> Line<'static> {
 /// The rail: one row per section with content, the active one marked, its status glyph right-aligned; then the sections with nothing yet
 /// under a dim `later`. The marker is bold text, and the accent only where the section waits for the person.
 fn render_rail(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'static>)], later: &[(Section, String, Span<'static>)], active: Section) {
-    let row = |(section, label, status): &(Section, String, Span<'static>), dimmed: bool| {
+    let row = |n: Option<usize>, (section, label, status): &(Section, String, Span<'static>), dimmed: bool| {
         let on = *section == active;
+        // The digit that jumps here, for the first nine rows of the list `1`-`9` index; the `later` group has none.
+        let label = &match n {
+            Some(n) if n < 9 => format!("{} {label}", n + 1),
+            _ => format!("{}{label}", if dimmed { "" } else { "  " }),
+        };
         let waits = status.style.fg == theme::needs_you().fg || status.style.fg == theme::flag().fg;
         let width = RAIL_WIDTH as usize - 1 - status.width();
         let name = Span::styled(format!("{label:<width$}"), if on { theme::heading() } else if dimmed { theme::dim() } else { theme::text() });
         let marker = Span::styled(if on { "▌" } else { " " }, if waits { theme::needs_you() } else { theme::heading() });
         Line::from(vec![marker, name, status.clone()])
     };
-    let mut lines: Vec<Line> = cells.iter().map(|c| row(c, false)).collect();
+    let mut lines: Vec<Line> = cells.iter().enumerate().map(|(i, c)| row(Some(i), c, false)).collect();
     if !later.is_empty() {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(" later", theme::dim())));
-        lines.extend(later.iter().map(|c| row(c, true)));
+        lines.extend(later.iter().map(|c| row(None, c, true)));
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -477,6 +482,7 @@ fn render_strip(frame: &mut Frame, area: Rect, cells: &[(Section, String, Span<'
             let on = *section == active;
             let status_text = status.content.trim().to_string();
             let label = truncate(label, label_w);
+            let label = if i < 9 { format!("{} {label}", i + 1) } else { label };
             let text = if status_text.is_empty() { format!("{pad}{label}{pad}") } else { format!("{pad}{label} {status_text}{pad}") };
             spans.push(if on { Span::styled(text, theme::heading().underlined()) } else { Span::from(text) });
         }
@@ -2289,7 +2295,7 @@ mod tests {
             assert!(text.contains(s.label()), "{}: {text}", s.label());
         }
         let rail = |label: &str| rows.iter().find(|r| r.chars().take(14).collect::<String>().contains(label) || r.contains(&format!(" {label}"))).cloned().unwrap_or_default();
-        let plan_row = rows.iter().find(|r| r.contains("▌Plan")).expect("the active section is marked");
+        let plan_row = rows.iter().find(|r| r.contains('▌') && r.contains("Plan")).expect("the active section is marked");
         assert!(plan_row.contains("✓"), "the plan is approved: {plan_row}");
         assert!(rail("Tests").contains("3 ✓"), "three cases, checked: {}", rail("Tests"));
         assert!(rail("Runs").contains("4 ◐"), "four runs, the last one running: {}", rail("Runs"));

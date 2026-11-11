@@ -740,7 +740,7 @@ const DETAIL: &[Binding] = &[
         "pick the selected stage's engine",
         Group::Ticket,
         Scope::Detail,
-        |app| if app.detail_section == Section::Engines { Avail::On } else { Avail::Off("only in the Engines section (9)") },
+        |app| if app.detail_section == Section::Engines { Avail::On } else { Avail::Off("only in the Engines section") },
         45,
     ),
     b("M", "close as a duplicate of another", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 40),
