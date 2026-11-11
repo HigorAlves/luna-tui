@@ -34,7 +34,7 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        ARCHIVE_REASONS, COLUMNS, RECORD_FIELDS, TriageRecord, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
+        ARCHIVE_REASONS, COLUMNS, RECORD_FIELDS, TriageRecord, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
         StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of,
         plan_markdown, priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
@@ -87,9 +87,6 @@ fn start_cursor(section: Section) -> usize {
         _ => 0,
     }
 }
-
-/// Rows one card takes on the board, including its spacer line.
-pub const CARD_HEIGHT: usize = 3;
 
 /// The Floor view's numbers, one window each. A window stays `None` until its first fetch
 /// succeeds; a failed refresh keeps what was there.
@@ -503,7 +500,7 @@ pub struct App {
     pub slots: Option<Slots>,
     /// The Digest view, open while this is `Some`.
     pub digest: Option<DigestState>,
-    /// Columns folded to their header; Done starts folded, it grows forever.
+    /// Columns folded to their header by hand (`zc`). The board also narrows columns by itself when the width is short.
     pub folded: BTreeSet<usize>,
     /// How tickets are ordered inside a column (`gs`/`gr`/`ga`).
     pub group: GroupBy,
@@ -615,7 +612,7 @@ impl App {
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
-            folded: COLUMNS.iter().position(|c| *c == "Done").into_iter().collect(),
+            folded: BTreeSet::new(),
             group: GroupBy::default(),
             density: Density::default(),
             prefix: None,
@@ -1065,7 +1062,7 @@ impl App {
     /// How many tickets wait on you right now: the Board tab's badge. On Slack that is every
     /// P0/P1 in Needs reply or Decide plus every open item past its reply SLA, each once.
     pub fn needs_you_count(&self) -> usize {
-        let tickets = self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count();
+        let tickets = self.tasks.iter().filter(|t| t.look().needs_person()).count();
         let prs = self.prs.prs.iter().filter(|p| p.split_enum().is_some_and(PrSplit::needs_me)).count();
         let slack = self
             .slack_snapshot
@@ -1389,7 +1386,7 @@ impl App {
     }
 
     fn passes_filter(&self, task: &Task) -> bool {
-        if self.needs_only && !matches!(task.look(), Look::NeedsYou | Look::Escalated) {
+        if self.needs_only && !task.look().needs_person() {
             return false;
         }
         if self.this_repo_only && task.repo_path != self.home_repo {
@@ -1520,9 +1517,8 @@ impl App {
         };
         self.focus = column;
         let row = y.saturating_sub(rect.y + 1) as usize;
-        let len = self.indices(column).len();
-        if len > 0 {
-            self.selection[column] = (row / CARD_HEIGHT).min(len - 1);
+        if !self.indices(column).is_empty() {
+            self.selection[column] = crate::ui::card_at_row(self, column, rect.width, row);
         }
     }
 
@@ -2189,7 +2185,7 @@ impl App {
         for column in 0..COLUMNS.len() {
             for (row, &i) in self.indices(column).iter().enumerate() {
                 let task = &self.tasks[i];
-                if matches!(task.look(), Look::NeedsYou | Look::Escalated) {
+                if task.look().needs_person() {
                     stops.push((column, row, task.id.clone()));
                 }
             }
@@ -3457,7 +3453,7 @@ impl App {
     /// everything `ticket_key` takes (`S` opens Slack here, so it is not ship).
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
-        "q", "Q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "B", "$", "S", "v", "V", "?", ":",
+        "q", "Q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "tab", "shift+tab", "]", "[", "F", "I", "D", "P", "B", "$", "S", "v", "V", "?", ":",
         "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "K",
     ];
 
@@ -3509,8 +3505,8 @@ impl App {
                     self.focus = column;
                 }
             }
-            KeyCode::Char(']') => self.hop_needs_you(true),
-            KeyCode::Char('[') => self.hop_needs_you(false),
+            KeyCode::Char(']') | KeyCode::Tab => self.hop_needs_you(true),
+            KeyCode::Char('[') | KeyCode::BackTab => self.hop_needs_you(false),
             KeyCode::Char('F') => {
                 self.floor = Some(FloorState::default());
                 self.refresh_floor();
@@ -4523,7 +4519,7 @@ impl App {
 
     /// What `q` would leave behind: the cards waiting on you (as the header counts them) and the cards running.
     pub fn pending_counts(&self) -> (usize, usize) {
-        let needs = self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count();
+        let needs = self.tasks.iter().filter(|t| t.look().needs_person()).count();
         (needs, self.tasks.iter().filter(|t| t.running).count())
     }
 
@@ -5140,10 +5136,10 @@ mod tests {
     }
 
     #[test]
-    fn done_is_folded_by_default_and_sorted_newest_first_and_z_prefix_folds_a_column() {
+    fn done_is_sorted_newest_first_and_z_prefix_folds_a_column() {
         let mut app = App::new(Machine::from_env());
         let done = COLUMNS.iter().position(|c| *c == "Done").unwrap();
-        assert!(app.folded.contains(&done), "Done starts folded");
+        assert!(!app.folded.contains(&done), "Done is not folded by hand; the board narrows it when the width is short");
         let mut old = ticket("aaaaaaaa0000", "closed", false, false);
         old.column = "Done".into();
         old.created_at = "2026-10-20T10:00:00.000Z".into();
@@ -5157,11 +5153,11 @@ mod tests {
         app.focus = done;
         let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
         press(&mut app, KeyCode::Char('z'));
-        press(&mut app, KeyCode::Char('o'));
-        assert!(!app.folded.contains(&done), "zo unfolds");
-        press(&mut app, KeyCode::Char('z'));
         press(&mut app, KeyCode::Char('c'));
         assert!(app.folded.contains(&done), "zc folds");
+        press(&mut app, KeyCode::Char('z'));
+        press(&mut app, KeyCode::Char('o'));
+        assert!(!app.folded.contains(&done), "zo unfolds");
         press(&mut app, KeyCode::Char('z'));
         press(&mut app, KeyCode::Char('z'));
         assert!(app.fold, "zz folds the whole board");

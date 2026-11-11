@@ -2209,6 +2209,14 @@ pub enum Look {
     Archived,
 }
 
+impl Look {
+    /// Whether the person has something to do here: a gate waiting, or an escalation. The header's
+    /// `N need you`, the column tallies and the jump key all count this.
+    pub fn needs_person(self) -> bool {
+        matches!(self, Look::NeedsYou | Look::Escalated)
+    }
+}
+
 /// Why a ticket may be archived, in the order the picker lists them: the machine's `ArchiveReason`.
 pub const ARCHIVE_REASONS: [(&str, &str); 7] = [
     ("duplicate", "duplicate of another ticket"),

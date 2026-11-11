@@ -16,6 +16,8 @@ use serde_json::Value;
 use tui_textarea::TextArea;
 
 use crate::detail::{self, DetailView};
+use crate::text::{self, cells};
+use crate::theme;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::keys::{self, Avail, HelpRow, Scope};
@@ -31,9 +33,11 @@ use crate::{
 
 pub(crate) use crate::theme::{ACCENT, BASE, BLUE, GREEN, LAVENDER, MUTED, PEACH, RED, SELECTED_BG, SUBTEXT0, SURFACE0, SURFACE1, YELLOW, c};
 
-/// Narrowest a column may get before the board scrolls instead of squeezing.
-const MIN_COLUMN_WIDTH: u16 = 18;
-/// Width of a collapsed column in folded mode: wide enough for its header bar, not its cards.
+/// Narrowest a full column may get; below it the board collapses and then drops columns.
+const MIN_COLUMN_WIDTH: u16 = 20;
+/// Widest a full column grows; a wider screen keeps the leftover as margin.
+const MAX_COLUMN_WIDTH: u16 = 44;
+/// Width of a collapsed column: wide enough for its header bar (`Ship 1 ⏸1`), not its cards.
 const FOLD_WIDTH: u16 = 14;
 
 pub(crate) fn look_color(look: Look) -> Color {
@@ -199,6 +203,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
         return;
     }
     render_board(frame, body, app);
+    if !app.fold
+        && let Some(note) = board_note(app, body.width)
+    {
+        // Right-aligned on the header; it takes its cells from the left side when the two meet.
+        let w = (note.width() as u16 + 1).min(header.width);
+        let rect = Rect { x: header.right() - w, width: w, ..header };
+        frame.render_widget(Clear, rect);
+        frame.render_widget(note, Rect { x: rect.x + 1, width: w - 1, ..rect });
+    }
     frame.render_widget(footer_line(app, footer.width), footer);
 
     // A prompt, picker, editor or palette opened from the task view leaves the card on screen under it.
@@ -416,7 +429,7 @@ fn header_line(app: &App) -> Line<'static> {
         let waiting = app
             .tasks
             .iter()
-            .filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated))
+            .filter(|t| t.look().needs_person())
             .count();
         let queued_part = if queued > 0 { format!(" · {queued} queued") } else { String::new() };
         spans.push(
@@ -606,7 +619,13 @@ fn view_footer(app: &App, width: u16) -> Line<'static> {
             ("esc", "close"),
         ]),
         Scope::Detail => detail_footer(app, width),
-        _ => hint(&[("?", "help"), ("n", "new"), ("a", keys::board_a_label(app)), ("enter", "open"), ("x", "actions"), ("=", "density"), ("/", "filter"), ("q", "quit")]),
+        _ => {
+            let mut keys = vec![("?", "help"), ("n", "new"), ("a", keys::board_a_label(app)), ("enter", "open"), ("x", "actions"), ("=", "density"), ("/", "filter"), ("q", "quit")];
+            if keys::someone_needs_you(app).is_on() {
+                keys.insert(3, ("tab", "next to do"));
+            }
+            hint(&keys)
+        }
     }
 }
 
@@ -677,28 +696,156 @@ fn hint(keys: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
+/// One drawn column: its width and whether its cards show or only its header bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Slot {
+    pub column: usize,
+    pub width: u16,
+    pub full: bool,
+}
+
+/// Which columns the board draws at a width, and how wide. The columns not in `slots` are hidden.
+#[derive(Debug)]
+pub(crate) struct BoardLayout {
+    pub slots: Vec<Slot>,
+}
+
+impl BoardLayout {
+    pub fn hidden(&self) -> Vec<usize> {
+        (0..COLUMNS.len()).filter(|c| !self.slots.iter().any(|s| s.column == *c)).collect()
+    }
+}
+
+/// Fits the eight columns to `width`. All eight at `MIN_COLUMN_WIDTH` or more when they fit, sharing
+/// the width up to `MAX_COLUMN_WIDTH`. When they do not: Done narrows to its header first, then the
+/// empty columns (farthest from the cursor first), and only then do columns drop. A drop takes the
+/// farthest column from the cursor, but one with a card that needs the person goes last: those stay in
+/// view as long as anything else can go. The focused column is never narrowed by the width and never
+/// dropped. A column folded by hand (`zc`) stays narrow.
+pub(crate) fn board_layout(app: &App, width: u16) -> BoardLayout {
+    let n = COLUMNS.len();
+    let focus = app.focus.min(n - 1);
+    let needs: Vec<bool> = (0..n).map(|c| app.indices(c).iter().any(|&i| app.tasks[i].look().needs_person())).collect();
+    let empty: Vec<bool> = (0..n).map(|c| app.indices(c).is_empty()).collect();
+    let mut full: Vec<bool> = (0..n).map(|c| !app.folded.contains(&c)).collect();
+    let mut shown = vec![true; n];
+    let fits = |full: &[bool], shown: &[bool]| -> bool {
+        let used: u32 = (0..n).filter(|&c| shown[c]).map(|c| u32::from(if full[c] { MIN_COLUMN_WIDTH } else { FOLD_WIDTH })).sum();
+        used <= u32::from(width)
+    };
+
+    if let Some(done) = COLUMNS.iter().position(|c| *c == "Done")
+        && !fits(&full, &shown)
+        && done != focus
+        && !needs[done]
+    {
+        full[done] = false;
+    }
+    // Farthest from the cursor first; on a tie the right-hand column goes first.
+    let mut by_distance: Vec<usize> = (0..n).collect();
+    by_distance.sort_by_key(|&c| (std::cmp::Reverse(c.abs_diff(focus)), std::cmp::Reverse(c)));
+    for &c in &by_distance {
+        if !fits(&full, &shown) && c != focus && full[c] && empty[c] {
+            full[c] = false;
+        }
+    }
+    for pass in [false, true] {
+        for &c in &by_distance {
+            if !fits(&full, &shown) && c != focus && shown[c] && needs[c] == pass {
+                shown[c] = false;
+            }
+        }
+    }
+    let shown: Vec<usize> = (0..n).filter(|&c| shown[c]).collect();
+    let narrow = shown.iter().filter(|&&c| !full[c]).count() as u16 * FOLD_WIDTH;
+    let wide = shown.iter().filter(|&&c| full[c]).count() as u16;
+    let room = width.saturating_sub(narrow);
+    let even = room.checked_div(wide).unwrap_or(0);
+    // Past the cap the rest is margin; under it, an uneven width goes one cell at a time to the first columns.
+    let (share, extra) = (even.min(MAX_COLUMN_WIDTH), if even < MAX_COLUMN_WIDTH { room.checked_rem(wide).unwrap_or(0) } else { 0 });
+    let mut given = 0;
+    let slots = shown
+        .into_iter()
+        .map(|column| {
+            if full[column] {
+                given += 1;
+                Slot { column, width: share + u16::from(given <= extra), full: true }
+            } else {
+                Slot { column, width: FOLD_WIDTH, full: false }
+            }
+        })
+        .collect();
+    BoardLayout { slots }
+}
+
+/// The header's right side when a column is not fully shown: `→ Ship 1 ⏸ · Done 12`. Each column that is
+/// hidden or collapsed with how many of its cards need you, else how many it holds. The arrow points to
+/// where they are, from the cursor.
+pub(crate) fn board_note(app: &App, width: u16) -> Option<Line<'static>> {
+    let layout = board_layout(app, width);
+    let mut aside: Vec<usize> = layout.hidden();
+    aside.extend(layout.slots.iter().filter(|s| !s.full).map(|s| s.column));
+    aside.sort_unstable();
+    if aside.is_empty() {
+        return None;
+    }
+    let arrow = match (aside.iter().any(|&c| c < app.focus), aside.iter().any(|&c| c > app.focus)) {
+        (true, true) => "↔",
+        (true, false) => "←",
+        _ => "→",
+    };
+    let mut spans = vec![Span::styled(format!("{arrow} "), theme::label())];
+    for (i, column) in aside.into_iter().enumerate() {
+        let indices = app.indices(column);
+        let need = indices.iter().filter(|&&j| app.tasks[j].look().needs_person()).count();
+        spans.push(Span::styled(format!("{}{} ", if i == 0 { "" } else { "· " }, COLUMNS[column]), theme::label()));
+        spans.push(if need > 0 { Span::styled(format!("{need} {}", look_glyph(Look::NeedsYou)), theme::needs_you().bold()) } else { Span::styled(indices.len().to_string(), theme::label()) });
+        spans.push(Span::raw(" "));
+    }
+    spans.pop();
+    Some(Line::from(spans))
+}
+
+/// Cells a card's lines get inside a column `area_width` wide: the border, the padding and the gutter go.
+fn card_width(area_width: u16) -> usize {
+    usize::from(area_width.saturating_sub(6))
+}
+
 fn render_board(frame: &mut Frame, area: Rect, app: &App) {
     if app.fold {
         render_board_folded(frame, area, app);
         return;
     }
-    let visible = ((area.width / MIN_COLUMN_WIDTH) as usize).clamp(1, COLUMNS.len());
-    let start = app
-        .focus
-        .saturating_sub(visible - 1)
-        .min(COLUMNS.len() - visible);
-    // A folded column (`zc`; Done by default) keeps only its header bar; the others share the rest.
-    let constraints: Vec<Constraint> = (0..visible)
-        .map(|slot| if app.folded.contains(&(start + slot)) { Constraint::Length(FOLD_WIDTH) } else { Constraint::Fill(1) })
-        .collect();
-    let rects = Layout::horizontal(constraints).split(area);
+    let layout = board_layout(app, area.width);
+    let rects = Layout::horizontal(layout.slots.iter().map(|s| Constraint::Length(s.width))).split(area);
 
     app.column_rects.borrow_mut().clear();
-    for (slot, rect) in rects.iter().enumerate() {
-        let column = start + slot;
-        app.column_rects.borrow_mut().push((column, *rect));
-        render_column(frame, *rect, app, column, !app.folded.contains(&column));
+    for (slot, rect) in layout.slots.iter().zip(rects.iter()) {
+        app.column_rects.borrow_mut().push((slot.column, *rect));
+        render_column(frame, *rect, app, slot.column, slot.full);
     }
+}
+
+/// Which card a click `row` lines below a column's top border lands on, counting each card's own
+/// height and the repo separators. Ignores list scrolling.
+pub(crate) fn card_at_row(app: &App, column: usize, area_width: u16, row: usize) -> usize {
+    let width = card_width(area_width);
+    let indices = app.indices(column);
+    let by_repo = app.group == GroupBy::Repo;
+    let mut top = 0;
+    let mut last_repo: Option<Option<&str>> = None;
+    for (position, &i) in indices.iter().enumerate() {
+        let task = &app.tasks[i];
+        if by_repo && last_repo != Some(task.repo_name()) {
+            top += 1;
+            last_repo = Some(task.repo_name());
+        }
+        top += card_lines(task, None, false, false, app.density, width).len();
+        if row < top {
+            return position;
+        }
+    }
+    indices.len().saturating_sub(1)
 }
 
 /// Every column at once: the focused one expanded, the rest collapsed to their header bar.
@@ -731,10 +878,18 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
         Span::from(format!(" {} ", COLUMNS[column])).bold(),
         Span::from(format!("{} ", indices.len())).fg(c(SUBTEXT0)),
     ];
-    for look in [Look::Escalated, Look::NeedsYou, Look::Working, Look::Queued, Look::Paused] {
-        let count = indices.iter().filter(|&&i| app.tasks[i].look() == look).count();
-        if count > 0 {
-            title.push(Span::from(format!("{}{count} ", look_glyph(look))).fg(look_color(look)));
+    if expanded {
+        for look in [Look::Escalated, Look::NeedsYou, Look::Working, Look::Queued, Look::Paused] {
+            let count = indices.iter().filter(|&&i| app.tasks[i].look() == look).count();
+            if count > 0 {
+                title.push(Span::from(format!("{}{count} ", look_glyph(look))).fg(look_color(look)));
+            }
+        }
+    } else {
+        // Collapsed: the count, and what needs you, so a card waiting on the person is never only a number.
+        let need = indices.iter().filter(|&&i| app.tasks[i].look().needs_person()).count();
+        if need > 0 {
+            title.push(Span::styled(format!("{}{need} ", look_glyph(Look::NeedsYou)), theme::needs_you()));
         }
     }
 
@@ -753,7 +908,7 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
 
     let p90 = spend_p90(&app.tasks);
     // Two cells go to the highlight symbol, one to the padding each side.
-    let width = usize::from(area.width.saturating_sub(6));
+    let width = card_width(area.width);
     let by_repo = app.group == GroupBy::Repo;
     let mut items: Vec<ListItem> = Vec::new();
     let mut positions = Vec::with_capacity(indices.len());
@@ -771,7 +926,7 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
     let list = List::new(items)
         .block(block)
         .highlight_style(selection_style())
-        .highlight_symbol("▌ ");
+        .highlight_symbol("› ");
 
     let mut state = ListState::default();
     if focused && !indices.is_empty() {
@@ -793,10 +948,10 @@ fn repo_separator(repo: Option<&str>, count: usize, width: usize) -> ListItem<'s
 /// A board card. One colour per repo, so a column scans by repo: the bar and the name share it.
 const REPO_COLOURS: [Color; REPO_COLOUR_SLOTS] = [BLUE, GREEN, PEACH, LAVENDER, YELLOW, RED];
 
-/// The card's first line: the marks, a repo-coloured bar, the issue number, the title. The
-/// title leads so a narrow column cuts the identifiers, never the words. A ticket past one of
-/// its SLA clocks leads with `‼` and goes red, like an overdue Slack row.
-fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
+/// What leads a card's first line: the marks, a repo-coloured bar, the issue number. The title
+/// follows, so a narrow column cuts the identifiers, never the words. A ticket past one of its SLA
+/// clocks leads with `‼` and goes red, like an overdue Slack row.
+fn card_prefix(task: &Task, marked: bool, is_new: bool) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     if marked {
         spans.push(Span::from("◆ ").fg(c(ACCENT)).bold());
@@ -814,17 +969,57 @@ fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
         spans.push(Span::from("⚙ ").fg(c(SUBTEXT0)));
     }
     spans.push(Span::from(task.issue_prefix()).fg(c(SUBTEXT0)));
-    let title = Span::from(crate::model::plain(&task.title, 400)).bold();
-    spans.push(if task.overdue() { title.fg(c(RED)) } else { title });
-    Line::from(spans)
+    spans
+}
+
+/// A title in at most two lines: the first `first` cells wide (the prefix took the rest of the row),
+/// the second `rest` wide, ending in `…` when the title does not fit. A title that fits is one line.
+fn title_lines(title: &str, first: usize, rest: usize) -> Vec<String> {
+    let first = first.max(4);
+    let rest = rest.max(4);
+    let head = text::wrap(title, first, 0).into_iter().next().unwrap_or_default();
+    let taken = head.split_whitespace().count();
+    let words: Vec<&str> = title.split_whitespace().collect();
+    // A single word wider than the line wraps mid-word: cut it with an ellipsis instead.
+    if head.split_whitespace().collect::<Vec<_>>() != words[..taken.min(words.len())] || cells(&head) > first {
+        return vec![text::ellipsis(title, first)];
+    }
+    let remainder = words[taken..].join(" ");
+    if remainder.is_empty() {
+        return vec![head];
+    }
+    let mut second = text::wrap(&remainder, rest, 0);
+    if second.len() > 1 || second.first().is_some_and(|l| cells(l) > rest) {
+        return vec![head, text::ellipsis(&remainder, rest)];
+    }
+    vec![head, second.remove(0)]
+}
+
+/// `spans` cut to `width` cells: the span that crosses the edge ends in `…`, the ones after it go.
+fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let mut out = Vec::with_capacity(spans.len());
+    let mut used = 0;
+    for span in spans {
+        let w = span.width();
+        if used + w <= width {
+            used += w;
+            out.push(span);
+            continue;
+        }
+        let room = width.saturating_sub(used);
+        out.push(Span::styled(text::ellipsis(&span.content, room), span.style));
+        break;
+    }
+    Line::from(out)
 }
 
 fn card(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> ListItem<'static> {
     ListItem::new(card_lines(task, spend_p90, marked, is_new, density, width))
 }
 
-/// The card's lines by density: the head; `#id · repo`; the status with its age and badges;
-/// and, when comfortable, the worked / diff / tests line. Compact is the head alone with the
+/// The card's lines by density: the title (two lines when it needs them, ending in `…` when it
+/// needs more); `#id · repo`; the status with its age and badges; and, when comfortable, the worked /
+/// diff / tests line. Every line fits `width`, cut with `…`. Compact is the title alone with the
 /// status glyph and the age.
 fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> Vec<Line<'static>> {
     let look = task.look();
@@ -837,6 +1032,7 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     } else {
         SUBTEXT0
     };
+    let title = crate::model::plain(&task.title, 400);
     if density == Density::Compact {
         let mut spans = Vec::new();
         if marked {
@@ -849,13 +1045,26 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
             spans.push(Span::from("‼ ").fg(c(RED)).bold());
         }
         spans.push(Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)));
-        let used: usize = spans.iter().map(Span::width).sum::<usize>() + age.chars().count() + 1;
-        let title = Span::from(truncate(&crate::model::plain(&task.title, 400), width.saturating_sub(used).max(4))).bold();
+        let used: usize = spans.iter().map(Span::width).sum::<usize>() + cells(&age) + 1;
+        let title = Span::from(text::ellipsis(&title, width.saturating_sub(used).max(4))).bold();
         spans.push(if task.overdue() { title.fg(c(RED)) } else { title });
         spans.push(Span::from(format!(" {age}")).fg(c(age_colour)));
         return vec![Line::from(spans)];
     }
-    let head = card_head(task, marked, is_new);
+
+    let mut lines = Vec::new();
+    let mut head = card_prefix(task, marked, is_new);
+    let prefix: usize = head.iter().map(Span::width).sum();
+    let mut parts = title_lines(&title, width.saturating_sub(prefix), width.saturating_sub(1)).into_iter();
+    let bold = |text: String| {
+        let span = Span::from(text).bold();
+        if task.overdue() { span.fg(c(RED)) } else { span }
+    };
+    head.push(bold(parts.next().unwrap_or_default()));
+    lines.push(fit_spans(head, width));
+    for part in parts {
+        lines.push(Line::from(vec![Span::raw(" "), bold(part)]));
+    }
 
     let mut ids = format!("  #{}", task.short_id());
     if let Some(repo) = task.repo_name() {
@@ -870,7 +1079,7 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     if let Some(part) = &task.split_part {
         ids.push_str(&format!(" · part {}/{}", part.n, part.of));
     }
-    let ids = Line::from(Span::from(ids).fg(c(SUBTEXT0)));
+    lines.push(Line::from(Span::from(text::ellipsis(&ids, width)).fg(c(SUBTEXT0))));
 
     let mut meta = vec![
         Span::raw("  "),
@@ -890,9 +1099,9 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     if task.spent_usd.zip(spend_p90).is_some_and(|(spent, p90)| spent > p90) {
         meta.push(Span::from(" $").fg(c(SUBTEXT0)));
     }
-    let mut lines = vec![head, ids, Line::from(meta)];
+    lines.push(fit_spans(meta, width));
     if density == Density::Comfortable {
-        lines.push(task.triad().map_or_else(Line::default, |t| Line::from(Span::from(format!("  {t}")).fg(c(SUBTEXT0)))));
+        lines.push(task.triad().map_or_else(Line::default, |t| Line::from(Span::from(text::ellipsis(&format!("  {t}"), width)).fg(c(SUBTEXT0)))));
     }
     lines
 }
@@ -3215,7 +3424,7 @@ mod tests {
         let luna = rows.iter().position(|r| r.contains("── luna-tui")).unwrap();
         let notch = rows.iter().position(|r| r.contains("── notch")).unwrap();
         assert!(luna < notch, "groups in name order: {text}");
-        let selected = rows.iter().find(|r| r.contains("▌ ")).expect("a highlighted row");
+        let selected = rows.iter().find(|r| r.contains("› ")).expect("a highlighted row");
         assert!(selected.contains("Ticket"), "the highlight sits on a card, not a separator: {selected}");
     }
 
@@ -3258,8 +3467,8 @@ mod tests {
         )
         .unwrap();
         app.tasks.push(task.clone());
-        assert!(!card_head(&task, false, false).to_string().contains('◆'));
-        assert!(card_head(&task, true, false).to_string().contains('◆'));
+        assert!(!card_lines(&task, None, false, false, Density::Cozy, 60)[0].to_string().contains('◆'));
+        assert!(card_lines(&task, None, true, false, Density::Cozy, 60)[0].to_string().contains('◆'));
         app.marked.insert(task.id.clone());
         app.online = true;
         let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
@@ -3289,8 +3498,8 @@ mod tests {
             "createdAt":"2026-10-22T20:00:00.000Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#,
         )
         .unwrap();
-        assert!(card_head(&task, false, true).to_string().contains('•'));
-        assert!(!card_head(&task, false, false).to_string().contains('•'));
+        assert!(card_lines(&task, None, false, true, Density::Cozy, 60)[0].to_string().contains('•'));
+        assert!(!card_lines(&task, None, false, false, Density::Cozy, 60)[0].to_string().contains('•'));
     }
 
     #[test]
@@ -3902,7 +4111,7 @@ mod help_sheet_tests {
         assert!(text.contains("(not at the ship gate)"), "x S dim with its reason: {text}");
         assert!(text.contains("(no memory review waiting)"), "{text}");
         assert!(!text.contains("approve the setup") && !text.contains("a    start"), "the other a meanings are hidden: {text}");
-        assert!(text.contains("h l  j k  gg  G  1-8  ] [  enter"), "Move folds to a strip: {text}");
+        assert!(text.contains("h l  j k  gg  G  1-8  tab shift+tab  ] [  enter"), "Move folds to a strip: {text}");
         assert!(text.contains("enter runs · esc closes · ? long form"), "{text}");
         for heading in ["Gate", "Ticket", "Move", "Filter & order", "Views", "Marks & bulk", "App", "Commands (type after :)"] {
             assert!(text.contains(heading), "heading {heading}: {text}");
@@ -4050,7 +4259,10 @@ mod help_sheet_tests {
     #[test]
     fn the_footer_is_a_few_short_words_per_view() {
         let board = footer(&app_with("awaiting_approval", true));
-        assert!(board.starts_with("  ?  help   n  new   a  open to approve   enter  open   x  actions   =  density   /  filter   q  quit"), "{board}");
+        assert!(board.starts_with("  ?  help   n  new   a  open to approve   tab  next to do   enter  open   x  actions   =  density   /  filter   q  quit"), "{board}");
+        let mut quiet = app_with("implementing", false);
+        quiet.tasks[0].waiting_on_you = false;
+        assert!(!footer(&quiet).contains("next to do"), "the jump key is offered only while a card needs you");
         let mut pulls = App::new(Machine::from_env());
         pulls.pulls = Some(PullsState::default());
         pulls.toast = None;
@@ -4250,5 +4462,224 @@ mod help_sheet_tests {
             let (text, _) = line(&app, 200);
             assert!(text.contains("j/k  pick") && text.contains("J/K  scroll"), "{text}");
         }
+    }
+}
+
+#[cfg(test)]
+mod board_tests {
+    use super::*;
+    use crate::testkit::{self, full_board_app, render};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn app_at(focus: usize) -> App {
+        let mut app = full_board_app();
+        app.folded.clear();
+        app.focus = focus;
+        app
+    }
+
+    fn header(screen: &str) -> &str {
+        screen.lines().next().unwrap_or("")
+    }
+
+    fn names(columns: &[usize]) -> Vec<&'static str> {
+        columns.iter().map(|&c| COLUMNS[c]).collect()
+    }
+
+    #[test]
+    fn at_200_columns_all_eight_show_with_two_line_titles_and_no_indicator() {
+        let mut app = app_at(0);
+        let screen = render(&mut app, 200, 50);
+        for name in COLUMNS {
+            assert!(screen.contains(&format!(" {name} ")), "{name} missing in\n{screen}");
+        }
+        assert!(!header(&screen).contains('→') && !header(&screen).contains('←'), "{}", header(&screen));
+        let lines: Vec<&str> = screen.lines().collect();
+        let first = lines.iter().position(|l| l.contains("Add CSV export to")).expect("the plan card's first title line");
+        assert!(lines[first + 1].contains("reports"), "the title wraps to a second line: {}", lines[first + 1]);
+        let long = lines.iter().position(|l| l.contains("Retry failed")).expect("the long title");
+        assert!(lines[long + 1].contains('…'), "a title past two lines ends in an ellipsis: {}", lines[long + 1]);
+    }
+
+    #[test]
+    fn at_200_columns_each_column_takes_a_share_and_none_passes_the_cap() {
+        let app = app_at(0);
+        let layout = board_layout(&app, 200);
+        assert_eq!(layout.slots.len(), 8);
+        assert!(layout.slots.iter().all(|s| s.full && (MIN_COLUMN_WIDTH..=MAX_COLUMN_WIDTH).contains(&s.width)));
+        assert_eq!(layout.slots.iter().map(|s| s.width).sum::<u16>(), 200, "an uneven width is shared out, not left over");
+        let wide = board_layout(&app, 400);
+        assert!(wide.slots.iter().all(|s| s.width == MAX_COLUMN_WIDTH), "the cap holds on a very wide screen");
+    }
+
+    #[test]
+    fn done_narrows_to_its_header_and_count_before_any_other_column_changes() {
+        let app = app_at(0);
+        let layout = board_layout(&app, 156);
+        let done = COLUMNS.len() - 1;
+        assert!(layout.hidden().is_empty(), "{:?}", names(&layout.hidden()));
+        assert_eq!(layout.slots.iter().filter(|s| !s.full).map(|s| s.column).collect::<Vec<_>>(), vec![done], "only Done narrows");
+        let mut app = app_at(0);
+        let screen = render(&mut app, 156, 40);
+        assert!(screen.contains(" Done 4 "), "Done keeps its header and count: {screen}");
+        assert!(header(&screen).contains("→ Done 4"), "the header names what is collapsed: {}", header(&screen));
+    }
+
+    #[test]
+    fn at_120_columns_every_column_is_drawn_or_named_and_the_one_that_needs_you_is_drawn() {
+        let mut app = app_at(0);
+        let screen = render(&mut app, 120, 40);
+        let layout = board_layout(&app, 120);
+        let head = header(&screen);
+        for (column, name) in COLUMNS.iter().enumerate() {
+            let drawn = layout.slots.iter().any(|s| s.column == column);
+            assert!(drawn || head.contains(name), "{name} is neither drawn nor named: {head}");
+        }
+        assert!(layout.slots.iter().any(|s| COLUMNS[s.column] == "Ship" && s.full), "Ship waits on you, so it stays full");
+        assert!(screen.contains("Rate limit"), "{screen}");
+        assert!(head.contains("Evidence 1") && head.contains("Done 4"), "the columns that dropped are counted: {head}");
+    }
+
+    #[test]
+    fn at_120_columns_with_the_cursor_far_right_the_far_left_columns_without_a_gate_are_what_drop() {
+        let app = app_at(7);
+        let layout = board_layout(&app, 120);
+        assert!(layout.slots.iter().any(|s| s.column == 7 && s.full), "the focused column is full width");
+        assert_eq!(names(&layout.hidden()), vec!["Intake", "Triage"], "Plan and Build wait on you and stay");
+        let note = board_note(&app, 120).expect("something is hidden").to_string();
+        assert_eq!(note, "← Intake 2 · Triage 1");
+    }
+
+    #[test]
+    fn at_80_columns_the_focused_column_is_full_and_the_header_says_what_is_not() {
+        let mut app = app_at(3);
+        let screen = render(&mut app, 80, 24);
+        let head = header(&screen);
+        assert!(head.contains('↔'), "{head}");
+        assert!(screen.contains(" Build ") && screen.contains("Retry failed"), "the focused column shows its cards: {screen}");
+        assert!(head.contains("Intake 2") && head.contains("Done 4"), "{head}");
+        let layout = board_layout(&app, 80);
+        assert!(layout.slots.iter().filter(|s| matches!(COLUMNS[s.column], "Plan" | "Build" | "Ship")).all(|s| s.full), "the three that wait on you are full");
+        assert!(layout.slots.iter().map(|s| s.width).sum::<u16>() <= 80);
+        let mut app = app_at(0);
+        let screen = render(&mut app, 80, 24);
+        assert!(header(&screen).contains("→") && screen.contains(" Intake "), "{screen}");
+    }
+
+    #[test]
+    fn the_cursor_entering_a_collapsed_or_hidden_column_makes_it_full() {
+        for width in [80, 100, 120, 140] {
+            for focus in 0..COLUMNS.len() {
+                let app = app_at(focus);
+                let layout = board_layout(&app, width);
+                let slot = layout.slots.iter().find(|s| s.column == focus).unwrap_or_else(|| panic!("focus {focus} is not drawn at {width}"));
+                assert!(slot.full, "focus {focus} at {width} is narrow");
+            }
+        }
+    }
+
+    #[test]
+    fn empty_columns_collapse_before_any_column_drops() {
+        let mut app = app_at(0);
+        app.tasks.retain(|t| !matches!(t.column.as_str(), "Triage" | "Verify" | "Evidence"));
+        let layout = board_layout(&app, 140);
+        assert!(layout.hidden().is_empty(), "{:?}", names(&layout.hidden()));
+        let narrow: Vec<&str> = layout.slots.iter().filter(|s| !s.full).map(|s| COLUMNS[s.column]).collect();
+        assert_eq!(narrow, vec!["Triage", "Verify", "Evidence", "Done"]);
+        let mut app = app_at(0);
+        app.tasks.retain(|t| !matches!(t.column.as_str(), "Triage" | "Verify" | "Evidence"));
+        let screen = render(&mut app, 140, 40);
+        assert!(header(&screen).contains("Triage 0") && header(&screen).contains("Evidence 0"), "{}", header(&screen));
+    }
+
+    #[test]
+    fn a_card_that_needs_you_in_ship_is_visible_or_named_at_every_width() {
+        for width in (60..=220).step_by(10) {
+            for focus in 0..COLUMNS.len() {
+                let mut app = app_at(focus);
+                let screen = render(&mut app, width, 40);
+                let named = header(&screen).contains("Ship 1 ⏸");
+                assert!(screen.contains(testkit::SHIP_STAGE_TITLE.split(' ').next().unwrap()) && screen.contains("Rate limit") || named, "width {width} focus {focus}:\n{screen}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_title_that_needs_the_ellipsis_gets_one_and_a_short_one_does_not() {
+        let app = full_board_app();
+        let long = app.tasks.iter().find(|t| t.title.starts_with("Retry failed")).unwrap();
+        let lines: Vec<String> = card_lines(long, None, false, false, Density::Cozy, 20).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines.len(), 4, "two title lines, ids, status: {lines:?}");
+        assert!(lines[1].ends_with('…') && lines[1].chars().count() <= 20, "{lines:?}");
+        assert!(lines.iter().all(|l| cells(l) <= 20), "nothing runs past the column: {lines:?}");
+        let short = app.tasks.iter().find(|t| t.title.starts_with("Paginate")).unwrap();
+        let lines: Vec<String> = card_lines(short, None, false, false, Density::Cozy, 30).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines.len(), 3, "a title on one line takes no spare line: {lines:?}");
+        assert!(!lines.iter().any(|l| l.contains('…')), "{lines:?}");
+        let compact: Vec<String> = card_lines(long, None, false, false, Density::Compact, 24).iter().map(|l| l.to_string()).collect();
+        assert_eq!(compact.len(), 1);
+        assert!(compact[0].contains('…') && cells(&compact[0]) <= 24, "{compact:?}");
+    }
+
+    #[test]
+    fn the_status_line_is_cut_with_an_ellipsis_never_mid_word() {
+        let app = full_board_app();
+        let task = app.tasks.iter().find(|t| t.state == "awaiting_ship").unwrap();
+        let lines: Vec<String> = card_lines(task, None, false, false, Density::Cozy, 12).iter().map(|l| l.to_string()).collect();
+        let status = lines.last().unwrap();
+        assert!(status.ends_with('…') && cells(status) <= 12, "{status:?}");
+        let ids = &lines[lines.len() - 2];
+        assert!(cells(ids) <= 12 && ids.ends_with('…'), "{ids:?}");
+    }
+
+    #[test]
+    fn the_selected_card_is_marked_by_a_gutter_arrow_and_a_background_not_by_the_repo_bar() {
+        let mut app = app_at(0);
+        let mut terminal = Terminal::new(TestBackend::new(200, 50)).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row = (0..50).find(|&y| (0..200).any(|x| buffer[(x, y)].symbol() == "›")).expect("a gutter arrow");
+        let x = (0..200).find(|&x| buffer[(x, row)].symbol() == "›").unwrap();
+        assert_eq!(buffer[(x + 2, row)].symbol(), "▌", "the repo bar still follows the gutter");
+        let highlighted = |cell: &ratatui::buffer::Cell| cell.bg == selection_style().bg.unwrap_or(Color::Reset) && cell.bg != Color::Reset || cell.modifier.contains(Modifier::REVERSED);
+        let card_rows = (row..row + 3).filter(|&y| highlighted(&buffer[(x + 4, y)])).count();
+        assert_eq!(card_rows, 3, "the selection covers every line of the card");
+        assert_eq!((0..200).filter(|&x| buffer[(x, row)].symbol() == "›").count(), 1, "one selected card on the screen");
+        app.focus = 3;
+    }
+
+    #[test]
+    fn a_click_on_a_card_selects_it_whatever_height_the_cards_above_have() {
+        let mut app = app_at(0);
+        render(&mut app, 200, 50);
+        let rects = app.column_rects.borrow().clone();
+        let (build, rect) = rects.iter().find(|(c, _)| COLUMNS[*c] == "Build").copied().unwrap();
+        let first_height = card_lines(&app.tasks[app.indices(build)[0]], None, false, false, app.density, usize::from(rect.width - 6)).len();
+        app.click(rect.x + 3, rect.y + 1 + first_height as u16);
+        assert_eq!(app.focus, build);
+        assert_eq!(app.selection[build], 1, "the second card, below a first one of {first_height} lines");
+    }
+
+    #[test]
+    fn tab_visits_what_needs_you_in_pipeline_order_wraps_and_matches_the_header_count() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        let mut app = app_at(0);
+        let key = |app: &mut App, code: KeyCode| {
+            app.handle_key(KeyEvent::from(code));
+            app.focus_task().map(|t| t.title.clone()).unwrap_or_default()
+        };
+        assert_eq!(key(&mut app, KeyCode::Tab), testkit::PLAN_GATE_TITLE);
+        assert_eq!(key(&mut app, KeyCode::Tab), testkit::ESCALATED_TITLE);
+        assert_eq!(key(&mut app, KeyCode::Tab), testkit::SHIP_STAGE_TITLE);
+        assert_eq!(key(&mut app, KeyCode::Tab), testkit::PLAN_GATE_TITLE, "wraps around");
+        assert_eq!(key(&mut app, KeyCode::BackTab), testkit::SHIP_STAGE_TITLE, "shift+tab goes back, wrapping");
+        assert_eq!(key(&mut app, KeyCode::BackTab), testkit::ESCALATED_TITLE);
+        let stops = app.tasks.iter().filter(|t| t.look().needs_person()).count();
+        app.online = true;
+        let screen = render(&mut app, 200, 50);
+        assert!(header(&screen).contains(&format!("{stops} need you")), "{}", header(&screen));
+        app.tasks.retain(|t| !t.look().needs_person());
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing needs you"));
     }
 }

@@ -189,6 +189,34 @@ pub fn release_question_app() -> App {
     )
 }
 
+/// The board with a card in every column: Intake to Done, a gate waiting on the person in Plan and in Ship, an
+/// escalation in Build and four closed cards in Done. For the board's width tests.
+pub fn full_board_app() -> App {
+    let rows: [(&str, &str, &str, &str, Value); 13] = [
+        ("a1", "Fix the typo in the onboarding email", "draft", "Intake", json!({})),
+        ("a2", "Support dark mode in the dashboard charts", "draft", "Intake", json!({})),
+        ("b1", "Rotate the signing keys", "triaging", "Triage", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"})),
+        ("c1", PLAN_GATE_TITLE, "awaiting_approval", "Plan", json!({"waitingOnYou": true})),
+        ("d1", "Retry failed webhook deliveries with exponential backoff and a dead letter queue", "implementing", "Build", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"})),
+        ("d2", ESCALATED_TITLE, "escalated", "Build", json!({"reason": "build budget spent"})),
+        ("e1", "Paginate the audit log", "verifying", "Verify", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"})),
+        ("f1", "Cache the pricing lookups", "evidence", "Evidence", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z"})),
+        ("g1", SHIP_STAGE_TITLE, "awaiting_ship", "Ship", json!({"waitingOnYou": true})),
+        ("h1", "Upgrade the queue client", "closed", "Done", json!({})),
+        ("h2", "Drop the legacy export route", "closed", "Done", json!({})),
+        ("h3", "Fix the flaky session test", "closed", "Done", json!({})),
+        ("h4", "Document the retry policy", "closed", "Done", json!({})),
+    ];
+    let mut app = App::new(Machine::from_env());
+    app.tasks.clear();
+    for (i, (key, title, state, column, extra)) in rows.into_iter().enumerate() {
+        let id = format!("{key}{:010}", i);
+        let task: Task = serde_json::from_value(task_json(&id, title, state, column, extra)).unwrap();
+        app.tasks.push(task);
+    }
+    app
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

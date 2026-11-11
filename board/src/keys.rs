@@ -314,6 +314,11 @@ fn enter_key(app: &App) -> Avail {
     }
 }
 
+/// The jump keys: on while any ticket needs the person, the same definition as the header's count.
+pub(crate) fn someone_needs_you(app: &App) -> Avail {
+    if app.tasks.iter().any(|t| t.look().needs_person()) { Avail::On } else { Avail::Off("nothing needs you") }
+}
+
 fn with_task(app: &App, f: fn(&Task) -> Avail) -> Avail {
     match task_of(app) {
         Some(task) => f(task),
@@ -623,7 +628,8 @@ const BOARD: &[Binding] = &[
     b("gg", "first ticket in the column", Group::Move, Scope::Board, on, 10),
     b("G", "last ticket in the column", Group::Move, Scope::Board, on, 10),
     b("1-8", "jump to that column", Group::Move, Scope::Board, on, 10),
-    b("] / [", "next / previous ticket that needs you", Group::Move, Scope::Board, on, 15),
+    b("tab / shift+tab", "next / previous ticket that needs you", Group::Move, Scope::Board, someone_needs_you, 58),
+    b("] / [", "same as tab / shift+tab", Group::Move, Scope::Board, someone_needs_you, 15),
     cmd(b("enter", "open the ticket's workspace", Group::Move, Scope::Board, |app| with_task(app, |_| Avail::On), 75), "open"),
     // Filter & order.
     cmd(b("/", "filter by title, #id or repo", Group::Filter, Scope::Board, on, 65), "filter"),

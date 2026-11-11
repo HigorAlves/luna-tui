@@ -123,7 +123,8 @@ generates the tables below. A test fails when they drift from the registry.
 | `gg` | first ticket in the column |
 | `G` | last ticket in the column |
 | `1-8` | jump to that column |
-| `] / [` | next / previous ticket that needs you |
+| `tab / shift+tab` | next / previous ticket that needs you |
+| `] / [` | same as tab / shift+tab |
 | `enter` | open the ticket's workspace |
 
 **Filter & order**
