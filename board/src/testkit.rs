@@ -115,6 +115,73 @@ pub fn plan_gate_app() -> App {
     )
 }
 
+/// A plan gate as `machine/src/application/stages/plan.ts` builds its `requested`: flagged sentences as the machine writes them (and three
+/// bare check names), `planIssues` from the plan check's script, the planner's own `plan.flags`, a `coverageReport` with `open` notes (a
+/// sentence each), `gaps` and `untestable` as criterion ids, steps carrying both `files` and `touchpoints`, scenarios tied by `criterion_ref`.
+pub fn real_plan_gate_app() -> App {
+    let criteria = [
+        "exports every column the report shows",
+        "escapes commas, quotes and newlines",
+        "declares UTF-8 with a byte-order mark",
+        "rejects a report over 1M rows",
+        "a person without access gets a 403",
+    ];
+    let task = task_json("abababab1111", "Add CSV export to reports", "awaiting_approval", "Plan", json!({"waitingOnYou": true, "criteria": criteria}));
+    let scenario = |id: &str, title: &str, text: &str, reference: &str, kind: &str| {
+        json!({"id": id, "title": title, "criterion": text, "criterion_ref": reference, "approach": "run the suite and read the output", "type": kind, "layer": "unit"})
+    };
+    let cases = vec![
+        scenario("S1", "every column of the report is in the header row", criteria[0], "C1", "happy"),
+        // The criterion text as the scenario carries it differs from the plan's (a tab): the tie is the ref.
+        scenario("S2", "a comma inside a cell is quoted", "escapes commas,\tquotes and newlines", "C2", "happy"),
+        scenario("S3", "the file starts with the byte-order mark", criteria[2], "C3", "happy"),
+    ];
+    let steps = [
+        ("P1", "Add the CSV writer", 90, vec!["src/reports/csv.ts"]),
+        ("P2", "Add GET /api/reports/:id/export.csv and its CI check", 120, vec!["src/reports/api.ts", ".github/workflows/ci.yml"]),
+        ("P3", "Add the export button", 60, vec!["src/reports/page.tsx"]),
+    ];
+    let steps: Vec<Value> = steps
+        .into_iter()
+        .map(|(id, title, loc, files)| json!({"id": id, "title": title, "description": title, "est_loc": loc, "files": files, "touchpoints": files, "new_files": [], "done_when": ["it works"], "acceptance": ["it works"]}))
+        .collect();
+    open_card(
+        task,
+        json!({
+            "stageRuns": [stage_run("r1", "triage", 1, "passed", 0.42), stage_run("r2", "plan", 1, "passed", 0.71)],
+            "approvals": [{"id": "p1", "kind": "awaiting_approval", "decision": null, "createdAt": "2026-10-22T09:50:00Z", "requested": {
+                "summary": "Add CSV export", "brief": "Add a CSV export endpoint to the reports API and a button on the report page.",
+                "criteria": criteria, "assumptions": ["CSV only, no XLSX"],
+                "slices": steps.iter().map(|s| json!({"title": s["title"], "est_loc": s["est_loc"], "touchpoints": s["touchpoints"], "acceptance": ["it works"]})).collect::<Vec<_>>(),
+                "rollback": "Revert the commit; the export route owns no data.",
+                "plan": {
+                    "version": 1, "brief": "Add a CSV export endpoint.", "rollback": "Revert the commit; the export route owns no data.", "out_of_scope": ["XLSX export"],
+                    "acceptance_criteria": criteria.iter().enumerate().map(|(i, t)| json!({"id": format!("C{}", i + 1), "text": t})).collect::<Vec<_>>(),
+                    "steps": steps,
+                    "flags": ["the CSV writer may need a streaming rewrite for very large reports", "P3 depends on a design the ticket does not attach"]
+                },
+                "planIssues": ["P2 touches .github/workflows/ci.yml, which the code map does not name and the step does not declare new", "the plan has no rollback for the CI change"],
+                "riskRaised": "a step touches a control-plane file: .github/workflows/ci.yml",
+                "cases": cases,
+                "coverageReport": {"score": 0.6, "bar": 0.8, "gaps": ["C4", "C5"], "thin": [], "untestable": ["C4"], "open": ["C5 has no scenario: a person without access gets a 403"],
+                    "per": criteria.iter().enumerate().map(|(i, t)| json!({"id": format!("C{}", i + 1), "text": t, "scenarios": [], "types": []})).collect::<Vec<_>>()},
+                "risk": {"level": "high", "machine": "high", "scores": {"blast_radius": 4}},
+                "approvalRule": {"needed": 2, "text": "Needs 2 approvers."},
+                "verdicts": {"coverage": "flag", "plan": "flag", "risk": "proceed"},
+                "size": {"verdict": "over", "planned_loc": 270},
+                "lane": "full",
+                "map": {"components": ["reports"], "stale": true, "behind": 41, "files": [{"path": "src/reports/api.ts", "role": "change"}, {"path": "src/reports/csv.ts", "role": "change"}]},
+                "flagged": [
+                    "coverage: excused as untestable, not covered: C4 (rejects a report over 1M rows)",
+                    "plan outside map", "outside approver not checked: CODEOWNERS unreadable",
+                    "over the size limit", "over the size limit: kept whole by a person",
+                    "coverage", "plan", "map stale", "replan: the planner did not say what it changed", "triage.size"
+                ]
+            }}]
+        }),
+    )
+}
+
 /// A running Build card: 3 slices (scenarios) and the budget used against its limits.
 pub fn running_build_app() -> App {
     let task = task_json("bbbbbbbb2222", RUNNING_BUILD_TITLE, "implementing", "Build", json!({"running": true, "updatedAt": "2099-01-01T00:00:00.000Z", "spentUsd": 0.63}));

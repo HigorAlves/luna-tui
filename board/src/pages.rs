@@ -47,57 +47,125 @@ fn strings(value: &Value) -> Vec<String> {
     value.as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(plain)).collect()).unwrap_or_default()
 }
 
-/// What the plan gate flags, one line each with the machine's reason where it gave one: the plan check's issues and the planner's
-/// own flags, a coverage check's open notes and criteria excused as untestable, an unsure risk, a stale code map, a raised or
-/// overridden risk, a triage field to correct. A flagged check with no reason is named: `⚑ plan check flagged`.
-fn flags(approval: &Approval, width: usize) -> Vec<Line<'static>> {
+/// How many flags the page itself shows; the rest are in the `Flags` reference group.
+const FLAGS_SHOWN: usize = 5;
+
+/// Trimmed, spaces collapsed, lower case: how two flags are compared.
+fn normal(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// One flag before it is drawn: its words, the criterion id when it is only the id's own line, the check's name when it is a bare name.
+struct Flag {
+    text: String,
+    id: Option<String>,
+    check: Option<String>,
+}
+
+impl Flag {
+    fn said(text: impl Into<String>) -> Flag {
+        Flag { text: text.into(), id: None, check: None }
+    }
+}
+
+/// Whether `id` stands in `text` as a word of its own (`C4` in `C4 has no scenario`, not in `C40`).
+fn names(text: &str, id: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric()).any(|word| word == id)
+}
+
+/// What the machine found wrong with this plan, each distinct finding once, in a fixed order: the plan check's issues, criteria with no
+/// scenario, criteria excused as untestable, a raised or overridden risk, a stale code map, the other sentences the machine flagged
+/// (size, kept whole, owners, replan), a bare check name when nothing says more, the triage fields to correct. The machine writes
+/// sentences into `flagged`, so a sentence is printed as it is; only a bare check name becomes `<name> check flagged`.
+fn machine_flags(approval: &Approval, rows: &[(String, String)]) -> Vec<String> {
     let r = &approval.requested;
-    let mut out = Vec::new();
-    let mut explained: Vec<&str> = Vec::new();
-    let issues: Vec<String> = strings(&r["planIssues"]).into_iter().chain(strings(&r["plan"]["flags"])).collect();
-    if !issues.is_empty() {
-        explained.push("plan");
-        for issue in &issues {
-            out.extend(flag_line(&format!("plan: {issue}"), width));
-        }
+    let text_of = |id: &str| rows.iter().find(|(i, _)| i == id).map(|(_, t)| t.clone());
+    let report = &r["coverageReport"];
+    let untestable = strings(&report["untestable"]);
+    let mut all: Vec<Flag> = Vec::new();
+    let issues = strings(&r["planIssues"]);
+    all.extend(issues.iter().map(|i| Flag::said(format!("plan: {i}"))));
+    for id in strings(&report["gaps"]).into_iter().filter(|g| !untestable.contains(g)) {
+        let said = text_of(&id).map_or(format!("coverage: {id} has no scenario"), |t| format!("coverage: {id} has no scenario: {t}"));
+        all.push(Flag { text: said, id: Some(id), check: None });
     }
-    let coverage: Vec<String> = ["open", "gaps"].iter().flat_map(|k| strings(&r["coverageReport"][*k])).collect();
-    if !coverage.is_empty() {
-        explained.push("coverage");
-        for note in &coverage {
-            out.extend(flag_line(&format!("coverage: {note}"), width));
-        }
+    all.extend(strings(&report["open"]).into_iter().map(|n| Flag::said(if n.starts_with("coverage") { n } else { format!("coverage: {n}") })));
+    for id in untestable {
+        let said = text_of(&id).map_or(format!("coverage: {id} excused as untestable"), |t| format!("coverage: {id} excused as untestable: {t}"));
+        all.push(Flag { text: said, id: Some(id), check: None });
     }
-    for untestable in strings(&r["coverageReport"]["untestable"]) {
-        out.extend(flag_line(&format!("excused as untestable: {untestable}"), width));
+    if let Some(line) = approval.risk_raised_line() {
+        all.push(Flag::said(format!("risk raised: {}", plain(&line))));
+    }
+    if let Some(line) = approval.risk_override_line() {
+        all.push(Flag::said(plain(&line)));
+    }
+    let stale = r["map"]["stale"].as_bool() == Some(true);
+    if stale {
+        let behind = r["map"]["behind"].as_u64().map_or("many".to_string(), |n| n.to_string());
+        all.push(Flag::said(format!("the code map's graph is {behind} commits behind the default branch")));
     }
     let named: Vec<String> = r["flagged"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|f| !f.starts_with("triage.")).map(plain).collect();
     let mut checks: Vec<(String, bool)> = approval.checks().into_iter().filter(|(_, v)| matches!(v.as_str(), "flag" | "ask")).map(|(n, v)| (n, v == "ask")).collect();
     for name in named {
-        if !checks.iter().any(|(n, _)| *n == name) {
-            checks.push((name, false));
+        match name.as_str() {
+            "coverage" | "plan" | "risk" => {
+                if !checks.iter().any(|(n, _)| *n == name) {
+                    checks.push((name, false));
+                }
+            }
+            // The stale map has its own sentence above; a plan outside the map is what the plan check's issue says in full.
+            "map stale" if stale => {}
+            "plan outside map" if issues.iter().any(|i| i.contains("code map")) => {}
+            _ => all.push(Flag::said(name)),
         }
     }
     for (name, unsure) in checks {
-        if !explained.contains(&name.as_str()) {
-            out.extend(flag_line(&if unsure { format!("{name} check is unsure") } else { format!("{name} check flagged") }, width));
-        }
+        let said = if unsure { format!("{name} check is unsure") } else { format!("{name} check flagged") };
+        all.push(Flag { text: said, id: None, check: Some(name) });
     }
     for field in r["flagged"].as_array().into_iter().flatten().filter_map(Value::as_str).filter_map(|f| f.strip_prefix("triage.")) {
-        out.extend(flag_line(&format!("triage {} flagged · T corrects the record", plain(field)), width));
+        all.push(Flag::said(format!("triage {} flagged · T corrects the record", plain(field))));
     }
-    if r["map"]["stale"].as_bool() == Some(true) {
-        let behind = r["map"]["behind"].as_u64().map_or("many".to_string(), |n| n.to_string());
-        out.extend(flag_line(&format!("the code map's graph is {behind} commits behind the default branch"), width));
+
+    let normals: Vec<String> = all.iter().map(|f| normal(&f.text)).collect();
+    let mut out = Vec::new();
+    for (i, flag) in all.iter().enumerate() {
+        let key = normals[i].as_str();
+        // The same words twice: the one a fuller finding wrote, then the earlier, stays.
+        let twice = (0..all.len()).any(|j| j != i && normals[j] == key && (all[j].id.is_some(), j) < (flag.id.is_some(), i));
+        // An id's own line goes when a fuller flag names the id; a bare check name goes when a flag of that check says more; a phrase
+        // goes when a longer flag begins with it and a colon (`over the size limit` before `over the size limit: kept whole …`).
+        let by_id = flag.id.as_deref().is_some_and(|id| all.iter().enumerate().any(|(j, o)| j != i && o.id.is_none() && names(&o.text, id)));
+        let by_check = flag.check.as_deref().is_some_and(|c| normals.iter().any(|n| n.starts_with(&format!("{c}:"))));
+        let by_head = normals.iter().enumerate().any(|(j, n)| j != i && n.len() > key.len() && n.starts_with(key) && n[key.len()..].starts_with(':'));
+        if !(twice || by_id || by_check || by_head) {
+            out.push(flag.text.clone());
+        }
     }
-    if let Some(line) = approval.risk_raised_line() {
-        out.extend(flag_line(&format!("risk raised: {line}"), width));
-    }
-    if let Some(line) = approval.risk_override_line() {
-        out.extend(flag_line(&line, width));
-    }
-    if r["keptWhole"].as_bool() == Some(true) {
-        out.extend(flag_line("kept whole: you chose not to split this plan", width));
+    out
+}
+
+/// The planner's own notes (`plan.flags`): the model's words, not the machine's findings; none that the machine says as well.
+fn planner_notes(approval: &Approval, said: &[String]) -> Vec<String> {
+    let said: Vec<String> = said.iter().map(|s| normal(s)).collect();
+    let mut seen: Vec<String> = Vec::new();
+    strings(&approval.requested["plan"]["flags"])
+        .into_iter()
+        .filter(|n| {
+            let key = normal(n);
+            let keep = !key.is_empty() && !seen.contains(&key) && !said.iter().any(|s| s.ends_with(&key));
+            seen.push(key);
+            keep
+        })
+        .collect()
+}
+
+/// The flag block of the Review page: at most `FLAGS_SHOWN` flags, then how many are shown of how many.
+fn flag_block(flags: &[String], width: usize) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = flags.iter().take(FLAGS_SHOWN).flat_map(|f| flag_line(f, width)).collect();
+    if flags.len() > FLAGS_SHOWN {
+        out.extend(flag_line(&format!("{FLAGS_SHOWN} of {} shown · tab opens the rest", flags.len()), width));
     }
     out
 }
@@ -110,6 +178,8 @@ pub(crate) struct Scenario {
     pub title: String,
     pub approach: String,
     pub criterion: Option<String>,
+    /// The id of the criterion it proves, as the machine ties them.
+    pub criterion_ref: Option<String>,
 }
 
 impl Scenario {
@@ -138,6 +208,7 @@ pub(crate) fn scenarios(detail: Option<&TaskDetail>) -> Vec<Scenario> {
                 title: plain(c["title"].as_str()?),
                 approach: c["approach"].as_str().or_else(|| c["test"].as_str()).map(plain).unwrap_or_default(),
                 criterion: c["criterion"].as_str().map(str::to_string),
+                criterion_ref: c["criterion_ref"].as_str().map(str::to_string),
             })
         })
         .collect()
@@ -174,7 +245,12 @@ fn steps(approval: &Approval, width: usize) -> Vec<Line<'static>> {
         let Some(text) = step["description"].as_str().or_else(|| step["title"].as_str()) else { continue };
         let number = format!("  {:<3}", i + 1);
         out.extend(hanging(vec![Span::styled(number, theme::label())], text, width));
-        let files: Vec<String> = ["files", "touchpoints"].iter().flat_map(|k| strings(&step[*k])).collect();
+        let mut files: Vec<String> = Vec::new();
+        for file in ["files", "touchpoints"].iter().flat_map(|k| strings(&step[*k])) {
+            if !files.contains(&file) {
+                files.push(file);
+            }
+        }
         let shown: Vec<String> = files.iter().take(2).map(|f| truncate_middle(f, 36)).collect();
         let mut meta = Vec::new();
         if let Some(loc) = step["est_loc"].as_u64() {
@@ -222,7 +298,14 @@ pub(crate) fn plan_material(task: &Task, approval: &Approval, detail: Option<&Ta
         if !with_scenarios {
             continue;
         }
-        let mine: Vec<&Scenario> = all.iter().filter(|s| s.criterion.as_deref() == Some(text.as_str())).collect();
+        // The machine ties a scenario to its criterion by id; a scenario with no ref belongs to the criterion whose text it carries.
+        let mine: Vec<&Scenario> = all
+            .iter()
+            .filter(|s| match &s.criterion_ref {
+                Some(reference) => reference == id,
+                None => s.criterion.as_deref().is_some_and(|c| normal(&plain(c)) == normal(text)),
+            })
+            .collect();
         let indent = Span::raw("      ");
         match mine.len() {
             0 => main.push(Line::from(vec![indent, Span::styled("⚑ no scenario", theme::flag())])),
@@ -261,7 +344,19 @@ pub(crate) fn review_page(task: &Task, detail: Option<&TaskDetail>, width: usize
         return Page::of(vec![title("Review"), Line::default(), muted("  no plan yet: triage and the planner write one once the ticket starts".into())]);
     };
     let r = &approval.requested;
-    let mut main = flags(approval, width);
+    let rows = criteria(approval, task);
+    let machine = machine_flags(approval, &rows);
+    let mut main = flag_block(&machine, width);
+    let notes = planner_notes(approval, &machine);
+    if !notes.is_empty() {
+        if !main.is_empty() {
+            main.push(Line::default());
+        }
+        main.push(title("Planner notes"));
+        for note in &notes {
+            main.extend(hanging(vec![Span::raw("  · ")], note, width));
+        }
+    }
     // What this gate is really asking when it is not the plan itself: a split, a reply, an archive.
     let ask = gate_main_facts(approval);
     if let Some(reply) = approval.reply() {
@@ -289,6 +384,10 @@ pub(crate) fn review_page(task: &Task, detail: Option<&TaskDetail>, width: usize
     }
 
     let mut groups = Vec::new();
+    if machine.len() > FLAGS_SHOWN {
+        let lines = machine.iter().flat_map(|f| flag_line(f, ref_width)).collect();
+        groups.push(RefGroup::new("flags", "Flags", format!("{} flags", machine.len()), lines));
+    }
     groups.extend(gate_ref_group(approval, ref_width));
     groups.extend(record_group(task, r, ref_width));
     groups.extend(checks_group(approval));
@@ -955,5 +1054,101 @@ mod rail_tests {
         let mut app = escalated_app();
         let screen = render(&mut app, 180, 50);
         assert!(!screen.contains("Budget") && !screen.contains("Latest activity"), "{screen}");
+    }
+}
+
+#[cfg(test)]
+mod real_gate_tests {
+    use crate::{
+        detail::Section,
+        testkit::{real_plan_gate_app, render},
+    };
+
+    fn screen() -> String {
+        let mut app = real_plan_gate_app();
+        app.detail_section = Section::Review;
+        render(&mut app, 180, 50)
+    }
+
+    fn count(haystack: &str, needle: &str) -> usize {
+        haystack.matches(needle).count()
+    }
+
+    #[test]
+    fn no_flag_text_appears_twice_on_the_machines_real_plan_gate() {
+        let screen = screen();
+        for once in ["C5 has no scenario", "excused as untestable", "commits behind", "outside approver not checked", "kept whole by a person", "control-plane file", "does not name and the step does not declare new", "did not say what it changed"] {
+            assert!(count(&screen, once) <= 1, "{once:?} shown {} times:\n{screen}", count(&screen, once));
+        }
+        assert_eq!(count(&screen, "C4"), count(&screen, "C4 "), "a bare C4 flag is not shown");
+        assert!(!screen.contains("coverage: C4\n") && !screen.contains("excused as untestable: C4"), "{screen}");
+    }
+
+    #[test]
+    fn a_sentence_is_never_given_check_flagged_and_only_a_bare_name_is() {
+        let screen = screen();
+        assert!(!screen.contains("check flagged check flagged"), "{screen}");
+        for line in screen.lines().filter(|l| l.contains("check flagged")) {
+            let said = line.split('⚑').nth(1).unwrap_or("").trim();
+            assert!(["plan check flagged", "coverage check flagged", "risk check flagged"].iter().any(|n| said.starts_with(n)), "a sentence got the suffix: {line}");
+            assert!(said.len() < 40, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_step_lists_its_files_once_whether_the_machine_sent_files_touchpoints_or_both() {
+        let screen = screen();
+        assert!(!screen.contains("src/reports/csv.ts, src/reports/csv.ts"), "{screen}");
+        assert!(screen.contains("~90 lines · src/reports/csv.ts"), "{screen}");
+        assert!(screen.contains("src/reports/api.ts, .github/workflows/ci.yml"), "{screen}");
+        assert!(!screen.contains("+2"), "{screen}");
+    }
+
+    #[test]
+    fn the_flag_block_is_at_most_six_lines_and_says_how_many_it_shows() {
+        let screen = screen();
+        let flags = screen.lines().filter(|l| l.contains('⚑') && !l.contains("no scenario")).count();
+        assert!(flags <= 6, "{flags} flag lines:\n{screen}");
+        assert!(screen.contains("⚑ 5 of ") && screen.contains(" shown · tab opens the rest"), "{screen}");
+    }
+
+    #[test]
+    fn every_flag_is_in_the_flags_group_and_the_planners_notes_are_not() {
+        let app = real_plan_gate_app();
+        let task = app.tasks[0].clone();
+        let page = super::review_page(&task, app.detail.as_ref(), 100, 200);
+        let flags = page.groups.iter().find(|g| g.title == "Flags").expect("a Flags group");
+        let text: String = flags.lines.iter().map(|l| l.spans.iter().map(|s| s.content.to_string()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("C5 has no scenario") && text.contains("replan:") && text.contains("triage size"), "{text}");
+        assert!(!text.contains("streaming rewrite"), "the planner's notes are not the machine's findings:\n{text}");
+    }
+
+    #[test]
+    fn the_planners_own_flags_are_labelled_as_its_notes_after_the_machines_and_not_in_the_flag_style() {
+        let screen = screen();
+        let notes = screen.find("Planner notes").unwrap_or_else(|| panic!("{screen}"));
+        let last_flag = screen.rfind("shown · tab opens the rest").unwrap();
+        assert!(notes > last_flag, "{screen}");
+        let line = screen.lines().find(|l| l.contains("streaming rewrite")).unwrap();
+        assert!(!line.contains('⚑'), "{line}");
+    }
+
+    #[test]
+    fn a_scenario_is_under_the_criterion_its_ref_names_and_no_scenario_is_flagged_only_when_none_matches() {
+        let screen = screen();
+        let at = |needle: &str| screen.lines().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}:\n{screen}"));
+        assert!(at("S2 happy") > at("C2") && at("S2 happy") < at("C3"), "S2 belongs to C2 by its ref though the text differs:\n{screen}");
+        assert_eq!(count(&screen, "⚑ no scenario"), 2, "C4 and C5 only:\n{screen}");
+    }
+
+    #[test]
+    fn a_kept_whole_key_the_machine_never_sends_prints_nothing() {
+        let mut app = real_plan_gate_app();
+        app.detail_section = Section::Review;
+        let gate = app.detail.as_mut().unwrap().approvals.iter_mut().find(|a| a.kind.as_deref() == Some("awaiting_approval")).unwrap();
+        gate.requested["keptWhole"] = serde_json::json!(true);
+        gate.requested["flagged"] = serde_json::json!([]);
+        let screen = render(&mut app, 180, 50);
+        assert!(!screen.contains("kept whole"), "{screen}");
     }
 }
