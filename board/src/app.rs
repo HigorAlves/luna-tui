@@ -1611,11 +1611,12 @@ impl App {
         }
     }
 
-    /// Mouse wheel: scrolls the detail popup if it's open, does nothing under a prompt over a task, otherwise moves the board selection.
+    /// Mouse wheel: scrolls the detail popup if it's open; moves the board selection only on the board itself, never
+    /// under a palette, a menu, a box, a picker or a prompt (the card they act on is the one they opened on).
     pub fn scroll(&mut self, delta: i16) {
         if matches!(self.mode, Mode::Detail(_)) {
             self.scroll_detail(delta);
-        } else if self.over_task().is_none() {
+        } else if matches!(self.mode, Mode::Normal) {
             self.move_selection(delta as isize);
         }
     }
@@ -2727,7 +2728,8 @@ impl App {
 
     /// Opens the view for the repository of the card under the cursor.
     fn open_economy(&mut self) {
-        let Some(repo) = self.selected_task().and_then(|t| t.repo_path.clone()).filter(|p| !p.trim().is_empty()) else {
+        let card = self.card_target().and_then(|id| self.task(&id).cloned());
+        let Some(repo) = card.and_then(|t| t.repo_path).filter(|p| !p.trim().is_empty()) else {
             self.notify("select a card with a repository", true);
             return;
         };
@@ -4534,7 +4536,8 @@ impl App {
                 // A command on the card (the ones that name it) leaves the task view open; the ones
                 // that open a view, a prompt or the board's own state take the screen as on the board.
                 let open = self.return_to.take();
-                let back = open.clone().filter(|_| CARD_COMMANDS.contains(&line.split_whitespace().next().unwrap_or("")));
+                let name = line.split_whitespace().next().unwrap_or("");
+                let back = open.clone().filter(|_| CARD_COMMANDS.contains(&name) || matches!(name, "help" | "?"));
                 self.command_card = open;
                 self.mode = Mode::Normal;
                 let outcome = self.run_command(&line);
@@ -7672,6 +7675,84 @@ mod task_view_command_tests {
         press(&mut app, KeyCode::Char('y'));
         let sent = posts(&seen);
         assert!(!sent.is_empty() && sent.iter().all(|p| p.starts_with(&format!("/tasks/{open}/"))), "{sent:?}");
+    }
+
+    /// Both cards wait at a plan gate in the Plan column, so the wheel can move the selection between them.
+    fn both_at_a_plan_gate(app: &mut App) {
+        for task in &mut app.tasks {
+            task.state = "awaiting_approval".into();
+            task.column = "Plan".into();
+            task.waiting_on_you = true;
+            task.running = false;
+        }
+    }
+
+    #[test]
+    fn a_wheel_notch_over_the_board_palette_does_not_move_the_card_a_command_acts_on() {
+        let (mut app, open, other, seen) = two_cards();
+        both_at_a_plan_gate(&mut app);
+        app.mode = Mode::Normal;
+        app.select(&other, true);
+        press(&mut app, KeyCode::Char(':'));
+        app.scroll(-1);
+        app.scroll(-1);
+        assert_eq!(app.selected_id().as_deref(), Some(other.as_str()), "the wheel left the selection");
+        command_in_palette(&mut app, "whole");
+        assert!(matches!(&app.mode, Mode::Detail(id) if *id == other), ":whole opened the selected card, not {open}");
+        assert!(posts(&seen).is_empty());
+    }
+
+    fn command_in_palette(app: &mut App, line: &str) {
+        type_text(app, line);
+        press(app, KeyCode::Enter);
+    }
+
+    #[test]
+    fn a_wheel_notch_over_the_x_menu_does_not_move_the_card_it_acts_on() {
+        let (mut app, _, other, _) = two_cards();
+        both_at_a_plan_gate(&mut app);
+        app.mode = Mode::Normal;
+        app.select(&other, true);
+        press(&mut app, KeyCode::Char('x'));
+        app.scroll(-1);
+        press(&mut app, KeyCode::Char('d'));
+        assert!(matches!(&app.mode, Mode::ConfirmDelete(id) if *id == other), "the delete box names the card the menu opened on");
+        app.scroll(-1);
+        assert_eq!(app.selected_id().as_deref(), Some(other.as_str()), "nor does the wheel over a confirm box");
+    }
+
+    #[test]
+    fn a_click_over_an_overlay_does_not_move_the_selection() {
+        let (mut app, _, other, _) = two_cards();
+        both_at_a_plan_gate(&mut app);
+        app.mode = Mode::Normal;
+        app.select(&other, true);
+        crate::testkit::render(&mut app, 200, 50);
+        press(&mut app, KeyCode::Char('x'));
+        let rect = app.column_rects.borrow().iter().find(|(c, _)| COLUMNS[*c] == "Plan").map(|(_, r)| *r).unwrap();
+        app.click(rect.x + 3, rect.y + 1);
+        assert_eq!(app.selected_id().as_deref(), Some(other.as_str()));
+    }
+
+    #[test]
+    fn economy_typed_in_a_task_opens_the_repository_of_the_open_card() {
+        let (mut app, _, _, _) = two_cards();
+        app.tasks[1].repo_path = Some("/work/OTHER".into());
+        app.filter = "Another".into();
+        app.select("bbbbbbbb9999", true);
+        app.clamp_selection();
+        command(&mut app, "economy");
+        assert_eq!(app.economy.as_ref().map(|e| e.repo.as_str()), Some("/work/app"), "{:?}", app.toast.as_ref().map(|t| &t.text));
+    }
+
+    #[test]
+    fn help_typed_in_a_task_returns_to_the_task_like_the_key_does() {
+        let mut app = plan_gate_app();
+        let id = app.tasks[0].id.clone();
+        command(&mut app, "help");
+        assert!(matches!(app.mode, Mode::Help { .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "esc from :help lands on the task");
     }
 
     #[test]
