@@ -194,6 +194,11 @@ pub fn bulk_targets(tasks: &[Task], ids: &[String], action: BulkAction) -> Vec<S
         .collect()
 }
 
+/// The link of the issue a ticket came from or is linked to (its source's, else Jira's): `o` on the board and `i` in the task view open it.
+pub(crate) fn issue_link(task: &Task) -> Option<String> {
+    task.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| task.jira.as_ref().map(|j| j.url.clone()))
+}
+
 /// Every ticket waiting on the usage window.
 pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
     tasks.iter().filter(|t| t.state == "paused_rate_limit").map(|t| t.id.clone()).collect()
@@ -316,6 +321,9 @@ pub enum Mode {
     ConfirmApproveAll(Vec<String>),
     /// A destructive key over the marked set: one yes for all of them.
     ConfirmMany { action: BulkAction, ids: Vec<String> },
+    /// `a` over marked cards at a gate that commits something: one yes names the count and the kinds, then
+    /// every decision goes. `before` is what the other marked cards got already (they commit nothing).
+    ConfirmApproveMany { ids: Vec<String>, before: String },
     Actions {
         cursor: usize,
     },
@@ -1801,7 +1809,7 @@ impl App {
             },
             'd' => self.mode = Mode::ConfirmDelete(id.to_string()),
             'f' => self.watch(&task),
-            'o' => match task.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| task.jira.as_ref().map(|j| j.url.clone())) {
+            'o' | 'i' => match issue_link(&task) {
                 Some(url) => self.open_url(&url),
                 None => self.notify("no issue linked", false),
             },
@@ -2043,6 +2051,7 @@ impl App {
             Mode::RecordEdit { .. } => self.handle_record_edit(key),
             Mode::ConfirmApproveAll(_) => self.handle_confirm_approve_all(key),
             Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
+            Mode::ConfirmApproveMany { .. } => self.handle_confirm_approve_many(key),
             Mode::Actions { .. } => self.handle_actions(key),
             Mode::RepoPicker { .. } => self.handle_repo_picker(key),
             Mode::ConfirmMerge { .. } => self.handle_confirm_merge(key),
@@ -3587,8 +3596,10 @@ impl App {
     fn bulk_key(&mut self, c: char) -> Outcome {
         let ids: Vec<String> = self.marked.iter().cloned().collect();
         if c == 'a' {
+            // What commits something (the plan, a split, shipping, the release) waits for one yes; the rest goes now.
+            let (committing, rest): (Vec<String>, Vec<String>) = ids.iter().cloned().partition(|id| self.task(id).is_some_and(|t| self.committing_kind(t).is_some()));
             let (mut done, mut skipped) = (0, 0);
-            for id in &ids {
+            for id in &rest {
                 let Some(task) = self.task(id).cloned() else { continue };
                 let ok = match task.state.as_str() {
                     "draft" if task.repo_path.is_some() => self.machine.start(id).is_ok(),
@@ -3607,9 +3618,17 @@ impl App {
                     done += 1;
                 }
             }
-            self.marked.clear();
             let skip = if skipped > 0 { format!("; {skipped} need words from you or are running") } else { String::new() };
-            self.notify(format!("advanced {done} of {}{skip}", ids.len()), false);
+            let before = if rest.is_empty() { String::new() } else { format!("advanced {done} of {}{skip}", rest.len()) };
+            if committing.is_empty() {
+                self.marked.clear();
+                self.notify(before, false);
+            } else {
+                for id in &rest {
+                    self.marked.remove(id);
+                }
+                self.mode = Mode::ConfirmApproveMany { ids: committing, before };
+            }
             return Outcome::Continue;
         }
         let action = match c {
@@ -3622,6 +3641,62 @@ impl App {
             self.notify("none of the marked tickets can take that", false);
         } else {
             self.mode = Mode::ConfirmMany { action, ids: targets };
+        }
+        Outcome::Continue
+    }
+
+    /// What approving `task` would commit, when it is a gate that asks first: `plan`, `split`, `ship` or `release`.
+    /// The retro's rules are not approved in bulk, as before: they need reading.
+    pub fn committing_kind(&self, task: &Task) -> Option<&'static str> {
+        if !task.waiting_on_you || task.state == "reviewing_memory" {
+            return None;
+        }
+        let question = self.approval_question(task)?;
+        Some(if question.contains("split") {
+            "split"
+        } else if question.contains("release") {
+            "release"
+        } else if question.starts_with("ship") {
+            "ship"
+        } else {
+            "plan"
+        })
+    }
+
+    /// `approve 3 cards? 2 plans · 1 ship`: the count and the kinds, for the box over the marked cards.
+    pub fn approve_many_question(&self, ids: &[String]) -> String {
+        let kinds: Vec<&str> = ids.iter().filter_map(|id| self.task(id)).filter_map(|t| self.committing_kind(t)).collect();
+        let parts: Vec<String> = ["plan", "split", "ship", "release"]
+            .iter()
+            .filter_map(|kind| {
+                let n = kinds.iter().filter(|k| *k == kind).count();
+                (n > 0).then(|| format!("{n} {kind}{}", if n == 1 { "" } else { "s" }))
+            })
+            .collect();
+        format!("approve {} card{}? {}", ids.len(), if ids.len() == 1 { "" } else { "s" }, parts.join(" · "))
+    }
+
+    fn handle_confirm_approve_many(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                let Mode::ConfirmApproveMany { ids, before } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                let total = ids.len();
+                let done = ids.iter().filter(|id| self.machine.decide(id, true, None).is_ok()).count();
+                self.marked.clear();
+                let before = if before.is_empty() { String::new() } else { format!("{before}; ") };
+                self.notify(format!("{before}approved {done} of {total}"), done < total);
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                let Mode::ConfirmApproveMany { before, .. } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                if !before.is_empty() {
+                    self.notify(format!("{before}; the rest not approved"), false);
+                }
+            }
+            _ => {}
         }
         Outcome::Continue
     }
@@ -3687,7 +3762,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "tab", "space", "1-9", "+", "?", ":", "o", "O", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "tab", "space", "1-9", "+", "?", ":", "o", "O", "i", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -7603,6 +7678,73 @@ mod confirm_tests {
         }
     }
 
+    /// The board with marked cards: two plans, a ship, and a draft that commits nothing.
+    fn marked_gates() -> App {
+        let mut app = plan_gate_app();
+        let mut second = app.tasks[0].clone();
+        second.id = "aaaaaaaa2222".into();
+        second.title = "Second plan\u{1b}[31m with an escape".into();
+        let ship = ship_stage_app().tasks[0].clone();
+        let draft: Task = serde_json::from_value(task_json("eeeeeeee5555", "A draft", "draft", "Intake", serde_json::json!({}))).unwrap();
+        app.tasks.extend([second, ship, draft]);
+        app.mode = Mode::Normal;
+        app.toast = None;
+        app.marked = app.tasks.iter().map(|t| t.id.clone()).collect();
+        app
+    }
+
+    #[test]
+    fn a_over_marked_gates_asks_once_with_the_count_and_the_kinds_and_n_sends_nothing() {
+        let mut app = marked_gates();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(&app.mode, Mode::ConfirmApproveMany { ids, .. } if ids.len() == 3), "the draft is not counted");
+        assert_eq!(posts(&seen), vec!["/tasks/eeeeeeee5555/start".to_string()], "only what commits nothing went: the draft started");
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("approve 3 cards? 2 plans · 1 ship"), "{screen}");
+        assert!(screen.contains("#aaaaaaaa  ") && screen.contains("Second plan [31m with an escape") && !screen.contains('\u{1b}'), "{screen}");
+        assert!(screen.contains(" y  yes") && screen.contains(" n  no"), "{screen}");
+        press(&mut app, KeyCode::Char('x'));
+        assert!(matches!(app.mode, Mode::ConfirmApproveMany { .. }), "other keys do not answer");
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(posts(&seen).len(), 1, "n sends no decision");
+        let mut app = marked_gates();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && posts(&seen).len() == 1, "esc sends nothing either");
+    }
+
+    #[test]
+    fn y_over_marked_gates_sends_one_decision_per_committing_card() {
+        let mut app = marked_gates();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('y'));
+        let sent = posts(&seen);
+        let decisions: Vec<&String> = sent.iter().filter(|p| p.ends_with("/decision")).collect();
+        assert_eq!(decisions.len(), 3, "{sent:?}");
+        assert!(matches!(app.mode, Mode::Normal) && app.marked.is_empty());
+    }
+
+    #[test]
+    fn a_over_marked_cards_that_commit_nothing_keeps_its_behaviour() {
+        let mut app = marked_gates();
+        app.tasks.retain(|t| t.state == "draft");
+        app.marked = app.tasks.iter().map(|t| t.id.clone()).collect();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Normal), "no box when nothing commits");
+        assert_eq!(posts(&seen), vec!["/tasks/eeeeeeee5555/start".to_string()]);
+        assert!(app.marked.is_empty(), "{:?}", app.marked);
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.starts_with("advanced ") && t.text.contains(" of 1")), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
+    }
+
     #[test]
     fn other_keys_do_not_answer_the_box() {
         let mut app = plan_gate_app();
@@ -7801,6 +7943,28 @@ mod evidence_open_tests {
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         assert!(matches!(app.mode, Mode::Normal));
         assert!(launched(&calls).is_empty());
+    }
+
+    #[test]
+    fn i_opens_the_linked_issue_from_any_section_while_o_keeps_the_evidence_folder() {
+        let (mut app, root, calls) = card("issue");
+        let link = serde_json::json!({"key": "PLAT-1", "url": "https://acme.atlassian.net/browse/PLAT-1"});
+        app.tasks[0].jira = Some(serde_json::from_value(link).unwrap());
+        for section in [Section::Result, Section::Evidence, Section::Activity] {
+            app.set_section(section);
+            press(&mut app, 'i');
+            assert_eq!(launched(&calls).last(), Some(&OsString::from("https://acme.atlassian.net/browse/PLAT-1")), "{section:?}");
+            assert!(crate::keys::bindings_for(&app, crate::keys::Scope::Detail).iter().any(|(b, a)| b.keys == "i" && a.is_on()));
+        }
+        press(&mut app, 'o');
+        assert!(launched(&calls).last().is_some_and(|l| l != &OsString::from("https://acme.atlassian.net/browse/PLAT-1")), "o still opens the evidence, not the issue");
+        let _ = root;
+        let (mut bare, _, calls) = card("no-issue");
+        press(&mut bare, 'i');
+        assert!(launched(&calls).is_empty());
+        assert_eq!(toast(&bare), "no issue linked");
+        let off = crate::keys::bindings_for(&bare, crate::keys::Scope::Detail).into_iter().find(|(b, _)| b.keys == "i").unwrap().1;
+        assert!(matches!(off, crate::keys::Avail::Off("no linked issue")));
     }
 
     #[test]

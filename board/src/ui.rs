@@ -408,6 +408,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::ConfirmMany { action, ids } => render_note(frame, " Marked tickets ", &format!("{}  y / n", action.question(ids.len()))),
+        Mode::ConfirmApproveMany { ids, .. } => render_approve_many(frame, app, ids),
         Mode::JiraLink { id, query, hits, cursor } => {
             if let Some(task) = app.task(id) {
                 render_jira_link(frame, task, query, hits, *cursor);
@@ -611,6 +612,7 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
         Mode::SlackWatchAdd { .. } => hint(&[("type", "@handle, #channel or a word"), ("↑/↓", "pick"), ("enter", "watch"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
+        Mode::ConfirmApproveMany { .. } => hint(&[("y", "approve them"), ("n", "cancel")]),
         Mode::Command { text, .. } => Line::from(vec![
             Span::from(" :").fg(c(ACCENT)).bold(),
             Span::from(format!("{text}▏")),
@@ -1358,6 +1360,33 @@ fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
 fn render_approve(frame: &mut Frame, app: &App, task: &Task) {
     let question = app.approval_question(task).unwrap_or_else(|| format!("approve #{}?", task.short_id()));
     render_confirm_box(frame, &question, " Approve ", &crate::model::plain(&task.title, 400), GREEN);
+}
+
+/// The box over marked cards at gates: `approve 3 cards? 2 plans · 1 ship`, up to five of them by short id and
+/// title (machine text, so plain), then the yes / no chips.
+fn render_approve_many(frame: &mut Frame, app: &App, ids: &[String]) {
+    const LISTED: usize = 5;
+    let width = frame.area().width.saturating_sub(4).clamp(20, 68);
+    let room = (width as usize).saturating_sub(6);
+    let mut lines = vec![Line::from(Span::from(text::ellipsis(&app.approve_many_question(ids), room)).bold())];
+    for task in ids.iter().filter_map(|id| app.task(id)).take(LISTED) {
+        let label = format!("#{}  {}", task.short_id(), crate::model::plain(&task.title, 400));
+        lines.push(Line::from(Span::from(text::ellipsis(&label, room)).fg(c(SUBTEXT0))));
+    }
+    if ids.len() > LISTED {
+        lines.push(Line::from(Span::from(format!("… and {} more", ids.len() - LISTED)).fg(c(SUBTEXT0))));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::from(" y ").fg(c(BASE)).bg(c(GREEN)),
+        Span::from(" yes   ").fg(c(SUBTEXT0)),
+        Span::from(" n ").fg(c(BASE)).bg(c(ACCENT)),
+        Span::from(" no").fg(c(SUBTEXT0)),
+    ]));
+    let area = centered(frame.area(), width, lines.len() as u16 + 2);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(GREEN))).padding(Padding::horizontal(2)).title(Line::from(" Approve ").fg(c(GREEN)).bold());
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// Popup asking to confirm a PR merge or close, in the same box as a ticket delete: the

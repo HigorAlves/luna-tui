@@ -17,6 +17,14 @@ pub(crate) const REFUSE_RELATIVE: &str = "refused: not an absolute path";
 pub(crate) const REFUSE_MISSING: &str = "refused: that path does not exist";
 pub(crate) const REFUSE_OUTSIDE: &str = "refused: outside the machine's folders and the card's repository";
 pub(crate) const REFUSE_URL: &str = "refused: only https links open";
+
+/// What the refusal says about a link: its scheme when it has a plain one (`http`), so the person knows what to change.
+fn refusal(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, _)) if !scheme.eq_ignore_ascii_case("https") && !scheme.is_empty() && scheme.len() <= 10 && scheme.chars().all(|c| c.is_ascii_alphabetic()) => format!("{REFUSE_URL} (this one is {})", scheme.to_ascii_lowercase()),
+        _ => REFUSE_URL.to_string(),
+    }
+}
 const STARTING: &str = "could not start the opener";
 pub(crate) const REFUSE_NO_OPENER: &str = "no opener on this system";
 
@@ -77,7 +85,7 @@ pub(crate) fn open_url_with(launch: Launch, url: &str) -> Result<(), String> {
     let program = opener().ok_or(REFUSE_NO_OPENER)?;
     let plain = url.starts_with("https://") && url.len() > "https://".len() && url.len() <= MAX_URL && !url.chars().any(|ch| ch.is_whitespace() || ch.is_control());
     if !plain {
-        return Err(REFUSE_URL.into());
+        return Err(refusal(url));
     }
     launch(program, OsStr::new(url)).map_err(|_| STARTING.to_string())
 }
@@ -270,9 +278,12 @@ mod tests {
             long.as_str(),
         ] {
             let (result, n) = run_url(url);
-            assert_eq!(result, Err(REFUSE_URL.to_string()), "{url:?}");
+            assert!(result.as_ref().is_err_and(|why| why.starts_with(REFUSE_URL)), "{url:?}: {result:?}");
             assert_eq!(n, 0);
         }
+        assert_eq!(run_url("http://example.com").0, Err("refused: only https links open (this one is http)".to_string()));
+        assert_eq!(run_url("https://example.com/a b").0, Err(REFUSE_URL.to_string()), "an https link with a space is not called http");
+        assert_eq!(run_url("--help").0, Err(REFUSE_URL.to_string()));
     }
 
     #[test]

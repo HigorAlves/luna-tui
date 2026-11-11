@@ -291,6 +291,14 @@ fn open_key(app: &App) -> Avail {
     with_task(app, |_| Avail::On)
 }
 
+/// `i`: the linked issue (Jira or the source's) in the browser, from any section: `o` opens the evidence folder where there is one.
+fn open_issue_key(app: &App) -> Avail {
+    if crate::open::opener().is_none() {
+        return Avail::Off("no opener on this system");
+    }
+    with_task(app, |t| if crate::app::issue_link(t).is_some() { Avail::On } else { Avail::Off("no linked issue") })
+}
+
 /// `O`: the PR in the browser, from any section.
 fn open_pr_key(app: &App) -> Avail {
     if crate::open::opener().is_none() {
@@ -699,7 +707,8 @@ const BOARD: &[Binding] = &[
 const DETAIL: &[Binding] = &[
     SHIP,
     b("e", "edit: the plan, the cases or the ticket", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 80),
-    b("o", "open: the folder, file, PR or issue", Group::Ticket, Scope::Detail, open_key, 50),
+    b("o", "open: the folder, file or PR", Group::Ticket, Scope::Detail, open_key, 50),
+    b("i", "open the issue", Group::Ticket, Scope::Detail, open_issue_key, 37),
     b("O", "open the PR in the browser", Group::Ticket, Scope::Detail, open_pr_key, 38),
     b("enter", "open the file here; close elsewhere", Group::Ticket, Scope::Detail, enter_key, 41),
     b("y", "Evidence Pack was useful", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.evidence.is_some() { Avail::On } else { Avail::Off("no Evidence Pack yet") }), 40),

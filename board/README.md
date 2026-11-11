@@ -271,7 +271,8 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 | `f` | open or focus the agent's watch tab |
 | `R` | set the repo (search) |
 | `e` | edit: the plan, the cases or the ticket |
-| `o` | open: the folder, file, PR or issue |
+| `o` | open: the folder, file or PR |
+| `i` | open the issue |
 | `O` | open the PR in the browser |
 | `enter` | open the file here; close elsewhere |
 | `y` | Evidence Pack was useful |

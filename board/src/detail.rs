@@ -904,6 +904,9 @@ pub(crate) fn card_group(task: &Task, detail: Option<&TaskDetail>, width: usize,
         Some(jira) => lines.extend(fact_row("Jira", &jira.summary(now), width)),
         None => lines.extend(fact_row("Jira", "none (J links an issue)", width)),
     }
+    if crate::app::issue_link(task).is_some() {
+        lines.extend(fact_row("Issue", "i opens the linked issue", width));
+    }
     let engines: Vec<String> = task.stages.iter().map(|(pack, engine)| format!("{pack} {engine}")).collect();
     let running = detail.and_then(TaskDetail::running_engine).map(|e| format!("running on {e}"));
     match (engines.is_empty(), running) {
