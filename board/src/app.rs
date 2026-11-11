@@ -546,10 +546,9 @@ pub struct App {
     pub help_scroll: Cell<u16>,
     pub help_max: Cell<u16>,
     pub help_viewport: Cell<u16>,
-    /// The ticket whose Detail `?` was pressed in; closing the help returns to it.
-    help_return: Option<String>,
-    /// The ticket whose Detail `:` was pressed in: the palette acts on it, and returns to it.
-    pub(crate) command_return: Option<String>,
+    /// The task view a prompt, picker, editor, palette or help sheet was opened from: when it
+    /// closes the app returns there (`settle_return`), unless the card is gone.
+    pub(crate) return_to: Option<String>,
     imported: bool,
     /// The latest stage container per task id, for `f` to open a watch tab on.
     stages: std::collections::HashMap<String, herdr::Stage>,
@@ -628,8 +627,7 @@ impl App {
             help_scroll: Cell::new(0),
             help_max: Cell::new(0),
             help_viewport: Cell::new(0),
-            help_return: None,
-            command_return: None,
+            return_to: None,
             imported: false,
             stages: std::collections::HashMap::new(),
             scan_tx,
@@ -1148,7 +1146,7 @@ impl App {
     pub fn ensure_detail(&mut self) {
         let target = match &self.mode {
             Mode::Detail(id) => Some(id.clone()),
-            _ => self.selected_task().map(|t| t.id.clone()),
+            _ => self.over_task().map(str::to_string).or_else(|| self.selected_task().map(|t| t.id.clone())),
         };
         let Some(id) = target else {
             self.detail = None;
@@ -1218,7 +1216,7 @@ impl App {
     pub fn focus_task(&self) -> Option<&Task> {
         match &self.mode {
             Mode::Detail(id) => return self.task(id),
-            Mode::Help { .. } if self.help_return.is_some() => return self.task(self.help_return.as_deref().unwrap_or_default()),
+            _ if self.over_task().is_some() => return self.over_task().and_then(|id| self.task(id)),
             _ => {}
         }
         if let Some(state) = &self.inbox {
@@ -1268,10 +1266,7 @@ impl App {
     /// Closes the sheet: back to the popup it was opened over, else the view under it.
     fn close_help(&mut self) {
         self.help_scroll.set(0);
-        self.mode = match self.help_return.take() {
-            Some(id) => Mode::Detail(id),
-            None => Mode::Normal,
-        };
+        self.back_from_overlay();
     }
 
     /// The keys `handle_help` matches, besides the view's own that it passes on.
@@ -1943,7 +1938,49 @@ impl App {
         Outcome::Continue
     }
 
+    /// The card whose task view a prompt, picker, editor or sheet is open over: the task stays on
+    /// screen behind it, and `settle_return` brings the view back when it closes.
+    pub fn over_task(&self) -> Option<&str> {
+        match self.mode {
+            Mode::Normal | Mode::Detail(_) => None,
+            _ => self.return_to.as_deref(),
+        }
+    }
+
+    /// Closes an overlay: back to the task view it was opened over, else the board.
+    fn back_from_overlay(&mut self) {
+        self.mode = match self.return_to.take() {
+            Some(id) if self.task(&id).is_some() => Mode::Detail(id),
+            _ => Mode::Normal,
+        };
+    }
+
+    /// After every key: a mode opened from the task view remembers it, a mode that closed to the
+    /// board returns to it (the card may be gone by then, and then the board is right), and the task
+    /// view itself holds no way back.
+    fn settle_return(&mut self, from: Option<String>) {
+        match &self.mode {
+            Mode::Detail(_) => self.return_to = None,
+            Mode::Normal => self.back_from_overlay(),
+            _ => {
+                if from.is_some() {
+                    self.return_to = from;
+                }
+            }
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Outcome {
+        let from = match &self.mode {
+            Mode::Detail(id) => Some(id.clone()),
+            _ => None,
+        };
+        let outcome = self.dispatch_key(key);
+        self.settle_return(from);
+        outcome
+    }
+
+    fn dispatch_key(&mut self, key: KeyEvent) -> Outcome {
         if self.toast.as_ref().is_some_and(|t| t.error) {
             self.toast = None;
         }
@@ -3679,7 +3716,6 @@ impl App {
             }
             KeyCode::Char('+') => self.detail_full = !self.detail_full,
             KeyCode::Char('?') => {
-                self.help_return = Some(id.to_string());
                 self.open_help();
             }
             KeyCode::Char('o') => match self.detail_open_target() {
@@ -3702,16 +3738,13 @@ impl App {
     /// is back when the palette closes (`handle_command`).
     fn open_card_command(&mut self, id: &str, text: &str) {
         self.select(id, true);
-        self.command_return = Some(id.to_string());
+        self.return_to = Some(id.to_string());
         self.mode = Mode::Command { text: text.to_string(), pick: None };
     }
 
     /// Leaves the palette: back to the task view it was opened over, else the board.
     fn close_command(&mut self) {
-        self.mode = match self.command_return.take() {
-            Some(id) => Mode::Detail(id),
-            None => Mode::Normal,
-        };
+        self.back_from_overlay();
     }
 
     /// `E`: the picker for the selected stage of the Engines section.
@@ -4066,7 +4099,7 @@ impl App {
                 };
                 // A command on the card (the ones that name it) leaves the task view open; the ones
                 // that open a view, a prompt or the board's own state take the screen as on the board.
-                let back = self.command_return.take().filter(|_| CARD_COMMANDS.contains(&line.split_whitespace().next().unwrap_or("")));
+                let back = self.return_to.take().filter(|_| CARD_COMMANDS.contains(&line.split_whitespace().next().unwrap_or("")));
                 self.mode = Mode::Normal;
                 let outcome = self.run_command(&line);
                 if let Some(id) = back.filter(|_| matches!(self.mode, Mode::Normal)) {
@@ -5466,12 +5499,11 @@ mod tests {
 
     #[test]
     fn closing_help_returns_to_the_ticket_detail() {
-        let mut app = App::new(Machine::from_env());
-        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+        let mut app = crate::testkit::plan_gate_app();
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
         assert!(matches!(app.mode, Mode::Help { scope: Scope::Detail, .. }));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
-        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa1111"));
         app.mode = Mode::Normal;
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
         app.handle_key(KeyEvent::from(KeyCode::Char('q')));
@@ -7051,5 +7083,134 @@ mod task_view_command_tests {
         let app = plan_gate_app();
         assert!(keys::footer_keys(&app, keys::Scope::Detail, 20).iter().any(|b| b.first() == ":"));
         assert!(keys::detail_footer(&app).iter().any(|(k, l)| k == ":" && l == "command"));
+    }
+}
+
+#[cfg(test)]
+mod task_view_return_tests {
+    use super::*;
+    use crate::testkit::{ESCALATED_TITLE, PLAN_GATE_TITLE, RUNNING_BUILD_TITLE, SHIP_STAGE_TITLE, escalated_app, plan_gate_app, questions_app, render, running_build_app, ship_stage_app};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    /// One prompt, editor or picker reachable from the task view: the card, how to open it, what it
+    /// opens, the keys that confirm it, and the words its title shows.
+    struct Case {
+        name: &'static str,
+        app: App,
+        title: &'static str,
+        open: KeyCode,
+        is_open: fn(&Mode) -> bool,
+        confirm: Vec<KeyEvent>,
+    }
+
+    fn keys_of(text: &str) -> Vec<KeyEvent> {
+        text.chars().map(|c| KeyEvent::from(KeyCode::Char(c))).collect()
+    }
+
+    fn cases() -> Vec<Case> {
+        let enter = || KeyEvent::from(KeyCode::Enter);
+        let save = || KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        let mut with_record = plan_gate_app();
+        with_record.tasks[0].record = Some(crate::model::TriageRecord::default());
+        let mut cases_gate = plan_gate_app();
+        cases_gate.detail_section = Section::Tests;
+        if let Some(detail) = cases_gate.detail.as_mut() {
+            for approval in detail.approvals.iter_mut().filter(|a| a.kind.as_deref() == Some("awaiting_test_check")) {
+                approval.decision = None;
+            }
+        }
+        vec![
+            Case { name: "send back", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: KeyCode::Char('r'), is_open: |m| matches!(m, Mode::Reason { approve: false, .. }), confirm: [keys_of("too wide"), vec![enter()]].concat() },
+            Case { name: "reject", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: KeyCode::Char('N'), is_open: |m| matches!(m, Mode::Reject { .. }), confirm: [keys_of("no"), vec![enter()]].concat() },
+            Case { name: "escalation guidance", app: escalated_app(), title: ESCALATED_TITLE, open: KeyCode::Char('a'), is_open: |m| matches!(m, Mode::Reason { approve: true, .. }), confirm: vec![enter()] },
+            Case { name: "evidence note", app: ship_stage_app(), title: SHIP_STAGE_TITLE, open: KeyCode::Char('n'), is_open: |m| matches!(m, Mode::EvidenceNote { .. }), confirm: vec![enter()] },
+            Case { name: "plan editor", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: KeyCode::Char('e'), is_open: |m| matches!(m, Mode::EditPlan { .. }), confirm: vec![save()] },
+            Case { name: "cases editor", app: cases_gate, title: PLAN_GATE_TITLE, open: KeyCode::Char('e'), is_open: |m| matches!(m, Mode::EditCases { .. }), confirm: vec![save()] },
+            Case { name: "ticket editor", app: running_build_app(), title: RUNNING_BUILD_TITLE, open: KeyCode::Char('e'), is_open: |m| matches!(m, Mode::EditTicket { .. }), confirm: vec![save()] },
+            Case { name: "answers editor", app: questions_app(), title: "Fix the invoice rounding", open: KeyCode::Char('a'), is_open: |m| matches!(m, Mode::Answer { .. }), confirm: vec![save()] },
+            Case { name: "archive reason", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: KeyCode::Char('Z'), is_open: |m| matches!(m, Mode::ArchiveReason { .. }), confirm: vec![enter()] },
+            Case { name: "escalation reason", app: escalated_app(), title: ESCALATED_TITLE, open: KeyCode::Char('C'), is_open: |m| matches!(m, Mode::EscalationReason { .. }), confirm: vec![enter()] },
+            Case { name: "record picker", app: with_record, title: PLAN_GATE_TITLE, open: KeyCode::Char('T'), is_open: |m| matches!(m, Mode::RecordEdit { .. }), confirm: vec![enter()] },
+            Case { name: "delete", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: KeyCode::Char('d'), is_open: |m| matches!(m, Mode::ConfirmDelete(_)), confirm: keys_of("y") },
+            Case { name: "abort", app: running_build_app(), title: RUNNING_BUILD_TITLE, open: KeyCode::Char('X'), is_open: |m| matches!(m, Mode::ConfirmAbort(_)), confirm: keys_of("y") },
+            Case { name: "kill the worktree", app: ship_stage_app(), title: SHIP_STAGE_TITLE, open: KeyCode::Char('w'), is_open: |m| matches!(m, Mode::ConfirmWorktree(_)), confirm: keys_of("y") },
+        ]
+    }
+
+    #[test]
+    fn every_prompt_editor_and_picker_keeps_the_card_on_screen_when_it_opens() {
+        for mut case in cases() {
+            press(&mut case.app, case.open);
+            assert!((case.is_open)(&case.app.mode), "{}: did not open", case.name);
+            let screen = render(&mut case.app, 140, 40);
+            assert!(screen.contains(case.title), "{}: the card's title left the screen:\n{screen}", case.name);
+        }
+    }
+
+    #[test]
+    fn closing_any_of_them_with_esc_returns_to_the_same_card_section_and_scroll() {
+        for mut case in cases() {
+            let id = case.app.tasks[0].id.clone();
+            let section = case.app.detail_section;
+            case.app.detail_scroll.set(2);
+            press(&mut case.app, case.open);
+            assert!((case.is_open)(&case.app.mode), "{}: did not open", case.name);
+            press(&mut case.app, KeyCode::Esc);
+            assert!(matches!(&case.app.mode, Mode::Detail(open) if *open == id), "{}: esc ended in another mode", case.name);
+            assert_eq!(case.app.detail_section, section, "{}: the section moved", case.name);
+            assert_eq!(case.app.detail_scroll.get(), 2, "{}: the scroll moved", case.name);
+        }
+    }
+
+    #[test]
+    fn confirming_any_of_them_returns_to_the_same_card_section_and_scroll() {
+        for mut case in cases() {
+            let id = case.app.tasks[0].id.clone();
+            let section = case.app.detail_section;
+            case.app.detail_scroll.set(2);
+            press(&mut case.app, case.open);
+            assert!((case.is_open)(&case.app.mode), "{}: did not open", case.name);
+            for key in case.confirm.clone() {
+                case.app.handle_key(key);
+            }
+            // Delete and the like are refused by the unreachable machine; the card is still there.
+            assert!(matches!(&case.app.mode, Mode::Detail(open) if *open == id), "{}: confirming ended in another mode", case.name);
+            assert_eq!(case.app.detail_section, section, "{}: the section moved", case.name);
+            assert_eq!(case.app.detail_scroll.get(), 2, "{}: the scroll moved", case.name);
+        }
+    }
+
+    #[test]
+    fn a_card_that_is_gone_after_the_action_returns_to_the_board() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('d'));
+        app.tasks.clear();
+        press(&mut app, KeyCode::Char('y'));
+        assert!(matches!(app.mode, Mode::Normal), "nothing to return to");
+        assert!(app.return_to.is_none(), "the way back is forgotten");
+    }
+
+    #[test]
+    fn a_prompt_opened_on_the_board_returns_to_the_board() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        app.select("aaaaaaaa1111", true);
+        press(&mut app, KeyCode::Char('r'));
+        assert!(matches!(app.mode, Mode::Reason { .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal), "the board, not a task view");
+    }
+
+    #[test]
+    fn the_send_back_prompt_is_a_box_over_the_task_not_a_footer_line() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('r'));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("send back #aaaaaaaa — why?"), "{screen}");
+        assert!(!screen.contains("send back because:"), "no footer prompt:\n{screen}");
+        assert!(screen.contains(PLAN_GATE_TITLE));
     }
 }

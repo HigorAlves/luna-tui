@@ -196,38 +196,59 @@ pub fn draw(frame: &mut Frame, app: &App) {
     render_board(frame, body, app);
     frame.render_widget(footer_line(app, footer.width), footer);
 
-    // The palette typed over the task view (`:` there) leaves the card on screen under its prompt.
-    let command_over = match &app.mode {
-        Mode::Command { .. } => app.command_return.clone().map(Mode::Detail),
-        _ => None,
+    // A prompt, picker, editor or palette opened from the task view leaves the card on screen under it.
+    let task_id = match &app.mode {
+        Mode::Detail(id) | Mode::EnginePicker { id, .. } => Some(id.as_str()),
+        Mode::Help { .. } => None,
+        _ => app.over_task(),
     };
-    match command_over.as_ref().unwrap_or(&app.mode) {
-        Mode::Detail(id) | Mode::EnginePicker { id, .. } => {
-            if let Some(task) = app.task(id) {
-                let actions = keys::card_actions(app);
-                let can = keys::card_action_help(app);
-                let view = DetailView {
-                    task,
-                    detail: app.detail.as_ref(),
-                    section: app.detail_section,
-                    cursor: app.detail_cursor,
-                    scroll: &app.detail_scroll,
-                    prs: &app.prs.prs,
-                    diff: app.diff.as_ref().filter(|d| d.0 == task.id).map(|d| &d.1),
-                    viewport: &app.detail_viewport,
-                    follow: &app.detail_follow,
-                    engines: app.engine_catalog.as_ref(),
-                    tasks: &app.tasks,
-                    actions: &actions,
-                    can: &can,
-                    refs: &app.detail_refs,
-                };
-                detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
-            }
-            if let (Mode::EnginePicker { pack, cursor, .. }, Some(Ok(catalog))) = (&app.mode, &app.engine_catalog)
+    if let Some(task) = task_id.and_then(|id| app.task(id)) {
+        let actions = keys::card_actions(app);
+        let can = keys::card_action_help(app);
+        let view = DetailView {
+            task,
+            detail: app.detail.as_ref(),
+            section: app.detail_section,
+            cursor: app.detail_cursor,
+            scroll: &app.detail_scroll,
+            prs: &app.prs.prs,
+            diff: app.diff.as_ref().filter(|d| d.0 == task.id).map(|d| &d.1),
+            viewport: &app.detail_viewport,
+            follow: &app.detail_follow,
+            engines: app.engine_catalog.as_ref(),
+            tasks: &app.tasks,
+            actions: &actions,
+            can: &can,
+            refs: &app.detail_refs,
+        };
+        detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
+    }
+    match &app.mode {
+        Mode::EnginePicker { pack, cursor, .. } => {
+            if let Some(Ok(catalog)) = &app.engine_catalog
                 && let Some(pack) = catalog.packs.iter().find(|p| p.id == *pack)
             {
                 render_engine_picker(frame, pack, &catalog.choices(pack), *cursor);
+            }
+        }
+        Mode::Reason { id, approve, text } => {
+            let short = app.task(id).map(|t| t.short_id().to_string()).unwrap_or_default();
+            let (title, border) = if *approve { (format!("guidance for the retry of #{short} (optional)"), ACCENT) } else { (format!("send back #{short} — why?"), ACCENT) };
+            let placeholder = if text.is_empty() && !*approve { app.task(id).and_then(|t| reason_placeholder(&t.state)) } else { None };
+            if app.over_task().is_some() {
+                render_prompt(frame, app, &title, text, placeholder.unwrap_or_default(), "enter send · esc cancel", border);
+            }
+        }
+        Mode::Reject { id, text } => {
+            let short = app.task(id).map(|t| t.short_id().to_string()).unwrap_or_default();
+            if app.over_task().is_some() {
+                render_prompt(frame, app, &format!("reject #{short} — why? (the card ends)"), text, "", "enter reject · esc cancel", RED);
+            }
+        }
+        Mode::EvidenceNote { id, text } => {
+            let short = app.task(id).map(|t| t.short_id().to_string()).unwrap_or_default();
+            if app.over_task().is_some() {
+                render_prompt(frame, app, &format!("#{short} — why was the pack not useful?"), text, "", "enter send · esc cancel", PEACH);
             }
         }
         Mode::ConfirmDelete(id) => {
@@ -489,6 +510,8 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
             Span::from(format!("{}▏", app.filter)),
             Span::from("   enter keep · esc clear").fg(c(SUBTEXT0)),
         ]),
+        // Over the task view the prompt is a box on the card; the footer keeps the two keys.
+        Mode::Reason { .. } | Mode::Reject { .. } | Mode::EvidenceNote { .. } if app.over_task().is_some() => hint(&[("enter", "send"), ("esc", "cancel")]),
         Mode::Reason { approve, text, .. } => {
             let placeholder = if text.is_empty() && !*approve { app.tasks.iter().find(|t| matches!(&app.mode, Mode::Reason { id, .. } if *id == t.id)).and_then(|t| reason_placeholder(&t.state)) } else { None };
             let prompt = if *approve {
@@ -1125,6 +1148,28 @@ fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
 fn render_confirm_pr(frame: &mut Frame, app: &App, repo: &str, number: u64, title: &str, note: &str, accent: Color) {
     let name = app.prs.prs.iter().find(|p| p.repo == repo && p.number == number).map_or(String::new(), |p| format!("  {}", crate::model::plain(&p.title, 400)));
     render_confirm_box(frame, &format!("{repo}#{number}{name}"), title, note, accent);
+}
+
+/// A one-line prompt over the task view: 3 rows, bordered, titled with what it asks, near the bottom of
+/// the popup so the card stays visible above it. The tail of a long text shows, with the caret.
+fn render_prompt(frame: &mut Frame, app: &App, title: &str, text: &str, placeholder: &str, keys_hint: &str, accent: Color) {
+    let popup = detail::popup_area(frame.area(), app.detail_full);
+    let width = popup.width.saturating_sub(4).clamp(1, 72);
+    let area = Rect::new(popup.x + popup.width.saturating_sub(width) / 2, popup.bottom().saturating_sub(5), width, 3).intersection(frame.area());
+    frame.render_widget(Clear, area);
+    let room = (width as usize).saturating_sub(4);
+    let typed: String = text.chars().rev().take(room.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
+    let mut spans = vec![Span::from(format!("{typed}▏"))];
+    if text.is_empty() && !placeholder.is_empty() {
+        spans.push(Span::from(format!(" {}", truncate(placeholder, room.saturating_sub(2)))).fg(c(SUBTEXT0)));
+    }
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(accent)))
+        .padding(Padding::horizontal(1))
+        .title(Line::from(format!(" {} ", truncate(title, (width as usize).saturating_sub(4)))).fg(c(accent)).bold())
+        .title_bottom(Line::from(format!(" {keys_hint} ")).fg(c(SUBTEXT0)).right_aligned());
+    frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
 }
 
 fn render_confirm_box(frame: &mut Frame, heading: &str, title: &str, note: &str, accent: Color) {
