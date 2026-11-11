@@ -327,8 +327,8 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         Section::Review => (crate::pages::review_page(task, detail, width, ref_width), None),
         Section::Now => (crate::pages::now_page(task, detail, width, ref_width, now), None),
         Section::Stopped => (crate::pages::stopped_page(task, detail, view.can, width, ref_width), None),
-        Section::Result => (crate::pages::result_page(task, detail, view.prs, view.can, width, ref_width, now), None),
-        Section::Gate => (crate::pages::gate_page(task, detail, view.can, width, ref_width, now), None),
+        Section::Result => (crate::pages::result_page(task, detail, view.prs, width, ref_width, now), None),
+        Section::Gate => (crate::pages::gate_page(task, detail, width, ref_width, now), None),
         Section::Plan => (plan_page(task, detail, width, ref_width, now), None),
         Section::Tests => (Page::of(tests_lines(task, detail, width, now)), None),
         Section::Runs => {
@@ -2251,7 +2251,7 @@ mod tests {
     #[test]
     fn a_gate_s_error_note_config_proof_notes_and_questions_are_drawn_without_unsafe_characters() {
         let (task, detail) = hostile();
-        let page = crate::pages::gate_page(&task, Some(&detail), &[], 100, 30, 0);
+        let page = crate::pages::gate_page(&task, Some(&detail), 100, 30, 0);
         let text = text_of(&page.main);
         assert_safe("question page", &text);
         for needle in [format!("1. {TAMED}"), format!("suggested: {TAMED}"), format!("✗ {TAMED}: {TAMED}")] {

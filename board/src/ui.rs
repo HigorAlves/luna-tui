@@ -208,7 +208,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         let w = (note.width() as u16 + 1).min(header.width);
         let left = Rect { width: header.width - w, ..header };
         frame.render_widget(Clear, header);
-        frame.render_widget(clip_line(header_line(app), left.width as usize), left);
+        frame.render_widget(header_fit(app, left.width as usize), left);
         let rect = Rect { x: header.right() - w, width: w, ..header };
         frame.render_widget(note, Rect { x: rect.x + 1, width: w - 1, ..rect });
     }
@@ -217,7 +217,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
     // A prompt, picker, editor or palette opened from the task view leaves the card on screen under it.
     let task_id = match &app.mode {
         Mode::Detail(id) | Mode::EnginePicker { id, .. } => Some(id.as_str()),
-        Mode::Help { .. } => None,
         _ => app.over_task(),
     };
     if let Some(task) = task_id.and_then(|id| app.task(id)) {
@@ -447,6 +446,27 @@ fn clip_line(line: Line<'static>, max: usize) -> Line<'static> {
         break;
     }
     Line::from(spans)
+}
+
+/// The header cut to `width` with the needs-you count kept: the whole line when it fits, else the count in place of the totals (and
+/// before the offline text), and the app name goes last of all.
+fn header_fit(app: &App, width: usize) -> Line<'static> {
+    let full = header_line(app);
+    if full.width() <= width {
+        return full;
+    }
+    let waiting = app.tasks.iter().filter(|t| t.look().needs_person()).count();
+    let need = Span::from(format!("  {waiting} need you")).fg(c(if waiting > 0 { PEACH } else { SUBTEXT0 })).bold();
+    let mut spans = full.spans;
+    if app.online {
+        spans[1] = need.clone();
+    } else {
+        spans.insert(1, need.clone());
+    }
+    if spans[0].width() + need.width() > width {
+        spans.remove(0);
+    }
+    clip_line(Line::from(spans), width)
 }
 
 fn header_line(app: &App) -> Line<'static> {
@@ -1085,23 +1105,32 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     }
     lines.push(Line::from(Span::from(text::ellipsis(&ids, width)).fg(c(SUBTEXT0))));
 
-    let mut meta = vec![
-        Span::raw("  "),
-        Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(look_color(look)).bold(),
-        Span::from(format!(" · {age}")).fg(c(age_colour)),
-    ];
+    let mut badges: Vec<Span<'static>> = Vec::new();
     if task.worktree_path.is_some() {
-        meta.push(Span::from(" ⎇").fg(c(ACCENT)));
+        badges.push(Span::from(" ⎇").fg(c(ACCENT)));
     }
     if task.retries.total > 1 {
-        meta.push(Span::from(format!(" ×{}", task.retries.total)).fg(c(PEACH)));
+        badges.push(Span::from(format!(" ×{}", task.retries.total)).fg(c(PEACH)));
     }
     if task.repo_path.is_none() && task.state == "draft" {
-        meta.push(Span::from(" no repo").fg(c(SUBTEXT0)));
+        badges.push(Span::from(" no repo").fg(c(SUBTEXT0)));
     }
     // A dim `$` on the tickets above the p90 of spend: the expensive ones at a glance.
     if task.spent_usd.zip(spend_p90).is_some_and(|(spent, p90)| spent > p90) {
-        meta.push(Span::from(" $").fg(c(SUBTEXT0)));
+        badges.push(Span::from(" $").fg(c(SUBTEXT0)));
+    }
+    // The status and its age come first: a status too long for the card ends in `…`, and a badge that does not fit is left out.
+    let age_part = format!(" · {age}");
+    let label = format!("{} {}", look_glyph(look), task.status_label());
+    let room = width.saturating_sub(2 + text::cells(&age_part));
+    let status = if room >= 8 { text::ellipsis(&label, room) } else { label };
+    let mut used = 2 + text::cells(&status) + text::cells(&age_part);
+    let mut meta = vec![Span::raw("  "), Span::from(status).fg(look_color(look)).bold(), Span::from(age_part).fg(c(age_colour))];
+    for badge in badges {
+        if used + badge.width() <= width {
+            used += badge.width();
+            meta.push(badge);
+        }
     }
     lines.push(fit_spans(meta, width));
     if density == Density::Comfortable {
@@ -4322,7 +4351,7 @@ mod help_sheet_tests {
     #[test]
     fn the_footer_is_a_few_short_words_per_view() {
         let board = footer(&app_with("awaiting_approval", true));
-        assert!(board.starts_with("  a  open to approve   r  send back   N  reject   e  edit   enter  open   x  actions   /  filter   q  quit   tab  next to do   n  new"), "{board}");
+        assert!(board.starts_with("  a  open to approve   r  send back   N  reject   e  edit   enter  open task   x  actions   /  filter   q  quit   tab  next to do   n  new"), "{board}");
         assert!(board.trim_end().ends_with("?  all keys"), "{board}");
         let mut quiet = app_with("implementing", false);
         quiet.tasks[0].waiting_on_you = false;
@@ -4359,7 +4388,7 @@ mod help_sheet_tests {
         let row = screen(&app, 110, 24)[0].clone();
         let note = board_note(&app, 110).expect("110 columns hide some").spans.iter().map(|s| s.content.to_string()).collect::<String>();
         assert!(row.trim_end().ends_with(note.trim_end()), "the indicator is whole at the right: {row}");
-        assert!(row.contains("…") && row.contains("Luna TUI") && row.contains("machine offline"), "the left text is shortened: {row}");
+        assert!(row.contains("…") && row.contains("Luna TUI") && row.contains("1 need you") && row.contains("machine"), "the offline text is what is shortened, the count stays: {row}");
         let before_note = row.trim_end().strip_suffix(note.trim_end()).unwrap();
         assert!(before_note.trim_end().ends_with('…'), "cut at the edge of the indicator, not clipped under it: {row}");
     }
@@ -4798,5 +4827,63 @@ mod board_tests {
         app.tasks.retain(|t| !t.look().needs_person());
         app.handle_key(KeyEvent::from(KeyCode::Tab));
         assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing needs you"));
+    }
+}
+
+#[cfg(test)]
+mod age_tests {
+    #[test]
+    fn a_long_status_is_cut_before_its_age_is_at_200_columns() {
+        let mut app = crate::testkit::full_board_app();
+        let screen = crate::testkit::render(&mut app, 200, 24);
+        for status in ["approve", "implement", "choose", "verifying"] {
+            let line = screen.lines().find(|l| l.contains(status)).unwrap_or_else(|| panic!("{status}\n{screen}"));
+            let cell: String = line.chars().skip(line.find(status).map(|b| line[..b].chars().count()).unwrap() - 2).take(22).collect();
+            assert!(cell.contains(" · ") && !cell.contains("·…"), "{status}: {cell:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use crate::testkit::{full_board_app, render};
+
+    #[test]
+    fn at_80_columns_the_needs_you_count_stays_in_the_header_beside_the_hidden_columns_note() {
+        let mut app = full_board_app();
+        app.online = true;
+        let stops = app.tasks.iter().filter(|t| t.look().needs_person()).count();
+        for width in [80u16, 100, 120] {
+            let screen = render(&mut app, width, 24);
+            let header = screen.lines().next().unwrap();
+            assert!(header.contains(&format!("{stops} need you")), "{width}: {header}");
+        }
+        let wide = render(&mut app, 200, 24);
+        assert!(wide.lines().next().unwrap().contains("tickets"), "with room the totals stay");
+    }
+
+    #[test]
+    fn offline_the_count_comes_before_the_reason_which_is_what_gets_cut() {
+        let mut app = full_board_app();
+        let stops = app.tasks.iter().filter(|t| t.look().needs_person()).count();
+        let header = render(&mut app, 80, 24).lines().next().unwrap().to_string();
+        assert!(header.contains(&format!("{stops} need you")) && header.contains("machine"), "{header}");
+    }
+}
+
+#[cfg(test)]
+mod help_over_task_tests {
+    use crate::testkit::{PLAN_GATE_TITLE, plan_gate_app, render};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+    #[test]
+    fn the_key_sheet_opens_over_the_task_which_stays_on_screen_and_esc_returns_to_it() {
+        let mut app = plan_gate_app();
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        let screen = render(&mut app, 180, 50);
+        assert!(screen.contains(" Keys"), "{screen}");
+        assert!(screen.contains(PLAN_GATE_TITLE) && screen.contains("approve the plan?"), "the task is behind the sheet:\n{screen}");
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(&app.mode, crate::app::Mode::Detail(_)), "back in the task");
     }
 }

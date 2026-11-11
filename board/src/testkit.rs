@@ -192,7 +192,7 @@ pub fn running_build_app() -> App {
             "buildProgress": {
                 "scenarios": [{"id": "S1", "state": "green"}, {"id": "S2", "state": "green"}, {"id": "S3", "state": "red"}],
                 "budget": {"iterations": 4, "tokens": 52000, "minutes": 7.5, "limits": {"max_iterations": 12, "max_tokens": 400000, "max_minutes": 45.0}},
-                "lastCheckpoint": {"sha": "9f3c2a1d5e", "follows": "green scenario"}
+                "lastCheckpoint": {"sha": "9f3c2a1d5e", "follows": "green"}
             }
         }),
     )

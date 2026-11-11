@@ -8454,7 +8454,7 @@ mod confirm_tests {
         assert_eq!(split[..3], ["a approve", "r send back", "N reject"], "{split:?}");
         assert!(!split.iter().any(|k| k.starts_with("e ")), "a split has no plan to edit: {split:?}");
         let release = bar(&release_question_app());
-        assert_eq!(release[..2], ["a ship", "N reject"], "{release:?}");
+        assert_eq!(release[..2], ["a release", "N reject"], "{release:?}");
         assert!(!release.iter().any(|k| k.starts_with("e ")), "{release:?}");
         let plan = bar(&plan_gate_app());
         assert!(plan.contains(&"e edit".to_string()), "the plan gate edits: {plan:?}");

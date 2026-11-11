@@ -456,7 +456,7 @@ pub(crate) fn now_page(task: &Task, detail: Option<&TaskDetail>, width: usize, r
         main.push(budget_row("minutes", b.minutes, b.limits.max_minutes, format!("{} of {}", number(b.minutes), number(b.limits.max_minutes))));
         if let Some(cp) = &p.last_checkpoint {
             main.push(Line::default());
-            main.push(Line::from(vec![Span::styled(format!("{:<11}", "checkpoint"), theme::label()), Span::raw(format!("{} after a {}", plain(&cp.sha).chars().take(7).collect::<String>(), plain(&cp.follows)))]));
+            main.push(Line::from(vec![Span::styled(format!("{:<11}", "checkpoint"), theme::label()), Span::raw(format!("{} after {}", plain(&cp.sha).chars().take(7).collect::<String>(), match cp.follows.as_str() { "red" | "green" => format!("a {} scenario", cp.follows), other => plain(other) }))]));
         }
     }
     main.extend([Line::default(), title("Latest activity")]);
@@ -473,7 +473,7 @@ pub(crate) fn now_page(task: &Task, detail: Option<&TaskDetail>, width: usize, r
     Page { main, groups: vec![card_group(task, detail, ref_width, now)] }
 }
 
-/// The keys that apply, each with what it does.
+/// The keys that apply, each with what it does: only the stopped page lists them, because only there does each need its explanation.
 fn can_do(can: &[(String, String)]) -> Vec<Line<'static>> {
     if can.is_empty() {
         return Vec::new();
@@ -584,7 +584,7 @@ fn evidence_pack(d: &TaskDetail) -> Option<&Value> {
 
 /// A card at or past shipping: the release question first when there is one, then what changed and why, what review found by
 /// level, the PR, the evidence and the ship checklist.
-pub(crate) fn result_page(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], can: &[(String, String)], width: usize, ref_width: usize, now: u64) -> Page {
+pub(crate) fn result_page(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], width: usize, ref_width: usize, now: u64) -> Page {
     let Some(d) = detail else { return Page::of(vec![title("Result"), Line::default(), muted("  loading…".into())]) };
     let mut main = Vec::new();
     let open = d.open_approval();
@@ -628,8 +628,12 @@ pub(crate) fn result_page(task: &Task, detail: Option<&TaskDetail>, prs: &[PullR
         main.extend([title("Findings"), Line::from(Span::styled(format!("  {}", counts.join(" · ")), theme::label()))]);
         for (id, name) in levels {
             for f in open_findings.iter().filter(|f| f.level() == id) {
-                let place = if f.path.is_empty() { String::new() } else { format!("  {}:{}", truncate_middle(&plain(&f.path), 50), f.line) };
-                main.extend(hanging(vec![Span::raw("  "), Span::styled(format!("{name:<11}"), if id == "blocker" { theme::lost() } else { theme::label() })], &format!("{}{place}", plain(&f.title)), width));
+                // The level in a fixed column, the words wrapped under themselves, the place dim on a line of its own.
+                let label = Span::styled(format!("{name:<13}"), if id == "blocker" { theme::lost() } else { theme::label() });
+                main.extend(hanging(vec![Span::raw("  "), label], &plain(&f.title), width));
+                if !f.path.is_empty() {
+                    main.push(Line::from(Span::styled(format!("               {}:{}", truncate_middle(&plain(&f.path), 50), f.line), theme::dim())));
+                }
             }
         }
         main.push(Line::default());
@@ -659,7 +663,6 @@ pub(crate) fn result_page(task: &Task, detail: Option<&TaskDetail>, prs: &[PullR
             ]));
         }
     }
-    main.extend(can_do(can));
     let mut groups = Vec::new();
     if let Some(pack) = pack {
         let lines: Vec<Line<'static>> = crate::ui::pack_lines(pack).iter().map(|l| Line::from(ellipsis(l, ref_width))).collect();
@@ -673,7 +676,7 @@ pub(crate) fn result_page(task: &Task, detail: Option<&TaskDetail>, prs: &[PullR
 
 /// A gate that asks a question: the question and its choices first (the triage questions numbered, each with the machine's
 /// suggested answer; the intake candidates; the proposed setup), then where the card came from as reference.
-pub(crate) fn gate_page(task: &Task, detail: Option<&TaskDetail>, can: &[(String, String)], width: usize, ref_width: usize, now: u64) -> Page {
+pub(crate) fn gate_page(task: &Task, detail: Option<&TaskDetail>, width: usize, ref_width: usize, now: u64) -> Page {
     let mut main = vec![title(&gate_question(task, detail).unwrap_or_else(|| task.status_label()))];
     if let Some(approval) = detail.and_then(TaskDetail::open_approval) {
         for (i, (question, suggested)) in questions_of(approval).into_iter().enumerate() {
@@ -690,7 +693,6 @@ pub(crate) fn gate_page(task: &Task, detail: Option<&TaskDetail>, can: &[(String
         main.push(Line::default());
         main.extend(intake);
     }
-    main.extend(can_do(can));
     let mut groups = Vec::new();
     let origin = origin_lines(task, detail);
     if !origin.is_empty() {
@@ -1303,5 +1305,45 @@ mod spoof_tests {
         let real_flag = rows.iter().position(|r| r.iter().collect::<String>().contains("⚑ plan: step 3")).unwrap();
         assert_eq!(col(real_flag, "⚑"), gutter);
         assert!(!screen.contains("⚑ approved by") && !screen.contains("✓ all checks"), "{screen}");
+    }
+}
+
+#[cfg(test)]
+mod polish_tests {
+    use crate::testkit::{escalated_app, questions_app, real_ship_gate_app, render, ship_stage_app};
+
+    #[test]
+    fn what_you_can_do_is_on_the_stopped_page_only_the_other_pages_have_the_bar_and_the_footer() {
+        for (name, mut app) in [("result", ship_stage_app()), ("release", real_ship_gate_app(false)), ("question", questions_app())] {
+            let screen = render(&mut app, 180, 50);
+            assert!(!screen.contains("What you can do"), "{name}:\n{screen}");
+        }
+        let mut app = escalated_app();
+        assert!(render(&mut app, 180, 50).contains("What you can do"));
+    }
+
+    #[test]
+    fn a_finding_reads_as_a_level_in_a_column_then_its_words_with_the_place_dim_on_its_own_line() {
+        let mut app = ship_stage_app();
+        let screen = render(&mut app, 180, 50);
+        let rows: Vec<&str> = screen.lines().collect();
+        let at = rows.iter().position(|r| r.contains("should fix   the limiter keys on the proxy address")).unwrap_or_else(|| panic!("{screen}"));
+        assert!(rows[at + 1].contains("src/limit.ts:31") && !rows[at].contains("src/limit.ts"), "{}", rows[at + 1]);
+        assert!(rows.iter().any(|r| r.contains("nit          name the window constant")), "{screen}");
+    }
+
+    #[test]
+    fn the_checkpoint_says_which_kind_of_scenario_it_follows_in_full() {
+        let mut app = crate::testkit::running_build_app();
+        let screen = render(&mut app, 180, 50);
+        assert!(screen.contains("9f3c2a1 after a green scenario"), "{screen}");
+        assert!(!screen.contains("after a green  ") , "{screen}");
+    }
+
+    #[test]
+    fn the_bar_calls_the_release_question_s_answer_a_release_not_a_ship() {
+        let mut app = real_ship_gate_app(false);
+        let bar = render(&mut app, 180, 50).lines().find(|l| l.contains("approve the release?")).unwrap().to_string();
+        assert!(bar.contains("a release") && !bar.contains("a ship") && !bar.contains("S ship"), "{bar}");
     }
 }

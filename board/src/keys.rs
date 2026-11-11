@@ -1151,6 +1151,11 @@ pub fn terse_label(app: &App, b: &Binding) -> String {
         "w" => return "worktree".into(),
         _ => {}
     }
+    // At the release question `a` and `S` give the same answer, and the PR is already open: it is a release, not a ship.
+    let at_release = task_of(app).is_some_and(|t| open_ship_approval(app, t));
+    if b.label.starts_with("ship: approve the release") || (b.first() == "S" && at_release) {
+        return "release".into();
+    }
     let head = b.label.split([':', ',']).next().unwrap_or(b.label).split(" (").next().unwrap_or(b.label);
     if head.starts_with("send back") {
         return "send back".into();
@@ -1210,7 +1215,8 @@ fn view_label(app: &App, scope: Scope, b: &Binding) -> String {
         match first {
             "a" => return board_a_label(app).into(),
             "tab" => return "next to do".into(),
-            "enter" => return "open".into(),
+            "enter" => return "open task".into(),
+            "f" => return "watch tab".into(),
             "x" => return "actions".into(),
             "/" => return "filter".into(),
             "n" => return "new".into(),
