@@ -68,7 +68,10 @@ pub fn open_card(task: Value, detail_rest: Value) -> App {
     let mut app = App::new(dead_machine());
     app.tasks.push(task.clone());
     app.detail = Some(detail);
+    // The detail was set by hand: it is the machine's latest.
+    app.detail_stale = false;
     app.open_detail(task.id);
+    app.detail_stale = false;
     app
 }
 

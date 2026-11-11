@@ -101,6 +101,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if let Some(floor) = app.floor.as_ref().filter(|_| app.active_view() == Some(View::Floor)) {
         render_floor(frame, body, floor);
         frame.render_widget(footer_line(app, footer.width), footer);
+        if let Mode::ConfirmBase { repo, base } = &app.mode {
+            let repo = crate::model::plain(repo, 200);
+            render_confirm_details(frame, " Approve base image ", &format!("approve the base image of {repo}?"), &[format!("image {}", crate::model::plain(base, 200)), "It runs with the stage's credential.".to_string()], PEACH);
+        }
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
@@ -133,9 +137,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.economy.as_ref().filter(|_| app.active_view() == Some(View::Economy) && matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+    if let Some(state) = app.economy.as_ref().filter(|_| app.active_view() == Some(View::Economy) && matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::ConfirmMask { .. })) {
         render_economy(frame, body, app, state);
         frame.render_widget(footer_line(app, footer.width), footer);
+        if let Mode::ConfirmMask { pack, units, .. } = &app.mode {
+            let units: Vec<String> = units.iter().map(|u| crate::model::plain(u, 80)).collect();
+            render_confirm_details(frame, " Approve tool mask ", &format!("mask these tools for {}?", crate::model::plain(pack, 80)), &[units.join(", "), "The pack will not be offered them again.".to_string()], PEACH);
+        }
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
@@ -407,7 +415,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::ConfirmMany { action, ids } => render_note(frame, " Marked tickets ", &format!("{}  y / n", action.question(ids.len()))),
-        Mode::ConfirmApproveMany { ids, .. } => render_approve_many(frame, app, ids),
+        Mode::ConfirmApproveMany { ids, question, .. } => render_approve_many(frame, app, ids, question),
+        Mode::ConfirmBase { .. } | Mode::ConfirmMask { .. } => {}
         Mode::JiraLink { id, query, hits, cursor } => {
             if let Some(task) = app.task(id) {
                 render_jira_link(frame, task, query, hits, *cursor);
@@ -628,6 +637,8 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
         Mode::ConfirmApproveMany { .. } => hint(&[("y", "approve them"), ("n", "cancel")]),
+        Mode::ConfirmBase { .. } => hint(&[("y", "approve the base image"), ("n/esc", "cancel")]),
+        Mode::ConfirmMask { .. } => hint(&[("y", "approve the tool mask"), ("n/esc", "cancel")]),
         Mode::Command { text, .. } => Line::from(vec![
             Span::from(" :").fg(c(ACCENT)).bold(),
             Span::from(format!("{text}▏")),
@@ -1395,6 +1406,31 @@ fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
     render_confirm_box(frame, &format!("#{} {}", task.short_id(), crate::model::plain(&task.title, 400)), title, note, RED);
 }
 
+/// A confirmation that spells out what it is about: the heading, then each detail wrapped to the box (an image
+/// reference or a list of tools is read whole, never cut), then the yes / no chips.
+fn render_confirm_details(frame: &mut Frame, title: &str, heading: &str, details: &[String], accent: Color) {
+    let width = frame.area().width.saturating_sub(4).clamp(20, 68);
+    let room = usize::from(width).saturating_sub(6).max(8);
+    let mut lines = vec![Line::from(Span::from(truncate(heading, room)).bold())];
+    for detail in details {
+        let chars: Vec<char> = detail.chars().collect();
+        for chunk in chars.chunks(room) {
+            lines.push(Line::from(Span::from(chunk.iter().collect::<String>()).fg(c(SUBTEXT0))));
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::from(" y ").fg(c(BASE)).bg(c(accent)),
+        Span::from(" yes   ").fg(c(SUBTEXT0)),
+        Span::from(" n ").fg(c(BASE)).bg(c(ACCENT)),
+        Span::from(" no").fg(c(SUBTEXT0)),
+    ]));
+    let area = centered(frame.area(), width, (lines.len() as u16 + 2).min(frame.area().height));
+    frame.render_widget(Clear, area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(accent))).padding(Padding::horizontal(2)).title(Line::from(title).fg(c(accent)).bold());
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 /// Popup asking to confirm an approval: what is approved and the card, in the delete box's shape.
 fn render_approve(frame: &mut Frame, question: &str, task: &Task) {
     render_confirm_box(frame, question, " Approve ", &crate::model::plain(&task.title, 400), GREEN);
@@ -1402,12 +1438,12 @@ fn render_approve(frame: &mut Frame, question: &str, task: &Task) {
 
 /// The box over marked cards at gates: `approve 3 cards? 2 plans · 1 ship`, up to five of them by short id and
 /// title (machine text, so plain), then the yes / no chips.
-fn render_approve_many(frame: &mut Frame, app: &App, ids: &[String]) {
+fn render_approve_many(frame: &mut Frame, app: &App, ids: &[(String, &'static str)], question: &str) {
     const LISTED: usize = 5;
     let width = frame.area().width.saturating_sub(4).clamp(20, 68);
     let room = (width as usize).saturating_sub(6);
-    let mut lines = vec![Line::from(Span::from(text::ellipsis(&app.approve_many_question(ids), room)).bold())];
-    for task in ids.iter().filter_map(|id| app.task(id)).take(LISTED) {
+    let mut lines = vec![Line::from(Span::from(text::ellipsis(question, room)).bold())];
+    for task in ids.iter().filter_map(|(id, _)| app.task(id)).take(LISTED) {
         let label = format!("#{}  {}", task.short_id(), crate::model::plain(&task.title, 400));
         lines.push(Line::from(Span::from(text::ellipsis(&label, room)).fg(c(SUBTEXT0))));
     }
