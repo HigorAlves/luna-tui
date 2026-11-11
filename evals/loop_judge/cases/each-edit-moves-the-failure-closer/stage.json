@@ -1,0 +1,36 @@
+{
+  "schema": 3,
+  "stage": "loop_judge",
+  "pack": "loop_judge",
+  "attempt": 1,
+  "task": {
+    "id": "loop-judge",
+    "title": "Loop judge",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "loop",
+      "loop": {
+        "digest": "turns=21 edit_churn=2 distinct_edit_files=3 error_outputs=3 test_runs=4 repeated_identical_failures=0 stagnation=0.00\nRecent actions (oldest->newest):\n 10: grep cartTotal\n 11: read cart.ts\n 12: edit cart.ts  [edits cart.ts]\n 13: $ pnpm test --filter cart  [SyntaxError#11aa22bb33]\n 14: edit cart.ts  [edits cart.ts]\n 15: $ pnpm test --filter cart  [TypeError#44cc55dd66]\n 16: edit money.ts  [edits money.ts]\n 17: $ pnpm test --filter cart  [AssertionError#77ee88ff99]\n 18: read cart.test.ts\n 19: edit totals.ts  [edits totals.ts]\n 20: $ pnpm test --filter cart",
+        "pack": "implementing",
+        "calls": 21
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

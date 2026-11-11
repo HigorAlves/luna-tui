@@ -462,6 +462,15 @@ describe("Build's tests step", () => {
     expect(result.detail).toMatchObject({ testsStep: { status: "skipped", why: "holdout_cases" } });
   });
 
+  it("keeps the cache writes when it adds the runs' tokens", async () => {
+    const f = fakes([tagged("S1")], {
+      runWriter: async () => ({ outcome: "pass", run: { inputCommit: "base0" }, detail: { scenarioReds: { S1: "FAIL" } }, usage: { turns: 1, costUsd: 0.1, tokens: { input: 100, output: 20, cached: 3, cacheWrite5m: 60 } } }) as StageResult,
+      implement: async () => ({ outcome: "pass", usage: { turns: 1, costUsd: 0.1, tokens: { input: 1000, output: 200, cached: 4, cacheWrite5m: 10, cacheWrite1h: 500 } } }) as StageResult,
+    });
+    const result = await buildTestsStep(f.deps)(context([v2]));
+    expect(result.usage?.tokens).toEqual({ input: 1100, output: 220, cached: 7, cacheWrite5m: 70, cacheWrite1h: 500 });
+  });
+
   it("adds the writer's usage to the run's, so the budget counts the tests step's tokens and turns", async () => {
     const f = fakes([tagged("S1")], {
       runWriter: async () => ({ outcome: "pass", run: { inputCommit: "base0" }, detail: { scenarioReds: { S1: "FAIL" } }, usage: { turns: 4, costUsd: 0.25, tokens: { input: 100, output: 20 } } }) as StageResult,

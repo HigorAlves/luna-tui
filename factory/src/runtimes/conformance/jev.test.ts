@@ -29,7 +29,7 @@ const valid = {
   archive_reason: { type: "choice", choice: "none", confidence: 0.9, probabilities: {} },
 };
 
-conformance("jev", "jev", (script) => jevRuntime(() => typesafeTransport(() => scriptedClient(script))), { resetsAt: false, schemaIssue: true, tools: false, text: false, delegate: false }, {
+conformance("jev", "jev", (script) => jevRuntime(() => typesafeTransport(() => scriptedClient(script))), { resetsAt: false, schemaIssue: true, tools: false, text: false, delegate: false, economy: false }, {
   table: { pack, valid, expected: fromJev(pack.questions, valid), off: { ...valid, kind: { type: "choice", choice: "epic", confidence: 0.9, probabilities: {} } } },
 });
 
@@ -48,7 +48,7 @@ const decided = {
   archive_reason: { type: "choice", choice: "none", probabilities: { none: 0.9, stale: 0.1 } },
 };
 
-conformance("jev (gateway)", "jev", (script) => jevRuntime(() => gatewayTransport(scriptedDecide(script))), { resetsAt: false, schemaIssue: true, tools: false, text: false, delegate: false }, {
+conformance("jev (gateway)", "jev", (script) => jevRuntime(() => gatewayTransport(scriptedDecide(script))), { resetsAt: false, schemaIssue: true, tools: false, text: false, delegate: false, economy: false }, {
   table: { pack, valid: decided, expected: fromDecide(pack.questions, decided), off: { ...decided, kind: { type: "choice", choice: "epic", probabilities: { epic: 0.9 } } } },
 });
 

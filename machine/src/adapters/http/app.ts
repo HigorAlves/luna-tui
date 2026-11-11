@@ -53,7 +53,11 @@ import {
   UpdateTaskInput,
   type RepoHealth,
 } from "@hardness/contracts";
+import { EconomyApproveInput, type EconomyConfig, EconomyRepoInput, EconomyRestoreInput } from "@hardness/contracts";
+import { isAbsolute } from "node:path";
 import { type Context, Hono } from "hono";
+import type { Economy } from "../../application/economy.ts";
+import { economyMetrics } from "../../domain/economy/metrics.ts";
 import { type Backlog, BacklogItemNotFoundError, NotSchedulableError } from "../../application/backlog.ts";
 import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
@@ -108,6 +112,8 @@ export interface AppDeps {
   repoHealth?: () => Promise<RepoHealth[]>;
   /** Approves a base for a repository (refused unless it is the one in the repository's luna.yaml on the user's checkout); absent, `POST /repos/base/approve` is absent. */
   approveBase?: (repo: string, base: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** The token economy (RFC 0007) with the repositories the machine knows and each one's `economy` policy; absent (`MACHINE_ECONOMY=off`), the `/economy` routes and the metrics' `economy` are absent. */
+  economy?: { port: Economy; knownRepos: () => Promise<string[]>; configOf: (repo: string) => Promise<EconomyConfig> };
   db: DataSource;
   pipeline: Pipeline;
   bus: Bus;
@@ -192,7 +198,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -317,6 +323,37 @@ export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog,
     });
   }
 
+  if (economy) {
+    /** A checkout the machine knows, named by its absolute path: anything else is a 400. */
+    const known = async (repo: string): Promise<string> => {
+      if (!isAbsolute(repo)) throw new BadRequest("repo must be an absolute path");
+      if (!(await economy.knownRepos()).includes(repo)) throw new BadRequest("the machine does not know that repository");
+      return repo;
+    };
+    app.get("/economy", async (c) => {
+      const repo = await known(EconomyRepoInput.parse({ repo: c.req.query("repo") }).repo);
+      return c.json(await economy.port.status(repo, (await economy.configOf(repo)).guard.envelope_min_samples));
+    });
+    app.post("/economy/facts/:id/drop", async (c) => {
+      const { repo } = await body(c, EconomyRepoInput);
+      return c.json({ dropped: await economy.port.dropFact(await known(repo), c.req.param("id")) });
+    });
+    app.post("/economy/mask/approve", async (c) => {
+      const { repo, pack } = await body(c, EconomyApproveInput);
+      return c.json({ approved: await economy.port.approveMask(await known(repo), pack) });
+    });
+    app.post("/economy/mask/restore", async (c) => {
+      const { repo, pack, unit } = await body(c, EconomyRestoreInput);
+      return c.json({ restored: await economy.port.restore(await known(repo), pack, unit) });
+    });
+    // The runs already on disk are folded once; a second call finds none.
+    app.post("/economy/import", async (c) => {
+      const { repo } = await body(c, EconomyRepoInput);
+      await known(repo);
+      return c.json({ runs: await economy.port.importRuns(repo, await economy.configOf(repo)) });
+    });
+  }
+
   app.get("/metrics", async (c) => {
     let since: Date;
     try {
@@ -329,15 +366,22 @@ export function createApp({ repoHealth, approveBase, db, pipeline, bus, backlog,
     const groupBy = c.req.query("groupBy");
     if (groupBy !== undefined && !(METRICS_GROUP_BY as readonly string[]).includes(groupBy)) throw new BadRequest(`groupBy must be one of ${METRICS_GROUP_BY.join(", ")}, got "${groupBy}"`);
     const repo = c.req.query("repo");
-    return c.json(
-      await computeMetrics(db, {
-        since,
-        slots: pipeline.slots,
-        budget,
-        ...(repo !== undefined ? { repo: repo === "" ? null : repo } : {}),
-        ...(groupBy !== undefined ? { groupBy: groupBy as MetricsGroupBy } : {}),
-      }),
-    );
+    const metrics = await computeMetrics(db, {
+      since,
+      slots: pipeline.slots,
+      budget,
+      ...(repo !== undefined ? { repo: repo === "" ? null : repo } : {}),
+      ...(groupBy !== undefined ? { groupBy: groupBy as MetricsGroupBy } : {}),
+    });
+    // The economy's numbers come from its own files, never from Postgres: one repository's, or every known one's added up.
+    // A `repo` the machine does not know gets none: its path is the client's, and the policy for it would be read from that host path.
+    const knownRepos = economy && repo !== "" ? await economy.knownRepos() : [];
+    if (economy && repo !== "" && (repo === undefined || knownRepos.includes(repo))) {
+      const repos = repo !== undefined ? [repo] : knownRepos;
+      const statuses = await Promise.all(repos.map(async (r) => economy.port.status(r, (await economy.configOf(r)).guard.envelope_min_samples)));
+      return c.json({ ...metrics, economy: economyMetrics(statuses) });
+    }
+    return c.json(metrics);
   });
 
   app.get("/tasks", async (c) => {

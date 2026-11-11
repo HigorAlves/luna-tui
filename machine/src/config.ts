@@ -57,6 +57,8 @@ export interface Config {
   publicUrl: string | null;
   /** Keep what the person changed or approved in the plan, under the state dir, for evals. `MACHINE_GROUND_TRUTH=off` stops it. */
   groundTruth: boolean;
+  /** Fold each run into per-repository facts and tool use, and hand the next run its guard (RFC 0007). `MACHINE_ECONOMY=off` stops it. */
+  economy: boolean;
   /** Keep each decision pack call's context, answer and verdicts under the state dir, for evals (`MACHINE_DECISIONS=off` stops it) and for how many days (`MACHINE_DECISIONS_RETENTION_DAYS`, 365; 0 keeps them) and up to how many megabytes (`MACHINE_DECISIONS_MAX_MB`, 4096; 0 for no cap). */
   decisions: { enabled: boolean; retentionDays: number; maxMb: number };
   /** A Slack bot token and channel: one thread per task is opened there. Both or neither. */
@@ -426,6 +428,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     threadReplies: env.MACHINE_THREAD_REPLIES !== "off",
     publicUrl: publicUrlOf(env.MACHINE_PUBLIC_URL),
     groundTruth: env.MACHINE_GROUND_TRUTH !== "off",
+    economy: env.MACHINE_ECONOMY !== "off",
     decisions: { enabled: env.MACHINE_DECISIONS !== "off", retentionDays: decisionRetentionDays, maxMb: decisionMaxMb },
     slack: slackToken === "" ? null : { token: slackToken, channel: slackChannel },
     slackInbox: {

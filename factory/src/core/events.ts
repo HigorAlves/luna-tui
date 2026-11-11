@@ -1,6 +1,6 @@
 // How a runtime reports a run: it emits RunEvents (contracts/src/events.ts) and core prints the
 // transcript from them (transcript.ts) and writes them to /out/events.jsonl (output.ts).
-import type { RunEvent } from "@hardness/contracts";
+import type { Observation, RunEvent } from "@hardness/contracts";
 
 import type { GuardDecision } from "./guards.ts";
 import { callTarget } from "./render.ts";
@@ -23,6 +23,7 @@ export class CallJoin {
   private readonly decisions = new Map<string, Call & { decision: GuardDecision }>();
   private readonly emitted = new Set<string>();
   private readonly names = new Map<string, string>();
+  private readonly observations = new Map<string, Observation>();
   private readonly emit: Emit;
   private readonly guarded: (tool: string) => boolean;
 
@@ -48,11 +49,19 @@ export class CallJoin {
     else if (!this.emitted.has(id)) this.decisions.set(id, { tool, input: asInput(input), decision });
   }
 
+  /** The economy session's reading of a call's result. It is put on the call's `tool_result`, so it has to
+   *  arrive before `settled`: the SDK runs its post-tool hooks before it shows the result. */
+  observed(id: string, observation: Observation | undefined): void {
+    if (observation !== undefined) this.observations.set(id, observation);
+  }
+
   /** The call ended; a call still waiting on its guard is taken as allowed, since it ran. */
   settled(id: string, ok: boolean, error?: string): void {
     const waiting = this.requests.get(id);
     if (waiting) this.call(id, waiting, { allow: true });
-    this.emit({ kind: "tool_result", payload: { id, tool: this.names.get(id) ?? "call", ok, ...(error !== undefined && { error }) } });
+    const observation = this.observations.get(id);
+    this.observations.delete(id);
+    this.emit({ kind: "tool_result", payload: { id, tool: this.names.get(id) ?? "call", ok, ...(error !== undefined && { error }), ...(observation !== undefined && { observation }) } });
   }
 
   /** Emits every call still waiting: a request as allowed, a decision the stream never showed as decided. */

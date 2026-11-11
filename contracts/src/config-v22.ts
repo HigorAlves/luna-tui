@@ -4,6 +4,7 @@
 // `ship.merge.commit_template`) are stored as opaque text; the machine runs the e2e ones in a container, never on the host.
 import { z } from "zod";
 
+import type { EconomyConfig } from "./economy.ts";
 import { hostPatternProblem, secretNameProblem, urlPatternProblem } from "./egress.ts";
 
 const unit = z.number().min(0).max(1);
@@ -107,6 +108,16 @@ export const FactoryConfigInput = {
   }).optional(),
   /** What the machine keeps for this repository: it can only lower what the machine's own switches allow. `full` traces is not a value a repository can write. */
   learning: section({ records: z.boolean().optional(), context: z.enum(["full", "answers"]).optional(), truth: z.boolean().optional(), traces: z.enum(["off", "metadata", "host"]).optional() }).optional(),
+  /** The token economy (RFC 0007): the loop guard, the facts learned per repository, the tool pruning. */
+  economy: section({
+    loop_guard: z.enum(["on", "off"]).optional(),
+    facts: z.enum(["on", "free", "off"]).optional(),
+    tool_prune: z.enum(["propose", "off"]).optional(),
+    propose_every: z.number().int().min(1).max(100).optional(),
+    promote_cards: z.number().int().min(1).max(100).optional(),
+    guard: section({ judge_confidence: unit.optional(), redirects: count(3).optional(), backstop_mult: z.number().min(1).max(10).optional(), envelope_min_samples: z.number().int().min(1).max(100).optional() }).optional(),
+    prune: section({ runs: z.number().int().min(1).max(500).optional(), min_cards: z.number().int().min(1).max(100).optional(), cards: z.number().int().min(1).max(100).optional() }).optional(),
+  }).optional(),
   ship: section({
     preview: z.enum(["off", "on"]).optional(),
     auto_merge: z.enum(["off", "low", "medium_when_review_required", "medium"]).optional(),
@@ -142,6 +153,7 @@ export interface FactoryConfig {
   sandbox: { cpu: number; memory_gb: number; keep_hours: number; egress: { allow: string[]; registries: "install" | "always" }; install: { run: "on" | "off"; scripts: "off" | "on" }; image: { base: string | null } };
   verify: { coverage_drop_max: number; mutation: { command: string | null; min_score: number }; build_rounds: number; e2e_rounds: number; ci_rounds: number; env_flake_retries: number; ci_flaky_reruns: number; auto_rebase: number; e2e: { deploy: { command: string | null; url_pattern: string | null; health_check: string; timeout_minutes: number; secrets: string[] }; start: { command: string | null; port: number; ready: string; ready_timeout_s: number; secrets: string[] }; seed: { command: string | null; secrets: string[] } } };
   evidence: { video_budget_s: number; regenerate: number; tts: { voice: string | null; language: string | null }; storage: "release_asset" | "local"; retention_days: number };
+  economy: EconomyConfig;
   ship: { preview: "off" | "on"; auto_merge: "off" | "low" | "medium_when_review_required" | "medium"; merge: { method: "squash" | "merge" | "rebase"; queue: boolean; delete_branch: boolean; commit_template: string | null }; release_owners: string[]; stale_days: number; sla: { reminder_days: number; escalate_days: number }; poll_minutes: number };
 }
 
@@ -162,6 +174,7 @@ export const FACTORY_DEFAULTS: FactoryConfig = {
   sandbox: { cpu: 2, memory_gb: 4, keep_hours: 24, egress: { allow: [], registries: "always" }, install: { run: "on", scripts: "off" }, image: { base: null } },
   verify: { coverage_drop_max: 0.5, mutation: { command: null, min_score: 0.6 }, build_rounds: 1, e2e_rounds: 3, ci_rounds: 3, env_flake_retries: 1, ci_flaky_reruns: 1, auto_rebase: 1, e2e: { deploy: { command: null, url_pattern: null, health_check: "/", timeout_minutes: 15, secrets: [] }, start: { command: null, port: 3000, ready: "/", ready_timeout_s: 120, secrets: [] }, seed: { command: null, secrets: [] } } },
   evidence: { video_budget_s: 240, regenerate: 1, tts: { voice: null, language: null }, storage: "release_asset", retention_days: 180 },
+  economy: { loop_guard: "on", facts: "on", tool_prune: "propose", propose_every: 3, promote_cards: 5, guard: { judge_confidence: 0.7, redirects: 1, backstop_mult: 2.5, envelope_min_samples: 5 }, prune: { runs: 10, min_cards: 2, cards: 5 } },
   ship: { preview: "off", auto_merge: "medium_when_review_required", merge: { method: "squash", queue: true, delete_branch: true, commit_template: null }, release_owners: [], stale_days: 14, sla: { reminder_days: 2, escalate_days: 5 }, poll_minutes: 5 },
 };
 
@@ -188,6 +201,9 @@ export const CONSUMED_FROM: Readonly<Record<string, number>> = {
   "evidence.video_budget_s": 12, "evidence.regenerate": 12, "evidence.tts.voice": 12, "evidence.tts.language": 12, "evidence.storage": 12, "evidence.retention_days": 12,
   "ship.preview": 12, "ship.auto_merge": 13, "ship.merge.method": 13, "ship.merge.queue": 13, "ship.merge.delete_branch": 13, "ship.merge.commit_template": 13,
   "learning.records": 18, "learning.context": 18, "learning.truth": 18, "learning.traces": 18,
+  "economy.loop_guard": 19, "economy.facts": 19, "economy.tool_prune": 19, "economy.propose_every": 19, "economy.promote_cards": 19,
+  "economy.guard.judge_confidence": 19, "economy.guard.redirects": 19, "economy.guard.backstop_mult": 19, "economy.guard.envelope_min_samples": 19,
+  "economy.prune.runs": 19, "economy.prune.min_cards": 19, "economy.prune.cards": 19,
   "ship.release_owners": 13, "ship.stale_days": 8, "ship.sla.reminder_days": 13, "ship.sla.escalate_days": 13, "ship.poll_minutes": 13,
 };
 

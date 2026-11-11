@@ -15,6 +15,13 @@ describe("decideEscalation", () => {
     expect(asked).toEqual([]);
   });
 
+  it("tells the decision the loop guard stopped the run, as one line of facts", async () => {
+    const asked: Array<Record<string, any>> = [];
+    const decide: Decide = async (_p, check) => (asked.push(check as never), choice("too_complex", 0.9));
+    await decideEscalation({ ...base, decide, facts: { loopGuard: { cause: "the same test fails after each edit", failure: "abc1234567", calls: 31 } } });
+    expect(asked[0]!.escalation.facts).toContain("the loop guard stopped the run: the same test fails after each edit after 31 calls");
+  });
+
   it("decides a branch the container moved by fact: head_moved, no model asked", async () => {
     const asked: unknown[] = [];
     const decide: Decide = async (...args) => (asked.push(args), choice("flaky_tests", 0.99));

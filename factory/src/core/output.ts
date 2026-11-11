@@ -1,7 +1,7 @@
 // What a stage leaves behind: /out/result.json (the StageOutput contract), /out/events.jsonl
 // and the artifact index over /out/files/**. One function, called however the run ended, so
 // the machine always finds a result.
-import type { Ledger, Pack, RunEvent, RunInfo, StageArtifact, StageOutcome, StageOutput } from "@hardness/contracts";
+import { LOOP_STUCK, type Ledger, type Pack, type RunEvent, type RunInfo, type StageArtifact, type StageOutcome, type StageOutput } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
@@ -121,7 +121,7 @@ export function settle(run: RunOutcome, pack: Pack): RunOutcome {
     const text = settled.text.trim();
     settled.error = text ? `no answer the ${pack.id} schema accepts: the run ended with text, not a structured answer: ${text.slice(0, 200)}` : "no structured output";
   }
-  if (settled.error && !settled.error.startsWith(BUDGET_SPENT) && /usage limit|rate limit/i.test(settled.error)) settled.rateLimited = true;
+  if (settled.error && !settled.error.startsWith(BUDGET_SPENT) && !settled.error.startsWith(LOOP_STUCK) && /usage limit|rate limit/i.test(settled.error)) settled.rateLimited = true;
   return settled;
 }
 

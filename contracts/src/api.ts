@@ -3,6 +3,7 @@
 import { z } from "zod";
 
 import type { Column, TaskState } from "./index.ts";
+import type { Tokens } from "./economy.ts";
 import type { PrSnapshot } from "./github.ts";
 import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
@@ -51,10 +52,38 @@ export type RunInput = z.infer<typeof RunInput>;
 /** What `POST /runs` answers: the pack's answer, validated against its schema, and what the run cost. */
 export interface RunResult {
   answer: Record<string, unknown>;
-  usage: { model: string; engine: EngineId; turns: number; durationMs: number; costUsd: number | null };
+  usage: { model: string; engine: EngineId; turns: number; durationMs: number; costUsd: number | null; /** The runtime's own count when the run reported one (the economy prices its overhead by it). Host use. */ tokens?: Tokens | null };
   /** The decision record this call left (a decision pack with records on), so a later fact can name it. Host use. */
   recordId?: string;
 }
+
+/** `GET /economy?repo=`, and the body of the economy's POST routes: the repository is an absolute path of a checkout the machine knows. */
+export const EconomyRepoInput = z.object({ repo: z.string().trim().min(1) });
+export type EconomyRepoInput = z.infer<typeof EconomyRepoInput>;
+
+/** `POST /economy/mask/approve`: approve the tools proposed for the pack. */
+export const EconomyApproveInput = EconomyRepoInput.extend({ pack: PackId });
+export type EconomyApproveInput = z.infer<typeof EconomyApproveInput>;
+
+/** `POST /economy/mask/restore`: bring a unit of the pack back (`web`, `agent`, `skill:<name>`, `luna:<tool>`). */
+export const EconomyRestoreInput = EconomyApproveInput.extend({ unit: z.string().trim().min(1).max(100) });
+export type EconomyRestoreInput = z.infer<typeof EconomyRestoreInput>;
+
+/** What `POST /economy/facts/:id/drop` answers: false for a fact id the repository does not hold. */
+export const EconomyDropped = z.object({ dropped: z.boolean() });
+export type EconomyDropped = z.infer<typeof EconomyDropped>;
+
+/** What `POST /economy/mask/approve` answers: false when the pack has no proposal. */
+export const EconomyApproved = z.object({ approved: z.boolean() });
+export type EconomyApproved = z.infer<typeof EconomyApproved>;
+
+/** What `POST /economy/mask/restore` answers: false for a unit the pack does not have. */
+export const EconomyRestored = z.object({ restored: z.boolean() });
+export type EconomyRestored = z.infer<typeof EconomyRestored>;
+
+/** What `POST /economy/import` answers: the runs it folded (0 on a second call). */
+export const EconomyImported = z.object({ runs: z.number().int().nonnegative() });
+export type EconomyImported = z.infer<typeof EconomyImported>;
 
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
 export const SetupRepoInput = z.object({ repoPath: z.string().trim().min(1) });
@@ -631,6 +660,19 @@ export interface FingerprintMetrics {
 export const METRICS_GROUP_BY = ["repo", "engine", "fingerprint"] as const;
 export type MetricsGroupBy = (typeof METRICS_GROUP_BY)[number];
 
+/** What a repository's token economy shows in `GET /metrics` (RFC 0007 §5): the cost in effective tokens, what the guard did lately, the facts it holds, the tools masked. */
+export interface EconomyMetrics {
+  effective: { exec: number; overhead: number };
+  overheadShare: number;
+  /** Overhead runs that reported no tokens: `effective.overhead` is a floor while this is above 0. */
+  overheadUnpriced: number;
+  /** The guard's redirects and stops among its last 50 events per repository. */
+  guard: { redirects: number; stops: number };
+  facts: { active: number; promoted: number };
+  /** Units (`web`, `agent`, `skill:<name>`, `luna:<tool>`) masked, summed over packs. */
+  masked: number;
+}
+
 export interface Metrics {
   since: string;
   until: string;
@@ -660,6 +702,8 @@ export interface Metrics {
   gates: { withinSla: number | null; answered: number; waitMs: Record<string, Stats> };
   /** The diagram's flow numbers; absent on a machine from before wave 8. */
   flow?: FlowMetrics;
+  /** The token economy: for `?repo=<path>` that repository's, else the sum over the repositories the machine knows. Absent with `MACHINE_ECONOMY=off`, and for `repo=` (tasks with no repository). */
+  economy?: EconomyMetrics;
   /** Share of tasks whose first run of the stage passed. */
   firstPassRate: {
     verifying: number | null;

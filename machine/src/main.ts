@@ -27,16 +27,22 @@ import { evidenceRetentionDays, sweepEvidenceStore } from "./application/evidenc
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { DecisionLog } from "./application/decision-log.ts";
+import { randomUUID } from "node:crypto";
+import { currentTask } from "./application/task-scope.ts";
 import { ownCalls } from "./application/pack-runs.ts";
+import { economy as economyOver, noEconomy, type Propose } from "./application/economy.ts";
+import { finishedRunsOf } from "./adapters/persistence/finished-runs.ts";
+import { fileStore as economyStore } from "./adapters/economy/store.ts";
+import { OVERHEAD_PACKS } from "./domain/economy/ledger.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
 import { priorityTruth, escalationTruthWriter, evidenceFeedbackWriter, groundTruthWriter, ticketTruthWriter } from "./application/ground-truth.ts";
-import { commitsSince, gitIdentity, headCommit } from "./adapters/git/worktree.ts";
+import { commitsSince, defaultBranchFile, gitIdentity, headCommit } from "./adapters/git/worktree.ts";
 import { ConfigProofs } from "./application/config-proofs.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
 import { loadCursor } from "./application/ship-cursor.ts";
 import { shipViewOf } from "./application/ship-view.ts";
-import { retroFactsOf } from "./application/stages/memory.ts";
+import { CONTEXT_FILE, retroFactsOf } from "./application/stages/memory.ts";
 import { shippedStream } from "./application/ship-loop.ts";
 import type { ShipDecide } from "./application/stages/ship-fixes.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
@@ -234,6 +240,10 @@ let pipeline: Pipeline;
 // A graph is built in the repository's own image, so the Graphify that built it is the one that reads it; the resolver is bound
 // once the stages (and with them the repository images) exist.
 let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = async () => config.runnerImage;
+// The token economy (RFC 0007): each repository's envelope and cost ledger, folded from every finished run. `MACHINE_ECONOMY=off` keeps none and hands no run anything.
+/** The fact proposer: the `fact_propose` pack, run through PackRuns once it exists (bound below). */
+const factProposer: { run: Propose | null } = { run: null };
+const economy = config.economy ? economyOver(economyStore(config.stateDir), (line) => console.warn(line), (repoPath) => finishedRunsOf(db, repoPath, config.stateDir), (repoPath) => defaultBranchFile(repoPath, [CONTEXT_FILE])) : noEconomy();
 const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
 let graphWatch: GraphWatch | null = null;
@@ -330,6 +340,7 @@ const { real, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe } = awa
   { search: async ({ repoPath, selfId, selfSource, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, selfSource, now: new Date() }) },
   // A stacked card's workspace: what it is cut from and the base it drops, read from the pipeline's rows when a run first makes it.
   stackDeps,
+  economy,
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -447,6 +458,8 @@ const channelClaims = new ChannelClaims(
 );
 
 pipeline = new Pipeline(db, runnerFor, {
+  economy,
+  proposer: factProposer,
   // A card that came from a ticket is split into child tickets, created only after a person approves the split gate (never by a clock or a retry).
   splitTickets: {
     knows: (task) => ticketMachine.ticketOfCard(task),
@@ -713,7 +726,18 @@ if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await ownCa
 if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await ownCalls(packRuns).run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
 if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await ownCalls(packRuns).run({ pack, context: { ship }, stage: "ship" }, "ship"));
 buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
-if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await ownCalls(packRuns).run({ pack, context: { check }, stage: "build" }, "build"));
+if (packRuns)
+  buildDecisions.decide = async (pack, check, repoPath) => {
+    const out = await ownCalls(packRuns).run({ pack, context: { check }, stage: "build" }, "build");
+    // The loop guard's judge and redirect writer are the economy's own cost: a ledger line beside the work's. A pack run's tokens are the runtime's own count; a run on a runtime that reports none keeps only its cost in dollars.
+    if (repoPath && OVERHEAD_PACKS.includes(pack)) void economy.recordOverhead({ repoPath, runId: out.recordId ?? randomUUID(), pack, cardId: currentTask() ?? "", tokens: out.usage.tokens ?? null, costUsd: out.usage.costUsd });
+    return tagged(out);
+  };
+// The proposer runs as an on-demand pack with no tools; the economy records its cost as overhead and validates what it answers.
+if (packRuns) factProposer.run = async (propose) => {
+  const out = await ownCalls(packRuns).run({ pack: "fact_propose", context: { propose } }, "economy");
+  return { answer: out.answer, runId: out.recordId ?? randomUUID(), costUsd: out.usage.costUsd, tokens: out.usage.tokens ?? null };
+};
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 /** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
 const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources), stackOf: (sources) => ticketMachine.stackOfSources(sources) });
@@ -776,6 +800,7 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
 };
 const app = createApp({
   approveBase,
+  ...(config.economy ? { economy: { port: economy, knownRepos, configOf: async (repo: string) => (await policies.for(repo)).factory.economy } } : {}),
   repoHealth: () =>
     repoHealthOf({
       repos: [],

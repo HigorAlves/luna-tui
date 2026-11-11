@@ -63,6 +63,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`. You need a `.env`
 | `MACHINE_DECISIONS_MAX_MB` | 4096 | when `decisions/` is over this many megabytes the prune removes records with no truth first, oldest first, never one younger than 7 days or of an open card (`0` for no cap). A card that runs end to end leaves 0.2 to 0.7 MB of records and about 50 KB of ground truth: at 5 cards a day a year is about 1 GB, at 20 a day about 4 GB |
 | `learning` in `luna.yaml` | all kept | a repository can keep less, never more: `records: false`, `context: answers`, `truth: false`, `traces: off`/`metadata`. `MACHINE_DECISIONS=off` and `MACHINE_TRACES=off` stay ceilings it cannot raise |
 | `MACHINE_GROUND_TRUTH` | on | set to `off` to stop the machine keeping each approved plan, with what the proposal said and what was edited before approval (and who approved), as `<MACHINE_STATE_DIR>/ground-truth/plan/<taskId>-<approvalId>.json`; the files stay on your machine, never in a repo, and feed later evals |
+| `MACHINE_ECONOMY` | on | set to `off` to turn the token economy off for the whole machine: no run gets a loop guard, learned facts or a tool mask, and the machine keeps no envelope, cost ledger, fact or digest. The `/economy` routes and the `economy` section of `/metrics` are then absent. The owner's switch: a repository's `economy` section can only turn a part off or tune it, and cannot turn on what this variable turned off (see [architecture](architecture.md#token-economy)) |
 | `MACHINE_SLACK_TOKEN` / `MACHINE_SLACK_CHANNEL` | unset | a bot token (`chat:write`) and a channel id: one Slack thread per task, for the cards of a repository whose `luna.yaml` sets `conversation.auto: on` and for no other (with it off, a card's updates are drafts in the thread it came from). Both or neither |
 | `MACHINE_SLACK_SCOPE` | `opted_in` | `all` restores the old reading of every mention, DM and channel; the default reads only a channel watched from the board, a channel a repository lists in `conversation.channels`, and a DM you opted in by its id. A machine variable on purpose: a repository's file cannot widen what the machine reads |
 | `MACHINE_SLACK_USER_TOKEN` | unset | your User OAuth Token (`xoxp-…`) from the internal app in `slack/manifest.json`: the inbox reads what you see and replies as you. Unset: the inbox is off and every Slack call says so |
@@ -227,6 +228,50 @@ Wave 9b reads the whole `plan` section. `plan.coverage_score_min` is the bar tha
 Wave 16 reads `tickets.*`. It reads whose tickets the ticket machine reads (`assignees`, `teams`). With neither, the repository's own JQL or label filter is the scope. It reads how long an edit settles (`debounce_seconds`). It also reads the clocks. **A default changed.** With the ticket machine on (the default), the Jira and GitHub intakes no longer comment on a ticket or make a card by themselves. They hold the ticket with its drafts until a person taps. `tickets.auto: on` in a repository's `luna.yaml` keeps the old behaviour. Only 3 and 10 days (the needs-info reminder and park) are the numbers of the diagram. The other clock defaults (24 hours, 2/7/30/90 days, 30 days) are the choice of this wave. `policyOf` reads the `tickets` and `backlog` sections of a repository's `luna.yaml` like every other section.
 
 Wave 15 reads `size.target_loc` (`[1000, 2000]`: what the decomposer aims at and a plan-gate flag). It also reads `size.hard_limit_loc` (2500: the machine does not build a plan over it, and Verify reports a diff over it). It reads `size.max_children` (8: also the deepest stack), `size.max_rounds` (3: decomposition rounds per split) and `size.depth` (2: the machine splits no child again). The machine reads them at each use from the repository's `luna.yaml`. `size_estimate` and `split_check` are among the decisions a repository can set bars for (`decisions:`). The questions of `size_estimate` are `est_loc`, `est_files` and `reviewable`. The questions of `split_check` are `covers`, `no_overlap` and `stand_alone`. Wave 14 reads `dedup.*`. This sets the bars of the duplicate check and how far back it compares closed cards. Wave 14 also reads `backlog.stale_days`. This sets how long a backlog item may go unassessed before the machine marks it stale. Wave 8 reads `plan.coverage_rounds` (the test designer's rounds) and `plan.plan_check_retries` (the planner's re-runs after a plan check). It reads `verify.env_flake_retries` (browser re-runs on an environment flake). It reads `verify.ci_flaky_reruns` and `verify.auto_rebase` (the ship monitor's CI re-runs and rebases). It reads `ship.stale_days` (how old a PR head may be before it blocks a merge). Wave 12 reads the `evidence` keys and `ship.preview`. Wave 13 reads `ship.auto_merge`. The default is `medium_when_review_required`. With it, the machine merges a Low or Medium risk PR only where the repo requires a review. It also needs an approval on the head commit from a collaborator who is not the machine. An unreadable rule means manual merge. A High-risk PR asks a release owner after readiness. Wave 13 also reads `ship.merge.method`, `queue`, `delete_branch` and `commit_template`. The `commit_template` has five placeholders and no model text. Wave 13 reads `ship.release_owners`. These are the people who may answer the release question. When the list is empty, the CODEOWNERS owners answer it. Wave 13 reads `ship.sla.reminder_days` (2) and `escalate_days` (5). These clocks remind and name the release owners. They never merge or archive. Wave 13 reads `ship.poll_minutes` (5). `MACHINE_SHIP_POLL_INTERVAL` overrides it. Wave 13 reads `ship.stale_days` (14) and `ship.preview`. `policy.auto_merge` is the deprecated spelling of `ship.auto_merge`. `freeze` windows stop every merge. An unreadable window counts as frozen. A freeze window also shows as a checklist item. The code fixes the checklist itself. These keys set its parameters and never its items. `event_class` is among the decisions a repository can set bars for. Its labels are `review_comment`, `ci_flaky`, `ci_real`, `conflict`, `base_moved`, `freeze`, `blocked_by_other_pr` and `noise`. It also has the two stacked-PR labels `parent_merged` and `parent_changed`. Wave 15 produces both from GitHub's facts, so the machine never asks `event_class` for them. This wave stores `verify.mutation.command`, `verify.e2e.deploy.command`, `verify.e2e.start.command` and `ship.merge.commit_template` as written. It never runs or renders them.
+
+### The `economy` section (the token economy)
+
+The `economy` section sets the loop guard, the learned facts and the tool pruning for the repository (RFC 0007, see [architecture](architecture.md#token-economy)). Every key is optional. Each key has the default shown. An unknown key makes the file invalid, and the machine names it.
+
+```yaml
+economy:
+  loop_guard: on          # on | off
+  facts: on               # on | free | off
+  tool_prune: propose     # propose | off
+  propose_every: 3        # closed cards between two runs of the fact proposer
+  promote_cards: 5        # distinct cards a fact needs before the retro can promote it
+  guard:
+    judge_confidence: 0.7
+    redirects: 1
+    backstop_mult: 2.5
+    envelope_min_samples: 5
+  prune:
+    runs: 10
+    min_cards: 2
+    cards: 5
+```
+
+| Key | Default | Bounds | What it does |
+|---|---|---|---|
+| `loop_guard` | `on` | `on`, `off` | `off` gives the run no loop guard. No redirect and no stop happen. |
+| `facts` | `on` | `on`, `free`, `off` | `on` states free facts and proposed facts to each run. `free` states free facts only and makes no model call. `off` learns and states none. |
+| `tool_prune` | `propose` | `propose`, `off` | `propose` collects tool evidence and proposes unused tools. `off` collects none, proposes none and applies no mask. |
+| `propose_every` | 3 | whole number, 1 to 100 | The fact proposer runs after this many closed cards of the repository. |
+| `promote_cards` | 5 | whole number, 1 to 100 | A fact needs this many distinct cards before the retro can offer it for the project context. |
+| `guard.judge_confidence` | 0.7 | 0 to 1 | The least confidence of a `loop_judge` verdict that the guard acts on. |
+| `guard.redirects` | 1 | whole number, 0 to 3 | The notes a run gets before the stop. `0` stops the run at the first stuck verdict. |
+| `guard.backstop_mult` | 2.5 | 1 to 10 | A stuck segment past the envelope times this number is stopped with no judge. |
+| `guard.envelope_min_samples` | 5 | whole number, 1 to 100 | The passing runs of a pack that the guard needs before it acts. Under it, the guard only records. |
+| `prune.runs` | 10 | whole number, 1 to 500 | The runs a tool must go unused over, across at least `prune.min_cards` cards, before the machine proposes it. |
+| `prune.min_cards` | 2 | whole number, 1 to 100 | The distinct cards that go with `prune.runs`. |
+| `prune.cards` | 5 | whole number, 1 to 100 | The machine also proposes a tool that went unused over this many distinct cards. |
+
+A repository can turn a mechanism off, or tune a number inside its bounds. A tuned number can make a mechanism more eager as well as less. A lower `guard.backstop_mult` or `guard.redirects` makes the guard stop sooner. A repository cannot do these things:
+
+- Turn on what `MACHINE_ECONOMY=off` turned off.
+- Change the fixed rules: the gate and stuck numbers, the 90th percentile and its margin of 1.25, and the fact lifecycle.
+- Add a tool or widen a pack's access. A mask only removes.
+- Approve a mask, drop a fact or restore a tool. A person does that through the routes in [api.md](api.md).
 
 ## GitHub gates
 

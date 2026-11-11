@@ -682,6 +682,16 @@ describe("planStage", () => {
     expect(result.run).toMatchObject({ containerId: "tests-container" });
   });
 
+  it("sums the sub-runs' tokens with every field, the cache writes too", async () => {
+    const withTokens = (result: StageResult, tokens: NonNullable<NonNullable<StageResult["usage"]>["tokens"]>): StageResult => ({ ...result, usage: { ...result.usage!, tokens } });
+    const { run } = setup({
+      plan: [withTokens(planned(), { input: 100, output: 10, cached: 5, cacheWrite5m: 40 })],
+      test_design: [withTokens(cased("no panic", "stays selected"), { input: 50, output: 5, cached: 1, cacheWrite1h: 7 })],
+    });
+    const result = await run(context());
+    expect(result.usage?.tokens).toEqual({ input: 150, output: 15, cached: 6, cacheWrite5m: 40, cacheWrite1h: 7 });
+  });
+
   it("falls back to the ticket's criteria when the planner gave none", async () => {
     const { run } = setup({ plan: [planned({ criteria: undefined })], test_design: [cased("no panic")] });
     const result = await run(context());

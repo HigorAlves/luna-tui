@@ -140,6 +140,8 @@ export async function buildRealStages(
   cards?: AgentDeps["cards"],
   /** What a stacked card's workspace is cut from (`Pipeline.baseOf`) and the base it drops (`Pipeline.clearBase`). */
   stack?: { baseFor: NonNullable<AgentDeps["baseFor"]>; clearBase: NonNullable<AgentDeps["clearBase"]>; /** The checklist's and the merge rule's view of the parent. */ facts: NonNullable<ShipMonitorDeps["stack"]>["facts"]; defaultBranch: NonNullable<ShipMonitorDeps["stack"]>["defaultBranch"]; /** Whether another open card is stacked on a card (its branch is kept). */ hasChildren?: (id: string) => Promise<boolean> },
+  /** The token economy: what each run starts with; absent, a run gets none. */
+  economy?: AgentDeps["economy"],
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -292,6 +294,7 @@ export async function buildRealStages(
     policies,
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure, graphReady } : {}),
+    ...(economy ? { economy } : {}),
   };
   const verifyPack = (context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) =>
     runAgent(deps, context, "verifying", { ...(extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}), ...(extra?.coverage ? { coverage: extra.coverage } : {}), ...(extra?.image ? { image: extra.image } : {}) });
@@ -543,7 +546,9 @@ export async function buildRealStages(
     shipping: mergeRunner({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch, ...(stack.hasChildren ? { hasChildren: stack.hasChildren } : {}) } } : {}), policies, evidence: { load: evidenceDeps.load }, truth: truth ?? null, stateDir: config.stateDir, ...(graphs?.rebuild ? { onMerged: graphs.rebuild } : {}), pollMs: config.shipPoll.intervalMs ?? FACTORY_DEFAULTS.ship.poll_minutes * 60_000 }),
     // The retro, after the merge: its proposal waits at the same state for a person, and a card with nothing to learn closes by itself.
     reviewing_memory: memoryReviewRunner({
-      runPack: async (context, ship) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}) }),
+      runPack: async (context, ship, factCandidates) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}), ...(factCandidates?.length ? { factCandidates } : {}) }),
+      // The learned facts that earned a place in the project context: the retro names them, a person approves.
+      candidates: async (context) => (context.task.repoPath && economy ? economy.promotable(context.task.repoPath, (await policies.for(context.task.repoPath)).factory.economy) : []),
       stateDir: config.stateDir,
       ...(retroFacts ? { facts: retroFacts } : {}),
       // worth_learning binds late, with the other ship decisions.

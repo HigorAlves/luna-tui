@@ -3,10 +3,13 @@
 import { recordIdOf } from "../decision-truth.ts";
 import { type CheckContext, type DecisionOverrides, PACKS, type Verdict, applyPolicy } from "@hardness/contracts";
 
-export type CheckPack = "red_check" | "scope_check" | "escalation_reason" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy";
+export type CheckPack = "red_check" | "scope_check" | "escalation_reason" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "frame_privacy" | "loop_judge";
 
-/** Runs a decision pack on a check context and returns its answer; bound late, once PackRuns exists. */
-export type Decide = (pack: CheckPack, check: CheckContext, repoPath: string | null) => Promise<Record<string, unknown>>;
+/** What `Decide` runs: the decision packs on a check context, and the loop guard's redirect writer, an agent pack with no tools that reads the same context. */
+export type DecidePack = CheckPack | "loop_redirect";
+
+/** Runs a pack on a check context and returns its answer; bound late, once PackRuns exists. */
+export type Decide = (pack: DecidePack, check: CheckContext, repoPath: string | null) => Promise<Record<string, unknown>>;
 
 /** The pack's verdict over its answer; "skipped" when there is no decision to ask or it failed. */
 export async function judgeCheck(

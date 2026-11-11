@@ -52,6 +52,8 @@ import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 import type { CommitFact, PriorityTruthEntry } from "./ground-truth.ts";
 import { budgetRowsOf, buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
 import { DECIDED_REASONS, type DecidedEscalation, decideEscalation } from "./stages/escalation.ts";
+import { type Economy, type Propose, noEconomy } from "./economy.ts";
+import { type LoopStop, loopStop } from "../domain/economy/stop.ts";
 import { type Decide } from "./stages/check-decide.ts";
 import { withTask } from "./task-scope.ts";
 import { buildEntryOf } from "../domain/build-entry.ts";
@@ -224,6 +226,10 @@ export interface PipelineOptions {
   headOf?: (worktreePath: string) => Promise<string>;
   /** Runs the `escalation_reason` decision on a Build escalation; its `decide` is bound late and read at call time (null: the agent's own word stands). */
   escalationDecide?: { decide: Decide | null };
+  /** The token economy: folds each finished stage run into the repository's envelope and ledger; absent, nothing is kept. */
+  economy?: Economy;
+  /** Runs the fact_propose pack when a card closes; bound late (once PackRuns exists). Absent or null, no card asks for facts. */
+  proposer?: { run: Propose | null };
   /** Whether the repo already has a luna.yaml; a task on one without runs setup first. Tests pass a fake. */
   hasConfig?: (repoPath: string) => boolean;
   /** Resolves a card's repository, project, owners and history by script when it starts; absent, a card starts as it is. */
@@ -421,6 +427,8 @@ export class Pipeline {
   private readonly boardUrl: string | null;
   private readonly knownRepos: (() => Promise<string[]>) | null;
   private readonly escalationDecide: { decide: Decide | null };
+  private readonly economy: Economy;
+  private readonly proposer: { run: Propose | null } | undefined;
   private readonly escalationTruth: NonNullable<PipelineOptions["escalationTruth"]> | undefined;
   private readonly commitsSince: NonNullable<PipelineOptions["commitsSince"]> | undefined;
   private readonly headOf: PipelineOptions["headOf"];
@@ -481,6 +489,8 @@ export class Pipeline {
     this.store = new PgTaskStore(db);
     this.onEvent = options.onEvent ?? (() => {});
     this.escalationDecide = options.escalationDecide ?? { decide: null };
+    this.economy = options.economy ?? noEconomy();
+    this.proposer = options.proposer;
     this.escalationTruth = options.escalationTruth;
     this.commitsSince = options.commitsSince;
     this.headOf = options.headOf;
@@ -2435,12 +2445,14 @@ export class Pipeline {
   }
 
   /** The memory review's proposal and whether the approval kept it, if the gate carried one. */
-  private async approvedRules(id: string): Promise<{ markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }> } | undefined> {
+  private async approvedRules(id: string): Promise<{ markdown: string; apply: boolean; proposals?: Array<{ kind: string; title: string; body: string }>; factPromotions?: Array<{ id: string; text: string; section: string }> } | undefined> {
     const gate = (await this.approvals(id)).filter((a) => a.kind === "reviewing_memory" && a.decision === "approved").at(-1);
-    const rules = (gate?.requested as { rules?: { markdown?: unknown; proposals?: unknown } } | undefined)?.rules;
-    if (!gate || typeof rules?.markdown !== "string" || rules.markdown.trim() === "") return undefined;
-    const proposals = Array.isArray(rules.proposals) ? (rules.proposals as Array<{ kind: string; title: string; body: string }>).filter((p) => typeof p?.kind === "string" && typeof p.title === "string" && typeof p.body === "string") : [];
-    return { markdown: rules.markdown, apply: gate.response?.applyRules !== false, ...(proposals.length > 0 ? { proposals } : {}) };
+    const rules = (gate?.requested as { rules?: { markdown?: unknown; proposals?: unknown; factPromotions?: unknown } } | undefined)?.rules;
+    const promotions = Array.isArray(rules?.factPromotions) ? (rules.factPromotions as Array<{ id: string; text: string; section: string }>).filter((p) => typeof p?.id === "string" && typeof p.text === "string" && typeof p.section === "string") : [];
+    const markdown = typeof rules?.markdown === "string" ? rules.markdown : "";
+    if (!gate || (markdown.trim() === "" && promotions.length === 0)) return undefined;
+    const proposals = Array.isArray(rules?.proposals) ? (rules.proposals as Array<{ kind: string; title: string; body: string }>).filter((p) => typeof p?.kind === "string" && typeof p.title === "string" && typeof p.body === "string") : [];
+    return { markdown, apply: gate.response?.applyRules !== false, ...(proposals.length > 0 ? { proposals } : {}), ...(promotions.length > 0 ? { factPromotions: promotions } : {}) };
   }
 
   /** A merged card's retro: the truth file for the eval loop (written whether or not a retro ran) and the graph misses the Build Report also declared. Returns how many misses were recorded. Never throws. */
@@ -2484,6 +2496,27 @@ export class Pipeline {
   private async close(id: string): Promise<void> {
     await this.closeOut(id);
     await this.releaseHeld();
+    // The proposer is a pack run of minutes: nothing waits on it, and it never throws.
+    const tick = this.factTick(id).finally(() => void this.factTicks.delete(tick));
+    this.factTicks.add(tick);
+  }
+
+  /** The fact-proposer ticks still running after closes. Tests wait on it; nothing else does. */
+  private readonly factTicks = new Set<Promise<void>>();
+  async factTicksDone(): Promise<void> {
+    while (this.factTicks.size > 0) await Promise.all([...this.factTicks]);
+  }
+
+  /** A card closed: the economy counts it and, on every few, asks the proposer for facts. Never throws. */
+  private async factTick(id: string): Promise<void> {
+    const propose = this.proposer?.run;
+    if (!propose) return;
+    try {
+      const repo = (await this.get(id)).repoPath;
+      if (repo) await this.economy.cardClosed(repo, id, (await this.policyFor(repo)).factory.economy, propose);
+    } catch (error) {
+      console.error(`could not tick the fact proposer for ${id}`, error);
+    }
   }
 
   private async closeOut(id: string): Promise<void> {
@@ -2496,6 +2529,9 @@ export class Pipeline {
         await this.store.updateTask(id, { worktreePath: null });
       }
       await this.log(id, "task.closed", { ...report });
+      // A fact the default branch's project context holds is no longer told to a run; one the retro's PR is waiting to land stays told, and is settled later.
+      if (report.promoted?.length && task.repoPath) await this.economy.promoted(task.repoPath, report.promoted);
+      if (report.pending?.ids.length && task.repoPath) await this.economy.pending(task.repoPath, report.pending.ids, report.pending.branch);
       // What the retro leaves behind, recorded where it is used (never written into prompts or rules here).
       const rulesWritten = report.steps.some((step) => step.step === "rules" && step.ok && !step.note.startsWith("skipped"));
       const misses = await this.recordRetroOutputs(id, task.repoPath, rulesWritten);
@@ -2684,6 +2720,8 @@ export class Pipeline {
         // A second scope red on the same card escalates with the reason the machine knows (undeclared_scope); the first got one fix pass.
         const secondScopeRed = stage === "implementing" && result.outcome === "fail" && result.detail?.scopeRed === true && (await this.scopeReds(id)) >= 2;
         const stuck = result.outcome === "fail" && !secondScopeRed ? await this.stuckReason(id, stage) : null;
+        // The loop guard ended the run: the same failure again would be the same loop, so it goes to a person (or the planner) now, not to a retry.
+        const stopped = result.outcome === "fail" ? loopStop(result.detail?.error, result.events ?? []) : null;
         // A test_change sends the task back to test_design; verifying's tests, the ones
         // implementing says are wrong, must not stay locked in the branch meanwhile.
         const revertFailed = stage === "implementing" && result.outcome === "test_change" ? await this.undoVerifyingTests(id) : null;
@@ -2691,8 +2729,8 @@ export class Pipeline {
           ? { type: "rate_limited" }
           : secondScopeRed
             ? { type: "stage_done", outcome: "escalated", reason: `the scope check failed twice on this card: ${typeof result.detail?.error === "string" ? result.detail.error.slice(0, 300) : "files or tests outside the plan"}`, escalation: "undeclared_scope" }
-          : (stuck ?? revertFailed)
-            ? { type: "stage_done", outcome: "escalated", reason: (stuck ?? revertFailed)! }
+          : (stuck ?? stopped ?? revertFailed)
+            ? { type: "stage_done", outcome: "escalated", reason: stuck ?? (stopped ? String(result.detail!.error) : revertFailed)! }
             : {
                 type: "stage_done",
                 outcome: result.outcome,
@@ -2711,7 +2749,7 @@ export class Pipeline {
                 ...(stage === "evidence" ? { preview: (await this.policyFor((await this.get(id)).repoPath)).factory.ship.preview === "on" } : {}),
               };
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.
-        const decided = stage === "implementing" ? await this.decideBuildEscalation(id, result, planned, { secondScopeRed, stuck: stuck ?? null }) : null;
+        const decided = stage === "implementing" ? await this.decideBuildEscalation(id, result, planned, { secondScopeRed, stuck: stuck ?? null, loopGuard: stopped }) : null;
         const headSha = decided && this.headOf ? await this.headOf((await this.get(id)).worktreePath ?? "").catch(() => null) : null;
         const next: PipelineEvent = decided ? { type: "stage_done", outcome: "escalated", reason: decided.reasonText, escalation: decided.decision.reason } : planned;
         const detail =
@@ -3044,7 +3082,7 @@ export class Pipeline {
 
   /** The decided reason of a Build escalation, or null when this move is not one. The move is previewed through the pure `transition` so that
    *  an escalation the machine makes (the run cap, the loop cap) is decided too. */
-  private async decideBuildEscalation(id: string, result: StageResult, planned: PipelineEvent, why: { secondScopeRed: boolean; stuck: string | null }): Promise<{ decision: DecidedEscalation; reasonText: string } | null> {
+  private async decideBuildEscalation(id: string, result: StageResult, planned: PipelineEvent, why: { secondScopeRed: boolean; stuck: string | null; loopGuard: LoopStop | null }): Promise<{ decision: DecidedEscalation; reasonText: string } | null> {
     if (planned.type !== "stage_done" || result.rateLimited) return null;
     const task = await this.get(id);
     if (task.route !== "feature") return null;
@@ -3072,6 +3110,7 @@ export class Pipeline {
         ...(why.secondScopeRed ? { scopeTwice: true } : {}),
         ...(detail.envBroken === true ? { envBroken: true } : {}),
         ...(detail.headMoved === true ? { headMoved: true } : {}),
+        ...(why.loopGuard ? { loopGuard: why.loopGuard } : {}),
         ...(budget ? { budget: { spent: String(budget.spent), numbers: `${String(budget.iterations)} of ${limits.max_iterations} iterations, ${budget.tokens === null ? "tokens not counted" : `${String(budget.tokens)} of ${limits.max_tokens} tokens`}, ${String(budget.minutes)} of ${limits.max_minutes} minutes`, consecutiveReds: Number(budget.consecutiveReds ?? 0) } } : {}),
         notes: [...(why.stuck ? ["the stuck detector stopped the same failure repeating"] : []), ...(planned.outcome !== "escalated" ? [`the machine escalated: ${preview.reason ?? "a cap was reached"}`] : [])],
       },
