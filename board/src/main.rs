@@ -19,9 +19,16 @@ mod intake;
 mod keys;
 mod model;
 mod notify;
+mod open;
+mod pages;
 mod pulls;
+mod reference;
 mod slack;
 mod store;
+mod text;
+mod theme;
+#[cfg(test)]
+mod testkit;
 mod ui;
 mod vim;
 

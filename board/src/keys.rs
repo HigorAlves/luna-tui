@@ -8,7 +8,7 @@
 //! that never hold at once, so the sheet shows the one that applies and the footer says
 //! `a approve the plan` instead of `a advance`.
 
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, View};
 use crate::detail::Section;
 use crate::model::Task;
 use crate::pulls::{self, PrKey};
@@ -171,6 +171,8 @@ pub struct Binding {
     pub weight: u8,
     /// The `:` form, when there is one.
     pub command: Option<&'static str>,
+    /// What the board calls it when that differs: `a` at a gate opens the task there, and approves inside it.
+    pub on_board: Option<&'static str>,
 }
 
 impl std::fmt::Debug for Binding {
@@ -268,6 +270,29 @@ pub(crate) fn open_ship_approval(app: &App, t: &Task) -> bool {
     t.state == "awaiting_ship" && t.waiting_on_you && app.detail.as_ref().filter(|d| d.task.id == t.id).and_then(|d| d.open_approval()).is_some_and(|a| a.is_ship_approval())
 }
 
+/// Why `e` has nothing to edit on this card, when it has not: a split proposes new cards, a reply or an archive has no plan, and the release question is
+/// asked of a PR that is already open. The ticket editor would open there and change nothing that matters.
+pub(crate) fn edit_blocked(app: &App, t: &Task) -> Option<&'static str> {
+    let outcome = app.detail.as_ref().filter(|d| d.task.id == t.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome());
+    if t.state == "awaiting_approval" && matches!(outcome, Some("split" | "split_failed")) {
+        Some("a split has no plan to edit; :whole keeps it one card")
+    } else if t.state == "awaiting_approval" && matches!(outcome, Some("conversation" | "archive")) {
+        Some("a reply or an archive has nothing to edit")
+    } else if open_ship_approval(app, t) {
+        Some("the release question has nothing to edit")
+    } else {
+        None
+    }
+}
+
+/// `e` in the task view: `On` where something can be edited.
+fn edit_key(app: &App) -> Avail {
+    match task_of(app) {
+        None => Avail::Off("no ticket selected"),
+        Some(t) => edit_blocked(app, t).map_or(Avail::On, Avail::Off),
+    }
+}
+
 /// Whether the ticket is at a gate. `awaiting_ship` and `reviewing_memory` also hold a running stage (the watch, the retro): they are gates only when the machine waits on you.
 pub(crate) fn at_gate(t: &Task) -> bool {
     GATE_STATES.contains(&t.state.as_str()) && (!matches!(t.state.as_str(), "awaiting_ship" | "reviewing_memory") || t.waiting_on_you)
@@ -276,6 +301,60 @@ pub(crate) fn at_gate(t: &Task) -> bool {
 /// Whether `task` waits at the plan stage's own gate (not triage's reply or archive): the only gate a plan is rejected at.
 pub(crate) fn rejectable(app: &App, task: &Task) -> bool {
     (task.state == "awaiting_approval" && app.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome()).is_none_or(|o| matches!(o, "split" | "split_failed"))) || open_ship_approval(app, task)
+}
+
+/// `o` in the task view: the evidence folder, the selected file (Diff), the PR (PR) or the linked issue, by section.
+fn open_key(app: &App) -> Avail {
+    if crate::open::opener().is_none() {
+        return Avail::Off("no opener on this system");
+    }
+    if app.detail_section == Section::Evidence && app.detail_rows() == 0 {
+        return Avail::Off("no evidence yet");
+    }
+    if app.detail_open_target().is_some() {
+        return Avail::On;
+    }
+    // Nothing of the section's own to open: `o` falls back to the linked issue, where the section has no rows of its own.
+    if app.detail_section.has_cursor() {
+        return Avail::Off("nothing to open here");
+    }
+    with_task(app, |t| if crate::app::issue_link(t).is_some() { Avail::On } else { Avail::Off("no issue linked") })
+}
+
+/// `i`: the linked issue (Jira or the source's) in the browser, from any section: `o` opens the evidence folder where there is one.
+fn open_issue_key(app: &App) -> Avail {
+    if crate::open::opener().is_none() {
+        return Avail::Off("no opener on this system");
+    }
+    with_task(app, |t| if crate::app::issue_link(t).is_some() { Avail::On } else { Avail::Off("no linked issue") })
+}
+
+/// `O`: the PR in the browser, from any section.
+fn open_pr_key(app: &App) -> Avail {
+    if crate::open::opener().is_none() {
+        return Avail::Off("no opener on this system");
+    }
+    match app.detail_pr_url() {
+        Some(_) => Avail::On,
+        None => Avail::Off("no PR yet"),
+    }
+}
+
+/// `enter` opens the file under the cursor in the Evidence section; in the others it closes the view, which is no offer.
+fn enter_key(app: &App) -> Avail {
+    if crate::open::opener().is_none() {
+        return Avail::Off("no opener on this system");
+    }
+    match app.detail_rows() {
+        _ if app.detail_section != Section::Evidence => Avail::Off("only in the Evidence section"),
+        0 => Avail::Off("no evidence yet"),
+        _ => Avail::On,
+    }
+}
+
+/// The jump keys: on while any ticket needs the person, the same definition as the header's count.
+pub(crate) fn someone_needs_you(app: &App) -> Avail {
+    if app.tasks.iter().any(|t| t.look().needs_person()) { Avail::On } else { Avail::Off("nothing needs you") }
 }
 
 fn with_task(app: &App, f: fn(&Task) -> Avail) -> Avail {
@@ -296,7 +375,7 @@ fn gate_is(app: &App, states: &[&str]) -> Avail {
 
 /// `On` at the plan gate: with `outcome` None the plan stage's own gate (or one whose detail is not
 /// loaded yet), with `Some(outcome)` the gate triage opened to confirm a reply or an archive in
-/// one click. `Hidden` anywhere else, so the three meanings of `a` there never show together.
+/// one yes. `Hidden` anywhere else, so the three meanings of `a` there never show together.
 fn plan_gate(app: &App, outcome: Option<&str>) -> Avail {
     let Some(task) = task_of(app) else { return Avail::Hidden };
     if task.state != "awaiting_approval" {
@@ -382,7 +461,12 @@ fn in_insert(app: &App) -> Avail {
 // ---------- the table ----------
 
 const fn b(keys: &'static str, label: &'static str, group: Group, scope: Scope, when: fn(&App) -> Avail, weight: u8) -> Binding {
-    Binding { keys, label, group, scope, when, weight, command: None }
+    Binding { keys, label, group, scope, when, weight, command: None, on_board: None }
+}
+
+/// A shared binding the board words differently: the key opens the task instead of acting at once.
+const fn opens_on_board(binding: Binding) -> Binding {
+    Binding { on_board: Some("open to approve"), ..binding }
 }
 
 const fn cmd(binding: Binding, command: &'static str) -> Binding {
@@ -393,18 +477,18 @@ const fn cmd(binding: Binding, command: &'static str) -> Binding {
 /// is set when the table is built.
 const SHARED: &[Binding] = &[
     cmd(b("a", "start", Group::Gate, Scope::Board, |app| gate_is(app, &["draft"]), 90), "start"),
-    b("a", "approve the setup", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_setup"]), 90),
+    opens_on_board(b("a", "approve the setup", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_setup"]), 90)),
     b("a", "answer triage's questions", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_answers"]), 90),
-    b("a", "approve the plan", Group::Gate, Scope::Board, |app| plan_gate(app, None), 90),
-    b("a", "approve the split", Group::Gate, Scope::Board, |app| plan_gate(app, Some("split")), 90),
-    b("a", "archive the ticket (one click)", Group::Gate, Scope::Board, |app| plan_gate(app, Some("archive")), 90),
-    b("a", "post the reply and close the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90),
-    b("a", "approve the tests", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_test_check"]), 90),
-    b("a", "ship: publish, watch the PR", Group::Gate, Scope::Board, |app| ship_gate(app, false), 90),
-    b("a", "ship: approve the release", Group::Gate, Scope::Board, |app| ship_gate(app, true), 90),
+    opens_on_board(b("a", "approve the plan", Group::Gate, Scope::Board, |app| plan_gate(app, None), 90)),
+    opens_on_board(b("a", "approve the split", Group::Gate, Scope::Board, |app| plan_gate(app, Some("split")), 90)),
+    opens_on_board(b("a", "archive the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("archive")), 90)),
+    opens_on_board(b("a", "post the reply and close the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90)),
+    opens_on_board(b("a", "approve the tests", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_test_check"]), 90)),
+    opens_on_board(b("a", "ship: publish, watch the PR", Group::Gate, Scope::Board, |app| ship_gate(app, false), 90)),
+    opens_on_board(b("a", "ship: approve the release", Group::Gate, Scope::Board, |app| ship_gate(app, true), 90)),
     b("a", "retry the escalation, with guidance", Group::Gate, Scope::Board, |app| gate_is(app, &["escalated"]), 90),
     b("a", "resume after the usage limit", Group::Gate, Scope::Board, |app| gate_is(app, &["paused_rate_limit"]), 90),
-    b("a", "approve the memory review", Group::Gate, Scope::Board, |app| gate_is(app, &["reviewing_memory"]), 90),
+    opens_on_board(b("a", "approve the memory review", Group::Gate, Scope::Board, |app| gate_is(app, &["reviewing_memory"]), 90)),
     b("a", "advance", Group::Gate, Scope::Board, advance_fallback, 90),
     b(
         "T",
@@ -547,13 +631,14 @@ const BOARD: &[Binding] = &[
     cmd(b("x -", "one slot fewer", Group::App, Scope::Board, on, 5), "slots"),
     Binding { scope: Scope::Board, keys: "x S", ..SHIP },
     // The ticket keys whose meaning is the board's own.
-    b("e", "edit the plan and the ticket", Group::Ticket, Scope::Board, |app| gate_is(app, &["awaiting_approval"]), 80),
+    b("e", "edit the plan and the ticket", Group::Ticket, Scope::Board, |app| if task_of(app).is_some_and(|t| edit_blocked(app, t).is_some()) { Avail::Hidden } else { gate_is(app, &["awaiting_approval"]) }, 80),
     b(
         "e",
         "edit title, description and criteria",
         Group::Ticket,
         Scope::Board,
         |app| match task_of(app) {
+            Some(t) if edit_blocked(app, t).is_some() => Avail::Hidden,
             Some(t) if t.state != "awaiting_approval" => Avail::On,
             Some(_) => Avail::Hidden,
             None => Avail::Off("no ticket selected"),
@@ -582,7 +667,8 @@ const BOARD: &[Binding] = &[
     b("gg", "first ticket in the column", Group::Move, Scope::Board, on, 10),
     b("G", "last ticket in the column", Group::Move, Scope::Board, on, 10),
     b("1-8", "jump to that column", Group::Move, Scope::Board, on, 10),
-    b("] / [", "next / previous ticket that needs you", Group::Move, Scope::Board, on, 15),
+    b("tab / shift+tab", "next / previous ticket that needs you", Group::Move, Scope::Board, someone_needs_you, 58),
+    b("] / [", "same as tab / shift+tab", Group::Move, Scope::Board, someone_needs_you, 15),
     cmd(b("enter", "open the ticket's workspace", Group::Move, Scope::Board, |app| with_task(app, |_| Avail::On), 75), "open"),
     // Filter & order.
     cmd(b("/", "filter by title, #id or repo", Group::Filter, Scope::Board, on, 65), "filter"),
@@ -613,7 +699,8 @@ const BOARD: &[Binding] = &[
     b(":", "command palette", Group::App, Scope::Board, on, 30),
     b("esc", "clear the filter and the marks", Group::App, Scope::Board, on, 20),
     cmd(b("?", "keys", Group::App, Scope::Board, on, 100), "help"),
-    cmd(b("q", "quit", Group::App, Scope::Board, on, 60), "q"),
+    cmd(b("q", "quit (asks if something is pending)", Group::App, Scope::Board, on, 60), "q"),
+    b("Q", "quit without asking", Group::App, Scope::Board, on, 5),
     // Commands: what `:` understands.
     cmd(b(":q", "quit", Group::Commands, Scope::Board, on, 0), "q"),
     cmd(b(":new <title>", "new ticket, then edit it in place", Group::Commands, Scope::Board, on, 0), "new"),
@@ -650,8 +737,11 @@ const BOARD: &[Binding] = &[
 
 const DETAIL: &[Binding] = &[
     SHIP,
-    b("e", "edit: the plan, the cases or the ticket", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 80),
-    b("o", "open: the file, the PR or the issue", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 50),
+    b("e", "edit: the plan, the cases or the ticket", Group::Ticket, Scope::Detail, edit_key, 80),
+    b("o", "open: the folder, file or PR", Group::Ticket, Scope::Detail, open_key, 50),
+    b("i", "open the issue", Group::Ticket, Scope::Detail, open_issue_key, 37),
+    b("O", "open the PR in the browser", Group::Ticket, Scope::Detail, open_pr_key, 38),
+    b("enter", "open the file here; close elsewhere", Group::Ticket, Scope::Detail, enter_key, 41),
     b("y", "Evidence Pack was useful", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.evidence.is_some() { Avail::On } else { Avail::Off("no Evidence Pack yet") }), 40),
     b("n", "Evidence Pack was not useful (note)", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.evidence.is_some() { Avail::On } else { Avail::Off("no Evidence Pack yet") }), 39),
     b(
@@ -659,18 +749,39 @@ const DETAIL: &[Binding] = &[
         "pick the selected stage's engine",
         Group::Ticket,
         Scope::Detail,
-        |app| if app.detail_section == Section::Engines { Avail::On } else { Avail::Off("only in the Engines section (9)") },
+        |app| if app.detail_section == Section::Engines { Avail::On } else { Avail::Off("only in the Engines section") },
         45,
     ),
     b("M", "close as a duplicate of another", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 40),
     b("U", "bring a closed duplicate back", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.merged_into.is_some() { Avail::On } else { Avail::Off("not merged into another ticket") }), 39),
     b("h / l", "previous / next section", Group::Move, Scope::Detail, on, 30),
     b("1-9", "jump to that section", Group::Move, Scope::Detail, on, 10),
-    b("j / k", "scroll, or pick a run / file", Group::Move, Scope::Detail, on, 28),
+    b(
+        "tab",
+        "focus the reference groups, and back",
+        Group::Move,
+        Scope::Detail,
+        |app| if app.detail_refs.has_groups() { Avail::On } else { Avail::Off("this section has no reference groups") },
+        29,
+    ),
+    b(
+        "space",
+        "fold or unfold the focused group",
+        Group::Move,
+        Scope::Detail,
+        |app| match (app.detail_refs.has_groups(), app.detail_refs.focus) {
+            (true, true) => Avail::On,
+            (true, false) => Avail::Off("tab first: focus the reference groups"),
+            (false, _) => Avail::Off("this section has no reference groups"),
+        },
+        24,
+    ),
+    b("j / k", "scroll, or pick a run / file / group", Group::Move, Scope::Detail, on, 28),
     b("J / K", "scroll a line where j / k pick", Group::Move, Scope::Detail, on, 10),
     b("ctrl+d / ctrl+u", "half a page", Group::Move, Scope::Detail, on, 10),
     b("+", "popup: most of the screen, or all", Group::Move, Scope::Detail, on, 26),
-    b("esc / q / enter", "close", Group::Move, Scope::Detail, on, 27),
+    b(":", "command palette: acts on this ticket", Group::App, Scope::Detail, on, 9),
+    b("esc / q", "close; esc leaves the reference first", Group::Move, Scope::Detail, on, 27),
     cmd(b("?", "keys", Group::App, Scope::Detail, on, 100), "help"),
 ];
 
@@ -862,6 +973,9 @@ const fn copy_into(rows: &[Binding], scope: Scope, except: &str, out: &mut [Bind
         let mut row = rows[j];
         if !str_eq(row.keys, except) {
             row.scope = scope;
+            if let (Scope::Board, Some(label)) = (scope, row.on_board) {
+                row.label = label;
+            }
             out[*at] = row;
             *at += 1;
         }
@@ -937,24 +1051,16 @@ pub fn active_scope(app: &App) -> Scope {
     if app.slack.as_ref().is_some_and(|s| s.watches.is_some()) {
         return Scope::Watches;
     }
-    if app.floor.is_some() {
-        Scope::Floor
-    } else if app.inbox.is_some() {
-        Scope::Inbox
-    } else if app.digest.is_some() {
-        Scope::Digest
-    } else if app.pulls.is_some() {
-        Scope::Pulls
-    } else if app.backlog.is_some() {
-        Scope::Backlog
-    } else if app.economy.is_some() {
-        Scope::Economy
-    } else if app.tickets.is_some() {
-        Scope::Tickets
-    } else if app.slack.is_some() {
-        Scope::Slack
-    } else {
-        Scope::Board
+    match app.active_view() {
+        Some(View::Floor) => Scope::Floor,
+        Some(View::Inbox) => Scope::Inbox,
+        Some(View::Digest) => Scope::Digest,
+        Some(View::Pulls) => Scope::Pulls,
+        Some(View::Backlog) => Scope::Backlog,
+        Some(View::Economy) => Scope::Economy,
+        Some(View::Tickets) => Scope::Tickets,
+        Some(View::Slack) => Scope::Slack,
+        None => Scope::Board,
     }
 }
 
@@ -981,6 +1087,188 @@ pub fn footer_keys(app: &App, scope: Scope, n: usize) -> Vec<&'static Binding> {
     found.sort_by_key(|b| std::cmp::Reverse(b.weight));
     found.truncate(n);
     found
+}
+
+/// Whether the task view offers `b` for this card right now. Everything `On` is a key that works,
+/// but three read as offers only where they mean something: `e` edits whatever waits at a gate (a
+/// running card's ticket is edited from the board's `x` menu), and `J / K` scroll a line only in the
+/// sections where `j / k` pick a row.
+fn detail_offered(app: &App, b: &Binding) -> bool {
+    match b.first() {
+        "e" => task_of(app).is_some_and(|t| at_gate(t) && edit_blocked(app, t).is_none()),
+        "J" => app.detail_section.has_cursor(),
+        "enter" => app.detail_section == Section::Evidence,
+        _ => true,
+    }
+}
+
+/// The task view's offered keys, heaviest first (ties keep table order). `?` and the way out are
+/// left to the footer's tail, and the menu chords and `:` commands are not keys you press.
+fn detail_keys(app: &App) -> Vec<&'static Binding> {
+    let mut found: Vec<&Binding> = bindings_for(app, Scope::Detail)
+        .into_iter()
+        .filter(|(b, avail)| avail.is_on() && b.menu_key().is_none() && b.group != Group::Commands && !matches!(b.first(), "?" | "esc") && detail_offered(app, b))
+        .map(|(b, _)| b)
+        .collect();
+    found.sort_by_key(|b| std::cmp::Reverse(b.weight));
+    found
+}
+
+/// A binding that acts on the card (answers its gate, edits it, stops its stage), as against one that moves.
+fn acts_on_card(b: &Binding) -> bool {
+    b.group == Group::Gate || matches!(b.first(), "e" | "X" | "C")
+}
+
+/// What the footer and the decision bar call a key: the label cut to the word they have room for
+/// (`approve the plan` is `approve`, `ship: publish, watch the PR` is `ship`).
+/// The word the board's footer gives `a`: what it does for the selected card (`open to approve` at a gate), else `advance`.
+pub fn board_a_label(app: &App) -> &'static str {
+    match bindings_for(app, Scope::Board).into_iter().find(|(b, avail)| b.first() == "a" && avail.is_on()) {
+        Some((b, _)) if b.on_board.is_some() => "open to approve",
+        _ => "advance",
+    }
+}
+
+pub fn terse_label(app: &App, b: &Binding) -> String {
+    match b.first() {
+        "h" => return "section".into(),
+        "1-9" => return "jump".into(),
+        "tab" => return "reference".into(),
+        "space" => return "fold".into(),
+        "j" => return if app.detail_section.has_cursor() { "pick" } else { "scroll" }.into(),
+        "J" => return "scroll".into(),
+        "ctrl+d" => return "page".into(),
+        "+" => return "size".into(),
+        ":" => return "command".into(),
+        "y" => return "useful".into(),
+        "n" => return "not useful".into(),
+        "M" => return "duplicate".into(),
+        "U" => return "restore".into(),
+        "E" => return "engine".into(),
+        "O" => return "PR".into(),
+        "enter" => return "open file".into(),
+        "A" => return "skip rules".into(),
+        "T" => return "correct record".into(),
+        "f" => return "watch".into(),
+        "w" => return "worktree".into(),
+        _ => {}
+    }
+    // At the release question `a` and `S` give the same answer, and the PR is already open: it is a release, not a ship.
+    let at_release = task_of(app).is_some_and(|t| open_ship_approval(app, t));
+    if b.label.starts_with("ship: approve the release") || (b.first() == "S" && at_release) {
+        return "release".into();
+    }
+    let head = b.label.split([':', ',']).next().unwrap_or(b.label).split(" (").next().unwrap_or(b.label);
+    if head.starts_with("send back") {
+        return "send back".into();
+    }
+    head.split(' ').next().unwrap_or(head).to_string()
+}
+
+/// A binding's keys as the bar and footer show them: `j/k`, `^d/^u`.
+pub fn terse_keys(b: &Binding) -> String {
+    b.short_keys().replace("ctrl+", "^")
+}
+
+/// Keys and labels, one entry per label (two keys that mean the same here show the first).
+fn terse_pairs(app: &App, keys: impl Iterator<Item = &'static Binding>) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for b in keys {
+        let label = terse_label(app, b);
+        if !out.iter().any(|(_, l)| *l == label) {
+            out.push((terse_keys(b), label));
+        }
+    }
+    out
+}
+
+/// The keys the decision bar offers on this card now, heaviest first: the task view's `On`
+/// bindings that act on the card. A running card with nothing to answer gets only what stops it.
+pub fn card_actions(app: &App) -> Vec<(String, String)> {
+    terse_pairs(app, detail_keys(app).into_iter().filter(|b| acts_on_card(b)))
+}
+
+/// What each key the bar offers does, `(keys, label)` in the registry's words and the bar's order: the pages that list what you can do read this.
+pub fn card_action_help(app: &App) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for b in detail_keys(app).into_iter().filter(|b| acts_on_card(b)) {
+        let keys = terse_keys(b);
+        if !out.iter().any(|(k, _)| *k == keys) {
+            out.push((keys, b.label.to_string()));
+        }
+    }
+    out
+}
+
+/// The task view's footer, in priority order: the same actions the bar offers (repeated, so a key the
+/// bar had no room for is still on screen), `o` to open, then the keys that move and `:`. The rest of
+/// the ticket's keys (delete, archive, the worktree, ...) stay in the sheet behind `?`: a footer that
+/// lists them crowds out scrolling. `?` and `esc` are not here: `ui` ends the footer with them,
+/// whatever the width.
+pub fn detail_footer(app: &App) -> Vec<(String, String)> {
+    terse_pairs(app, detail_keys(app).into_iter().filter(|b| acts_on_card(b) || b.group == Group::Move || matches!(b.first(), "o" | "O" | "enter" | ":")))
+}
+
+/// What a full-screen view's footer calls a key: the label cut to a word or two (`CI fix: an agent
+/// repairs ...` is `CI fix`, `poll Slack now` is `poll`), with a few overrides where the cut reads badly.
+fn view_label(app: &App, scope: Scope, b: &Binding) -> String {
+    let first = b.first();
+    if scope == Scope::Board {
+        match first {
+            "a" => return board_a_label(app).into(),
+            "tab" => return "next to do".into(),
+            "enter" => return "open task".into(),
+            "f" => return "watch tab".into(),
+            "x" => return "actions".into(),
+            "/" => return "filter".into(),
+            "n" => return "new".into(),
+            "=" => return "density".into(),
+            "q" => return "quit".into(),
+            "h" => return "column".into(),
+            "j" => return "ticket".into(),
+            "!" => return "needs you".into(),
+            "@" => return "this repo".into(),
+            "v" => return "mark".into(),
+            _ => {}
+        }
+    }
+    match first {
+        "tab" => return "next repo".into(),
+        "esc" => return "close".into(),
+        "j" => return "move".into(),
+        "h" => return "split".into(),
+        "1-5" | "1-6" => return "jump".into(),
+        "!" => return "priority up".into(),
+        "-" => return "priority down".into(),
+        "x" if b.label.starts_with("the same actions") => return "menu".into(),
+        _ => {}
+    }
+    let head = b.label.split([':', ',']).next().unwrap_or(b.label).split(" (").next().unwrap_or(b.label);
+    if head.starts_with("send back") {
+        return "send back".into();
+    }
+    if b.label.contains(':') { head.to_string() } else { head.split(' ').next().unwrap_or(head).to_string() }
+}
+
+/// The footer of a full-screen view, in priority order: the scope's `On` bindings, heaviest first
+/// (ties keep table order), as `(keys, label)`. `?` is left to the footer's tail, and the menu chords
+/// and `:` commands are not keys you press. `ui` cuts the list to the width.
+pub fn view_footer(app: &App, scope: Scope) -> Vec<(String, String)> {
+    let mut found: Vec<&Binding> = bindings_for(app, scope)
+        .into_iter()
+        .filter(|(b, avail)| avail.is_on() && b.menu_key().is_none() && b.group != Group::Commands && b.first() != "?")
+        .map(|(b, _)| b)
+        .collect();
+    found.sort_by_key(|b| std::cmp::Reverse(b.weight));
+    let mut out: Vec<(String, String)> = Vec::new();
+    for b in found {
+        // The close row lists three keys (`esc / S / q`); the footer names the one all views share.
+        let keys = if b.first() == "esc" { "esc".to_string() } else if b.first() == "tab" { "tab".to_string() } else { b.short_keys() };
+        if !out.iter().any(|(k, _)| *k == keys) {
+            out.push((keys, view_label(app, scope, b)));
+        }
+    }
+    out
 }
 
 /// Bindings of every scope whose keys, label or command contain `query`, case-insensitively.
@@ -1224,7 +1512,6 @@ pub fn splice_markdown(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::app::handled;
-    use crate::client::Machine;
     use crate::model::Task;
 
     fn task(id: &str, state: &str, repo: bool, running: bool, worktree: bool) -> Task {
@@ -1242,7 +1529,7 @@ mod tests {
     }
 
     fn app_with(tasks: Vec<Task>) -> App {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks = tasks;
         app.focus = app.tasks.first().map(|t| t.column_index()).unwrap_or(0);
         app
@@ -1306,9 +1593,11 @@ mod tests {
         }
         let approval = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
         let a = bindings_for(&approval, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
-        assert_eq!((a.0.label, a.1), ("approve the plan", Avail::On));
-        // A gate triage opened for a reply or an archive says what `a` does there, once its detail is loaded.
-        for (outcome, label) in [("archive", "archive the ticket (one click)"), ("conversation", "post the reply and close the ticket")] {
+        assert_eq!((a.0.label, a.1), ("open to approve", Avail::On), "on the board `a` opens the gate to read it");
+        let in_task = bindings_for(&approval, Scope::Detail).into_iter().find(|(b, _)| b.keys == "a").unwrap();
+        assert_eq!((in_task.0.label, in_task.1), ("approve the plan", Avail::On), "inside the task it approves");
+        // A gate triage opened for a reply or an archive says what `a` does inside the task, once its detail is loaded; the board opens it.
+        for (outcome, label) in [("archive", "archive the ticket"), ("conversation", "post the reply and close the ticket")] {
             let mut gate = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
             let task_json = r#"{"id":"t1","title":"Login page","description":"","criteria":[],"repoPath":"/r/app","branch":null,"worktreePath":"/w/app","state":"awaiting_approval","column":"Build",
                 "waitingOnYou":true,"running":false,"queued":false,"retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
@@ -1320,7 +1609,9 @@ mod tests {
                 .unwrap(),
             );
             let shown: Vec<&str> = bindings_for(&gate, Scope::Board).into_iter().filter(|(b, _)| b.keys == "a").map(|(b, _)| b.label).collect();
-            assert_eq!(shown, [label], "{outcome}");
+            assert_eq!(shown, ["open to approve"], "{outcome}: the board opens it");
+            let inside: Vec<&str> = bindings_for(&gate, Scope::Detail).into_iter().filter(|(b, a)| b.keys == "a" && *a != Avail::Hidden).map(|(b, _)| b.label).collect();
+            assert_eq!(inside, [label], "{outcome}: the task approves it");
         }
         let running = app_with(vec![task("t1", "implementing", true, true, true)]);
         let a = bindings_for(&running, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
@@ -1338,7 +1629,7 @@ mod tests {
             gate
         };
         let shown = |app: &App, key: &str| bindings_for(app, Scope::Board).into_iter().filter(|(b, a)| b.keys == key && *a != Avail::Hidden).map(|(b, _)| b.label).collect::<Vec<_>>();
-        assert_eq!(shown(&at("split"), "a"), ["approve the split"]);
+        assert_eq!(shown(&at("split"), "a"), ["open to approve"], "the board opens the split; the task view approves it");
         assert_eq!(shown(&at("split"), "N"), ["reject the split, with a comment"]);
         assert!(shown(&at("split_failed"), "a").is_empty(), "a failed split has nothing to approve: {:?}", shown(&at("split_failed"), "a"));
         assert_eq!(shown(&at("split_failed"), "N"), ["reject the split, with a comment"]);
@@ -1419,14 +1710,14 @@ mod tests {
         let names = |app: &App| footer_keys(app, Scope::Board, 7).into_iter().map(|b| format!("{} {}", b.keys, b.label)).collect::<Vec<_>>();
         let approval = names(&app_with(vec![task("t1", "awaiting_approval", true, false, true)]));
         assert_eq!(approval[0], "? keys");
-        assert_eq!(approval[1], "a approve the plan");
+        assert_eq!(approval[1], "a open to approve");
         assert!(approval.contains(&"r send back with a reason".to_string()) && approval.contains(&"e edit the plan and the ticket".to_string()), "{approval:?}");
         let draft = names(&app_with(vec![task("t1", "draft", false, false, false)]));
         assert_eq!(draft[1], "a start");
         assert!(draft.contains(&"R set the repo (search)".to_string()), "a draft without a repo weights R up: {draft:?}");
         assert!(!draft.iter().any(|k| k.starts_with("r ")), "nothing to send back on a draft: {draft:?}");
         let ship = names(&app_with(vec![task("t1", "awaiting_ship", true, false, true)]));
-        assert_eq!(ship[1], "a ship: publish, watch the PR");
+        assert_eq!(ship[1], "a open to approve");
         assert!(footer_keys(&approval_app(), Scope::Board, 7).iter().all(|b| b.menu_key().is_none()), "no menu chords in the footer");
     }
 
