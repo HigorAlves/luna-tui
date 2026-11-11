@@ -200,13 +200,13 @@ pub fn running_build_app() -> App {
 
 /// An escalated card: the machine's reason with its confidence, a summary and the tail of the failing output.
 pub fn escalated_app() -> App {
-    let task = task_json("cccccccc3333", ESCALATED_TITLE, "escalated", "Build", json!({"reason": "build budget spent", "retries": {"verify": 2, "e2e": 0, "ci": 0, "total": 2}}));
+    let task = task_json("cccccccc3333", ESCALATED_TITLE, "escalated", "Build", json!({"reason": "the build budget is spent: 12 of 12 iterations, 3 consecutive reds", "retries": {"verify": 2, "e2e": 0, "ci": 0, "total": 2}}));
     open_card(
         task,
         json!({
             "stageRuns": [stage_run("r1", "implementing", 1, "failed", 1.1), stage_run("r2", "implementing", 2, "failed", 1.4)],
             "approvals": [{"id": "e1", "kind": "escalated", "decision": null, "createdAt": "2026-10-22T10:00:00Z", "requested": {
-                "escalationDecision": {"reason": "the same migration test failed three times", "confidence": 0.82, "source": "classifier"},
+                "escalationDecision": {"reason": "too_complex", "confidence": 0.82, "source": "decision", "agentReason": "too_complex"},
                 "summary": "The session table migration cannot run twice; the test seeds rows the migration rejects.",
                 "outputTail": "FAIL migrate.test.ts\n  expected 3 rows, received 2\n  at migrate (src/sessions/migrate.ts:41)\nTests: 1 failed, 11 passed"
             }}]

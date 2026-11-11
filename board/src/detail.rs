@@ -691,17 +691,34 @@ pub(crate) fn slice_progress(detail: Option<&TaskDetail>) -> Option<String> {
     (!scenarios.is_empty()).then(|| format!("S{} of {}", (green + 1).min(scenarios.len()), scenarios.len()))
 }
 
+/// An escalation reason in plain words: the machine's enum (`escalation.ts`) never reaches the screen as a code word.
+pub(crate) fn escalation_words(reason: &str) -> String {
+    match reason {
+        "plan_wrong" => "the plan is wrong".to_string(),
+        "env_broken" => "the environment is broken".to_string(),
+        "flaky_tests" => "the tests are flaky".to_string(),
+        "too_complex" => "too complex for this engine".to_string(),
+        "undeclared_scope" => "it changed files outside its scope".to_string(),
+        "head_moved" => "the branch moved under it".to_string(),
+        "other" => "it needs a person".to_string(),
+        unknown => plain(unknown).replace('_', " "),
+    }
+}
+
+/// The reason the open escalated gate was decided with: the machine's enum word.
+pub(crate) fn escalation_reason(detail: Option<&TaskDetail>) -> Option<&str> {
+    detail?.approvals.iter().rev().find(|a| a.kind_or_guess() == "escalated" && a.decision.is_none())?.requested["escalationDecision"]["reason"].as_str()
+}
+
 /// The bar's content for a card: the gate's question, `escalated · why`, or what runs
 /// (`implementing · S3 of 4 · $0.63 · 2m`); the note holds `1 check flagged` at a plan gate.
 pub fn bar_status(task: &Task, detail: Option<&TaskDetail>, now: u64) -> BarStatus {
     let look = task.look();
     let words = if task.state == "escalated" {
-        let why = detail
-            .and_then(|d| d.approvals.iter().rev().find(|a| a.kind_or_guess() == "escalated" && a.decision.is_none()))
-            .and_then(|a| a.requested["escalationDecision"]["reason"].as_str())
-            .or(task.reason.as_deref());
+        // The reason in words; the machine's sentence when it decided no enum.
+        let why = escalation_reason(detail).map(escalation_words).or_else(|| task.reason.as_deref().map(plain));
         match why {
-            Some(why) => format!("escalated · {}", ellipsis(&plain(why), 80)),
+            Some(why) => format!("escalated · {}", ellipsis(&why, 80)),
             None => "escalated".to_string(),
         }
     } else if let Some(question) = gate_question(task, detail) {
@@ -3126,8 +3143,8 @@ mod tests {
         let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
         detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalation":"flaky_tests","escalationDecision":{"reason":"flaky_tests","confidence":0.82,"source":"decision","agentReason":"other"},"summary":"stopped at slice 2","outputTail":"FAIL a.test.ts\u001b[31m red \u001b]0;title\u0007\nexpected 3"},"decision":null}"#).unwrap());
         let text = lines_text(&escalation_lines(&detail));
-        assert!(text.contains("flaky_tests") && text.contains("82% sure") && text.contains("by decision"), "{text}");
-        assert!(text.contains("the agent said: other"), "{text}");
+        assert!(text.contains("the tests are flaky") && !text.contains("flaky_tests") && text.contains("82% sure") && text.contains("judged by the escalation check"), "{text}");
+        assert!(text.contains("the agent said: it needs a person"), "{text}");
         assert!(text.contains("stopped at slice 2") && text.contains("expected 3"), "{text}");
         assert!(!text.contains('\u{1b}') && !text.contains('\u{7}'), "no control character reaches the terminal");
     }
@@ -3138,7 +3155,7 @@ mod tests {
         let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
         detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x"},"decision":null}"#).unwrap());
         detail.events.push(serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"escalation.corrected","payload":{"from":"flaky_tests","to":"env_broken"},"at":"2026-10-22T10:20:00Z"}"#).unwrap());
-        assert!(lines_text(&escalation_lines(&detail)).contains("corrected to env_broken"));
+        assert!(lines_text(&escalation_lines(&detail)).contains("corrected to: the environment is broken"));
     }
 
     #[test]
@@ -3452,7 +3469,7 @@ mod frame_tests {
         let mut app = escalated_app();
         let screen = render(&mut app, 120, 40);
         let bar = rows(&screen)[bar_row(&screen, "✗ escalated")];
-        assert!(bar.contains("the same migration test failed three times"), "{bar}");
+        assert!(bar.contains("escalated · too complex for this engine") && !bar.contains("too_complex"), "{bar}");
         assert!(bar.contains("a retry"), "{bar}");
         assert!(!bar.contains("a approve"), "{bar}");
     }

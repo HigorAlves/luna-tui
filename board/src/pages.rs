@@ -6,10 +6,10 @@ use serde_json::Value;
 
 use crate::{
     detail::{
-        assumptions_group, card_group, checks_group, criteria_table, gate_blocks, gate_main_facts, gate_question, gate_ref_group, intake_gate_lines, map_group, muted, origin_lines, plain, pr_for, pr_url,
+        assumptions_group, card_group, checks_group, criteria_table, escalation_words, gate_blocks, gate_main_facts, gate_question, gate_ref_group, intake_gate_lines, map_group, muted, origin_lines, plain, pr_for, pr_url,
         record_group, run_error, ship_risk_is_high, slice_progress,
     },
-    model::{Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of, ESCALATION_REASONS},
+    model::{Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of},
     reference::{Page, RefGroup},
     text::{self, ellipsis, truncate_middle},
     theme,
@@ -484,18 +484,38 @@ fn can_do(can: &[(String, String)]) -> Vec<Line<'static>> {
 }
 
 /// A card that stopped: why (the reason, how sure the machine is, what it summed up), what can be done, and the failing output's tail.
+/// The questions an open gate carries, each with the machine's recommended answer; nothing when it has none.
+fn question_lines(approval: &Approval, width: usize) -> Vec<Line<'static>> {
+    let questions = questions_of(approval);
+    if questions.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![Line::default(), title("Questions (a to answer)")];
+    for (question, recommended) in questions {
+        out.extend(hanging(vec![Span::raw("  "), Span::styled("? ", theme::label())], &question, width));
+        if !recommended.is_empty() {
+            out.push(Line::from(Span::styled(format!("    recommended: {}", ellipsis(&plain(&recommended), width.saturating_sub(18))), theme::dim())));
+        }
+    }
+    out
+}
+
 pub(crate) fn stopped_page(task: &Task, detail: Option<&TaskDetail>, can: &[(String, String)], width: usize, ref_width: usize) -> Page {
     const SHOWN: usize = 20;
     let gate = detail.and_then(|d| d.approvals.iter().rev().find(|a| a.kind_or_guess() == "escalated" && a.decision.is_none()));
     let decision = gate.map(|g| &g.requested["escalationDecision"]);
-    let reason = decision.and_then(|d| d["reason"].as_str()).or(task.reason.as_deref());
-    let head = match reason {
-        Some(r) => format!("✗ {} · {}", task.status_label(), plain(r)),
-        None => format!("✗ {}", task.status_label()),
+    // The label is the heading and the machine's own sentence (`task.reason`) sits under it; the enum word never shows. With no
+    // decided reason the sentence is the heading's tail.
+    let label = decision.and_then(|d| d["reason"].as_str()).map(escalation_words);
+    let sentence = task.reason.as_deref().map(plain).filter(|r| !r.trim().is_empty());
+    let (head, under) = match (label, sentence) {
+        (Some(label), sentence) => (format!("✗ {} · {label}", task.status_label()), sentence),
+        (None, Some(sentence)) => (format!("✗ {} · {sentence}", task.status_label()), None),
+        (None, None) => (format!("✗ {}", task.status_label()), None),
     };
     let mut main = vec![Line::from(Span::styled(head, theme::lost().add_modifier(ratatui::style::Modifier::BOLD)))];
-    if let Some(known) = reason.and_then(|r| ESCALATION_REASONS.iter().find(|(id, _)| *id == r)) {
-        main.push(Line::from(Span::styled(format!("  {}", known.1), theme::label())));
+    if let Some(sentence) = under {
+        main.extend(hanging(vec![Span::raw("  ")], &sentence, width));
     }
     if let Some(d) = decision {
         let mut how = Vec::new();
@@ -503,21 +523,30 @@ pub(crate) fn stopped_page(task: &Task, detail: Option<&TaskDetail>, can: &[(Str
             how.push(format!("{:.0}% sure", conf * 100.0));
         }
         if let Some(source) = d["source"].as_str() {
-            how.push(format!("by {}", plain(source)));
+            how.push(match source {
+                "fact" => "settled by a fact".to_string(),
+                "decision" => "judged by the escalation check".to_string(),
+                "agent" => "from the agent's own word".to_string(),
+                other => format!("by {}", plain(other)),
+            });
         }
         if !how.is_empty() {
             main.push(Line::from(Span::styled(format!("  {}", how.join(" · ")), theme::label())));
         }
         if let Some(agent) = d["agentReason"].as_str() {
-            main.push(Line::from(Span::styled(format!("  the agent said: {}", plain(agent)), theme::label())));
+            main.push(Line::from(Span::styled(format!("  the agent said: {}", escalation_words(agent)), theme::label())));
         }
     }
     if let Some(to) = detail.and_then(|d| d.events.iter().rev().find(|e| e.kind == "escalation.corrected")).and_then(|e| e.payload["to"].as_str()) {
-        main.push(Line::from(Span::styled(format!("  corrected to {}", plain(to)), theme::done())));
+        main.push(Line::from(Span::styled(format!("  corrected to: {}", escalation_words(to)), theme::done())));
     }
     if let Some(summary) = gate.and_then(|g| g.requested["summary"].as_str()).filter(|s| !s.trim().is_empty()) {
         main.push(Line::default());
         main.extend(text::markdown(summary, width, 2));
+    }
+    if let Some(g) = gate {
+        main.extend(gate_blocks(g, width));
+        main.extend(question_lines(g, width));
     }
     main.extend(can_do(can));
     let tail = gate
@@ -903,7 +932,7 @@ mod first_page_tests {
         assert_eq!(app.detail_section, Section::Stopped);
         let screen = render(&mut app, 180, 50);
         let main = main_pane(&screen);
-        in_order(&main, &["✗ escalated · the same migration test failed three times", "82%", "The session table migration cannot run twice", "What you can do", "a ", "Output", "FAIL migrate.test.ts", "expected 3 rows, received 2"]);
+        in_order(&main, &["✗ escalated · too complex for this engine", "the build budget is spent: 12 of 12 iterations, 3 consecutive reds", "82%", "The session table migration cannot run twice", "What you can do", "a ", "Output", "FAIL migrate.test.ts", "expected 3 rows, received 2"]);
         assert!(rail_of(&screen).lines().next().unwrap().contains("Stopped"), "{}", rail_of(&screen));
         assert!(!main.contains("stage  ") && !main.contains("took"), "the run table stays in Runs\n{main}");
     }
@@ -1041,7 +1070,7 @@ mod rail_tests {
 
     #[test]
     fn at_100x30_each_card_opens_on_its_own_first_line() {
-        for (name, mut app, first) in [("plan gate", plan_gate_app(), "⚑ plan:"), ("running", running_build_app(), "Stage"), ("escalated", escalated_app(), "✗ escalated · the same migration"), ("ship", ship_stage_app(), "Summary")] {
+        for (name, mut app, first) in [("plan gate", plan_gate_app(), "⚑ plan:"), ("running", running_build_app(), "Stage"), ("escalated", escalated_app(), "✗ escalated · too complex"), ("ship", ship_stage_app(), "Summary")] {
             let screen = render(&mut app, 100, 30);
             assert!(screen.contains(first), "{name}: {first} on the first screen\n{screen}");
         }
@@ -1186,5 +1215,64 @@ mod result_tests {
         app.open_detail(app.tasks[0].id.clone());
         assert_eq!(app.detail_section, Section::Now);
         assert!(render(&mut app, 180, 50).contains("Now"));
+    }
+}
+
+#[cfg(test)]
+mod stopped_tests {
+    use crate::{
+        detail::Section,
+        testkit::{escalated_app, render},
+    };
+    use serde_json::json;
+
+    fn gate(app: &mut crate::app::App) -> &mut crate::model::Approval {
+        app.detail.as_mut().unwrap().approvals.iter_mut().find(|a| a.kind.as_deref() == Some("escalated")).unwrap()
+    }
+
+    #[test]
+    fn each_reason_has_its_words_and_none_shows_the_enum() {
+        for (reason, words) in [
+            ("plan_wrong", "the plan is wrong"),
+            ("env_broken", "the environment is broken"),
+            ("flaky_tests", "the tests are flaky"),
+            ("too_complex", "too complex for this engine"),
+            ("undeclared_scope", "it changed files outside its scope"),
+            ("head_moved", "the branch moved under it"),
+            ("other", "it needs a person"),
+        ] {
+            let mut app = escalated_app();
+            gate(&mut app).requested = json!({});
+            gate(&mut app).requested["escalationDecision"] = json!({"reason": reason, "confidence": 1.0, "source": "fact"});
+            app.detail_section = Section::Stopped;
+            let screen = render(&mut app, 180, 50);
+            let bar_and_head = screen.lines().filter(|l| l.contains("✗ escalated")).count();
+            assert!(bar_and_head >= 2, "{reason}: {screen}");
+            assert!(screen.lines().filter(|l| l.contains("✗ escalated")).all(|l| l.contains(words)), "{reason}: {screen}");
+            assert!(!screen.contains(reason) || reason == "other", "{reason} shown as a word:\n{screen}");
+        }
+    }
+
+    #[test]
+    fn the_label_heads_the_page_with_the_machines_sentence_wrapped_directly_under_it() {
+        let mut app = escalated_app();
+        app.tasks[0].reason = Some("the build budget is spent: 12 of 12 iterations, 3 consecutive reds and a long tail of words that has to wrap somewhere before it reaches the end of the pane at this width, because a sentence should".into());
+        let screen = render(&mut app, 120, 50);
+        let rows: Vec<&str> = screen.lines().collect();
+        let head = rows.iter().rposition(|l| l.contains("✗ escalated · too complex for this engine")).unwrap();
+        assert!(rows[head + 1].contains("the build budget is spent"), "{}", rows[head + 1]);
+        assert!(rows[head + 2].contains("should") || rows[head + 2].contains("pane") || rows[head + 2].contains("wrap"), "wrapped under the label: {}", rows[head + 2]);
+    }
+
+    #[test]
+    fn the_gates_error_note_and_questions_are_on_the_stopped_page() {
+        let mut app = escalated_app();
+        gate(&mut app).requested["error"] = json!("container exited 137");
+        gate(&mut app).requested["note"] = json!("the sandbox was kept");
+        gate(&mut app).requested["questions"] = json!([{"question": "Should the migration be split?", "recommended": "yes, per table"}]);
+        let screen = render(&mut app, 180, 60);
+        for needle in ["Error", "container exited 137", "the sandbox was kept", "Questions", "Should the migration be split?", "yes, per table"] {
+            assert!(screen.contains(needle), "{needle} missing:\n{screen}");
+        }
     }
 }
