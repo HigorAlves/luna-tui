@@ -466,7 +466,7 @@ pub enum PlanPane {
 /// Whether `task` is at the plan gate with its plan already fetched into `detail`, so `e`
 /// opens the two-pane plan editor instead of the plain ticket editor.
 fn has_open_plan(task: &Task, detail: Option<&TaskDetail>) -> bool {
-    task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some_and(|a| !matches!(a.outcome(), Some("split" | "split_failed"))))
+    task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some_and(|a| !matches!(a.outcome(), Some("split" | "split_failed" | "conversation" | "archive"))))
 }
 
 /// Whether the plan may still be edited: at its own gate, or at the test check, before anything
@@ -8638,6 +8638,21 @@ mod confirm_tests {
             let reg = crate::keys::bindings_for(&app, crate::keys::Scope::Detail).into_iter().find(|(b, _)| b.keys == "e").unwrap().1;
             assert!(matches!(reg, crate::keys::Avail::Off(_)), "{reg:?}");
             assert!(app.toast.is_some());
+        }
+    }
+
+    #[test]
+    fn e_at_a_reply_or_archive_gate_says_why_it_edits_nothing_and_the_bar_does_not_offer_it() {
+        for outcome in ["conversation", "archive"] {
+            let mut app = at_outcome_gate(outcome);
+            let bar: Vec<String> = crate::keys::detail_footer(&app).into_iter().map(|(k, l)| format!("{k} {l}")).collect();
+            assert!(!bar.iter().any(|k| k.starts_with("e ")), "{outcome}: the bar offers e: {bar:?}");
+            let screen = render(&mut app, 160, 40);
+            assert!(!screen.lines().any(|l| l.contains("e edit")), "{outcome}: the screen offers e edit:\n{screen}");
+            press(&mut app, KeyCode::Char('e'));
+            assert!(matches!(app.mode, Mode::Detail(_)), "{outcome}: no editor opened");
+            assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("nothing to edit")), "{outcome}: {:?}", app.toast.as_ref().map(|t| &t.text));
+            assert!(!has_open_plan(&app.tasks[0], app.detail.as_ref()), "{outcome}: there is no plan");
         }
     }
 

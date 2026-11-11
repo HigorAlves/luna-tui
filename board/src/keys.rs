@@ -270,12 +270,14 @@ pub(crate) fn open_ship_approval(app: &App, t: &Task) -> bool {
     t.state == "awaiting_ship" && t.waiting_on_you && app.detail.as_ref().filter(|d| d.task.id == t.id).and_then(|d| d.open_approval()).is_some_and(|a| a.is_ship_approval())
 }
 
-/// Why `e` has nothing to edit on this card, when it has not: a split proposes new cards, and the release question is
+/// Why `e` has nothing to edit on this card, when it has not: a split proposes new cards, a reply or an archive has no plan, and the release question is
 /// asked of a PR that is already open. The ticket editor would open there and change nothing that matters.
 pub(crate) fn edit_blocked(app: &App, t: &Task) -> Option<&'static str> {
     let outcome = app.detail.as_ref().filter(|d| d.task.id == t.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome());
     if t.state == "awaiting_approval" && matches!(outcome, Some("split" | "split_failed")) {
         Some("a split has no plan to edit; :whole keeps it one card")
+    } else if t.state == "awaiting_approval" && matches!(outcome, Some("conversation" | "archive")) {
+        Some("a reply or an archive has nothing to edit")
     } else if open_ship_approval(app, t) {
         Some("the release question has nothing to edit")
     } else {
