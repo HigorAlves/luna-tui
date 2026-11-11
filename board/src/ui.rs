@@ -851,25 +851,39 @@ fn render_board(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Which card a click `row` lines below a column's top border lands on, counting each card's own
-/// height and the repo separators. Ignores list scrolling.
+/// height (as drawn: marked, new, by density) and the repo separators, from the first item the list
+/// scrolled to in the last frame.
 pub(crate) fn card_at_row(app: &App, column: usize, area_width: u16, row: usize) -> usize {
     let width = card_width(area_width);
     let indices = app.indices(column);
     let by_repo = app.group == GroupBy::Repo;
+    let offset = app.list_offsets.borrow().get(column).copied().unwrap_or(0);
+    let mut item = 0;
     let mut top = 0;
     let mut last_repo: Option<Option<&str>> = None;
     for (position, &i) in indices.iter().enumerate() {
         let task = &app.tasks[i];
         if by_repo && last_repo != Some(task.repo_name()) {
-            top += 1;
+            if item >= offset {
+                top += 1;
+            }
+            item += 1;
             last_repo = Some(task.repo_name());
         }
-        top += card_lines(task, None, false, false, app.density, width).len();
+        if item >= offset {
+            top += board_card_lines(app, task, None, width).len();
+        }
+        item += 1;
         if row < top {
             return position;
         }
     }
     indices.len().saturating_sub(1)
+}
+
+/// A card's lines as the board draws them, for the renderer and for hit-testing alike.
+fn board_card_lines(app: &App, task: &Task, spend_p90: Option<f64>, width: usize) -> Vec<Line<'static>> {
+    card_lines(task, spend_p90, app.marked.contains(&task.id), app.is_new(task), app.density, width)
 }
 
 /// Every column at once: the focused one expanded, the rest collapsed to their header bar.
@@ -945,7 +959,7 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
             last_repo = Some(task.repo_name());
         }
         positions.push(items.len());
-        items.push(card(task, p90, app.marked.contains(&task.id), app.is_new(task), app.density, width));
+        items.push(ListItem::new(board_card_lines(app, task, p90, width)));
     }
     let list = List::new(items)
         .block(block)
@@ -957,6 +971,11 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
         state.select(positions.get(app.selection[column]).copied().or(positions.last().copied()));
     }
     frame.render_stateful_widget(list, area, &mut state);
+    let mut offsets = app.list_offsets.borrow_mut();
+    if offsets.len() <= column {
+        offsets.resize(column + 1, 0);
+    }
+    offsets[column] = state.offset();
 }
 
 /// Under `gr` ordering: `── luna-tui 3 ─────`, a line that names the group the cards below
@@ -1035,10 +1054,6 @@ fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
         break;
     }
     Line::from(out)
-}
-
-fn card(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> ListItem<'static> {
-    ListItem::new(card_lines(task, spend_p90, marked, is_new, density, width))
 }
 
 /// The card's lines by density: the title (two lines when it needs them, ending in `…` when it
@@ -4804,6 +4819,74 @@ mod board_tests {
         app.click(rect.x + 3, rect.y + 1 + first_height as u16);
         assert_eq!(app.focus, build);
         assert_eq!(app.selection[build], 1, "the second card, below a first one of {first_height} lines");
+    }
+
+    /// Five Intake cards whose titles fit a 19-cell card unmarked and wrap once a mark or a dot is in front of them.
+    fn intake_of_five() -> App {
+        let mut app = app_at(0);
+        app.tasks.retain(|t| t.column != "Intake");
+        for (n, title) in ["Rotate signing key", "Rename the backlog", "Retire legacy code", "Rebuild the search", "Reword the readme!"].iter().enumerate() {
+            let json = testkit::task_json(&format!("i{n}aaaaaaaaaa"), title, "draft", "Intake", serde_json::json!({"repoPath": null}));
+            app.tasks.push(serde_json::from_value(json).unwrap());
+        }
+        app.folded.clear();
+        app
+    }
+
+    /// Clicks the id row of every Intake card, as drawn, and returns which card each click selected.
+    fn click_each_intake_card(app: &mut App) -> Vec<usize> {
+        let intake_rect = |app: &App| app.column_rects.borrow().iter().find(|(c, _)| COLUMNS[*c] == "Intake").copied().unwrap();
+        // A terminal on which the Intake column is 25 wide: cards of 19 cells.
+        let width = (60..200).find(|&w| {
+            render(app, w, 60);
+            intake_rect(app).1.width == 25
+        });
+        let screen = render(app, width.expect("a width with a 25-wide Intake column"), 60);
+        let (intake, rect) = intake_rect(app);
+        let rows: Vec<&str> = screen.lines().collect();
+        let mut picked = Vec::new();
+        for n in 0..5 {
+            let y = (rect.y..rect.bottom()).find(|&y| rows[usize::from(y)].contains(&format!("#i{n}aaaaaa"))).expect("the card's id row is on the screen");
+            app.click(rect.x + 3, y);
+            picked.push(app.selection[intake]);
+        }
+        picked
+    }
+
+    #[test]
+    fn a_click_lands_on_the_card_under_the_pointer_below_marked_cards_that_wrap() {
+        let mut app = intake_of_five();
+        for n in 0..3 {
+            app.marked.insert(format!("i{n}aaaaaaaaaa"));
+        }
+        assert_eq!(click_each_intake_card(&mut app), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_click_lands_on_the_card_under_the_pointer_below_new_cards_that_wrap() {
+        let mut app = intake_of_five();
+        app.last_seen_secs = Some(1);
+        for task in &mut app.tasks {
+            task.updated_at = if ["i0", "i1", "i2"].iter().any(|p| task.id.starts_with(p)) { "2026-10-22T10:00:00.000Z".into() } else { "1970-01-01T00:00:00.000Z".into() };
+        }
+        assert_eq!(click_each_intake_card(&mut app), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_click_in_a_column_scrolled_to_its_last_card_lands_on_the_card_drawn_there() {
+        let mut app = intake_of_five();
+        app.selection[0] = 4;
+        let width = (60..200).find(|&w| {
+            render(&mut app, w, 12);
+            app.column_rects.borrow().iter().any(|(c, r)| COLUMNS[*c] == "Intake" && r.width == 25)
+        });
+        let screen = render(&mut app, width.unwrap(), 12);
+        let rect = app.column_rects.borrow().iter().find(|(c, _)| COLUMNS[*c] == "Intake").map(|(_, r)| *r).unwrap();
+        let y = (rect.y..rect.bottom()).find(|&y| screen.lines().nth(usize::from(y)).is_some_and(|l| l.contains("#i4aaaaaa"))).expect("the last card is in view");
+        assert!(!screen.contains("#i0aaaaaa"), "the first card scrolled out of view");
+        app.selection[0] = 0;
+        app.click(rect.x + 3, y);
+        assert_eq!(app.selection[0], 4);
     }
 
     #[test]

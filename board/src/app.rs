@@ -562,6 +562,8 @@ pub struct App {
     pub home_repo: Option<String>,
     /// Column rectangles from the last frame, for mouse clicks.
     pub column_rects: RefCell<Vec<(usize, Rect)>>,
+    /// The first list item each column showed in the last frame (its scroll), for mouse clicks.
+    pub list_offsets: RefCell<Vec<usize>>,
     /// The Evidence section's folder line and file rows from the last frame, for mouse clicks.
     pub evidence_hits: RefCell<Vec<(Rect, EvidenceHit)>>,
     /// The file row last clicked and when, for the double click that opens it.
@@ -667,6 +669,7 @@ impl App {
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
+            list_offsets: RefCell::new(Vec::new()),
             evidence_hits: RefCell::new(Vec::new()),
             last_click: None,
             launch: Box::new(crate::open::spawn_detached),
