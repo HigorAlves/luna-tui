@@ -104,7 +104,7 @@ To roll back, revert the alias line. A stage already running keeps its engine. T
 
 From the day after that date, the contract test fails while any pack's engines still reach the entry.
 
-Once no pack's engines reach the entry, delete it.
+Delete the old entry only when no engine names it and no pack's engines reach it.
 
 The evals measure a decision pack's engine default. Nobody assumes it. After the upgrade, do these steps:
 
