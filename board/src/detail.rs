@@ -164,9 +164,9 @@ fn is_stopped(task: &Task) -> bool {
     matches!(task.state.as_str(), "escalated" | "failed" | "aborted" | "paused_rate_limit")
 }
 
-/// A card at or past shipping, or finished.
+/// A card at or past shipping, or finished. `ci_watch` is not: the machine is still watching the PR's checks, in the Verify column.
 fn is_result(task: &Task) -> bool {
-    matches!(task.state.as_str(), "awaiting_ship" | "shipping" | "ci_watch" | "reviewing_memory" | "closed" | "archived" | "done")
+    matches!(task.state.as_str(), "awaiting_ship" | "shipping" | "reviewing_memory" | "closed" | "archived" | "done")
 }
 
 /// A card whose open gate asks a question the plan gate and the test check do not: answers, setup, intake.
@@ -176,7 +176,7 @@ fn is_question(task: &Task) -> bool {
 
 /// A card a stage is working on or waits to work on, and no other page claims.
 fn is_running(task: &Task) -> bool {
-    (task.running || task.queued) && task.state != "awaiting_approval" && !is_stopped(task) && !is_result(task) && !is_question(task)
+    (task.running || task.queued || task.state == "ci_watch") && task.state != "awaiting_approval" && !is_stopped(task) && !is_result(task) && !is_question(task)
 }
 
 /// The sections the rail lists for `task`, in order. At the plan gate Review stands in for Plan and Tests; Now, Stopped,

@@ -241,6 +241,23 @@ pub fn ship_stage_app() -> App {
     )
 }
 
+/// A card at the ship gate as the machine sends it: `requested.evidence` is the cut-down object (`format`, `summary`, `media`, `commitSha`,
+/// `risk`; no `diffSummary`, no scenarios), the whole pack is `task.evidence`. With `preview` the gate carries the whole pack as `requested.pack`
+/// instead and the task has none yet.
+pub fn real_ship_gate_app(preview: bool) -> App {
+    let pack = json!({"verdict": "pass", "artifactCount": 3, "summary": "The limiter answers 429 past the limit.", "format": "markdown", "scenarios": [], "results": [],
+        "diffSummary": {"what": "Rate limits the public API per key with a sliding window.", "why": "C2: one client must not starve the rest.", "files": ["src/limit.ts"], "added": 42, "removed": 3}});
+    let trimmed = json!({"format": "markdown", "summary": "The limiter answers 429 past the limit.", "media": [], "commitSha": "9f3c2a1", "risk": "medium"});
+    let extra = if preview { json!({"waitingOnYou": true}) } else { json!({"waitingOnYou": true, "evidence": pack.clone()}) };
+    let task = task_json("dbdbdbdb4444", SHIP_STAGE_TITLE, "awaiting_ship", "Ship", extra);
+    let mut requested = json!({"gate": "ship_approval", "head": "9f3c2a1", "prUrl": "https://github.com/acme/app/pull/412", "number": 412, "risk": "medium",
+        "question": "safe to release now?", "checklist": [{"id": "ci", "ok": true, "detail": "CI green on 3 of 3 checks"}], "evidence": trimmed});
+    if preview {
+        requested["pack"] = pack;
+    }
+    open_card(task, json!({"approvals": [{"id": "s1", "kind": "awaiting_ship", "decision": null, "createdAt": "2026-10-22T10:00:00Z", "requested": requested}]}))
+}
+
 /// A card at the triage questions: two questions, each with the machine's suggested answer.
 pub fn questions_app() -> App {
     let task = task_json("eeeeeeee5555", "Fix the invoice rounding", "awaiting_answers", "Triage", json!({"waitingOnYou": true}));

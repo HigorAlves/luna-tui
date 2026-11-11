@@ -543,11 +543,14 @@ pub(crate) fn stopped_page(task: &Task, detail: Option<&TaskDetail>, can: &[(Str
     Page { main, groups }
 }
 
+/// The evidence pack to read the diff summary from. The machine trims `requested.evidence` at both ship gates (no `diffSummary`, no
+/// scenarios), so the whole pack comes first: `task.evidence`, then the preview gate's `requested.pack`, then `requested.evidence`.
 fn evidence_pack(d: &TaskDetail) -> Option<&Value> {
-    match d.latest_approval("awaiting_ship") {
-        Some(a) if a.requested["evidence"].is_object() => Some(&a.requested["evidence"]),
-        _ => d.task.evidence.as_ref(),
-    }
+    let gate = d.latest_approval("awaiting_ship");
+    [d.task.evidence.as_ref(), gate.map(|a| &a.requested["pack"]), gate.map(|a| &a.requested["evidence"])]
+        .into_iter()
+        .flatten()
+        .find(|pack| pack["diffSummary"].is_object())
 }
 
 /// A card at or past shipping: the release question first when there is one, then what changed and why, what review found by
@@ -1150,5 +1153,38 @@ mod real_gate_tests {
         gate.requested["flagged"] = serde_json::json!([]);
         let screen = render(&mut app, 180, 50);
         assert!(!screen.contains("kept whole"), "{screen}");
+    }
+}
+
+#[cfg(test)]
+mod result_tests {
+    use crate::{
+        app::{App, Mode},
+        detail::Section,
+        testkit::{real_ship_gate_app, render},
+    };
+
+    #[test]
+    fn the_summary_shows_at_a_ship_gate_whose_evidence_the_machine_trimmed() {
+        for preview in [false, true] {
+            let mut app = real_ship_gate_app(preview);
+            assert_eq!(app.detail_section, Section::Result);
+            let screen = render(&mut app, 180, 50);
+            assert!(screen.contains("Summary"), "preview={preview}:\n{screen}");
+            assert!(screen.contains("Rate limits the public API per key"), "preview={preview}:\n{screen}");
+            assert!(screen.contains("Why  C2: one client must not starve the rest."), "preview={preview}:\n{screen}");
+        }
+    }
+
+    #[test]
+    fn a_card_whose_ci_is_being_watched_opens_on_now_not_on_its_result() {
+        let mut app: App = real_ship_gate_app(false);
+        app.tasks[0].state = "ci_watch".into();
+        app.tasks[0].column = "Verify".into();
+        app.tasks[0].running = true;
+        app.mode = Mode::Normal;
+        app.open_detail(app.tasks[0].id.clone());
+        assert_eq!(app.detail_section, Section::Now);
+        assert!(render(&mut app, 180, 50).contains("Now"));
     }
 }
