@@ -79,7 +79,7 @@ Nobody has built shadow (the candidate answering the same input without anyone a
 1. Add the candidate to the pack's `engines.allowed` in `contracts/src/packs.ts`.
    The `default` stays as it is. A reviewer reviews this one-line change.
 2. Pick the engine for one repo in that repo's `luna.yaml` (`engines: { triage: claude:opus-next }`).
-   To pick the engine for one task instead, use `stages` on `POST /tasks`, `PATCH /tasks/:id/stages`, or the engine picker on the board.
+   A task can take its own engine through `stages` on `POST /tasks`, `PATCH /tasks/:id/stages`, or the engine picker on the board.
 3. Run a few real tickets.
 4. Compare the runs by hand: approved plans, first-pass verifying, cost, escalations.
    Every stage run records the engine it started on (`GET /tasks/:id`). `/metrics` does not split by engine yet.
