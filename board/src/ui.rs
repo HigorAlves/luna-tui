@@ -107,9 +107,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(inbox) = app.inbox.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::Help { .. })) {
+    if let Some(inbox) = app.inbox.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::ConfirmApprove(_) | Mode::Help { .. })) {
         render_inbox(frame, body, app, inbox);
         frame.render_widget(footer_line(app, footer.width), footer);
+        if let Mode::ConfirmApprove(id) = &app.mode
+            && let Some(task) = app.task(id)
+        {
+            render_approve(frame, app, task);
+        }
         if let Mode::ConfirmApproveAll(ids) = &app.mode {
             render_note(frame, " Approve them all? ", &format!("{} ticket(s) in Approve get a yes, each with no guidance.  y / n", ids.len()));
         }
@@ -251,6 +256,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 render_prompt(frame, app, &format!("#{short} — why was the pack not useful?"), text, "", "enter send · esc cancel", PEACH);
             }
         }
+        Mode::ConfirmApprove(id) => {
+            if let Some(task) = app.task(id) {
+                render_approve(frame, app, task);
+            }
+        }
+        Mode::ConfirmQuit => render_confirm_box(frame, &app.quit_question(), " Quit? ", "The machine keeps working; only the board closes.", PEACH),
         Mode::ConfirmDelete(id) => {
             if let Some(task) = app.task(id) {
                 render_confirm(
@@ -536,9 +547,10 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
             Span::from(format!("{text}▏")),
             Span::from("   enter reject (the card ends) · esc cancel").fg(c(SUBTEXT0)),
         ]),
-        Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) | Mode::ConfirmWorktree(_) => {
+        Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) | Mode::ConfirmWorktree(_) | Mode::ConfirmQuit => {
             hint(&[("y", "yes"), ("n", "no")])
         }
+        Mode::ConfirmApprove(_) => hint(&[("y/enter", "approve"), ("n/esc", "cancel")]),
         Mode::Actions { .. } | Mode::PrActions { .. } | Mode::SlackActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
@@ -593,7 +605,7 @@ fn view_footer(app: &App, width: u16) -> Line<'static> {
             ("esc", "close"),
         ]),
         Scope::Detail => detail_footer(app, width),
-        _ => hint(&[("?", "help"), ("n", "new"), ("a", "advance"), ("enter", "open"), ("x", "actions"), ("=", "density"), ("/", "filter"), ("q", "quit")]),
+        _ => hint(&[("?", "help"), ("n", "new"), ("a", keys::board_a_label(app)), ("enter", "open"), ("x", "actions"), ("=", "density"), ("/", "filter"), ("q", "quit")]),
     }
 }
 
@@ -1141,6 +1153,12 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
 /// Popup asking to confirm a delete or an abort.
 fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
     render_confirm_box(frame, &format!("#{} {}", task.short_id(), crate::model::plain(&task.title, 400)), title, note, RED);
+}
+
+/// Popup asking to confirm an approval: what is approved and the card, in the delete box's shape.
+fn render_approve(frame: &mut Frame, app: &App, task: &Task) {
+    let question = app.approval_question(task).unwrap_or_else(|| format!("approve #{}?", task.short_id()));
+    render_confirm_box(frame, &question, " Approve ", &crate::model::plain(&task.title, 400), GREEN);
 }
 
 /// Popup asking to confirm a PR merge or close, in the same box as a ticket delete: the
@@ -3879,7 +3897,7 @@ mod help_sheet_tests {
         let text = screen(&app, 120, 40).join("\n");
         assert!(text.contains(" Keys · ticket #a1b2c3d4 Login page · approve plan "), "{text}");
         assert!(text.contains("/ search"), "{text}");
-        assert!(text.contains("a         approve the plan") || text.contains("a    approve the plan"), "the gate's a, bright: {text}");
+        assert!(text.contains("a         open to approve") || text.contains("a    open to approve"), "the gate's a, bright: {text}");
         assert!(text.contains("(not at the ship gate)"), "x S dim with its reason: {text}");
         assert!(text.contains("(no memory review waiting)"), "{text}");
         assert!(!text.contains("approve the setup") && !text.contains("a    start"), "the other a meanings are hidden: {text}");
@@ -4031,7 +4049,7 @@ mod help_sheet_tests {
     #[test]
     fn the_footer_is_a_few_short_words_per_view() {
         let board = footer(&app_with("awaiting_approval", true));
-        assert!(board.starts_with("  ?  help   n  new   a  advance   enter  open   x  actions   =  density   /  filter   q  quit"), "{board}");
+        assert!(board.starts_with("  ?  help   n  new   a  open to approve   enter  open   x  actions   =  density   /  filter   q  quit"), "{board}");
         let mut pulls = App::new(Machine::from_env());
         pulls.pulls = Some(PullsState::default());
         pulls.toast = None;
@@ -4103,10 +4121,10 @@ mod help_sheet_tests {
         assert!(text.contains(" #a1b2c3d4 Login page "), "{text}");
         assert!(text.contains("P   resume every ticket paused on the limit"), "{text}");
         assert!(text.contains("S   ship: approve and open the PR") && text.contains("↳ not at the ship gate"), "{text}");
-        assert!(text.contains("a   approve the plan") && text.contains("R   set the repo"), "{text}");
+        assert!(text.contains("a   open to approve") && text.contains("R   set the repo"), "{text}");
         assert!(text.contains("↳ has a repo; x or :repo <name> replaces it"), "{text}");
         press(&mut app, KeyCode::Char('a'));
-        assert!(matches!(app.mode, Mode::Normal), "a menu key runs and closes");
+        assert!(matches!(app.mode, Mode::Detail(_)), "a at a gate opens the task, as on the board");
     }
 
     fn split_task(id: &str, title: &str, extra: &str) -> Task {

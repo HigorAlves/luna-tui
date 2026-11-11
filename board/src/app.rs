@@ -317,6 +317,11 @@ pub enum Mode {
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
+    /// `a` at a gate that commits something (the plan, a split, shipping, the release, the retro's
+    /// rules): one yes names what is approved and the card, then the decision goes.
+    ConfirmApprove(String),
+    /// `q` on the board while a card needs you or runs.
+    ConfirmQuit,
     /// `A` in the Inbox: approve every ticket in the split, after one yes.
     ConfirmApproveAll(Vec<String>),
     /// A destructive key over the marked set: one yes for all of them.
@@ -1678,6 +1683,7 @@ impl App {
             "paused_rate_limit" => self.act(|m| m.resume(id), "resumed"),
             "closed" => self.notify("this ticket is closed", false),
             "archived" => self.notify("this ticket is archived", false),
+            _ if task.waiting_on_you && self.approval_question(&task).is_some() => self.mode = Mode::ConfirmApprove(id.to_string()),
             _ if task.waiting_on_you => self.act(|m| m.decide(id, true, None), "approved"),
             _ => self.notify(format!("{} is running; X aborts it", task.status_label()), false),
         }
@@ -2024,10 +2030,11 @@ impl App {
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::Reject { .. } => self.handle_reject(key),
             Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
-            Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
+            Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) | Mode::ConfirmApprove(id) => {
                 let id = id.clone();
                 self.handle_confirm(key, &id)
             }
+            Mode::ConfirmQuit => self.handle_confirm_quit(key),
             Mode::ArchiveReason { .. } => self.handle_archive_reason(key),
             Mode::EscalationReason { .. } => self.handle_escalation_reason(key),
             Mode::RecordEdit { .. } => self.handle_record_edit(key),
@@ -3436,7 +3443,7 @@ impl App {
     /// everything `ticket_key` takes (`S` opens Slack here, so it is not ship).
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
-        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "B", "$", "S", "v", "V", "?", ":",
+        "q", "Q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "B", "$", "S", "v", "V", "?", ":",
         "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "K",
     ];
 
@@ -3448,7 +3455,8 @@ impl App {
             return Outcome::Continue;
         }
         match key.code {
-            KeyCode::Char('q') => return Outcome::Quit,
+            KeyCode::Char('q') if self.pending_counts() != (0, 0) => self.mode = Mode::ConfirmQuit,
+            KeyCode::Char('q' | 'Q') => return Outcome::Quit,
             KeyCode::Char('h') | KeyCode::Left => self.switch_column(-1),
             KeyCode::Char('l') | KeyCode::Right => self.switch_column(1),
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
@@ -3546,12 +3554,22 @@ impl App {
                     return self.bulk_key(c);
                 }
                 if let Some(id) = self.selected_id() {
-                    return self.ticket_key(c, &id);
+                    return self.board_key(c, &id);
                 }
             }
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// A ticket key from the board or its `x` menu. `a` at a gate that commits something opens the
+    /// task on its first page instead of approving: you read what you approve, and approve inside.
+    fn board_key(&mut self, c: char, id: &str) -> Outcome {
+        if c == 'a' && self.task(id).is_some_and(|t| t.waiting_on_you && self.approval_question(t).is_some()) {
+            self.open_detail(id.to_string());
+            return Outcome::Continue;
+        }
+        self.ticket_key(c, id)
     }
 
     /// `a`, `X`, `d` or `w` over the marked set. `a` goes straight to the machine for the
@@ -4380,8 +4398,14 @@ impl App {
     }
 
     fn handle_confirm(&mut self, key: KeyEvent, id: &str) -> Outcome {
+        // Only the approval takes enter as a yes: a delete or an abort wants the letter.
+        let yes = match key.code {
+            KeyCode::Char('y') => true,
+            KeyCode::Enter => matches!(self.mode, Mode::ConfirmApprove(_)),
+            _ => false,
+        };
         match key.code {
-            KeyCode::Char('y') => {
+            _ if yes => {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
                 match mode {
                     Mode::ConfirmDelete(_) => match self.machine.delete(id) {
@@ -4394,6 +4418,7 @@ impl App {
                     Mode::ConfirmWorktree(_) => {
                         self.act(|m| m.remove_worktree(id), "worktree removed");
                     }
+                    Mode::ConfirmApprove(_) => self.act(|m| m.decide(id, true, None), "approved"),
                     _ => self.act(|m| m.abort(id), "aborted; it waits for you"),
                 }
             }
@@ -4401,6 +4426,45 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// `q` on the board asked while something needs you or runs: y (enter, or q again) quits, n and esc stay.
+    fn handle_confirm_quit(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y' | 'q' | 'Q') | KeyCode::Enter => return Outcome::Quit,
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// What `q` would leave behind: the cards waiting on you (as the header counts them) and the cards running.
+    pub fn pending_counts(&self) -> (usize, usize) {
+        let needs = self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count();
+        (needs, self.tasks.iter().filter(|t| t.running).count())
+    }
+
+    /// The question `q` asks: `quit? 2 cards need you, 1 running`.
+    pub fn quit_question(&self) -> String {
+        let (needs, running) = self.pending_counts();
+        format!("quit? {needs} {} you, {running} running", if needs == 1 { "card needs" } else { "cards need" })
+    }
+
+    /// What approving `task` commits, as the box asks it (`approve the plan of #abcdef12?`), when
+    /// the card waits at a gate that commits something; None at the gates and states that do not.
+    pub fn approval_question(&self, task: &Task) -> Option<String> {
+        let short = task.short_id();
+        let open = self.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval());
+        match task.state.as_str() {
+            "awaiting_approval" => match open.and_then(|a| a.outcome()) {
+                None => Some(format!("approve the plan of #{short}?")),
+                Some("split") => Some(format!("approve the split of #{short}?")),
+                Some(_) => None,
+            },
+            "awaiting_ship" if task.waiting_on_you => Some(if keys::open_ship_approval(self, task) { format!("approve the release of #{short}?") } else { format!("ship #{short}?") }),
+            "reviewing_memory" if task.waiting_on_you => Some(format!("approve the retro's rules of #{short}?")),
+            _ => None,
+        }
     }
 
     /// Type to filter, up/down to move, enter to set the highlighted repo on the ticket.
@@ -4491,7 +4555,7 @@ impl App {
                 return Outcome::Continue;
             }
             if let Some(id) = self.selected_id() {
-                return self.ticket_key(c, &id);
+                return self.board_key(c, &id);
             }
         }
         Outcome::Continue
@@ -7349,5 +7413,236 @@ mod view_stack_tests {
         press(&mut app, KeyCode::Esc);
         let state = app.inbox.as_ref().expect("the inbox is back");
         assert_eq!((state.split, state.cursor), (crate::inbox::Split::All, 2));
+    }
+}
+
+#[cfg(test)]
+mod confirm_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        sync::{Arc, Mutex},
+    };
+
+    use super::*;
+    use crate::testkit::{open_card, plan_gate_app, release_question_app, render, running_build_app, ship_stage_app, task_json};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    /// A machine that answers `{}` to everything and records each POST's path: how a test sees that a
+    /// request was (or was not) sent.
+    fn recording_machine() -> (Machine, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let posts = Arc::new(Mutex::new(Vec::new()));
+        let seen = posts.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    request.push_str(&line);
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let mut parts = request.split_whitespace();
+                if let (Some("POST"), Some(path)) = (parts.next(), parts.next()) {
+                    seen.lock().unwrap().push(path.to_string());
+                }
+                let mut stream = reader.into_inner();
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), posts)
+    }
+
+    fn posts(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        seen.lock().unwrap().clone()
+    }
+
+    fn at_split_gate() -> App {
+        let task = task_json("aaaaaaaa7777", "Split the export work", "awaiting_approval", "Plan", serde_json::json!({"waitingOnYou": true}));
+        open_card(task, serde_json::json!({"approvals": [{"id": "p1", "kind": "awaiting_approval", "decision": null, "createdAt": "2026-10-22T09:50:00Z", "requested": {"outcome": "split", "brief": "b"}}]}))
+    }
+
+    fn at_memory_review() -> App {
+        let task = task_json("aaaaaaaa8888", "Retro for the export", "reviewing_memory", "Ship", serde_json::json!({"waitingOnYou": true}));
+        open_card(task, serde_json::json!({}))
+    }
+
+    /// Every gate that commits something: the card, its decision path and what the box asks.
+    fn gates() -> Vec<(&'static str, App, &'static str)> {
+        vec![
+            ("plan", plan_gate_app(), "approve the plan of #aaaaaaaa?"),
+            ("split", at_split_gate(), "approve the split of #aaaaaaaa?"),
+            ("ship", ship_stage_app(), "ship #dddddddd?"),
+            ("release", release_question_app(), "approve the release of #ffffffff?"),
+            ("memory", at_memory_review(), "approve the retro's rules of #aaaaaaaa?"),
+        ]
+    }
+
+    #[test]
+    fn approving_at_a_gate_asks_once_naming_the_action_and_the_card() {
+        for (name, mut app, question) in gates() {
+            press(&mut app, KeyCode::Char('a'));
+            assert!(matches!(app.mode, Mode::ConfirmApprove(_)), "{name}: a asks first");
+            let screen = render(&mut app, 140, 40);
+            assert!(screen.contains(question), "{name}: the box asks {question:?}:\n{screen}");
+            assert!(screen.contains(" y  yes") && screen.contains(" n  no"), "{name}: the answers show:\n{screen}");
+            assert!(screen.contains(&app.tasks[0].title), "{name}: the card stays on screen");
+        }
+    }
+
+    #[test]
+    fn n_and_esc_cancel_back_to_the_task_and_send_nothing() {
+        for (name, mut app, _) in gates() {
+            let (machine, seen) = recording_machine();
+            app.machine = machine;
+            let id = app.tasks[0].id.clone();
+            for cancel in [KeyCode::Char('n'), KeyCode::Esc] {
+                press(&mut app, KeyCode::Char('a'));
+                press(&mut app, cancel);
+                assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "{name}: back on the task");
+            }
+            assert!(posts(&seen).is_empty(), "{name}: nothing was sent: {:?}", posts(&seen));
+        }
+    }
+
+    #[test]
+    fn y_and_enter_approve_and_return_to_the_task() {
+        for (name, mut app, _) in gates() {
+            let (machine, seen) = recording_machine();
+            app.machine = machine;
+            let id = app.tasks[0].id.clone();
+            press(&mut app, KeyCode::Char('a'));
+            assert!(posts(&seen).is_empty(), "{name}: asking sends nothing");
+            press(&mut app, KeyCode::Char('y'));
+            assert_eq!(posts(&seen), vec![format!("/tasks/{id}/decision")], "{name}: y sends the decision");
+            assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "{name}: back on the task");
+            press(&mut app, KeyCode::Char('a'));
+            press(&mut app, KeyCode::Enter);
+            assert_eq!(posts(&seen).len(), 2, "{name}: enter confirms too");
+        }
+    }
+
+    #[test]
+    fn other_keys_do_not_answer_the_box() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('x'));
+        assert!(matches!(app.mode, Mode::ConfirmApprove(_)));
+    }
+
+    #[test]
+    fn answers_that_commit_nothing_keep_their_flow() {
+        // Send back is a prompt, not a confirmation.
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('r'));
+        assert!(matches!(app.mode, Mode::Reason { approve: false, .. }));
+        // A card that is running has nothing to approve: no box, a word in the footer.
+        let mut app = running_build_app();
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("running")));
+        // Triage's questions open the answers editor.
+        let mut app = crate::testkit::questions_app();
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Answer { .. }));
+    }
+
+    #[test]
+    fn a_on_the_board_at_a_gate_opens_the_task_and_sends_nothing() {
+        for (name, mut app, _) in gates() {
+            let (machine, seen) = recording_machine();
+            app.machine = machine;
+            let id = app.tasks[0].id.clone();
+            let first = Section::for_task(&app.tasks[0]);
+            app.mode = Mode::Normal;
+            app.select(&id, true);
+            press(&mut app, KeyCode::Char('a'));
+            assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "{name}: the task opens");
+            assert_eq!(app.detail_section, first, "{name}: on its first page");
+            assert!(posts(&seen).is_empty(), "{name}: nothing was approved unseen");
+        }
+    }
+
+    #[test]
+    fn a_on_the_board_keeps_its_meaning_on_other_cards() {
+        // A draft starts, as before.
+        let task = task_json("aaaaaaaa9999", "A draft", "draft", "Intake", serde_json::json!({}));
+        let mut app = open_card(task, serde_json::json!({}));
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        app.mode = Mode::Normal;
+        app.select("aaaaaaaa9999", true);
+        press(&mut app, KeyCode::Char('a'));
+        assert_eq!(posts(&seen), vec!["/tasks/aaaaaaaa9999/start".to_string()]);
+        // An escalated card asks for guidance.
+        let mut app = crate::testkit::escalated_app();
+        app.mode = Mode::Normal;
+        app.select("cccccccc3333", true);
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Reason { approve: true, .. }));
+    }
+
+    #[test]
+    fn the_board_says_what_a_will_do_for_the_selected_card() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        app.select("aaaaaaaa1111", true);
+        let label = |app: &App, scope: keys::Scope| keys::bindings_for(app, scope).into_iter().find(|(b, _)| b.first() == "a").map(|(b, _)| b.label);
+        assert_eq!(label(&app, keys::Scope::Board), Some("open to approve"));
+        app.toast = None;
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("open to approve"), "the board footer says it:\n{screen}");
+        app.open_detail("aaaaaaaa1111".to_string());
+        assert_eq!(label(&app, keys::Scope::Detail), Some("approve the plan"), "the task view still approves");
+    }
+
+    #[test]
+    fn q_asks_before_quitting_while_a_card_needs_you_or_runs() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Char('q'))), Outcome::Continue));
+        assert!(matches!(app.mode, Mode::ConfirmQuit));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("quit? 1 card needs you, 0 running"), "{screen}");
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Char('n'))), Outcome::Continue));
+        assert!(matches!(app.mode, Mode::Normal), "n stays");
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Esc)), Outcome::Continue));
+        assert!(matches!(app.mode, Mode::Normal), "esc stays");
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Char('y'))), Outcome::Quit), "y quits");
+    }
+
+    #[test]
+    fn q_counts_running_cards_too_and_quits_at_once_when_nothing_is_pending() {
+        let mut app = running_build_app();
+        app.mode = Mode::Normal;
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("quit? 0 cards need you, 1 running"), "{screen}");
+        let task = task_json("aaaaaaaa0001", "All done", "closed", "Done", serde_json::json!({}));
+        let mut quiet = open_card(task, serde_json::json!({}));
+        quiet.mode = Mode::Normal;
+        assert!(matches!(quiet.handle_key(KeyEvent::from(KeyCode::Char('q'))), Outcome::Quit), "nothing pending: quit at once");
+    }
+
+    #[test]
+    fn capital_q_quits_without_asking() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Char('Q'))), Outcome::Quit));
     }
 }

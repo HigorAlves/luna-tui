@@ -23,6 +23,8 @@ The board connects to whichever machine is up: the one from `pnpm dev` on `http:
 the container from `pnpm start` on `:4318`. It checks again on every reconnect, so switching between
 the two needs no restart. `HARDNESS_MACHINE_URL` pins one address instead. `LUNA_APPROVER` names you on every approval and send-back. A plan of High risk needs two distinct names. So the first `a` keeps your name on the gate (`Approvals  1 of 2 (ana)`), and a second person's `a` closes it.
 
+On the board, `a` at a plan, split, ship, release or memory gate opens the task so you read what you approve; inside the task `a` asks once (`y` or `enter` approves, `n` or `esc` cancels). `q` asks before quitting while a card needs you or is running, and `Q` quits at once.
+
 ## Install as a herdr plugin (local link)
 
 ```sh
@@ -89,7 +91,7 @@ generates the tables below. A test fails when they drift from the registry.
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; open to approve; archive the ticket (one click); post the reply and close the ticket; approve the tests; retry the escalation, with guidance; resume after the usage limit; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
@@ -172,7 +174,8 @@ generates the tables below. A test fails when they drift from the registry.
 | `:` | command palette |
 | `esc` | clear the filter and the marks |
 | `?` | keys |
-| `q` | quit |
+| `q` | quit (asks if something is pending) |
+| `Q` | quit without asking |
 
 **Commands (type after :)**
 

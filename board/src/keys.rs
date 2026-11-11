@@ -171,6 +171,8 @@ pub struct Binding {
     pub weight: u8,
     /// The `:` form, when there is one.
     pub command: Option<&'static str>,
+    /// What the board calls it when that differs: `a` at a gate opens the task there, and approves inside it.
+    pub on_board: Option<&'static str>,
 }
 
 impl std::fmt::Debug for Binding {
@@ -382,7 +384,12 @@ fn in_insert(app: &App) -> Avail {
 // ---------- the table ----------
 
 const fn b(keys: &'static str, label: &'static str, group: Group, scope: Scope, when: fn(&App) -> Avail, weight: u8) -> Binding {
-    Binding { keys, label, group, scope, when, weight, command: None }
+    Binding { keys, label, group, scope, when, weight, command: None, on_board: None }
+}
+
+/// A shared binding the board words differently: the key opens the task instead of acting at once.
+const fn opens_on_board(binding: Binding) -> Binding {
+    Binding { on_board: Some("open to approve"), ..binding }
 }
 
 const fn cmd(binding: Binding, command: &'static str) -> Binding {
@@ -395,16 +402,16 @@ const SHARED: &[Binding] = &[
     cmd(b("a", "start", Group::Gate, Scope::Board, |app| gate_is(app, &["draft"]), 90), "start"),
     b("a", "approve the setup", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_setup"]), 90),
     b("a", "answer triage's questions", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_answers"]), 90),
-    b("a", "approve the plan", Group::Gate, Scope::Board, |app| plan_gate(app, None), 90),
-    b("a", "approve the split", Group::Gate, Scope::Board, |app| plan_gate(app, Some("split")), 90),
+    opens_on_board(b("a", "approve the plan", Group::Gate, Scope::Board, |app| plan_gate(app, None), 90)),
+    opens_on_board(b("a", "approve the split", Group::Gate, Scope::Board, |app| plan_gate(app, Some("split")), 90)),
     b("a", "archive the ticket (one click)", Group::Gate, Scope::Board, |app| plan_gate(app, Some("archive")), 90),
     b("a", "post the reply and close the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90),
     b("a", "approve the tests", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_test_check"]), 90),
-    b("a", "ship: publish, watch the PR", Group::Gate, Scope::Board, |app| ship_gate(app, false), 90),
-    b("a", "ship: approve the release", Group::Gate, Scope::Board, |app| ship_gate(app, true), 90),
+    opens_on_board(b("a", "ship: publish, watch the PR", Group::Gate, Scope::Board, |app| ship_gate(app, false), 90)),
+    opens_on_board(b("a", "ship: approve the release", Group::Gate, Scope::Board, |app| ship_gate(app, true), 90)),
     b("a", "retry the escalation, with guidance", Group::Gate, Scope::Board, |app| gate_is(app, &["escalated"]), 90),
     b("a", "resume after the usage limit", Group::Gate, Scope::Board, |app| gate_is(app, &["paused_rate_limit"]), 90),
-    b("a", "approve the memory review", Group::Gate, Scope::Board, |app| gate_is(app, &["reviewing_memory"]), 90),
+    opens_on_board(b("a", "approve the memory review", Group::Gate, Scope::Board, |app| gate_is(app, &["reviewing_memory"]), 90)),
     b("a", "advance", Group::Gate, Scope::Board, advance_fallback, 90),
     b(
         "T",
@@ -613,7 +620,8 @@ const BOARD: &[Binding] = &[
     b(":", "command palette", Group::App, Scope::Board, on, 30),
     b("esc", "clear the filter and the marks", Group::App, Scope::Board, on, 20),
     cmd(b("?", "keys", Group::App, Scope::Board, on, 100), "help"),
-    cmd(b("q", "quit", Group::App, Scope::Board, on, 60), "q"),
+    cmd(b("q", "quit (asks if something is pending)", Group::App, Scope::Board, on, 60), "q"),
+    b("Q", "quit without asking", Group::App, Scope::Board, on, 5),
     // Commands: what `:` understands.
     cmd(b(":q", "quit", Group::Commands, Scope::Board, on, 0), "q"),
     cmd(b(":new <title>", "new ticket, then edit it in place", Group::Commands, Scope::Board, on, 0), "new"),
@@ -883,6 +891,9 @@ const fn copy_into(rows: &[Binding], scope: Scope, except: &str, out: &mut [Bind
         let mut row = rows[j];
         if !str_eq(row.keys, except) {
             row.scope = scope;
+            if let (Scope::Board, Some(label)) = (scope, row.on_board) {
+                row.label = label;
+            }
             out[*at] = row;
             *at += 1;
         }
@@ -1035,6 +1046,14 @@ fn acts_on_card(b: &Binding) -> bool {
 
 /// What the footer and the decision bar call a key: the label cut to the word they have room for
 /// (`approve the plan` is `approve`, `ship: publish, watch the PR` is `ship`).
+/// The word the board's footer gives `a`: what it does for the selected card (`open to approve` at a gate), else `advance`.
+pub fn board_a_label(app: &App) -> &'static str {
+    match bindings_for(app, Scope::Board).into_iter().find(|(b, avail)| b.first() == "a" && avail.is_on()) {
+        Some((b, _)) if b.on_board.is_some() => "open to approve",
+        _ => "advance",
+    }
+}
+
 pub fn terse_label(app: &App, b: &Binding) -> String {
     match b.first() {
         "h" => return "section".into(),
@@ -1431,7 +1450,9 @@ mod tests {
         }
         let approval = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
         let a = bindings_for(&approval, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
-        assert_eq!((a.0.label, a.1), ("approve the plan", Avail::On));
+        assert_eq!((a.0.label, a.1), ("open to approve", Avail::On), "on the board `a` opens the gate to read it");
+        let in_task = bindings_for(&approval, Scope::Detail).into_iter().find(|(b, _)| b.keys == "a").unwrap();
+        assert_eq!((in_task.0.label, in_task.1), ("approve the plan", Avail::On), "inside the task it approves");
         // A gate triage opened for a reply or an archive says what `a` does there, once its detail is loaded.
         for (outcome, label) in [("archive", "archive the ticket (one click)"), ("conversation", "post the reply and close the ticket")] {
             let mut gate = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
@@ -1463,7 +1484,7 @@ mod tests {
             gate
         };
         let shown = |app: &App, key: &str| bindings_for(app, Scope::Board).into_iter().filter(|(b, a)| b.keys == key && *a != Avail::Hidden).map(|(b, _)| b.label).collect::<Vec<_>>();
-        assert_eq!(shown(&at("split"), "a"), ["approve the split"]);
+        assert_eq!(shown(&at("split"), "a"), ["open to approve"], "the board opens the split; the task view approves it");
         assert_eq!(shown(&at("split"), "N"), ["reject the split, with a comment"]);
         assert!(shown(&at("split_failed"), "a").is_empty(), "a failed split has nothing to approve: {:?}", shown(&at("split_failed"), "a"));
         assert_eq!(shown(&at("split_failed"), "N"), ["reject the split, with a comment"]);
@@ -1544,14 +1565,14 @@ mod tests {
         let names = |app: &App| footer_keys(app, Scope::Board, 7).into_iter().map(|b| format!("{} {}", b.keys, b.label)).collect::<Vec<_>>();
         let approval = names(&app_with(vec![task("t1", "awaiting_approval", true, false, true)]));
         assert_eq!(approval[0], "? keys");
-        assert_eq!(approval[1], "a approve the plan");
+        assert_eq!(approval[1], "a open to approve");
         assert!(approval.contains(&"r send back with a reason".to_string()) && approval.contains(&"e edit the plan and the ticket".to_string()), "{approval:?}");
         let draft = names(&app_with(vec![task("t1", "draft", false, false, false)]));
         assert_eq!(draft[1], "a start");
         assert!(draft.contains(&"R set the repo (search)".to_string()), "a draft without a repo weights R up: {draft:?}");
         assert!(!draft.iter().any(|k| k.starts_with("r ")), "nothing to send back on a draft: {draft:?}");
         let ship = names(&app_with(vec![task("t1", "awaiting_ship", true, false, true)]));
-        assert_eq!(ship[1], "a ship: publish, watch the PR");
+        assert_eq!(ship[1], "a open to approve");
         assert!(footer_keys(&approval_app(), Scope::Board, 7).iter().all(|b| b.menu_key().is_none()), "no menu chords in the footer");
     }
 
