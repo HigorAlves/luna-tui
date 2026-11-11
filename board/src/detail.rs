@@ -3281,7 +3281,7 @@ mod frame_tests {
     #[test]
     fn an_escalated_card_wears_the_lost_role_on_the_card_the_bar_the_rail_and_the_stopped_heading() {
         let mut app = escalated_app();
-        let want = theme::lost().fg;
+        let want = theme::lost().fg.filter(|fg| *fg != ratatui::style::Color::Reset);
         let found = glyph_colours(&mut app, "✗", Section::Stopped);
         // The board card, the bar, the rail's Stopped marker and the page's heading.
         assert!(found.len() >= 4, "{found:?}");
@@ -3295,12 +3295,12 @@ mod frame_tests {
         let mut app = escalated_app();
         app.tasks[0].state = "paused_rate_limit".into();
         app.tasks[0].column = "Build".into();
-        let want = theme::paused().fg;
+        let want = theme::paused().fg.filter(|fg| *fg != ratatui::style::Color::Reset);
         let found = glyph_colours(&mut app, "⏳", Section::Overview);
         assert!(found.len() >= 2, "{found:?}");
         assert!(found.iter().all(|fg| *fg == want), "every ⏳ is the paused role {want:?}: {found:?}");
         let bar = crate::detail::bar_status(&app.tasks[0], app.detail.as_ref(), 0);
-        assert_eq!(bar.style.fg, want);
+        assert_eq!(bar.style.fg.filter(|fg| *fg != ratatui::style::Color::Reset), want);
     }
 
     #[test]

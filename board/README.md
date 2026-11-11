@@ -23,7 +23,7 @@ The board connects to whichever machine is up: the one from `pnpm dev` on `http:
 the container from `pnpm start` on `:4318`. It checks again on every reconnect, so switching between
 the two needs no restart. `HARDNESS_MACHINE_URL` pins one address instead. `LUNA_APPROVER` names you on every approval and send-back. A plan of High risk needs two distinct names. So the first `a` keeps your name on the gate (`Approvals  1 of 2 (ana)`), and a second person's `a` closes it.
 
-On the board, `a` at a plan, split, ship, release or memory gate opens the task so you read what you approve; inside the task `a` asks once (`y` or `enter` approves, `n` or `esc` cancels). `q` asks before quitting while a card needs you or is running, and `Q` quits at once.
+On the board, `a` at a plan, split, ship, release or memory gate opens the task so you read what you approve; inside the task `a` asks once (`y` or `enter` approves, `n` or `esc` cancels). `a` over marked cards at those gates asks once, with the count and the kinds. `q` asks before quitting while a card needs you or is running, and `Q` quits at once. `tab` on the board jumps to the next card that needs you. Columns collapse by width: empty ones first, then Done, and the header says where the rest are.
 
 ## Install as a herdr plugin (local link)
 
@@ -69,7 +69,7 @@ Press a bright key to close the sheet and run it. A dim key only says why it doe
 Under a popup, the layer beneath folds to one line at the bottom
 (`▸ board keys: …`). The sheet has two columns from 100 columns wide, and one below.
 
-The footer is a few short words per view (`? help  n new  a advance  enter open  x actions …`).
+The footer of each view lists the keys that work now, most useful first, cut to the terminal's width, and ends with `? all keys`.
 `?` has the rest. After `g` or `z` with no second
 key for 400 ms, the board lists the second keys (`g ▸  g first ticket …  s order columns by stage …`).
 Inside an editor `?` types a character. So the editor's title carries its keys and follows the
@@ -218,8 +218,12 @@ generates the tables below. A test fails when they drift from the registry.
 
 ## Tickets
 
-`enter` opens a ticket in a popup over the board. Inside it, a rail of nine sections sits on the
-left. On a terminal under 100 columns, a tab strip replaces the rail. One pane sits on the right.
+`enter` opens a ticket in a popup over the board. A fixed bar on top says what the card needs and
+lists the keys that answer it. Under it, a rail of sections sits on the left. On a terminal under 100
+columns, a tab strip replaces the rail. One pane sits on the right, and it opens on the first page for
+the card's state: Review at the plan gate, Now while a stage runs, Stopped when it failed, Result when
+it is done, Question when it asks you something. The rail lists the sections that have something to show.
+Facts such as risk, checks, the code map and the card itself sit in reference groups: `tab` moves to them and `space` folds one.
 `h`/`l` or `1`…`9` switch sections.
 `j`/`k` scroll the pane or pick a row where the section lists some.
 `J`/`K` scroll a line there. `ctrl+d`/`ctrl+u` and PgDn/PgUp scroll half a page anywhere.
@@ -229,13 +233,13 @@ A ticket that Luna Notch sent wears `notch LUNA-14` (its work order's ref), dim,
 An issue's `#42` or a Jira issue's `PLAT-123` appears the same way on the card.
 Every section draws from everything the machine knows
 about the ticket, whether or not someone decided a gate. The approved plan stays readable after `a`.
-While a gate is open, its strip sits on top of every section with the keys that answer it.
+`a` asks once before it approves. Evidence opens with `o` (the folder), `enter` (the file) and `O` (the PR), or a click. `i` opens the linked issue from any section. `esc` returns to the view the card was opened from.
 
 | Section | Shows | Keys inside |
 |---|---|---|
 | Overview | the status. One row per acceptance criterion: its state in the plan, how many cases prove it, what verifying found. Repo, branch, issue, the Jira link, the SLA clocks, why, spend. The ticket's description and criteria. A setup gate's `luna.yaml` and proof, triage's questions, the memory review's rules | `e` edits the ticket's text, `J` links or unlinks the Jira issue |
-| Plan | triage's latest plan (brief, criteria, assumptions, slices) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate |
-| Tests | test_design's cases under the criterion each proves, with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
+| Plan | triage's latest plan, read like the Review page (brief, each criterion with its id, steps with size and files, rollback) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate |
+| Tests | test_design's scenarios under the criterion each proves (id, type, layer, title), with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
 | Runs | every stage run with how long it took, its cost and turns. The selected run's error, per-case verdicts and files. It opens on the latest run | `j`/`k` pick a run, `J`/`K` scroll |
 | Diff | the branch against its base: files with +/−, the selected file's patch. The machine sends at most 512 KB of it. The pane says when it cut | `j`/`k` pick a file, `J`/`K` scroll the patch, `o` opens the file from the worktree |
 | Evidence | every artifact the stages produced, by run, under the folder they live in; then the QA verdict. Opens on the latest | `j`/`k` pick a file, `J`/`K` scroll, `enter` opens the file, `o` the folder, `O` the PR; a click selects a row, a second click opens it, a click on `Folder` opens the folder |
