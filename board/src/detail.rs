@@ -15,8 +15,10 @@ use crate::model::{
     Approval, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TaskSource, TestCase, Tone, age, criteria_summary, now_secs,
     plan_history, questions_of,
 };
+use crate::text::{cells, ellipsis};
+use crate::theme;
 use crate::ui::{
-    ACCENT, BASE, GREEN, MUTED, PEACH, RED, SUBTEXT0, YELLOW, bullets, c, centered, continues_line, describe, evidence_lines,
+    ACCENT, GREEN, MUTED, PEACH, RED, SUBTEXT0, YELLOW, bullets, c, centered, continues_line, describe, evidence_lines,
     json_list, look_color, look_glyph, proof_lines, rules_lines, slice_lines, truncate,
 };
 
@@ -117,6 +119,8 @@ pub struct DetailView<'a> {
     pub engines: Option<&'a Result<EngineCatalog, String>>,
     /// The board's current cards, to name a split's origin and children by title.
     pub tasks: &'a [Task],
+    /// The keys the decision bar offers now, `(keys, label)` heaviest first (`keys::card_actions`).
+    pub actions: &'a [(String, String)],
 }
 
 /// A terminal this wide or wider lays the rail beside the pane; narrower, the rail becomes a
@@ -140,33 +144,33 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
             Span::from(task.source.as_ref().and_then(TaskSource::notch_tag).map(|t| format!("{t} ")).unwrap_or_default()).fg(c(SUBTEXT0)),
             Span::from(format!("{} ", crate::model::plain(&task.title, 400))).bold(),
         ]))
-        .title_bottom(
-            Line::from(format!(
-                " {} {}{} · h/l sections · {} · + size · ? help ",
-                look_glyph(look),
-                task.status_label(),
-                detail.and_then(TaskDetail::running_engine).map(|e| format!(" on {e}")).unwrap_or_default(),
-                if view.section.has_cursor() { "j/k pick · J/K scroll" } else { "j/k scroll" }
-            ))
-                .fg(c(look_color(look)))
-                .left_aligned(),
-        )
         .title_bottom(Line::from(format!(" {} · {} ago ", task.column, age(&task.updated_at, now))).fg(c(SUBTEXT0)).right_aligned());
 
     frame.render_widget(Clear, area);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // The frame is three rows of layers: the decision bar (never scrolls), a rule that joins the
+    // border, and the body. The body is a rail beside the pane (a tab strip above it when narrow);
+    // a reference side pane attaches by splitting `pane_area` below, before `viewport` is set.
+    let [bar_area, rule_area, body] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+    let wide = inner.width >= RAIL_FROM;
+    let status = bar_status(task, detail, now);
+    frame.render_widget(Paragraph::new(bar_line(bar_area.width as usize, &status.text, status.style, view.actions, &status.note)), bar_area);
+    let tee = wide.then_some((inner.x - area.x + RAIL_WIDTH) as usize);
+    let rule = Rect { x: area.x, width: area.width, ..rule_area };
+    frame.render_widget(Paragraph::new(rule_line(area.width as usize, tee).style(Style::new().fg(c(look_color(look))))), rule);
+
     let cells: Vec<(Section, String, Span<'static>)> = Section::ALL.iter().map(|s| (*s, s.label().to_string(), rail_status(*s, view, detail))).collect();
-    let pane_area = if inner.width >= RAIL_FROM {
+    let pane_area = if wide {
         let [rail_area, sep, pane_area] =
-            Layout::horizontal([Constraint::Length(RAIL_WIDTH), Constraint::Length(2), Constraint::Min(0)]).areas(inner);
+            Layout::horizontal([Constraint::Length(RAIL_WIDTH), Constraint::Length(2), Constraint::Min(0)]).areas(body);
         render_rail(frame, rail_area, &cells, view.section);
         let rule: Vec<Line> = (0..sep.height).map(|_| Line::from(Span::from("│ ").fg(c(MUTED)))).collect();
         frame.render_widget(Paragraph::new(rule), sep);
         pane_area
     } else {
-        let [strip, rule, pane_area] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+        let [strip, rule, pane_area] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)]).areas(body);
         render_strip(frame, strip, &cells, view.section);
         frame.render_widget(Paragraph::new(Line::from(Span::from("─".repeat(rule.width as usize)).fg(c(MUTED)))), rule);
         pane_area
@@ -175,8 +179,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     let height = pane_area.height as usize;
     let width = pane_area.width as usize;
     view.viewport.set(pane_area.height);
-    let mut lines: Vec<Line> = gate_strip(task, detail).map(|strip| vec![strip, Line::default()]).unwrap_or_default();
-    let above = lines.len();
+    let mut lines: Vec<Line> = Vec::new();
     let follow = view.follow.replace(false);
 
     if view.section == Section::Diff {
@@ -184,14 +187,14 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         // a row of scroll is a line of the patch.
         let head = diff_head(task, view.diff, view.cursor, width);
         let body_len = head.patch.map_or(1, |p| p.lines().count());
-        let total = above + head.lines.len() + body_len + head.tail.len();
+        let total = head.lines.len() + body_len + head.tail.len();
         let mut offset = view.scroll.get() as usize;
         if follow && let Some(row) = head.cursor_row {
-            offset = keep_visible(offset, above + row, height);
+            offset = keep_visible(offset, row, height);
         }
         let offset = offset.min(total.saturating_sub(height));
         view.scroll.set(offset as u16);
-        let body_from = offset.saturating_sub(above + head.lines.len()).min(body_len);
+        let body_from = offset.saturating_sub(head.lines.len()).min(body_len);
         lines.extend(head.lines);
         match head.patch {
             Some(patch) => lines.extend(patch.lines().skip(body_from).take(height).map(patch_line)),
@@ -199,6 +202,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         }
         lines.extend(head.tail);
         frame.render_widget(Paragraph::new(Text::from(lines)).scroll(((offset - body_from) as u16, 0)), pane_area);
+        scroll_markers(frame, pane_area, offset, total);
         return;
     }
 
@@ -220,11 +224,34 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     let total = paragraph.line_count(pane_area.width);
     let mut offset = view.scroll.get() as usize;
     if follow && let Some(row) = cursor_row {
-        offset = keep_visible(offset, above + row, height);
+        offset = keep_visible(offset, row, height);
     }
     let offset = offset.min(total.saturating_sub(height));
     view.scroll.set(offset as u16);
     frame.render_widget(paragraph.scroll((offset as u16, 0)), pane_area);
+    scroll_markers(frame, pane_area, offset, total);
+}
+
+/// `▲ N above` over the pane's first row once it is scrolled, `▼ N more` over its last while
+/// content continues. A marker replaces its row, so N counts what is not on screen, that row's
+/// line included.
+fn scroll_markers(frame: &mut Frame, pane: Rect, offset: usize, total: usize) {
+    let height = pane.height as usize;
+    if height < 3 {
+        return;
+    }
+    let mut mark = |y: u16, text: String| {
+        let row = Rect { y, height: 1, ..pane };
+        frame.render_widget(Clear, row);
+        frame.render_widget(Paragraph::new(Line::from(Span::from(text).style(theme::dim())).right_aligned()), row);
+    };
+    if offset > 0 {
+        mark(pane.y, format!("▲ {} above", offset + 1));
+    }
+    let below = total.saturating_sub(offset + height);
+    if below > 0 {
+        mark(pane.y + pane.height - 1, format!("▼ {} more", below + 1));
+    }
 }
 
 /// The scroll offset that keeps `row` inside a window of `height` rows, moving as little as
@@ -404,31 +431,27 @@ fn run_glyph(run: &StageRun) -> (&'static str, ratatui::style::Color) {
     }
 }
 
-/// The one line that says what the ticket waits on you for and which keys answer, on top
-/// of every section while a gate is open (or the ticket is escalated or paused).
-pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'static>> {
-    // The watch and the retro are not gates: the strip says nothing unless the machine waits on you.
+/// The question the ticket waits on you for, in plain words (`approve the plan?`, `answer 2
+/// questions`, `ship this PR?`), with what the machine says about who may answer. None when nothing
+/// waits at a gate: the watch and the retro are not gates unless the machine waits on you.
+pub fn gate_question(task: &Task, detail: Option<&TaskDetail>) -> Option<String> {
     if matches!(task.state.as_str(), "awaiting_ship" | "reviewing_memory") && !task.waiting_on_you {
         return None;
     }
-    let look = task.look();
-    let gate = detail.and_then(|d| d.open_approval()).filter(|a| a.kind_or_guess() == "awaiting_approval");
-    let approve_plan = match gate {
-        Some(a) if a.outcome() == Some("archive") => "a archive the ticket · r send back (triage again)".to_string(),
-        Some(a) if a.outcome() == Some("conversation") => "a post the reply and close · r send back (triage again)".to_string(),
-        Some(a) if a.outcome() == Some("split_failed") => ":whole keep it as one card · r send back · N reject".to_string(),
+    let open = detail.and_then(|d| d.open_approval());
+    let gate = open.filter(|a| a.kind_or_guess() == "awaiting_approval");
+    let plan = match gate {
+        Some(a) if a.outcome() == Some("archive") => "archive this ticket?".to_string(),
+        Some(a) if a.outcome() == Some("conversation") => "post the reply and close the ticket?".to_string(),
+        Some(a) if a.outcome() == Some("split_failed") => "the split failed: keep it whole, send back or reject?".to_string(),
         Some(a) if a.outcome() == Some("split") => {
             let n = a.split_children().len();
             let what = if a.requested["split"]["via"].as_str() == Some("tickets") { format!("{n} ticket{}", if n == 1 { "" } else { "s" }) } else { format!("{n} card{}", if n == 1 { "" } else { "s" }) };
             let who = match a.names_needed() {
                 1 => String::new(),
-                needed => {
-                    let word = if needed == 2 { "two".to_string() } else { needed.to_string() };
-                    let outside = if matches!(a.requested["approvalRule"]["outside"].as_str(), Some("at_approval" | "required")) { ", one outside the owning team when CODEOWNERS applies" } else { "" };
-                    format!(" ({word} names: {word} different people{outside})")
-                }
+                needed => format!(" · {} different people", if needed == 2 { "two".to_string() } else { needed.to_string() }),
             };
-            format!("a approve the split ({what}){who} · r send back · N reject · :whole keep it as one card")
+            format!("approve the split ({what})?{who}")
         }
         Some(a) if a.names_needed() > 1 => {
             let needed = a.names_needed();
@@ -438,34 +461,153 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
                 have if have + 1 == needed => format!("last of {word} approvers"),
                 _ => format!("next of {word} approvers"),
             };
-            format!("a approve ({who}) · r send back · e edit the plan")
+            format!("approve the plan? · {who}")
         }
-        _ => "a approve · r send back · e edit the plan".to_string(),
+        _ => "approve the plan?".to_string(),
     };
-    let release = detail.and_then(|d| d.open_approval()).filter(|a| a.is_ship_approval());
-    let release_keys = if release.is_some_and(|a| a.requested["risk"].as_str() == Some("high")) || (release.is_some() && ship_risk_is_high(detail)) {
-        "S approve the release · N reject and archive (high risk: a release owner, not one of the plan's approvers)"
-    } else {
-        "S approve the release · N reject and archive"
-    };
-    let keys = match task.state.as_str() {
-        "awaiting_approval" => approve_plan.as_str(),
-        "awaiting_test_check" => "a approve · r send back · e edit the cases",
-        "awaiting_setup" => "a write luna.yaml · r send back",
-        "awaiting_answers" => "a answer the questions",
-        "awaiting_ship" if task.route == "review" => "a post the verdict · r drop it",
-        "awaiting_ship" if release.is_some() => release_keys,
-        "awaiting_ship" if ship_risk_is_high(detail) => "S publish and watch the PR (high risk: a release owner will be asked after the checks) · r send back",
-        "awaiting_ship" => "S publish and watch the PR · r send back",
-        "reviewing_memory" => "a apply the rules · A skip them",
-        "escalated" => "a retry (guidance optional) · X abort",
-        "paused_rate_limit" => "a resume now",
+    let release = open.filter(|a| a.is_ship_approval());
+    let high = release.is_some_and(|a| a.requested["risk"].as_str() == Some("high")) || (release.is_some() && ship_risk_is_high(detail));
+    Some(match task.state.as_str() {
+        "awaiting_approval" => plan,
+        "awaiting_test_check" => "approve the tests?".to_string(),
+        "awaiting_setup" => "approve the setup?".to_string(),
+        "awaiting_answers" => match open.map(|a| questions_of(a).len()) {
+            Some(n) if n > 0 => format!("answer {n} question{}", if n == 1 { "" } else { "s" }),
+            _ => "answer the questions".to_string(),
+        },
+        "awaiting_ship" if task.route == "review" => "post the verdict?".to_string(),
+        "awaiting_ship" if release.is_some() && high => "approve the release? · high risk: a release owner, not one of the plan's approvers".to_string(),
+        "awaiting_ship" if release.is_some() => "approve the release?".to_string(),
+        "awaiting_ship" if ship_risk_is_high(detail) => "ship this PR? · high risk: a release owner is asked after the checks".to_string(),
+        "awaiting_ship" => "ship this PR?".to_string(),
+        "reviewing_memory" => "apply the memory rules?".to_string(),
         _ => return None,
+    })
+}
+
+/// What the decision bar says: the state's glyph and words in the state's role style, and the
+/// short note that goes right-aligned.
+pub struct BarStatus {
+    pub text: String,
+    pub style: Style,
+    pub note: String,
+}
+
+/// The role style of a card's `Look`: the one colour for "needs you", one for running, for stopped, for done.
+fn look_style(look: crate::model::Look) -> Style {
+    use crate::model::Look;
+    match look {
+        Look::Escalated => theme::lost(),
+        Look::NeedsYou | Look::Stale => theme::needs_you(),
+        Look::Working => theme::working(),
+        Look::Done => theme::done(),
+        Look::Archived => theme::dim(),
+        Look::Queued | Look::Paused | Look::Draft => theme::label(),
+    }
+}
+
+/// `S3 of 4`: the scenario Build is on, from the progress the machine reports; None without any.
+fn slice_progress(detail: Option<&TaskDetail>) -> Option<String> {
+    let scenarios = &detail?.build_progress.as_ref()?.scenarios;
+    let green = scenarios.iter().filter(|s| s.state == "green").count();
+    (!scenarios.is_empty()).then(|| format!("S{} of {}", (green + 1).min(scenarios.len()), scenarios.len()))
+}
+
+/// The bar's content for a card: the gate's question, `escalated · why`, or what runs
+/// (`implementing · S3 of 4 · $0.63 · 2m`); the note holds `1 check flagged` at a plan gate.
+pub fn bar_status(task: &Task, detail: Option<&TaskDetail>, now: u64) -> BarStatus {
+    let look = task.look();
+    let words = if task.state == "escalated" {
+        let why = detail
+            .and_then(|d| d.approvals.iter().rev().find(|a| a.kind_or_guess() == "escalated" && a.decision.is_none()))
+            .and_then(|a| a.requested["escalationDecision"]["reason"].as_str())
+            .or(task.reason.as_deref());
+        match why {
+            Some(why) => format!("escalated · {}", ellipsis(&plain(why), 80)),
+            None => "escalated".to_string(),
+        }
+    } else if let Some(question) = gate_question(task, detail) {
+        question
+    } else if task.running || task.queued {
+        let started = detail.and_then(|d| d.stage_runs.iter().rev().find(|r| r.status == "running")).and_then(|r| r.started_at.as_deref()).map(|at| age(at, now));
+        let cost = detail.and_then(TaskDetail::spent_usd).or(task.spent_usd).map(|usd| format!("${usd:.2}"));
+        let stage = task.status_label() + &detail.and_then(TaskDetail::running_engine).map(|e| format!(" on {}", plain(e))).unwrap_or_default();
+        let parts = [Some(stage), slice_progress(detail), cost, started.filter(|a| !a.is_empty())];
+        parts.into_iter().flatten().collect::<Vec<_>>().join(" · ")
+    } else {
+        task.status_label()
     };
-    Some(Line::from(vec![
-        Span::from(format!(" {} {} ", look_glyph(look), task.status_label())).fg(c(BASE)).bg(c(look_color(look))).bold(),
-        Span::from(format!(" {keys}")).fg(c(look_color(look))),
-    ]))
+    let mut notes = Vec::new();
+    if task.state == "awaiting_approval" {
+        let flagged = detail.and_then(|d| d.latest_approval("awaiting_approval")).map_or(0, |a| a.checks().iter().filter(|(_, verdict)| verdict == "flag").count());
+        if flagged > 0 {
+            notes.push(format!("{flagged} check{} flagged", if flagged == 1 { "" } else { "s" }));
+        }
+        if detail.and_then(|d| d.open_approval()).and_then(|a| a.outcome()).is_some_and(|o| matches!(o, "split" | "split_failed")) {
+            notes.push(":whole keeps it one card".to_string());
+        }
+    }
+    BarStatus { text: format!("{} {}", look_glyph(look), plain(&words)), style: look_style(look).add_modifier(ratatui::style::Modifier::BOLD), note: notes.join(" · ") }
+}
+
+/// The bar row: the status first, then the keys that apply (the key in bold), the note right-aligned.
+/// Too wide, it drops keys from the lowest priority, then the note, and never the status (which is
+/// cut with an ellipsis only when it alone is wider than the row).
+pub fn bar_line(width: usize, status: &str, style: Style, keys: &[(String, String)], note: &str) -> Line<'static> {
+    const MAX_KEYS: usize = 5;
+    let key_w = |(key, label): &(String, String)| cells(key) + 1 + cells(label);
+    let needed = |keys: &[(String, String)], note: &str| {
+        let keys_w = if keys.is_empty() { 0 } else { 4 + keys.iter().map(key_w).sum::<usize>() + 3 * (keys.len() - 1) };
+        cells(status) + keys_w + if note.is_empty() { 0 } else { 2 + cells(note) }
+    };
+    let mut shown: Vec<(String, String)> = keys.iter().take(MAX_KEYS).cloned().collect();
+    let mut note = note.to_string();
+    while needed(&shown, &note) > width {
+        if shown.pop().is_none() {
+            if note.is_empty() {
+                break;
+            }
+            note.clear();
+        }
+    }
+    let status = if cells(status) > width { ellipsis(status, width) } else { status.to_string() };
+    let mut spans = vec![Span::from(status.clone()).style(style)];
+    let mut used = cells(&status);
+    if !shown.is_empty() {
+        spans.push(Span::raw("    "));
+        used += 4;
+    }
+    for (i, (key, label)) in shown.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("   "));
+            used += 3;
+        }
+        spans.push(Span::from(key.clone()).bold());
+        spans.push(Span::from(format!(" {label}")).style(theme::label()));
+        used += key_w(&(key.clone(), label.clone()));
+    }
+    if !note.is_empty() {
+        spans.push(Span::raw(" ".repeat(width.saturating_sub(used + cells(&note)))));
+        spans.push(Span::from(note).style(theme::flag()));
+    }
+    Line::from(spans)
+}
+
+/// The rule under the bar, drawn across the border cells so it joins the frame: `├────┬────┤`,
+/// the `┬` where the rail's separator starts when `tee` says so.
+fn rule_line(width: usize, tee: Option<usize>) -> Line<'static> {
+    let mut text: String = (0..width)
+        .map(|x| match (x, tee) {
+            (0, _) => '├',
+            (x, _) if x + 1 == width => '┤',
+            (x, Some(t)) if x == t => '┬',
+            _ => '─',
+        })
+        .collect();
+    if width == 0 {
+        text.clear();
+    }
+    Line::from(text)
 }
 
 /// Whether the ship gate's Evidence Pack is High risk: shipping then needs an approver who did not approve the plan.
@@ -1651,7 +1793,7 @@ mod tests {
     ) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let scroll = Cell::new(0);
-        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[] };
+        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[] };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect()
@@ -1804,7 +1946,7 @@ mod tests {
         for s in Section::ALL {
             assert!(text.contains(s.label()), "{}: {text}", s.label());
         }
-        let rail = |label: &str| rows.iter().find(|r| r[..14.min(r.len())].contains(label) || r.contains(&format!(" {label}"))).cloned().unwrap_or_default();
+        let rail = |label: &str| rows.iter().find(|r| r.chars().take(14).collect::<String>().contains(label) || r.contains(&format!(" {label}"))).cloned().unwrap_or_default();
         let plan_row = rows.iter().find(|r| r.contains("▌Plan")).expect("the active section is marked");
         assert!(plan_row.contains("✓"), "the plan is approved: {plan_row}");
         assert!(rail("Tests").contains("3 ✓"), "three cases, checked: {}", rail("Tests"));
@@ -1845,14 +1987,15 @@ mod tests {
     }
 
     #[test]
-    fn an_open_gate_puts_its_strip_on_top_of_every_section() {
+    fn an_open_gate_puts_its_bar_on_top_of_every_section() {
         let (mut task, mut detail) = fixture();
         task.state = "awaiting_approval".into();
         task.waiting_on_you = true;
         detail.approvals[1].decision = None;
         for section in [Section::Overview, Section::Plan, Section::Activity] {
             let rows = render(120, 30, &task, Some(&detail), section, 0);
-            assert!(rows[1].contains("approve plan") && rows[1].contains("a approve · r send back · e edit the plan"), "{section:?}: {}", rows[1]);
+            assert!(rows[1].contains("⏸ approve the plan?"), "{section:?}: {}", rows[1]);
+            assert!(rows[2].starts_with('├') && rows[2].trim_end().ends_with('┤'), "the rule under the bar: {}", rows[2]);
         }
         let text = render(120, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("waiting for you"), "{text}");
@@ -1863,8 +2006,8 @@ mod tests {
     fn under_a_hundred_columns_the_rail_becomes_a_tab_strip() {
         let (task, detail) = fixture();
         let rows = render(80, 30, &task, Some(&detail), Section::Tests, 0);
-        assert!(rows[1].contains("Overview") && rows[1].contains("Tests 3 ✓") && rows[1].contains("Activity 3"), "{}", rows[1]);
-        assert!(rows[2].chars().filter(|ch| *ch == '─').count() > 60, "a rule under the strip: {}", rows[2]);
+        assert!(rows[3].contains("Overview") && rows[3].contains("Tests 3 ✓") && rows[3].contains("Activity 3"), "{}", rows[3]);
+        assert!(rows[4].chars().filter(|ch| *ch == '─').count() > 60, "a rule under the strip: {}", rows[4]);
         assert!(rows.iter().any(|r| r.contains("rejects a bad password")));
     }
 
@@ -2063,7 +2206,7 @@ mod tests {
         .unwrap();
         let (width, height) = (120, 20);
         let scroll = Cell::new(300);
-        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[] };
+        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[] };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -2094,7 +2237,7 @@ mod tests {
         ))
         .unwrap();
         let text = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
-        assert!(text.contains("approve setup") && text.contains("a write luna.yaml"), "{text}");
+        assert!(text.contains("approve the setup?"), "{text}");
         assert!(text.contains("Proposed luna.yaml"), "{text}");
         assert!(text.contains("run: cargo test"), "the file is shown as is: {text}");
         assert!(text.contains("Base image (not approved by this gate)") && text.contains("sandbox.image.base: attacker/x:1"), "{text}");
@@ -2282,17 +2425,17 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_strip_says_what_a_does_at_each_kind_of_gate() {
-        let strip = |requested: &str| {
+    fn the_bar_asks_the_question_of_each_kind_of_gate() {
+        let question = |requested: &str| {
             let (task, detail) = at_gate(requested, "awaiting_approval");
-            gate_strip(&task, Some(&detail)).unwrap().to_string()
+            gate_question(&task, Some(&detail)).unwrap()
         };
-        assert!(strip(r#"{"brief":"b","risk":{"level":"low"}}"#).contains("a approve · r send back · e edit the plan"));
-        assert!(strip(r#"{"brief":"b","risk":{"level":"high"}}"#).contains("a approve (first of two approvers; set LUNA_APPROVER)"));
-        assert!(strip(PLAN_GATE).contains("a approve (last of two approvers)"), "{}", strip(PLAN_GATE));
-        assert!(strip(r#"{"brief":"b","risk":{"level":"high"},"approvalRule":{"needed":3,"text":"t"},"approvers":["ana"]}"#).contains("a approve (next of 3 approvers)"));
-        assert!(strip(r#"{"outcome":"archive","archiveReason":"duplicate"}"#).contains("a archive the ticket · r send back"));
-        assert!(strip(r#"{"outcome":"conversation","reply":"x"}"#).contains("a post the reply and close · r send back"));
+        assert_eq!(question(r#"{"brief":"b","risk":{"level":"low"}}"#), "approve the plan?");
+        assert!(question(r#"{"brief":"b","risk":{"level":"high"}}"#).contains("approve the plan? · first of two approvers; set LUNA_APPROVER"));
+        assert!(question(PLAN_GATE).contains("approve the plan? · last of two approvers"), "{}", question(PLAN_GATE));
+        assert!(question(r#"{"brief":"b","risk":{"level":"high"},"approvalRule":{"needed":3,"text":"t"},"approvers":["ana"]}"#).contains("next of 3 approvers"));
+        assert_eq!(question(r#"{"outcome":"archive","archiveReason":"duplicate"}"#), "archive this ticket?");
+        assert_eq!(question(r#"{"outcome":"conversation","reply":"x"}"#), "post the reply and close the ticket?");
     }
 
     const SPLIT_GATE: &str = r#"{"outcome":"split","summary":"over the size limit","size":{"estLoc":4000,"planned":null,"limit":{"hard":2500,"target":[1000,2000]},"verdict":"over","by":"decision"},
@@ -2300,20 +2443,20 @@ mod tests {
         "risk":{"level":"low"}}"#;
 
     #[test]
-    fn a_split_gate_names_its_four_answers_and_a_failed_one_has_no_approve() {
-        let strip = |requested: &str| {
+    fn a_split_gate_asks_about_the_split_and_a_failed_one_has_no_approve() {
+        let ask = |requested: &str| {
             let (task, detail) = at_gate(requested, "awaiting_approval");
-            gate_strip(&task, Some(&detail)).unwrap().to_string()
+            (gate_question(&task, Some(&detail)).unwrap(), bar_status(&task, Some(&detail), 0).note)
         };
-        let split = strip(SPLIT_GATE);
-        assert!(split.contains("a approve the split (2 tickets) · r send back · N reject · :whole keep it as one card"), "{split}");
-        assert!(!split.contains("e edit"), "{split}");
-        assert!(strip(&SPLIT_GATE.replace("tickets", "cards")).contains("a approve the split (2 cards)"));
-        let failed = strip(r#"{"outcome":"split_failed","reason":"no valid split after 3 rounds","split":{"children":[],"issues":["a"],"rounds":3}}"#);
-        assert!(failed.contains(":whole keep it as one card · r send back · N reject"), "{failed}");
-        assert!(!failed.contains("a approve"), "{failed}");
-        let two = strip(&SPLIT_GATE.replace(r#""risk":{"level":"low"}"#, r#""risk":{"level":"high"},"approvalRule":{"needed":2,"text":"t"}"#));
-        assert!(two.contains("two names") || two.contains("first of two"), "{two}");
+        let (split, note) = ask(SPLIT_GATE);
+        assert_eq!(split, "approve the split (2 tickets)?");
+        assert!(note.contains(":whole keeps it one card"), "{note}");
+        assert!(ask(&SPLIT_GATE.replace("tickets", "cards")).0.contains("approve the split (2 cards)?"));
+        let (failed, note) = ask(r#"{"outcome":"split_failed","reason":"no valid split after 3 rounds","split":{"children":[],"issues":["a"],"rounds":3}}"#);
+        assert!(failed.contains("the split failed") && !failed.contains("approve"), "{failed}");
+        assert!(note.contains(":whole keeps it one card"), "{note}");
+        let (two, _) = ask(&SPLIT_GATE.replace(r#""risk":{"level":"low"}"#, r#""risk":{"level":"high"},"approvalRule":{"needed":2,"text":"t"}"#));
+        assert!(two.contains("two different people"), "{two}");
     }
 
     #[test]
@@ -2351,16 +2494,17 @@ mod tests {
     }
 
     #[test]
-    fn a_split_gate_shows_who_may_approve_in_the_machine_s_words_and_the_outside_condition_in_the_strip() {
+    fn a_split_gate_shows_who_may_approve_in_the_machine_s_words_and_the_bar_counts_the_names() {
         let high = SPLIT_GATE.replace(r#""risk":{"level":"low"}"#, r#""risk":{"level":"high"},"approvalRule":{"needed":2,"outside":"at_approval","text":"Needs 2 different approvers. When CODEOWNERS names owners at the tap, one must be outside them (@ana\u001b[2J)."}"#);
         let (task, detail) = at_gate(&high, "awaiting_approval");
         let text = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
         assert!(text.contains("Rule       Needs 2 different approvers"), "{text}");
         assert!(!text.contains('\u{1b}'), "{text:?}");
-        let strip = gate_strip(&task, Some(&detail)).unwrap().to_string();
-        assert!(strip.contains("two different people") && strip.contains("one outside the owning team when CODEOWNERS applies"), "{strip}");
+        assert!(text.contains("one must be outside them"), "the outside condition is the rule's own words: {text}");
+        let question = gate_question(&task, Some(&detail)).unwrap();
+        assert!(question.contains("two different people"), "{question}");
         let (task, detail) = at_gate(SPLIT_GATE, "awaiting_approval");
-        assert!(!gate_strip(&task, Some(&detail)).unwrap().to_string().contains("outside"));
+        assert!(!gate_question(&task, Some(&detail)).unwrap().contains("different people"));
     }
 
     #[test]
@@ -2510,14 +2654,14 @@ mod tests {
     }
 
     #[test]
-    fn the_ship_gate_hint_names_the_other_approver_only_for_a_high_risk_pack() {
-        let strip = |risk: &str| {
+    fn the_ship_question_names_the_other_approver_only_for_a_high_risk_pack() {
+        let question = |risk: &str| {
             let (task, mut detail) = at_gate("{}", "awaiting_ship");
             detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":{"evidence":{"risk":risk}}})).unwrap()];
-            gate_strip(&task, Some(&detail)).unwrap().to_string()
+            gate_question(&task, Some(&detail)).unwrap()
         };
-        assert!(strip("high").contains("S publish and watch the PR (high risk: a release owner will be asked after the checks) · r send back"), "{}", strip("high"));
-        assert!(strip("low").contains("S publish and watch the PR · r send back") && !strip("low").contains("high risk"), "{}", strip("low"));
+        assert_eq!(question("high"), "ship this PR? · high risk: a release owner is asked after the checks");
+        assert_eq!(question("low"), "ship this PR?");
     }
 
     #[test]
@@ -2566,6 +2710,7 @@ mod tests {
             follow: &Cell::new(false),
             engines: Some(catalog),
             tasks: &[],
+            actions: &[],
         };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -2660,17 +2805,16 @@ mod tests {
     }
 
     #[test]
-    fn the_ship_approval_strip_has_two_answers_and_the_watch_is_no_gate() {
+    fn the_ship_approval_asks_for_the_release_and_the_watch_is_no_gate() {
         let strip = |requested: serde_json::Value, waiting: bool| {
             let (mut task, mut detail) = at_gate("{}", "awaiting_ship");
             task.waiting_on_you = waiting;
             detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":requested})).unwrap()];
-            gate_strip(&task, Some(&detail)).map(|l| l.to_string())
+            gate_question(&task, Some(&detail))
         };
-        let low = strip(serde_json::json!({"gate":"ship_approval","risk":"low"}), true).unwrap();
-        assert!(low.contains("S approve the release · N reject and archive") && !low.contains("high risk") && !low.contains("r send back"), "{low}");
-        assert!(strip(serde_json::json!({"gate":"ship_approval","risk":"high"}), true).unwrap().contains("(high risk: a release owner, not one of the plan's approvers)"));
-        assert!(strip(serde_json::json!({"evidence":{"risk":"low"}}), true).unwrap().contains("S publish and watch the PR · r send back"));
+        assert_eq!(strip(serde_json::json!({"gate":"ship_approval","risk":"low"}), true).unwrap(), "approve the release?");
+        assert!(strip(serde_json::json!({"gate":"ship_approval","risk":"high"}), true).unwrap().contains("high risk: a release owner, not one of the plan's approvers"));
+        assert_eq!(strip(serde_json::json!({"evidence":{"risk":"low"}}), true).unwrap(), "ship this PR?");
         assert_eq!(strip(serde_json::json!({}), false), None, "a watched PR is not a gate");
     }
 
@@ -2686,5 +2830,169 @@ mod tests {
         for want in ["✗ ", "ci", "✓ ", "required by a ruleset", "1 fix round", "quiet 3 days", "keeps waiting and goes on when it ends"] {
             assert!(text.contains(want), "{want}: {text}");
         }
+    }
+}
+
+/// The task view's frame: the fixed decision bar, the scroll markers and the border, drawn through `ui::draw` on the fixture cards.
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use crate::testkit::{escalated_app, plan_gate_app, render, running_build_app, ship_stage_app};
+
+    fn rows(screen: &str) -> Vec<&str> {
+        screen.lines().collect()
+    }
+
+    fn bar_row(screen: &str, needle: &str) -> usize {
+        rows(screen).iter().position(|r| r.contains(needle)).unwrap_or_else(|| panic!("{needle} not on screen:\n{screen}"))
+    }
+
+    #[test]
+    fn the_plan_gate_bar_holds_the_question_the_keys_and_the_flag_note() {
+        let mut app = plan_gate_app();
+        let screen = render(&mut app, 120, 40);
+        let bar = rows(&screen)[bar_row(&screen, "approve the plan?")];
+        for want in ["⏸ approve the plan?", "a approve", "r send back", "e edit", "1 check flagged"] {
+            assert!(bar.contains(want), "{want} missing in the bar: {bar}");
+        }
+        let rule = rows(&screen)[bar_row(&screen, "approve the plan?") + 1];
+        assert!(rule.contains('├') && rule.contains('┬') && rule.contains('┤'), "a rule under the bar joins the frame: {rule}");
+    }
+
+    #[test]
+    fn scrolling_leaves_the_bar_where_it_was() {
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Plan;
+        let before = render(&mut app, 120, 24);
+        let at = bar_row(&before, "approve the plan?");
+        let bar = rows(&before)[at].to_string();
+        app.detail_scroll.set(10);
+        let after = render(&mut app, 120, 24);
+        assert!(app.detail_scroll.get() > 0, "the plan is long enough to scroll");
+        assert_eq!(rows(&after)[at], bar, "the bar is the same row after a page down:\n{after}");
+        assert!(after.contains("▲") && after.contains("above"), "{after}");
+    }
+
+    #[test]
+    fn the_bar_is_on_every_section_of_an_open_gate() {
+        let mut app = plan_gate_app();
+        for section in Section::ALL {
+            app.detail_section = section;
+            let screen = render(&mut app, 120, 40);
+            assert!(rows(&screen)[bar_row(&screen, "approve the plan?")].contains("a approve"), "{section:?}:\n{screen}");
+        }
+    }
+
+    #[test]
+    fn a_running_card_says_what_runs_and_offers_no_gate_keys() {
+        let mut app = running_build_app();
+        let screen = render(&mut app, 120, 40);
+        let at = bar_row(&screen, "implementing");
+        let bar = rows(&screen)[at];
+        for want in ["implementing", "S3 of 3", "$0.83"] {
+            assert!(bar.contains(want), "{want} missing in the bar: {bar}");
+        }
+        let footer = rows(&screen).last().unwrap().to_string();
+        for text in [bar.to_string(), footer] {
+            for banned in ["advance", "send back", "edit", "approve"] {
+                assert!(!text.contains(banned), "{banned} offered on a running card: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_escalated_card_is_in_the_lost_wording_with_the_keys_that_apply() {
+        let mut app = escalated_app();
+        let screen = render(&mut app, 120, 40);
+        let bar = rows(&screen)[bar_row(&screen, "✗ escalated")];
+        assert!(bar.contains("the same migration test failed three times"), "{bar}");
+        assert!(bar.contains("a retry"), "{bar}");
+        assert!(!bar.contains("a approve"), "{bar}");
+    }
+
+    #[test]
+    fn the_ship_gate_asks_whether_to_ship() {
+        let mut app = ship_stage_app();
+        let screen = render(&mut app, 120, 40);
+        let bar = rows(&screen)[bar_row(&screen, "ship this PR?")];
+        assert!(bar.contains("ship") && bar.contains("a ship"), "{bar}");
+    }
+
+    #[test]
+    fn the_bottom_border_carries_the_stage_and_age_and_no_key_hints() {
+        let mut app = plan_gate_app();
+        let screen = render(&mut app, 120, 40);
+        let border = rows(&screen).iter().find(|r| r.contains(" ago ") && r.contains('╯')).copied().expect("a bottom border");
+        assert!(border.contains("Plan · "), "{border}");
+        for hint in ["sections", "scroll", "help", "size"] {
+            assert!(!border.contains(hint), "{hint} on the border: {border}");
+        }
+    }
+
+    /// The count in a marker row: `▼ 12 more` is 12.
+    fn count(screen: &str, glyph: char, word: &str) -> Option<usize> {
+        let row = screen.lines().find(|r| r.contains(glyph))?;
+        row.split(glyph).nth(1)?.trim_end_matches(|c: char| c == '│' || c.is_whitespace()).trim().trim_end_matches(word).trim().parse().ok()
+    }
+
+    #[test]
+    fn scroll_markers_count_the_lines_off_screen_and_none_show_when_everything_fits() {
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Activity;
+        let short = render(&mut app, 120, 40);
+        assert!(!short.contains('▼') && !short.contains('▲'), "everything fits:\n{short}");
+        app.detail_section = Section::Plan;
+        let top = render(&mut app, 120, 14);
+        let more = count(&top, '▼', "more").unwrap_or_else(|| panic!("a count of lines below:\n{top}"));
+        assert!(more > 1 && !top.contains('▲'), "{top}");
+        // Three lines of scroll: three fewer below, and what is above is those three plus the row the marker covers.
+        app.detail_scroll.set(3);
+        let moved = render(&mut app, 120, 14);
+        assert_eq!(count(&moved, '▼', "more"), Some(more - 3), "{moved}");
+        assert_eq!(count(&moved, '▲', "above"), Some(4), "{moved}");
+        // At the end the marker goes, the last line shows, and one cannot scroll past it.
+        app.detail_scroll.set(500);
+        let end = render(&mut app, 120, 14);
+        assert!(!end.contains('▼') && end.contains('▲'), "{end}");
+        let clamped = app.detail_scroll.get();
+        // The pane is 7 rows (11 of the popup, less the border, the bar and its rule): `more` counted from the top was total - 7 + 1.
+        assert_eq!(clamped as usize, more - 1, "the offset stops at the last line");
+        app.detail_scroll.set(clamped + 50);
+        assert_eq!(render(&mut app, 120, 14), end, "scrolling past the end changes nothing");
+        assert_eq!(app.detail_scroll.get(), clamped);
+    }
+
+    #[test]
+    fn a_narrow_bar_drops_keys_from_the_lowest_priority_then_the_note_and_never_the_question() {
+        let keys: Vec<(String, String)> = [("a", "approve"), ("r", "send back"), ("N", "reject"), ("e", "edit")].iter().map(|(k, l)| (k.to_string(), l.to_string())).collect();
+        let text = |width: usize| bar_line(width, "⏸ approve the plan?", theme::needs_you(), &keys, "1 check flagged").to_string();
+        let full = text(120);
+        assert!(full.starts_with("⏸ approve the plan?") && full.contains("a approve") && full.contains("e edit") && full.trim_end().ends_with("1 check flagged"), "{full}");
+        assert_eq!(cells(&full), 120, "the note sits at the right edge");
+        let tight = text(80);
+        assert!(tight.contains("1 check flagged") && tight.contains("a approve") && !tight.contains("e edit"), "{tight}");
+        let tighter = text(30);
+        assert!(!tighter.contains("check flagged") && !tighter.contains("approve ") || tighter.starts_with("⏸ approve the plan?"), "{tighter}");
+        assert!(tighter.contains("⏸ approve the plan?") && !tighter.contains("a approve") && !tighter.contains("flagged"), "{tighter}");
+        let squeezed = text(12);
+        assert!(squeezed.starts_with("⏸ approve t") && cells(&squeezed) <= 12, "{squeezed}");
+        let none: Vec<(String, String)> = Vec::new();
+        assert_eq!(bar_line(60, "◐ implementing", theme::working(), &none, "").to_string(), "◐ implementing", "a running card with nothing to do shows no keys");
+    }
+
+    #[test]
+    fn the_bar_shows_at_most_five_keys() {
+        let keys: Vec<(String, String)> = (0..8).map(|i| (format!("{i}"), format!("do{i}"))).collect();
+        let text = bar_line(200, "⏸ q?", theme::needs_you(), &keys, "").to_string();
+        assert!(text.contains("4 do4") && !text.contains("5 do5"), "{text}");
+    }
+
+    #[test]
+    fn a_bar_is_cleaned_of_control_characters_in_the_reason() {
+        let app = escalated_app();
+        let mut task = app.tasks[0].clone();
+        task.reason = Some("boom\u{1b}[31m red".into());
+        let status = bar_status(&task, None, 0);
+        assert!(!status.text.contains('\u{1b}') && status.text.contains("escalated · boom"), "{}", status.text);
     }
 }

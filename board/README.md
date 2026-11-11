@@ -290,6 +290,7 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 
 | Key | Does |
 |---|---|
+| `:` | command palette: acts on this ticket |
 | `?` | keys |
 
 <!-- keys:end -->

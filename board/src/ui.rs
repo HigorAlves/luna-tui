@@ -93,7 +93,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(header_line(app), header);
     if let Some(floor) = &app.floor {
         render_floor(frame, body, floor);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
@@ -101,7 +101,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     if let Some(digest) = app.digest.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_digest(frame, body, app, digest);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
@@ -109,7 +109,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     if let Some(inbox) = app.inbox.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::Help { .. })) {
         render_inbox(frame, body, app, inbox);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if let Mode::ConfirmApproveAll(ids) = &app.mode {
             render_note(frame, " Approve them all? ", &format!("{} ticket(s) in Approve get a yes, each with no guidance.  y / n", ids.len()));
         }
@@ -120,7 +120,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     if let Some(state) = app.tickets.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::Command { .. })) {
         render_tickets(frame, body, app, state);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
@@ -128,7 +128,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     if let Some(state) = app.economy.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_economy(frame, body, app, state);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
@@ -136,7 +136,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     if let Some(state) = app.backlog.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_backlog(frame, body, app, state);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
@@ -146,7 +146,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ConfirmClose { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help { .. })
     }) {
         render_pulls(frame, body, app, state);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         match &app.mode {
             Mode::ConfirmMerge { repo, number } => {
                 render_confirm_pr(frame, app, repo, *number, " Merge? ", "Merged the way the repo allows, and its branch is deleted.", GREEN);
@@ -176,7 +176,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         )
     }) {
         render_slack(frame, body, app, state);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if state.watches.is_some() {
             render_slack_watches(frame, app, state);
         }
@@ -194,11 +194,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
         return;
     }
     render_board(frame, body, app);
-    frame.render_widget(footer_line(app), footer);
+    frame.render_widget(footer_line(app, footer.width), footer);
 
-    match &app.mode {
+    // The palette typed over the task view (`:` there) leaves the card on screen under its prompt.
+    let command_over = match &app.mode {
+        Mode::Command { .. } => app.command_return.clone().map(Mode::Detail),
+        _ => None,
+    };
+    match command_over.as_ref().unwrap_or(&app.mode) {
         Mode::Detail(id) | Mode::EnginePicker { id, .. } => {
             if let Some(task) = app.task(id) {
+                let actions = keys::card_actions(app);
                 let view = DetailView {
                     task,
                     detail: app.detail.as_ref(),
@@ -211,6 +217,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     follow: &app.detail_follow,
                     engines: app.engine_catalog.as_ref(),
                     tasks: &app.tasks,
+                    actions: &actions,
                 };
                 detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
             }
@@ -435,7 +442,7 @@ fn header_line(app: &App) -> Line<'static> {
     Line::from(spans)
 }
 
-fn footer_line(app: &App) -> Line<'static> {
+fn footer_line(app: &App, width: u16) -> Line<'static> {
     if let Some(toast) = &app.toast {
         let color = if toast.error { RED } else { GREEN };
         return Line::from(Span::from(format!(" {}", toast.text)).fg(c(color)).bold());
@@ -532,11 +539,11 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::Help { .. } => scope_footer(app, Scope::Help),
         // The views, the ticket popup and the Watches popup: a few short words, as before the
         // key registry. The sheet behind `?` lists the rest.
-        _ => view_footer(app),
+        _ => view_footer(app, width),
     }
 }
 
-fn view_footer(app: &App) -> Line<'static> {
+fn view_footer(app: &App, width: u16) -> Line<'static> {
     match keys::active_scope(app) {
         Scope::Floor => hint(&[("tab", "next repo"), ("r", "refresh"), ("esc", "close")]),
         Scope::Digest => hint(&[("j/k", "move"), ("enter", "jump to the ticket"), ("o", "open the PR"), ("esc", "close")]),
@@ -559,14 +566,38 @@ fn view_footer(app: &App) -> Line<'static> {
             ("R", "poll"),
             ("esc", "close"),
         ]),
-        Scope::Detail => {
-            let shippable = matches!(&app.mode, Mode::Detail(id) if app.task(id).is_some_and(|t| t.state == "awaiting_ship"));
-            let (rows, scroll) = if app.detail_section.has_cursor() { (("jk", "pick"), ("JK", "scroll")) } else { (("jk", "scroll"), ("^d/^u", "page")) };
-            let act = if shippable { ("S", "ship") } else { ("a", "advance") };
-            hint(&[("h/l 1-9", "section"), rows, scroll, act, ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
-        }
+        Scope::Detail => detail_footer(app, width),
         _ => hint(&[("?", "help"), ("n", "new"), ("a", "advance"), ("enter", "open"), ("x", "actions"), ("=", "density"), ("/", "filter"), ("q", "quit")]),
     }
+}
+
+/// The task view's footer: the keys that work on this card now, in priority order (`keys::detail_footer`),
+/// as many as fit `width`, then `? all keys` and `esc back`. The actions the decision bar offers are
+/// repeated here, so a key the bar had no room for is still on screen; nothing else is listed that
+/// does not work (an edit on a running card, a send back at no gate).
+fn detail_footer(app: &App, width: u16) -> Line<'static> {
+    let seg = |key: &str, desc: &str| vec![Span::from(format!(" {key} ")).fg(c(BASE)).bg(c(ACCENT)), Span::from(format!(" {desc}  ")).fg(c(SUBTEXT0))];
+    let tail: Vec<Span<'static>> = [seg("?", "all keys"), seg("esc", "back")].concat();
+    let room = (width as usize).saturating_sub(1);
+    let mut spans = vec![Span::raw(" ")];
+    let mut used = 0;
+    let tail_w: usize = tail.iter().map(Span::width).sum();
+    for (key, desc) in keys::detail_footer(app) {
+        let one = seg(&key, &desc);
+        let w: usize = one.iter().map(Span::width).sum();
+        if used + w + tail_w > room {
+            break;
+        }
+        used += w;
+        spans.extend(one);
+    }
+    // The tail keeps its place when it fits; on a terminal too narrow for it, `?` alone.
+    if used + tail_w <= room {
+        spans.extend(tail);
+    } else {
+        spans.extend(seg("?", "all keys"));
+    }
+    Line::from(spans)
 }
 
 /// How many keys the footer shows: `?` and seven more fit in 120 columns with these labels.
@@ -3789,7 +3820,7 @@ mod help_sheet_tests {
     }
 
     fn footer(app: &App) -> String {
-        footer_line(app).spans.iter().map(|s| s.content.to_string()).collect()
+        footer_line(app, 200).spans.iter().map(|s| s.content.to_string()).collect()
     }
 
     #[test]
@@ -4091,5 +4122,66 @@ mod help_sheet_tests {
         let plain = split_task("abcdef12", "Login page", "");
         let lines: Vec<String> = card_lines(&plain, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect();
         assert!(!lines.iter().any(|l| l.contains("part ")), "{lines:?}");
+    }
+
+    // The task view's footer: the keys that work on this card, cut to the width, ending with the help hint.
+    mod task_view_footer {
+        use super::*;
+        use crate::testkit::{escalated_app, plan_gate_app, running_build_app, ship_stage_app};
+
+        /// The fixture cards, with the "machine offline" toast of the test run cleared (a toast replaces the footer).
+        fn quiet(mut app: App) -> App {
+            app.toast = None;
+            app
+        }
+
+        fn line(app: &App, width: u16) -> (String, usize) {
+            let line = footer_line(app, width);
+            (line.spans.iter().map(|s| s.content.to_string()).collect(), line.width())
+        }
+
+        #[test]
+        fn the_footer_never_exceeds_the_width_and_ends_with_the_help_hint() {
+            for app in [plan_gate_app(), running_build_app(), escalated_app(), ship_stage_app()].map(quiet) {
+                for width in [80, 100, 120, 200] {
+                    let (text, cells) = line(&app, width);
+                    assert!(cells <= width as usize, "{cells} cells in {width}: {text}");
+                    assert!(text.trim_end().ends_with("esc  back") && text.contains("?  all keys"), "{width}: {text}");
+                }
+            }
+        }
+
+        #[test]
+        fn a_wider_terminal_shows_more_keys_and_a_narrow_one_drops_the_lowest_priority_first() {
+            let app = quiet(plan_gate_app());
+            let (wide, _) = line(&app, 200);
+            let (narrow, _) = line(&app, 60);
+            for want in ["a  approve", "r  send back", "e  edit", "h/l  section", "j/k  scroll", "^d/^u  page"] {
+                assert!(wide.contains(want), "{want}: {wide}");
+            }
+            assert!(narrow.contains("a  approve") && !narrow.contains("^d/^u"), "{narrow}");
+            assert!(narrow.len() < wide.len());
+        }
+
+        #[test]
+        fn a_running_card_footer_offers_no_gate_key_and_the_footer_repeats_the_bar_s_actions() {
+            let (running, _) = line(&quiet(running_build_app()), 200);
+            for banned in ["advance", "send back", "edit", "approve", "reject"] {
+                assert!(!running.contains(banned), "{banned}: {running}");
+            }
+            let app = quiet(plan_gate_app());
+            let (footer, _) = line(&app, 200);
+            for (key, label) in crate::keys::card_actions(&app) {
+                assert!(footer.contains(&format!(" {key} ")) && footer.contains(&label), "the bar's {key} {label} is in the footer: {footer}");
+            }
+        }
+
+        #[test]
+        fn j_k_pick_where_a_section_has_rows() {
+            let mut app = quiet(escalated_app());
+            app.detail_section = crate::detail::Section::Runs;
+            let (text, _) = line(&app, 200);
+            assert!(text.contains("j/k  pick") && text.contains("J/K  scroll"), "{text}");
+        }
     }
 }

@@ -214,6 +214,10 @@ const DETAIL_DEBOUNCE: Duration = Duration::from_millis(300);
 /// How long the `J` prompt waits after a keystroke before asking the machine to search.
 const JIRA_SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 
+/// The `:` commands that act on one ticket: typed in the task view they run on the open one and
+/// the view stays open.
+const CARD_COMMANDS: &[&str] = &["whole", "dismiss", "finding", "dedup", "context", "dup", "undup", "repo", "jira", "ticket-edit"];
+
 /// How tall a card is: three lines (title; id and repo; status), four with the worked / diff /
 /// tests line, or one (glyph, title, age) so a busy column shows twice the tickets.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -542,6 +546,8 @@ pub struct App {
     pub help_viewport: Cell<u16>,
     /// The ticket whose Detail `?` was pressed in; closing the help returns to it.
     help_return: Option<String>,
+    /// The ticket whose Detail `:` was pressed in: the palette acts on it, and returns to it.
+    pub(crate) command_return: Option<String>,
     imported: bool,
     /// The latest stage container per task id, for `f` to open a watch tab on.
     stages: std::collections::HashMap<String, herdr::Stage>,
@@ -620,6 +626,7 @@ impl App {
             help_max: Cell::new(0),
             help_viewport: Cell::new(0),
             help_return: None,
+            command_return: None,
             imported: false,
             stages: std::collections::HashMap::new(),
             scan_tx,
@@ -3616,7 +3623,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", ":", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3654,12 +3661,30 @@ impl App {
                 None => return self.ticket_key('o', id),
             },
             KeyCode::Char('E') => self.open_engine_picker(id),
-            KeyCode::Char('M') => self.mode = Mode::Command { text: "dup ".into(), pick: None },
+            KeyCode::Char(':') => self.open_card_command(id, ""),
+            KeyCode::Char('M') => self.open_card_command(id, "dup "),
             KeyCode::Char('U') => self.unmerge_selected(),
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// `:` (and `M`) in the task view: the palette over the open card. The commands that read the
+    /// board's selection (`:whole`, `:dismiss`, `:dup`, ...) find this card there, and the task view
+    /// is back when the palette closes (`handle_command`).
+    fn open_card_command(&mut self, id: &str, text: &str) {
+        self.select(id, true);
+        self.command_return = Some(id.to_string());
+        self.mode = Mode::Command { text: text.to_string(), pick: None };
+    }
+
+    /// Leaves the palette: back to the task view it was opened over, else the board.
+    fn close_command(&mut self) {
+        self.mode = match self.command_return.take() {
+            Some(id) => Mode::Detail(id),
+            None => Mode::Normal,
+        };
     }
 
     /// `E`: the picker for the selected stage of the Engines section.
@@ -3971,7 +3996,7 @@ impl App {
             KeyCode::Backspace => {
                 *pick = None;
                 if text.pop().is_none() {
-                    self.mode = Mode::Normal;
+                    self.close_command();
                 }
             }
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up => {
@@ -3986,7 +4011,7 @@ impl App {
                     });
                 }
             }
-            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Esc => self.close_command(),
             KeyCode::Enter => {
                 let matches = keys::completions(text);
                 let line = match (*pick, matches.as_slice()) {
@@ -3994,8 +4019,15 @@ impl App {
                     (None, [(only, _)]) => only.to_string(),
                     _ => text.trim().to_string(),
                 };
+                // A command on the card (the ones that name it) leaves the task view open; the ones
+                // that open a view, a prompt or the board's own state take the screen as on the board.
+                let back = self.command_return.take().filter(|_| CARD_COMMANDS.contains(&line.split_whitespace().next().unwrap_or("")));
                 self.mode = Mode::Normal;
-                return self.run_command(&line);
+                let outcome = self.run_command(&line);
+                if let Some(id) = back.filter(|_| matches!(self.mode, Mode::Normal)) {
+                    self.mode = Mode::Detail(id);
+                }
+                return outcome;
             }
             _ => {}
         }
@@ -6916,4 +6948,62 @@ pub fn record_changes(record: &TriageRecord, picks: &[usize; 5]) -> Vec<(String,
             (record.value_of(key) != Some(value)).then(|| (key.to_string(), value.to_string()))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod task_view_command_tests {
+    use super::*;
+    use crate::testkit::{plan_gate_app, running_build_app};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for ch in text.chars() {
+            press(app, KeyCode::Char(ch));
+        }
+    }
+
+    #[test]
+    fn colon_in_the_task_view_opens_the_palette_over_the_card_and_esc_returns_to_it() {
+        let mut app = plan_gate_app();
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char(':'));
+        assert!(matches!(&app.mode, Mode::Command { text, .. } if text.is_empty()));
+        let screen = crate::testkit::render(&mut app, 120, 40);
+        assert!(screen.contains(crate::testkit::PLAN_GATE_TITLE), "the task view stays under the prompt:\n{screen}");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id));
+    }
+
+    #[test]
+    fn every_command_a_section_names_runs_in_the_task_view_and_leaves_it_open() {
+        for name in ["whole", "dedup", "context", "dismiss", "finding"] {
+            let mut app = running_build_app();
+            let id = app.tasks[0].id.clone();
+            press(&mut app, KeyCode::Char(':'));
+            type_text(&mut app, name);
+            press(&mut app, KeyCode::Enter);
+            assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), ":{name} left the task view");
+            assert!(app.toast.as_ref().is_none_or(|t| !t.text.contains("unknown command")), ":{name} is not a command here: {:?}", app.toast.as_ref().map(|t| &t.text));
+            assert_eq!(app.selected_id().as_deref(), Some(id.as_str()), ":{name} acts on the open card");
+        }
+    }
+
+    #[test]
+    fn a_command_that_opens_a_view_leaves_the_task_view_as_on_the_board() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, "inbox");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.inbox.is_some() && matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn the_registry_offers_the_colon_in_the_task_view_and_the_footer_shows_it() {
+        let app = plan_gate_app();
+        assert!(keys::footer_keys(&app, keys::Scope::Detail, 20).iter().any(|b| b.first() == ":"));
+        assert!(keys::detail_footer(&app).iter().any(|(k, l)| k == ":" && l == "command"));
+    }
 }

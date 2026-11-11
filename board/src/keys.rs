@@ -670,6 +670,7 @@ const DETAIL: &[Binding] = &[
     b("J / K", "scroll a line where j / k pick", Group::Move, Scope::Detail, on, 10),
     b("ctrl+d / ctrl+u", "half a page", Group::Move, Scope::Detail, on, 10),
     b("+", "popup: most of the screen, or all", Group::Move, Scope::Detail, on, 26),
+    b(":", "command palette: acts on this ticket", Group::App, Scope::Detail, on, 9),
     b("esc / q / enter", "close", Group::Move, Scope::Detail, on, 27),
     cmd(b("?", "keys", Group::App, Scope::Detail, on, 100), "help"),
 ];
@@ -981,6 +982,96 @@ pub fn footer_keys(app: &App, scope: Scope, n: usize) -> Vec<&'static Binding> {
     found.sort_by_key(|b| std::cmp::Reverse(b.weight));
     found.truncate(n);
     found
+}
+
+/// Whether the task view offers `b` for this card right now. Everything `On` is a key that works,
+/// but three read as offers only where they mean something: `e` edits whatever waits at a gate (a
+/// running card's ticket is edited from the board's `x` menu), and `J / K` scroll a line only in the
+/// sections where `j / k` pick a row.
+fn detail_offered(app: &App, b: &Binding) -> bool {
+    match b.first() {
+        "e" => task_of(app).is_some_and(at_gate),
+        "J" => app.detail_section.has_cursor(),
+        _ => true,
+    }
+}
+
+/// The task view's offered keys, heaviest first (ties keep table order). `?` and the way out are
+/// left to the footer's tail, and the menu chords and `:` commands are not keys you press.
+fn detail_keys(app: &App) -> Vec<&'static Binding> {
+    let mut found: Vec<&Binding> = bindings_for(app, Scope::Detail)
+        .into_iter()
+        .filter(|(b, avail)| avail.is_on() && b.menu_key().is_none() && b.group != Group::Commands && !matches!(b.first(), "?" | "esc") && detail_offered(app, b))
+        .map(|(b, _)| b)
+        .collect();
+    found.sort_by_key(|b| std::cmp::Reverse(b.weight));
+    found
+}
+
+/// A binding that acts on the card (answers its gate, edits it, stops its stage), as against one that moves.
+fn acts_on_card(b: &Binding) -> bool {
+    b.group == Group::Gate || matches!(b.first(), "e" | "X" | "C")
+}
+
+/// What the footer and the decision bar call a key: the label cut to the word they have room for
+/// (`approve the plan` is `approve`, `ship: publish, watch the PR` is `ship`).
+pub fn terse_label(app: &App, b: &Binding) -> String {
+    match b.first() {
+        "h" => return "section".into(),
+        "1-9" => return "jump".into(),
+        "j" => return if app.detail_section.has_cursor() { "pick" } else { "scroll" }.into(),
+        "J" => return "scroll".into(),
+        "ctrl+d" => return "page".into(),
+        "+" => return "size".into(),
+        ":" => return "command".into(),
+        "y" => return "useful".into(),
+        "n" => return "not useful".into(),
+        "M" => return "duplicate".into(),
+        "U" => return "restore".into(),
+        "E" => return "engine".into(),
+        "A" => return "skip rules".into(),
+        "T" => return "correct record".into(),
+        "f" => return "watch".into(),
+        "w" => return "worktree".into(),
+        _ => {}
+    }
+    let head = b.label.split([':', ',']).next().unwrap_or(b.label).split(" (").next().unwrap_or(b.label);
+    if head.starts_with("send back") {
+        return "send back".into();
+    }
+    head.split(' ').next().unwrap_or(head).to_string()
+}
+
+/// A binding's keys as the bar and footer show them: `j/k`, `^d/^u`.
+pub fn terse_keys(b: &Binding) -> String {
+    b.short_keys().replace("ctrl+", "^")
+}
+
+/// Keys and labels, one entry per label (two keys that mean the same here show the first).
+fn terse_pairs(app: &App, keys: impl Iterator<Item = &'static Binding>) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for b in keys {
+        let label = terse_label(app, b);
+        if !out.iter().any(|(_, l)| *l == label) {
+            out.push((terse_keys(b), label));
+        }
+    }
+    out
+}
+
+/// The keys the decision bar offers on this card now, heaviest first: the task view's `On`
+/// bindings that act on the card. A running card with nothing to answer gets only what stops it.
+pub fn card_actions(app: &App) -> Vec<(String, String)> {
+    terse_pairs(app, detail_keys(app).into_iter().filter(|b| acts_on_card(b)))
+}
+
+/// The task view's footer, in priority order: the same actions the bar offers (repeated, so a key the
+/// bar had no room for is still on screen), `o` to open, then the keys that move and `:`. The rest of
+/// the ticket's keys (delete, archive, the worktree, ...) stay in the sheet behind `?`: a footer that
+/// lists them crowds out scrolling. `?` and `esc` are not here: `ui` ends the footer with them,
+/// whatever the width.
+pub fn detail_footer(app: &App) -> Vec<(String, String)> {
+    terse_pairs(app, detail_keys(app).into_iter().filter(|b| acts_on_card(b) || b.group == Group::Move || matches!(b.first(), "o" | ":")))
 }
 
 /// Bindings of every scope whose keys, label or command contain `query`, case-insensitively.
