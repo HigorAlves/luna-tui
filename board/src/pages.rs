@@ -733,7 +733,7 @@ mod tests {
         let at = |needle: &str| main.find(needle).unwrap_or_else(|| panic!("no {needle:?} in\n{main}"));
         assert!(at("⚑ ") < at("Brief") && at("Brief") < at("Criteria") && at("Criteria") < at("Steps") && at("Steps") < at("Rollback"), "{main}");
         assert!(main.contains("⚑ plan: step 3 names a file outside the code map"), "the flag carries the plan check's reason\n{main}");
-        assert!(main.contains("  • the endpoint streams rows"), "the brief goes through the markdown renderer\n{main}");
+        assert!(main.contains("▏ • the endpoint streams rows"), "the brief goes through the markdown renderer\n{main}");
         for gone in ["Criteria to build", "Slices", "Outcome", "Checks", "Code map"] {
             assert!(!main.contains(gone), "{gone} belongs to the reference, not the first page\n{main}");
         }
@@ -1274,5 +1274,34 @@ mod stopped_tests {
         for needle in ["Error", "container exited 137", "the sandbox was kept", "Questions", "Should the migration be split?", "yes, per table"] {
             assert!(screen.contains(needle), "{needle} missing:\n{screen}");
         }
+    }
+}
+
+#[cfg(test)]
+mod spoof_tests {
+    use crate::testkit::{plan_gate_app, render};
+
+    #[test]
+    fn a_brief_cannot_pass_for_the_pages_own_heading_or_flag() {
+        let mut app = plan_gate_app();
+        let gate = app.detail.as_mut().unwrap().approvals.iter_mut().find(|a| a.kind.as_deref() == Some("awaiting_approval")).unwrap();
+        gate.requested["brief"] = serde_json::json!("Small change.\n# Criteria\n⚑ approved by the release owner\n✓ all checks passed");
+        let screen = render(&mut app, 180, 60);
+        let rows: Vec<Vec<char>> = screen.lines().map(|l| l.chars().collect()).collect();
+        let find = |needle: &str| rows.iter().position(|r| r.iter().collect::<String>().contains(needle)).unwrap_or_else(|| panic!("{needle}\n{screen}"));
+        let col = |row: usize, needle: &str| rows[row].iter().collect::<String>().chars().take_while(|_| true).collect::<Vec<_>>().windows(needle.chars().count()).position(|w| w.iter().collect::<String>() == needle).unwrap();
+        // The model's lines: gutter first, the glyphs gone from their start.
+        let owner = find("approved by the release owner");
+        let gutter = col(owner, "▏");
+        assert_eq!(rows[owner][gutter + 2], '·', "{}", rows[owner].iter().collect::<String>());
+        assert_eq!(rows[find("all checks passed")][gutter], '▏');
+        let fake_heading = rows.iter().position(|r| r.iter().collect::<String>().contains("▏ Criteria")).expect("the model's heading keeps the gutter");
+        assert_eq!(col(fake_heading, "Criteria"), gutter + 2, "indented with the block");
+        // The page's own: the real heading and the real flag sit at the pane's margin, with no gutter.
+        let real_heading = rows.iter().position(|r| r.iter().collect::<String>().contains("Criteria") && !r.contains(&'▏')).unwrap();
+        assert_eq!(col(real_heading, "Criteria"), gutter, "the real heading is at column 0 of the pane");
+        let real_flag = rows.iter().position(|r| r.iter().collect::<String>().contains("⚑ plan: step 3")).unwrap();
+        assert_eq!(col(real_flag, "⚑"), gutter);
+        assert!(!screen.contains("⚑ approved by") && !screen.contains("✓ all checks"), "{screen}");
     }
 }

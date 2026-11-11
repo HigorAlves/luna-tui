@@ -942,7 +942,7 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
 /// Under `gr` ordering: `── luna-tui 3 ─────`, a line that names the group the cards below
 /// belong to, in the repo's colour.
 fn repo_separator(repo: Option<&str>, count: usize, width: usize) -> ListItem<'static> {
-    let name = repo.unwrap_or("no repo");
+    let name = repo.map_or("no repo".to_string(), |r| crate::model::plain(r, 60));
     let colour = repo.map_or(SUBTEXT0, |r| REPO_COLOURS[repo_colour_slot(r)]);
     let head = format!("── {name} {count} ");
     let rule = "─".repeat(width.saturating_sub(head.chars().count()));
@@ -1072,7 +1072,7 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
 
     let mut ids = format!("  #{}", task.short_id());
     if let Some(repo) = task.repo_name() {
-        ids.push_str(&format!(" · {repo}"));
+        ids.push_str(&format!(" · {}", crate::model::plain(repo, 60)));
     }
     if let Some(number) = task.source.as_ref().and_then(|s| s.number) {
         ids.push_str(&format!(" · gh#{number}"));
@@ -1563,7 +1563,7 @@ fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
         let selected = row == inbox.cursor.min(items.len().saturating_sub(1));
         let bar = if selected { "▌ " } else { "  " };
         let what = task.reason.clone().unwrap_or_else(|| task.status_label());
-        let repo = task.repo_name().map(|r| format!("{r} · ")).unwrap_or_default();
+        let repo = task.repo_name().map(|r| format!("{} · ", crate::model::plain(r, 60))).unwrap_or_default();
         let mut line = vec![
             Span::from(bar).fg(c(ACCENT)),
             Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)),

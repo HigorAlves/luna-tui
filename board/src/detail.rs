@@ -474,7 +474,7 @@ fn patch_line(line: &str) -> Line<'static> {
         Some('@') => ACCENT,
         _ => SUBTEXT0,
     };
-    Line::from(Span::from(line.to_string()).fg(c(color)))
+    Line::from(Span::from(plain(line)).fg(c(color)))
 }
 
 /// The rail: one row per section with content, the active one marked, its status glyph right-aligned; then the sections with nothing yet
@@ -865,7 +865,7 @@ pub(crate) fn fact_row(label: &str, value: &str, width: usize) -> Vec<Line<'stat
 pub(crate) fn record_group(task: &Task, requested: &serde_json::Value, width: usize) -> Option<RefGroup> {
     let record = task.record.as_ref()?;
     let who = match record.decision_by.as_deref() {
-        Some("person") => format!("corrected by a person ({})", if record.edited_fields.is_empty() { "record".to_string() } else { record.edited_fields.join(", ") }),
+        Some("person") => format!("corrected by a person ({})", if record.edited_fields.is_empty() { "record".to_string() } else { plain(&record.edited_fields.join(", ")) }),
         _ => "decided by the machine".to_string(),
     };
     let mut lines = vec![Line::from(Span::styled(format!("Triage record v{} · {who}", record.version.unwrap_or(1)), theme::label()))];
@@ -968,7 +968,7 @@ pub(crate) fn card_group(task: &Task, detail: Option<&TaskDetail>, width: usize,
         (true, Some(running)) => lines.extend(fact_row("Engines", &running, width)),
         (false, running) => lines.extend(fact_row("Engines", &[Some(engines.join(", ")), running].into_iter().flatten().collect::<Vec<_>>().join(" · "), width)),
     }
-    RefGroup::new("card", "Card", task.repo_path.as_deref().map(|r| r.rsplit('/').next().unwrap_or(r).to_string()).unwrap_or_default(), lines)
+    RefGroup::new("card", "Card", task.repo_path.as_deref().map(|r| plain(r.rsplit('/').next().unwrap_or(r))).unwrap_or_default(), lines)
 }
 
 pub(crate) fn proposal_heading(text: &str) -> Line<'static> {
@@ -1295,7 +1295,7 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
 
 /// Text from a run or a model, made safe for a terminal: every control character (an escape sequence included) becomes a space.
 pub(crate) fn plain(text: &str) -> String {
-    text.chars().map(|ch| if crate::text::is_unsafe(ch) && ch != '\n' { ' ' } else { ch }).collect()
+    crate::text::sanitize(text, true)
 }
 
 /// Plan: the latest triage plan, decided or not, then what happened to it. The page reads like the Review page: the brief, each
@@ -1668,7 +1668,7 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
     let removed: u64 = diff.files.iter().map(|f| f.removed).sum();
     let mut lines = vec![Line::from(vec![
         Span::from("Diff").style(theme::heading()),
-        Span::from(format!(" · {} against {} · {} file{} · ", diff.head, diff.base, diff.files.len(), if diff.files.len() == 1 { "" } else { "s" }))
+        Span::from(format!(" · {} against {} · {} file{} · ", plain(&diff.head), plain(&diff.base), diff.files.len(), if diff.files.len() == 1 { "" } else { "s" }))
             .style(theme::label()),
         Span::from(format!("+{added}")).style(theme::done()),
         Span::from(format!(" −{removed}")).style(theme::lost()),
@@ -1685,12 +1685,12 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
         let on = i == selected;
         lines.push(Line::from(vec![
             Span::from(if on { "  ▌ " } else { "    " }).style(theme::border_focus()),
-            Span::from(format!("{} ", file.status)).fg(c(match file.status.as_str() {
+            Span::from(format!("{} ", plain(&file.status))).fg(c(match file.status.as_str() {
                 "A" => GREEN,
                 "D" => RED,
                 _ => YELLOW,
             })),
-            Span::from(format!("{:<w$}", truncate(&file.path, path_w), w = path_w)),
+            Span::from(format!("{:<w$}", truncate(&plain(&file.path), path_w), w = path_w)),
             Span::from(format!("  +{:<4}", file.added)).style(theme::done()),
             Span::from(format!(" −{}", file.removed)).style(theme::lost()),
         ]));
@@ -1698,7 +1698,7 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
     let file = &diff.files[selected];
     lines.push(Line::default());
     lines.push(Line::from(vec![
-        Span::from(format!("─ {} ", file.path)).style(theme::heading()),
+        Span::from(format!("─ {} ", plain(&file.path))).style(theme::heading()),
         Span::from("─".repeat(width.saturating_sub(file.path.chars().count() + 4))).fg(c(MUTED)),
     ]));
     let patch = diff.patch.as_deref().filter(|_| diff.file.as_deref() == Some(file.path.as_str()));
@@ -2004,7 +2004,7 @@ fn pr_lines(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], now: 
                     .is_some_and(|a| a.requested["reused"].as_bool().unwrap_or(false));
                 lines.push(Line::from(vec![
                     Span::from(if reused { "PR (already open)  " } else { "PR opened  " }).style(theme::label()),
-                    Span::from(url).style(theme::border_focus()),
+                    Span::from(plain(&url)).style(theme::border_focus()),
                 ]));
                 lines.push(muted("  not in your inbox: o opens it in the browser".into()));
             }
@@ -2026,8 +2026,8 @@ pub fn pr_widget(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
     };
     let mut lines = vec![
         Line::from(vec![Span::from(format!("{}  ", pr.key())).style(theme::label()), Span::from(crate::model::plain(&pr.title, 400)).bold()]),
-        muted(format!("@{} · {} → {}{} · {} ago", pr.author, pr.head_ref, pr.base_ref, if pr.from_fork { " (fork)" } else { "" }, age(&pr.updated_at, now))),
-        muted(pr.url.clone()),
+        muted(format!("@{} · {} → {}{} · {} ago", plain(&pr.author), plain(&pr.head_ref), plain(&pr.base_ref), if pr.from_fork { " (fork)" } else { "" }, age(&pr.updated_at, now))),
+        muted(plain(&pr.url)),
         Line::default(),
         Line::from(vec![
             Span::from("Checks     ").style(theme::label()),
@@ -2051,7 +2051,7 @@ pub fn pr_widget(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
             "FAILURE" | "ERROR" | "TIMED_OUT" | "CANCELLED" => ("✗", RED),
             _ => ("◐", YELLOW),
         };
-        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(name.to_string())]));
+        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(plain(name))]));
     }
     let mut review = pr.review_label().to_string();
     if pr.unresolved_threads > 0 {

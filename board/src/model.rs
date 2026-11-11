@@ -681,7 +681,7 @@ impl Approval {
 
     /// `1 of 2 (ana)` on a High-risk plan that has a name and needs another; `approved by ana` once decided on one name.
     pub fn approvals_line(&self) -> Option<String> {
-        let names = self.approvers();
+        let names: Vec<String> = self.approvers().iter().map(|n| plain(n, 80)).collect();
         if names.is_empty() {
             return None;
         }
@@ -1970,7 +1970,7 @@ pub struct GraphHealth {
 
 /// Text from outside on one line: control characters become spaces, at most `max` characters.
 pub fn plain(text: &str, max: usize) -> String {
-    let flat: String = text.chars().map(|ch| if crate::text::is_unsafe(ch) { ' ' } else { ch }).collect();
+    let flat = crate::text::sanitize(text, false);
     let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max { flat } else { format!("{}…", flat.chars().take(max.saturating_sub(1)).collect::<String>()) }
 }
