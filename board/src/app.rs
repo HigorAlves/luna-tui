@@ -566,6 +566,8 @@ pub struct App {
     /// The task view a prompt, picker, editor, palette or help sheet was opened from: when it
     /// closes the app returns there (`settle_return`), unless the card is gone.
     pub(crate) return_to: Option<String>,
+    /// The card a palette command acts on while it runs: the open task's, when the palette was opened over one.
+    command_card: Option<String>,
     imported: bool,
     /// The latest stage container per task id, for `f` to open a watch tab on.
     stages: std::collections::HashMap<String, herdr::Stage>,
@@ -648,6 +650,7 @@ impl App {
             help_max: Cell::new(0),
             help_viewport: Cell::new(0),
             return_to: None,
+            command_card: None,
             imported: false,
             stages: std::collections::HashMap::new(),
             scan_tx,
@@ -1479,6 +1482,11 @@ impl App {
         self.selected_task().map(|t| t.id.clone())
     }
 
+    /// The card a command on "the ticket" acts on: the open task's when the command was typed over one, else the board's selection.
+    fn card_target(&self) -> Option<String> {
+        self.command_card.clone().or_else(|| self.selected_id())
+    }
+
     fn clamp_selection(&mut self) {
         for column in 0..COLUMNS.len() {
             let len = self.indices(column).len();
@@ -1486,11 +1494,11 @@ impl App {
         }
     }
 
-    /// Mouse wheel: scrolls the detail popup if it's open, otherwise moves the board selection.
+    /// Mouse wheel: scrolls the detail popup if it's open, does nothing under a prompt over a task, otherwise moves the board selection.
     pub fn scroll(&mut self, delta: i16) {
         if matches!(self.mode, Mode::Detail(_)) {
             self.scroll_detail(delta);
-        } else {
+        } else if self.over_task().is_none() {
             self.move_selection(delta as isize);
         }
     }
@@ -2690,7 +2698,7 @@ impl App {
 
     /// `:dedup duplicate <slot> | related <slots> | neither` on the selected ticket: the answer to Intake's dedup gate.
     fn answer_dedup(&mut self, rest: &str) {
-        let Some(id) = self.selected_id() else {
+        let Some(id) = self.card_target() else {
             self.notify("select a ticket first", true);
             return;
         };
@@ -2707,7 +2715,7 @@ impl App {
 
     /// `:dup <id prefix>`: the selected ticket is a duplicate of that one.
     fn merge_selected(&mut self, rest: &str) {
-        let Some(id) = self.selected_id() else {
+        let Some(id) = self.card_target() else {
             self.notify("select a ticket first", true);
             return;
         };
@@ -2719,7 +2727,7 @@ impl App {
 
     /// `:undup`: the selected, merged ticket comes back as a new card.
     fn unmerge_selected(&mut self) {
-        let Some(id) = self.selected_id() else {
+        let Some(id) = self.card_target() else {
             self.notify("select a ticket first", true);
             return;
         };
@@ -2732,7 +2740,7 @@ impl App {
 
     /// `:context repo|project|text <value>` on the selected ticket: what Intake's gate asked for.
     fn give_context(&mut self, rest: &str) {
-        let Some(id) = self.selected_id() else {
+        let Some(id) = self.card_target() else {
             self.notify("select a ticket first", true);
             return;
         };
@@ -3831,7 +3839,11 @@ impl App {
             KeyCode::Char('E') => self.open_engine_picker(id),
             KeyCode::Char(':') => self.open_card_command(id, ""),
             KeyCode::Char('M') => self.open_card_command(id, "dup "),
-            KeyCode::Char('U') => self.unmerge_selected(),
+            KeyCode::Char('U') => {
+                self.command_card = Some(id.to_string());
+                self.unmerge_selected();
+                self.command_card = None;
+            }
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
@@ -4267,9 +4279,12 @@ impl App {
                 };
                 // A command on the card (the ones that name it) leaves the task view open; the ones
                 // that open a view, a prompt or the board's own state take the screen as on the board.
-                let back = self.return_to.take().filter(|_| CARD_COMMANDS.contains(&line.split_whitespace().next().unwrap_or("")));
+                let open = self.return_to.take();
+                let back = open.clone().filter(|_| CARD_COMMANDS.contains(&line.split_whitespace().next().unwrap_or("")));
+                self.command_card = open;
                 self.mode = Mode::Normal;
                 let outcome = self.run_command(&line);
+                self.command_card = None;
                 if let Some(id) = back.filter(|_| matches!(self.mode, Mode::Normal)) {
                     self.mode = Mode::Detail(id);
                 }
@@ -4303,12 +4318,12 @@ impl App {
                 self.needs_only = false;
                 self.clamp_selection();
             }
-            "repo" => match self.selected_id() {
+            "repo" => match self.card_target() {
                 None => self.notify("no ticket selected", true),
                 Some(id) if rest.is_empty() => self.open_repo_picker(&id),
                 Some(id) => self.set_repo_named(&id, rest),
             },
-            "start" => match self.selected_id() {
+            "start" => match self.card_target() {
                 Some(id) => return self.ticket_key('a', &id),
                 None => self.notify("no ticket selected", true),
             },
@@ -4341,16 +4356,16 @@ impl App {
                 }
                 Err(error) => self.notify(error, true),
             },
-            "whole" => match self.selected_id() {
+            "whole" => match self.card_target() {
                 None => self.notify("no ticket selected", true),
                 Some(id) => self.act(|m| m.keep_whole(&id), "kept as one card: recorded, and flagged at every later gate"),
             },
-            "dismiss" => match (self.selected_id(), parse_dismiss(rest)) {
+            "dismiss" => match (self.card_target(), parse_dismiss(rest)) {
                 (None, _) => self.notify("no ticket selected", true),
                 (_, Err(error)) => self.notify(error, true),
                 (Some(id), Ok((finding, reason))) => self.act(|m| m.dismiss_finding(&id, &finding, reason.as_deref()), "finding dismissed"),
             },
-            "finding" => match (self.selected_id(), parse_finding(rest)) {
+            "finding" => match (self.card_target(), parse_finding(rest)) {
                 (None, _) => self.notify("no ticket selected", true),
                 (_, Err(error)) => self.notify(error, true),
                 (Some(id), Ok((severity, title))) => self.act(|m| m.add_finding(&id, &severity, &title), "finding added"),
@@ -4389,7 +4404,7 @@ impl App {
             "dup" => self.merge_selected(rest),
             "undup" => self.unmerge_selected(),
             "slack" => self.open_slack(),
-            "jira" => match self.selected_id() {
+            "jira" => match self.card_target() {
                 Some(id) if rest.is_empty() => return self.ticket_key('J', &id),
                 Some(id) => self.link_jira(&id, rest),
                 None => self.notify("no ticket selected", true),
@@ -7233,8 +7248,83 @@ pub fn record_changes(record: &TriageRecord, picks: &[usize; 5]) -> Vec<(String,
 
 #[cfg(test)]
 mod task_view_command_tests {
+    use super::confirm_tests::{posts, recording_machine};
     use super::*;
     use crate::testkit::{plan_gate_app, running_build_app};
+
+    /// The open Build card with a second card beside it in the same column, and a machine that records what is sent.
+    fn two_cards() -> (App, String, String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let mut app = running_build_app();
+        let mut other = app.tasks[0].clone();
+        other.id = "bbbbbbbb9999".into();
+        other.title = "Another build".into();
+        let (open, other_id) = (app.tasks[0].id.clone(), other.id.clone());
+        app.tasks.push(other);
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        (app, open, other_id, seen)
+    }
+
+    fn command(app: &mut App, line: &str) {
+        press(app, KeyCode::Char(':'));
+        type_text(app, line);
+        press(app, KeyCode::Enter);
+    }
+
+    #[test]
+    fn a_command_typed_in_the_task_names_the_open_card_when_a_filter_hides_it() {
+        let (mut app, open, _, seen) = two_cards();
+        app.filter = "Another".into();
+        app.select("bbbbbbbb9999", true);
+        app.clamp_selection();
+        assert_eq!(app.selected_id().as_deref(), Some("bbbbbbbb9999"), "the board shows only the other card");
+        command(&mut app, "whole");
+        let sent = posts(&seen);
+        assert!(!sent.is_empty() && sent.iter().all(|p| p.starts_with(&format!("/tasks/{open}/"))), "{sent:?}");
+        assert!(matches!(&app.mode, Mode::Detail(id) if *id == open));
+    }
+
+    #[test]
+    fn a_wheel_notch_over_the_palette_does_not_move_the_card_a_command_acts_on() {
+        let (mut app, open, _, seen) = two_cards();
+        press(&mut app, KeyCode::Char(':'));
+        app.scroll(1);
+        type_text(&mut app, "whole");
+        press(&mut app, KeyCode::Enter);
+        let sent = posts(&seen);
+        assert!(!sent.is_empty() && sent.iter().all(|p| p.starts_with(&format!("/tasks/{open}/"))), "{sent:?}");
+    }
+
+    #[test]
+    fn every_card_command_in_the_task_goes_to_the_open_card() {
+        let (_, open, other, _) = two_cards();
+        for line in ["whole", "dismiss F1", "finding nit rename x", "dup bbbbbbbb9", "undup", "context text hello", "jira PLAT-1"] {
+            let (mut app, _, _, seen) = two_cards();
+            app.filter = "Another".into();
+            app.select("bbbbbbbb9999", true);
+            app.clamp_selection();
+            if line == "undup" {
+                app.tasks[0].merged_into = Some(other.clone());
+            }
+            command(&mut app, line);
+            let sent = posts(&seen);
+            assert!(sent.iter().all(|p| !p.contains(&other)), ":{line} reached the other card: {sent:?}");
+            assert!(!sent.is_empty(), ":{line} sent nothing (toast {:?})", app.toast.as_ref().map(|t| &t.text));
+            assert!(sent.iter().all(|p| p.contains(&open)), ":{line}: {sent:?}");
+        }
+    }
+
+    #[test]
+    fn capital_u_and_m_in_the_task_act_on_the_open_card_too() {
+        let (mut app, open, other, seen) = two_cards();
+        app.filter = "Another".into();
+        app.select("bbbbbbbb9999", true);
+        app.clamp_selection();
+        app.tasks[0].merged_into = Some(other.clone());
+        press(&mut app, KeyCode::Char('U'));
+        let sent = posts(&seen);
+        assert!(!sent.is_empty() && sent.iter().all(|p| p.contains(&open)), "{sent:?}");
+    }
 
     fn press(app: &mut App, code: KeyCode) {
         app.handle_key(KeyEvent::from(code));
@@ -7577,7 +7667,7 @@ mod confirm_tests {
 
     /// A machine that answers `{}` to everything and records each POST's path: how a test sees that a
     /// request was (or was not) sent.
-    fn recording_machine() -> (Machine, Arc<Mutex<Vec<String>>>) {
+    pub(super) fn recording_machine() -> (Machine, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let posts = Arc::new(Mutex::new(Vec::new()));
@@ -7610,7 +7700,7 @@ mod confirm_tests {
         (Machine::at(&format!("http://{addr}")), posts)
     }
 
-    fn posts(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+    pub(super) fn posts(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
         seen.lock().unwrap().clone()
     }
 
