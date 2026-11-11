@@ -2771,7 +2771,8 @@ impl App {
             roots.extend(task.repo_path.iter().chain(task.worktree_path.iter()).map(PathBuf::from));
         }
         match crate::open::open_path_with(&mut *self.launch, Path::new(path), &roots) {
-            Ok(()) => self.notify(format!("opened {what}"), false),
+            Ok(crate::open::Opened::Opened) => self.notify(format!("opened {what}"), false),
+            Ok(crate::open::Opened::Revealed) => self.notify(format!("revealed {what} in the folder"), false),
             Err(why) => self.notify(why, true),
         }
     }
@@ -7869,7 +7870,7 @@ mod evidence_open_tests {
         testkit::{open_card, render, ship_stage_app, task_json},
     };
 
-    type Calls = Rc<RefCell<Vec<(String, OsString)>>>;
+    type Calls = Rc<RefCell<Vec<(String, Vec<OsString>)>>>;
 
     /// The ship-stage card with its three artifacts in real files under a fresh folder that is the card's worktree,
     /// and an opener that records its calls. Runs: verifying (r1) wrote `verify.log`, evidence (r2) the other two.
@@ -7887,8 +7888,8 @@ mod evidence_open_tests {
         app.tasks[0].worktree_path = Some(root.to_string_lossy().into_owned());
         let calls: Calls = Rc::default();
         let log = calls.clone();
-        app.launch = Box::new(move |program, target| {
-            log.borrow_mut().push((program.to_string(), target.to_os_string()));
+        app.launch = Box::new(move |program, args| {
+            log.borrow_mut().push((program.to_string(), args.to_vec()));
             Ok(())
         });
         (app, root, calls)
@@ -7903,7 +7904,7 @@ mod evidence_open_tests {
     }
 
     fn launched(calls: &Calls) -> Vec<OsString> {
-        calls.borrow().iter().map(|(_, target)| target.clone()).collect()
+        calls.borrow().iter().filter_map(|(_, args)| args.last().cloned()).collect()
     }
 
     fn canon(path: &Path) -> OsString {
@@ -7978,6 +7979,43 @@ mod evidence_open_tests {
         press(&mut bare, 'O');
         assert!(launched(&calls).is_empty());
         assert_eq!(toast(&bare), "no PR yet");
+    }
+
+    #[test]
+    fn a_file_a_run_wrote_is_revealed_not_launched_unless_it_is_plain_to_view() {
+        let (mut app, root, calls) = card("reveal");
+        let hostile = root.join("runs/r2/files/run.command");
+        fs::write(&hostile, b"#!/bin/sh").unwrap();
+        app.detail.as_mut().unwrap().artifacts[0].path = hostile.to_string_lossy().into_owned();
+        app.detail.as_mut().unwrap().artifacts[0].label = "run.command".into();
+        app.set_section(Section::Evidence);
+        let row = crate::detail::ordered_artifacts(app.detail.as_ref().unwrap()).iter().position(|a| a.label == "run.command").unwrap();
+        app.detail_cursor = row;
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let real = canon(&hostile);
+        let last = calls.borrow().last().cloned().unwrap();
+        let expect: Vec<OsString> = if cfg!(target_os = "macos") { vec![OsString::from("-R"), real] } else { vec![canon(hostile.parent().unwrap())] };
+        assert_eq!(last.1, expect, "revealed, never opened");
+        assert_eq!(toast(&app), "revealed run.command in the folder");
+        let plain = crate::detail::ordered_artifacts(app.detail.as_ref().unwrap()).iter().position(|a| a.label != "run.command").unwrap();
+        app.detail_cursor = plain;
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(toast(&app).starts_with("opened "), "{}", toast(&app));
+    }
+
+    #[test]
+    fn the_evidence_folder_inside_a_bundle_is_revealed() {
+        let (mut app, root, calls) = card("bundle-folder");
+        let bundle = root.join("runs/r2/X.app/files");
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join("a.png"), b"x").unwrap();
+        for artifact in app.detail.as_mut().unwrap().artifacts.iter_mut() {
+            artifact.path = bundle.join("a.png").to_string_lossy().into_owned();
+        }
+        press(&mut app, 'o');
+        assert_eq!(toast(&app), "revealed the evidence folder in the folder");
+        let last = calls.borrow().last().cloned().unwrap();
+        assert!(if cfg!(target_os = "macos") { last.1.first() == Some(&OsString::from("-R")) } else { true });
     }
 
     #[test]

@@ -1,10 +1,14 @@
 //! The one place the board launches anything: a file or folder in the platform's opener, or a link in
-//! the browser. The program is run with the target as a single argument, never through a shell; a path
-//! must exist and lie under a folder the board may open from; a link must be `https://`. Anything else
-//! is refused with a fixed sentence that never repeats the target.
+//! the browser. The program is run with its arguments as separate arguments, never through a shell; a path
+//! must exist and lie under a folder the board may open from; a link must be a plain `https://` one.
+//! Anything else is refused with a fixed sentence that never repeats the target.
+//!
+//! Stage containers write the files the board shows, so a file is never handed to its default handler
+//! (`open` runs `.command` files, `.terminal` and `.inetloc` files and executables): it is revealed in the
+//! file manager, except for a short list of kinds that are inert to view.
 
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -28,11 +32,24 @@ fn refusal(url: &str) -> String {
 const STARTING: &str = "could not start the opener";
 pub(crate) const REFUSE_NO_OPENER: &str = "no opener on this system";
 
-/// What launches a target: `(program, target)`. Tests record the call instead of spawning.
-pub(crate) type Launch<'a> = &'a mut dyn FnMut(&str, &OsStr) -> io::Result<()>;
+/// What launches a target: `(program, arguments)`. Tests record the call instead of spawning.
+pub(crate) type Launch<'a> = &'a mut dyn FnMut(&str, &[OsString]) -> io::Result<()>;
 
 /// The launcher the app owns.
-pub(crate) type Launcher = Box<dyn FnMut(&str, &OsStr) -> io::Result<()>>;
+pub(crate) type Launcher = Box<dyn FnMut(&str, &[OsString]) -> io::Result<()>>;
+
+/// What a launched path came to: opened with its default handler, or shown in the file manager.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Opened {
+    Opened,
+    Revealed,
+}
+
+/// Kinds a viewer shows without running anything: images, video, plain text, JSON, CSV, PDF. `html`, `svg` and archives are not here.
+const VIEWABLE: [&str; 15] = ["png", "jpg", "jpeg", "gif", "webp", "mp4", "webm", "mov", "txt", "log", "md", "json", "jsonl", "csv", "pdf"];
+
+/// Folder-like packages the OS launches or installs when asked to open them.
+const BUNDLES: [&str; 15] = ["app", "bundle", "framework", "plugin", "kext", "prefpane", "workflow", "action", "qlgenerator", "saver", "wdgt", "xpc", "appex", "pkg", "mpkg"];
 
 /// The platform's "open this" program: `open` on macOS, `xdg-open` on Linux, none elsewhere.
 pub fn opener() -> Option<&'static str> {
@@ -57,42 +74,108 @@ fn state_dir_from(state: Option<String>, home: Option<String>) -> Option<PathBuf
     }
 }
 
-/// Spawns `program target` detached: no shell, output discarded, and a thread reaps the child so none lingers.
-pub(crate) fn spawn_detached(program: &str, target: &OsStr) -> io::Result<()> {
-    let mut child = Command::new(program).arg(target).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+/// Spawns `program args` detached: no shell, output discarded, and a thread reaps the child so none lingers.
+pub(crate) fn spawn_detached(program: &str, args: &[OsString]) -> io::Result<()> {
+    let mut child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
     std::thread::spawn(move || {
         let _ = child.wait();
     });
     Ok(())
 }
 
-/// Opens `path` (a file or a folder) when it is absolute, exists and, with symlinks and `..` resolved, lies under one of `roots`.
-pub(crate) fn open_path_with(launch: Launch, path: &Path, roots: &[PathBuf]) -> Result<(), String> {
+/// A root the board may open from: an absolute, canonical directory at least two folders deep that is not the home folder.
+/// `/`, `/Users`, `/home` and `$HOME` are refused, so nothing under them opens through that root.
+fn usable_root(root: &Path) -> Option<PathBuf> {
+    let real = fs::canonicalize(root).ok()?;
+    let depth = real.components().filter(|c| matches!(c, std::path::Component::Normal(_))).count();
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).and_then(|h| fs::canonicalize(h).ok());
+    (real.is_absolute() && real.is_dir() && depth >= 2 && home.as_ref() != Some(&real)).then_some(real)
+}
+
+/// Whether `name` ends in a package extension (case-insensitive).
+fn is_bundle_name(name: &OsStr) -> bool {
+    let name = name.to_string_lossy().to_ascii_lowercase();
+    BUNDLES.iter().any(|ext| name.strip_suffix(ext).is_some_and(|rest| rest.ends_with('.') && rest.len() > 1))
+}
+
+/// Whether any folder of `real` (or its own name) is a package.
+fn inside_bundle(real: &Path) -> bool {
+    real.components().any(|c| matches!(c, std::path::Component::Normal(name) if is_bundle_name(name)))
+}
+
+/// Whether the default handler may be given this file: a regular file, executable by no one, of a kind that is inert to view.
+fn viewable(real: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = fs::metadata(real) else { return false };
+    let kind = real.extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
+    meta.is_file() && meta.permissions().mode() & 0o111 == 0 && kind.is_some_and(|k| VIEWABLE.contains(&k.as_str()))
+}
+
+/// Shows `real` in the file manager: `open -R` selects it in Finder; elsewhere its folder opens.
+fn reveal(launch: Launch, program: &str, real: &Path) -> Result<Opened, String> {
+    let args: Vec<OsString> = if cfg!(target_os = "macos") {
+        vec![OsString::from("-R"), real.as_os_str().to_os_string()]
+    } else {
+        vec![real.parent().unwrap_or(real).as_os_str().to_os_string()]
+    };
+    launch(program, &args).map(|()| Opened::Revealed).map_err(|_| STARTING.to_string())
+}
+
+/// Opens or reveals `path` (a file or a folder) when it is absolute, exists and, with symlinks and `..` resolved, lies under one of `roots`.
+/// A folder opens unless a package is in its path; a file opens only when it is a plain viewable kind; everything else is revealed.
+pub(crate) fn open_path_with(launch: Launch, path: &Path, roots: &[PathBuf]) -> Result<Opened, String> {
     let program = opener().ok_or(REFUSE_NO_OPENER)?;
     if !path.is_absolute() {
         return Err(REFUSE_RELATIVE.into());
     }
     // Canonical: it proves the path exists, and settles `..` and symlinks before the root check.
     let real = fs::canonicalize(path).map_err(|_| REFUSE_MISSING.to_string())?;
-    if !roots.iter().filter_map(|root| fs::canonicalize(root).ok()).any(|root| real.starts_with(root)) {
+    if !roots.iter().filter_map(|root| usable_root(root)).any(|root| real.starts_with(root)) {
         return Err(REFUSE_OUTSIDE.into());
     }
-    launch(program, real.as_os_str()).map_err(|_| STARTING.to_string())
+    let plain = !inside_bundle(&real) && (if real.is_dir() { true } else { viewable(&real) });
+    if plain {
+        launch(program, &[real.as_os_str().to_os_string()]).map(|()| Opened::Opened).map_err(|_| STARTING.to_string())
+    } else {
+        reveal(launch, program, &real)
+    }
+}
+
+/// Whether the host of an `https://` link is one the board will hand to a browser: a name, ASCII, not punycode, not an address.
+fn plain_host(rest: &str) -> bool {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return false;
+    }
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => host,
+        _ => authority,
+    };
+    let host = host.to_ascii_lowercase();
+    let last = host.trim_end_matches('.').rsplit('.').next().unwrap_or("");
+    !host.is_empty()
+        && host.is_ascii()
+        && !host.contains("xn--")
+        && !host.starts_with('[')
+        && host.parse::<std::net::IpAddr>().is_err()
+        && !last.is_empty()
+        && !last.chars().all(|c| c.is_ascii_digit())
+        && !last.starts_with("0x")
 }
 
 /// Opens `url` in the browser when it is a plain `https://` link.
 pub(crate) fn open_url_with(launch: Launch, url: &str) -> Result<(), String> {
     let program = opener().ok_or(REFUSE_NO_OPENER)?;
-    let plain = url.starts_with("https://") && url.len() > "https://".len() && url.len() <= MAX_URL && !url.chars().any(|ch| ch.is_whitespace() || ch.is_control());
+    let plain = url.starts_with("https://") && url.len() > "https://".len() && url.len() <= MAX_URL && !url.chars().any(|ch| ch.is_whitespace() || ch.is_control()) && plain_host(&url["https://".len()..]);
     if !plain {
         return Err(refusal(url));
     }
-    launch(program, OsStr::new(url)).map_err(|_| STARTING.to_string())
+    launch(program, &[OsString::from(url)]).map_err(|_| STARTING.to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
     use super::*;
 
@@ -120,10 +203,12 @@ mod tests {
         }
     }
 
-    fn run(path: &Path, roots: &[PathBuf]) -> (Result<(), String>, Vec<(String, std::ffi::OsString)>) {
+    type Calls = Vec<(String, Vec<OsString>)>;
+
+    fn run(path: &Path, roots: &[PathBuf]) -> (Result<Opened, String>, Calls) {
         let mut calls = Vec::new();
-        let mut launch = |program: &str, target: &OsStr| {
-            calls.push((program.to_string(), target.to_os_string()));
+        let mut launch = |program: &str, args: &[OsString]| {
+            calls.push((program.to_string(), args.to_vec()));
             Ok(())
         };
         let result = open_path_with(&mut launch, path, roots);
@@ -132,7 +217,7 @@ mod tests {
 
     fn run_url(url: &str) -> (Result<(), String>, usize) {
         let mut n = 0;
-        let mut launch = |_: &str, _: &OsStr| {
+        let mut launch = |_: &str, _: &[OsString]| {
             n += 1;
             Ok(())
         };
@@ -158,10 +243,10 @@ mod tests {
         let s = Scratch::new("spaces");
         let file = s.file("my runs/a shot.png");
         let (result, calls) = run(&file, std::slice::from_ref(&s.0));
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Ok(Opened::Opened));
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, opener().unwrap());
-        assert_eq!(calls[0].1, fs::canonicalize(&file).unwrap().as_os_str());
+        assert_eq!(calls[0].1, vec![fs::canonicalize(&file).unwrap().into_os_string()]);
     }
 
     #[test]
@@ -169,8 +254,8 @@ mod tests {
         let s = Scratch::new("meta");
         let file = s.file("a;rm -rf $(echo x)`id`.png");
         let (result, calls) = run(&file, std::slice::from_ref(&s.0));
-        assert_eq!(result, Ok(()));
-        assert_eq!(calls[0].1, fs::canonicalize(&file).unwrap().as_os_str());
+        assert_eq!(result, Ok(Opened::Opened));
+        assert_eq!(calls[0].1, vec![fs::canonicalize(&file).unwrap().into_os_string()]);
     }
 
     #[test]
@@ -178,7 +263,7 @@ mod tests {
         let s = Scratch::new("folder");
         s.file("qa/one.png");
         let (result, calls) = run(&s.0.join("qa"), std::slice::from_ref(&s.0));
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Ok(Opened::Opened));
         assert_eq!(calls.len(), 1);
     }
 
@@ -252,12 +337,12 @@ mod tests {
     #[test]
     fn a_https_link_opens_as_one_argument() {
         let mut got = Vec::new();
-        let mut launch = |program: &str, target: &OsStr| {
-            got.push((program.to_string(), target.to_os_string()));
+        let mut launch = |program: &str, args: &[OsString]| {
+            got.push((program.to_string(), args.to_vec()));
             Ok(())
         };
         assert_eq!(open_url_with(&mut launch, "https://github.com/acme/app/pull/412?x=a;b&y=$(id)"), Ok(()));
-        assert_eq!(got, vec![(opener().unwrap().to_string(), "https://github.com/acme/app/pull/412?x=a;b&y=$(id)".into())]);
+        assert_eq!(got, vec![(opener().unwrap().to_string(), vec![OsString::from("https://github.com/acme/app/pull/412?x=a;b&y=$(id)")])]);
     }
 
     #[test]
@@ -273,6 +358,17 @@ mod tests {
             "https://example.com/\u{1b}[2J",
             "https://example.com/a\nb",
             "-oProxyCommand=id",
+            "https://github.com@evil.example/x",
+            "https://user:pw@example.com/",
+            "https://xn--e1afmkfd.example/",
+            "https://XN--e1afmkfd.example/",
+            "https://exämple.com/",
+            "https:///path",
+            "https://:443/",
+            "https://127.0.0.1/",
+            "https://127.0.0.1:8080/x",
+            "https://[::1]/x",
+            "https://2130706433/",
             "--help",
             "",
             long.as_str(),
@@ -298,10 +394,109 @@ mod tests {
     fn a_launcher_that_fails_says_so_in_fixed_words() {
         let s = Scratch::new("fail");
         let file = s.file("a.png");
-        let mut launch = |_: &str, _: &OsStr| Err(io::Error::other("boom /secret"));
+        let mut launch = |_: &str, _: &[OsString]| Err(io::Error::other("boom /secret"));
         let error = open_path_with(&mut launch, &file, std::slice::from_ref(&s.0)).unwrap_err();
         assert_eq!(error, "could not start the opener");
-        let mut launch = |_: &str, _: &OsStr| Err(io::Error::other("boom"));
+        let mut launch = |_: &str, _: &[OsString]| Err(io::Error::other("boom"));
         assert_eq!(open_url_with(&mut launch, "https://example.com").unwrap_err(), "could not start the opener");
+    }
+
+    fn one(path: &Path, roots: &[PathBuf]) -> (Result<Opened, String>, Vec<OsString>) {
+        let (result, calls) = run(path, roots);
+        assert!(calls.len() <= 1, "{calls:?}");
+        (result, calls.into_iter().next().map(|(_, args)| args).unwrap_or_default())
+    }
+
+    fn revealed_args(real: &Path) -> Vec<OsString> {
+        if cfg!(target_os = "macos") {
+            vec![OsString::from("-R"), real.as_os_str().to_os_string()]
+        } else {
+            vec![real.parent().unwrap().as_os_str().to_os_string()]
+        }
+    }
+
+    #[test]
+    fn files_that_run_or_act_when_opened_are_revealed_not_opened() {
+        let s = Scratch::new("hostile");
+        for name in ["run.command", "x.terminal", "link.inetloc", "a.html", "b.svg", "c.zip", "d.jar", "e.pkg", "f.webloc", "bin/setup", "UPPER.COMMAND"] {
+            let file = s.file(name);
+            let (result, args) = one(&file, std::slice::from_ref(&s.0));
+            assert_eq!(result, Ok(Opened::Revealed), "{name}");
+            assert_eq!(args, revealed_args(&fs::canonicalize(&file).unwrap()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_plain_viewable_file_opens_and_an_executable_one_is_revealed() {
+        let s = Scratch::new("viewable");
+        for name in ["shot.png", "SHOT.PNG", "a.jpg", "v.mp4", "n.txt", "x.log", "r.md", "d.json", "d.jsonl", "t.csv", "p.pdf"] {
+            let file = s.file(name);
+            let (result, args) = one(&file, std::slice::from_ref(&s.0));
+            assert_eq!(result, Ok(Opened::Opened), "{name}");
+            assert_eq!(args, vec![fs::canonicalize(&file).unwrap().into_os_string()], "{name}");
+        }
+        let exec = s.file("notes.txt");
+        fs::set_permissions(&exec, fs::Permissions::from_mode(0o755)).unwrap();
+        let (result, args) = one(&exec, std::slice::from_ref(&s.0));
+        assert_eq!(result, Ok(Opened::Revealed));
+        assert_eq!(args, revealed_args(&fs::canonicalize(&exec).unwrap()));
+        let group = s.file("group.txt");
+        fs::set_permissions(&group, fs::Permissions::from_mode(0o610)).unwrap();
+        assert_eq!(one(&group, std::slice::from_ref(&s.0)).0, Ok(Opened::Revealed), "executable by anyone counts");
+    }
+
+    #[test]
+    fn a_file_inside_a_bundle_is_revealed_and_so_is_the_bundle_folder() {
+        let s = Scratch::new("bundle");
+        let inside = s.file("X.app/Contents/shot.png");
+        let (result, args) = one(&inside, std::slice::from_ref(&s.0));
+        assert_eq!(result, Ok(Opened::Revealed));
+        assert_eq!(args, revealed_args(&fs::canonicalize(&inside).unwrap()));
+        let folder = s.0.join("Evil.APP");
+        fs::create_dir_all(&folder).unwrap();
+        let (result, args) = one(&folder, std::slice::from_ref(&s.0));
+        assert_eq!(result, Ok(Opened::Revealed));
+        assert_eq!(args, revealed_args(&fs::canonicalize(&folder).unwrap()));
+        for ext in ["bundle", "framework", "plugin", "kext", "prefPane", "workflow", "action", "qlgenerator", "saver", "wdgt", "xpc", "appex", "pkg", "mpkg"] {
+            let dir = s.0.join(format!("a.{ext}"));
+            fs::create_dir_all(&dir).unwrap();
+            assert_eq!(one(&dir, std::slice::from_ref(&s.0)).0, Ok(Opened::Revealed), "{ext}");
+        }
+        let near = s.0.join("app");
+        fs::create_dir_all(&near).unwrap();
+        assert_eq!(one(&near, std::slice::from_ref(&s.0)).0, Ok(Opened::Opened), "a folder merely named app is a folder");
+    }
+
+    #[test]
+    fn a_normal_folder_opens() {
+        let s = Scratch::new("plainfolder");
+        s.file("qa/shot.png");
+        let (result, args) = one(&s.0.join("qa"), std::slice::from_ref(&s.0));
+        assert_eq!(result, Ok(Opened::Opened));
+        assert_eq!(args, vec![fs::canonicalize(s.0.join("qa")).unwrap().into_os_string()]);
+    }
+
+    #[test]
+    fn roots_that_are_too_broad_open_nothing() {
+        let (result, calls) = run(Path::new("/etc/hosts"), &[PathBuf::from("/")]);
+        assert_eq!(result, Err(REFUSE_OUTSIDE.to_string()));
+        assert!(calls.is_empty());
+        let home = PathBuf::from(std::env::var("HOME").unwrap());
+        let s = Scratch::new("broad");
+        let file = s.file("a.png");
+        for root in [PathBuf::from("/"), PathBuf::from("/Users"), PathBuf::from("/home"), home.clone(), PathBuf::from("relative/dir")] {
+            let (result, calls) = run(&file, std::slice::from_ref(&root));
+            assert_eq!(result, Err(REFUSE_OUTSIDE.to_string()), "{root:?}");
+            assert!(calls.is_empty());
+        }
+        let (result, _) = run(&file, &[PathBuf::from("/"), s.0.clone()]);
+        assert_eq!(result, Ok(Opened::Opened), "a good root next to a bad one still works");
+    }
+
+    #[test]
+    fn a_link_with_a_plain_host_still_opens() {
+        for url in ["https://github.com/acme/app/pull/1?a=b#c", "https://acme.atlassian.net/browse/PLAT-1", "https://example.com:8443/x", "https://app.slack.com/client/T1/C1?x=a@b", "https://v6.example.com/"] {
+            assert_eq!(run_url(url), (Ok(()), 1), "{url}");
+        }
     }
 }
