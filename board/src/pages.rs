@@ -5,8 +5,11 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use crate::{
-    detail::{assumptions_group, card_group, checks_group, gate_main_facts, gate_ref_group, map_group, muted, plain, record_group},
-    model::{Approval, Task, TaskDetail},
+    detail::{
+        assumptions_group, card_group, checks_group, criteria_table, gate_blocks, gate_main_facts, gate_question, gate_ref_group, intake_gate_lines, map_group, muted, origin_lines, plain, pr_for, pr_url,
+        record_group, run_error, ship_risk_is_high, slice_progress,
+    },
+    model::{Approval, PullRequest, Task, TaskDetail, criteria_summary, questions_of, ESCALATION_REASONS},
     reference::{Page, RefGroup},
     text::{self, ellipsis, truncate_middle},
     theme,
@@ -287,6 +290,267 @@ pub(crate) fn review_page(task: &Task, detail: Option<&TaskDetail>, width: usize
     Page { main, groups }
 }
 
+/// `52k`, `1.5k`, `640`.
+fn thousands(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        _ if n.is_multiple_of(1000) => format!("{}k", n / 1000),
+        _ => format!("{:.1}k", n as f64 / 1000.0),
+    }
+}
+
+/// `7.5` or `45`.
+fn number(n: f64) -> String {
+    if n.fract() == 0.0 { format!("{n:.0}") } else { format!("{n:.1}") }
+}
+
+/// `iterations ████░░░░░░ 4 of 12`: a ten-cell bar of `used` against `max`, in the flag style from 80%.
+fn budget_row(label: &str, used: f64, max: f64, text: String) -> Line<'static> {
+    let share = if max > 0.0 { (used / max).clamp(0.0, 1.0) } else { 0.0 };
+    let filled = (share * 10.0).round() as usize;
+    let style = if share >= 0.8 { theme::flag() } else { theme::text() };
+    Line::from(vec![
+        Span::styled(format!("  {label:<10} "), theme::label()),
+        Span::styled(format!("{}{}", "█".repeat(filled), "░".repeat(10 - filled)), style),
+        Span::styled(format!(" {text}"), style),
+    ])
+}
+
+/// A running card: the stage and step, the slices, the budget against its limits, the checkpoint and the latest activity, then the
+/// criteria. The board holds a run's transcript only in the watch pane, so the last lines here are the activity log's.
+pub(crate) fn now_page(task: &Task, detail: Option<&TaskDetail>, width: usize, ref_width: usize, now: u64) -> Page {
+    let mut main = Vec::new();
+    let run = detail.and_then(|d| d.stage_runs.iter().rev().find(|r| r.status == "running"));
+    let mut parts = vec![task.status_label() + &run.map(|r| format!(" #{}", r.attempt)).unwrap_or_default()];
+    parts.extend(slice_progress(detail));
+    parts.extend(detail.and_then(TaskDetail::running_engine).map(|e| format!("on {}", plain(e))));
+    main.push(Line::from(vec![Span::styled(format!("{:<11}", "Stage"), theme::label()), Span::styled(parts.join(" · "), theme::heading())]));
+    let Some(d) = detail else { return Page::of(main) };
+    if let Some(p) = &d.build_progress {
+        main.extend([Line::default(), title("Build")]);
+        for s in &p.scenarios {
+            let (glyph, style) = if s.state == "green" { ("●", theme::done()) } else { ("○", theme::label()) };
+            main.push(Line::from(vec![Span::styled(format!("  {glyph} "), style), Span::raw(format!("{:<8}", ellipsis(&plain(&s.id), 8))), Span::styled(plain(&s.state), style)]));
+        }
+        let b = &p.budget;
+        main.extend([Line::default(), title("Budget")]);
+        main.push(budget_row("iterations", b.iterations as f64, b.limits.max_iterations as f64, format!("{} of {}", b.iterations, b.limits.max_iterations)));
+        match b.tokens {
+            Some(t) => main.push(budget_row("tokens", t as f64, b.limits.max_tokens as f64, format!("{} of {}", thousands(t), thousands(b.limits.max_tokens)))),
+            None => main.push(muted("  tokens     not counted".into())),
+        }
+        main.push(budget_row("minutes", b.minutes, b.limits.max_minutes, format!("{} of {}", number(b.minutes), number(b.limits.max_minutes))));
+        if let Some(cp) = &p.last_checkpoint {
+            main.push(Line::default());
+            main.push(Line::from(vec![Span::styled(format!("{:<11}", "checkpoint"), theme::label()), Span::raw(format!("{} after a {}", plain(&cp.sha).chars().take(7).collect::<String>(), plain(&cp.follows)))]));
+        }
+    }
+    main.extend([Line::default(), title("Latest activity")]);
+    main.push(Line::from(Span::styled("  from the activity log; f follows the live run", theme::dim())));
+    let events: Vec<_> = d.events.iter().rev().take(5).collect();
+    for e in events.into_iter().rev() {
+        main.push(Line::from(Span::styled(format!("  {}", ellipsis(&plain(&crate::ui::describe(e)), width.saturating_sub(2))), theme::label())));
+    }
+    let table = criteria_table(&criteria_summary(d), width);
+    if !table.is_empty() {
+        main.push(Line::default());
+        main.extend(table);
+    }
+    Page { main, groups: vec![card_group(task, detail, ref_width, now)] }
+}
+
+/// The keys that apply, each with what it does.
+fn can_do(can: &[(String, String)]) -> Vec<Line<'static>> {
+    if can.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![Line::default(), title("What you can do")];
+    out.extend(can.iter().map(|(k, l)| Line::from(vec![Span::raw("  "), Span::styled(format!("{k:<8}"), theme::heading()), Span::styled(l.clone(), theme::label())])));
+    out
+}
+
+/// A card that stopped: why (the reason, how sure the machine is, what it summed up), what can be done, and the failing output's tail.
+pub(crate) fn stopped_page(task: &Task, detail: Option<&TaskDetail>, can: &[(String, String)], width: usize, ref_width: usize) -> Page {
+    const SHOWN: usize = 20;
+    let gate = detail.and_then(|d| d.approvals.iter().rev().find(|a| a.kind_or_guess() == "escalated" && a.decision.is_none()));
+    let decision = gate.map(|g| &g.requested["escalationDecision"]);
+    let reason = decision.and_then(|d| d["reason"].as_str()).or(task.reason.as_deref());
+    let head = match reason {
+        Some(r) => format!("✗ {} · {}", task.status_label(), plain(r)),
+        None => format!("✗ {}", task.status_label()),
+    };
+    let mut main = vec![Line::from(Span::styled(head, theme::lost().add_modifier(ratatui::style::Modifier::BOLD)))];
+    if let Some(known) = reason.and_then(|r| ESCALATION_REASONS.iter().find(|(id, _)| *id == r)) {
+        main.push(Line::from(Span::styled(format!("  {}", known.1), theme::label())));
+    }
+    if let Some(d) = decision {
+        let mut how = Vec::new();
+        if let Some(conf) = d["confidence"].as_f64() {
+            how.push(format!("{:.0}% sure", conf * 100.0));
+        }
+        if let Some(source) = d["source"].as_str() {
+            how.push(format!("by {}", plain(source)));
+        }
+        if !how.is_empty() {
+            main.push(Line::from(Span::styled(format!("  {}", how.join(" · ")), theme::label())));
+        }
+        if let Some(agent) = d["agentReason"].as_str() {
+            main.push(Line::from(Span::styled(format!("  the agent said: {}", plain(agent)), theme::label())));
+        }
+    }
+    if let Some(to) = detail.and_then(|d| d.events.iter().rev().find(|e| e.kind == "escalation.corrected")).and_then(|e| e.payload["to"].as_str()) {
+        main.push(Line::from(Span::styled(format!("  corrected to {}", plain(to)), theme::done())));
+    }
+    if let Some(summary) = gate.and_then(|g| g.requested["summary"].as_str()).filter(|s| !s.trim().is_empty()) {
+        main.push(Line::default());
+        main.extend(text::markdown(summary, width, 2));
+    }
+    main.extend(can_do(can));
+    let tail = gate
+        .and_then(|g| g.requested["outputTail"].as_str().map(str::to_string))
+        .or_else(|| detail.and_then(|d| d.stage_runs.iter().rev().find(|r| r.status == "failed").and_then(|r| run_error(d, r))))
+        .filter(|t| !t.trim().is_empty());
+    let mut groups = Vec::new();
+    if let Some(tail) = tail {
+        let rows: Vec<String> = plain(&tail).lines().map(|l| ellipsis(l, width.saturating_sub(4))).collect();
+        let hidden = rows.len().saturating_sub(SHOWN);
+        main.extend([Line::default(), title("Output")]);
+        if hidden > 0 {
+            main.push(Line::from(Span::styled(format!("  ▸ {hidden} more lines (Earlier output, in the reference)"), theme::dim())));
+            groups.push(RefGroup::new("earlier", "Earlier output", format!("{hidden} lines"), rows[..hidden].iter().map(|l| Line::from(Span::styled(l.clone(), theme::code()))).collect()));
+        }
+        main.extend(rows[hidden..].iter().map(|l| Line::from(Span::styled(format!("  {l}"), theme::code()))));
+    }
+    if let Some(path) = gate.and_then(|g| g.requested["keptSandbox"]["path"].as_str()) {
+        let until = gate.and_then(|g| g.requested["keptSandbox"]["until"].as_str()).map(|u| format!(" until {}", plain(u))).unwrap_or_default();
+        groups.push(RefGroup::new("sandbox", "Sandbox", "kept", vec![Line::from(format!("sandbox kept at {}{until}", plain(path)))]));
+    }
+    groups.push(card_group(task, detail, ref_width, crate::model::now_secs()));
+    Page { main, groups }
+}
+
+fn evidence_pack(d: &TaskDetail) -> Option<&Value> {
+    match d.latest_approval("awaiting_ship") {
+        Some(a) if a.requested["evidence"].is_object() => Some(&a.requested["evidence"]),
+        _ => d.task.evidence.as_ref(),
+    }
+}
+
+/// A card at or past shipping: the release question first when there is one, then what changed and why, what review found by
+/// level, the PR, the evidence and the ship checklist.
+pub(crate) fn result_page(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], can: &[(String, String)], width: usize, ref_width: usize, now: u64) -> Page {
+    let Some(d) = detail else { return Page::of(vec![title("Result"), Line::default(), muted("  loading…".into())]) };
+    let mut main = Vec::new();
+    let open = d.open_approval();
+    if let Some(a) = open.filter(|a| a.is_ship_approval()) {
+        let question = plain(a.requested["question"].as_str().unwrap_or("safe to release now?"));
+        if a.requested["risk"].as_str() == Some("high") || ship_risk_is_high(detail) {
+            main.push(Line::from(Span::styled(format!("⚑ release owner: {question}"), theme::flag())));
+        } else {
+            main.push(title(&format!("Release question: {question}")));
+        }
+        for item in a.requested["checklist"].as_array().into_iter().flatten() {
+            let ok = item["ok"].as_bool().unwrap_or(false);
+            main.push(Line::from(vec![
+                Span::styled(format!("  {} ", if ok { "✓" } else { "✗" }), if ok { theme::done() } else { theme::lost() }),
+                Span::raw(plain(item["detail"].as_str().unwrap_or(item["id"].as_str().unwrap_or("")))),
+            ]));
+        }
+        main.push(Line::default());
+    } else if let Some(a) = open.filter(|a| a.kind_or_guess() == "reviewing_memory") {
+        let blocks = gate_blocks(a, width);
+        if !blocks.is_empty() {
+            main.extend(blocks);
+            main.push(Line::default());
+        }
+    }
+    let pack = evidence_pack(d);
+    if let Some(summary) = pack.map(|p| &p["diffSummary"]).filter(|s| s.is_object()) {
+        main.push(title("Summary"));
+        if let Some(what) = summary["what"].as_str() {
+            main.extend(text::markdown(what, width, 2));
+        }
+        if let Some(why) = summary["why"].as_str() {
+            main.extend(hanging(vec![Span::styled("  Why  ", theme::label())], why, width));
+        }
+        main.push(Line::default());
+    }
+    let open_findings: Vec<_> = d.reports.as_ref().and_then(|r| r.verify.as_ref()).map(|v| v.findings.iter().filter(|f| f.resolution.is_none()).collect()).unwrap_or_default();
+    if !open_findings.is_empty() {
+        let levels = [("blocker", "blocker"), ("should_fix", "should fix"), ("nit", "nit")];
+        let counts: Vec<String> = levels.iter().filter_map(|(id, name)| Some(open_findings.iter().filter(|f| f.level() == *id).count()).filter(|n| *n > 0).map(|n| format!("{n} {name}"))).collect();
+        main.extend([title("Findings"), Line::from(Span::styled(format!("  {}", counts.join(" · ")), theme::label()))]);
+        for (id, name) in levels {
+            for f in open_findings.iter().filter(|f| f.level() == id) {
+                let place = if f.path.is_empty() { String::new() } else { format!("  {}:{}", truncate_middle(&plain(&f.path), 50), f.line) };
+                main.extend(hanging(vec![Span::raw("  "), Span::styled(format!("{name:<11}"), if id == "blocker" { theme::lost() } else { theme::label() })], &format!("{}{place}", plain(&f.title)), width));
+            }
+        }
+        main.push(Line::default());
+    }
+    let pr = match (pr_for(task, prs), d.ship.as_ref().filter(|s| s.pr.number > 0)) {
+        (Some(pr), _) => Some(format!("{} · checks {} · {}", pr.key(), pr.checks_label(), pr.review_label())),
+        (None, Some(ship)) => Some(format!("#{} · {}", ship.pr.number, if ship.ready { "every item passes" } else { "waiting on the items below" })),
+        _ => pr_url(d),
+    };
+    if let Some(pr) = pr {
+        main.push(Line::from(vec![Span::styled(format!("{:<11}", "PR"), theme::label()), Span::raw(plain(&pr))]));
+    }
+    if !d.artifacts.is_empty() {
+        main.push(Line::from(vec![Span::styled(format!("{:<11}", "Evidence"), theme::label()), Span::raw(format!("{} file{}", d.artifacts.len(), if d.artifacts.len() == 1 { "" } else { "s" }))]));
+    }
+    if let Some(ship) = d.ship.as_ref().filter(|s| !s.checklist.is_empty()) {
+        main.extend([Line::default(), title("Ship checklist")]);
+        for item in &ship.checklist {
+            main.push(Line::from(vec![
+                Span::styled(format!("  {} ", if item.ok { "✓" } else { "✗" }), if item.ok { theme::done() } else { theme::lost() }),
+                Span::raw(format!("{:<10}", plain(&item.id).replace('_', " "))),
+                Span::styled(plain(&item.detail), theme::label()),
+            ]));
+        }
+    }
+    main.extend(can_do(can));
+    let mut groups = Vec::new();
+    if let Some(pack) = pack {
+        let lines: Vec<Line<'static>> = crate::ui::pack_lines(pack).iter().map(|l| Line::from(ellipsis(l, ref_width))).collect();
+        if !lines.is_empty() {
+            groups.push(RefGroup::new("pack", "Evidence pack", format!("{} lines", lines.len()), lines));
+        }
+    }
+    groups.push(card_group(task, detail, ref_width, now));
+    Page { main, groups }
+}
+
+/// A gate that asks a question: the question and its choices first (the triage questions numbered, each with the machine's
+/// suggested answer; the intake candidates; the proposed setup), then where the card came from as reference.
+pub(crate) fn gate_page(task: &Task, detail: Option<&TaskDetail>, can: &[(String, String)], width: usize, ref_width: usize, now: u64) -> Page {
+    let mut main = vec![title(&gate_question(task, detail).unwrap_or_else(|| task.status_label()))];
+    if let Some(approval) = detail.and_then(TaskDetail::open_approval) {
+        for (i, (question, suggested)) in questions_of(approval).into_iter().enumerate() {
+            main.push(Line::default());
+            main.extend(hanging(vec![Span::raw("  "), Span::styled(format!("{}. ", i + 1), theme::label())], &question, width));
+            if !suggested.is_empty() {
+                main.push(Line::from(Span::styled(format!("     suggested: {}", plain(&suggested)), theme::dim())));
+            }
+        }
+        main.extend(gate_blocks(approval, width));
+    }
+    let intake = intake_gate_lines(detail);
+    if !intake.is_empty() {
+        main.push(Line::default());
+        main.extend(intake);
+    }
+    main.extend(can_do(can));
+    let mut groups = Vec::new();
+    let origin = origin_lines(task, detail);
+    if !origin.is_empty() {
+        let n = origin.len();
+        groups.push(RefGroup::new("origin", "Origin", format!("{n} lines"), origin));
+    }
+    groups.push(card_group(task, detail, ref_width, now));
+    Page { main, groups }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -453,5 +717,124 @@ mod approver_tests {
         let screen = render(&mut app, 180, 60);
         let main: String = screen.lines().skip(8).map(|r| r.chars().skip(17).take(94).collect::<String>()).collect::<Vec<_>>().join("\n");
         assert!(!main.contains("⚑ plan") && !main.contains("check flagged"), "{main}");
+    }
+}
+
+/// The first pages of a running, a stopped, a shipped and a questioning card, drawn through `ui::draw` on the fixture cards.
+#[cfg(test)]
+mod first_page_tests {
+    use crate::{
+        detail::Section,
+        testkit::{escalated_app, plan_gate_app, questions_app, release_question_app, render, running_build_app, ship_stage_app},
+    };
+
+    fn main_pane(screen: &str) -> String {
+        screen.lines().map(|r| r.chars().skip(17).take(94).collect::<String>().trim_end().to_string()).collect::<Vec<_>>().join("\n")
+    }
+
+    fn rail_of(screen: &str) -> String {
+        screen.lines().skip(8).take(14).map(|r| r.chars().skip(9).take(14).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    fn in_order(text: &str, needles: &[&str]) {
+        let mut last = 0;
+        for needle in needles {
+            let at = text[last..].find(needle).unwrap_or_else(|| panic!("{needle:?} missing, or before the one that should precede it, in\n{text}"));
+            last += at + needle.len();
+        }
+    }
+
+    #[test]
+    fn a_running_card_opens_on_now_first_in_the_rail_with_the_step_the_slices_the_budget_and_the_checkpoint() {
+        let mut app = running_build_app();
+        assert_eq!(app.detail_section, Section::Now);
+        let screen = render(&mut app, 180, 50);
+        let main = main_pane(&screen);
+        assert!(rail_of(&screen).lines().next().unwrap().contains("Now"), "{}", rail_of(&screen));
+        in_order(&main, &["implementing", "Build", "● S1", "● S2", "○ S3", "iterations", "tokens", "minutes", "checkpoint", "Latest activity"]);
+        for want in ["iterations ███░░░░░░░ 4 of 12", "52k of 400k", "7.5 of 45", "9f3c2a1 after a green scenario", "S3 of 3"] {
+            assert!(main.contains(want), "{want} missing in\n{main}");
+        }
+        assert!(screen.contains("Repo       /work/app"), "the repo, branch and tracker are in the Card group\n{screen}");
+        assert!(!main.contains("Repo  "), "and not in the main text\n{main}");
+    }
+
+    #[test]
+    fn a_budget_bar_turns_to_the_flag_style_from_eighty_percent_and_says_the_run_is_not_counting_tokens_when_it_is_not() {
+        let spans = |used: f64, max: f64| super::budget_row("iterations", used, max, format!("{used} of {max}"));
+        let flagged = |line: ratatui::text::Line| line.spans.iter().any(|s| s.style == crate::theme::flag());
+        assert!(!flagged(spans(4.0, 12.0)));
+        assert!(!flagged(spans(9.0, 12.0)), "75%");
+        assert!(flagged(spans(10.0, 12.0)), "83%");
+        assert!(flagged(spans(12.0, 12.0)));
+        assert_eq!(super::thousands(52_000), "52k");
+        assert_eq!(super::thousands(1_500), "1.5k");
+        assert_eq!(super::thousands(640), "640");
+    }
+
+    #[test]
+    fn an_escalated_card_opens_on_why_it_stopped_with_the_reason_the_options_and_the_output() {
+        let mut app = escalated_app();
+        assert_eq!(app.detail_section, Section::Stopped);
+        let screen = render(&mut app, 180, 50);
+        let main = main_pane(&screen);
+        in_order(&main, &["✗ escalated · the same migration test failed three times", "82%", "The session table migration cannot run twice", "What you can do", "a ", "Output", "FAIL migrate.test.ts", "expected 3 rows, received 2"]);
+        assert!(rail_of(&screen).lines().next().unwrap().contains("Stopped"), "{}", rail_of(&screen));
+        assert!(!main.contains("stage  ") && !main.contains("took"), "the run table stays in Runs\n{main}");
+    }
+
+    #[test]
+    fn the_output_is_cut_to_twenty_lines_and_says_how_many_more_there_are_and_control_characters_are_gone() {
+        let mut app = escalated_app();
+        let tail: String = (1..=30).map(|i| format!("line {i}\u{1b}[31m")).collect::<Vec<_>>().join("\n");
+        let gate = app.detail.as_mut().unwrap().approvals.iter_mut().find(|a| a.kind.as_deref() == Some("escalated")).unwrap();
+        gate.requested["outputTail"] = serde_json::Value::String(tail);
+        let screen = render(&mut app, 180, 60);
+        let main = main_pane(&screen);
+        assert!(main.contains("line 30") && main.contains("line 11 ") && !main.contains("line 10 "), "the last twenty lines\n{main}");
+        assert!(main.contains("▸ 10 more lines"), "{main}");
+        assert!(!screen.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn a_ship_stage_card_opens_on_result_with_the_summary_findings_by_level_the_pr_and_the_evidence_count() {
+        let mut app = ship_stage_app();
+        assert_eq!(app.detail_section, Section::Result);
+        let screen = render(&mut app, 180, 50);
+        let main = main_pane(&screen);
+        in_order(&main, &["Rate limits the public API per key", "C2: one client must not starve the rest", "Findings", "1 should fix · 1 nit", "the limiter keys on the proxy address", "src/limit.ts:31", "PR", "#412", "Evidence", "3 files", "Ship checklist", "✓ checks", "✗ review"]);
+        assert!(rail_of(&screen).lines().next().unwrap().contains("Result"), "{}", rail_of(&screen));
+    }
+
+    #[test]
+    fn the_release_question_of_a_high_risk_card_starts_with_its_own_flag_line_and_the_preview_gate_does_not() {
+        let mut app = release_question_app();
+        let screen = render(&mut app, 180, 50);
+        let main = main_pane(&screen);
+        let first = main_pane(&screen.lines().skip_while(|l| !l.contains('├')).skip(1).collect::<Vec<_>>().join("\n"));
+        let first = first.lines().find(|l| !l.trim().is_empty()).unwrap();
+        assert!(first.contains("⚑ release owner: safe to release now?"), "{main}");
+        assert!(main.contains("✓ CI green on 3 of 3 checks"), "{main}");
+        let mut app = ship_stage_app();
+        assert!(!main_pane(&render(&mut app, 180, 50)).contains("release owner"));
+    }
+
+    #[test]
+    fn a_card_at_the_triage_questions_opens_on_the_questions_numbered_each_with_the_suggested_answer() {
+        let mut app = questions_app();
+        assert_eq!(app.detail_section, Section::Gate);
+        let screen = render(&mut app, 180, 50);
+        let main = main_pane(&screen);
+        in_order(&main, &["answer 2 questions", "1. Round half up or half to even?", "suggested: half to even", "2. Which currency does the report use?", "suggested: the account currency"]);
+        assert!(rail_of(&screen).lines().next().unwrap().contains("Question"), "{}", rail_of(&screen));
+    }
+
+    #[test]
+    fn every_first_page_also_reads_at_100x30_with_its_reference_folded_under_it() {
+        for (name, mut app) in [("running", running_build_app()), ("escalated", escalated_app()), ("ship", ship_stage_app()), ("questions", questions_app()), ("plan gate", plan_gate_app())] {
+            let screen = render(&mut app, 100, 30);
+            assert!(screen.contains("approve") || screen.contains("answer") || screen.contains("escalated") || screen.contains("implementing") || screen.contains("ship"), "{name}\n{screen}");
+            assert!(!screen.contains("│  Risk") || name == "plan gate", "{name}: no side pane at 100 columns\n{screen}");
+        }
     }
 }

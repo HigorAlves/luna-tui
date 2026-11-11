@@ -28,6 +28,14 @@ use crate::ui::{
 pub enum Section {
     /// The plan gate's one page: flags, brief, criteria with their scenarios, steps. In the rail in place of Plan and Tests.
     Review,
+    /// A stage is running: the step, the slices, the budget, the latest activity.
+    Now,
+    /// The card stopped (escalated, failed, paused): why, what can be done, the failing output.
+    Stopped,
+    /// The card is at or past shipping: what changed, what review found, the PR, the evidence.
+    Result,
+    /// A gate that asks a question (triage questions, setup, intake): the question and its choices first.
+    Gate,
     #[default]
     Overview,
     Plan,
@@ -41,8 +49,12 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 10] = [
+    pub const ALL: [Section; 14] = [
         Section::Review,
+        Section::Now,
+        Section::Stopped,
+        Section::Result,
+        Section::Gate,
         Section::Overview,
         Section::Plan,
         Section::Tests,
@@ -57,6 +69,10 @@ impl Section {
     pub fn label(self) -> &'static str {
         match self {
             Section::Review => "Review",
+            Section::Now => "Now",
+            Section::Stopped => "Stopped",
+            Section::Result => "Result",
+            Section::Gate => "Question",
             Section::Overview => "Overview",
             Section::Plan => "Plan",
             Section::Tests => "Tests",
@@ -90,13 +106,16 @@ impl Section {
         (1..=order.len()).contains(&i).then(|| order[i - 1])
     }
 
-    /// Where the popup opens for a ticket: on the section its open gate concerns.
+    /// Where the popup opens for a ticket: on the page of what the person came for. A gate opens on its question (the plan
+    /// gate on Review), a stopped card on why, a running one on what it is doing, a shipped one on its result.
     pub fn for_task(task: &Task) -> Section {
         match task.state.as_str() {
             "awaiting_approval" => Section::Review,
             "awaiting_test_check" => Section::Tests,
-            "awaiting_ship" | "shipping" | "ci_watch" => Section::Pr,
-            "escalated" => Section::Runs,
+            _ if is_stopped(task) => Section::Stopped,
+            _ if is_question(task) => Section::Gate,
+            _ if is_result(task) => Section::Result,
+            _ if is_running(task) => Section::Now,
             _ => Section::Overview,
         }
     }
@@ -129,14 +148,49 @@ pub struct DetailView<'a> {
     pub tasks: &'a [Task],
     /// The keys the decision bar offers now, `(keys, label)` heaviest first (`keys::card_actions`).
     pub actions: &'a [(String, String)],
+    /// The same keys with what each does, `(keys, label)`, for the pages that list what you can do (`keys::card_action_help`).
+    pub can: &'a [(String, String)],
     /// Which reference groups are open and where their focus is.
     pub refs: &'a RefState,
 }
 
-/// The sections the rail lists for `task`, in order. At the plan gate Review stands in for Plan and Tests.
+/// A card that ended without shipping: the machine escalated it, a run failed or was aborted, or the usage window paused it.
+fn is_stopped(task: &Task) -> bool {
+    matches!(task.state.as_str(), "escalated" | "failed" | "aborted" | "paused_rate_limit")
+}
+
+/// A card at or past shipping, or finished.
+fn is_result(task: &Task) -> bool {
+    matches!(task.state.as_str(), "awaiting_ship" | "shipping" | "ci_watch" | "reviewing_memory" | "closed" | "archived" | "done")
+}
+
+/// A card whose open gate asks a question the plan gate and the test check do not: answers, setup, intake.
+fn is_question(task: &Task) -> bool {
+    matches!(task.state.as_str(), "awaiting_setup" | "awaiting_answers") || (task.state == "draft" && task.waiting_on_you)
+}
+
+/// A card a stage is working on or waits to work on, and no other page claims.
+fn is_running(task: &Task) -> bool {
+    (task.running || task.queued) && task.state != "awaiting_approval" && !is_stopped(task) && !is_result(task) && !is_question(task)
+}
+
+/// The sections the rail lists for `task`, in order. At the plan gate Review stands in for Plan and Tests; Now, Stopped,
+/// Result and Question are listed only for a card they describe.
 pub fn order(task: &Task) -> Vec<Section> {
     let at_plan_gate = task.state == "awaiting_approval";
-    Section::ALL.iter().copied().filter(|s| if at_plan_gate { !matches!(s, Section::Plan | Section::Tests) } else { *s != Section::Review }).collect()
+    Section::ALL
+        .iter()
+        .copied()
+        .filter(|s| match s {
+            Section::Review => at_plan_gate,
+            Section::Plan | Section::Tests => !at_plan_gate,
+            Section::Now => is_running(task),
+            Section::Stopped => is_stopped(task),
+            Section::Result => is_result(task),
+            Section::Gate => is_question(task),
+            _ => true,
+        })
+        .collect()
 }
 
 /// A terminal this wide or wider lays the rail beside the pane; narrower, the rail becomes a
@@ -239,6 +293,10 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     let (page, cursor_row) = match view.section {
         Section::Overview => (Page::of(overview_lines(task, detail, width, now, view.tasks)), None),
         Section::Review => (crate::pages::review_page(task, detail, width, ref_width), None),
+        Section::Now => (crate::pages::now_page(task, detail, width, ref_width, now), None),
+        Section::Stopped => (crate::pages::stopped_page(task, detail, view.can, width, ref_width), None),
+        Section::Result => (crate::pages::result_page(task, detail, view.prs, view.can, width, ref_width, now), None),
+        Section::Gate => (crate::pages::gate_page(task, detail, view.can, width, ref_width, now), None),
         Section::Plan => (plan_page(task, detail, ref_width, now), None),
         Section::Tests => (Page::of(tests_lines(task, detail, width, now)), None),
         Section::Runs => {
@@ -293,7 +351,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
 
 /// Whether a section hands its reference over as groups (a side pane when wide, folds under the text when narrow).
 fn has_groups(section: Section) -> bool {
-    matches!(section, Section::Review | Section::Plan)
+    matches!(section, Section::Review | Section::Now | Section::Stopped | Section::Result | Section::Gate | Section::Plan)
 }
 
 /// `▲ N above` over the pane's first row once it is scrolled, `▼ N more` over its last while
@@ -402,6 +460,14 @@ fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>)
     match section {
         Section::Overview => Span::raw(""),
         Section::Review | Section::Plan => gate(d.latest_approval("awaiting_approval"), None),
+        Section::Now => Span::raw(""),
+        Section::Stopped => Span::styled("✗", theme::lost()),
+        Section::Result => match view.task.state.as_str() {
+            "closed" | "done" => Span::styled("✓", theme::done()),
+            _ if view.task.waiting_on_you => Span::styled("⏸", theme::flag()),
+            _ => Span::raw(""),
+        },
+        Section::Gate => Span::styled("⏸", theme::flag()),
         Section::Tests => {
             let cases = d.cases();
             gate(d.cases_approval(), (!cases.is_empty()).then_some(cases.len()))
@@ -571,7 +637,7 @@ fn look_style(look: crate::model::Look) -> Style {
 }
 
 /// `S3 of 4`: the scenario Build is on, from the progress the machine reports; None without any.
-fn slice_progress(detail: Option<&TaskDetail>) -> Option<String> {
+pub(crate) fn slice_progress(detail: Option<&TaskDetail>) -> Option<String> {
     let scenarios = &detail?.build_progress.as_ref()?.scenarios;
     let green = scenarios.iter().filter(|s| s.state == "green").count();
     (!scenarios.is_empty()).then(|| format!("S{} of {}", (green + 1).min(scenarios.len()), scenarios.len()))
@@ -675,7 +741,7 @@ fn rule_line(width: usize, tee: Option<usize>) -> Line<'static> {
 }
 
 /// Whether the ship gate's Evidence Pack is High risk: shipping then needs an approver who did not approve the plan.
-fn ship_risk_is_high(detail: Option<&TaskDetail>) -> bool {
+pub(crate) fn ship_risk_is_high(detail: Option<&TaskDetail>) -> bool {
     // The open or last gate's pack, else the task's own: the same source the Evidence section shows.
     detail.is_some_and(|d| match d.latest_approval("awaiting_ship") {
         Some(a) => a.requested["evidence"]["risk"].as_str() == Some("high"),
@@ -862,7 +928,7 @@ pub(crate) fn gate_header(title: &str, stage: &str, approval: Option<&Approval>,
 }
 
 /// The criteria summary: one row per criterion with its plan, cases and verify columns.
-fn criteria_table(rows: &[CriterionRow], width: usize) -> Vec<Line<'static>> {
+pub(crate) fn criteria_table(rows: &[CriterionRow], width: usize) -> Vec<Line<'static>> {
     if rows.is_empty() {
         return Vec::new();
     }
@@ -903,7 +969,7 @@ fn criteria_table(rows: &[CriterionRow], width: usize) -> Vec<Line<'static>> {
 /// whatever an open gate asks that has no section of its own (setup, questions, rules).
 /// Where the card came from and what Intake still needs: its sources, reporter, followers, project, owners, attachments, merged duplicates, and the
 /// open Intake gate's missing list with the command that answers it. Every text is a stranger's, so each goes through `plain` and a cap.
-fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
+pub(crate) fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
     const LISTED: usize = 5;
     let text = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).map(|s| truncate(&plain(s), 60));
     let mut lines = Vec::new();
@@ -950,9 +1016,16 @@ fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> 
     if let Some(line) = detail.and_then(|d| d.open_approval()).and_then(|a| ticket_changed_line(&a.requested)) {
         lines.push(muted(line));
     }
+    lines
+}
+
+/// What an Intake gate asks, in the gate's words: the duplicate candidates with how to pick one, or what the card still lacks with the
+/// command that gives it. Empty at any other gate.
+pub(crate) fn intake_gate_lines(detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
     if let Some(gate) = detail.and_then(|d| d.open_approval()).filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("dedup")) {
         lines.push(muted("Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither".to_string()));
-        lines.extend(crate::intake::candidates(&gate.requested).iter().map(|c| muted(format!("           {}", c.line()))));
+        lines.extend(crate::intake::candidates(&gate.requested).iter().map(|c| muted(format!("           {}", plain(&c.line())))));
     }
     if let Some(gate) = detail.and_then(|d| d.open_approval()).filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("context")) {
         let words = gate
@@ -975,6 +1048,47 @@ fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> 
             .unwrap_or_default();
         lines.push(muted(format!("Intake     waiting for: {words}")));
         lines.push(muted("           give it with :context repo <path> · project <KEY> · text <more>".to_string()));
+    }
+    lines
+}
+
+/// The blocks a gate carries that no section of its own shows: its error and note, the proposed rules (memory), the proposed
+/// `luna.yaml` with its base image, proof and notes (setup), and the triage questions with the machine's suggested answers.
+pub(crate) fn gate_blocks(approval: &Approval, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let requested = &approval.requested;
+    if let Some(error) = requested["error"].as_str() {
+        lines.extend([Line::default(), Line::from(Span::from("Error").fg(c(RED)).bold())]);
+        lines.extend(plain(error).lines().map(|l| Line::from(format!("  {l}")).fg(c(RED))));
+    }
+    if let Some(note) = requested["note"].as_str() {
+        lines.push(muted(plain(note)));
+    }
+    let rules = rules_lines(&requested["rules"], width.saturating_sub(4).max(20));
+    if !rules.is_empty() {
+        lines.extend([Line::default(), proposal_heading("Proposed rules (a applies, A skips)")]);
+        lines.extend(rules.iter().map(|l| Line::from(format!("  {l}"))));
+    }
+    if let Some(config) = requested["config"].as_str() {
+        lines.extend([Line::default(), proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)")]);
+        lines.extend(plain(config).lines().map(|l| Line::from(format!("  {l}"))));
+        // The base image, singled out of the long proposal: it runs the stage's process, and approving the setup does not approve it.
+        if let Some(base) = requested["sandboxBase"].as_str() {
+            lines.extend([Line::default(), proposal_heading("Base image (not approved by this gate)")]);
+            lines.push(Line::from(format!("  {}", crate::model::plain(base, 400))).fg(c(RED)));
+        }
+        let proof = proof_lines(&requested["proof"]);
+        if !proof.is_empty() {
+            lines.extend([Line::default(), proposal_heading("Proof (each check run once)")]);
+            for (ok, text) in proof {
+                lines.push(Line::from(format!("  {text}")).fg(c(if ok { GREEN } else { RED })));
+            }
+        }
+        let notes = json_list(&requested["notes"]);
+        if !notes.is_empty() {
+            lines.extend([Line::default(), proposal_heading("Notes from setup")]);
+            lines.extend(bullets(&notes));
+        }
     }
     lines
 }
@@ -1016,10 +1130,6 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     }
     lines.extend(jira_lines(task, now));
     lines.extend(origin_lines(task, detail));
-    if let Some(d) = detail {
-        lines.extend(build_progress_lines(d));
-        lines.extend(escalation_lines(d));
-    }
     if let Some(stage) = &task.resume_to {
         lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
     }
@@ -1032,51 +1142,6 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     if task.retries.total > 0 {
         let r = &task.retries;
         lines.push(muted(format!("Failures   verify {} · e2e {} · ci {}", r.verify, r.e2e, r.ci)));
-    }
-
-    if let Some(approval) = detail.and_then(TaskDetail::open_approval) {
-        let requested = &approval.requested;
-        if let Some(error) = requested["error"].as_str() {
-            lines.extend([Line::default(), Line::from(Span::from("Error").fg(c(RED)).bold())]);
-            lines.extend(plain(error).lines().map(|l| Line::from(format!("  {l}")).fg(c(RED))));
-        }
-        if let Some(note) = requested["note"].as_str() {
-            lines.push(muted(plain(note)));
-        }
-        let rules = rules_lines(&requested["rules"], width.saturating_sub(4).max(20));
-        if !rules.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Proposed rules (a applies, A skips)")]);
-            lines.extend(rules.iter().map(|l| Line::from(format!("  {l}"))));
-        }
-        if let Some(config) = requested["config"].as_str() {
-            lines.extend([Line::default(), proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)")]);
-            lines.extend(plain(config).lines().map(|l| Line::from(format!("  {l}"))));
-            // The base image, singled out of the long proposal: it runs the stage's process, and approving the setup does not approve it.
-            if let Some(base) = requested["sandboxBase"].as_str() {
-                lines.extend([Line::default(), proposal_heading("Base image (not approved by this gate)")]);
-                lines.push(Line::from(format!("  {}", crate::model::plain(base, 400))).fg(c(RED)));
-            }
-            let proof = proof_lines(&requested["proof"]);
-            if !proof.is_empty() {
-                lines.extend([Line::default(), proposal_heading("Proof (each check run once)")]);
-                for (ok, text) in proof {
-                    lines.push(Line::from(format!("  {text}")).fg(c(if ok { GREEN } else { RED })));
-                }
-            }
-            let notes = json_list(&requested["notes"]);
-            if !notes.is_empty() {
-                lines.extend([Line::default(), proposal_heading("Notes from setup")]);
-                lines.extend(bullets(&notes));
-            }
-        }
-        let questions = questions_of(approval);
-        if !questions.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Questions (a to answer)")]);
-            for (question, recommended) in questions {
-                lines.push(Line::from(format!("  ? {}", plain(&question))));
-                lines.push(muted(format!("    recommended: {}", plain(&recommended))));
-            }
-        }
     }
 
     lines.extend([Line::default(), heading("Description")]);
@@ -1129,67 +1194,9 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
     lines
 }
 
-/// Plan: the latest triage plan, decided or not, then what happened to it.
 /// Text from a run or a model, made safe for a terminal: every control character (an escape sequence included) becomes a space.
 pub(crate) fn plain(text: &str) -> String {
     text.chars().map(|ch| if crate::text::is_unsafe(ch) && ch != '\n' { ' ' } else { ch }).collect()
-}
-
-/// Build while it runs: each scenario red or green, the budget used against its limits and the last checkpoint pushed. Empty without progress.
-fn build_progress_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
-    let Some(p) = &detail.build_progress else { return Vec::new() };
-    let mut lines = vec![Line::default(), heading("Build")];
-    for s in &p.scenarios {
-        let (glyph, color) = if s.state == "green" { ("●", GREEN) } else { ("○", RED) };
-        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(format!("{:<8}", truncate(&plain(&s.id), 8))), Span::from(plain(&s.state)).fg(c(color))]));
-    }
-    let b = &p.budget;
-    let tokens = match b.tokens {
-        Some(t) => format!("{t} of {} tokens", b.limits.max_tokens),
-        None => "tokens not counted".to_string(),
-    };
-    lines.push(muted(format!("  budget  {} of {} iterations · {tokens} · {} of {} minutes", b.iterations, b.limits.max_iterations, b.minutes, b.limits.max_minutes)));
-    if let Some(cp) = &p.last_checkpoint {
-        lines.push(muted(format!("  checkpoint  {} after a {}", plain(&cp.sha).chars().take(7).collect::<String>(), plain(&cp.follows))));
-    }
-    lines
-}
-
-/// An escalated ticket: the reason the machine decided, with its confidence and source, the agent's own word, a person's correction, the summary and the output's tail.
-fn escalation_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
-    let Some(gate) = detail.approvals.iter().rev().find(|a| a.kind_or_guess() == "escalated" && a.decision.is_none()) else { return Vec::new() };
-    let decision = &gate.requested["escalationDecision"];
-    let Some(reason) = decision["reason"].as_str() else { return Vec::new() };
-    let mut head = format!("  {}", plain(reason));
-    if let Some(conf) = decision["confidence"].as_f64() {
-        head.push_str(&format!(" · confidence {conf:.2}"));
-    }
-    if let Some(source) = decision["source"].as_str() {
-        head.push_str(&format!(" · by {}", plain(source)));
-    }
-    let mut lines = vec![Line::default(), heading("Why it escalated"), Line::from(head).fg(c(PEACH))];
-    if let Some(agent) = decision["agentReason"].as_str() {
-        lines.push(muted(format!("  the agent said: {}", plain(agent))));
-    }
-    if let Some(to) = detail.events.iter().rev().find(|e| e.kind == "escalation.corrected").and_then(|e| e.payload["to"].as_str()) {
-        lines.push(Line::from(format!("  corrected to {}", plain(to))).fg(c(GREEN)));
-    }
-    if let Some(summary) = gate.requested["summary"].as_str().filter(|s| !s.trim().is_empty()) {
-        lines.push(Line::from(format!("  {}", plain(summary))));
-    }
-    // The sandbox the machine kept: the clone as the agent left it, and until when.
-    if let Some(path) = gate.requested["keptSandbox"]["path"].as_str() {
-        let until = gate.requested["keptSandbox"]["until"].as_str().map(|u| format!(" until {}", plain(u))).unwrap_or_default();
-        lines.push(muted(format!("  sandbox kept at {}{until}", plain(path))));
-    }
-    if let Some(tail) = gate.requested["outputTail"].as_str().filter(|s| !s.trim().is_empty()) {
-        lines.push(muted("  last failing output:".into()));
-        let rows: Vec<&str> = tail.lines().collect();
-        for row in rows.iter().skip(rows.len().saturating_sub(12)) {
-            lines.push(muted(format!("    {}", truncate(&plain(row), 200))));
-        }
-    }
-    lines
 }
 
 /// Plan: the latest triage plan, decided or not, then what happened to it. The brief, the criteria and the slices are the
@@ -1514,7 +1521,7 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
 }
 
 /// The error a run finished with, as the activity log recorded it.
-fn run_error(detail: &TaskDetail, run: &StageRun) -> Option<String> {
+pub(crate) fn run_error(detail: &TaskDetail, run: &StageRun) -> Option<String> {
     detail.events.iter().rev().find_map(|e| {
         let p = &e.payload;
         (e.kind == "stage.finished" && p["stage"].as_str() == Some(run.stage.as_str()) && p["attempt"].as_u64() == Some(u64::from(run.attempt)))
@@ -1709,7 +1716,7 @@ pub fn pr_for<'a>(task: &Task, prs: &'a [PullRequest]) -> Option<&'a PullRequest
 }
 
 /// The URL the ship gate reported, when the inbox has no row for the PR (not yours, closed).
-fn pr_url(detail: &TaskDetail) -> Option<String> {
+pub(crate) fn pr_url(detail: &TaskDetail) -> Option<String> {
     detail.latest_approval("awaiting_ship").and_then(|a| a.requested["prUrl"].as_str().map(str::to_string))
 }
 
@@ -1921,7 +1928,7 @@ mod tests {
     fn draw(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>, section: Section, cursor: usize, (prs, diff): (&[PullRequest], Option<&TaskDiff>), refs: &RefState) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let scroll = Cell::new(0);
-        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], refs };
+        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], can: &[], refs };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect()
@@ -1941,6 +1948,20 @@ mod tests {
         let mut lines = page.main;
         for group in page.groups {
             lines.push(Line::from(group.title));
+            lines.extend(group.lines);
+        }
+        lines
+    }
+
+    fn build_progress_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
+        crate::pages::now_page(&detail.task, Some(detail), 100, 30, 0).main
+    }
+
+    /// The stopped page's text, its reference groups open under it.
+    fn escalation_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
+        let page = crate::pages::stopped_page(&detail.task, Some(detail), &[], 100, 30);
+        let mut lines = page.main;
+        for group in page.groups {
             lines.extend(group.lines);
         }
         lines
@@ -2008,9 +2029,10 @@ mod tests {
     #[test]
     fn a_gate_s_error_note_config_proof_notes_and_questions_are_drawn_without_unsafe_characters() {
         let (task, detail) = hostile();
-        let text = text_of(&overview_lines(&task, Some(&detail), 100, 0, &[]));
-        assert_safe("overview gate", &text);
-        for needle in [format!("? {TAMED}"), format!("recommended: {TAMED}"), format!("✗ {TAMED}: {TAMED}")] {
+        let page = crate::pages::gate_page(&task, Some(&detail), &[], 100, 30, 0);
+        let text = text_of(&page.main);
+        assert_safe("question page", &text);
+        for needle in [format!("1. {TAMED}"), format!("suggested: {TAMED}"), format!("✗ {TAMED}: {TAMED}")] {
             assert!(text.contains(&needle), "{needle} missing in\n{text}");
         }
     }
@@ -2048,10 +2070,10 @@ mod tests {
     }
 
     #[test]
-    fn the_overview_names_what_the_intake_gate_is_missing() {
+    fn the_question_page_names_what_the_intake_gate_is_missing() {
         let (task, mut detail) = fixture();
         detail.approvals.push(serde_json::from_str(r#"{"kind":"awaiting_setup","requested":{"kind":"context","missing":["repository","text"]},"decision":null}"#).unwrap());
-        let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
+        let rows = render(120, 40, &task, Some(&detail), Section::Gate, 0).join("\n");
         assert!(rows.contains("Intake     waiting for: which repository it is for, more detail on what is wrong"), "{rows}");
         assert!(rows.contains(":context repo"), "{rows}");
     }
@@ -2062,11 +2084,16 @@ mod tests {
         detail.approvals.push(serde_json::from_str(r#"{"kind":"awaiting_setup","requested":{"kind":"dedup","candidates":[{"slot":1,"id":"11111111-0000-0000-0000-000000000000","kind":"open","title":"Checkout fails\u001b[2J","state":"triage","score":0.82}]},"decision":null}"#).unwrap());
         let extra = r#""reason":null,"mergedInto":"22222222-0000-0000-0000-000000000000","related":["33333333-0000-0000-0000-000000000000"]"#;
         let task: Task = serde_json::from_str(&TASK.replace(r#""reason":null"#, extra)).unwrap();
-        let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
-        for needle in ["Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither", "1  11111111  triage", "0.82  Checkout fails", "Merged into  22222222", "Related    33333333"] {
-            assert!(rows.contains(needle), "{needle} missing in\n{rows}");
+        let overview = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
+        let gate = render(120, 40, &task, Some(&detail), Section::Gate, 0).join("\n");
+        for needle in ["Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither", "1  11111111  triage", "0.82  Checkout fails"] {
+            assert!(gate.contains(needle), "{needle} missing in\n{gate}");
         }
-        assert!(!rows.contains('\u{1b}'));
+        for needle in ["Merged into  22222222", "Related    33333333"] {
+            assert!(overview.contains(needle), "{needle} missing in\n{overview}");
+        }
+        assert!(!overview.contains("could this be a duplicate"), "the question is not printed on the Overview too");
+        assert!(!gate.contains('\u{1b}'));
     }
 
     fn col_of(rows: &[String], needle: &str) -> Option<usize> {
@@ -2152,7 +2179,7 @@ mod tests {
     #[test]
     fn under_a_hundred_columns_the_rail_becomes_a_tab_strip() {
         let (task, detail) = fixture();
-        let rows = render(80, 30, &task, Some(&detail), Section::Tests, 0);
+        let rows = render(99, 30, &task, Some(&detail), Section::Tests, 0);
         assert!(rows[3].contains("Overview") && rows[3].contains("Tests 3 ✓") && rows[3].contains("Activity 3"), "{}", rows[3]);
         assert!(rows[4].chars().filter(|ch| *ch == '─').count() > 60, "a rule under the strip: {}", rows[4]);
         assert!(rows.iter().any(|r| r.contains("rejects a bad password")));
@@ -2353,7 +2380,7 @@ mod tests {
         .unwrap();
         let (width, height) = (120, 20);
         let scroll = Cell::new(300);
-        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], refs: &RefState::default() };
+        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], can: &[], refs: &RefState::default() };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -2383,7 +2410,7 @@ mod tests {
               "notes":["no e2e surface"]}},"decision":null}}],"events":[]}}"#
         ))
         .unwrap();
-        let text = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
+        let text = render(120, 40, &task, Some(&detail), Section::Gate, 0).join("\n");
         assert!(text.contains("approve the setup?"), "{text}");
         assert!(text.contains("Proposed luna.yaml"), "{text}");
         assert!(text.contains("run: cargo test"), "the file is shown as is: {text}");
@@ -2796,14 +2823,23 @@ mod tests {
     #[test]
     fn a_ticket_opens_on_the_section_its_gate_concerns_and_digits_jump() {
         let (mut task, _) = fixture();
+        assert_eq!(Section::for_task(&task), Section::Now, "a running card opens on what it is doing");
+        task.running = false;
+        task.state = "draft".into();
+        task.waiting_on_you = false;
         assert_eq!(Section::for_task(&task), Section::Overview);
+        for (state, section) in [("awaiting_answers", Section::Gate), ("awaiting_setup", Section::Gate), ("awaiting_ship", Section::Result), ("closed", Section::Result), ("paused_rate_limit", Section::Stopped), ("failed", Section::Stopped)] {
+            task.state = state.into();
+            assert_eq!(Section::for_task(&task), section, "{state}");
+        }
         task.state = "awaiting_approval".into();
         assert_eq!(Section::for_task(&task), Section::Review);
         task.state = "awaiting_test_check".into();
         assert_eq!(Section::for_task(&task), Section::Tests);
         task.state = "escalated".into();
-        assert_eq!(Section::for_task(&task), Section::Runs);
+        assert_eq!(Section::for_task(&task), Section::Stopped);
         task.state = "implementing".into();
+        task.running = false;
         let order = order(&task);
         assert_eq!(Section::from_digit('1', &order), Some(Section::Overview));
         assert_eq!(Section::from_digit('8', &order), Some(Section::Activity));
@@ -2855,6 +2891,7 @@ mod tests {
             engines: Some(catalog),
             tasks: &[],
             actions: &[],
+            can: &[],
             refs: &RefState::default(),
         };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
@@ -2893,18 +2930,18 @@ mod tests {
         let text = lines_text(&build_progress_lines(&detail));
         assert!(text.contains("S1") && text.contains("green"), "{text}");
         assert!(text.contains("S2") && text.contains("red"), "{text}");
-        assert!(text.contains("4 of 15 iterations"), "{text}");
-        assert!(text.contains("175000 of 2000000 tokens"), "{text}");
-        assert!(text.contains("12.5 of 90 minutes"), "{text}");
+        assert!(text.contains("4 of 15"), "{text}");
+        assert!(text.contains("175k of 2000k"), "{text}");
+        assert!(text.contains("12.5 of 90"), "{text}");
         assert!(text.contains("bbbbbbb") && text.contains("after a green"), "{text}");
     }
 
     #[test]
     fn build_progress_says_tokens_are_not_counted_and_is_silent_without_progress() {
         let mut detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
-        assert!(build_progress_lines(&detail).is_empty());
+        assert!(!lines_text(&build_progress_lines(&detail)).contains("Budget"), "no budget without progress");
         detail.build_progress = Some(serde_json::from_str(r#"{"scenarios":[],"budget":{"iterations":1,"tokens":null,"minutes":1.0,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},"lastCheckpoint":null}"#).unwrap());
-        assert!(lines_text(&build_progress_lines(&detail)).contains("tokens not counted"));
+        assert!(lines_text(&build_progress_lines(&detail)).contains("not counted"));
     }
 
     #[test]
@@ -2913,8 +2950,8 @@ mod tests {
         let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
         detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalation":"flaky_tests","escalationDecision":{"reason":"flaky_tests","confidence":0.82,"source":"decision","agentReason":"other"},"summary":"stopped at slice 2","outputTail":"FAIL a.test.ts\u001b[31m red \u001b]0;title\u0007\nexpected 3"},"decision":null}"#).unwrap());
         let text = lines_text(&escalation_lines(&detail));
-        assert!(text.contains("flaky_tests") && text.contains("0.82") && text.contains("decision"), "{text}");
-        assert!(text.contains("agent said: other"), "{text}");
+        assert!(text.contains("flaky_tests") && text.contains("82% sure") && text.contains("by decision"), "{text}");
+        assert!(text.contains("the agent said: other"), "{text}");
         assert!(text.contains("stopped at slice 2") && text.contains("expected 3"), "{text}");
         assert!(!text.contains('\u{1b}') && !text.contains('\u{7}'), "no control character reaches the terminal");
     }

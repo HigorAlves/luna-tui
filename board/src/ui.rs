@@ -205,6 +205,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Mode::Detail(id) | Mode::EnginePicker { id, .. } => {
             if let Some(task) = app.task(id) {
                 let actions = keys::card_actions(app);
+                let can = keys::card_action_help(app);
                 let view = DetailView {
                     task,
                     detail: app.detail.as_ref(),
@@ -218,6 +219,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     engines: app.engine_catalog.as_ref(),
                     tasks: &app.tasks,
                     actions: &actions,
+                    can: &can,
                     refs: &app.detail_refs,
                 };
                 detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);

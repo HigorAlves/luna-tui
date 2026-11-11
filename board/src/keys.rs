@@ -1087,6 +1087,18 @@ pub fn card_actions(app: &App) -> Vec<(String, String)> {
     terse_pairs(app, detail_keys(app).into_iter().filter(|b| acts_on_card(b)))
 }
 
+/// What each key the bar offers does, `(keys, label)` in the registry's words and the bar's order: the pages that list what you can do read this.
+pub fn card_action_help(app: &App) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for b in detail_keys(app).into_iter().filter(|b| acts_on_card(b)) {
+        let keys = terse_keys(b);
+        if !out.iter().any(|(k, _)| *k == keys) {
+            out.push((keys, b.label.to_string()));
+        }
+    }
+    out
+}
+
 /// The task view's footer, in priority order: the same actions the bar offers (repeated, so a key the
 /// bar had no room for is still on screen), `o` to open, then the keys that move and `:`. The rest of
 /// the ticket's keys (delete, archive, the worktree, ...) stay in the sheet behind `?`: a footer that

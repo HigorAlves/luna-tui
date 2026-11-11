@@ -141,7 +141,9 @@ pub fn escalated_app() -> App {
 
 /// A ship-stage card: the watched PR, the evidence artifacts and the verify findings.
 pub fn ship_stage_app() -> App {
-    let task = task_json("dddddddd4444", SHIP_STAGE_TITLE, "awaiting_ship", "Ship", json!({"waitingOnYou": true}));
+    let pack = json!({"verdict": "pass", "artifactCount": 3, "summary": "The limiter answers 429 past the limit.",
+        "diffSummary": {"what": "Rate limits the public API per key with a sliding window.", "why": "C2: one client must not starve the rest.", "files": ["src/limit.ts"], "added": 42, "removed": 3}});
+    let task = task_json("dddddddd4444", SHIP_STAGE_TITLE, "awaiting_ship", "Ship", json!({"waitingOnYou": true, "evidence": pack}));
     open_card(
         task,
         json!({
@@ -161,6 +163,29 @@ pub fn ship_stage_app() -> App {
                 "autoMerge": {"allowed": false, "reason": "review is required"}, "review": {"required": true, "by": "platform"}, "fixRounds": 1
             }
         }),
+    )
+}
+
+/// A card at the triage questions: two questions, each with the machine's suggested answer.
+pub fn questions_app() -> App {
+    let task = task_json("eeeeeeee5555", "Fix the invoice rounding", "awaiting_answers", "Triage", json!({"waitingOnYou": true}));
+    open_card(
+        task,
+        json!({"approvals": [{"id": "q1", "kind": "awaiting_answers", "decision": null, "createdAt": "2026-10-22T10:00:00Z", "requested": {
+            "questions": [{"question": "Round half up or half to even?", "recommended": "half to even"}, {"question": "Which currency does the report use?", "recommended": "the account currency"}]
+        }}]}),
+    )
+}
+
+/// The release question for a high-risk card: the checklist as it was when asked.
+pub fn release_question_app() -> App {
+    let task = task_json("ffffffff6666", "Rotate the signing keys", "awaiting_ship", "Ship", json!({"waitingOnYou": true}));
+    open_card(
+        task,
+        json!({"approvals": [{"id": "s1", "kind": "awaiting_ship", "decision": null, "createdAt": "2026-10-22T10:00:00Z", "requested": {
+            "gate": "ship_approval", "risk": "high", "question": "safe to release now?",
+            "checklist": [{"id": "ci", "ok": true, "detail": "CI green on 3 of 3 checks"}, {"id": "pack", "ok": true, "detail": "Evidence Pack complete"}]
+        }}]}),
     )
 }
 
@@ -200,11 +225,9 @@ mod tests {
             assert!(screen.contains(needle), "{needle} missing in\n{screen}");
         }
         let mut app = running_build_app();
-        app.detail_section = crate::detail::Section::Overview;
-        assert!(render(&mut app, 120, 50).contains("4 of 12 iterations"));
+        assert!(render(&mut app, 120, 50).contains("4 of 12"));
         let mut app = escalated_app();
-        app.detail_section = crate::detail::Section::Overview;
-        assert!(render(&mut app, 120, 50).contains("confidence 0.82"));
+        assert!(render(&mut app, 120, 50).contains("82% sure"));
         let mut app = ship_stage_app();
         assert!(render(&mut app, 120, 50).contains("waiting for a reviewer"));
     }

@@ -3774,7 +3774,7 @@ impl App {
 
     /// Switches the popup's section; each starts at the top, Runs and Evidence on their
     /// latest row, the others on their first.
-    fn set_section(&mut self, section: Section) {
+    pub(crate) fn set_section(&mut self, section: Section) {
         if section != self.detail_section {
             self.detail_section = section;
             self.detail_scroll.set(0);
@@ -6490,15 +6490,16 @@ mod workspace_key_tests {
     #[test]
     fn runs_and_evidence_open_on_their_latest_row() {
         let mut app = open("escalated");
+        assert_eq!(app.detail_section, Section::Stopped, "an escalated card opens on why, not on the run table");
+        app.set_section(Section::Runs);
         assert_eq!(app.detail_section, Section::Runs);
         app.detail = Some(detail_with_runs(&app.tasks[0], 3));
         assert_eq!(app.detail_row(), 2, "the latest run, not the oldest");
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(app.detail_row(), 1);
-        press(&mut app, KeyCode::Char('4'));
-        press(&mut app, KeyCode::Char('5'));
+        press(&mut app, KeyCode::Char('6'));
         assert_eq!(app.detail_row(), 0, "the Diff starts on the first file");
-        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('5'));
         assert_eq!(app.detail_row(), 2, "coming back to Runs lands on the latest run again");
     }
 
