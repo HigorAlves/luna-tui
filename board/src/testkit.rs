@@ -75,7 +75,7 @@ pub fn plan_gate_app() -> App {
     ];
     let task = task_json("aaaaaaaa1111", PLAN_GATE_TITLE, "awaiting_approval", "Plan", json!({"waitingOnYou": true, "criteria": criteria}));
     let cases: Vec<Value> = (0..6)
-        .map(|i| json!({"title": format!("case {} proves criterion {}", i + 1, i % 5 + 1), "criterion": criteria[i % 5], "approach": "run the suite and read the output"}))
+        .map(|i| json!({"id": format!("S{}", i + 1), "title": format!("case {} proves criterion {}", i + 1, i % 5 + 1), "criterion": criteria[i % 5], "approach": "run the suite and read the output", "type": if i < 5 { "happy" } else { "failure" }, "layer": if i % 2 == 0 { "unit" } else { "integration" }}))
         .collect();
     open_card(
         task,
@@ -85,12 +85,15 @@ pub fn plan_gate_app() -> App {
                 {"id": "t1", "kind": "awaiting_test_check", "requested": {"cases": cases}, "decision": "approved", "createdAt": "2026-10-22T09:40:00Z", "decidedAt": "2026-10-22T09:45:00Z"},
                 {"id": "p1", "kind": "awaiting_approval", "decision": null, "createdAt": "2026-10-22T09:50:00Z", "requested": {
                     "lane": "plan", "risk": {"level": "medium"}, "verdicts": {"coverage": "proceed", "plan": "flag", "risk": "proceed"},
-                    "brief": "Add a CSV export endpoint to the reports API and a button on the report page.",
+                    "brief": "Add a CSV export endpoint to the reports API and a button on the report page.\n\n- the endpoint streams rows\n- the button calls it",
                     "criteria": criteria,
+                    "planIssues": ["step 3 names a file outside the code map"],
+                    "rollback": "Revert the commit; the export route owns no data.",
+                    "plan": {"out_of_scope": ["XLSX export"], "migration": "none needed", "acceptance_criteria": criteria.iter().enumerate().map(|(i, t)| json!({"id": format!("C{}", i + 1), "text": t})).collect::<Vec<_>>()},
                     "assumptions": ["CSV only, no XLSX", "the report page already knows the report id", "the export uses the viewer's permissions"],
                     "slices": [
-                        {"title": "Add the CSV writer", "est_loc": 90}, {"title": "Add GET /api/reports/:id/export.csv", "est_loc": 120},
-                        {"title": "Stream large reports", "est_loc": 80}, {"title": "Add the export button", "est_loc": 60}
+                        {"title": "Add the CSV writer", "est_loc": 90, "touchpoints": ["src/reports/csv.ts"]}, {"title": "Add GET /api/reports/:id/export.csv", "est_loc": 120, "touchpoints": ["src/reports/api.ts"]},
+                        {"title": "Stream large reports", "est_loc": 80, "touchpoints": ["src/reports/api.ts", "src/reports/csv.ts"]}, {"title": "Add the export button", "est_loc": 60, "touchpoints": ["src/reports/page.tsx"]}
                     ],
                     "map": {"components": ["reports"], "files": [
                         {"path": "src/reports/api.ts", "role": "change"}, {"path": "src/reports/csv.ts", "role": "change"},

@@ -19,6 +19,7 @@ mod intake;
 mod keys;
 mod model;
 mod notify;
+mod pages;
 mod pulls;
 mod reference;
 mod slack;

@@ -3669,10 +3669,11 @@ impl App {
             KeyCode::Char('K') => self.scroll_detail(-1),
             KeyCode::PageDown => self.scroll_detail(half_page),
             KeyCode::PageUp => self.scroll_detail(-half_page),
-            KeyCode::Char('l') | KeyCode::Right => self.set_section(self.detail_section.next()),
-            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.set_section(self.detail_section.prev()),
+            KeyCode::Char('l') | KeyCode::Right => self.step_section(true),
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.step_section(false),
             KeyCode::Char(digit @ '1'..='9') => {
-                if let Some(section) = Section::from_digit(digit) {
+                let order = self.detail_order();
+                if let Some(section) = Section::from_digit(digit, &order) {
                     self.set_section(section);
                 }
             }
@@ -3754,6 +3755,21 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// The sections the open card's rail lists, in order.
+    fn detail_order(&self) -> Vec<Section> {
+        match &self.mode {
+            Mode::Detail(id) => self.task(id).map(crate::detail::order).unwrap_or_else(|| Section::ALL.to_vec()),
+            _ => Section::ALL.to_vec(),
+        }
+    }
+
+    /// `l` / `h`: the next or previous section of the rail.
+    fn step_section(&mut self, forward: bool) {
+        let order = self.detail_order();
+        let to = if forward { self.detail_section.next(&order) } else { self.detail_section.prev(&order) };
+        self.set_section(to);
     }
 
     /// Switches the popup's section; each starts at the top, Runs and Evidence on their
@@ -6278,7 +6294,7 @@ mod workspace_key_tests {
     #[test]
     fn enter_opens_on_the_section_the_gate_concerns_and_h_l_digits_switch() {
         let app = open("awaiting_approval");
-        assert_eq!(app.detail_section, Section::Plan);
+        assert_eq!(app.detail_section, Section::Review);
         let mut app = open("implementing");
         assert_eq!(app.detail_section, Section::Overview);
         press(&mut app, KeyCode::Char('l'));
