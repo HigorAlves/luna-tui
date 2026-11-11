@@ -15,7 +15,8 @@ use crate::model::{
     Approval, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TaskSource, TestCase, Tone, age, criteria_summary, now_secs,
     plan_history, questions_of,
 };
-use crate::text::{cells, ellipsis};
+use crate::reference::{self, Page, RefGroup, RefState, SIDE_FROM, SIDE_WIDTH};
+use crate::text::{cells, ellipsis, truncate_middle};
 use crate::theme;
 use crate::ui::{
     ACCENT, GREEN, MUTED, PEACH, RED, SUBTEXT0, YELLOW, bullets, c, centered, continues_line, describe, evidence_lines,
@@ -23,7 +24,7 @@ use crate::ui::{
 };
 
 /// The sections of the workspace, in rail order. `1`…`9` jump to them.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Section {
     #[default]
     Overview,
@@ -121,6 +122,8 @@ pub struct DetailView<'a> {
     pub tasks: &'a [Task],
     /// The keys the decision bar offers now, `(keys, label)` heaviest first (`keys::card_actions`).
     pub actions: &'a [(String, String)],
+    /// Which reference groups are open and where their focus is.
+    pub refs: &'a RefState,
 }
 
 /// A terminal this wide or wider lays the rail beside the pane; narrower, the rail becomes a
@@ -176,13 +179,27 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         pane_area
     };
 
+    // A section with reference groups gives them a side pane when the popup is wide enough.
+    let side = wide && inner.width >= SIDE_FROM && has_groups(view.section);
+    let (pane_area, side_area) = if side {
+        let [main, sep, side_area] = Layout::horizontal([Constraint::Min(0), Constraint::Length(1), Constraint::Length(SIDE_WIDTH)]).areas(pane_area);
+        let rule: Vec<Line> = (0..sep.height).map(|_| Line::from(Span::styled("│", theme::dim()))).collect();
+        frame.render_widget(Paragraph::new(rule), sep);
+        (main, Some(side_area))
+    } else {
+        (pane_area, None)
+    };
+
     let height = pane_area.height as usize;
     let width = pane_area.width as usize;
+    // Reference lines wrap to the side pane, or to the text's width when they are folded under it.
+    let ref_width = if side { SIDE_WIDTH as usize - 2 } else { width.saturating_sub(2) };
     view.viewport.set(pane_area.height);
     let mut lines: Vec<Line> = Vec::new();
     let follow = view.follow.replace(false);
 
     if view.section == Section::Diff {
+        view.refs.ids.borrow_mut().clear();
         // Patches run to 512 KB: only the lines in view become widgets, and nothing wraps, so
         // a row of scroll is a line of the patch.
         let head = diff_head(task, view.diff, view.cursor, width);
@@ -206,18 +223,46 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         return;
     }
 
-    let (section_lines, cursor_row) = match view.section {
-        Section::Overview => (overview_lines(task, detail, width, now, view.tasks), None),
-        Section::Plan => (plan_lines(task, detail, now), None),
-        Section::Tests => (tests_lines(task, detail, width, now), None),
-        Section::Runs => runs_lines(task, detail, view.cursor, width, now),
+    let (page, cursor_row) = match view.section {
+        Section::Overview => (Page::of(overview_lines(task, detail, width, now, view.tasks)), None),
+        Section::Plan => (plan_page(task, detail, ref_width, now), None),
+        Section::Tests => (Page::of(tests_lines(task, detail, width, now)), None),
+        Section::Runs => {
+            let (lines, row) = runs_lines(task, detail, view.cursor, width, now);
+            (Page::of(lines), row)
+        }
         Section::Diff => unreachable!("drawn above"),
-        Section::Evidence => evidence_section_lines(detail, view.cursor),
-        Section::Pr => (pr_lines(task, detail, view.prs, now), None),
-        Section::Activity => (activity_lines(detail), None),
-        Section::Engines => engines_lines(task, detail, view.engines, view.cursor),
+        Section::Evidence => {
+            let (lines, row) = evidence_section_lines(detail, view.cursor);
+            (Page::of(lines), row)
+        }
+        Section::Pr => (Page::of(pr_lines(task, detail, view.prs, now)), None),
+        Section::Activity => (Page::of(activity_lines(detail)), None),
+        Section::Engines => {
+            let (lines, row) = engines_lines(task, detail, view.engines, view.cursor);
+            (Page::of(lines), row)
+        }
     };
-    lines.extend(section_lines);
+    *view.refs.ids.borrow_mut() = page.groups.iter().map(|g| g.id).collect();
+    let mut cursor_row = cursor_row;
+    lines.extend(page.main);
+    if !page.groups.is_empty() {
+        match side_area {
+            Some(area) => {
+                let (rows, _) = reference::layout(&page.groups, view.section, view.refs, true, area.width as usize);
+                frame.render_widget(Paragraph::new(Text::from(rows)).wrap(Wrap { trim: false }), area);
+            }
+            None => {
+                lines.push(Line::default());
+                lines.push(Line::from(Span::styled(format!("── reference {}", "─".repeat(width.saturating_sub(13))), theme::dim())));
+                let (rows, headers) = reference::layout(&page.groups, view.section, view.refs, false, width);
+                if view.refs.focus && let Some(row) = headers.get(view.refs.cursor.min(headers.len().saturating_sub(1))) {
+                    cursor_row = Some(lines.len() + row);
+                }
+                lines.extend(rows);
+            }
+        }
+    }
 
     // One paragraph: counted at this width, then clamped so j/k never scroll past the end.
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
@@ -230,6 +275,11 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
     view.scroll.set(offset as u16);
     frame.render_widget(paragraph.scroll((offset as u16, 0)), pane_area);
     scroll_markers(frame, pane_area, offset, total);
+}
+
+/// Whether a section hands its reference over as groups (a side pane when wide, folds under the text when narrow).
+fn has_groups(section: Section) -> bool {
+    matches!(section, Section::Plan)
 }
 
 /// `▲ N above` over the pane's first row once it is scrolled, `▼ N more` over its last while
@@ -623,53 +673,69 @@ fn heading(text: &str) -> Line<'static> {
     Line::from(Span::from(text.to_string()).fg(c(ACCENT)).bold())
 }
 
-/// The Triage Record on the card: the summary, the kind, the type of work, the size, the priority with its five sub-scores, the
-/// preliminary risk, the signals the plan gate flags and who decided. Empty until triage has written one.
-fn record_lines(task: &Task, requested: &serde_json::Value) -> Vec<Line<'static>> {
-    let Some(record) = task.record.as_ref() else { return Vec::new() };
+/// A facts row for a reference group: a label column and the value wrapped under itself.
+fn fact_row(label: &str, value: &str, width: usize) -> Vec<Line<'static>> {
+    let value = plain(value);
+    let room = width.saturating_sub(11).max(8);
+    crate::text::wrap(&value, room, 0)
+        .into_iter()
+        .enumerate()
+        .map(|(i, part)| Line::from(vec![Span::styled(format!("{:<11}", if i == 0 { label } else { "" }), theme::label()), Span::raw(part.trim_start().to_string())]))
+        .collect()
+}
+
+/// The Triage Record, as reference: the summary, the kind, the type of work, the size, the priority with its five sub-scores, the
+/// preliminary risk, the signals the plan gate flags and who decided. None until triage has written one.
+fn record_group(task: &Task, requested: &serde_json::Value, width: usize) -> Option<RefGroup> {
+    let record = task.record.as_ref()?;
     let who = match record.decision_by.as_deref() {
         Some("person") => format!("corrected by a person ({})", if record.edited_fields.is_empty() { "record".to_string() } else { record.edited_fields.join(", ") }),
         _ => "decided by the machine".to_string(),
     };
-    let mut lines = vec![Line::default(), proposal_heading(&format!("Triage record v{} · {who}", record.version.unwrap_or(1)))];
+    let mut lines = vec![Line::from(Span::styled(format!("Triage record v{} · {who}", record.version.unwrap_or(1)), theme::label()))];
     if let Some(summary) = record.summary.as_deref().filter(|s| !s.trim().is_empty()) {
-        lines.extend(plain(summary).lines().map(|l| Line::from(format!("  {l}"))));
+        lines.extend(plain(summary).lines().map(|l| Line::from(l.to_string())));
     }
-    let row = |label: &str, value: String| Line::from(vec![Span::from(format!("  {label:<11}")).fg(c(SUBTEXT0)), Span::from(plain(&value))]);
-    lines.push(row("Kind", record.kind.clone()));
+    lines.extend(fact_row("Kind", &record.kind, width));
     if let Some(t) = &record.type_of_work {
-        lines.push(row("Type", t.clone()));
+        lines.extend(fact_row("Type", t, width));
     }
-    lines.push(row("Size", record.size.clone()));
+    lines.extend(fact_row("Size", &record.size, width));
     if let Some(u) = &record.urgency_detail {
         let s = &u.sub_scores;
-        lines.push(row("Priority", format!("{} (who {}, what {}, impact {}, time {}, demand {})", u.priority, s.who, s.what, s.impact, s.time, s.demand)));
+        lines.extend(fact_row("Priority", &format!("{} (who {}, what {}, impact {}, time {}, demand {})", u.priority, s.who, s.what, s.impact, s.time, s.demand), width));
     }
     if let Some(r) = &record.risk_prelim {
-        lines.push(row("Risk", r.clone()));
+        lines.extend(fact_row("Risk", r, width));
     }
-    let flagged: Vec<String> = requested["flagged"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).filter_map(|v| v.strip_prefix("triage.")).map(str::to_string).collect()).unwrap_or_default();
+    let flagged = triage_flags(requested);
     if !flagged.is_empty() {
-        lines.push(Line::from(vec![Span::from(format!("  {:<11}", "Flagged")).fg(c(SUBTEXT0)), Span::from(format!("{} (T corrects the record)", plain(&flagged.join(", ")))).fg(c(YELLOW))]));
+        lines.extend(fact_row("Flagged", &format!("{} (T corrects the record)", flagged.join(", ")), width));
     }
-    lines
+    let size = format!("{} · {}", plain(&record.kind), plain(&record.size));
+    Some(RefGroup::new("record", "Record", size, lines))
 }
 
-/// The code map a plan stage opened with: components, files by role (a plain string is a file to change), entry points,
+/// The triage fields the plan gate flags (`triage.size` is `size`).
+fn triage_flags(requested: &serde_json::Value) -> Vec<String> {
+    requested["flagged"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).filter_map(|v| v.strip_prefix("triage.")).map(plain).collect()).unwrap_or_default()
+}
+
+/// The code map a plan stage opened with, as reference: components, files by role (a plain string is a file to change), entry points,
 /// owners and whether the graph it came from is stale. Only a plan stage's gate has one (it carries a lane); without a map the gate says why.
-fn map_lines(requested: &serde_json::Value) -> Vec<Line<'static>> {
+fn map_group(requested: &serde_json::Value, width: usize) -> Option<RefGroup> {
     if !requested["lane"].is_string() {
-        return Vec::new();
+        return None;
     }
-    let row = |label: &str, value: String| Line::from(vec![Span::from(format!("  {label:<11}")).fg(c(SUBTEXT0)), Span::from(plain(&value))]);
-    let mut lines = vec![Line::default(), proposal_heading("Code map")];
     let map = &requested["map"];
     if !map.is_object() {
-        lines.push(muted(format!("  no code map: {}", plain(requested["mapNote"].as_str().unwrap_or("the plan was written without one")))));
-        return lines;
+        let why = plain(requested["mapNote"].as_str().unwrap_or("the plan was written without one"));
+        return Some(RefGroup::new("map", "Code map", "none", fact_row("", &format!("no code map: {why}"), width)));
     }
+    let row = |label: &str, value: String| fact_row(label, &value, width);
     let list = |v: &serde_json::Value| -> String { json_list(v).join(", ") };
-    lines.push(row("Components", list(&map["components"])));
+    let mut lines = row("Components", list(&map["components"]));
+    let mut files = 0;
     for role in ["change", "read", "test"] {
         for file in map["files"].as_array().into_iter().flatten() {
             let (path, file_role) = match file.as_str() {
@@ -677,19 +743,53 @@ fn map_lines(requested: &serde_json::Value) -> Vec<Line<'static>> {
                 None => (file["path"].as_str(), file["role"].as_str().unwrap_or("change")),
             };
             if let Some(path) = path.filter(|_| file_role == role) {
-                lines.push(row(role, path.to_string()));
+                files += 1;
+                lines.push(Line::from(vec![Span::styled(format!("{role:<7}"), theme::label()), Span::raw(truncate_middle(&plain(path), width.saturating_sub(7)))]));
             }
         }
     }
     if map["entry_points"].as_array().is_some_and(|a| !a.is_empty()) {
-        lines.push(row("Entry", list(&map["entry_points"])));
+        lines.extend(row("Entry", list(&map["entry_points"])));
     }
-    lines.push(row("Owners", if map["owners"].as_array().is_some_and(|a| !a.is_empty()) { list(&map["owners"]) } else { "none found".to_string() }));
+    lines.extend(row("Owners", if map["owners"].as_array().is_some_and(|a| !a.is_empty()) { list(&map["owners"]) } else { "none found".to_string() }));
     if map["stale"].as_bool() == Some(true) {
         let behind = map["behind"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "many".into());
-        lines.push(Line::from(Span::from(format!("  stale: the graph is {behind} commits behind the default branch; treat the map as a lead")).fg(c(PEACH))));
+        lines.extend(fact_row("", &format!("stale: the graph is {behind} commits behind the default branch; treat the map as a lead"), width));
     }
-    lines
+    Some(RefGroup::new("map", "Code map", format!("{files} file{}", if files == 1 { "" } else { "s" }), lines))
+}
+
+/// The plan's assumptions, as reference.
+fn assumptions_group(requested: &serde_json::Value, width: usize) -> Option<RefGroup> {
+    let items = json_list(&requested["assumptions"]);
+    if items.is_empty() {
+        return None;
+    }
+    let lines = items.iter().flat_map(|item| crate::text::wrap(item, width.saturating_sub(4).max(8), 0).into_iter().enumerate().map(|(i, l)| Line::from(format!("{}{}", if i == 0 { "• " } else { "  " }, l.trim_start())))).collect();
+    Some(RefGroup::new("assumptions", "Assumptions", items.len().to_string(), lines))
+}
+
+/// Where the card lives: its repo, branch, tracker link, SLA and the engines it was told to use.
+fn card_group(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64) -> RefGroup {
+    let mut lines = fact_row("Repo", task.repo_path.as_deref().unwrap_or("none (R sets one)"), width);
+    if let Some(branch) = &task.branch {
+        lines.extend(fact_row("Branch", branch, width));
+    }
+    if let Some(source) = &task.source {
+        lines.extend(fact_row("Source", &source.detail_line(), width));
+    }
+    match &task.jira {
+        Some(jira) => lines.extend(fact_row("Jira", &jira.summary(now), width)),
+        None => lines.extend(fact_row("Jira", "none (J links an issue)", width)),
+    }
+    let engines: Vec<String> = task.stages.iter().map(|(pack, engine)| format!("{pack} {engine}")).collect();
+    let running = detail.and_then(TaskDetail::running_engine).map(|e| format!("running on {e}"));
+    match (engines.is_empty(), running) {
+        (true, None) => {}
+        (true, Some(running)) => lines.extend(fact_row("Engines", &running, width)),
+        (false, running) => lines.extend(fact_row("Engines", &[Some(engines.join(", ")), running].into_iter().flatten().collect::<Vec<_>>().join(" · "), width)),
+    }
+    RefGroup::new("card", "Card", task.repo_path.as_deref().map(|r| r.rsplit('/').next().unwrap_or(r).to_string()).unwrap_or_default(), lines)
 }
 
 fn proposal_heading(text: &str) -> Line<'static> {
@@ -1078,7 +1178,9 @@ fn escalation_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
     lines
 }
 
-fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'static>> {
+/// Plan: the latest triage plan, decided or not, then what happened to it. The brief, the criteria and the slices are the
+/// page; the outcome and risk, the triage record, the checks, the code map, the assumptions and the card's facts are reference.
+fn plan_page(task: &Task, detail: Option<&TaskDetail>, ref_width: usize, now: u64) -> Page {
     let approval = detail.and_then(|d| d.latest_approval("awaiting_approval"));
     // A gate that carries triage's outcome came from triage; the plan stage's has a lane or a risk.
     let stage = if approval.is_some_and(|a| a.outcome().is_none() && (a.requested["lane"].is_string() || a.requested["risk"].is_object())) { "test_design" } else { "triage" };
@@ -1086,16 +1188,14 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
     let Some(approval) = approval else {
         lines.push(Line::default());
         lines.push(muted("  no plan yet: triage and the planner write one once the ticket starts".into()));
-        return lines;
+        return Page::of(lines);
     };
     let requested = &approval.requested;
-    lines.extend(record_lines(task, requested));
-    let facts = gate_facts(approval);
+    let facts = gate_main_facts(approval);
     if !facts.is_empty() {
         lines.push(Line::default());
         lines.extend(facts);
     }
-    lines.extend(map_lines(requested));
     if let Some(reply) = approval.reply() {
         lines.extend([Line::default(), proposal_heading("Reply (a posts it where the ticket came from and closes it)")]);
         lines.extend(plain(&reply).lines().map(|l| Line::from(format!("  {l}"))));
@@ -1109,11 +1209,7 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
         Some(brief) => lines.extend(plain(brief).lines().map(|l| Line::from(format!("  {l}")))),
         None => lines.push(muted("  (none)".into())),
     }
-    for (title, items) in [
-        ("Criteria to build", json_list(&requested["criteria"])),
-        ("Assumptions", json_list(&requested["assumptions"])),
-        ("Slices", slice_lines(&requested["slices"])),
-    ] {
+    for (title, items) in [("Criteria to build", json_list(&requested["criteria"])), ("Slices", slice_lines(&requested["slices"]))] {
         if !items.is_empty() {
             lines.extend([Line::default(), proposal_heading(title)]);
             lines.extend(bullets(&items));
@@ -1132,44 +1228,57 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
             "read-only now that Build has started · r at the next gate sends the ticket back to triage".to_string()
         },
     ));
-    lines
+    let width = ref_width;
+    let groups = [gate_ref_group(approval, width), record_group(task, requested, width), checks_group(approval), map_group(requested, width), assumptions_group(requested, width), Some(card_group(task, detail, width, now))];
+    Page { main: lines, groups: groups.into_iter().flatten().collect() }
 }
 
-/// What a gate says about itself above its text: the outcome, the risk with its three scores, the
-/// plan stage's checks (a flagged one in peach, an unsure one red) and who has approved.
-fn gate_facts(approval: &Approval) -> Vec<Line<'static>> {
-    let label = |name: &str| Span::from(format!("{name:<11}")).fg(c(SUBTEXT0));
+/// The gate's outcome, its risk with the three scores, what raised or overrode it, as reference. None for a gate that says none of it.
+fn gate_ref_group(approval: &Approval, width: usize) -> Option<RefGroup> {
     let mut lines = Vec::new();
     if let Some(outcome) = approval.outcome_line() {
-        lines.push(Line::from(vec![label("Outcome"), Span::from(plain(&outcome))]));
+        lines.extend(fact_row("Outcome", &outcome, width));
     }
+    let level = approval.requested["risk"]["level"].as_str().map(plain);
     if let Some(risk) = approval.risk_line() {
-        let high = approval.requested["risk"]["level"].as_str() == Some("high");
-        lines.push(Line::from(vec![label("Risk"), if high { Span::from(risk).fg(c(PEACH)).bold() } else { Span::from(risk) }]));
+        lines.extend(fact_row("Risk", &risk, width));
     }
     if let Some(line) = approval.risk_raised_line() {
-        lines.push(Line::from(vec![label("Raised"), Span::from(line).fg(c(PEACH))]));
+        lines.extend(fact_row("Raised", &line, width));
     }
     if let Some(line) = approval.risk_override_line() {
-        lines.push(Line::from(vec![label("Override"), Span::from(line).fg(c(YELLOW))]));
+        lines.extend(fact_row("Override", &line, width));
     }
+    (!lines.is_empty()).then(|| RefGroup::new("risk", "Risk", level.unwrap_or_else(|| "see gate".into()), lines))
+}
+
+/// The plan stage's checks, one line each with its verdict: `✓` proceeds, `⚑` is flagged, `?` is unsure.
+fn checks_group(approval: &Approval) -> Option<RefGroup> {
     let checks = approval.checks();
-    if !checks.is_empty() {
-        let mut spans = vec![label("Checks")];
-        for (i, (name, verdict)) in checks.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::from(" · ").fg(c(SUBTEXT0)));
-            }
-            let color = match verdict.as_str() {
-                "proceed" => GREEN,
-                "flag" => PEACH,
-                "ask" => RED,
-                _ => SUBTEXT0,
-            };
-            spans.push(Span::from(format!("{name} {verdict}")).fg(c(color)));
-        }
-        lines.push(Line::from(spans));
+    if checks.is_empty() {
+        return None;
     }
+    let flagged = checks.iter().filter(|(_, verdict)| matches!(verdict.as_str(), "flag" | "ask")).count();
+    let lines = checks
+        .iter()
+        .map(|(name, verdict)| {
+            let glyph = match verdict.as_str() {
+                "proceed" => "✓",
+                "flag" => "⚑",
+                "ask" => "?",
+                _ => "–",
+            };
+            Line::from(format!("{glyph} {name} {}", plain(verdict)))
+        })
+        .collect();
+    let summary = if flagged == 0 { "all clear".to_string() } else { format!("{flagged} flagged") };
+    Some(RefGroup::new("checks", "Checks", summary, lines))
+}
+
+/// The gate's own words that the person reads with the plan: the rule on who may approve, who has, and a split's children.
+fn gate_main_facts(approval: &Approval) -> Vec<Line<'static>> {
+    let label = |name: &str| Span::from(format!("{name:<11}")).fg(c(SUBTEXT0));
+    let mut lines = Vec::new();
     if let Some(rule) = approval.rule_line() {
         lines.push(Line::from(vec![label("Rule"), Span::from(plain(&rule)).fg(c(SUBTEXT0))]));
     }
@@ -1791,12 +1900,36 @@ mod tests {
         cursor: usize,
         (prs, diff): (&[PullRequest], Option<&TaskDiff>),
     ) -> Vec<String> {
+        draw(width, height, task, detail, section, cursor, (prs, diff), &RefState::default())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>, section: Section, cursor: usize, (prs, diff): (&[PullRequest], Option<&TaskDiff>), refs: &RefState) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let scroll = Cell::new(0);
-        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[] };
+        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], refs };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect()
+    }
+
+    /// The screen with every reference group of `section` unfolded: drawn once to learn the groups, then again with them open.
+    fn render_open(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>, section: Section, cursor: usize) -> Vec<String> {
+        let probe = RefState::default();
+        draw(width, height, task, detail, section, cursor, (&[], None), &probe);
+        let refs = RefState { toggled: probe.ids.borrow().iter().map(|id| (section, *id)).collect(), ..Default::default() };
+        draw(width, height, task, detail, section, cursor, (&[], None), &refs)
+    }
+
+    /// The plan page as one run of lines: the main text, then each reference group open under its title.
+    fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'static>> {
+        let page = plan_page(task, detail, 100, now);
+        let mut lines = page.main;
+        for group in page.groups {
+            lines.push(Line::from(group.title));
+            lines.extend(group.lines);
+        }
+        lines
     }
 
     fn fixture() -> (Task, TaskDetail) {
@@ -1873,7 +2006,7 @@ mod tests {
         let (task, detail) = hostile();
         let text = text_of(&plan_lines(&task, Some(&detail), 0));
         assert_safe("plan", &text);
-        for needle in [format!("  • {TAMED}"), format!("Kind       {TAMED}"), format!("{TAMED} (~10 LOC)"), format!("change     {TAMED}")] {
+        for needle in [format!("  • {TAMED}"), format!("Kind       {TAMED}"), format!("{TAMED} (~10 LOC)"), format!("change {TAMED}")] {
             assert!(text.contains(&needle), "{needle} missing in\n{text}");
         }
     }
@@ -1941,7 +2074,7 @@ mod tests {
     #[test]
     fn the_rail_lists_every_section_with_its_status_and_marks_the_active_one() {
         let (task, detail) = fixture();
-        let rows = render(120, 30, &task, Some(&detail), Section::Plan, 0);
+        let rows = render_open(120, 30, &task, Some(&detail), Section::Plan, 0);
         let text = rows.join("\n");
         for s in Section::ALL {
             assert!(text.contains(s.label()), "{}: {text}", s.label());
@@ -1958,7 +2091,7 @@ mod tests {
     #[test]
     fn the_plan_section_shows_the_approved_plan_and_its_history_after_the_gate_was_decided() {
         let (task, detail) = fixture();
-        let text = render(120, 36, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(120, 36, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("Plan · triage #1 · approved"), "{text}");
         assert!(text.contains("Add a CSV export endpoint."), "{text}");
         assert!(text.contains("• exports UTF-8 with a BOM"), "{text}");
@@ -1997,7 +2130,7 @@ mod tests {
             assert!(rows[1].contains("⏸ approve the plan?"), "{section:?}: {}", rows[1]);
             assert!(rows[2].starts_with('├') && rows[2].trim_end().ends_with('┤'), "the rule under the bar: {}", rows[2]);
         }
-        let text = render(120, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(120, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("waiting for you"), "{text}");
         assert!(text.contains("e edits the brief"), "{text}");
     }
@@ -2206,7 +2339,7 @@ mod tests {
         .unwrap();
         let (width, height) = (120, 20);
         let scroll = Cell::new(300);
-        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[] };
+        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None, tasks: &[], actions: &[], refs: &RefState::default() };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -2325,27 +2458,28 @@ mod tests {
     #[test]
     fn the_plan_gate_shows_outcome_risk_checks_and_approvals_above_the_plan() {
         let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
-        let text = render(120, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(120, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
         for line in [
             "Outcome    fast lane",
             "Risk       high (blast 2 · reversibility 1 · data 0)",
-            "Checks     coverage proceed · plan flag · risk proceed",
+            "✓ coverage proceed",
+            "⚑ plan flag",
             "Approvals  1 of 2 (ana)",
         ] {
             assert!(text.contains(line), "missing {line:?}: {text}");
         }
         let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("no {needle:?}: {text}"));
-        assert!(at("Outcome    fast lane") < at("Brief") && at("Approvals  1 of 2") < at("Brief"), "all four sit above the plan: {text}");
+        assert!(at("Approvals  1 of 2") < at("Brief") && at("Brief") < at("Outcome    fast lane"), "the approvals sit above the plan, the outcome and risk in the reference below it: {text}");
     }
 
     #[test]
     fn the_gate_shows_its_approval_rule_and_a_risk_a_person_set() {
         let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","risk":{"level":"high","machine":"high"},"overrides":{"risk":{"level":"low","reason":"behind a flag","applied":false}},"approvalRule":{"needed":2,"outside":"required","text":"Needs 2 approvers: at least one must be someone not among the code map's owners (@ana). This is an attestation."}}"#, "awaiting_approval");
-        let text = render(120, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(120, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("Rule       Needs 2 approvers") && text.contains("attestation"), "{text}");
         assert!(text.contains("Override   you set low, below the machine's high"), "{text}");
         let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","risk":{"level":"low"}}"#, "awaiting_approval");
-        let text = render(120, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(120, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(!text.contains("Rule ") && !text.contains("Override"), "{text}");
     }
 
@@ -2353,13 +2487,11 @@ mod tests {
     fn a_flagged_check_is_highlighted_and_a_plan_with_no_checks_shows_none() {
         let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
         let lines = plan_lines(&task, Some(&detail), 0);
-        let checks = lines.iter().find(|l| l.to_string().starts_with("Checks")).expect("a checks line");
-        let flagged = checks.spans.iter().find(|s| s.content.contains("plan flag")).expect("the flagged check");
-        assert_eq!(flagged.style.fg, Some(c(PEACH)), "flag is peach");
-        let ok = checks.spans.iter().find(|s| s.content.contains("coverage proceed")).expect("a clear check");
-        assert_ne!(ok.style.fg, Some(c(PEACH)));
+        let flagged = lines.iter().find(|l| l.to_string().contains("⚑ plan flag")).expect("the flagged check");
+        let ok = lines.iter().find(|l| l.to_string().contains("✓ coverage proceed")).expect("a clear check");
+        assert!(flagged.to_string().starts_with("⚑") && ok.to_string().starts_with("✓"), "a glyph tells them apart");
         let (task, detail) = at_gate(r#"{"brief":"b"}"#, "awaiting_approval");
-        let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(!text.contains("Checks") && !text.contains("Risk ") && !text.contains("Outcome"), "{text}");
     }
 
@@ -2367,34 +2499,34 @@ mod tests {
     fn the_plan_gate_shows_the_code_map_by_role_with_owners_entry_points_and_the_stale_flag() {
         let gate = r#"{"brief":"b","lane":"full","map":{"components":["board keys","board app"],"files":[{"path":"board/src/keys.rs","role":"change"},{"path":"board/src/app.rs","role":"read"},{"path":"board/src/keys_tests.rs","role":"test"},"board/src/old.rs"],"entry_points":["keys::handle"],"owners":["@marta","@lee"],"confidence":0.7,"stale":true,"behind":120}}"#;
         let (task, detail) = at_gate(gate, "awaiting_approval");
-        let text = render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
-        for want in ["Code map", "Components board keys, board app", "change     board/src/keys.rs", "change     board/src/old.rs", "read       board/src/app.rs", "test       board/src/keys_tests.rs", "Entry      keys::handle", "Owners     @marta, @lee", "stale: the graph is 120 commits behind"] {
+        let text = render_open(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        for want in ["Code map", "Components board keys, board app", "change board/src/keys.rs", "change board/src/old.rs", "read   board/src/app.rs", "test   board/src/keys_tests.rs", "Entry      keys::handle", "Owners     @marta, @lee", "stale: the graph is 120 commits behind"] {
             assert!(text.contains(want), "{want}: {text}");
         }
-        assert!(text.find("Code map").unwrap() < text.find("Brief").unwrap(), "the map sits above the brief: {text}");
+        assert!(text.find("Code map").unwrap() > text.find("Brief").unwrap(), "the map is reference, below the brief: {text}");
         let (task, detail) = at_gate(&gate.replace(r#","stale":true,"behind":120"#, r#","stale":false,"behind":3"#), "awaiting_approval");
-        let text = render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("Code map") && !text.contains("stale"), "a current graph shows no flag: {text}");
     }
 
     #[test]
     fn a_plan_gate_without_a_map_says_so_and_why_and_a_triage_gate_shows_none() {
         let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","map":null,"mapNote":"the repo has no code graph, so there is no code map"}"#, "awaiting_approval");
-        let text = render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("Code map") && text.contains("no code graph"), "{text}");
         let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","map":null}"#, "awaiting_approval");
-        assert!(render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n").contains("no code map"));
+        assert!(render_open(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n").contains("no code map"));
         let (task, detail) = at_gate(r#"{"brief":"b","outcome":"conversation","reply":"hi"}"#, "awaiting_approval");
-        assert!(!render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n").contains("Code map"));
+        assert!(!render_open(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n").contains("Code map"));
     }
 
     #[test]
     fn a_reply_gate_shows_the_reply_and_an_archive_gate_its_reason() {
         let (task, detail) = at_gate(r#"{"outcome":"conversation","brief":"asks how","reply":"Use `pnpm dev`."}"#, "awaiting_approval");
-        let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("Outcome    conversation") && text.contains("Use `pnpm dev`.") && text.contains("posts it"), "{text}");
         let (task, detail) = at_gate(r#"{"outcome":"archive","archiveReason":"duplicate","brief":"same as #7"}"#, "awaiting_approval");
-        let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("Outcome    archive (duplicate)") && text.contains("archives the ticket"), "{text}");
     }
 
@@ -2404,16 +2536,16 @@ mod tests {
     fn the_plan_shows_the_triage_record_its_priority_flags_and_who_decided() {
         let (mut task, detail) = at_gate(r#"{"brief":"b","flagged":["triage.size","plan"]}"#, "awaiting_approval");
         task.record = Some(serde_json::from_str(RECORD).unwrap());
-        let text = render(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
         for want in ["Triage record v1 · decided by the machine", "The board panics on j.", "Kind       bug", "Type       frontend", "Size       S", "Priority   P1 (who 3, what 2, impact 2, time 1, demand 1)", "Risk       low", "Flagged    size (T corrects the record)"] {
             assert!(text.contains(want), "{want}: {text}");
         }
-        assert!(text.find("Triage record").unwrap() < text.find("Brief").unwrap(), "{text}");
+        assert!(text.find("Triage record").unwrap() > text.find("Brief").unwrap(), "the record is reference, below the brief: {text}");
         task.record = serde_json::from_str(&RECORD.replace(r#""decisionBy":"machine","version":1"#, r#""decisionBy":"person","version":2,"editedFields":["kind","size"]"#)).unwrap();
-        let text = render(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
+        let text = render_open(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("Triage record v2 · corrected by a person (kind, size)"), "{text}");
         task.record = None;
-        assert!(!render(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n").contains("Triage record"));
+        assert!(!render_open(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n").contains("Triage record"));
     }
 
     #[test]
@@ -2711,6 +2843,7 @@ mod tests {
             engines: Some(catalog),
             tasks: &[],
             actions: &[],
+            refs: &RefState::default(),
         };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -2845,6 +2978,95 @@ mod frame_tests {
 
     fn bar_row(screen: &str, needle: &str) -> usize {
         rows(screen).iter().position(|r| r.contains(needle)).unwrap_or_else(|| panic!("{needle} not on screen:\n{screen}"))
+    }
+
+    fn press(app: &mut crate::app::App, code: ratatui::crossterm::event::KeyCode) {
+        app.handle_key(ratatui::crossterm::event::KeyEvent::from(code));
+    }
+
+    #[test]
+    fn a_wide_plan_has_a_side_pane_of_reference_groups_and_the_main_text_keeps_the_plan() {
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Plan;
+        let screen = render(&mut app, 180, 50);
+        let col = |needle: &str| rows(&screen).iter().find_map(|r| r.find(needle).map(|i| r[..i].chars().count())).unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"));
+        assert!(col("Risk") > col("Brief") + 80, "the groups sit in a pane right of the main text: Brief at {}, Risk at {}\n{screen}", col("Brief"), col("Risk"));
+        for want in ["Risk", "▸ Code map  5 files", "Checks", "⚑ plan flag", "Card", "Repo       /work/app"] {
+            assert!(screen.contains(want), "{want} missing in\n{screen}");
+        }
+        assert!(!screen.contains("reference ──"), "no folded block under the text when the pane is there");
+    }
+
+    #[test]
+    fn a_narrow_plan_folds_its_groups_under_the_main_text_behind_a_dim_rule() {
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Plan;
+        let screen = render(&mut app, 100, 60);
+        let at = |needle: &str| screen.find(needle).unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"));
+        assert!(at("Slices") < at("── reference") && at("── reference") < at("▸ Code map  5 files"), "{screen}");
+        for folded in ["▸ Risk", "▸ Checks", "▸ Card"] {
+            assert!(screen.contains(folded), "{folded} is a folded header: {screen}");
+        }
+        assert!(!screen.contains("src/reports/csv.ts"), "folded: the files stay out of sight\n{screen}");
+    }
+
+    #[test]
+    fn tab_focuses_the_groups_enter_unfolds_one_and_esc_gives_the_keys_back_before_it_closes_the_view() {
+        use ratatui::crossterm::event::KeyCode;
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Plan;
+        render(&mut app, 180, 50);
+        press(&mut app, KeyCode::Tab);
+        assert!(app.detail_refs.focus);
+        // Risk, Checks (short, always open in the pane), then Code map: two steps down.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        let screen = render(&mut app, 180, 50);
+        assert!(screen.contains("▸ Code map  5 files"), "{screen}");
+        press(&mut app, KeyCode::Enter);
+        let open = render(&mut app, 180, 50);
+        assert!(open.contains("▾ Code map") && open.contains("src/reports/csv.ts") && !open.contains("5 files"), "{open}");
+        press(&mut app, KeyCode::Char(' '));
+        assert!(render(&mut app, 180, 50).contains("▸ Code map  5 files"), "space folds it again");
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.detail_refs.focus && matches!(app.mode, crate::app::Mode::Detail(_)), "the first esc leaves the groups");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, crate::app::Mode::Normal), "the second closes the view");
+    }
+
+    #[test]
+    fn the_fold_state_is_forgotten_when_another_card_opens_and_tab_does_nothing_without_groups() {
+        use ratatui::crossterm::event::KeyCode;
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Plan;
+        render(&mut app, 180, 50);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.detail_refs.toggled.is_empty());
+        let id = app.tasks[0].id.clone();
+        app.open_detail(id);
+        assert!(app.detail_refs.toggled.is_empty() && !app.detail_refs.focus);
+        app.detail_section = Section::Activity;
+        render(&mut app, 180, 50);
+        press(&mut app, KeyCode::Tab);
+        assert!(!app.detail_refs.focus, "the Activity section has no groups to take the keys");
+    }
+
+    #[test]
+    fn tab_and_space_are_in_the_registry_off_with_a_reason_where_there_are_no_groups() {
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Activity;
+        render(&mut app, 180, 50);
+        let avail = |app: &crate::app::App, key: &str| crate::keys::bindings_for(app, crate::keys::Scope::Detail).into_iter().find(|(b, _)| b.first() == key).map(|(_, a)| a).unwrap();
+        assert!(matches!(avail(&app, "tab"), crate::keys::Avail::Off(_)));
+        app.detail_section = Section::Plan;
+        render(&mut app, 180, 50);
+        assert_eq!(avail(&app, "tab"), crate::keys::Avail::On);
+        assert!(matches!(avail(&app, "space"), crate::keys::Avail::Off(_)), "space waits for the focus");
+        press(&mut app, ratatui::crossterm::event::KeyCode::Tab);
+        assert_eq!(avail(&app, "space"), crate::keys::Avail::On);
     }
 
     #[test]

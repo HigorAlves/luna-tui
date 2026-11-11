@@ -192,8 +192,8 @@ mod tests {
     #[test]
     fn the_fixtures_carry_the_data_the_task_view_will_show() {
         let mut app = plan_gate_app();
-        let screen = render(&mut app, 120, 50);
-        for needle in ["Add the CSV writer", "CSV only, no XLSX", "plan flag"] {
+        let screen = render(&mut app, 180, 50);
+        for needle in ["Add the CSV writer", "▸ Code map  5 files", "plan flag"] {
             assert!(screen.contains(needle), "{needle} missing in\n{screen}");
         }
         let mut app = running_build_app();

@@ -527,6 +527,8 @@ pub struct App {
     /// and all of it.
     pub detail_section: Section,
     pub detail_cursor: usize,
+    /// The reference groups of the open section: which are open, and whether they hold the keys (`tab`). Reset with each card.
+    pub detail_refs: crate::reference::RefState,
     pub detail_full: bool,
     /// The branch diff of the ticket whose popup is open, once fetched: (task id, diff).
     pub diff: Option<(String, TaskDiff)>,
@@ -615,6 +617,7 @@ impl App {
             detail_follow: Cell::new(false),
             detail_section: Section::Overview,
             detail_cursor: 0,
+            detail_refs: Default::default(),
             detail_full: false,
             diff: None,
             diff_pending: None,
@@ -995,6 +998,7 @@ impl App {
         self.diff_failed = None;
         self.detail_section = self.task(&id).map(Section::for_task).unwrap_or_default();
         self.detail_cursor = start_cursor(self.detail_section);
+        self.detail_refs.reset();
         self.detail_follow.set(true);
         self.mode = Mode::Detail(id);
     }
@@ -3623,7 +3627,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", ":", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "tab", "space", "1-9", "+", "?", ":", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3635,15 +3639,37 @@ impl App {
             }
             return Outcome::Continue;
         }
+        if self.detail_refs.focus {
+            // The reference holds the keys: its headers move and fold; everything else is as in the main text.
+            let section = self.detail_section;
+            match key.code {
+                KeyCode::Esc | KeyCode::Tab => self.detail_refs.focus = false,
+                KeyCode::Enter | KeyCode::Char(' ') => self.detail_refs.toggle(section),
+                KeyCode::Char('j') | KeyCode::Down => self.detail_refs.step(1),
+                KeyCode::Char('k') | KeyCode::Up => self.detail_refs.step(-1),
+                _ => return self.handle_detail_main(key, id, half_page),
+            }
+            self.detail_follow.set(true);
+            return Outcome::Continue;
+        }
+        self.handle_detail_main(key, id, half_page)
+    }
+
+    fn handle_detail_main(&mut self, key: KeyEvent, id: &str, half_page: i16) -> Outcome {
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Tab => {
+                self.detail_refs.flip_focus();
+                self.detail_follow.set(true);
+            }
+            KeyCode::Char(' ') => {}
             KeyCode::Char('j') | KeyCode::Down => self.move_in_detail(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_in_detail(-1),
             KeyCode::Char('J') => self.scroll_detail(1),
             KeyCode::Char('K') => self.scroll_detail(-1),
             KeyCode::PageDown => self.scroll_detail(half_page),
             KeyCode::PageUp => self.scroll_detail(-half_page),
-            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => self.set_section(self.detail_section.next()),
+            KeyCode::Char('l') | KeyCode::Right => self.set_section(self.detail_section.next()),
             KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.set_section(self.detail_section.prev()),
             KeyCode::Char(digit @ '1'..='9') => {
                 if let Some(section) = Section::from_digit(digit) {
@@ -3737,6 +3763,8 @@ impl App {
             self.detail_section = section;
             self.detail_scroll.set(0);
             self.detail_cursor = start_cursor(section);
+            self.detail_refs.focus = false;
+            self.detail_refs.cursor = 0;
             self.detail_follow.set(true);
             self.diff_failed = None;
             if section == Section::Engines {
@@ -6260,7 +6288,7 @@ mod workspace_key_tests {
         assert_eq!(app.detail_section, Section::Engines, "h wraps around");
         press(&mut app, KeyCode::Char('4'));
         assert_eq!(app.detail_section, Section::Runs);
-        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('l'));
         assert_eq!(app.detail_section, Section::Diff);
         assert!(matches!(app.mode, Mode::Detail(_)), "still open");
     }

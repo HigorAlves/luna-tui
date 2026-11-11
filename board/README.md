@@ -280,11 +280,13 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 |---|---|
 | `h / l` | previous / next section |
 | `1-9` | jump to that section |
-| `j / k` | scroll, or pick a run / file |
+| `tab` | focus the reference groups, and back |
+| `space` | fold or unfold the focused group |
+| `j / k` | scroll, or pick a run / file / group |
 | `J / K` | scroll a line where j / k pick |
 | `ctrl+d / ctrl+u` | half a page |
 | `+` | popup: most of the screen, or all |
-| `esc / q / enter` | close |
+| `esc / q / enter` | close; esc leaves the reference first |
 
 **App**
 

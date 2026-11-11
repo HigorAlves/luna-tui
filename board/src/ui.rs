@@ -218,6 +218,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     engines: app.engine_catalog.as_ref(),
                     tasks: &app.tasks,
                     actions: &actions,
+                    refs: &app.detail_refs,
                 };
                 detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
             }

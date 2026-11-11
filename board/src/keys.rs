@@ -666,12 +666,32 @@ const DETAIL: &[Binding] = &[
     b("U", "bring a closed duplicate back", Group::Ticket, Scope::Detail, |app| with_task(app, |t| if t.merged_into.is_some() { Avail::On } else { Avail::Off("not merged into another ticket") }), 39),
     b("h / l", "previous / next section", Group::Move, Scope::Detail, on, 30),
     b("1-9", "jump to that section", Group::Move, Scope::Detail, on, 10),
-    b("j / k", "scroll, or pick a run / file", Group::Move, Scope::Detail, on, 28),
+    b(
+        "tab",
+        "focus the reference groups, and back",
+        Group::Move,
+        Scope::Detail,
+        |app| if app.detail_refs.has_groups() { Avail::On } else { Avail::Off("this section has no reference groups") },
+        29,
+    ),
+    b(
+        "space",
+        "fold or unfold the focused group",
+        Group::Move,
+        Scope::Detail,
+        |app| match (app.detail_refs.has_groups(), app.detail_refs.focus) {
+            (true, true) => Avail::On,
+            (true, false) => Avail::Off("tab first: focus the reference groups"),
+            (false, _) => Avail::Off("this section has no reference groups"),
+        },
+        24,
+    ),
+    b("j / k", "scroll, or pick a run / file / group", Group::Move, Scope::Detail, on, 28),
     b("J / K", "scroll a line where j / k pick", Group::Move, Scope::Detail, on, 10),
     b("ctrl+d / ctrl+u", "half a page", Group::Move, Scope::Detail, on, 10),
     b("+", "popup: most of the screen, or all", Group::Move, Scope::Detail, on, 26),
     b(":", "command palette: acts on this ticket", Group::App, Scope::Detail, on, 9),
-    b("esc / q / enter", "close", Group::Move, Scope::Detail, on, 27),
+    b("esc / q / enter", "close; esc leaves the reference first", Group::Move, Scope::Detail, on, 27),
     cmd(b("?", "keys", Group::App, Scope::Detail, on, 100), "help"),
 ];
 
@@ -1019,6 +1039,8 @@ pub fn terse_label(app: &App, b: &Binding) -> String {
     match b.first() {
         "h" => return "section".into(),
         "1-9" => return "jump".into(),
+        "tab" => return "reference".into(),
+        "space" => return "fold".into(),
         "j" => return if app.detail_section.has_cursor() { "pick" } else { "scroll" }.into(),
         "J" => return "scroll".into(),
         "ctrl+d" => return "page".into(),

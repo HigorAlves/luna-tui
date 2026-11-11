@@ -20,6 +20,7 @@ mod keys;
 mod model;
 mod notify;
 mod pulls;
+mod reference;
 mod slack;
 mod store;
 mod text;
