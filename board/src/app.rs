@@ -2232,7 +2232,6 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => next.cursor = state.cursor.saturating_sub(1),
             KeyCode::Enter => {
                 if let Some(id) = under_cursor {
-                    self.digest = None;
                     self.select(&id, true);
                     self.open_detail(id);
                 }
@@ -2309,7 +2308,6 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(id) = under_cursor {
-                    self.inbox = None;
                     self.select(&id, true);
                     self.open_detail(id);
                 }
@@ -2394,7 +2392,6 @@ impl App {
                 if let Some(pr) = under {
                     match pr.task.as_ref().map(|t| t.id.clone()) {
                         Some(id) if self.task(&id).is_some() => {
-                            self.pulls = None;
                             self.select(&id, true);
                             self.open_detail(id);
                         }
@@ -2960,7 +2957,6 @@ impl App {
                     match item.task_id() {
                         Some(id) if self.task(id).is_some() => {
                             let id = id.to_string();
-                            self.slack = None;
                             self.select(&id, true);
                             self.open_detail(id);
                         }
@@ -3229,7 +3225,6 @@ impl App {
                         if let Some(item) = self.slack_item_mut(&id) {
                             item.linked.task_id = Some(task_id.clone());
                         }
-                        self.slack = None;
                         self.select(&task_id, true);
                         self.open_detail(task_id.clone());
                         if no_repo {
@@ -7212,5 +7207,147 @@ mod task_view_return_tests {
         assert!(screen.contains("send back #aaaaaaaa — why?"), "{screen}");
         assert!(!screen.contains("send back because:"), "no footer prompt:\n{screen}");
         assert!(screen.contains(PLAN_GATE_TITLE));
+    }
+}
+
+#[cfg(test)]
+mod view_stack_tests {
+    use super::*;
+    use crate::model::{PrSnapshot, SlackSnapshot};
+    use crate::slack::fixtures::item_json;
+    use crate::testkit::{plan_gate_app, task_json};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    /// Three cards at a gate, so every view has rows to move over; the board is showing.
+    fn board_of_three() -> App {
+        let mut app = plan_gate_app();
+        for (n, id) in ["bbbbbbbb2222", "cccccccc3333"].into_iter().enumerate() {
+            let json = task_json(id, &format!("Second card {n}"), "awaiting_approval", "Plan", serde_json::json!({"waitingOnYou": true, "updatedAt": format!("2026-10-22T1{}:00:00.000Z", n + 1)}));
+            app.tasks.push(serde_json::from_value(json).unwrap());
+        }
+        app.mode = Mode::Normal;
+        app.last_seen_secs = None;
+        app
+    }
+
+    fn pr_json(number: u64, task: &str) -> String {
+        format!(
+            r#"{{"repo":"acme/app","number":{number},"title":"PR {number}","url":"https://github.com/acme/app/pull/{number}","author":"me","mine":true,"reviewRequested":false,"isDraft":false,
+            "headRef":"feat/{number}","baseRef":"main","fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE","checks":{{"state":"none","passed":0,"total":0,"failed":[]}},
+            "unresolvedThreads":0,"split":"ready_to_merge","localPath":"/r/app","task":{{"id":"{task}","state":"awaiting_approval","route":"feature"}},"updatedAt":"2026-10-27T0{number}:00:00Z"}}"#
+        )
+    }
+
+    /// Opens each view with its cursor on the second row.
+    fn open_view(app: &mut App, view: &str) {
+        match view {
+            "inbox" => app.inbox = Some(InboxState { cursor: 1, ..InboxState::default() }),
+            "digest" => app.digest = Some(DigestState { cursor: 1 }),
+            "pulls" => {
+                let prs = ["aaaaaaaa1111", "bbbbbbbb2222", "cccccccc3333"].iter().enumerate().map(|(n, t)| serde_json::from_str(&pr_json(n as u64 + 1, t)).unwrap()).collect();
+                app.prs = PrSnapshot { prs, polled_at: None, error: None };
+                app.pulls = Some(PullsState { split: crate::pulls::PrSplit::ReadyToMerge, cursor: 1 });
+            }
+            "slack" => {
+                let items = ["aaaaaaaa1111", "bbbbbbbb2222", "cccccccc3333"]
+                    .iter()
+                    .enumerate()
+                    .map(|(n, t)| {
+                        let mut item: SlackItem = serde_json::from_str(&item_json(&format!("C0123:{n}"), "needs_reply", Some("P1"), &format!("2026-10-28T09:0{n}:00Z"))).unwrap();
+                        item.linked.task_id = Some((*t).to_string());
+                        item
+                    })
+                    .collect();
+                app.slack_snapshot = SlackSnapshot { items, ..SlackSnapshot::default() };
+                app.slack = Some(SlackState { cursor: 1, ..SlackState::default() });
+            }
+            other => panic!("no view {other}"),
+        }
+    }
+
+    fn cursor_of(app: &App, view: &str) -> usize {
+        match view {
+            "inbox" => app.inbox.as_ref().map(|s| s.cursor),
+            "digest" => app.digest.as_ref().map(|s| s.cursor),
+            "pulls" => app.pulls.as_ref().map(|s| s.cursor),
+            _ => app.slack.as_ref().map(|s| s.cursor),
+        }
+        .expect("the view is showing")
+    }
+
+    fn showing(app: &App, view: &str) -> bool {
+        match view {
+            "inbox" => app.inbox.is_some(),
+            "digest" => app.digest.is_some(),
+            "pulls" => app.pulls.is_some(),
+            _ => app.slack.is_some(),
+        }
+    }
+
+    #[test]
+    fn esc_in_a_task_opened_from_a_view_returns_to_the_view_with_its_cursor() {
+        for view in ["inbox", "digest", "pulls", "slack"] {
+            let mut app = board_of_three();
+            open_view(&mut app, view);
+            let under = app.focus_task().map(|t| t.id.clone());
+            press(&mut app, KeyCode::Enter);
+            let opened = match &app.mode {
+                Mode::Detail(id) => id.clone(),
+                other => panic!("{view}: enter did not open a task ({})", if matches!(other, Mode::Normal) { "board" } else { "another mode" }),
+            };
+            if let Some(under) = under {
+                assert_eq!(opened, under, "{view}: opened the row under the cursor");
+            }
+            assert!(showing(&app, view), "{view}: the view stays open under the task");
+            let title = app.task(&opened).map(|t| t.title.clone()).unwrap_or_default();
+            assert!(crate::testkit::render(&mut app, 140, 40).contains(&title), "{view}: the task is drawn");
+            press(&mut app, KeyCode::Esc);
+            assert!(matches!(app.mode, Mode::Normal) && showing(&app, view), "{view}: esc in the task returns to the view");
+            assert_eq!(cursor_of(&app, view), 1, "{view}: the cursor is where it was");
+            press(&mut app, KeyCode::Esc);
+            assert!(!showing(&app, view) && matches!(app.mode, Mode::Normal), "{view}: esc in the view returns to the board");
+        }
+    }
+
+    #[test]
+    fn q_in_a_task_opened_from_a_view_also_returns_to_the_view() {
+        let mut app = board_of_three();
+        open_view(&mut app, "inbox");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('q'));
+        assert!(app.inbox.is_some() && matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn esc_on_the_board_with_nothing_open_does_nothing() {
+        let mut app = board_of_three();
+        let before = (app.focus, app.selection);
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.inbox.is_none() && app.digest.is_none() && app.pulls.is_none() && app.slack.is_none());
+        assert_eq!((app.focus, app.selection), before);
+    }
+
+    #[test]
+    fn a_task_opened_from_the_board_returns_to_the_board() {
+        let mut app = board_of_three();
+        app.select("aaaaaaaa1111", true);
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn the_view_under_a_task_keeps_its_split() {
+        let mut app = board_of_three();
+        app.inbox = Some(InboxState { split: crate::inbox::Split::All, cursor: 2 });
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        let state = app.inbox.as_ref().expect("the inbox is back");
+        assert_eq!((state.split, state.cursor), (crate::inbox::Split::All, 2));
     }
 }
