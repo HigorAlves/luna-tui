@@ -24,6 +24,8 @@ export * from "./packs.ts";
 export * from "./models.ts";
 export * from "./engines.ts";
 export * from "./access.ts";
+export * from "./economy.ts";
+export * from "./economy-vocabulary.ts";
 export * from "./questions.ts";
 export * from "./decisions.ts";
 export { DECISION_ALLOWED, DECISION_DEFAULTS, DecisionDefault, DecisionDefaults, decisionEngines } from "./decision-defaults.ts";
@@ -101,6 +103,13 @@ export const COLUMN_OF: Record<TaskState, Column> = {
   reviewing: "Verify",
   addressing: "Build",
 };
+
+/** The column a card is shown in. A card that escalated, or paused on a rate limit, stays where its stage lives (the stage it resumes at), so a failed
+ *  delivery or a conflict at the ship watch is not shown as Build work. With no resume stage recorded it takes its state's own column. */
+export function columnOf(state: TaskState, resumeTo: TaskState | null | undefined): Column {
+  if ((state === "escalated" || state === "paused_rate_limit") && resumeTo && resumeTo !== "escalated" && resumeTo !== "paused_rate_limit") return COLUMN_OF[resumeTo];
+  return COLUMN_OF[state];
+}
 
 /** States a task ends in: nothing moves it again. */
 export const TERMINAL: ReadonlySet<TaskState> = new Set(["closed", "archived"]);

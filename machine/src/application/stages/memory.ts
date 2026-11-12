@@ -4,7 +4,7 @@
 // owns the merge that the close step applies when the proposal is approved.
 import { readFile } from "node:fs/promises";
 
-import { type DecisionOverrides, type Ledger, PACKS, type ShipContext, applyPolicy } from "@hardness/contracts";
+import { type DecisionOverrides, type Ledger, PACKS, PROJECT_CONTEXT_SECTIONS, ProjectContextSection, type ShipContext, applyPolicy } from "@hardness/contracts";
 
 import { recordIdOf } from "../decision-truth.ts";
 import type { EventRow, TaskRow } from "../../domain/task.ts";
@@ -19,8 +19,10 @@ export const CAP_BYTES = 6144;
 export type RetroFacts = NonNullable<ShipContext["retro"]>;
 
 export interface MemoryDeps {
-  /** Runs the reviewing_memory pack; with `ship`, the retro facts ride in its input as `context.ship`. */
-  runPack: (context: StageContext, ship?: ShipContext) => Promise<StageResult>;
+  /** Runs the reviewing_memory pack; with `ship`, the retro facts ride in its input as `context.ship`, and `candidates` (id and text) as `context.factCandidates`. */
+  runPack: (context: StageContext, ship?: ShipContext, candidates?: Array<{ id: string; text: string }>) => Promise<StageResult>;
+  /** The learned facts of the task's repository the retro may promote (active, many cards, no contradiction); absent, none. */
+  candidates?: (context: StageContext) => Promise<Array<{ id: string; text: string; section?: string }>>;
   stateDir: string;
   /** The task's predicted-against-actual facts; absent or null, the retro runs without them and without the worth_learning question. */
   facts?: (taskId: string) => Promise<RetroFacts | null>;
@@ -56,6 +58,33 @@ async function notWorthLearning(deps: MemoryDeps, ship: ShipContext, repoPath: s
   }
 }
 
+/** One learned fact the retro named, as the gate shows it and the close step writes it: the fact's own stored text, never the model's. */
+export interface FactPromotion {
+  id: string;
+  text: string;
+  section: string;
+}
+
+/** The candidates the retro named that the machine offered, once each, with the fact's own text and the retro's section (the fact's own when the retro's is not a section of the file). */
+function promotionsOf(named: unknown, offered: ReadonlyArray<{ id: string; text: string; section?: string }>): FactPromotion[] {
+  if (!Array.isArray(named)) return [];
+  const out: FactPromotion[] = [];
+  for (const item of named as Array<{ id?: unknown; section?: unknown }>) {
+    const fact = typeof item?.id === "string" ? offered.find((c) => c.id === item.id) : undefined;
+    if (!fact || out.some((p) => p.id === fact.id)) continue;
+    const section = ProjectContextSection.safeParse(item.section);
+    if (!section.success) continue;
+    out.push({ id: fact.id, text: fact.text, section: section.data });
+  }
+  return out;
+}
+
+/** The promoted facts as the bullets `mergeRules` reads: a heading per section, a line per fact. */
+export function promotionsMarkdown(promotions: ReadonlyArray<{ text: string; section: string }>): string {
+  const sections = PROJECT_CONTEXT_SECTIONS.filter((section) => promotions.some((p) => p.section === section));
+  return sections.map((section) => `## ${section}\n${promotions.filter((p) => p.section === section).map((p) => `- ${p.text.replace(/\s+/g, " ").trim()}`).join("\n")}\n`).join("\n");
+}
+
 export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
   return async (context) => {
     const facts = deps.facts ? await deps.facts(context.task.id).catch(() => null) : null;
@@ -65,7 +94,8 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
     if (facts && ship && (await notWorthLearning(deps, ship, context.task.repoPath ?? null, worth))) {
       return { outcome: "pass", detail: { rules: null, note: `no retro: ${factsLine(facts)}` } };
     }
-    const result = await deps.runPack(context, ship);
+    const offered = deps.candidates ? await deps.candidates(context).catch(() => []) : [];
+    const result = await deps.runPack(context, ship, offered.map(({ id, text }) => ({ id, text })));
     if (result.outcome !== "pass") return result;
 
     const answer = answerOf(result.detail);
@@ -78,7 +108,9 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
         markdown = "";
       }
     }
+    const promotions = promotionsOf(answer.factPromotions, offered);
     const learned = {
+      ...(promotions.length > 0 ? { factPromotions: promotions } : {}),
       ...(Array.isArray(answer.recalibration) ? { recalibration: answer.recalibration } : {}),
       ...(Array.isArray(answer.graphMisses) ? { graphMisses: answer.graphMisses } : {}),
       ...(Array.isArray(answer.promptUpdates) ? { promptUpdates: answer.promptUpdates } : {}),
@@ -109,14 +141,7 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
   };
 }
 
-const SECTIONS = [
-  "Stack & versions",
-  "Commands",
-  "Critical rules",
-  "Patterns to follow",
-  "Patterns to avoid",
-  "Known landmines",
-];
+const SECTIONS: readonly string[] = PROJECT_CONTEXT_SECTIONS;
 const DEFAULT_SECTION = "Critical rules";
 
 /** The rules in a proposal, keyed by section. Reads a fenced diff or a plain bullet list. */

@@ -18,6 +18,8 @@ import {
   FACTORY_DEFAULTS,
   type SizeContext,
   type SplitContext,
+  type Tokens,
+  sumTokens,
   sizeLimits,
   type FactoryConfig,
   PACKS,
@@ -128,12 +130,13 @@ function combine(results: StageResult[]): Pick<StageResult, "events" | "artifact
   const artifacts = results.flatMap((r) => r.artifacts ?? []);
   const used = results.filter((r) => r.usage);
   const sum = (key: "turns" | "costUsd") => used.reduce<number | null>((total, r) => (r.usage![key] === null ? total : (total ?? 0) + r.usage![key]!), null);
+  const tokens = used.reduce<Tokens | null>((total, r) => sumTokens(total, r.usage!.tokens), null);
   const run = results.reduce<StageResult["run"]>((last, r) => (r.run ? { ...last, ...r.run } : last), undefined);
   const workspace = results.find((r) => r.workspace)?.workspace;
   return {
     ...(events.length ? { events } : {}),
     ...(artifacts.length ? { artifacts } : {}),
-    ...(used.length ? { usage: { turns: sum("turns"), costUsd: sum("costUsd") } } : {}),
+    ...(used.length ? { usage: { turns: sum("turns"), costUsd: sum("costUsd"), ...(tokens ? { tokens } : {}) } } : {}),
     ...(run ? { run } : {}),
     ...(workspace ? { workspace } : {}),
   };

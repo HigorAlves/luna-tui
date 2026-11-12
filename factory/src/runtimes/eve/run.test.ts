@@ -1,6 +1,6 @@
 // The eve runner's own pieces, without a server: what the server's environment holds, where the
 // run's secrets go, and the luna bridge's token check.
-import { PACKS, StageInput, resolveEngine } from "@hardness/contracts";
+import { PACKS, type RunEvent, StageInput, resolveEngine } from "@hardness/contracts";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -159,5 +159,20 @@ describe("eveRuntime", () => {
     const input = StageInput.parse({ schema: 3, stage: "implementing", pack: "implementing", attempt: 1, task: { id: "t", title: "x", description: "y", criteria: [], repoPath: "/r", branch: "task/x", source: null }, plan: null, decisions: [], priorFindings: [], context: { projectContext: null }, limits: { maxTurns: 3, timeoutMs: 10_000 }, env: {} });
     const run = await eveRuntime({ agentsDir }).run({ pack: PACKS.implementing, engine: resolveEngine("codex:luna"), input, prompt: "x", paths: { factoryRoot: "/f", work: agentsDir, out: agentsDir, input: agentsDir, scratch: agentsDir }, luna, dry: false, emit: () => {} });
     expect(run).toMatchObject({ ok: false, error: expect.stringMatching(/the eve agent for implementing is not built .*whose engines allow eve/) });
+  });
+});
+
+describe("eveRuntime with a mask", () => {
+  it("ignores it and says so once", async () => {
+    const agentsDir = mkdtempSync(join(tmpdir(), "eve-mask-"));
+    const input = StageInput.parse({ schema: 3, stage: "implementing", pack: "implementing", attempt: 1, task: { id: "t", title: "x", description: "y", criteria: [], repoPath: "/r", branch: "task/x", source: null }, plan: null, decisions: [], priorFindings: [], context: { projectContext: null, economy: { mask: { web: true } } }, limits: { maxTurns: 3, timeoutMs: 10_000 }, env: {} });
+    const events: RunEvent[] = [];
+    const ctx = { pack: PACKS.implementing, engine: resolveEngine("codex:luna"), input, prompt: "x", paths: { factoryRoot: "/f", work: agentsDir, out: agentsDir, input: agentsDir, scratch: agentsDir }, luna: { call: async () => null }, dry: false, emit: (e: RunEvent) => void events.push(e) };
+    await eveRuntime({ agentsDir }).run(ctx);
+    expect(events.filter((e) => e.kind === "note")).toEqual([{ kind: "note", payload: expect.objectContaining({ phase: "economy_mask_skipped", pack: "implementing" }) }]);
+    const bare = { ...ctx, input: { ...input, context: { projectContext: null } }, emit: (e: RunEvent) => void events.push(e) };
+    events.length = 0;
+    await eveRuntime({ agentsDir }).run(bare);
+    expect(events.filter((e) => e.kind === "note")).toEqual([]);
   });
 });

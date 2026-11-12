@@ -7,6 +7,7 @@ import { CallJoin, type Emit } from "../../core/events.ts";
 import { EMPTY_RUN, type RunOutcome, budgetSpent } from "../../core/output.ts";
 import { eveTokens, sumTokens } from "../../core/usage.ts";
 import { GUARDED } from "./compile.ts";
+import type { EconomyTap } from "./economy.ts";
 
 /** One session event as the follower reads it. */
 export interface SessionEvent {
@@ -28,13 +29,19 @@ export class TurnFollower {
   private paused = false;
   private replyText = "";
   private failure: string | null = null;
+  /** The calls the stream showed, with what they were asked: the economy's observation joins on them. */
+  private readonly known = new Map<string, { tool: string; input: unknown }>();
+  private ending: { tool: string; input: unknown } | null = null;
+  private ended = false;
 
+  private readonly economy: Pick<EconomyTap, "take" | "count"> | null;
   private readonly pack: Pick<Pack, "id" | "answer">;
   private readonly maxTurns: number;
   private readonly emit: Emit;
   private readonly model: string;
 
-  constructor(pack: Pick<Pack, "id" | "answer">, maxTurns: number, emit: Emit, model = "") {
+  constructor(pack: Pick<Pack, "id" | "answer">, maxTurns: number, emit: Emit, model = "", economy: Pick<EconomyTap, "take" | "count"> | null = null) {
+    this.economy = economy;
     this.pack = pack;
     this.maxTurns = maxTurns;
     this.emit = emit;
@@ -42,9 +49,17 @@ export class TurnFollower {
     this.calls = new CallJoin(emit, (tool) => GUARDED.has(tool));
   }
 
+  /** The run is ending (the economy's stop, on this call): the stream's events go on until the call settles,
+   *  so its result is in the events (the stream may show the call after the bridge heard of it), then the turn
+   *  is cancelled and a call the stream shows after that is not followed. */
+  end(tool: string, input: unknown): void {
+    this.ending = { tool, input };
+  }
+
   /** Takes one event; true when the turn must be cancelled now. */
   take(event: SessionEvent): boolean {
     const data = event.data ?? {};
+    if (this.ended && event.type.startsWith("call.") && !this.known.has(String(data.callId))) return false;
     const result = this.result;
     if (event.type === "model.requested" && (data.owner as { turnId?: string } | undefined)?.turnId) {
       this.modelCalls++;
@@ -70,7 +85,9 @@ export class TurnFollower {
         if (data.phase === "reply") this.replyText = data.value;
       }
     } else if (event.type === "call.requested") {
-      this.calls.requested(String(data.callId), (data.capability as { name?: string } | undefined)?.name ?? "tool", data.input ?? {});
+      const tool = (data.capability as { name?: string } | undefined)?.name ?? "tool";
+      this.known.set(String(data.callId), { tool, input: data.input ?? {} });
+      this.calls.requested(String(data.callId), tool, data.input ?? {});
     } else if (event.type === "call.started") {
       // The call cleared its approval (or needed none): the guard allowed it.
       this.calls.decided(String(data.callId), "", {}, { allow: true });
@@ -79,8 +96,20 @@ export class TurnFollower {
       const error = data.error as { message?: string } | undefined;
       // A rejected call never started: in a stage nobody approves by hand, so the guard refused it.
       if (data.outcome === "rejected") this.calls.decided(id, "", {}, { allow: false, reason: error?.message ?? "rejected" });
-      const ok = data.outcome === "completed";
-      this.calls.settled(id, ok, ok ? undefined : `${String(data.outcome)}: ${error?.message ?? ""}`);
+      const asked = this.known.get(id);
+      // A tool no wrapper reports (the luna tools, `delegate`) never reached the guard: the machine's envelope counts it, so it does too.
+      if (asked && data.outcome !== "rejected" && !GUARDED.has(asked.tool)) this.economy?.count(asked.tool, asked.input, data.outcome === "completed");
+      // The tool reported this call over the bridge before it settled: its observation goes on the event.
+      const reported = asked ? this.economy?.take(asked.tool, asked.input) : undefined;
+      if (reported) this.calls.observed(id, reported.observation);
+      const ok = data.outcome === "completed" && reported?.ok !== false;
+      this.calls.settled(id, ok, ok ? undefined : data.outcome === "completed" ? "the command failed" : `${String(data.outcome)}: ${error?.message ?? ""}`);
+      // The run is ending (the economy's stop) and its last call is in the events: cancel the turn now.
+      if (this.ending && asked && asked.tool === this.ending.tool && JSON.stringify(asked.input) === JSON.stringify(this.ending.input)) {
+        this.ended = true;
+        return this.cap(true);
+      }
+      return false;
     } else if (event.type === "usage.recorded") {
       const usage = data.usage as { costUsd?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number } | undefined;
       if (typeof usage?.costUsd === "number") result.costUsd = (result.costUsd ?? 0) + usage.costUsd;

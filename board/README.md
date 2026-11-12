@@ -23,6 +23,8 @@ The board connects to whichever machine is up: the one from `pnpm dev` on `http:
 the container from `pnpm start` on `:4318`. It checks again on every reconnect, so switching between
 the two needs no restart. `HARDNESS_MACHINE_URL` pins one address instead. `LUNA_APPROVER` names you on every approval and send-back. A plan of High risk needs two distinct names. So the first `a` keeps your name on the gate (`Approvals  1 of 2 (ana)`), and a second person's `a` closes it.
 
+From the board, the `x` menu, the Inbox or `:start`, `a` (and `A` at the retro) at any gate opens the task so you read what you approve; inside the task it asks once, naming the gate (`y` or `enter` approves, `n` or `esc` cancels), and sends nothing if the card moved to another gate meanwhile. `a` over marked cards at a plan, split, ship or release gate asks once, with the count and the kinds; the other gates are approved inside their card. `q` asks before quitting while a card needs you or is running, and `Q` quits at once. `tab` on the board jumps to the next card that needs you. Columns collapse by width: empty ones first, then Done, and the header says where the rest are.
+
 ## Install as a herdr plugin (local link)
 
 ```sh
@@ -67,7 +69,7 @@ Press a bright key to close the sheet and run it. A dim key only says why it doe
 Under a popup, the layer beneath folds to one line at the bottom
 (`▸ board keys: …`). The sheet has two columns from 100 columns wide, and one below.
 
-The footer is a few short words per view (`? help  n new  a advance  enter open  x actions …`).
+The footer of each view lists the keys that work now, most useful first, cut to the terminal's width, and ends with `? all keys`.
 `?` has the rest. After `g` or `z` with no second
 key for 400 ms, the board lists the second keys (`g ▸  g first ticket …  s order columns by stage …`).
 Inside an editor `?` types a character. So the editor's title carries its keys and follows the
@@ -89,7 +91,7 @@ generates the tables below. A test fails when they drift from the registry.
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; open to approve; answer triage's questions; retry the escalation, with guidance; resume after the usage limit; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
@@ -121,7 +123,8 @@ generates the tables below. A test fails when they drift from the registry.
 | `gg` | first ticket in the column |
 | `G` | last ticket in the column |
 | `1-8` | jump to that column |
-| `] / [` | next / previous ticket that needs you |
+| `tab / shift+tab` | next / previous ticket that needs you |
+| `] / [` | same as tab / shift+tab |
 | `enter` | open the ticket's workspace |
 
 **Filter & order**
@@ -148,6 +151,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `D` | Digest: what changed since last time |
 | `P` | Pulls: every open PR involving you |
 | `B` | Backlog: candidates, not tickets yet |
+| `$` | Economy: facts, tool mask, guard, cost |
 | `K` | Tickets: held, assessed, waiting on you |
 | `S` | Slack: mentions, DMs and watches |
 
@@ -171,7 +175,8 @@ generates the tables below. A test fails when they drift from the registry.
 | `:` | command palette |
 | `esc` | clear the filter and the marks |
 | `?` | keys |
-| `q` | quit |
+| `q` | quit (asks if something is pending) |
+| `Q` | quit without asking |
 
 **Commands (type after :)**
 
@@ -198,6 +203,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `:digest` | open the Digest |
 | `:prs` | open Pulls |
 | `:backlog` | open the Backlog |
+| `:economy` | open the Economy |
 | `:tickets` | open the Tickets view |
 | `:ticket-edit <text>` | post your text, not the draft's |
 | `:dedup duplicate <n> \| related <ns> \| neither` | answer the duplicate question |
@@ -212,9 +218,13 @@ generates the tables below. A test fails when they drift from the registry.
 
 ## Tickets
 
-`enter` opens a ticket in a popup over the board. Inside it, a rail of nine sections sits on the
-left. On a terminal under 100 columns, a tab strip replaces the rail. One pane sits on the right.
-`h`/`l` or `1`…`9` switch sections.
+`enter` opens a ticket in a popup over the board. A fixed bar on top says what the card needs and
+lists the keys that answer it. Under it, a rail of sections sits on the left. On a terminal under 100
+columns, a tab strip replaces the rail. One pane sits on the right, and it opens on the first page for
+the card's state: Review at the plan gate, Now while a stage runs, Stopped when it failed, Result when
+it is done, Question when it asks you something. The rail lists the sections that have something to show.
+Facts such as risk, checks, the code map and the card itself sit in reference groups: `tab` moves to them and `space` folds one.
+`h`/`l` or `1`…`9` switch sections; the rail prints the digit of each row, and the sections under `later` have none (`h`/`l` reach them). When the card changes state and the page you are on leaves the rail, the view moves to the card's first page and says so.
 `j`/`k` scroll the pane or pick a row where the section lists some.
 `J`/`K` scroll a line there. `ctrl+d`/`ctrl+u` and PgDn/PgUp scroll half a page anywhere.
 Picking a row brings it into view.
@@ -223,16 +233,16 @@ A ticket that Luna Notch sent wears `notch LUNA-14` (its work order's ref), dim,
 An issue's `#42` or a Jira issue's `PLAT-123` appears the same way on the card.
 Every section draws from everything the machine knows
 about the ticket, whether or not someone decided a gate. The approved plan stays readable after `a`.
-While a gate is open, its strip sits on top of every section with the keys that answer it.
+`a` asks once before it approves. Evidence opens with `o` (the folder), `enter` (the file) and `O` (the PR), or a click. `i` opens the linked issue from any section. `esc` returns to the view the card was opened from.
 
 | Section | Shows | Keys inside |
 |---|---|---|
 | Overview | the status. One row per acceptance criterion: its state in the plan, how many cases prove it, what verifying found. Repo, branch, issue, the Jira link, the SLA clocks, why, spend. The ticket's description and criteria. A setup gate's `luna.yaml` and proof, triage's questions, the memory review's rules | `e` edits the ticket's text, `J` links or unlinks the Jira issue |
-| Plan | triage's latest plan (brief, criteria, assumptions, slices) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate |
-| Tests | test_design's cases under the criterion each proves, with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
+| Plan | triage's latest plan, read like the Review page (brief, each criterion with its id, steps with size and files, rollback) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate |
+| Tests | test_design's scenarios under the criterion each proves (id, type, layer, title), with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
 | Runs | every stage run with how long it took, its cost and turns. The selected run's error, per-case verdicts and files. It opens on the latest run | `j`/`k` pick a run, `J`/`K` scroll |
 | Diff | the branch against its base: files with +/−, the selected file's patch. The machine sends at most 512 KB of it. The pane says when it cut | `j`/`k` pick a file, `J`/`K` scroll the patch, `o` opens the file from the worktree |
-| Evidence | the QA verdict and every artifact the stages produced, by kind; opens on the latest | `j`/`k` pick a file, `J`/`K` scroll, `o` opens it |
+| Evidence | every artifact the stages produced, by run, under the folder they live in; then the QA verdict. Opens on the latest | `j`/`k` pick a file, `J`/`K` scroll, `enter` opens the file, `o` the folder, `O` the PR; a click selects a row, a second click opens it, a click on `Folder` opens the folder |
 | PR | the branch's pull request as the Pulls inbox sees it: checks by name, review state, threads, the task in flight. Or the URL the ship gate reported | `o` opens it, `S` ships at the gate |
 | Activity | every event | |
 | Engines | each stage the ticket runs (from `GET /packs`), the engine it is set to (yours, else `default: <engine>`) and the one it ran on. The bottom line names the running stage's (`implementing on codex:sol`). A machine from before engines says it offers none | `j`/`k` pick a stage. `E` picks its engine: the default, or one the stage allows. An engine with no credential on this machine is dim and shows what is missing. You cannot pick it. A stage that already ran keeps its engine |
@@ -245,7 +255,7 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket; post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
@@ -265,7 +275,10 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 | `f` | open or focus the agent's watch tab |
 | `R` | set the repo (search) |
 | `e` | edit: the plan, the cases or the ticket |
-| `o` | open: the file, the PR or the issue |
+| `o` | open: the folder, file or PR |
+| `i` | open the issue |
+| `O` | open the PR in the browser |
+| `enter` | open the file here; close elsewhere |
 | `y` | Evidence Pack was useful |
 | `n` | Evidence Pack was not useful (note) |
 | `E` | pick the selected stage's engine |
@@ -278,16 +291,19 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 |---|---|
 | `h / l` | previous / next section |
 | `1-9` | jump to that section |
-| `j / k` | scroll, or pick a run / file |
+| `tab` | focus the reference groups, and back |
+| `space` | fold or unfold the focused group |
+| `j / k` | scroll, or pick a run / file / group |
 | `J / K` | scroll a line where j / k pick |
 | `ctrl+d / ctrl+u` | half a page |
 | `+` | popup: most of the screen, or all |
-| `esc / q / enter` | close |
+| `esc / q` | close; esc leaves the reference first |
 
 **App**
 
 | Key | Does |
 |---|---|
+| `:` | command palette: acts on this ticket |
 | `?` | keys |
 
 <!-- keys:end -->
@@ -437,6 +453,36 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 | Key | Does |
 |---|---|
 | `R` | fetch the backlog again |
+| `?` | keys |
+
+<!-- keys:end -->
+
+## Economy
+
+`$` (or `:economy`) opens the Economy of the repository of the card under the cursor: what the machine learned about its token spend. The list on the left holds the repository's facts (active first, then candidates, promoted, retired and dropped), the tool mask each pack runs with (applied units are marked `masked`, proposals `proposed` with how many runs and cards never used the tool) and the newest twenty loop-guard events. The row's detail sits on the right, with the cost in effective tokens (execution, overhead and the overhead's share) and each pack's envelope, or how many samples it still needs. `d` drops a candidate or active fact, `a` approves the pack's proposed mask, `r` restores a masked or proposed tool, and `I` imports the repository's past runs. A machine running with the economy off answers 404 and the board says so. The board flattens text from outside before it draws it.
+
+<!-- keys:start economy -->
+**Row**
+
+| Key | Does |
+|---|---|
+| `d` | drop: the fact under the cursor |
+| `a` | approve: the pack's proposed tool mask |
+| `r` | restore: a masked or proposed tool |
+
+**Move**
+
+| Key | Does |
+|---|---|
+| `j / k` | previous / next row |
+| `esc / q` | close |
+
+**App**
+
+| Key | Does |
+|---|---|
+| `R` | fetch the economy again |
+| `I` | import past runs |
 | `?` | keys |
 
 <!-- keys:end -->
@@ -594,7 +640,7 @@ What the ticket shows:
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the split; archive the ticket; post the reply and close the ticket; approve the tests; ship: publish, watch the PR; ship: approve the release; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |

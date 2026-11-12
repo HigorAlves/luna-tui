@@ -11,3 +11,9 @@ same repository at its 0.31.0 release and adapted the same way.
 
 Individual skills keep their own upstream attribution in the `metadata.source`
 line of their SKILL.md frontmatter where one was present.
+
+The token economy (RFC 0007) is a port of TokenEconomizer,
+https://github.com/microsoft/TokenEconomizer at commit
+81e32e56bb3c4c1b4c9756b429be91e3960116ca (Apache-2.0 licensed). Its loop guard,
+micro-skills, tool pruning and cost rules were ported to TypeScript and
+modified.

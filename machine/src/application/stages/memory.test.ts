@@ -115,6 +115,71 @@ describe("the retro's worth_learning question", () => {
   });
 });
 
+describe("the retro's fact promotions", () => {
+  const rich = { ...context, task: { id: "t1", repoPath: "/repo" } as unknown as TaskRow } as StageContext;
+  const candidates = [
+    { id: "aaaaaaaaaaaa", text: "Run the tests with `python -m pytest -q`.", section: "Commands" },
+    { id: "bbbbbbbbbbbb", text: "Generated clients live in `src/gen/`." },
+  ];
+
+  function wire(answer: Record<string, unknown>, offered: typeof candidates | null = candidates, markdown = "") {
+    const stateDir = mkdtempSync(join(tmpdir(), "memory-"));
+    const artifacts: NonNullable<StageResult["artifacts"]> = [];
+    if (markdown) {
+      const path = join(stateDir, "rules.md");
+      writeFileSync(path, markdown);
+      artifacts.push({ kind: "rules", path, label: "rules.md", sha256: "x" });
+    }
+    const calls: unknown[][] = [];
+    const runPack = async (...args: unknown[]): Promise<StageResult> => (calls.push(args), { outcome: "pass", detail: { answer }, artifacts });
+    return { run: memoryReviewRunner({ runPack, stateDir, ...(offered ? { candidates: async () => offered } : {}) }), calls };
+  }
+
+  it("hands the pack the candidates by id and text, never the section", async () => {
+    const { run, calls } = wire({ incidents: [], patterns: [] });
+    await run(rich);
+    expect(calls[0]![2]).toEqual([{ id: "aaaaaaaaaaaa", text: "Run the tests with `python -m pytest -q`." }, { id: "bbbbbbbbbbbb", text: "Generated clients live in `src/gen/`." }]);
+  });
+
+  it("carries the named candidates to the gate with the fact's own stored text and the retro's section, with no rules otherwise", async () => {
+    const { run } = wire({ incidents: [], patterns: [], factPromotions: [{ id: "bbbbbbbbbbbb", section: "Known landmines" }] });
+    const result = await run(rich);
+    expect(result.detail?.rules).toMatchObject({ factPromotions: [{ id: "bbbbbbbbbbbb", text: "Generated clients live in `src/gen/`.", section: "Known landmines" }] });
+  });
+
+  it("ignores an id that is not a candidate, a repeat, and a section outside the project context", async () => {
+    const { run } = wire({ incidents: [], patterns: [], factPromotions: [{ id: "zzzzzzzzzzzz", section: "Commands" }, { id: "aaaaaaaaaaaa", section: "Commands" }, { id: "aaaaaaaaaaaa", section: "Known landmines" }, { id: "bbbbbbbbbbbb", section: "Secrets" }] });
+    const rules = (await run(rich)).detail?.rules as { factPromotions: Array<{ id: string; section: string }> };
+    expect(rules.factPromotions).toEqual([{ id: "aaaaaaaaaaaa", text: "Run the tests with `python -m pytest -q`.", section: "Commands" }]);
+  });
+
+  it("proposes no rules when the only names are ids that are not candidates", async () => {
+    const { run } = wire({ incidents: [], patterns: [], factPromotions: [{ id: "zzzzzzzzzzzz", section: "Commands" }] });
+    expect((await run(rich)).detail?.rules).toBeNull();
+  });
+
+  it("ignores every name when no candidate was offered, and passes the markdown through untouched", async () => {
+    const { run } = wire({ incidents: [], patterns: [], factPromotions: [{ id: "aaaaaaaaaaaa", section: "Commands" }] }, null, "- r\n");
+    const rules = (await run(rich)).detail?.rules as Record<string, unknown>;
+    expect(rules.markdown).toBe("- r\n");
+    expect(rules.factPromotions).toBeUndefined();
+  });
+
+  it("asks nothing when the candidate lookup fails", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "memory-"));
+    const run = memoryReviewRunner({ runPack: async () => ({ outcome: "pass", detail: { answer: { incidents: [], patterns: [], factPromotions: [{ id: "a", section: "Commands" }] } } }), stateDir, candidates: async () => Promise.reject(new Error("disk")) });
+    expect((await run(rich)).detail?.rules).toBeNull();
+  });
+});
+
+describe("promotionsMarkdown", () => {
+  it("writes each fact's text as a bullet under its section, one line", async () => {
+    const { promotionsMarkdown } = await import("./memory.ts");
+    expect(promotionsMarkdown([{ text: "Run `make gen` first.", section: "Commands" }, { text: "Two\nlines  here.", section: "Commands" }, { text: "Gen lives in `src/gen/`.", section: "Known landmines" }])).toBe("## Commands\n- Run `make gen` first.\n- Two lines here.\n\n## Known landmines\n- Gen lives in `src/gen/`.\n");
+    expect(promotionsMarkdown([])).toBe("");
+  });
+});
+
 describe("retroFactsOf", () => {
   it("sets what was predicted against what happened, from the task's own records", async () => {
     const { retroFactsOf } = await import("./memory.ts");

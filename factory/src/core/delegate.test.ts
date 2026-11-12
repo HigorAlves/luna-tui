@@ -1,6 +1,6 @@
 // The delegate tool apart from any runtime: which helpers it serves, what it refuses before a child
 // starts, and the budget a child gets. The table (runtimes/conformance/) runs it through each runtime.
-import { PACKS, type RunEvent, StageInput } from "@hardness/contracts";
+import { type EconomyInput, PACKS, type RunEvent, StageInput } from "@hardness/contracts";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -15,7 +15,7 @@ const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".."
 const HELPER = { role: "security-reviewer", engine: "codex:sol" } as const;
 const PACK = { ...PACKS.verifying, helpers: [HELPER] };
 
-const input = (limits = { maxTurns: 40, timeoutMs: 20 * 60_000 }) =>
+const input = (limits = { maxTurns: 40, timeoutMs: 20 * 60_000 }, economy?: EconomyInput) =>
   StageInput.parse({
     schema: 3,
     stage: "verifying",
@@ -25,7 +25,7 @@ const input = (limits = { maxTurns: 40, timeoutMs: 20 * 60_000 }) =>
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null },
+    context: { projectContext: null, ...(economy ? { economy } : {}) },
     limits,
     env: {},
   });
@@ -51,13 +51,13 @@ const answering = (given: RunContext[]): Runtime => ({
   },
 });
 
-function delegating(over: { limits?: { maxTurns: number; timeoutMs: number }; turnsUsed?: number; startedAt?: number; env?: NodeJS.ProcessEnv } = {}) {
+function delegating(over: { limits?: { maxTurns: number; timeoutMs: number }; turnsUsed?: number; startedAt?: number; env?: NodeJS.ProcessEnv; economy?: EconomyInput } = {}) {
   const given: RunContext[] = [];
   const events: RunEvent[] = [];
   const d = delegation({
     pack: PACK,
     helpers: [HELPER],
-    input: input(over.limits),
+    input: input(over.limits, over.economy),
     paths: { factoryRoot: FACTORY_ROOT, work: root, out: join(root, "out"), input: root },
     runtimes: { eve: answering(given) },
     emit: (e) => events.push(e),
@@ -109,6 +109,20 @@ describe("delegate", () => {
     expect(d.spent).toEqual({ costUsd: 1, turns: 6 });
     expect(withChildren({ ...EMPTY_RUN, costUsd: 2 }, d).costUsd).toBe(3);
     expect(withChildren({ ...EMPTY_RUN, costUsd: null }, d).costUsd).toBe(1);
+  });
+
+  it("gives a helper none of the parent's economy: no guard, no mask, no facts, and no judge", async () => {
+    const economy: EconomyInput = {
+      guard: { mode: "on", judge: true, envelope: 10, judgeConfidence: 0.7, redirects: 1, backstopMult: 2.5 },
+      facts: ["pnpm is the package manager here."],
+      mask: { web: true, skills: ["review"], luna: ["step"] },
+    };
+    const { d, given } = delegating({ economy });
+    await d.call({ helper: HELPER.role, message: "m" });
+    expect(given).toHaveLength(1);
+    expect(given[0]!.input.context.economy).toBeUndefined();
+    expect(given[0]!.input.context.projectContext).toBeNull();
+    expect(given[0]!.judge).toBeUndefined();
   });
 
   it("starts no child without the turns or the time for one, or for a helper the pack does not have", async () => {

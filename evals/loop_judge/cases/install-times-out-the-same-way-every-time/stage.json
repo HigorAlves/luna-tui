@@ -1,0 +1,36 @@
+{
+  "schema": 3,
+  "stage": "loop_judge",
+  "pack": "loop_judge",
+  "attempt": 1,
+  "task": {
+    "id": "loop-judge",
+    "title": "Loop judge",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "loop",
+      "loop": {
+        "digest": "turns=16 edit_churn=0 distinct_edit_files=0 error_outputs=7 test_runs=0 repeated_identical_failures=6 stagnation=0.86\nRecent actions (oldest->newest):\n  8: $ pnpm install  [FetchError#4d20be11a7]\n  9: $ pnpm install --force  [FetchError#4d20be11a7]\n 10: $ npm install  [FetchError#4d20be11a7]\n 11: $ pnpm install  [FetchError#4d20be11a7]\n 12: $ curl -sI https://registry.npmjs.org  [FetchError#4d20be11a7]\n 13: $ pnpm install --prefer-offline  [FetchError#4d20be11a7]\n 14: $ pnpm install  [FetchError#4d20be11a7]\n 15: $ sleep 30\n 16: $ pnpm install  [FetchError#4d20be11a7]",
+        "pack": "implementing",
+        "calls": 16
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

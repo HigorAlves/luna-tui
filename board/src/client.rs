@@ -19,6 +19,7 @@ use ureq::{
 };
 
 use crate::backlog::BacklogEntry;
+use crate::economy::Economy;
 use crate::tickets::{TicketEntry, encode_key};
 use crate::model::{
     EngineCatalog, EngineInfo, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
@@ -366,6 +367,24 @@ impl Machine {
     /// The ranked backlog.
     pub fn backlog(&self) -> Result<Vec<BacklogEntry>, String> {
         Self::typed(self.agent.get(self.url("/backlog")).call())
+    }
+
+    /// A repository's economy; a 404 is the machine running with the economy off.
+    pub fn economy(&self, repo: &str) -> Result<Economy, String> {
+        let reply = self.agent.get(self.url("/economy")).query("repo", repo).call();
+        if reply.as_ref().is_ok_and(|r| r.status().as_u16() == 404) {
+            return Err(crate::economy::OFF.to_string());
+        }
+        Self::typed(reply)
+    }
+
+    /// `POST /economy/<path>` with the repository and `extra` fields; the machine's answer body.
+    pub fn economy_act(&self, path: &str, repo: &str, extra: Value) -> Result<Value, String> {
+        let mut body = json!({ "repo": repo });
+        if let (Some(out), Some(add)) = (body.as_object_mut(), extra.as_object()) {
+            out.extend(add.clone());
+        }
+        Self::json(self.agent.post(self.url(&format!("/economy/{path}"))).send_json(body))
     }
 
     /// The tickets the ticket machine holds, with their drafts.
@@ -924,5 +943,41 @@ mod refusal_tests {
         });
         let error = Machine::at(&format!("http://{addr}")).backlog_act("item-1", "promote").unwrap_err();
         assert_eq!(error, "this item waits for 1 dependency that is not there yet: c1 (unreadable)");
+    }
+
+    #[test]
+    fn the_economy_maps_a_404_to_the_off_message_and_a_400_to_the_machine_s_message() {
+        use std::{
+            io::{BufRead, BufReader, Read, Write},
+            net::TcpListener,
+            thread,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut first = String::new();
+                let _ = reader.read_line(&mut first);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let (status, json) = if first.contains("repo=%2Fno") { ("404 Not Found", r#"{"error":"not_found"}"#) } else { ("400 Bad Request", r#"{"error":"bad_request","message":"unknown repo"}"#) };
+                let _ = reader.into_inner().write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{json}", json.len()).as_bytes());
+            }
+        });
+        let machine = Machine::at(&format!("http://{addr}"));
+        assert_eq!(machine.economy("/no").unwrap_err(), "the economy is off on this machine");
+        assert_eq!(machine.economy("/other").unwrap_err(), "unknown repo");
+        assert_eq!(machine.economy_act("import", "/other", json!({})).unwrap_err(), "unknown repo");
     }
 }

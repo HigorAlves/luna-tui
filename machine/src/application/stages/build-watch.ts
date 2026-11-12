@@ -1,9 +1,9 @@
 // The build watch follows an implementing run's /out while its container runs. The container
 // cannot push and the machine reads the ledger only after the run, so a slice that turned
 // committed is handed to `onCommitted` as it lands.
-import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, Slice } from "@hardness/contracts";
-import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, PACKS, Slice, confidenceOf } from "@hardness/contracts";
+import { constants, opendirSync } from "node:fs";
+import { lstat, mkdir, open, opendir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 
 import { type TruthSink, redCheckTruth, scopeFactsTruth } from "../decision-truth.ts";
@@ -72,7 +72,23 @@ export interface BuildWatchOptions {
   onScopeRequest?: (request: ScopeRequest) => Promise<void>;
   /** Called once per `checks/card-search-request.json` the triage agent writes (a rewritten request is a new one). */
   onCardSearch?: (query: string) => Promise<void>;
+  /** Called once per `checks/loop-request-<nonce>-<n>.json` the loop guard writes, in order of first sight and then `n`; its verdict is written as `loop-answer-<nonce>-<n>.json`. A request already there when the watch starts belongs to an earlier container and is never answered. Not awaited by the watch: a judge takes seconds, and a red slice or a commit does not wait for it. */
+  onLoopRequest?: (request: LoopRequest) => Promise<LoopVerdict>;
   log?: (line: string) => void;
+}
+
+/** What the loop guard's question leaves for the machine: its number is the file's, and the body must say the same. */
+export interface LoopRequest {
+  n: number;
+  digest: string;
+}
+
+/** The answer to a loop request: what the guard's `Verdict` reads. */
+export interface LoopVerdict {
+  stuck: boolean;
+  confidence: number;
+  cause: string;
+  redirect?: string;
 }
 
 /** What the implementer's `scope_check` tool leaves for the machine. */
@@ -94,6 +110,64 @@ export const MAX_REDS_PER_SLICE = 2;
 export const MAX_SCOPE_REQUESTS = 3;
 /** Board searches answered per run: a triage agent that keeps asking is not helped by more. */
 export const MAX_CARD_SEARCHES = 5;
+/** Loop requests judged per run: the container writes the files, and each one is a metered decision. */
+export const MAX_LOOP_REQUESTS = 20;
+/** The most names of `checks/` one look reads. */
+const MAX_NAMES = 200;
+/** Looks at an unreadable request file before it is given up. */
+const UNREADABLE_LOOKS = 5;
+const LOOP_REQUEST_NAME = /^loop-request-([0-9a-f]{8})-(\d{1,4})\.json$/;
+
+/** The loop request files in a list of names, with the nonce and number their names carry; the order of `n`. */
+function loopNames(names: readonly string[]): Array<{ name: string; nonce: string; n: number }> {
+  return names
+    .flatMap((name) => {
+      const found = LOOP_REQUEST_NAME.exec(name);
+      return found ? [{ name, nonce: found[1]!, n: Number(found[2]) }] : [];
+    })
+    .sort((a, b) => a.n - b.n || (a.nonce < b.nonce ? -1 : a.nonce > b.nonce ? 1 : 0));
+}
+
+/** At most `MAX_NAMES` names of the run's `checks/` folder; none when it is missing or not a real directory. */
+async function checkNames(outDir: string): Promise<string[]> {
+  try {
+    const dir = join(outDir, "checks");
+    if (!(await lstat(dir)).isDirectory()) return [];
+    const names: string[] = [];
+    const handle = await opendir(dir);
+    try {
+      for await (const entry of handle) {
+        names.push(entry.name);
+        if (names.length >= MAX_NAMES) break;
+      }
+    } finally {
+      await handle.close().catch(() => {});
+    }
+    return names;
+  } catch {
+    return [];
+  }
+}
+
+/** The same, once and at once, for the watch's start. */
+function checkNamesNow(outDir: string): string[] {
+  try {
+    const dir = join(outDir, "checks");
+    const handle = opendirSync(dir);
+    const names: string[] = [];
+    try {
+      for (let entry = handle.readSync(); entry && names.length < MAX_NAMES; entry = handle.readSync()) names.push(entry.name);
+    } finally {
+      handle.closeSync();
+    }
+    return names;
+  } catch {
+    return [];
+  }
+}
+
+/** The longest digest a loop request may carry: what `loop_judge` accepts. */
+const MAX_LOOP_DIGEST = 6000;
 /** The tail of a red note a decision sees: the failing lines are at the end, and a note is agent-written. */
 export const NOTE_TAIL = 4096;
 
@@ -105,6 +179,13 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
   let lastRequest = "";
   let lastSearch = "";
   let cardSearches = 0;
+  // The requests of an earlier container are in the folder when the watch starts: they are handled already, and never answered.
+  const loopSeen = new Set<string>(options.onLoopRequest ? loopNames(checkNamesNow(options.outDir)).map((r) => r.name) : []);
+  const loopQueue: Array<{ name: string; nonce: string; n: number }> = [];
+  let loopsHandled = 0;
+  let unreadable = 0;
+  let loopPending = false;
+  let loopCapLogged = false;
   let stopped = false;
   let tick: Promise<void> = Promise.resolve();
 
@@ -186,8 +267,66 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
     }
   };
 
+  /** The loop guard's questions, one judge at a time, in the order they were first seen and then by `n`: a request that arrives while one is pending waits for a later tick. Each is judged off the tick; once the watch stops its answer is dropped, for the run's folder may be gone. At most `MAX_LOOP_REQUESTS` files are handled per watch, and a file that is not JSON, names another nonce or number than its own, or holds an over-long digest is skipped and counts. */
+  const loops = async (): Promise<void> => {
+    if (!options.onLoopRequest) return;
+    for (const request of loopNames(await checkNames(options.outDir))) {
+      if (loopSeen.has(request.name)) continue;
+      loopSeen.add(request.name);
+      loopQueue.push(request);
+    }
+    while (!loopPending && loopQueue.length > 0) {
+      if (loopsHandled >= MAX_LOOP_REQUESTS) {
+        if (!loopCapLogged) options.log?.(`build watch: loop request limit (${MAX_LOOP_REQUESTS}) reached; later requests are ignored`);
+        loopCapLogged = true;
+        loopQueue.length = 0;
+        return;
+      }
+      const { name, nonce, n } = loopQueue[0]!;
+      const text = await readMailbox(options.outDir, name);
+      // Not readable yet (half-written, or gone): the next tick looks again and it keeps its place. One still unreadable after a few looks (a file over the cap, a link) is skipped and counts.
+      if (text === null) {
+        unreadable += 1;
+        if (unreadable < UNREADABLE_LOOKS) return;
+        options.log?.(`build watch: loop request ${nonce}-${n} cannot be read; skipped`);
+      }
+      unreadable = 0;
+      loopQueue.shift();
+      if (text === null) {
+        loopsHandled += 1;
+        continue;
+      }
+      loopsHandled += 1;
+      let digest = "";
+      try {
+        const parsed = JSON.parse(text) as { nonce?: unknown; n?: unknown; digest?: unknown } | null;
+        if (parsed?.nonce !== nonce || parsed?.n !== n) {
+          options.log?.(`build watch: loop request ${nonce}-${n} names another nonce or number than its file; skipped`);
+          continue;
+        }
+        if (typeof parsed.digest === "string") digest = parsed.digest;
+      } catch {
+        options.log?.(`build watch: loop request ${nonce}-${n} is not JSON; skipped`);
+        continue;
+      }
+      if (digest.length > MAX_LOOP_DIGEST) {
+        options.log?.(`build watch: loop request ${nonce}-${n} has a digest over ${MAX_LOOP_DIGEST} characters; skipped`);
+        continue;
+      }
+      loopPending = true;
+      void options.onLoopRequest({ n, digest }).then(
+        async (verdict) => {
+          if (!stopped) await writeMailbox(options.outDir, `loop-answer-${nonce}-${n}.json`, JSON.stringify(verdict));
+        },
+        (error: unknown) => options.log?.(`build watch: loop request ${nonce}-${n}: ${error instanceof Error ? error.message : String(error)}`),
+      ).catch(() => {}).finally(() => {
+        loopPending = false;
+      });
+    }
+  };
+
   const timer = setInterval(() => {
-    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches)));
+    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches).then(loops)));
   }, options.every);
 
   return {
@@ -200,6 +339,76 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
       await requests();
       await searches();
       stopped = true;
+    },
+  };
+}
+
+/** The loop judge's budget for the redirect writer: past it the guard uses its own template. */
+export const REDIRECT_BUDGET_MS = 30_000;
+/** The most a redirect may hold. */
+const REDIRECT_MAX = 1200;
+const CALM: LoopVerdict = { stuck: false, confidence: 0, cause: "productive" };
+
+export interface LoopAnswersDeps {
+  /** The pack the run is: it names itself in the judge's context. */
+  pack: string;
+  /** Whether the pack may change files: only then does a redirect have anything to steer. */
+  writable: boolean;
+  repoPath: string | null;
+  /** Null when no decision can run. Read at call time. */
+  decide: Decide | null;
+  overrides: Record<string, DecisionOverrides>;
+  redirectMs?: number;
+  log?: (line: string) => void;
+}
+
+/** The machine's side of the loop guard's question: `loop_judge` over the digest, and for a stuck verdict on a writable pack `loop_redirect`. Any failure is "not stuck" and no redirect. Never throws. */
+export function loopAnswers(deps: LoopAnswersDeps) {
+  const log = deps.log ?? (() => {});
+  const redirectOf = async (loop: { digest: string; pack: string; calls: number; cause: string }): Promise<string | undefined> => {
+    if (!deps.decide) return undefined;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const answer = await Promise.race([
+        deps.decide("loop_redirect", { kind: "loop", loop }, deps.repoPath),
+        new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), deps.redirectMs ?? REDIRECT_BUDGET_MS))),
+      ]);
+      if (answer === null) {
+        log("loop judge: the redirect took too long; the guard's own text goes in");
+        return undefined;
+      }
+      const text = typeof answer.redirect === "string" ? answer.redirect.replace(/\s+/g, " ").trim().slice(0, REDIRECT_MAX) : "";
+      return text || undefined;
+    } catch (error) {
+      log(`loop judge: redirect skipped: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  return {
+    async onLoopRequest(request: LoopRequest): Promise<LoopVerdict> {
+      if (request.digest === "") return CALM;
+      // The guard's digest opens with its own counter: the calls the segment has seen.
+      const calls = Number(/^turns=(\d+)/.exec(request.digest)?.[1] ?? 0);
+      const loop = { digest: request.digest, pack: deps.pack, calls };
+      const { answer } = await judgeCheck(deps.decide, "loop_judge", { kind: "loop", loop }, deps.repoPath, deps.overrides, log);
+      if (!answer) return CALM;
+      try {
+        // Stuck is the yes the pack's own bar accepts: the judge's confidence is the yes/no's, the cause only names it.
+        const pack = PACKS.loop_judge;
+        const bar = deps.overrides.loop_judge?.stuck?.proceed ?? pack.policy.stuck?.proceed ?? 0.7;
+        const confidence = confidenceOf(pack.questions.stuck!, answer.stuck);
+        const said = (answer.stuck as { value?: unknown } | undefined)?.value === true;
+        const choice = (answer.cause as { choice?: unknown } | undefined)?.choice;
+        const cause = typeof choice === "string" ? choice : "productive";
+        if (!said || !(confidence >= bar)) return { stuck: false, confidence: Number.isFinite(confidence) ? confidence : 0, cause };
+        const redirect = deps.writable ? await redirectOf({ ...loop, cause }) : undefined;
+        return { stuck: true, confidence, cause, ...(redirect ? { redirect } : {}) };
+      } catch (error) {
+        log(`loop judge: unreadable answer: ${error instanceof Error ? error.message : String(error)}`);
+        return CALM;
+      }
     },
   };
 }

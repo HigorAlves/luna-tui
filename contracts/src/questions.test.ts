@@ -480,3 +480,46 @@ describe("what a decision's answer can hold", () => {
     }
   });
 });
+
+describe("the loop_judge decision pack and the loop_redirect agent pack", () => {
+  it("loop_judge asks whether the run is stuck and why, as a yes/no and one choice of four causes", async () => {
+    const { PACKS } = await import("./index.ts");
+    const pack = PACKS.loop_judge;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["stuck", "cause"]);
+    expect(pack.questions.stuck).toMatchObject({ type: "yesno", instructions: expect.stringContaining("stuck in a loop") });
+    expect(pack.questions.cause).toMatchObject({ type: "choice" });
+    expect(Object.keys((pack.questions.cause as { criteria: Record<string, string> }).criteria)).toEqual(["repeating_failure", "wrong_approach", "environment", "productive"]);
+    expect(pack.policy.stuck).toMatchObject({ proceed: 0.7 });
+    expect(pack.answer.safeParse({ stuck: { value: true, p: 0.9 }, cause: { choice: "repeating_failure", confidence: 0.8 } }).success).toBe(true);
+    expect(pack.answer.safeParse({ stuck: { value: true, p: 0.9 }, cause: { choice: "other", confidence: 0.8 } }).success).toBe(false);
+  });
+
+  it("loop_redirect writes a bounded note with no tools, one turn and one cheap engine", async () => {
+    const { PACKS, NO_ACCESS } = await import("./index.ts");
+    const pack = PACKS.loop_redirect;
+    expect(pack).toMatchObject({ kind: "agent", agent: "redirect-writer", writable: false, maxTurns: 1, timeoutMs: 60_000, access: NO_ACCESS, template: "loop_redirect.md", effort: "low" });
+    expect(pack.engines).toEqual({ default: "claude:haiku", allowed: ["claude:haiku"] });
+    expect(pack.answer.safeParse({ redirect: "x".repeat(1200) }).success).toBe(true);
+    expect(pack.answer.safeParse({ redirect: "x".repeat(1201) }).success).toBe(false);
+  });
+});
+
+describe("the fact_propose agent pack", () => {
+  it("proposes from digests with no tools, one turn, two minutes and one cheap engine", async () => {
+    const { PACKS, NO_ACCESS } = await import("./index.ts");
+    const pack = PACKS.fact_propose;
+    expect(pack).toMatchObject({ kind: "agent", agent: "fact-proposer", writable: false, maxTurns: 1, timeoutMs: 120_000, access: NO_ACCESS, template: "fact_propose.md", effort: "low" });
+    expect(pack.engines).toEqual({ default: "claude:haiku", allowed: ["claude:haiku"] });
+    expect(pack.answer.safeParse({ facts: [] }).success).toBe(true);
+  });
+
+  it("the retro may name learned facts to promote, by id and section, ten at most", async () => {
+    const { ReviewingMemoryAnswer } = await import("./index.ts");
+    const base = { summary: "s", incidents: [], patterns: [], proposedRules: [], calibration: { estLocBias: 0 } };
+    expect(ReviewingMemoryAnswer.safeParse(base).success).toBe(true);
+    expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: [{ id: "a1b2c3d4e5f6", section: "Commands" }] }).success).toBe(true);
+    expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: [{ id: "a1", section: "Elsewhere" }] }).success).toBe(false);
+    expect(ReviewingMemoryAnswer.safeParse({ ...base, factPromotions: Array(11).fill({ id: "a1", section: "Commands" }) }).success).toBe(false);
+  });
+});

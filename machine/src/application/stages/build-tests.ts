@@ -6,7 +6,7 @@ import { approvedScenarios } from "../../domain/stage-input.ts";
 import { isCommandCheck } from "../../domain/command-check.ts";
 import { isDocsOnly } from "../../domain/docs-only.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
-import { isPlainRepoPath } from "@hardness/contracts";
+import { isPlainRepoPath, sumTokens } from "@hardness/contracts";
 import { type ScenarioTagFacts, scenarioTags } from "../../domain/scenario-tags.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { voteRed } from "./red-vote.ts";
@@ -67,13 +67,12 @@ const MAX_SWEEP_FIXES = 2;
 
 type Usage = NonNullable<StageResult["usage"]>;
 
-/** Two runs' usage added: turns and cost where both are known, tokens where either counted. */
+/** Two runs' usage added: turns and cost where either is known, tokens where either counted (every field, the cache writes too). */
 function addUsage(a: StageResult["usage"], b: StageResult["usage"]): StageResult["usage"] {
   if (!a) return b;
   if (!b) return a;
   const sum = (x: number | null, y: number | null) => (x === null && y === null ? null : (x ?? 0) + (y ?? 0));
-  const tokens = a.tokens || b.tokens ? { input: (a.tokens?.input ?? 0) + (b.tokens?.input ?? 0), output: (a.tokens?.output ?? 0) + (b.tokens?.output ?? 0), cached: (a.tokens?.cached ?? 0) + (b.tokens?.cached ?? 0) } : null;
-  return { turns: sum(a.turns, b.turns), costUsd: sum(a.costUsd, b.costUsd), tokens } satisfies Usage;
+  return { turns: sum(a.turns, b.turns), costUsd: sum(a.costUsd, b.costUsd), tokens: sumTokens(a.tokens, b.tokens) } satisfies Usage;
 }
 
 /** What the diff check found wrong, as lines to send back or to say: ids and plain paths only. */

@@ -4,7 +4,7 @@
 // each runtime's fake plays it through its SDK's shapes. The run is settled the way main.ts
 // settles it, and the same checks apply to every runtime. A new runtime, or a major SDK bump, is
 // done when the table passes.
-import { type AgentPack, type AgentRole, type EngineId, type LunaTool, type Pack, PACKS, type RunEvent, StageInput, helpersOn, resolveEngine } from "@hardness/contracts";
+import { type AgentPack, type AgentRole, type EconomyInput, type EngineId, LOOP_STUCK, type LunaTool, type Pack, PACKS, type RunEvent, StageInput, helpersOn, resolveEngine } from "@hardness/contracts";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -13,15 +13,15 @@ import { describe, expect, it } from "vitest";
 
 import { delegationFor, withChildren, withDelegate } from "../../core/delegate.ts";
 import { lunaHandlers } from "../../core/luna-tools.ts";
-import { EMPTY_RUN, type RunOutcome, settle } from "../../core/output.ts";
+import { EMPTY_RUN, type RunOutcome, finish, settle } from "../../core/output.ts";
 import type { RunContext, Runtime } from "../../core/runtime.ts";
 import { transcript as printer } from "../../core/transcript.ts";
 
 /** One model turn. A call's result is what the model reads next, and `say` is text the model
  *  writes before it; `echo` puts the last result into the answer's summary, so a check can see
- *  what the model was told; `hang` never answers. */
+ *  what the model was told; `hang` never answers; `fails` is the output of a command that failed. */
 export type ScriptStep =
-  | { call: "bash"; command: string; say?: string }
+  | { call: "bash"; command: string; say?: string; fails?: string }
   | { call: "luna"; tool: LunaTool; args: Record<string, unknown>; say?: string }
   | { call: "delegate"; helper: AgentRole; message: string; say?: string }
   | { answer: Record<string, unknown>; as?: "structured" | "text"; echo?: boolean }
@@ -43,7 +43,9 @@ export interface TablePack {
 export interface Scenario {
   name: string;
   /** What the runtime must be able to do for the row to apply. */
-  needs?: "tools" | "text" | "delegate";
+  needs?: "tools" | "text" | "delegate" | "economy";
+  /** What the machine's token economy hands the run, when the row is about it. */
+  economy?: EconomyInput;
   /** How a helper the row delegates to ends; it answers when the row does not say. */
   child?: ChildPlay;
   /** The stage's time limit, when the row is about it. */
@@ -64,7 +66,12 @@ export interface ConformanceResult {
   given: RunContext[];
   /** The engine the helper runs on under this runtime. */
   helper: EngineId;
+  /** What the model was told besides the tool results (a redirect), when the runtime's fake says. */
+  told: string[];
 }
+
+/** A runtime whose fake keeps what its model was told besides the prompt and the tool results. */
+export type ToldRuntime = Runtime & { told?: () => string[] };
 
 /** How the fake helper's run ends: an answer, a failure, or no run for want of its credential. */
 export type ChildPlay = "answers" | "fails" | "no-credential";
@@ -98,6 +105,9 @@ export interface RuntimeCapabilities {
   text: boolean;
   /** The runtime serves `delegate` when the pack has a helper it does not run itself. */
   delegate: boolean;
+  /** The runtime reads each tool result into an observation and runs the loop guard on it (the
+   *  token economy, RFC 0007). */
+  economy: boolean;
 }
 
 /** The helper the table's pack may delegate to: on a runtime that is neither of the agent
@@ -113,6 +123,12 @@ export const RESETS_AT = 1_900_000_000;
 const DONE = { kind: "done", summary: "did it" };
 export const AGENT_TABLE: TablePack = { pack: PACK, valid: DONE, expected: DONE, off: { kind: "maybe", summary: "x" } };
 const TIMEOUT_MS = 2_000;
+
+const LOOPING = { mode: "on", judge: false, envelope: 8, judgeConfidence: 0.7, redirects: 1, backstopMult: 2.5 } as const;
+const FAILING_TEXT = "AssertionError: expected 1 to be 2";
+/** A test run that fails the same way, then an edit of the same file, `n` calls over. */
+const looping = (n: number): ScriptStep[] =>
+  Array.from({ length: n }, (_, i): ScriptStep => (i % 2 === 0 ? { call: "bash", command: "pnpm test", fails: `FAIL src/a.test.ts\n${FAILING_TEXT}` } : { call: "bash", command: "sed -i s/1/2/ src/a.ts" }));
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -266,6 +282,30 @@ export const SCENARIOS: Scenario[] = [
       expect(given).toHaveLength(0);
     },
   },
+  {
+    name: "a looping run gets one redirect, then ends itself with a result",
+    needs: "economy",
+    economy: { guard: LOOPING },
+    script: (t) => [...looping(60), { answer: t.valid }],
+    check: ({ run, out, events, told }, _can, t) => {
+      // The model was given the redirect once, and the run ended itself after the second stretch of the loop.
+      expect(told.filter((text) => /Process check/.test(text))).toHaveLength(1);
+      expect(run).toMatchObject({ ok: false, structured: null, rateLimited: false });
+      expect(run.error).toMatch(new RegExp(`^${LOOP_STUCK}`));
+      expect(events.flatMap((e) => (e.kind === "economy.guard" && e.payload.action !== "gate" ? [e.payload.action] : []))).toEqual(["redirect", "stop"]);
+      const results = events.flatMap((e) => (e.kind === "tool_result" ? [e.payload] : []));
+      expect(results).toHaveLength(2 * 20);
+      expect(results.every((r) => r.observation !== undefined)).toBe(true);
+      expect(results[0]).toMatchObject({ ok: false, observation: { intent: "test", failure: expect.stringMatching(/^.{10}$/) } });
+      expect(results[1]).toMatchObject({ ok: true, observation: { edits: ["src/a.ts"] } });
+      // The output is read and dropped: no event carries it.
+      expect(JSON.stringify(events)).not.toContain(FAILING_TEXT);
+      // The run still writes its result, with the stop's reason, and is no rate limit.
+      finish(out, t.pack, run, { ledger: { schema: 1, slices: [] }, events });
+      const written = JSON.parse(readFileSync(join(out, "result.json"), "utf8"));
+      expect(written).toMatchObject({ ok: false, rateLimited: false, error: expect.stringMatching(new RegExp(`^${LOOP_STUCK}`)) });
+    },
+  },
 ];
 
 /** The golden run: text, a progress step, a refused and an allowed command, a ledger call and an
@@ -284,7 +324,7 @@ export const masked = (lines: string[]): string[] => lines.map((line) => line.re
 
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
-const stageInput = (pack: Pack, engine: EngineId, timeoutMs: number): StageInput =>
+const stageInput = (pack: Pack, engine: EngineId, timeoutMs: number, economy?: EconomyInput): StageInput =>
   StageInput.parse({
     schema: 3,
     stage: pack.id,
@@ -295,14 +335,14 @@ const stageInput = (pack: Pack, engine: EngineId, timeoutMs: number): StageInput
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, testCases: [] },
+    context: { projectContext: null, testCases: [], ...(economy && { economy }) },
     limits: { maxTurns: 8, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   });
 
 /** Runs one scenario on a runtime the way main.ts runs a stage, in a fresh /work and /out under
  *  `root`; the caller removes `root`. */
-export async function runScenario(runtime: Runtime, engine: EngineId, root: string, t: TablePack = AGENT_TABLE, timeoutMs = 60_000, child: ChildPlay = "answers"): Promise<ConformanceResult> {
+export async function runScenario(runtime: ToldRuntime, engine: EngineId, root: string, t: TablePack = AGENT_TABLE, timeoutMs = 60_000, child: ChildPlay = "answers", economy?: EconomyInput): Promise<ConformanceResult> {
   const work = join(root, "work");
   const out = join(root, "out");
   const scratch = join(root, "scratch");
@@ -317,7 +357,7 @@ export async function runScenario(runtime: Runtime, engine: EngineId, root: stri
     print(event);
   };
   const luna = lunaHandlers({ ledgerPath: join(out, "ledger.json"), decisions: [], emit });
-  const input = stageInput(t.pack, engine, timeoutMs);
+  const input = stageInput(t.pack, engine, timeoutMs, economy);
   const started = Date.now();
   // As main.ts wires it: a helper on a runtime this one does not run is a child through `delegate`.
   const given: RunContext[] = [];
@@ -335,7 +375,7 @@ export async function runScenario(runtime: Runtime, engine: EngineId, root: stri
     turnsUsed: () => events.filter((e) => e.kind === "tool_call").length,
   });
   const run = await runtime.run({ pack: t.pack, engine: resolveEngine(engine), input, prompt: "Do the job.", paths, luna: withDelegate(luna, delegating), dry: false, emit, delegate: delegating?.tool ?? null });
-  return { run: withChildren(settle(run, t.pack), delegating), out, events, transcript, elapsedMs: Date.now() - started, given, helper: helpersOn(t.pack, runtime.id)[0]?.engine ?? engine };
+  return { run: withChildren(settle(run, t.pack), delegating), out, events, transcript, elapsedMs: Date.now() - started, given, helper: helpersOn(t.pack, runtime.id)[0]?.engine ?? engine, told: runtime.told?.() ?? [] };
 }
 
 /** Registers the table for one runtime: `runtimeFor` gives the runtime wired to a fake that plays
@@ -343,7 +383,7 @@ export async function runScenario(runtime: Runtime, engine: EngineId, root: stri
 export function conformance(
   name: string,
   engine: EngineId,
-  runtimeFor: (script: ScriptStep[]) => Runtime | Promise<Runtime>,
+  runtimeFor: (script: ScriptStep[]) => ToldRuntime | Promise<ToldRuntime>,
   can: RuntimeCapabilities,
   { timeoutMs = 5_000, table = AGENT_TABLE }: { timeoutMs?: number; table?: TablePack } = {},
 ): void {
@@ -352,7 +392,7 @@ export function conformance(
     it.each(rows)("$name", async (scenario) => {
       const root = mkdtempSync(join(tmpdir(), "conformance-"));
       try {
-        const result = await runScenario(await runtimeFor(scenario.script(table)), engine, root, table, scenario.timeoutMs, scenario.child);
+        const result = await runScenario(await runtimeFor(scenario.script(table)), engine, root, table, scenario.timeoutMs, scenario.child, scenario.economy);
         scenario.check(result, can, table);
       } finally {
         rmSync(root, { recursive: true, force: true });

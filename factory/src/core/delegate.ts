@@ -204,7 +204,9 @@ async function runChild(o: DelegationOptions, helper: Helper, message: string, n
       else {
         writeFileSync(join(out, "prompt.md"), prepared.prompt);
         info = runInfo(runtime, engine, pack, prepared.template, o.paths.factoryRoot);
-        const input: StageInput = { ...o.input, engine: helper.engine, limits: prepared.limits };
+        // A helper has its own pack: the parent's guard envelope, mask and facts are not its own, and it has no judge.
+        const { economy: _parents, ...context } = o.input.context;
+        const input: StageInput = { ...o.input, context, engine: helper.engine, limits: prepared.limits };
         run = settle(await runtime.run({ pack, engine, input, prompt: prepared.prompt, paths: { ...o.paths, out, scratch }, luna, dry: false, emit, delegate: null }), pack);
       }
     } catch (e) {

@@ -84,13 +84,18 @@ export const eveSubagents = (pack: AgentPack): Array<{ role: AgentRole; engine: 
 
 /** One tool file per tool, by path under `dir`, importing the runtime's tools from `lib`; a native
  *  subagent's guarded tools (`readOnly` its child run's commands) approve against its own read-only policy. */
-function toolFiles(dir: string, tools: string[], fromTools: (file: string) => string, readOnly?: string[]): Record<string, string> {
+function toolFiles(dir: string, tools: string[], fromTools: (file: string) => string, { readOnly, scripted = false }: { readOnly?: string[]; scripted?: boolean } = {}): Record<string, string> {
+  // The conformance fake's `bash` runs through its scripted executor (fake.ts).
+  const fake = scripted ? `import { scriptedExec } from "${fromTools("fake.ts")}";\n` : "";
+  const exec = scripted ? ", scriptedExec" : "";
   return Object.fromEntries(
     tools.map((tool) => {
       const body = GUARDED.has(tool)
         ? readOnly
-          ? `import { readOnlyTools } from "${fromTools("agent/tools.ts")}";\n\nexport default readOnlyTools(${JSON.stringify(readOnly)}).${tool};\n`
-          : `export { ${tool} as default } from "${fromTools("agent/tools.ts")}";\n`
+          ? `import { readOnlyTools } from "${fromTools("agent/tools.ts")}";\n${tool === "bash" ? fake : ""}\nexport default readOnlyTools(${JSON.stringify(readOnly)}${tool === "bash" ? exec : ""}).${tool};\n`
+          : tool === "bash" && scripted
+            ? `import { bashTool } from "${fromTools("agent/tools.ts")}";\n${fake}\nexport default bashTool(scriptedExec);\n`
+            : `export { ${tool} as default } from "${fromTools("agent/tools.ts")}";\n`
         : tool in LUNA_TOOLS
           ? `import { lunaTool } from "${fromTools("agent/tools.ts")}";\n\nexport default lunaTool("${tool}");\n`
           : `export { default } from "eve/tools/${tool}";\n`;
@@ -129,7 +134,7 @@ function subagentFiles(pack: AgentPack, helper: { role: AgentRole; engine: Engin
     [`${dir}/agent.ts`]: agent,
     [`${dir}/instructions.md`]: `${body}\n\n${rules}\n${addendum}`,
     [`${dir}/sandbox.ts`]: `import { defineParentSandbox } from "eve/sandbox";\n\nexport default defineParentSandbox();\n`,
-    ...toolFiles(`${dir}/tools`, eveTools(child.access), from("tools"), child.access.commands),
+    ...toolFiles(`${dir}/tools`, eveTools(child.access), from("tools"), { readOnly: child.access.commands, scripted }),
   };
 }
 
@@ -204,7 +209,7 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
   const { body, rules, addendum } = instructionParts(pack, options.factoryRoot);
   const instructions = `${body}\n\n${rules}\n${addendum}`;
 
-  const tools = toolFiles("agent/tools", eveTools(pack.access), fromTools);
+  const tools = toolFiles("agent/tools", eveTools(pack.access), fromTools, { scripted: options.model === "scripted" });
   // `delegate`, when the pack hands work to helpers: a native subagent for each on an eve engine, the bridge for the rest.
   const helpers = helpersOn(pack, "eve");
   const subagents = eveSubagents(pack);

@@ -11,7 +11,7 @@ import { deliverRunner, parentWinsFor } from "./deliver.ts";
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
 const bad = (stderr = "nope"): ExecResult => ({ code: 1, stdout: "", stderr });
 
-function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult; task?: Record<string, unknown>; respond?: (args: string[]) => ExecResult | undefined; defaultBranch?: string | null } = {}) {
+function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult; task?: Record<string, unknown>; respond?: (args: string[]) => ExecResult | undefined; defaultBranch?: string | null; resolve?: NonNullable<Parameters<typeof deliverRunner>[0]["resolveConflicts"]> } = {}) {
   const calls: string[][] = [];
   const exec = vi.fn(async (command: string, args: string[]) => {
     // Recording what was pushed is the machine's own bookkeeping, asserted once below.
@@ -27,7 +27,7 @@ function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult;
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run: deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => (opts.defaultBranch === undefined ? "main" : opts.defaultBranch) }), context, calls };
+  return { run: deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => (opts.defaultBranch === undefined ? "main" : opts.defaultBranch), ...(opts.resolve ? { resolveConflicts: opts.resolve } : {}) }), context, calls };
 }
 
 describe("what the machine pushed", () => {
@@ -169,14 +169,82 @@ describe("delivering a branch that conflicts with the default branch", () => {
   it("fails naming the files when the rebase stops, after aborting it", async () => {
     const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
     const { run, context, calls } = setup(github, {
-      respond: (args) => (args.includes("rebase") && !args.includes("--abort") ? bad("CONFLICT") : args.includes("diff") ? ok("a.ts\nb.ts\n") : undefined),
+      respond: (args) => (["rebase", "merge"].some((v) => args.includes(v)) && !args.includes("--abort") ? bad("CONFLICT") : args.includes("diff") ? ok("a.ts\nb.ts\n") : undefined),
     });
     const result = await run(context);
     expect(result.outcome).toBe("fail");
     expect(result.detail).toMatchObject({ error: "the branch conflicts with main and the rebase stopped on: a.ts, b.ts", conflicts: ["a.ts", "b.ts"], escalation: "other" });
     expect(calls).toContainEqual([...G, "diff", "--name-only", "--diff-filter=U"]);
     expect(calls).toContainEqual([...G, "rebase", "--abort"]);
+    expect(calls).toContainEqual([...G, "merge", "--abort"]);
     expect(calls.some((c) => c.includes("--force-with-lease"))).toBe(false);
+  });
+
+  it("merges the default branch when the replay stops on a conflict the final result does not have, and pushes it", async () => {
+    const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+    const { run, context, calls } = setup(github, {
+      respond: (args) => (args.includes("rebase") && !args.includes("--abort") ? bad("CONFLICT") : args.includes("diff") ? ok("docs/README.md\n") : undefined),
+    });
+    const result = await run(context);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ rebased: true, onto: "origin/main", merged: true });
+    expect(calls.some((c) => c.includes("merge") && c.includes("--no-ff") && c.includes("origin/main"))).toBe(true);
+    expect(calls.some((c) => c.includes("--force-with-lease"))).toBe(true);
+  });
+
+  describe("when the branch conflicts with the default branch for real", () => {
+    const FORK = "a".repeat(40);
+    const TIP = "b".repeat(40);
+    /** A rebase and a merge that both stop on a.ts; the branch changed a.ts and b.ts since it forked; `same` says which of them match the default branch's version. */
+    const stuck = (same: string[]) => (args: string[]): ExecResult | undefined => {
+      if (["rebase", "merge"].some((v) => args.includes(v)) && !args.includes("--abort")) return bad("CONFLICT");
+      if (args.includes("--diff-filter=U")) return ok("a.ts\n");
+      if (args.includes("merge-base")) return ok(`${FORK}\n`);
+      if (args.includes("rev-parse") && args.some((a) => a.startsWith("refs/remotes/origin/main"))) return ok(`${TIP}\n`);
+      if (args.includes("diff") && args.includes("--quiet")) return same.includes(args[args.length - 1]!) ? ok() : bad("differs");
+      if (args.includes("-z")) return ok("a.ts\0b.ts\0");
+      return undefined;
+    };
+
+    it("says so, and runs no resolution, when every file the card changed is already identical on the default branch", async () => {
+      const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+      const resolveConflicts = vi.fn();
+      const { run, context } = setup(github, { respond: stuck(["a.ts", "b.ts"]), resolve: resolveConflicts });
+      const result = await run(context);
+      expect(result.outcome).toBe("fail");
+      expect(result.detail).toMatchObject({ escalation: "other", verdict: "already_on_base", landed: ["a.ts", "b.ts"] });
+      expect(String(result.detail?.error)).toMatch(/already on main/);
+      expect(resolveConflicts).not.toHaveBeenCalled();
+    });
+
+    it("hands the merge to the resolver when some files still differ, and carries on without a forced push once it lands", async () => {
+      const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+      const resolveConflicts = vi.fn(async () => ({ ok: true as const, head: "c".repeat(40), resolved: ["a.ts"], result: { outcome: "escalated" as const, detail: {} } }));
+      const { run, context, calls } = setup(github, { respond: stuck(["b.ts"]), resolve: resolveConflicts });
+      const result = await run(context);
+      expect(resolveConflicts).toHaveBeenCalledWith(expect.objectContaining({ task: expect.objectContaining({ id: "t1" }) }), { slug: "acme/widgets", number: pr.number, base: { sha: TIP, name: "main" }, label: "deliver", pack: null });
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).toMatchObject({ prNumber: pr.number, merged: true, resolved: ["a.ts"], onto: "origin/main" });
+      expect(calls.some((c) => c.includes("--force-with-lease"))).toBe(false);
+    });
+
+    it("fails with the resolver's reason, after the same files, when the merge did not land", async () => {
+      const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+      const resolveConflicts = vi.fn(async () => ({ ok: false as const, result: { outcome: "escalated" as const, detail: { reason: "the checks failed after merging main" } } }));
+      const { run, context } = setup(github, { respond: stuck([]), resolve: resolveConflicts });
+      const result = await run(context);
+      expect(result.outcome).toBe("fail");
+      expect(result.detail).toMatchObject({ conflicts: ["a.ts"], escalation: "other" });
+      expect(String(result.detail?.error)).toMatch(/rebase stopped on: a\.ts.*merging instead did not resolve it: the checks failed after merging main/);
+    });
+
+    it("asks a person as before when no resolver is wired", async () => {
+      const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+      const { run, context } = setup(github, { respond: stuck([]) });
+      const result = await run(context);
+      expect(result.outcome).toBe("fail");
+      expect(result.detail).toMatchObject({ error: "the branch conflicts with main and the rebase stopped on: a.ts", conflicts: ["a.ts"] });
+    });
   });
 
   it("refuses a default branch that reads as an option or is not a ref name, before any git call: the ref lives in the container-writable git dir", async () => {

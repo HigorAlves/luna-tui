@@ -1,4 +1,4 @@
-import { PACKS, StageOutput } from "@hardness/contracts";
+import { LOOP_STUCK, PACKS, StageOutput } from "@hardness/contracts";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -142,5 +142,12 @@ describe("scanArtifacts", () => {
     ]);
     expect(scanArtifacts(dir)[0]!.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(scanArtifacts(outDir())).toEqual([]);
+  });
+});
+
+describe("settle with a loop-stuck stop", () => {
+  it("does not take the guard's stop for a rate limit, whatever its reason says", () => {
+    const error = `${LOOP_STUCK}: the same rate limit error 5 times over 40 calls`;
+    expect(settle({ ...EMPTY_RUN, error }, PACKS.triage)).toMatchObject({ ok: false, rateLimited: false, error });
   });
 });

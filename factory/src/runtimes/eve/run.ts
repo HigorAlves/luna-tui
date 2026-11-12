@@ -23,8 +23,11 @@ import { EMPTY_RUN, type RunOutcome, timeRanOut } from "../../core/output.ts";
 import { type Instructions, NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { DELEGATE } from "../../core/delegate.ts";
 import { GRAPH_ROOT } from "../../core/roots.ts";
+import { maskKey } from "../../core/economy/mask.ts";
+import { economySession } from "../../core/economy/session.ts";
 import { type ChildStream, type ParentSession, SubagentChildren } from "./children.ts";
 import { appName, eveTools, instructionParts, tokenBudgetPerTurn } from "./compile.ts";
+import { EconomyTap } from "./economy.ts";
 import { type SessionEvent, TurnFollower } from "./follower.ts";
 
 export { TurnFollower };
@@ -34,6 +37,8 @@ const env = process.env;
 const HEALTHY_WITHIN_MS = 30_000;
 /** How long a cancelled turn may take to settle before the run stops following it. */
 const CANCEL_GRACE_MS = 5_000;
+/** How long the call that ended the run (the economy's stop) has to show as settled before the turn is cancelled anyway. */
+const STOP_GRACE_MS = 3_000;
 
 export interface EveOptions {
   /** Where the built agents are, one folder per pack (default <factory>/.eve-agents). */
@@ -99,6 +104,8 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   if (pack.kind === "agent" && pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   // A decision pack is one turn: the questions as the message, the answer schema as the output schema.
   const decision = pack.kind === "decision" ? pack : null;
+  // A mask changes the Claude run's tools; eve's apps are built with the image, so it is said once and ignored.
+  if (pack.kind === "agent" && input.context.economy?.mask && maskKey(input.context.economy.mask) !== null) emit({ kind: "note", payload: { phase: "economy_mask_skipped", pack: pack.id, reason: "an eve app is built with the image; a mask does not narrow it" } });
   const message = decision ? renderDecision(decision.questions, stateOf(input)) : prompt;
   const maxTurns = decision ? 1 : input.limits.maxTurns;
   const app = join(options.agentsDir ?? join(paths.factoryRoot, ".eve-agents"), appName(pack));
@@ -133,7 +140,20 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   const t0 = Date.now();
   // The pinned ID the server was given; eve's model.started names the agent's compiled default
   // for a model chosen at run time, so it is not read back.
-  const turn = new TurnFollower(pack, maxTurns, emit, engine.modelId);
+  // The token economy (RFC 0007), when the machine sent its input: the tools report each finished call
+  // over the bridge, a redirect rides on a result, and a stop ends the run with the guard's reason.
+  const economy = economySession({ economy: input.context.economy, work: paths.work, emit, judge: ctx.judge });
+  const ending: { reason: string | null; cancel?: () => void } = { reason: null };
+  const tap = economy
+    ? new EconomyTap(economy, (reason, call) => {
+        ending.reason = reason;
+        turn.end(call.tool, call.input);
+        // The turn is cancelled when the stream shows the ending call settled (so its result is in the events);
+        // this is the fallback for a stream that never does.
+        setTimeout(() => ending.cancel?.(), STOP_GRACE_MS).unref();
+      })
+    : null;
+  const turn = new TurnFollower(pack, maxTurns, emit, engine.modelId, tap);
   turn.result.model = engine.modelId;
   const debug = env.LUNA_STAGE_DEBUG === "1";
   // Everything the run makes is made inside the try, so a throw anywhere still stops the server,
@@ -147,7 +167,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   const children = pack.kind === "agent" ? new SubagentChildren({ pack, input, paths, emit, startedAt: t0, turnsUsed: () => turn.result.turns, runtime: eveRuntime(options) }) : null;
   try {
     const bridgeToken = randomBytes(24).toString("hex");
-    const served = await serveLuna((tool, args) => (tool === "helper_start" && children ? children.start(args) : luna.call(tool, args)), bridgeToken);
+    const served = await serveLuna((tool, args) => (tool === "helper_start" && children ? children.start(args) : luna.call(tool, args)), bridgeToken, tap ?? undefined);
     bridge = served.server;
     const password = randomBytes(24).toString("hex");
     const ghToken = env.GH_TOKEN || env.GITHUB_TOKEN || undefined;
@@ -175,6 +195,8 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
         LUNA_EVE_SCRATCH: paths.scratch,
         LUNA_EVE_GUARD: JSON.stringify(guard),
         LUNA_EVE_BRIDGE_URL: served.url,
+        // The tools report to the economy's tap only when there is one: no call, no wait, without it.
+        ...(tap ? { LUNA_EVE_ECONOMY: "1" } : {}),
         // Laminar's key for agent/laminar.ts; its address (LMNR_BASE_URL, LMNR_GRPC_PORT) passes through serverEnv as it is.
         ...(env.LMNR_PROJECT_API_KEY ? { LMNR_PROJECT_API_KEY: env.LMNR_PROJECT_API_KEY } : {}),
       }),
@@ -208,6 +230,10 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
       session.cancel().catch(() => {});
       setTimeout(() => expire({ done: true, value: undefined }), CANCEL_GRACE_MS).unref();
     }, deadline);
+    ending.cancel = () => {
+      session.cancel().catch(() => {});
+      setTimeout(() => expire({ done: true, value: undefined }), CANCEL_GRACE_MS).unref();
+    };
     try {
       const events = delivery.stream()[Symbol.asyncIterator]();
       for (;;) {
@@ -229,6 +255,8 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   } finally {
     if (timedOut !== null && !turn.result.ok) Object.assign(turn.result, { structured: null, rateLimited: false, error: timeRanOut(timedOut) });
     await children?.close();
+    // The guard's stop is the run's error, whatever the cancelled turn made of it.
+    if (ending.reason !== null) Object.assign(turn.result, { ok: false, structured: null, rateLimited: false, error: ending.reason });
     turn.calls.flush();
     if (server) await stop(server);
     bridge?.close();
@@ -292,8 +320,8 @@ const body = async (req: IncomingMessage): Promise<unknown> => {
 const sha = (text: string) => createHash("sha256").update(text).digest();
 const carries = (req: IncomingMessage, token: string): boolean => timingSafeEqual(sha(req.headers.authorization ?? ""), sha(`Bearer ${token}`));
 
-/** The luna tools over loopback: POST /<tool> with the run's bearer token, the input as JSON. */
-export async function serveLuna(call: RunContext["luna"]["call"], token: string): Promise<{ server: Server; url: string }> {
+/** The luna tools over loopback: POST /<tool> with the run's bearer token, the input as JSON; POST /economy takes the token economy's reports. */
+export async function serveLuna(call: RunContext["luna"]["call"], token: string, economy?: EconomyTap): Promise<{ server: Server; url: string }> {
   const server = createServer(async (req, res) => {
     const reply = (status: number, value: unknown) => {
       res.writeHead(status, { "content-type": "application/json" });
@@ -301,7 +329,10 @@ export async function serveLuna(call: RunContext["luna"]["call"], token: string)
     };
     if (req.method !== "POST" || !carries(req, token)) return reply(403, { error: "forbidden" });
     try {
-      reply(200, await call((req.url ?? "/").slice(1), await body(req)));
+      const name = (req.url ?? "/").slice(1);
+      // The economy's reports from the tools (economy.ts): never a luna tool; with no session, nothing to say.
+      if (name === "economy") return reply(200, economy ? economy.report(await body(req)) : {});
+      reply(200, await call(name, await body(req)));
     } catch (e) {
       reply(400, { error: e instanceof Error ? e.message : String(e) });
     }

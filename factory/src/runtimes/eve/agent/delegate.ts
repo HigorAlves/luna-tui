@@ -1,12 +1,12 @@
 // What the generated `delegate` workflow tool (compile.ts) calls. The tool body is a workflow, so
 // it only decides and waits; each call out of the eve server is a step the tool file declares
 // ("use step" is only found in modules under the app), which calls these over the runner's bridge
-// (tools.ts). `delegate` itself (core/delegate.ts) runs a helper the stage cannot run natively;
+// (bridge.ts). `delegate` itself (core/delegate.ts) runs a helper the stage cannot run natively;
 // `helper_start` is the runner's side of a helper that is a native subagent.
 import type { AgentRole } from "@hardness/contracts";
 import { z } from "zod";
 
-import { bridge } from "./tools.ts";
+import { bridge } from "./bridge.ts";
 
 export interface DelegateInput {
   helper: string;

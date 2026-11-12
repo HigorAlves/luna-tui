@@ -4,6 +4,7 @@
 // the luna tools' events and the stage's notes have always had, so the machine reads them one way.
 import { z } from "zod";
 
+import { Observation } from "./economy.ts";
 import { AgentRole } from "./packs.ts";
 import { PackId } from "./stage.ts";
 
@@ -27,7 +28,15 @@ export const RunEvent = z.discriminatedUnion("kind", [
     reason: z.string().optional(),
   }),
   /** How a call ended, without its output: whether it worked and, when the runtime says, why not. */
-  event("tool_result", { id: z.string().optional(), tool: z.string(), ok: z.boolean(), error: z.string().optional() }),
+  event("tool_result", { id: z.string().optional(), tool: z.string(), ok: z.boolean(), error: z.string().optional(), observation: Observation.optional() }),
+  /** What the loop guard did (RFC 0007): a gate it recorded, a judge it asked, a redirect it sent, the stop it ended the run with. A fact for the task's log, not part of the stream. */
+  event("economy.guard", {
+    action: z.enum(["gate", "judge", "redirect", "stop"]),
+    calls: z.number().int(),
+    cause: z.string().optional(),
+    failure: z.string().optional(),
+    confidence: z.number().optional(),
+  }),
   /** The luna `step` tool: a progress label for the board. */
   event("step", { label: z.string(), n: z.number().int(), of: z.number().int() }),
   /** Tokens and cost as the SDK reported them, per model call or for the run. */

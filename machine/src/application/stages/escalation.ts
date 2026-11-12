@@ -35,6 +35,8 @@ export interface EscalationInput {
     envBroken?: boolean;
     /** A spent budget: which limit, the numbers as text, and the reds in a row. */
     budget?: { spent: string; numbers: string; consecutiveReds: number };
+    /** The loop guard ended the run: what it saw repeating (the failure's hash, never its text) and how many calls in. */
+    loopGuard?: { cause: string; failure?: string; calls: number };
     /** Other things the machine knows (the run cap, the stuck detector), one line each. */
     notes?: string[];
   };
@@ -65,6 +67,7 @@ export async function decideEscalation(input: EscalationInput): Promise<DecidedE
     ...(input.facts.budget ? [`the budget is spent: ${input.facts.budget.numbers} (${input.facts.budget.spent})`, `${input.facts.budget.consecutiveReds} consecutive reds at the end of the ledger`] : []),
     ...(input.facts.scopeTwice ? ["the scope check failed twice on this card"] : []),
     ...(input.facts.envBroken ? ["a service or the container never started"] : []),
+    ...(input.facts.loopGuard ? [`the loop guard stopped the run: ${input.facts.loopGuard.cause} after ${input.facts.loopGuard.calls} calls`] : []),
     ...(input.facts.notes ?? []),
   ].slice(0, MAX_FACTS).map((f) => flat(f));
   const summary = flat(input.summary);

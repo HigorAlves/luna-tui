@@ -558,6 +558,9 @@ impl StageRun {
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Approval {
+    /// The machine's id for this ask: a withdrawn gate asked again is a different approval.
+    #[serde(default)]
+    pub id: Option<String>,
     /// The gate this is (`awaiting_approval`, `awaiting_test_check`, ...); absent from machines
     /// that predate it, in which case `kind_or_guess` reads it off the request's shape.
     #[serde(default)]
@@ -678,7 +681,7 @@ impl Approval {
 
     /// `1 of 2 (ana)` on a High-risk plan that has a name and needs another; `approved by ana` once decided on one name.
     pub fn approvals_line(&self) -> Option<String> {
-        let names = self.approvers();
+        let names: Vec<String> = self.approvers().iter().map(|n| plain(n, 80)).collect();
         if names.is_empty() {
             return None;
         }
@@ -922,26 +925,6 @@ impl TaskDetail {
     pub fn cases_approval(&self) -> Option<&Approval> {
         self.latest_approval("awaiting_test_check")
             .or_else(|| self.latest_approval("awaiting_approval").filter(|a| a.requested["cases"].is_array()))
-    }
-
-    /// The cases grouped under the criterion each proves, criteria in first-seen order; cases
-    /// that name none gather under `(no criterion)` at the end.
-    pub fn cases_by_criterion(&self) -> Vec<(String, Vec<TestCase>)> {
-        let mut groups: Vec<(String, Vec<TestCase>)> = Vec::new();
-        let mut loose: Vec<TestCase> = Vec::new();
-        for case in self.cases() {
-            match &case.criterion {
-                Some(criterion) => match groups.iter_mut().find(|(c, _)| c == criterion) {
-                    Some((_, cases)) => cases.push(case),
-                    None => groups.push((criterion.clone(), vec![case])),
-                },
-                None => loose.push(case),
-            }
-        }
-        if !loose.is_empty() {
-            groups.push(("(no criterion)".to_string(), loose));
-        }
-        groups
     }
 }
 
@@ -1987,7 +1970,7 @@ pub struct GraphHealth {
 
 /// Text from outside on one line: control characters become spaces, at most `max` characters.
 pub fn plain(text: &str, max: usize) -> String {
-    let flat: String = text.chars().map(|ch| if ch.is_control() { ' ' } else { ch }).collect();
+    let flat = crate::text::sanitize(text, false);
     let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max { flat } else { format!("{}…", flat.chars().take(max.saturating_sub(1)).collect::<String>()) }
 }
@@ -2207,6 +2190,14 @@ pub enum Look {
     Done,
     /// Ended without shipping or closing: dimmed in Done.
     Archived,
+}
+
+impl Look {
+    /// Whether the person has something to do here: a gate waiting, or an escalation. The header's
+    /// `N need you`, the column tallies and the jump key all count this.
+    pub fn needs_person(self) -> bool {
+        matches!(self, Look::NeedsYou | Look::Escalated)
+    }
 }
 
 /// Why a ticket may be archived, in the order the picker lists them: the machine's `ArchiveReason`.
@@ -3563,17 +3554,18 @@ mod detail_tests {
     }
 
     #[test]
-    fn cases_group_under_the_criterion_they_prove_and_carry_verifying_s_verdict() {
+    fn cases_name_the_criterion_they_prove_and_carry_verifying_s_verdict() {
         let d = detail();
-        let groups = d.cases_by_criterion();
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].0, "handles a/b & c");
-        assert_eq!(groups[0].1.len(), 2);
-        assert_eq!(groups[0].1[0].title, "rejects a bad password");
-        assert_eq!(groups[0].1[0].approach, "run the suite");
-        assert_eq!(groups[0].1[0].result, Some(true));
-        assert_eq!(groups[0].1[1].result, Some(false));
-        assert_eq!(groups[1].1[0].approach, "hexdump", "an older `test` field still reads as the approach");
+        let cases = d.cases();
+        assert_eq!(cases.len(), 3);
+        assert_eq!(cases[0].criterion.as_deref(), Some("handles a/b & c"));
+        assert_eq!(cases[1].criterion.as_deref(), Some("handles a/b & c"));
+        assert_eq!(cases[2].criterion.as_deref(), Some("exports UTF-8 with a BOM"));
+        assert_eq!(cases[0].title, "rejects a bad password");
+        assert_eq!(cases[0].approach, "run the suite");
+        assert_eq!(cases[0].result, Some(true));
+        assert_eq!(cases[1].result, Some(false));
+        assert_eq!(cases[2].approach, "hexdump", "an older `test` field still reads as the approach");
     }
 
     #[test]

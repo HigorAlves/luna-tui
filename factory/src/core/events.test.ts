@@ -70,3 +70,24 @@ describe("CallJoin", () => {
     ]);
   });
 });
+
+describe("CallJoin observations", () => {
+  const OBSERVATION = { intent: "test" as const, failure: "abcdef0123" };
+
+  it("puts the observation of a call on its result, once", () => {
+    const { events, calls } = join();
+    calls.requested("1", "Mcp", {});
+    calls.observed("1", OBSERVATION);
+    calls.settled("1", false);
+    expect(events.at(-1)).toEqual({ kind: "tool_result", payload: { id: "1", tool: "Mcp", ok: false, observation: OBSERVATION } });
+    calls.settled("1", false);
+    expect(events.at(-1)).toEqual({ kind: "tool_result", payload: { id: "1", tool: "Mcp", ok: false } });
+  });
+
+  it("leaves a result with no observation as it was", () => {
+    const { events, calls } = join();
+    calls.requested("1", "Mcp", {});
+    calls.settled("1", true);
+    expect(events.at(-1)).toEqual({ kind: "tool_result", payload: { id: "1", tool: "Mcp", ok: true } });
+  });
+});

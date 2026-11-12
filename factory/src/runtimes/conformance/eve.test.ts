@@ -1,6 +1,6 @@
 // The eve runtime against the conformance table, on eve's mockModel playing the script inside a
 // real built eve server: the agent is compiled with the scripted model and built once here.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,9 +27,15 @@ conformance(
   (script) => {
     const file = join(agentsDir, `script-${Math.random().toString(36).slice(2)}.json`);
     writeFileSync(file, JSON.stringify(script));
-    return eveRuntime({ agentsDir, serverEnv: { LUNA_EVE_SCRIPT: file } });
+    // What the model was told besides the tool results is written by the fake, inside the server.
+    const told = `${file}.told`;
+    const runtime = eveRuntime({ agentsDir, serverEnv: { LUNA_EVE_SCRIPT: file, LUNA_EVE_TOLD: told } });
+    // The looping row scripts 40 calls; eve ends a run at its model-call cap (maxTurns, 8 in the table's input) first,
+    // which the Claude fake never does. An economy run gets room, so the guard's stop is what ends it.
+    const roomy: typeof runtime = { ...runtime, run: (ctx) => runtime.run(ctx.input.context.economy ? { ...ctx, input: { ...ctx.input, limits: { ...ctx.input.limits, maxTurns: 100 } } } : ctx) };
+    return Object.assign(roomy, { told: () => (existsSync(told) ? readFileSync(told, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string) : []) });
   },
-  { resetsAt: false, schemaIssue: false, tools: true, text: true, delegate: true },
+  { resetsAt: false, schemaIssue: false, tools: true, text: true, delegate: true, economy: true },
   { timeoutMs: 60_000 },
 );
 
@@ -41,7 +47,7 @@ conformance(
     writeFileSync(file, JSON.stringify(script));
     return eveRuntime({ agentsDir, serverEnv: { LUNA_EVE_SCRIPT: file } });
   },
-  { resetsAt: false, schemaIssue: false, ...CAPS_NO_TOOLS },
+  { resetsAt: false, schemaIssue: false, ...CAPS_NO_TOOLS, economy: false },
   { timeoutMs: 60_000, table: DECISION_TABLE },
 );
 
