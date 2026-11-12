@@ -12,7 +12,8 @@ import { boardPage, sidebar } from "./board.js";
 import { initDialog, renderDialog } from "./dialogs.js";
 import { inspector } from "./inspector.js";
 import { actionsFor, applyEvent, gateQuestion, needsYou, plainTitle } from "./model.js";
-import { prsPage } from "./prs.js";
+import { ACTIONS, COMMANDS, DIALOGS, PAGES, TABS } from "./registry.js";
+import "./features.js";
 
 const RECONNECT_MS = 3000;
 const POLL_MS = 30000;
@@ -80,6 +81,7 @@ export default class Luna extends View {
       cx.notify();
     });
     this.handle = cx.focus_handle();
+    this.states = {};
     cx.spawn(async (cx) => {
       try {
         await this.machine.connect();
@@ -165,7 +167,8 @@ export default class Luna extends View {
       const id = after?.id ?? data?.id;
       if (id && id === this.selected) {
         this.loadDetail(id, cx);
-        if (this.tab === "changes") this.loadDiff(id, cx);
+        const task = this.tasks.find((t) => t.id === id);
+        if (task) TABS.find((x) => x.id === this.tab)?.enter?.(this, task, cx);
       }
     } else if (event === "task.event") {
       if (data?.event?.taskId === this.selected) this.loadDetail(this.selected, cx);
@@ -175,7 +178,16 @@ export default class Luna extends View {
       this.prs = { ...this.prs, all: data?.snapshot ?? this.prs.all };
       this.prRefreshing = false;
     } else {
-      return;
+      // Every page sees the rest (slack.items, budget.alert, task.metrics, …).
+      let used = false;
+      for (const p of PAGES) {
+        try {
+          used = Boolean(p.onMessage?.(this, { event, data }, cx)) || used;
+        } catch {
+          // a page's handler never stops the stream
+        }
+      }
+      if (!used) return;
     }
     cx.notify();
   }
@@ -213,25 +225,44 @@ export default class Luna extends View {
 
   // ---- navigation ----
 
+  /** A feature's own state, kept on the pane for as long as it lives. */
+  state(id) {
+    this.states[id] ??= {};
+    return this.states[id];
+  }
+
+  currentPage() {
+    return PAGES.find((p) => p.id === this.page) ?? PAGES[0];
+  }
+
   go(page, cx) {
+    if (!PAGES.some((p) => p.id === page)) return;
     this.page = page;
     store("page", page);
+    try {
+      this.currentPage().enter?.(this, cx);
+    } catch (e) {
+      this.say(e?.message ?? String(e), "error");
+    }
     cx.notify();
   }
 
   select(id, cx) {
     this.selected = id;
     store("selected", id ?? "");
+    this.moreOpen = false;
     if (id) {
       this.loadDetail(id, cx);
-      if (this.tab === "changes") this.loadDiff(id, cx);
+      const task = this.tasks.find((t) => t.id === id);
+      if (task) TABS.find((x) => x.id === this.tab)?.enter?.(this, task, cx);
     }
     cx.notify();
   }
 
   setTab(id, cx) {
     this.tab = id;
-    if (id === "changes" && this.selected) this.loadDiff(this.selected, cx);
+    const task = this.tasks.find((t) => t.id === this.selected);
+    if (task) TABS.find((x) => x.id === id)?.enter?.(this, task, cx);
     cx.notify();
   }
 
@@ -250,8 +281,17 @@ export default class Luna extends View {
     exec("open", [url]).catch(() => null);
   }
 
-  dialog(spec, height = 320, width = 460) {
-    openOverlay({ mod: "luna", kind: "dialog", width, height, props: { dialog: spec } });
+  dialog(spec, height, width) {
+    const kind = DIALOGS[spec.kind];
+    openOverlay({ mod: "luna", kind: "dialog", width: width ?? kind?.width ?? 460, height: height ?? kind?.height ?? 320, props: { dialog: spec } });
+  }
+
+  /**
+   * Asks before a call: `{title, body, label, danger, call: {method, path, body}, done}`. The
+   * dialog makes the call; the board sees the result on the stream.
+   */
+  confirm(spec) {
+    this.dialog({ kind: "confirm", ...spec }, spec.height ?? 230);
   }
 
   newTask() {
@@ -295,6 +335,7 @@ export default class Luna extends View {
   }
 
   act(task, id, cx) {
+    if (ACTIONS[id]) return ACTIONS[id](this, task, cx);
     const m = this.machine;
     const r = task.gate?.requested ?? {};
     const sub = plainTitle(task);
@@ -408,7 +449,6 @@ export default class Luna extends View {
       case "close": return this.select(null, cx);
       case "refresh": return this.reload(cx, true);
       case "new": return this.newTask();
-      case "board": case "prs": return this.go(c, cx);
       case "approve": return this.primary(cx);
       case "search": return this.search.focus();
       default: return null;
@@ -454,6 +494,8 @@ export default class Luna extends View {
       const task = this.tasks.find((t) => t.id === this.selected);
       return task ? this.act(task, arg, cx) : null;
     }
+    if (verb === "page") return this.go(arg, cx);
+    if (COMMANDS[verb]) return COMMANDS[verb](this, arg, cx);
     if (verb === "done") {
       this.doneOpen = arg !== "off";
       return cx.notify();
@@ -462,6 +504,13 @@ export default class Luna extends View {
   }
 
   key(e, cx) {
+    if (!this.searchFocused) {
+      try {
+        if (this.currentPage().key?.(this, e, cx)) return cx.stop_propagation();
+      } catch {
+        // fall through to the board's keys
+      }
+    }
     if (this.searchFocused) {
       if (e.key === "escape") {
         this.handle.focus();
@@ -487,7 +536,7 @@ export default class Luna extends View {
     const inspectorWidth = Math.max(340, Math.min(440, Math.round(this.width * 0.34)));
     const open = this.page === "board" && Boolean(this.selected) && this.tasks.some((x) => x.id === this.selected);
     this.boardWidth = this.width - (!narrow || !open ? 236 : 0) - (open ? inspectorWidth : 0);
-    const pane = this.page === "prs" ? prsPage(this, t) : boardPage(this, t);
+    const pane = (this.currentPage()?.render ?? boardPage)(this, t);
     const side = open ? inspector(this, t, inspectorWidth) : null;
     if (this.selected && this.page === "board" && !this.tasks.find((x) => x.id === this.selected) && this.loaded) this.selected = null;
     return h_flex()

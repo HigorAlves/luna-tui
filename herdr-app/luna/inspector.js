@@ -7,21 +7,15 @@ import { h_flex, v_flex, TextView } from "gpui-base";
 import { actionsFor, ago, cardId, cardLine, duration, ended, escalationWords, gateQuestion, look, money, plainTitle, projectOf, stageWords } from "./model.js";
 import { COLUMN_ICON } from "./board.js";
 import { alpha, button, chip, dot, fact, icon, mono, projectColor, spinner, toneColor } from "./ui.js";
-
-const TABS = [
-  ["details", "Details"],
-  ["activity", "Activity"],
-  ["runs", "Runs"],
-  ["changes", "Changes"],
-];
+import { MORE, TABS, tab as addTab } from "./registry.js";
 
 const text = (v) => (typeof v === "string" ? v : v?.text ?? v?.question ?? v?.title ?? v?.description ?? (v == null ? "" : JSON.stringify(v)));
 
-function sub(t, label, extra = null) {
+export function sub(t, label, extra = null) {
   return h_flex().pt(10).pb(4).gap(8).items_center().child(div().text_size(12).font_semibold().text_color(t.muted).child(label)).when(extra != null, (el) => el.child(div().text_size(11.5).text_color(t.dim).child(extra)));
 }
 
-function bullet(t, body, { tone = null, mark = "•" } = {}) {
+export function bullet(t, body, { tone = null, mark = "•" } = {}) {
   return h_flex()
     .gap(8)
     .items_start()
@@ -30,16 +24,16 @@ function bullet(t, body, { tone = null, mark = "•" } = {}) {
     .child(div().flex_1().min_w(0).text_color(t.foreground).child(body));
 }
 
-function markdown(id, body) {
+export function markdown(id, body) {
   return TextView.markdown(id, body).selectable(true);
 }
 
-function codeBlock(t, body) {
+export function codeBlock(t, body) {
   return div().p(8).rounded(7).bg(t.background).border_1().border_color(t.border).font_family(mono()).text_size(11).text_color(t.muted).child(body);
 }
 
 /** The gate's own content: the plan, the questions, the release checklist, the review to post, or the escalation. */
-function gateBody(t, task) {
+export function gateBody(t, task) {
   const r = task.gate?.requested ?? {};
   const parts = [];
   if (task.state === "escalated") {
@@ -124,6 +118,13 @@ function gatePanel(app, t, task) {
   const lead = l === "working" ? spinner(t, 15) : waiting ? icon(l === "escalated" ? "alert" : "hand", 15, t.blocked) : ended(task) ? icon("done", 15, t.done) : icon("clock", 15, t.dim);
   const title = waiting ? (l === "escalated" ? `Escalated: ${escalationWords(task.gate?.requested?.escalationDecision?.reason ?? task.reason ?? "other")}` : gateQuestion(task) ?? "Waiting on you") : line.text;
   const body = waiting ? gateBody(t, task) : [];
+  const extra = MORE.filter((m) => {
+    try {
+      return m.when(task, app);
+    } catch {
+      return false;
+    }
+  });
   return v_flex()
     .gap(8)
     .p(12)
@@ -140,13 +141,30 @@ function gatePanel(app, t, task) {
         .when(task.spentUsd != null, (el) => el.child(div().text_size(11).text_color(t.dim).child(money(task.spentUsd)))),
     )
     .children(body)
-    .when(actions.length > 0, (el) =>
+    .when(actions.length > 0 || extra.length > 0, (el) =>
       el.child(
         h_flex()
           .pt(4)
           .gap(6)
           .flex_wrap()
-          .children(actions.map((a) => button(t, `act-${a.id}`, a.label, a.kind, (_e, cx) => app.act(task, a.id, cx), { busy, small: false }))),
+          .children(actions.map((a) => button(t, `act-${a.id}`, a.label, a.kind, (_e, cx) => app.act(task, a.id, cx), { busy, small: false })))
+          .when(extra.length > 0, (row) =>
+            row.child(
+              button(t, "act-more", app.moreOpen ? "Less" : "More", "quiet", (_e, cx) => {
+                app.moreOpen = !app.moreOpen;
+                cx.notify();
+              }, { iconName: app.moreOpen ? "chevron-down" : "chevron-right" }),
+            ),
+          ),
+      ),
+    )
+    .when(app.moreOpen && extra.length > 0, (el) =>
+      el.child(
+        h_flex()
+          .pt(2)
+          .gap(6)
+          .flex_wrap()
+          .children(extra.map((m) => button(t, `more-${m.id}`, m.label, m.kind ?? "plain", (_e, cx) => app.act(task, m.id, cx), { busy, small: true }))),
       ),
     );
 }
@@ -247,8 +265,15 @@ export function inspector(app, t, width) {
   const task = app.tasks.find((x) => x.id === app.selected);
   if (!task) return null;
   const detail = app.details[task.id];
-  const tab = app.tab;
-  const counts = { activity: detail?.events?.length, runs: detail?.stageRuns?.length, changes: app.diffs[task.id]?.files?.length };
+  const tab = TABS.some((x) => x.id === app.tab) ? app.tab : TABS[0]?.id;
+  const current = TABS.find((x) => x.id === tab);
+  const countOf = (x) => {
+    try {
+      return x.count?.(app, task, detail) ?? null;
+    } catch {
+      return null;
+    }
+  };
   return v_flex()
     .w(width)
     .flex_none()
@@ -293,11 +318,13 @@ export function inspector(app, t, width) {
         .px(16)
         .gap(16)
         .h(36)
+        .id("inspector-tabs")
+        .overflow_x_scroll()
         .items_end()
         .border_b(1)
         .border_color(t.border)
         .children(
-          TABS.map(([id, label]) =>
+          TABS.map(({ id, label, ...x }) =>
             h_flex()
               .id(`tab-${id}`)
               .h(34)
@@ -311,7 +338,7 @@ export function inspector(app, t, width) {
               .when(tab === id, (el) => el.font_semibold())
               .on_click((_e, cx) => app.setTab(id, cx))
               .child(label)
-              .when(Boolean(counts[id]), (el) => el.child(div().px(5).rounded(8).bg(t.hover).text_size(10.5).text_color(t.muted).child(String(counts[id])))),
+              .when(Boolean(countOf({ id, label, ...x })), (el) => el.child(div().px(5).rounded(8).bg(t.hover).text_size(10.5).text_color(t.muted).child(String(countOf({ id, label, ...x }))))),
           ),
         ),
     )
@@ -323,6 +350,12 @@ export function inspector(app, t, width) {
         .overflow_y_scrollbar()
         .px(10)
         .py(10)
-        .child(tab === "details" ? details(app, t, task, detail) : tab === "activity" ? activity(t, detail) : tab === "runs" ? runs(t, detail) : changes(app, t, task)),
+        .when(Boolean(current), (el) => el.child(current.render(app, t, task, detail))),
     );
 }
+
+// The inspector's own tabs; feature files add more (registry.js).
+addTab({ id: "details", label: "Details", order: 10, render: (app, t, task, detail) => details(app, t, task, detail) });
+addTab({ id: "activity", label: "Activity", order: 60, count: (app, task, detail) => detail?.events?.length, render: (app, t, task, detail) => activity(t, detail) });
+addTab({ id: "runs", label: "Runs", order: 40, count: (app, task, detail) => detail?.stageRuns?.length, render: (app, t, task, detail) => runs(t, detail) });
+addTab({ id: "changes", label: "Changes", order: 50, count: (app, task) => app.diffs[task.id]?.files?.length, enter: (app, task, cx) => app.loadDiff(task.id, cx), render: (app, t, task) => changes(app, t, task) });

@@ -6,6 +6,7 @@ import { h_flex, v_flex, Input, InputState, Textarea, TextareaState } from "gpui
 import { closeOverlay, pickFolder, props, setShared } from "herdr";
 
 import { ARCHIVE_REASONS } from "./model.js";
+import { DIALOGS } from "./registry.js";
 import { button, icon, mono, toneColor } from "./ui.js";
 
 const TITLES = {
@@ -29,6 +30,15 @@ export function initDialog(app, cx) {
   app.error = null;
   app.sending = false;
   app.handle = cx.focus_handle();
+  app.send = (cx, call) => send(app, cx, call);
+  app.fail = (cx, message) => {
+    app.error = message;
+    cx.notify();
+  };
+  if (DIALOGS[d.kind]) {
+    DIALOGS[d.kind].init?.(app, cx, d);
+    return;
+  }
   const field = (placeholder, value = "") => InputState.new({ placeholder, value });
   const area = (placeholder, rows = 4, value = "") => TextareaState.new({ placeholder, rows, value });
   if (d.kind === "send_back") app.reason = area("What should change (optional)", 4);
@@ -73,6 +83,7 @@ async function send(app, cx, call) {
 function submit(app, cx) {
   const d = app.d;
   const m = app.machine;
+  if (DIALOGS[d.kind]) return DIALOGS[d.kind].submit ? DIALOGS[d.kind].submit(app, cx, d) : finish(app);
   switch (d.kind) {
     case "send_back":
       return send(app, cx, () => m.decide(d.taskId, "sent_back", app.reason.value().trim() ? { reason: app.reason.value().trim() } : {}));
@@ -153,7 +164,12 @@ export function renderDialog(app, t) {
   const body = [];
   let primary = { label: "Send", kind: "primary" };
   if (d.subtitle) body.push(div().text_size(12.5).text_color(t.muted).child(d.subtitle));
-  switch (d.kind) {
+  const registered = DIALOGS[d.kind];
+  if (registered) {
+    body.push(...registered.body(app, t, d));
+    primary = registered.primary ? registered.primary(app, d) : { label: "Send", kind: "primary" };
+  }
+  switch (registered ? null : d.kind) {
     case "send_back":
       body.push(label(t, "Reason"), boxed(t, Textarea.new(app.reason).w_full(), 80));
       primary = { label: "Send back", kind: "primary" };
@@ -265,7 +281,7 @@ export function renderDialog(app, t) {
     .p(18)
     .bg(t.popover)
     .text_color(t.foreground)
-    .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().child(d.title ?? TITLES[d.kind] ?? "")).child(div().text_size(11).text_color(t.dim).child("Esc")))
+    .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().child(d.title ?? registered?.title ?? TITLES[d.kind] ?? "")).child(div().text_size(11).text_color(t.dim).child("Esc")))
     .child(v_flex().id("dialog-body").flex_1().min_h(0).overflow_y_scrollbar().children(body))
     .when(Boolean(app.error), (el) => el.child(div().pt(10).text_size(12).text_color(toneColor(t, "error")).child(app.error)))
     .child(
@@ -278,3 +294,24 @@ export function renderDialog(app, t) {
     );
 }
 
+
+// Asks before a call: `app.confirm({title, body, label, danger, call: {method, path, body}, done})`.
+DIALOGS.confirm = {
+  title: "Are you sure?",
+  height: 230,
+  body: (app, t, d) => [div().pt(8).text_size(12.5).text_color(t.foreground).child(d.body ?? "")],
+  primary: (app, d) => ({ label: d.label ?? "Go on", kind: d.danger ? "danger" : "primary" }),
+  submit: (app, cx, d) => app.send(cx, () => app.machine.call(d.call.method ?? "POST", d.call.path, d.call.body)),
+};
+
+/** A labelled single-line input, for feature dialogs. */
+export function field(t, labelText, state) {
+  return [label(t, labelText), boxed(t, Input.new(state).w_full())];
+}
+
+/** A labelled text area, for feature dialogs. */
+export function area(t, labelText, state, h = 80) {
+  return [label(t, labelText), boxed(t, Textarea.new(state).w_full(), h)];
+}
+
+export { option, label, boxed, finish };

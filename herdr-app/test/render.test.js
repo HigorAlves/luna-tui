@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { theme } from "./host/stub.js";
+import "../luna/features.js";
 import { boardPage, sidebar } from "../luna/board.js";
 import { inspector } from "../luna/inspector.js";
 import { prsPage } from "../luna/prs.js";

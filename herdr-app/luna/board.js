@@ -7,6 +7,7 @@ import {
   GROUPS, VIEWS, actionsFor, cardId, cardLine, chips, columns, filterTasks, look, plainTitle, projectOf, projects, summary, viewCounts,
 } from "./model.js";
 import { alpha, button, chip, dot, groupLabel, heading, icon, mono, projectColor, spinner, toneColor } from "./ui.js";
+import { PAGES } from "./registry.js";
 
 export const COLUMN_ICON = { Intake: "intake", Triage: "triage", Plan: "plan", Build: "build", Verify: "verify", Evidence: "evidence", Ship: "ship", Done: "done" };
 /** A column's width: the open columns share the board's room, between a readable minimum and a
@@ -71,22 +72,17 @@ function sideRow(t, id, { label, iconName = null, iconColor = null, count = null
 export function sidebar(app, t) {
   const now = Date.now();
   const counts = viewCounts(app.tasks, now);
-  const seg = (id, label) =>
-    div()
-      .id(`seg-${id}`)
-      .flex_1()
-      .h(24)
-      .flex()
-      .items_center()
-      .justify_center()
-      .rounded(6)
-      .text_size(12)
-      .cursor_pointer()
-      .when(app.page === id, (el) => el.bg(t.accent).text_color(t.accent_foreground).font_semibold())
-      .when(app.page !== id, (el) => el.text_color(t.muted).hover((s) => s.text_color(t.foreground)))
-      .on_click((_e, cx) => app.go(id, cx))
-      .child(label);
-  const waitingPrs = (app.prs.inbox?.prs ?? []).filter((p) => p.split === "review_requested").length;
+  const badge = (p) => {
+    try {
+      return p.badge?.(app) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const nav = PAGES.map((p) => {
+    const b = badge(p);
+    return sideRow(t, `page-${p.id}`, { label: p.label, iconName: p.icon, count: b?.n ?? null, countTone: b?.tone ?? null, active: app.page === p.id }, (_e, cx) => app.go(p.id, cx));
+  });
   return v_flex()
     .w(236)
     .flex_none()
@@ -99,10 +95,9 @@ export function sidebar(app, t) {
     .pt(10)
     .pb(8)
     .gap(2)
-    .child(h_flex().p(2).gap(2).rounded(8).bg(t.hover).child(seg("board", "Board")).child(seg("prs", waitingPrs ? `PRs · ${waitingPrs}` : "PRs")))
     .child(
       h_flex()
-        .mt(8)
+        .mb(6)
         .h(30)
         .px(8)
         .gap(7)
@@ -114,6 +109,7 @@ export function sidebar(app, t) {
         .child(icon("search", 13, t.dim))
         .child(Input.new(app.search).flex_1().text_size(12.5).text_color(t.foreground)),
     )
+    .children(nav)
     .when(app.page === "board", (el) =>
       el
         .child(heading(t, "Views"))
