@@ -92,7 +92,17 @@ export function resolvePath(path: string, cwd: string, home: string): ResolvedPa
 }
 
 /** Whether `real` lies under one of `roots`, each resolved as the kernel sees it. */
-export const inRoots = (real: string, roots: string[]): boolean => roots.some((root) => isUnder(real, realRoot(root)));
+export const inRoots = (real: string, roots: string[]): boolean => roots.some((root) => (root.includes("*") ? underPattern(real, root) : isUnder(real, realRoot(root))));
+
+/** Whether `real` lies under a root with whole-segment `*` wildcards (the session's projects/<cwd>/<session>/tool-results
+ *  folder is one): each `*` stands for exactly one folder name. `real` is already resolved, so it holds no `..`; a pattern is taken as written. */
+function underPattern(real: string, pattern: string): boolean {
+  // The folder before the first wildcard is resolved as the kernel sees it, as any root is (macOS's /var is /private/var).
+  const star = pattern.indexOf("*");
+  const want = `${realRoot(pattern.slice(0, star).replace(/\/$/, "") || "/")}/${pattern.slice(star)}`.split("/").filter(Boolean);
+  const have = real.split("/").filter(Boolean);
+  return have.length >= want.length && want.every((part, i) => part === "*" || part === have[i]);
+}
 
 /** The paths one argument may stand for: itself, a value after `=` (`--output=/x`, `GIT_DIR=/x`),
  *  a file URL's path, a value glued to a short option (`-o/tmp/x`). Only what could name a file:

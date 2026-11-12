@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { claudeRuntime } from "./run.ts";
+import { claudeRuntime, guardPolicy } from "./run.ts";
 
 const FACTORY = join(import.meta.dirname, "..", "..", "..");
 
@@ -40,6 +40,28 @@ describe("the Claude runtime with a mask", () => {
     expect(options?.tools).toEqual(expect.arrayContaining(["WebFetch", "Agent", "Skill", "mcp__luna__card_search"]));
     expect(Object.keys(options!.agents!)).toEqual(["triage-planner", "reply-drafter"]);
     expect(options).not.toHaveProperty("skills");
+  });
+
+  it("names the stage input, the output and the scratch folder as additional directories, so a shell read of /in matches the SDK's scope", async () => {
+    const { options } = await optionsFor("plan");
+    expect(options?.additionalDirectories).toHaveLength(3);
+    expect(new Set(options?.additionalDirectories).size).toBe(1);
+  });
+
+  it("lets a pack read its run's saved tool results: the SDK writes a big output there and tells the model to read it", () => {
+    const old = process.env.CLAUDE_CONFIG_DIR;
+    const paths = { factoryRoot: FACTORY, work: "/work", out: "/out", input: "/in", scratch: "/tmp/s" };
+    const policy = () => guardPolicy({ pack: PACKS.plan, input: { task: { branch: "x" }, context: {} } as never, paths });
+    try {
+      process.env.CLAUDE_CONFIG_DIR = "/session";
+      expect(policy().roots?.read).toContain("/session/projects/*/*/tool-results");
+      expect(policy().roots?.read).not.toContain("/session");
+      delete process.env.CLAUDE_CONFIG_DIR;
+      expect(policy().roots?.read?.some((root) => root.includes("tool-results"))).toBe(false);
+    } finally {
+      if (old === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = old;
+    }
   });
 
   it("registers only the luna tools the pack's access lists, so a pack is never offered a tool it is refused", async () => {

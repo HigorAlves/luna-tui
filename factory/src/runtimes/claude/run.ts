@@ -49,6 +49,13 @@ function instructions(pack: Pack, factoryRoot: string): Instructions {
 
 export const claude: Runtime = claudeRuntime();
 
+/** Where the SDK saves an output too large to show inline (`<config dir>/projects/<cwd>/<session>/tool-results/`) and tells
+ *  the model to read it. Only that folder, never the config dir, which holds the SDK's own state; the session mount is per
+ *  task, so it also holds the card's earlier runs' results, which a stage may read. Not set outside a container. */
+function sessionResults(): string[] {
+  return env.CLAUDE_CONFIG_DIR ? [join(env.CLAUDE_CONFIG_DIR, "projects", "*", "*", "tool-results")] : [];
+}
+
 /** The stage's guard policy: the pack's write access and branch, and the roots every path a tool
  *  names must lie in. The skills' own files are read-only roots, as is the stage input. */
 export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "input" | "paths">): GuardContext {
@@ -59,7 +66,7 @@ export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "i
     branchPrefix: branchPrefixFor(input.task),
     workRoot: paths.work,
     outRoot: paths.out,
-    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin"), GRAPH_ROOT] },
+    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin"), GRAPH_ROOT, ...sessionResults()] },
     web: pack.kind === "agent" && pack.access.web,
     // e2e signs in with the credentials its targets name (`env:QA_PASSWORD`), inline as "$QA_PASSWORD".
     expandable: (input.context.qaTargets ?? []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])),
@@ -94,6 +101,8 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   const delegating = ctx.delegate ? [`mcp__luna__${DELEGATE}`] : [];
   const options = {
     cwd: paths.work,
+    // The folders a stage reads or writes beside /work: without them the SDK refuses a shell read of /in/stage.json that the guard's roots allow.
+    additionalDirectories: [paths.input, paths.out, paths.scratch],
     agent: pack.agent,
     agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId),
     systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: FACTORY_RULES },
