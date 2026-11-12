@@ -70,6 +70,8 @@ export class CloneError extends Error {
 }
 
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
+/** What GitHub says when a budget is spent (the primary limit, or the secondary one). */
+const RATE_LIMITED = /rate limit|RATE_LIMITED/i;
 const key = (repo: string, number: number) => `${repo.toLowerCase()}#${number}`;
 
 export class GitHubPulls implements PullsPort {
@@ -160,12 +162,16 @@ export class GitHubPulls implements PullsPort {
     const me = await this.whoAmI();
     const hits = await this.options.github.searchMyPrs();
     // One GraphQL call per PR, a few at a time: a long list otherwise takes half a minute.
+    let limited: string | null = null;
     const found = await mapLimit(hits, FETCH_AT_ONCE, async (hit): Promise<PullRequest | null> => {
       let node;
       try {
         node = await this.options.github.prFacts(hit.repo, hit.number);
       } catch (error) {
-        console.warn(`github prs: ${hit.repo}#${hit.number}: ${messageOf(error)}`);
+        const said = messageOf(error);
+        // A spent GraphQL budget fails every PR alike: that is the poll failing (below), not forty PRs gone.
+        if (RATE_LIMITED.test(said)) limited ??= said;
+        else console.warn(`github prs: ${hit.repo}#${hit.number}: ${said}`);
         return null;
       }
       if (!node) return null;
@@ -176,6 +182,9 @@ export class GitHubPulls implements PullsPort {
       ]);
       return { ...facts, split: splitOf(facts), localPath, task };
     });
+    // The poll fails as a whole: the last list stays, the snapshot says why, and the next poll waits (`poll`), so the budget gets the quiet it needs.
+    // Search and GraphQL have separate budgets, so the search can succeed while every PR's facts are refused.
+    if (limited) throw new Error(limited);
     return found.filter((pr): pr is PullRequest => pr !== null);
   }
 

@@ -35,6 +35,8 @@ interface World {
   hits: Array<{ number: number; repository: { nameWithOwner: string }; updatedAt: string }>;
   nodes: Record<number, Record<string, unknown> | null>;
   searchError?: string;
+  /** A PR whose `prFacts` call rejects with this message, by number. */
+  factsErrors?: Record<number, string>;
   mergeError?: string;
   cloneError?: string;
   /** When set, every `prFacts` call takes a few ms and this records how many ran at once. */
@@ -55,6 +57,7 @@ function setup(world: World, over: Partial<ConstructorParameters<typeof GitHubPu
         await new Promise((resolve) => setTimeout(resolve, 5));
         world.flight.now--;
       }
+      if (world.factsErrors?.[number]) throw new Error(world.factsErrors[number]);
       return (world.nodes[number] ?? null) as never;
     },
     closePr: async (repo, number) => void calls.push(["close", repo, String(number)]),
@@ -127,6 +130,25 @@ describe("GitHubPulls.pollOnce", () => {
     expect(snapshot.error).toMatch(/Bad credentials/);
     expect(snapshot.prs).toHaveLength(1);
     expect(published).toHaveLength(2);
+  });
+
+  it("keeps the last list, says why and backs off when the PRs' facts are rate limited, instead of publishing an empty inbox", async () => {
+    const world: World = { hits: [hit(1), hit(2)], nodes: { 1: node(1), 2: node(2) } };
+    const { pulls } = setup(world);
+    await pulls.pollOnce();
+    world.factsErrors = { 1: "API rate limit exceeded (RATE_LIMITED)", 2: "API rate limit exceeded (RATE_LIMITED)" };
+    const snapshot = await pulls.pollOnce();
+    expect(snapshot.error).toMatch(/rate limit/i);
+    expect(snapshot.prs.map((p) => p.number)).toEqual([1, 2]);
+    expect(pulls.nextDelayMs).toBe(5 * 60_000);
+  });
+
+  it("still drops only the PR whose facts fail for another reason", async () => {
+    const world: World = { hits: [hit(1), hit(2)], nodes: { 1: node(1), 2: node(2) }, factsErrors: { 2: "boom (500)" } };
+    const { pulls } = setup(world);
+    const snapshot = await pulls.pollOnce();
+    expect(snapshot.error).toBeNull();
+    expect(snapshot.prs.map((p) => p.number)).toEqual([1]);
   });
 
   it("backs off to five minutes after a rate limit answer and returns to the interval after a good poll", async () => {
