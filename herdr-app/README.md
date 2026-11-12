@@ -49,17 +49,53 @@ It reads these through your login shell. The token is never shown.
 
 ## Keys and commands
 
-Click the pane to give it the keyboard, or move onto it with `pane.go`. Then:
+Click the pane to give it the keyboard, or move onto it with `pane.go`. The keys are the TUI's; `?` lists them in the pane. On the board:
 
 | Key | Does |
 |---|---|
-| `j` / `k` (or the arrows) | the next or previous card |
-| `Enter` | the selected card's main action |
-| `Esc` | close the inspector |
-| `/` | search |
+| `h` / `l` | previous / next column |
+| `j` / `k` (or the arrows) | previous / next ticket in the column |
+| `gg` / `G` | first / last ticket in the column |
+| `1`-`8` | jump to that column (`8` opens Done) |
+| `Tab` / `Shift+Tab`, `]` / `[` | next / previous ticket that needs you |
+| `Enter`, `a` | the selected card's main action |
+| `/` | search by title, #id or repo |
+| `!` | only the tickets that need you |
+| `@` | only the selected ticket's repo (again: all repos) |
+| `zc` / `zo` | fold / unfold the focused column (a folded column is a rail: click it to unfold) |
+| `zz` | fold every column but the focused one (again: unfold) |
+| `gs` / `gr` / `ga` | order the cards by stage, by repo (then stage) or by age (oldest first) |
+| `=` | card density: 3 lines, 4 lines with chips, 1 line |
+| `v` / `V` | mark the ticket / the whole column (cmd or shift click marks too) |
+| `a` `X` `d` `w` `Z` | with marks: approve or start / stop / delete / remove workspaces / archive. Each asks first, listing the tickets, then runs them one by one and says how many went through. Without marks `X` `d` `w` `Z` act on the selected card |
+| `Esc` | clear the search, the filters and the marks, else close the inspector |
+| `:` | command palette |
+| `?` | the keys sheet |
 | `n` | new task |
 | `r` | read the board again |
-| `1` / `2` | Board / PRs |
+| `P` | pull requests (`b` goes back to the board from any other page) |
+
+Folds, the order and the density are kept per pane. `g` and `z` wait for a second key; the header lists them.
+
+The palette (`:`) filters as you type: `Tab` completes and cycles, the arrows pick, `Enter` runs the picked entry, or the only one left, or the text as typed. It runs the TUI's `new <title>`, `filter <text>`, `open <#id>`, `group stage|repo|age`, `fold`, `unfold`, `start`, `slots <n>`, `drain` and `resume`, plus every verb a feature registers.
+
+On the PR page:
+
+| Key | Does |
+|---|---|
+| `j` / `k` | previous / next PR |
+| `h` / `l` | previous / next split |
+| `1`-`7` | jump to that split (`7`: all repos) |
+| `m` | merge (asks first) |
+| `c` / `v` / `t` | fix CI / review / answer the threads; an off key says why |
+| `X` | close the PR without merging (asks first; refused while a task runs for it) |
+| `C` | clone the repository |
+| `f` / `F` | show one repo / every repo |
+| `o` | open on GitHub |
+| `Space` / `x` | show every check by name, with its state and link, and the open threads |
+| `Enter` | jump to the PR's task, else open it on GitHub |
+| `R` | poll GitHub now |
+| `Esc`, `P`, `q` | back to the board |
 
 The same commands can be bound in Herdr's `keys.json` under `"mod:luna"` (for example `"alt-l": "luna.next"`).
 

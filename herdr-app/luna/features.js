@@ -15,3 +15,6 @@ import "./page-slack.js";
 import "./page-economy.js";
 import "./page-jira.js";
 import "./actions.js";
+import "./palette.js";
+import "./bulk.js";
+import "./keysheet.js";

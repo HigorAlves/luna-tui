@@ -1,11 +1,15 @@
 // The PR page: the inbox (yours and those asking your review) and every open PR in your repos,
 // split as the machine splits them, with the actions the machine takes (review, fix CI, address,
-// merge, clone). The machine polls GitHub; this reads its snapshot and the stream's updates.
+// merge, clone, close). A row opens to show every check by name. The machine polls GitHub; this
+// reads its snapshot and the stream's updates.
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 
 import { PR_SPLITS, ago, filterPrs, prActions, prStatus } from "./model.js";
-import { button, chip, dot, icon, mono, projectColor, spinner, toneColor } from "./ui.js";
+import { checkRows, checkTone, keyName, prKeyRefusal, stepSplit } from "./controls.js";
+import { alpha, button, chip, dot, icon, mono, projectColor, spinner, toneColor } from "./ui.js";
+
+const prKey = (pr) => `${pr.repo}#${pr.number}`;
 
 function tabs(app, t) {
   const tab = (id, label) =>
@@ -61,51 +65,228 @@ function splitBar(app, t, prs) {
     .when(Boolean(app.prRepo), (el) => el.child(button(t, "repo-clear", "", "quiet", (_e, cx) => { app.prRepo = null; cx.notify(); }, { iconName: "close", small: true })));
 }
 
+/** Every check by name with its state and link, and the threads still open. */
+function checksPanel(app, t, pr) {
+  const rows = checkRows(pr);
+  return v_flex()
+    .px(14)
+    .pb(10)
+    .gap(2)
+    .child(
+      h_flex()
+        .gap(10)
+        .pb(4)
+        .text_size(11)
+        .text_color(t.dim)
+        .child(div().font_family(mono()).text_size(10.5).child(`${pr.headRef ?? "?"} → ${pr.baseRef ?? "?"}`))
+        .child(div().child(`${pr.unresolvedThreads ?? 0} unresolved thread${pr.unresolvedThreads === 1 ? "" : "s"}`))
+        .when(Boolean(pr.reviewDecision), (el) => el.child(div().child(String(pr.reviewDecision).toLowerCase().replaceAll("_", " ")))),
+    )
+    .when(rows.length === 0, (el) => el.child(div().text_size(11.5).text_color(t.dim).child("No checks reported.")))
+    .children(
+      rows.map((c, i) => {
+        const tone = checkTone(c.state);
+        const color = tone ? toneColor(t, tone) : t.dim;
+        return h_flex()
+          .id(`chk-${pr.repo}-${pr.number}-${i}`)
+          .h(24)
+          .px(6)
+          .gap(8)
+          .items_center()
+          .rounded(6)
+          .when(Boolean(c.url), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => {
+            cx.stop_propagation();
+            app.openUrl(c.url);
+          }))
+          .child(dot(color, 7))
+          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(c.name))
+          .child(div().flex_none().text_size(10.5).text_color(color).child(String(c.state ?? "").toLowerCase().replaceAll("_", " ")))
+          .when(Boolean(c.url), (el) => el.child(icon("external", 11, t.dim)));
+      }),
+    );
+}
+
 function row(app, t, pr, cloning) {
   const status = prStatus(pr);
   const actions = prActions(pr);
-  const busy = app.busy.has(`${pr.repo}#${pr.number}`) || Boolean(cloning);
+  const key = prKey(pr);
+  const open = Boolean(app.prOpen?.has(key));
+  const selected = app.prSel === key;
+  const busy = app.busy.has(key) || Boolean(cloning);
   const name = pr.repo.split("/")[1] ?? pr.repo;
-  return h_flex()
+  const toggle = (_e, cx) => {
+    app.prOpen ??= new Set();
+    app.prOpen.has(key) ? app.prOpen.delete(key) : app.prOpen.add(key);
+    cx.notify();
+  };
+  return v_flex()
     .id(`pr-${pr.repo}-${pr.number}`)
-    .px(14)
-    .py(10)
-    .gap(12)
-    .items_center()
     .rounded(9)
-    .bg(t.background)
+    .bg(selected ? alpha(t.accent, 0.08) : t.background)
     .border_1()
-    .border_color(t.border)
-    .hover((s) => s.border_color(t.input))
-    .child(icon("pr", 15, pr.isDraft ? t.dim : pr.mine ? t.accent : t.done))
-    .child(
-      v_flex()
-        .flex_1()
-        .min_w(0)
-        .gap(3)
-        .child(div().truncate().text_size(12.8).font_medium().text_color(t.foreground).child(pr.title))
-        .child(
-          h_flex()
-            .gap(7)
-            .items_center()
-            .text_size(11)
-            .text_color(t.dim)
-            .child(dot(projectColor(t, name), 6))
-            .child(div().font_family(mono()).text_size(10.5).child(`${pr.repo}#${pr.number}`))
-            .child(div().child(`· ${pr.mine ? "you" : pr.author}`))
-            .child(div().child(`· ${ago(pr.updatedAt) ?? ""}`))
-            .when(pr.unresolvedThreads > 0, (el) => el.child(div().child(`· ${pr.unresolvedThreads} unresolved`)))
-            .when(!pr.localPath, (el) => el.child(chip(t, cloning ? "cloning…" : "not cloned"))),
-        ),
-    )
-    .child(chip(t, status.text, status.tone, 11))
+    .border_color(selected ? t.accent : t.border)
+    .hover((s) => s.border_color(selected ? t.accent : t.input))
     .child(
       h_flex()
-        .gap(6)
-        .flex_none()
-        .when(Boolean(cloning), (el) => el.child(spinner(t, 12)))
-        .children(actions.map((a) => button(t, `pra-${pr.repo}-${pr.number}-${a.id}`, a.label, a.kind, (_e, cx) => app.prAct(pr, a.id, cx), { small: true, busy, iconName: a.id === "browser" ? "external" : null }))),
-    );
+        .id(`prrow-${pr.repo}-${pr.number}`)
+        .px(14)
+        .py(10)
+        .gap(12)
+        .items_center()
+        .cursor_pointer()
+        .on_click((e, cx) => {
+          app.prSel = key;
+          if (pr.task) return app.prAct(pr, "open_task", cx);
+          return toggle(e, cx);
+        })
+        .child(button(t, `pr-exp-${pr.repo}-${pr.number}`, "", "quiet", (e, cx) => {
+          app.prSel = key;
+          toggle(e, cx);
+        }, { small: true, iconName: open ? "chevron-down" : "chevron-right" }))
+        .child(icon("pr", 15, pr.isDraft ? t.dim : pr.mine ? t.accent : t.done))
+        .child(
+          v_flex()
+            .flex_1()
+            .min_w(0)
+            .gap(3)
+            .child(div().truncate().text_size(12.8).font_medium().text_color(t.foreground).child(pr.title))
+            .child(
+              h_flex()
+                .gap(7)
+                .items_center()
+                .text_size(11)
+                .text_color(t.dim)
+                .child(dot(projectColor(t, name), 6))
+                .child(div().font_family(mono()).text_size(10.5).child(key))
+                .child(div().child(`· ${pr.mine ? "you" : pr.author}`))
+                .child(div().child(`· ${ago(pr.updatedAt) ?? ""}`))
+                .when(pr.unresolvedThreads > 0, (el) => el.child(div().child(`· ${pr.unresolvedThreads} unresolved`)))
+                .when(Boolean(pr.task), (el) => el.child(chip(t, "task running", "working")))
+                .when(!pr.localPath, (el) => el.child(chip(t, cloning ? "cloning…" : "not cloned"))),
+            ),
+        )
+        .child(chip(t, status.text, status.tone, 11))
+        .child(
+          h_flex()
+            .gap(6)
+            .flex_none()
+            .when(Boolean(cloning), (el) => el.child(spinner(t, 12)))
+            .children(actions.map((a) => button(t, `pra-${pr.repo}-${pr.number}-${a.id}`, a.label, a.kind, (_e, cx) => app.prAct(pr, a.id, cx), { small: true, busy, iconName: a.id === "browser" ? "external" : null })))
+            .child(button(t, `pra-${pr.repo}-${pr.number}-close`, "Close…", "danger", (_e, cx) => closePr(app, pr, cx), { small: true, busy })),
+        ),
+    )
+    .when(open, (el) => el.child(checksPanel(app, t, pr)));
+}
+
+/** Asks before closing a PR without merging it. */
+export function closePr(app, pr) {
+  app.dialog({ kind: "close_pr", repo: pr.repo, number: pr.number, subtitle: pr.title }, 240);
+}
+
+/** The PR page's keys, as the TUI's Pulls view: rows, splits, the per-PR actions. */
+export function prsKey(app, e, cx) {
+  const name = keyName(e);
+  const rows = app.prRows ?? [];
+  const at = rows.findIndex((p) => prKey(p) === app.prSel);
+  const pr = rows[at] ?? null;
+  const go = (i) => {
+    if (rows.length) app.prSel = prKey(rows[Math.max(0, Math.min(rows.length - 1, i))]);
+    cx.notify();
+    return true;
+  };
+  const splits = app.prSplitIds ?? [null];
+  const needsRow = (fn) => {
+    if (!pr) {
+      app.say("no pull request selected");
+      cx.notify();
+      return true;
+    }
+    return fn(pr);
+  };
+  const dispatch = (id, label) =>
+    needsRow((p) => {
+      const why = prKeyRefusal(p, id, prActions(p).map((a) => a.id));
+      if (why) app.say(`${label}: ${why}`, "error");
+      else app.prAct(p, id, cx);
+      cx.notify();
+      return true;
+    });
+  switch (name) {
+    case "j":
+    case "down": return go(at < 0 ? 0 : at + 1);
+    case "k":
+    case "up": return go(at < 0 ? 0 : at - 1);
+    case "h":
+    case "left":
+      app.prSplit = stepSplit(splits, app.prSplit, -1);
+      cx.notify();
+      return true;
+    case "l":
+    case "right":
+      app.prSplit = stepSplit(splits, app.prSplit, 1);
+      cx.notify();
+      return true;
+    case "m": return dispatch("merge", "merge");
+    case "c": return dispatch("ci_fix", "CI fix");
+    case "v": return dispatch("review", "review");
+    case "t": return dispatch("address", "threads");
+    case "C": return needsRow((p) => {
+      if (p.localPath) app.say("already cloned", "error");
+      else app.prAct(p, "clone", cx);
+      cx.notify();
+      return true;
+    });
+    case "X": return needsRow((p) => {
+      closePr(app, p);
+      return true;
+    });
+    case "o": return needsRow((p) => {
+      app.openUrl(p.url);
+      return true;
+    });
+    case "enter": return needsRow((p) => {
+      if (p.task) app.prAct(p, "open_task", cx);
+      else app.openUrl(p.url);
+      return true;
+    });
+    case "space":
+    case " ":
+    case "x": return needsRow((p) => {
+      app.prOpen ??= new Set();
+      const k = prKey(p);
+      app.prOpen.has(k) ? app.prOpen.delete(k) : app.prOpen.add(k);
+      cx.notify();
+      return true;
+    });
+    case "f":
+      app.pickRepo([...new Set((app.prAllRepos ?? []))].sort(), cx);
+      return true;
+    case "F":
+      app.prRepo = null;
+      cx.notify();
+      return true;
+    case "R":
+      app.refreshPrs(cx);
+      return true;
+    case "escape":
+    case "P":
+    case "q":
+      app.go("board", cx);
+      return true;
+    default:
+      break;
+  }
+  if (/^[1-7]$/.test(name)) {
+    const d = Number(name);
+    if (d === 7) app.showPrList("all", cx);
+    else {
+      app.showPrList("inbox", cx);
+      app.prSplit = PR_SPLITS[d - 1][0];
+    }
+    cx.notify();
+    return true;
+  }
+  return false;
 }
 
 /** The PR page. */
@@ -114,6 +295,12 @@ export function prsPage(app, t) {
   const all = snap?.prs ?? [];
   const shown = filterPrs(all, { split: app.prSplit, repo: app.prRepo, query: app.query });
   const clones = new Map((snap?.clones ?? []).filter((c) => c.state === "cloning").map((c) => [c.repo, c]));
+  // What the keys use: the rows as drawn, the splits that hold PRs and the repos to filter by.
+  const rows = shown.slice(0, 200);
+  app.prRows = rows;
+  app.prSplitIds = [null, ...PR_SPLITS.map(([id]) => id).filter((id) => all.some((p) => p.split === id))];
+  app.prAllRepos = [...new Set(all.map((p) => p.repo))];
+  if (rows.length && !rows.some((p) => prKey(p) === app.prSel)) app.prSel = prKey(rows[0]);
   return v_flex()
     .flex_1()
     .min_w(0)
@@ -149,6 +336,6 @@ export function prsPage(app, t) {
         .gap(6)
         .when(!snap, (el) => el.child(h_flex().gap(8).p(12).text_color(t.dim).child(spinner(t, 13)).child("Reading the PRs…")))
         .when(Boolean(snap) && shown.length === 0, (el) => el.child(div().p(12).text_size(12.5).text_color(t.dim).child(all.length ? "No PR in this split." : app.prList === "all" ? "The machine has not read your repos yet: it polls them every 15 minutes, Refresh starts it now." : "No open PR involves you.")))
-        .children(shown.slice(0, 200).map((pr) => row(app, t, pr, clones.get(pr.repo)))),
+        .children(rows.map((pr) => row(app, t, pr, clones.get(pr.repo)))),
     );
 }

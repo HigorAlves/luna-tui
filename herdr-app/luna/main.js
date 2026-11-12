@@ -10,6 +10,8 @@ import * as fs from "fs/promises";
 import { Machine } from "./api.js";
 import { boardPage, sidebar } from "./board.js";
 import { initDialog, renderDialog } from "./dialogs.js";
+import { focusColumn, markToggle, openKeys, openPalette, unfoldColumn } from "./boardkeys.js";
+import { getCtl, keyName } from "./controls.js";
 import { inspector } from "./inspector.js";
 import { actionsFor, applyEvent, gateQuestion, needsYou, plainTitle } from "./model.js";
 import { ACTIONS, COMMANDS, DIALOGS, PAGES, TABS } from "./registry.js";
@@ -300,6 +302,13 @@ export default class Luna extends View {
     this.dialog({ kind: "confirm", ...spec }, spec.height ?? 230);
   }
 
+  // The board's clicks and the keys that open a dialog; the rules are in controls.js and boardkeys.js.
+  toggleMark(id, cx) { markToggle(this, id, cx); }
+  unfold(name, cx) { unfoldColumn(this, name, cx); }
+  focusColumn(name, cx) { focusColumn(this, name, cx); }
+  palette() { openPalette(this); }
+  keysSheet() { openKeys(this); }
+
   newTask() {
     const repos = [...new Set(this.tasks.map((t) => t.repoPath).filter(Boolean))];
     const current = this.tasks.find((t) => t.id === this.selected)?.repoPath ?? repos[0] ?? "";
@@ -422,6 +431,24 @@ export default class Luna extends View {
       this.selected = pick.id;
       this.loadDetail(pick.id, cx);
     }
+    // What a dialog leaves behind: a command line from the palette, the result of a bulk action.
+    const cmd = shared("luna.command");
+    if (cmd?.at && cmd.at !== this.seenShared.command) {
+      this.seenShared.command = cmd.at;
+      try {
+        this.inboxCommand(String(cmd.line ?? ""), cx);
+      } catch (e) {
+        this.say(e?.message ?? String(e), "error");
+      }
+    }
+    const bulk = shared("luna.bulk");
+    if (bulk?.at && bulk.at !== this.seenShared.bulk) {
+      this.seenShared.bulk = bulk.at;
+      const ctl = getCtl(this);
+      for (const id of bulk.done ?? []) ctl.marked.delete(id);
+      if (bulk.text) this.say(bulk.text, bulk.failed ? "error" : null);
+      if (bulk.refreshPrs) this.refreshPrs(cx);
+    }
     const repo = shared("luna.prRepo");
     if (repo?.at && repo.at !== this.seenShared.repo) {
       this.seenShared.repo = repo.at;
@@ -510,13 +537,6 @@ export default class Luna extends View {
   }
 
   key(e, cx) {
-    if (!this.searchFocused) {
-      try {
-        if (this.currentPage().key?.(this, e, cx)) return cx.stop_propagation();
-      } catch {
-        // fall through to the board's keys
-      }
-    }
     if (this.searchFocused) {
       if (e.key === "escape") {
         this.handle.focus();
@@ -524,10 +544,22 @@ export default class Luna extends View {
       }
       return;
     }
-    const keys = { j: "next", down: "next", k: "prev", up: "prev", escape: "close", r: "refresh", n: "new", "/": "search", enter: "approve", 1: "board", 2: "prs" };
-    const c = keys[e.key];
-    if (!c || (c === "close" && !this.selected)) return;
-    this.command(c, cx);
+    try {
+      if (this.currentPage().key?.(this, e, cx)) return cx.stop_propagation();
+    } catch {
+      // fall through to the app's keys
+    }
+    const name = keyName(e);
+    if (name === "?") openKeys(this);
+    else if (name === ":") openPalette(this);
+    else if (name === "b" && this.page !== "board") this.go("board", cx);
+    else if (name === "P" && this.page !== "prs") this.go("prs", cx);
+    else {
+      const keys = { j: "next", down: "next", k: "prev", up: "prev", escape: "close", r: "refresh", n: "new", "/": "search", enter: "approve", a: "approve" };
+      const c = keys[name];
+      if (!c || (c === "close" && !this.selected)) return;
+      this.command(c, cx);
+    }
     cx.stop_propagation();
   }
 

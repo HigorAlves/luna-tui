@@ -3,6 +3,7 @@
 // knowing them. A feature keeps its own state in `app.state(<its id>)`.
 //
 // PAGES    {id, label, icon, hidden?: true (stream-only, not in the sidebar), group?: "work" | "inbox" | "insight", render(app, t), enter?(app, cx),
+//           keys?: [{name, rows: [[keys, does]]}] (listed in the keys sheet on that page),
 //           onMessage?(app, {event, data}, cx) -> true when it used it, badge?(app) -> {n, tone} | null,
 //           key?(app, e, cx) -> true when it handled the key}
 // TABS     inspector tabs: {id, label, order, count?(app, task, detail), render(app, t, task, detail), enter?(app, task, cx)}

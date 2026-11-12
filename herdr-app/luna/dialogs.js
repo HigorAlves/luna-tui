@@ -49,7 +49,7 @@ export function initDialog(app, cx) {
     app.reason = area("What it needs to know", 4);
   }
   if (d.kind === "new_task") {
-    app.title = field("What should be done");
+    app.title = field("What should be done", d.title ?? "");
     app.repo = field("/path/to/repository", d.repoPath ?? "");
     app.reason = area("Description (optional)", 4);
     app.criteria = area("Acceptance criteria, one per line (optional)", 4);
@@ -271,6 +271,8 @@ export function renderDialog(app, t) {
     .id("dialog")
     .track_focus(app.handle)
     .on_key_down((e, cx) => {
+      // A registered dialog may take keys first (the palette's arrows, the keys sheet's q).
+      if (registered?.key?.(app, e, cx)) return cx.stop_propagation();
       if (e.key === "escape") {
         closeOverlay(props().overlay);
         cx.stop_propagation();
