@@ -8,6 +8,7 @@ import type { BlockedRow } from "../../adapters/docker/egress.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type CheckCommand, checkCommand } from "../../domain/checks.ts";
 import { envBrokenDetail } from "../env-broken.ts";
+import { type SessionExec, openChecksSession } from "./checks-session.ts";
 
 const TAIL_LINES = 60;
 const GATE_NAME = /lint|type-?check|tsc|format|fmt|prettier|eslint|biome/i;
@@ -44,10 +45,22 @@ export interface CheckRun {
   missingTool?: { cmd: string; tail: string };
 }
 
-type Exec = (command: string, args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number; env?: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[] }) => Promise<ExecResult & { blocked?: BlockedRow[] }>;
+type Exec = SessionExec<(command: string, args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number; env?: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[] }) => Promise<ExecResult & { blocked?: BlockedRow[] }>>;
 
-/** Runs the commands in order inside one budget of `timeoutMs`; a command that finds the budget spent is reported as failed and skipped. */
-export async function runChecks(opts: { commands: readonly CheckCommand[]; exec: Exec; cwd: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; stage: string; timeoutMs: number; onBlocked?: (check: string, rows: BlockedRow[]) => void }): Promise<CheckRun> {
+type RunChecksOptions = { commands: readonly CheckCommand[]; exec: Exec; cwd: string; signal?: AbortSignal; env: NodeJS.ProcessEnv; services?: Record<string, ServiceSpec>; repoPath?: string; stage: string; timeoutMs: number; onBlocked?: (check: string, rows: BlockedRow[]) => void };
+
+/** Runs the commands in order inside one budget of `timeoutMs`; a command that finds the budget spent is reported as failed and skipped.
+ *  The repository's services start once for the whole pass (when the exec can open a session) and are removed when it ends, however it ends. */
+export async function runChecks(opts: RunChecksOptions): Promise<CheckRun> {
+  const pass = await openChecksSession(opts.exec, { cwd: opts.cwd, ...(opts.repoPath ? { repoPath: opts.repoPath } : {}), ...(opts.services && opts.commands.length > 0 ? { services: opts.services } : {}) });
+  try {
+    return await runCommands({ ...opts, exec: pass.exec });
+  } finally {
+    await pass.close();
+  }
+}
+
+async function runCommands(opts: RunChecksOptions): Promise<CheckRun> {
   const reports: CheckReport[] = [];
   const log: string[] = [];
   const deadline = Date.now() + opts.timeoutMs;

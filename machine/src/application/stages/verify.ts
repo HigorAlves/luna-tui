@@ -20,6 +20,7 @@ import { verifySteps } from "../../domain/verify-order.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
+import { type SessionExec, openChecksSession } from "./checks-session.ts";
 
 const MINUTE = 60_000;
 export const CHECKS_TIMEOUT_MS = 30 * MINUTE;
@@ -28,11 +29,11 @@ const CHECK_NAMES = ["test", "lint", "typecheck"] as const;
 
 export interface VerifyDeps {
   /** Runs a check command in the runner image; null when there is no sandbox, and then no check runs: the repository's commands never run on the host. */
-  exec: ((
+  exec: SessionExec<(
     command: string,
     args: string[],
     options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; image?: string },
-  ) => Promise<ExecResult>) | null;
+  ) => Promise<ExecResult>> | null;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
   runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) => Promise<StageResult>) | null;
   stateDir: string;
@@ -306,50 +307,63 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
 
     const log: string[] = [];
     const deadline = Date.now() + CHECKS_TIMEOUT_MS;
-    for (const { name, cmd, argv, secrets: declaredSecrets } of commands) {
-      const remaining = deadline - Date.now();
-      let result: ExecResult;
-      let timedOut = false;
-      if (remaining <= 0) {
-        result = { code: 1, stdout: "", stderr: "skipped: the 30 minute checks budget ran out" };
-        timedOut = true;
-      } else {
-        try {
-          result = await checkExec(argv[0]!, argv.slice(1), {
-            cwd,
-            signal,
-            timeoutMs: remaining,
-            env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
-            services,
-            ...(task.repoPath ? { repoPath: task.repoPath } : {}),
-            ...(declaredSecrets && declaredSecrets.length > 0 ? { secrets: declaredSecrets } : {}),
-            ...(state.image ? { image: state.image } : {}),
-          });
-        } catch (error) {
-          const escalated = escalationOf(error);
-          if (escalated) return escalated;
-          throw error;
+    // The repo's services start once for every check, not once per check, and come down however the loop ends.
+    let pass: Awaited<ReturnType<typeof openChecksSession<typeof checkExec>>>;
+    try {
+      pass = await openChecksSession(checkExec, { cwd, ...(task.repoPath ? { repoPath: task.repoPath } : {}), services: commands.length > 0 ? services : {} });
+    } catch (error) {
+      const escalated = escalationOf(error);
+      if (escalated) return escalated;
+      throw error;
+    }
+    try {
+      for (const { name, cmd, argv, secrets: declaredSecrets } of commands) {
+        const remaining = deadline - Date.now();
+        let result: ExecResult;
+        let timedOut = false;
+        if (remaining <= 0) {
+          result = { code: 1, stdout: "", stderr: "skipped: the 30 minute checks budget ran out" };
+          timedOut = true;
+        } else {
+          try {
+            result = await pass.exec(argv[0]!, argv.slice(1), {
+              cwd,
+              signal,
+              timeoutMs: remaining,
+              env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
+              services,
+              ...(task.repoPath ? { repoPath: task.repoPath } : {}),
+              ...(declaredSecrets && declaredSecrets.length > 0 ? { secrets: declaredSecrets } : {}),
+              ...(state.image ? { image: state.image } : {}),
+            });
+          } catch (error) {
+            const escalated = escalationOf(error);
+            if (escalated) return escalated;
+            throw error;
+          }
+          timedOut = result.code !== 0 && Date.now() >= deadline;
+          for (const payload of blockedPayloads((result as { blocked?: Parameters<typeof blockedPayloads>[0] }).blocked, "check")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
         }
-        timedOut = result.code !== 0 && Date.now() >= deadline;
-        for (const payload of blockedPayloads((result as { blocked?: Parameters<typeof blockedPayloads>[0] }).blocked, "check")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
+        if (signal.aborted) return aborted();
+        // The shell's "command not found": the runner image lacks the tool. No implementing
+        // attempt can fix that, so this escalates instead of burning the retry cap.
+        if (result.code === 127) {
+          return {
+            outcome: "escalated",
+            detail: {
+              step: "checks",
+              reason: `\`${cmd}\` cannot run: the runner image lacks the tool (exit 127: ${tailOf(result.stderr || result.stdout).trim() || "command not found"})`,
+              options: ["add the tool to machine/runner/Dockerfile and rebuild (pnpm images)", "change the repo's test command"],
+            },
+          };
+        }
+        const text = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`;
+        const tail = tailOf(timedOut ? `${text}\ntimed out: the 30 minute checks budget ran out` : text);
+        log.push(`$ ${cmd}\n(exit ${result.code})\n${text}\n`);
+        reports.push({ name, cmd, ok: result.code === 0, tail });
       }
-      if (signal.aborted) return aborted();
-      // The shell's "command not found": the runner image lacks the tool. No implementing
-      // attempt can fix that, so this escalates instead of burning the retry cap.
-      if (result.code === 127) {
-        return {
-          outcome: "escalated",
-          detail: {
-            step: "checks",
-            reason: `\`${cmd}\` cannot run: the runner image lacks the tool (exit 127: ${tailOf(result.stderr || result.stdout).trim() || "command not found"})`,
-            options: ["add the tool to machine/runner/Dockerfile and rebuild (pnpm images)", "change the repo's test command"],
-          },
-        };
-      }
-      const text = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`;
-      const tail = tailOf(timedOut ? `${text}\ntimed out: the 30 minute checks budget ran out` : text);
-      log.push(`$ ${cmd}\n(exit ${result.code})\n${text}\n`);
-      reports.push({ name, cmd, ok: result.code === 0, tail });
+    } finally {
+      await pass.close();
     }
     reports.push(...skipped);
     // No test command (a docs, shell or markdown-only repo): the pack still proves each

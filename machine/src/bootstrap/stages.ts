@@ -211,13 +211,31 @@ export async function buildRealStages(
   // The machine installs from the lockfile before a stage that writes, and before a check on a card's workspace (Verify's fresh one included).
   const install = (input: InstallInput): Promise<InstallOutcome> =>
     ensureInstalled({ stateDir: config.stateDir, policies, repoImages, imageId, lockfilesAt, nestedLockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c, names) => lockfilesAt(w, c, names), userBlobs: (r, c, names) => blobsAtRepo(r, c, names), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
-  const checksExec: typeof sandboxChecks = async (command, args, options = {}) => {
+  const installFor = async (options: { repoPath?: string; cwd?: string; signal?: AbortSignal }): Promise<void> => {
     if (options.repoPath && options.cwd && isClone(options.cwd)) {
       const installed = await install({ taskId: "_checks", repoPath: options.repoPath, workspace: options.cwd, commit: await headCommit(options.cwd), ...(options.signal ? { signal: options.signal } : {}) });
       if (!installed.ok) throw new InstallFailedError(installed.detail);
     }
-    return sandboxChecks(command, args, options);
   };
+  const checksExec: typeof sandboxChecks = Object.assign(
+    async (command: string, args: string[], options: Parameters<typeof sandboxChecks>[2] = {}) => {
+      await installFor(options);
+      return sandboxChecks(command, args, options);
+    },
+    {
+      // A pass of checks shares one set of services; each check still installs first, as above.
+      session: async (opened: Parameters<typeof sandboxChecks.session>[0]) => {
+        const session = await sandboxChecks.session(opened);
+        return {
+          exec: async (command: string, args: string[], options: Parameters<typeof session.exec>[2] = {}) => {
+            await installFor(options);
+            return session.exec(command, args, options);
+          },
+          close: session.close,
+        };
+      },
+    },
+  );
   // The app the browser run drives (`verify.e2e.start`): the repository's image, its own network with the check list, never the agent's.
   const appDeps: AppDeps = {
     policies,

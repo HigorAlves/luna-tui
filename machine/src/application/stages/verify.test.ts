@@ -48,13 +48,15 @@ function setup(opts: {
   counted?: { added: number; removed: number } | null;
   size?: { target_loc: [number, number]; hard_limit_loc: number; max_children: number; max_rounds: number; depth: number };
   approvals?: StageContext["approvals"];
+  /** An exec that can open a session of checks sharing one set of services. */
+  session?: () => Promise<{ exec: (command: string, args: string[], options?: unknown) => Promise<ExecResult>; close: () => Promise<void> }>;
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
-  const exec = vi.fn(async (command: string, args: string[], _options?: { env?: NodeJS.ProcessEnv; services?: unknown }) => {
+  const exec = Object.assign(vi.fn(async (command: string, args: string[], _options?: { env?: NodeJS.ProcessEnv; services?: unknown }) => {
     calls.push([command, ...args]);
     return opts.checks?.[[command, ...args].join(" ")] ?? { code: 0, stdout: "ok\n", stderr: "" };
-  });
+  }), opts.session ? { session: opts.session } : {});
   const runPack = vi.fn(async () => opts.pack ?? { outcome: "pass" as const, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } });
   const run = verifyRunner({
     exec,
@@ -472,6 +474,22 @@ describe("verifying stage", () => {
     const { run, context, exec } = setup({ services });
     await run(context);
     expect(exec.mock.calls[0]![2]).toMatchObject({ services });
+  });
+
+  it("starts the repo's services once for all its checks, and removes them when a check fails too", async () => {
+    const services = { postgres: { image: "postgres:16" } };
+    const events: string[] = [];
+    const opened = vi.fn(async () => ({
+      exec: async (command: string, args: string[]) => (events.push(`check ${[command, ...args].join(" ")}`), { code: args.includes("lint") ? 1 : 0, stdout: "", stderr: "" }),
+      close: async () => void events.push("close"),
+    }));
+    const { run, context, exec } = setup({ services, session: opened });
+    const result = await run(context);
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(exec).not.toHaveBeenCalled();
+    expect(events.filter((e) => e.startsWith("check")).length).toBeGreaterThan(1);
+    expect(events.filter((e) => e === "close")).toHaveLength(1);
+    expect(result.outcome).toBe("fail");
   });
 
   it("runs the review pack when checks pass and fails on its fail verdict", async () => {
