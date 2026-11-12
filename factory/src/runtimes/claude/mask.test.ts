@@ -42,6 +42,13 @@ describe("the Claude runtime with a mask", () => {
     expect(options).not.toHaveProperty("skills");
   });
 
+  it("registers only the luna tools the pack's access lists, so a pack is never offered a tool it is refused", async () => {
+    const { options } = await optionsFor("plan");
+    const registered = Object.keys((options?.mcpServers?.luna as { instance?: { _registeredTools?: Record<string, unknown> } }).instance?._registeredTools ?? {});
+    expect(registered.sort()).toEqual([...PACKS.plan.access.luna].sort());
+    expect(registered).not.toContain("card_search");
+  });
+
   it("with one, leaves out the masked tool, the subagents and the luna tool, and filters the skills", async () => {
     const { options } = await optionsFor("triage", { web: true, agent: true, luna: ["card_search"], skills: ["code-discovery"] });
     for (const list of [options?.tools, options?.allowedTools]) {

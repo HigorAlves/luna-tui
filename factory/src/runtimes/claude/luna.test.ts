@@ -36,6 +36,15 @@ describe("luna tools", () => {
     expect(server.type).toBe("sdk");
   });
 
+  it("registers only the tools it is asked to serve, and delegate when it delegates", () => {
+    const { call } = setup();
+    const names = (server: ReturnType<typeof lunaServer>) => Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools).sort();
+    expect(names(lunaServer(call, null, ["step", "decision_get"]))).toEqual(["decision_get", "step"]);
+    expect(names(lunaServer(call, null, []))).toEqual([]);
+    expect(names(lunaServer(call, { description: "d", input: {} } as never, ["step"]))).toEqual(["delegate", "step"]);
+    expect(names(lunaServer(call))).toContain("card_search");
+  });
+
   it("keeps the slice ledger: init once, set by id, list, persisted to disk after every change", async () => {
     const { dir, server, state, events } = setup();
     expect(await call(server, "slice_init", { slices: [{ id: 1, title: "a", estLoc: 10 }, { id: 2, title: "b" }] })).toMatchObject({ schema: 1, slices: [{ id: 1, status: "pending", estLoc: 10 }, { id: 2, status: "pending", estLoc: null }] });

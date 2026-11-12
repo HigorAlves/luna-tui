@@ -73,7 +73,6 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   const mask = input.context.economy?.mask;
   const pack = maskedPack(ctx.pack, mask);
   if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
-  const maskedLuna = ctx.pack.access.luna.filter((tool) => !pack.access.luna.includes(tool));
   // A call's event joins the stream's tool_use and the hook's decision, whichever comes first.
   const calls = new CallJoin(emit, isGuarded);
   // The token economy (RFC 0007), when the machine sent its input: each finished call is read and folded
@@ -109,7 +108,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     permissionMode: "dontAsk" as const,
     maxTurns: input.limits.maxTurns,
     outputFormat: { type: "json_schema" as const, schema: answerJsonSchema(pack) },
-    mcpServers: { luna: lunaServer(luna.call, ctx.delegate ?? null, maskedLuna) },
+    mcpServers: { luna: lunaServer(luna.call, ctx.delegate ?? null, pack.access.luna) },
     hooks: {
       PreToolUse: preToolUseGuards(guardPolicy({ ...ctx, pack }), (id, tool, toolInput, decision) => calls.decided(id, tool, toolInput, decision)),
       ...economy,
