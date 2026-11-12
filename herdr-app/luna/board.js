@@ -79,7 +79,7 @@ export function sidebar(app, t) {
       return null;
     }
   };
-  const nav = PAGES.map((p) => {
+  const nav = PAGES.filter((p) => !p.hidden).map((p) => {
     const b = badge(p);
     return sideRow(t, `page-${p.id}`, { label: p.label, iconName: p.icon, count: b?.n ?? null, countTone: b?.tone ?? null, active: app.page === p.id }, (_e, cx) => app.go(p.id, cx));
   });
