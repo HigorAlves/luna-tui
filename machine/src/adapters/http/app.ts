@@ -151,6 +151,8 @@ export interface AppDeps {
   runs?: PackRunsPort;
   /** Proofs of a repository's own luna.yaml for the setup skill; without it (no sandbox) `POST /repos/config/prove` answers 503. */
   configProofs?: ConfigProofs;
+  /** What keeps the machine from doing its job (`readinessProblems`), read on each `GET /health`; absent, `/health` is always ok. */
+  problems?: () => Promise<string[]> | string[];
 }
 
 class BadRequest extends Error {}
@@ -198,7 +200,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs }: AppDeps): Hono {
+export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus, backlog, tickets, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, shipView, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs, configProofs, problems: problemsOf }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -281,7 +283,12 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     return fail(c, 500, "internal", error.message);
   });
 
-  app.get("/health", (c) => c.json({ ok: true, slots: pipeline.slots }));
+  // 503 with the problems when the machine cannot do its job (no GitHub token, no git identity, stub stages): the compose healthcheck and `up --wait` then fail visibly. The stage pool is still in the body.
+  app.get("/health", async (c) => {
+    const problems = (await problemsOf?.()) ?? [];
+    if (problems.length === 0) return c.json({ ok: true, slots: pipeline.slots });
+    return c.json({ ok: false, problems, slots: pipeline.slots }, 503);
+  });
 
   /** Every pack in the registry, with the task states it runs in. */
   app.get("/packs", (c) => c.json(PackId.options.map((id) => packInfo(PACKS[id]))));

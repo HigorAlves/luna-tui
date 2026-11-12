@@ -6,6 +6,7 @@ import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAct
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
+import { readinessProblems } from "./application/readiness.ts";
 import { Bus } from "./adapters/http/bus.ts";
 import { StreamWatcher } from "./adapters/http/watch.ts";
 import { parseSince } from "./adapters/http/metrics.ts";
@@ -300,7 +301,7 @@ const stackDeps = {
 };
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
-const { real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe } = await buildRealStages(
+const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -799,6 +800,8 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
   return { ok: true };
 };
 const app = createApp({
+  // The identity is read on each call, so a machine fixed in place turns healthy without a restart; the token and the stub reason are fixed at boot.
+  problems: async () => readinessProblems({ githubToken: config.githubToken, identity: await gitIdentity(process.cwd()), stubReason }),
   approveBase,
   ...(config.economy ? { economy: { port: economy, knownRepos, configOf: async (repo: string) => (await policies.for(repo)).factory.economy } } : {}),
   repoHealth: () =>

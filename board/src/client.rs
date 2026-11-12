@@ -152,7 +152,11 @@ impl Machine {
 
     /// The stage pool, from `/health`.
     pub fn health(&self) -> Result<Health, String> {
-        Self::typed(self.agent.get(self.url("/health")).call())
+        match self.agent.get(self.url("/health")).call() {
+            // A machine that cannot do its job (no GitHub token, no git identity, stub stages) answers 503 with its problems and still its pool.
+            Ok(mut response) if response.status().as_u16() == 503 => response.body_mut().read_json().map_err(|e| format!("unexpected reply from the machine: {e}")),
+            reply => Self::typed(reply),
+        }
     }
 
     /// Take no new work; running stages finish.
@@ -613,8 +617,9 @@ fn pick_up(candidates: &[String], token: &Option<String>) -> String {
     if candidates.len() == 1 {
         return candidates[0].clone();
     }
-    let probe: Agent = builder(token).timeout_global(Some(PROBE_TIMEOUT)).build().into();
-    pick(candidates, |base| probe.get(format!("{base}/health")).call().is_ok()).to_string()
+    // A machine with problems answers 503: it is up, and the one to talk to.
+    let probe: Agent = builder(token).http_status_as_error(false).timeout_global(Some(PROBE_TIMEOUT)).build().into();
+    pick(candidates, |base| probe.get(format!("{base}/health")).call().is_ok_and(|r| r.status().is_success() || r.status().as_u16() == 503)).to_string()
 }
 
 /// Follows `/events` on a background thread, reconnecting while the machine is down. Each
@@ -874,6 +879,52 @@ mod token_tests {
         assert_eq!(rx.recv().unwrap().as_deref(), Some("bearer s3cret"));
         Machine::at(&format!("http://{addr}")).tasks().unwrap();
         assert_eq!(rx.recv().unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod unhealthy_tests {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        net::TcpListener,
+    };
+
+    use super::*;
+
+    /// A machine whose `/health` answers 503 with its problems and its pool, as one without a GitHub token does.
+    fn unhealthy_machine() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let body = r#"{"ok":false,"problems":["no GitHub token"],"slots":{"max":3,"active":1,"draining":false}}"#;
+                let reply = format!("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+                let _ = reader.into_inner().write_all(reply.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[test]
+    fn a_machine_with_problems_still_shows_its_pool() {
+        let machine = Machine::at(&unhealthy_machine());
+        let health = machine.health().unwrap();
+        assert!(!health.ok);
+        assert_eq!((health.slots.max, health.slots.active), (3, 1));
+    }
+
+    #[test]
+    fn a_machine_with_problems_is_still_the_one_that_is_up() {
+        let base = unhealthy_machine();
+        let candidates = vec!["http://127.0.0.1:1".to_string(), base.clone()];
+        assert_eq!(pick_up(&candidates, &None), base);
     }
 }
 
