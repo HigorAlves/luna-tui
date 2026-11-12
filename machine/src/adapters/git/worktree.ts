@@ -256,6 +256,27 @@ export async function rebaseOntoBase(
   return { ok: true, onto: `origin/${base}`, ...(settled.ok && settled.resolved.length ? { resolved: settled.resolved } : {}), ...(merged ? { merged: true as const } : {}) };
 }
 
+/**
+ * The commits after `since` (a head the machine read, the one a merged PR carried) replayed onto `origin/<base>`, once, never pushed: `rebase --onto`
+ * leaves out everything up to `since`, which the base already holds as the PR's squash. A replay that stops on a conflict is aborted, and the base is
+ * merged into the branch instead (a merge compares final results, as in `rebaseOntoBase`); when that stops too, the worktree is left as it was.
+ */
+export async function replayAfter(run: GitExec, worktreePath: string, since: string, base: string, options: RebaseOptions = {}): Promise<RebaseResult> {
+  if (!isBranchName(base)) return { ok: false, error: `no usable default branch: ${JSON.stringify(base)}`, conflicts: [] };
+  if (!/^[0-9a-f]{40,64}$/.test(since)) return { ok: false, error: "the merged head is not a commit sha", conflicts: [] };
+  const git = (...args: string[]) => run("git", [...HOST_GIT, ...at(worktreePath), ...args]);
+  const fetched = await run("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--end-of-options", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`], { timeoutMs: FETCH_TIMEOUT });
+  if (fetched.code !== 0) return failed("git fetch", fetched);
+  const onto = `refs/remotes/origin/${base}`;
+  const rebased = await git("-c", "commit.gpgsign=false", "rebase", "--empty=drop", "--onto", onto, since);
+  const settled = await settleRebase(run, worktreePath, rebased, options);
+  if (settled.ok) return { ok: true, onto: `origin/${base}`, ...(settled.resolved.length ? { resolved: settled.resolved } : {}) };
+  if (settled.conflicts.length === 0 || options.mergeFallback === false) return settled;
+  const instead = await mergeBaseInstead(run, worktreePath, onto, `origin/${base}`);
+  if (!instead.ok) return { ...settled, conflicts: instead.conflicts.length > 0 ? instead.conflicts : settled.conflicts };
+  return { ok: true, onto: `origin/${base}`, merged: true };
+}
+
 /** The same function, under the name every caller before the stack used. */
 export const rebaseOntoDefault = rebaseOntoBase;
 

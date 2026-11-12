@@ -83,7 +83,8 @@ describe("ci_watch on a card whose own PR already merged", () => {
     expect(result.detail).toMatchObject({ alreadyMerged: true, number: 214, merged: { by: "person" } });
     expect(github.prChecks).not.toHaveBeenCalled();
     expect(rebase).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
+    // Only the read of the branch's head, to look for commits made after the merge: nothing is pushed or rebased.
+    expect(exec.mock.calls.filter((c) => !(c[1] as string[]).includes("rev-parse"))).toEqual([]);
   });
 });
 

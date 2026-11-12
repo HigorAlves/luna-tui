@@ -1,7 +1,7 @@
 // The delivering stage: push the task's branch and open a draft PR on the host, so CI starts
 // early. The push is git with your own credentials; the PR is the GitHub port.
 import { at } from "../../adapters/git/machine-repo.ts";
-import { HOST_GIT, type RebaseResult, branchBase, defaultBranchFile, isBranchName, leaveStack, originSlugOf, rebaseOntoBase, stackOf, unstack as hostUnstack } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, type RebaseResult, branchBase, defaultBranchFile, isBranchName, leaveStack, originSlugOf, rebaseOntoBase, replayAfter, stackOf, unstack as hostUnstack } from "../../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../../adapters/process/exec.ts";
 import { PR_TEMPLATE_PATHS, type PrExtra, buildPr, mergePrSection } from "../../domain/prbody.ts";
 import { approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
@@ -12,7 +12,7 @@ import { cardOf } from "../../domain/card-fields.ts";
 import { isDocsOnly } from "../../domain/docs-only.ts";
 import { looksLikeTestPath } from "../../domain/locked-files.ts";
 import type { StackFacts } from "../stack.ts";
-import { alreadyMerged } from "./already-merged.ts";
+import { type MergedPr, alreadyMerged } from "./already-merged.ts";
 import type { MergeInput, MergeOutcome } from "./ship-merge.ts";
 
 export type ExecFn = (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<ExecResult>;
@@ -143,6 +143,128 @@ export async function landedOnBase(run: ExecFn, worktreePath: string, baseRef: s
   return { landed, remaining };
 }
 
+export interface FollowUpDeps {
+  exec: ExecFn;
+  github: GitHub;
+  /** The repository's PR template; default: read from its default branch. */
+  prTemplate?: (repoPath: string | null) => Promise<string | null>;
+  /** Resolves a conflict the replay and the plain merge could not (the merge round); absent, such a conflict asks a person. */
+  resolveConflicts?: (context: StageContext, input: MergeInput) => Promise<MergeOutcome>;
+}
+
+const SHORT_COMMITS = 10;
+
+/** A commit as a person reads it: the short sha and the subject. */
+async function commitLines(exec: ExecFn, cwd: string, range: string): Promise<string[] | null> {
+  const out = await exec("git", [...HOST_GIT, ...at(cwd), "log", "--reverse", "--no-color", "--format=%h %s", range]).catch(() => null);
+  return out && out.code === 0 ? out.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : null;
+}
+
+/**
+ * The card's own PR merged, and the card went on: commits made after the merge are not in that PR, and ending the card as shipped would drop
+ * them without a word. Null when there are none (or they cannot be told from what the merge carried): the card shipped. Otherwise they are
+ * replayed onto `origin/<default branch>`, pushed (the branch is the card's own, so with a lease) and opened as a NEW PR that says it follows
+ * up the merged one, and the stage goes on as a delivery: the card waits on that PR. A replay that stops goes to the merge round, as a
+ * conflicting delivery does; when nothing applies them, a person is asked, with the commits named.
+ */
+export async function followUpAfterMerge(deps: FollowUpDeps, context: StageContext, slug: string, merged: MergedPr): Promise<StageResult | null> {
+  const { task } = context;
+  const wt = task.worktreePath;
+  const branch = task.branch;
+  const base = merged.base;
+  if (!wt || !branch || !task.repoPath || !base || !isBranchName(base)) return null;
+  const git = (...args: string[]) => deps.exec("git", [...HOST_GIT, ...at(wt), ...args]);
+  const before = await headSha(deps.exec, wt);
+  if (!before) return null;
+  const mergedHead = merged.sha === null ? null : await deps.github.prHeadSha(slug, merged.number).catch(() => null);
+  const since = mergedHead && SHA.test(mergedHead) ? mergedHead : null;
+  // What the merged PR carried is the PR's head as GitHub has it. A head this repository does not hold (the range fails) is as good as unknown.
+  let commits = since ? await commitLines(deps.exec, wt, `${since}..HEAD`) : null;
+  const known = commits !== null;
+  if (commits?.length === 0) return null;
+  const baseRef = `refs/remotes/origin/${base}`;
+  const fetched = await git("fetch", "--quiet", "--end-of-options", "origin", `+refs/heads/${base}:${baseRef}`);
+  if (fetched.code !== 0) {
+    // Without the base nothing can be told from content: what was done before stands. With commits known to be left, a person decides.
+    return known ? stuckAfterMerge(merged, commits ?? [], `the default branch could not be fetched: ${describe(fetched)}`, []) : null;
+  }
+  // What the merge squashed is on the base exactly as the card has it: every file the card changed is `landed`, and nothing is left to deliver.
+  const landed = await landedOnBase(deps.exec, wt, baseRef);
+  if (!landed || landed.remaining.length === 0) return null;
+  if (!known) commits = (await commitLines(deps.exec, wt, `${baseRef}..HEAD`)) ?? [];
+
+  const replayed = since ? await replayAfter(deps.exec, wt, since, base) : await rebaseOntoBase(deps.exec, wt, task.repoPath, async () => base);
+  const note = (result: StageResult, events: NonNullable<StageResult["events"]>): StageResult => ({ ...result, events: [...(result.events ?? []), ...events] });
+  const moved = async (): Promise<StageResult | null> => {
+    // The branch may have been deleted by the merge (nothing to lease), or still hold what the merged PR did: anything else is somebody's push.
+    const listed = await git("ls-remote", "--heads", "origin", `refs/heads/${branch}`);
+    if (listed.code !== 0) return pushFailure(`git ls-remote failed: ${describe(listed)}`);
+    const tip = /^([0-9a-f]{40,64})\s/.exec(listed.stdout)?.[1] ?? null;
+    if (tip && ![before, since].includes(tip)) return stuckAfterMerge(merged, commits ?? [], `the branch on GitHub is at ${tip.slice(0, 7)}, which neither the merged PR nor this card made; nothing was pushed`, []);
+    const error = await pushBranch(deps.exec, branch, wt, tip ? { force: true, lease: tip } : {});
+    return error ? pushFailure(error) : null;
+  };
+
+  let merging: { resolved: string[] } | null = null;
+  if (replayed.ok) {
+    const stop = await moved();
+    if (stop) {
+      await restoreHead(deps.exec, wt, before);
+      return stop;
+    }
+  } else {
+    const said = replayed.conflicts.length > 0 ? `replaying them onto ${base} stopped on: ${replayed.conflicts.join(", ")}` : `replaying them onto ${base} could not be done: ${replayed.error}`;
+    if (replayed.conflicts.length === 0 || !deps.resolveConflicts) return stuckAfterMerge(merged, commits ?? [], said, replayed.conflicts);
+    // The merge round works on a PR: the branch goes up as it is (the worktree was left as it was), and the PR is closed again if the round cannot land it.
+    const stop = await moved();
+    if (stop) return stop;
+  }
+  try {
+    const existing = await deps.github.findPr(slug, branch).catch(() => null);
+    const template = await (deps.prTemplate ?? prTemplateOf)(task.repoPath).catch(() => null);
+    const extra = { ...prExtraOf(context, null, template), followsUp: merged.number };
+    const ref = existing ?? (await openTaskPr(deps.github, slug, context, true, extra));
+    if (!replayed.ok) {
+      const said = replayed.conflicts.length > 0 ? `replaying them onto ${base} stopped on: ${replayed.conflicts.join(", ")}` : replayed.error;
+      const tip = (await git("rev-parse", "--verify", `${baseRef}^{commit}`)).stdout.trim();
+      const round = SHA.test(tip) ? await deps.resolveConflicts!(context, { slug, number: ref.number, base: { sha: tip, name: base }, label: "deliver-followup", pack: null }) : null;
+      if (!round?.ok) {
+        if (!existing) await deps.github.closePr(slug, ref.number).catch(() => {});
+        return stuckAfterMerge(merged, commits ?? [], `${said}; merging instead did not resolve it: ${round ? String(round.result.detail?.reason ?? round.result.detail?.error ?? "the merge did not land") : "the base's tip could not be read"}`, replayed.conflicts);
+      }
+      merging = { resolved: round.resolved };
+    }
+    return note(
+      {
+        outcome: "pass",
+        detail: { prUrl: ref.url, prNumber: ref.number, draft: ref.isDraft, reused: existing !== null, followUpOf: merged.number, replayed: (commits ?? []).slice(0, SHORT_COMMITS), onto: `origin/${base}`, ...(merging ? { merged: true, resolved: merging.resolved } : {}), ...(replayed.ok && replayed.merged ? { merged: true } : {}) },
+        events: [{ at: new Date().toISOString(), kind: "pr.opened", payload: { url: ref.url, number: ref.number } }],
+      },
+      [{ at: new Date().toISOString(), kind: "ship.merged_with_followup", payload: { merged: merged.number, followUp: ref.number, commits: (commits ?? []).slice(0, SHORT_COMMITS) } }],
+    );
+  } catch (error) {
+    return { outcome: "fail", detail: { error: messageOf(error) } };
+  }
+}
+
+/** The card's commits after the merge could not be applied: a person decides, with the commits named. */
+function stuckAfterMerge(merged: MergedPr, commits: string[], why: string, conflicts: string[]): StageResult {
+  const shown = commits.slice(0, SHORT_COMMITS);
+  const more = commits.length > shown.length ? ` and ${commits.length - shown.length} more` : "";
+  return {
+    outcome: "fail",
+    detail: {
+      error: `PR #${merged.number} merged, and this card has commits made after it that it does not carry (${shown.join("; ")}${more}); ${why}. Nothing was delivered.`,
+      escalation: "other",
+      verdict: "commits_after_merge",
+      commits: shown,
+      conflicts,
+      options: ["deliver them by hand", "drop them and close the card as shipped"],
+    },
+    events: [{ at: new Date().toISOString(), kind: "ship.merged_followup_stuck", payload: { merged: merged.number, commits: shown } }],
+  };
+}
+
 export function deliverRunner(deps: DeliverDeps): StageRunner {
   /** The default branch for a repository slug, read from GitHub; a failed read is unknown. */
   const defaultFor = (slug: string) => async (repoPath: string): Promise<string | null> =>
@@ -156,7 +278,9 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
     // The card's own PR may have merged while the card was outside the ship watch: it shipped, so nothing is rebased, merged or pushed again.
     if (context.recordedPrs?.length) {
       const own = await slugOf(task.worktreePath);
-      const shipped = own ? await alreadyMerged(deps.github, own, context.recordedPrs, () => defaultFor(own)(task.repoPath!)) : null;
+      const shipped = own
+        ? await alreadyMerged(deps.github, own, context.recordedPrs, () => defaultFor(own)(task.repoPath!), { branch: task.branch, followUp: (merged) => followUpAfterMerge(deps, context, own, merged) })
+        : null;
       if (shipped) return shipped;
     }
     // A stacked card: what its parent is now decides what is pushed, and what the PR targets.

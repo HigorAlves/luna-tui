@@ -112,9 +112,9 @@ describe("a card whose own PR already merged", () => {
     const result = await run({ ...context, recordedPrs: [214] });
     expect(result.outcome).toBe("pass");
     expect(result.detail).toMatchObject({ merged: { sha: "m".repeat(40), at: "2026-11-10T00:36:48Z", by: "person" }, prUrl: "https://github.com/acme/widgets/pull/214", number: 214, alreadyMerged: true });
-    expect(calls).toEqual([]);
+    // Only the read of the branch's head, to look for commits made after the merge (none can be told here): nothing is pushed, rebased or merged.
+    expect(calls.filter((c) => !c.includes("rev-parse"))).toEqual([]);
     expect(github.openPr).not.toHaveBeenCalled();
-    expect(github.findPr).not.toHaveBeenCalled();
   });
 
   it("looks at the newest recorded PR first, and finds the merged one among the older", async () => {

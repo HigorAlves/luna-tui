@@ -14,7 +14,7 @@ import { alreadyMerged } from "./already-merged.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type CiFact, type TruthSink, ciClassTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
-import { headSha, parentWinsFor, pushBranch, restoreHead } from "./deliver.ts";
+import { followUpAfterMerge, headSha, parentWinsFor, pushBranch, restoreHead } from "./deliver.ts";
 import type { MergeInput, MergeOutcome } from "./ship-merge.ts";
 
 const MINUTE = 60_000;
@@ -98,7 +98,8 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
   const graceMs = deps.graceMs ?? NEW_RUN_GRACE_MS;
   const run: GitExec = deps.exec ?? exec;
 
-  return async (context) => {
+  /** The watch itself. `carried` collects the events of a follow-up PR it opened on the way, for the stage's final result. */
+  const watch = async (context: StageContext, carried: NonNullable<StageResult["events"]>): Promise<StageResult> => {
     const { task, signal } = context;
     if (!task.branch || !task.worktreePath) {
       return { outcome: "fail", detail: { error: "no branch to watch; the implementer never ran for real" } };
@@ -109,8 +110,20 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     const slug: string = origin;
     // The card's own PR may have merged while the card was outside the ship watch: it shipped, and its checks are nobody's to watch.
     if (context.recordedPrs?.length) {
-      const shipped = await alreadyMerged(deps.github, slug, context.recordedPrs, () => deps.github.defaultBranch(slug));
-      if (shipped) return shipped;
+      // Commits the card made after that merge go to a new PR (`followUpAfterMerge`); once it is open, its checks are what this stage watches.
+      let opened = false;
+      const shipped = await alreadyMerged(deps.github, slug, context.recordedPrs, () => deps.github.defaultBranch(slug), {
+        branch,
+        followUp: async (merged) => {
+          const followed = await followUpAfterMerge({ exec: run, github: deps.github, ...(deps.resolveConflicts ? { resolveConflicts: deps.resolveConflicts } : {}) }, context, slug, merged);
+          if (followed?.outcome === "pass") {
+            opened = true;
+            carried.push(...(followed.events ?? []));
+          }
+          return followed;
+        },
+      });
+      if (shipped && !opened) return shipped;
     }
     // The default branch is GitHub's answer for the slug (as in Deliver), never the branch the user's checkout is on; the parent wins the files the card's plan does not touch.
     const rebase = deps.rebase ?? ((r: GitExec, worktree: string, repo: string) => rebaseOntoDefault(r, worktree, repo, () => deps.github.defaultBranch(slug).catch(() => null), parentWinsFor(context)));
@@ -378,5 +391,11 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
       }
       return fixable("flake verdict, but it stayed red after one re-run");
     }
+  };
+
+  return async (context) => {
+    const carried: NonNullable<StageResult["events"]> = [];
+    const result = await watch(context, carried);
+    return carried.length > 0 ? { ...result, events: [...(result.events ?? []), ...carried] } : result;
   };
 }
