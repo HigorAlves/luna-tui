@@ -10,6 +10,7 @@ import { HOST_GIT, type GitExec, type RebaseResult, isBranchName, originSlugOf, 
 import { exec } from "../../adapters/process/exec.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type Check, type GitHub, messageOf } from "../github.ts";
+import { alreadyMerged } from "./already-merged.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type CiFact, type TruthSink, ciClassTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
@@ -106,6 +107,11 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     const origin = await slugOf(task.worktreePath);
     if (!origin) return { outcome: "fail", detail: { error: "the worktree's origin is not a GitHub repository" } };
     const slug: string = origin;
+    // The card's own PR may have merged while the card was outside the ship watch: it shipped, and its checks are nobody's to watch.
+    if (context.recordedPrs?.length) {
+      const shipped = await alreadyMerged(deps.github, slug, context.recordedPrs, () => deps.github.defaultBranch(slug));
+      if (shipped) return shipped;
+    }
     // The default branch is GitHub's answer for the slug (as in Deliver), never the branch the user's checkout is on; the parent wins the files the card's plan does not touch.
     const rebase = deps.rebase ?? ((r: GitExec, worktree: string, repo: string) => rebaseOntoDefault(r, worktree, repo, () => deps.github.defaultBranch(slug).catch(() => null), parentWinsFor(context)));
 

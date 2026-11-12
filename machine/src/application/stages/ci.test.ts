@@ -72,6 +72,21 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
   return { run, context, github, runPack, sleeps, rebase, exec, decide, learned };
 }
 
+describe("ci_watch on a card whose own PR already merged", () => {
+  it("passes as shipped without watching a check, rebasing or pushing", async () => {
+    const { run, context, github, rebase, exec } = setup({ polls: [checks(["lint", "FAILURE"])] });
+    github.prMerged.mockResolvedValue({ merged: true, mergedSha: "m".repeat(40), state: "closed", mergedAt: "2026-11-10T00:36:48Z" });
+    github.prFacts.mockResolvedValue({ baseRefName: "main" } as never);
+    github.defaultBranch.mockResolvedValue("main");
+    const result = await run({ ...context, recordedPrs: [214] });
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ alreadyMerged: true, number: 214, merged: { by: "person" } });
+    expect(github.prChecks).not.toHaveBeenCalled();
+    expect(rebase).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+  });
+});
+
 describe("ci_failure_class learns from what happened next", () => {
   const red = (...later: Check[][]) => [checks(["lint", "FAILURE"]), ...later];
   const taught = (learned: Learned[]) => learned.map((l) => [l.pack, l.recordId, l.label, l.source, l.kind, l.taskId]);

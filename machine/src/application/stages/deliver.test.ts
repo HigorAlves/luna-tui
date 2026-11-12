@@ -101,6 +101,57 @@ describe("delivering", () => {
   });
 });
 
+describe("a card whose own PR already merged", () => {
+  const merged = { merged: true, mergedSha: "m".repeat(40), state: "closed" as const, mergedAt: "2026-11-10T00:36:48Z" };
+  const open = { merged: false, mergedSha: null, state: "open" as const, mergedAt: null };
+  const squash = (extra: Record<string, unknown> = {}) => fakeGitHub({ prMerged: async () => merged, prFacts: async () => ({ baseRefName: "main" }) as never, defaultBranch: async () => "main", ...extra });
+
+  it("ships: nothing is pushed, rebased, merged or opened, and the stage names the merge the way a person's merge is named", async () => {
+    const github = squash();
+    const { run, context, calls } = setup(github);
+    const result = await run({ ...context, recordedPrs: [214] });
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ merged: { sha: "m".repeat(40), at: "2026-11-10T00:36:48Z", by: "person" }, prUrl: "https://github.com/acme/widgets/pull/214", number: 214, alreadyMerged: true });
+    expect(calls).toEqual([]);
+    expect(github.openPr).not.toHaveBeenCalled();
+    expect(github.findPr).not.toHaveBeenCalled();
+  });
+
+  it("looks at the newest recorded PR first, and finds the merged one among the older", async () => {
+    const asked: number[] = [];
+    const github = squash({ prMerged: async (_slug: string, number: number) => (asked.push(number), number === 214 ? merged : open) });
+    const { run, context } = setup(github);
+    const result = await run({ ...context, recordedPrs: [214, 221] });
+    expect(asked).toEqual([221, 214]);
+    expect(result.detail).toMatchObject({ number: 214, alreadyMerged: true });
+  });
+
+  it("goes on as before when no recorded PR is merged, or none is recorded", async () => {
+    const github = fakeGitHub({ prMerged: async () => open, findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: true }) });
+    const { run, context } = setup(github);
+    expect((await run({ ...context, recordedPrs: [3] })).detail).toMatchObject({ prNumber: 3, reused: true });
+    expect(github.prMerged).toHaveBeenCalledTimes(1);
+    const none = fakeGitHub({ findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: true }) });
+    const again = setup(none);
+    expect((await again.run(again.context)).outcome).toBe("pass");
+    expect(none.prMerged).not.toHaveBeenCalled();
+  });
+
+  it("is not a ship when the PR merged into another branch (a stacked card's parent)", async () => {
+    const github = squash({ prFacts: async () => ({ baseRefName: "task/parent", mergeable: "MERGEABLE" }) as never, findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: true }) });
+    const { run, context } = setup(github);
+    const result = await run({ ...context, recordedPrs: [214] });
+    expect(result.detail).not.toHaveProperty("alreadyMerged");
+    expect(result.detail).toMatchObject({ prNumber: 3 });
+  });
+
+  it("goes on when GitHub cannot say", async () => {
+    const github = fakeGitHub({ prMerged: async () => { throw new Error("rate limited"); }, findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: true }) });
+    const { run, context } = setup(github);
+    expect((await run({ ...context, recordedPrs: [214] })).detail).toMatchObject({ prNumber: 3 });
+  });
+});
+
 describe("the draft PR's body", () => {
   const withBody = (github: ReturnType<typeof fakeGitHub>) => {
     const { context } = setup(github, { task: { record: { goal: "Readers export a CSV" } } });

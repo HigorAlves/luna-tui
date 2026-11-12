@@ -50,7 +50,7 @@ export type PipelineEvent =
   /** The card is a report of another card (or of a backlog item): it closes, with nothing left to run. */
   | { type: "merged" }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; /** Verify itself failed without an answer (the run errored, nothing was found in the code): it runs again, and Build is not asked to fix what nobody found. */ unanswered?: boolean; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify itself failed without an answer (the run errored, nothing was found in the code): it runs again, and Build is not asked to fix what nobody found. */ unanswered?: boolean; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For delivering and ci_watch: the card's own PR is already merged, so the card shipped. */ merged?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
@@ -368,6 +368,9 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
     return { ...escalate(event.reason || `${state} escalated`, state, retries), ...(event.escalation ? { escalation: event.escalation } : {}) };
   }
   if (task.route !== "feature" && task.route !== "setup") return prStageDone(task, event);
+
+  // The card's own PR merged while it was outside the ship watch: it shipped, so it goes to the retro the way a merge the watch saw does.
+  if (outcome === "pass" && event.merged === true && task.route === "feature" && (state === "delivering" || state === "ci_watch")) return run("reviewing_memory", retries);
 
   switch (state) {
     case "setup":

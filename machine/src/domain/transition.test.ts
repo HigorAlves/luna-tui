@@ -683,6 +683,12 @@ describe("awaiting_ship and reviewing_memory hold a running stage or an open gat
   it("another escalation at awaiting_ship asks a person and resumes there", () => {
     expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "escalated", reason: "stuck" })).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship", reason: "stuck" });
   });
+  it("delivering or ci_watch that finds the card's own PR merged sends it to the retro, as a merge the watch saw would", () => {
+    for (const state of ["delivering", "ci_watch"] as const) {
+      expect(transition(at(state), { type: "stage_done", outcome: "pass", merged: true })).toMatchObject({ state: "reviewing_memory", effect: { kind: "run", stage: "reviewing_memory" } });
+    }
+    expect(transition(at("delivering"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "ci_watch" });
+  });
   it("shipping that is not ready hands the card back to the watch", () => {
     expect(transition(at("shipping"), { type: "stage_done", outcome: "fail", notReady: true })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
     expect(transition(at("shipping"), { type: "stage_done", outcome: "fail" })).toMatchObject({ state: "escalated", resumeTo: "shipping" });

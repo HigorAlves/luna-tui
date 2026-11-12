@@ -3946,6 +3946,48 @@ describe("closing the loop", () => {
   });
 });
 
+describe("a card whose own PR merged while it was outside the ship watch", () => {
+  it("ends the way a shipped card ends: ship.merged, the retro, no CI watch or Evidence, and the runner is told the PRs recorded for the card", async () => {
+    const ran: string[] = [];
+    const seen: Array<number[] | undefined> = [];
+    const detail = { merged: { sha: "m".repeat(40), at: "2026-11-10T00:36:48Z", by: "person" }, prUrl: "https://github.com/o/a/pull/214", number: 214, alreadyMerged: true };
+    const p = new Pipeline(db, (stage) => async (context) => {
+      ran.push(stage);
+      if (stage === "delivering") {
+        seen.push(context.recordedPrs);
+        return { outcome: "pass", detail, events: [{ at: new Date().toISOString(), kind: "pr.opened", payload: { url: "https://github.com/o/a/pull/214", number: 214 } }] };
+      }
+      return stubs.runnerFor(stage)(context);
+    }, { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await newTask();
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toContain("reviewing_memory");
+    expect(ran).not.toContain("ci_watch");
+    expect(ran).not.toContain("evidence");
+    expect(seen).toEqual([[]]);
+    const events = await p.events(task.id);
+    expect(events.find((e) => e.kind === "ship.merged")?.payload).toMatchObject({ prUrl: "https://github.com/o/a/pull/214", number: 214, mergedSha: "m".repeat(40), by: "person" });
+  });
+
+  it("hands Deliver the numbers of the PRs it opened for the card, oldest first", async () => {
+    const seen: Array<number[] | undefined> = [];
+    const opened = (number: number) => ({ outcome: "pass" as const, detail: { prNumber: number }, events: [{ at: new Date().toISOString(), kind: "pr.opened", payload: { url: `u/${number}`, number } }] });
+    const results = [opened(214), opened(221), opened(230)];
+    const p = new Pipeline(db, (stage) => async (context) => {
+      if (stage === "delivering") return seen.push(context.recordedPrs), results[seen.length - 1]!;
+      if (stage === "ci_watch") return { outcome: "fail", detail: { error: "red" } };
+      return stubs.runnerFor(stage)(context);
+    }, { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await newTask();
+    await p.start(task.id);
+    for (let i = 0; i < 2; i++) await p.decide(task.id, "approved");
+    expect(seen[0]).toEqual([]);
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen[1]).toEqual([214]);
+  });
+});
+
 describe("a PR closed without a merge archives its card", () => {
   const closed = { outcome: "fail" as const, detail: { prClosed: true } };
   const reasons = async (p: Pipeline, id: string) => ({ task: await p.get(id), kinds: (await p.events(id)).map((e) => e.kind) });

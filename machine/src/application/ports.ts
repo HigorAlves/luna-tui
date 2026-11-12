@@ -42,6 +42,8 @@ export interface StageContext {
   budgetMinutes?: number;
   /** For delivering: what the draft PR's body is fed, from the rows of the stages before it (the open findings, the files outside the map, each scenario's test file). */
   prFacts?: { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string> };
+  /** For delivering and ci_watch: the numbers of the PRs the machine opened for this card, oldest first (its `pr.opened` rows). A merged one means the card shipped. */
+  recordedPrs?: number[];
   /** Findings from the latest verifying run, fed to the next implementing attempt. */
   priorFindings?: Finding[];
   /** Aborted when you abort the task; the runner should stop its container. */

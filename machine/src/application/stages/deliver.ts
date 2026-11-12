@@ -12,6 +12,7 @@ import { cardOf } from "../../domain/card-fields.ts";
 import { isDocsOnly } from "../../domain/docs-only.ts";
 import { looksLikeTestPath } from "../../domain/locked-files.ts";
 import type { StackFacts } from "../stack.ts";
+import { alreadyMerged } from "./already-merged.ts";
 import type { MergeInput, MergeOutcome } from "./ship-merge.ts";
 
 export type ExecFn = (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<ExecResult>;
@@ -151,6 +152,12 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
     const { task } = context;
     if (!task.repoPath || !task.branch || !task.worktreePath) {
       return { outcome: "fail", detail: { error: "no branch to deliver; the implementer never ran for real" } };
+    }
+    // The card's own PR may have merged while the card was outside the ship watch: it shipped, so nothing is rebased, merged or pushed again.
+    if (context.recordedPrs?.length) {
+      const own = await slugOf(task.worktreePath);
+      const shipped = own ? await alreadyMerged(deps.github, own, context.recordedPrs, () => defaultFor(own)(task.repoPath!)) : null;
+      if (shipped) return shipped;
     }
     // A stacked card: what its parent is now decides what is pushed, and what the PR targets.
     let parent: StackFacts | null = null;

@@ -2500,7 +2500,8 @@ export class Pipeline {
 
   /** The task's PR when the last shipping run ended in a merge (the monitor's `detail.merged`), else null. */
   private async mergedPr(id: string): Promise<{ prUrl: string; number: number } | null> {
-    const detail = (await this.latestStageFinish(id, "shipping"))?.detail;
+    // A card Deliver or CI found already merged never reached shipping: its merge is on that stage's finish row.
+    const detail = (await this.latestStageFinish(id, "shipping"))?.detail ?? [(await this.latestStageFinish(id, "delivering"))?.detail, (await this.latestStageFinish(id, "ci_watch"))?.detail].find((d) => d?.alreadyMerged === true);
     return detail?.merged && typeof detail.prUrl === "string" && typeof detail.number === "number" ? { prUrl: detail.prUrl, number: detail.number } : null;
   }
 
@@ -2718,7 +2719,9 @@ export class Pipeline {
           return;
         }
         // A merged PR closes the loop: one event the board and the places the task came from react to.
-        if (stage === "shipping" && result.outcome === "pass" && result.detail?.merged) {
+        // The same when Deliver or CI found the card's own PR already merged: the card shipped.
+        const shippedEarly = (stage === "delivering" || stage === "ci_watch") && result.outcome === "pass" && result.detail?.alreadyMerged === true && !!result.detail.merged;
+        if ((stage === "shipping" && result.outcome === "pass" && result.detail?.merged) || shippedEarly) {
           const shipped = shippedEvent(await this.get(id), result.detail);
           if (shipped) await this.log(id, "ship.merged", shipped);
         }
@@ -2755,6 +2758,7 @@ export class Pipeline {
                 ...(await this.loopCap(id, stage, result)),
                 // The merge that did not happen because the PR is not ready; a fix that changed what a scenario shows (media from a new browser run).
                 ...(stage === "shipping" && result.detail?.notReady === true ? { notReady: true as const } : {}),
+                ...(shippedEarly ? { merged: true as const } : {}),
                 // The retro has something for a person (rules, prompt updates, graph misses): it waits for an answer; otherwise the card closes.
                 ...(stage === "reviewing_memory" && result.outcome === "pass" && result.detail?.rules != null ? { proposals: true as const } : {}),
                 ...(result.detail?.refresh === "media" || result.detail?.refresh === "verify" ? { refresh: result.detail.refresh } : {}),
@@ -3031,6 +3035,12 @@ export class Pipeline {
     }
   }
 
+  /** The numbers of the PRs the machine opened for the card (its `pr.opened` rows), oldest first, so a stage can tell that one of them merged. */
+  private async recordedPrs(id: string): Promise<number[]> {
+    const numbers = (await this.store.listEvents(id)).flatMap((e) => (e.kind === "stage.pr.opened" && Number.isInteger(e.payload.number) ? [e.payload.number as number] : []));
+    return [...new Set(numbers)];
+  }
+
   /** What the draft PR's body is fed: the rows of the stages that ran before Deliver. */
   private async prFacts(id: string): Promise<NonNullable<StageContext["prFacts"]>> {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
@@ -3291,6 +3301,7 @@ export class Pipeline {
         approvals,
         priorFindings,
         ...(stage === "delivering" ? { prFacts: await this.prFacts(id) } : {}),
+        ...((stage === "delivering" || stage === "ci_watch") && task.route === "feature" ? { recordedPrs: await this.recordedPrs(id) } : {}),
         ...(replan ? { replan } : {}),
         ...(budgetMinutes !== undefined ? { budgetMinutes } : {}),
         ...(testsCommit ? { testsCommit } : {}),
