@@ -172,6 +172,7 @@ describe("delivering a branch that conflicts with the default branch", () => {
     expect(result.detail).toMatchObject({ rebased: true, onto: "origin/main" });
     expect(calls).toEqual([
       [...G, "push", "-u", "origin", "hardness/t1"],
+      [...G, "rev-parse", "HEAD"],
       [...G, "fetch", "--quiet", "--end-of-options", "origin", "main"],
       [...G, "rebase", "--empty=drop", "origin/main"],
       [...G, "push", "--force-with-lease", "-u", "origin", "hardness/t1"],
@@ -301,6 +302,22 @@ describe("delivering a branch that conflicts with the default branch", () => {
     const result = await run(context);
     expect(result.outcome).toBe("fail");
     expect(String(result.detail?.error)).toContain("stale info");
+  });
+
+  it("puts the branch back where it was when the forced push after the rebase fails, so the next delivery's plain push still works", async () => {
+    const BEFORE = "e".repeat(40);
+    const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+    const { run, context, calls } = setup(github, {
+      respond: (args) => (args.includes("rev-parse") ? ok(`${BEFORE}\n`) : args.some((a) => a.startsWith("--force-with-lease")) ? bad("could not read Username") : undefined),
+    });
+    const result = await run(context);
+    expect(result.outcome).toBe("fail");
+    expect(String(result.detail?.error)).toContain("could not read Username");
+    // The lease is the head the machine pushed before, never a bare lease that a concurrent fetch can move.
+    expect(calls).toContainEqual([...G, "push", `--force-with-lease=refs/heads/hardness/t1:${BEFORE}`, "-u", "origin", "hardness/t1"]);
+    const reset = calls.findIndex((c) => c.includes("reset"));
+    expect(calls[reset]).toEqual([...G, "reset", "--hard", "--quiet", BEFORE]);
+    expect(reset).toBeGreaterThan(calls.findIndex((c) => c.some((a) => a.startsWith("--force-with-lease"))));
   });
 
   it("does nothing more on a mergeable PR, notes an UNKNOWN one, and ignores a prFacts that throws", async () => {

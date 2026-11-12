@@ -71,6 +71,22 @@ export async function pushBranch(exec: ExecFn, branch: string, cwd: string, opti
   return null;
 }
 
+const SHA = /^[0-9a-f]{40,64}$/;
+
+/** The worktree's head, read before the machine rewrites the branch (a rebase); null when it cannot be read. */
+export async function headSha(exec: ExecFn, cwd: string): Promise<string | null> {
+  const out = await exec("git", [...HOST_GIT, ...at(cwd), "rev-parse", "HEAD"]).catch(() => null);
+  const sha = out && out.code === 0 ? out.stdout.trim() : "";
+  return SHA.test(sha) ? sha : null;
+}
+
+/** Puts the worktree back at a head the machine read: after a forced push that failed, the branch is not left rewritten (a later plain push would be refused as non-fast-forward). */
+export async function restoreHead(exec: ExecFn, cwd: string, sha: string): Promise<void> {
+  if (!SHA.test(sha)) return;
+  await exec("git", [...HOST_GIT, ...at(cwd), "reset", "--hard", "--quiet", sha]).catch(() => {});
+  await exec("git", [...HOST_GIT, ...at(cwd), "clean", "-fd", "--quiet"]).catch(() => {});
+}
+
 /** The ref a Build checkpoint goes to: outside refs/heads and refs/tags, so no CI runs on it and no PR head moves. */
 export const checkpointRef = (branch: string): string => `refs/luna/wip/${branch}`;
 
@@ -228,6 +244,8 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
       if (facts?.mergeable === "CONFLICTING") {
         const base = defaultFor(slug);
         if ((await base(task.repoPath)) === null) return { outcome: "fail", detail: { error: "the default branch is not known from GitHub: nothing was rebased or pushed again", escalation: "other" } };
+        // The head the branch was pushed at: the lease for the forced push, and where the branch goes back to if that push fails.
+        const before = await headSha(deps.exec, task.worktreePath);
         const rebased: RebaseResult = await rebaseOntoBase(deps.exec, task.worktreePath, task.repoPath, base);
         if (!rebased.ok) {
           const files = rebased.conflicts.join(", ");
@@ -252,8 +270,11 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
             events: [{ at: new Date().toISOString(), kind: "pr.opened", payload: { url: ref.url, number: ref.number } }],
           };
         }
-        const forced = await pushBranch(deps.exec, task.branch, task.worktreePath, { force: true });
-        if (forced) return pushFailure(forced);
+        const forced = await pushBranch(deps.exec, task.branch, task.worktreePath, { force: true, ...(before ? { lease: before } : {}) });
+        if (forced) {
+          if (before) await restoreHead(deps.exec, task.worktreePath, before);
+          return pushFailure(forced);
+        }
         rebase = { rebased: true, onto: rebased.onto, ...(rebased.merged ? { merged: true } : {}) };
       }
       return {

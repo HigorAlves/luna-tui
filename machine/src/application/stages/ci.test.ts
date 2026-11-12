@@ -13,7 +13,7 @@ const checks = (...states: Array<[string, string]>): Check[] =>
 const finding = { path: "a.ts", line: 1, start_line: null, severity: "test", title: "red", body: "", suggestion_code: null, confidence: 1 };
 const pack = (answer: Record<string, unknown>): StageResult => ({ outcome: "pass", detail: { answer } });
 
-function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] }; classOf?: string | null; reruns?: number; autoRebase?: number; learn?: boolean; lastRed?: { recordId: string; job: string } | null; staleAfterRerun?: number }) {
+function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] }; classOf?: string | null; reruns?: number; autoRebase?: number; learn?: boolean; lastRed?: { recordId: string; job: string } | null; staleAfterRerun?: number; exec?: (command: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }> }) {
   let poll = 0;
   let facts = 0;
   // A re-run's jobs get new ids, as on GitHub: after the n-th re-run a check's link ends in /job/<n+1> (after `staleAfterRerun` polls that
@@ -35,7 +35,7 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
     ...(opts.mergeable ? { prFacts: async () => ({ mergeable: opts.mergeable![Math.min(facts++, opts.mergeable!.length - 1)] }) as never } : {}),
   });
   const rebase = vi.fn(async () => opts.rebase ?? { ok: true as const, onto: "origin/main" });
-  const exec = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
+  const exec = vi.fn(opts.exec ?? (async (..._args: unknown[]) => ({ code: 0, stdout: "", stderr: "" })));
   const runPack = vi.fn(async (_context: StageContext, _ci?: unknown) => opts.pack ?? pack({ verdict: "green" }));
   const sleeps: number[] = [];
   const decide = vi.fn<Decide>(async () => tagged({ answer: { class: { choice: opts.classOf ?? "real", confidence: 0.9 } }, recordId: "rec-ci" }));
@@ -337,6 +337,20 @@ describe("ci_watch on a conflicting PR", () => {
     expect(result).toMatchObject({ outcome: "pass", detail: { step: "checks", rebased: true } });
     expect(rebase).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["push", "--force-with-lease", "origin", "hardness/t1"]));
+  });
+
+  it("puts the branch back where it was when the forced push after the rebase fails, and pins the lease to that head", async () => {
+    const BEFORE = "e".repeat(40);
+    const { run, context, exec } = setup({
+      polls: [green],
+      mergeable: ["CONFLICTING"],
+      exec: async (_command, args) => (args.includes("rev-parse") ? { code: 0, stdout: `${BEFORE}\n`, stderr: "" } : args.some((a) => a.startsWith("--force-with-lease")) ? { code: 1, stdout: "", stderr: "could not read Username" } : { code: 0, stdout: "", stderr: "" }),
+    });
+    const result = await run(context);
+    expect(result.outcome).toBe("fail");
+    expect(String(result.detail?.error)).toContain("could not read Username");
+    expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["push", `--force-with-lease=refs/heads/hardness/t1:${BEFORE}`, "origin", "hardness/t1"]));
+    expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["reset", "--hard", "--quiet", BEFORE]));
   });
 
   it("goes to a person, with no rebase and no push, when verify.auto_rebase is 0", async () => {

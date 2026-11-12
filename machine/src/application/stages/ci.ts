@@ -13,7 +13,7 @@ import { type Check, type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type CiFact, type TruthSink, ciClassTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
-import { pushBranch } from "./deliver.ts";
+import { headSha, pushBranch, restoreHead } from "./deliver.ts";
 
 const MINUTE = 60_000;
 const RERUN_WAIT_MS = 15 * MINUTE;
@@ -194,12 +194,18 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     /** Rebases the branch onto the default branch, pushes it back and watches the checks again: null when it went well, else the result to return. */
     const rebaseAndWatch = async (): Promise<StageResult | null> => {
       const repoPath = task.repoPath ?? task.worktreePath!;
+      // The head the branch was pushed at: the lease for the forced push, and where the branch goes back to if that push fails.
+      const before = await headSha(run, task.worktreePath!);
       const result = await rebase(run, task.worktreePath!, repoPath);
       if (!result.ok) {
         return stuck(result.conflicts.length > 0 ? `the default branch moved and the rebase stops on: ${result.conflicts.join(", ")}` : `the branch conflicts with the default branch and could not be rebased: ${result.error}`);
       }
-      const pushError = await pushBranch(run, branch, task.worktreePath!, { force: true });
-      if (pushError) return { outcome: "fail", detail: { error: pushError } };
+      const pushError = await pushBranch(run, branch, task.worktreePath!, { force: true, ...(before ? { lease: before } : {}) });
+      if (pushError) {
+        // Left rewritten, the branch would be refused as a non-fast-forward by every later push.
+        if (before) await restoreHead(run, task.worktreePath!, before);
+        return { outcome: "fail", detail: { error: pushError } };
+      }
       rebased = true;
       graceEnds = Date.now() + graceMs;
       expected = null;
