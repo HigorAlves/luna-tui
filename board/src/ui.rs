@@ -2736,6 +2736,8 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     if let Some(error) = error {
         top.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
     }
+    // A clone can take minutes: its progress, and how a failed one ended, stay in sight.
+    top.extend(app.clones().into_iter().filter_map(|c| clone_line(c, now)));
     let [head_area, body] =
         Layout::vertical([Constraint::Length(top.len() as u16), Constraint::Min(0)]).areas(area);
     frame.render_widget(Paragraph::new(top), head_area);
@@ -2781,6 +2783,7 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
             row == selected,
             inner.width as usize,
             now,
+            app.cloning(&shown[i].repo).is_some(),
         ));
     }
     frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
@@ -2828,7 +2831,42 @@ fn pr_work_label(route: &str) -> &'static str {
     }
 }
 
-fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'static> {
+/// The PR view's line for a clone: how long a running one has gone, or why a failed one stopped. A landed one is a toast.
+fn clone_line(clone: &crate::model::CloneStatus, now: u64) -> Option<Line<'static>> {
+    if clone.is_cloning() {
+        let since = unix_secs(&clone.started_at).map_or(0, |at| now.saturating_sub(at));
+        Some(Line::from(
+            Span::from(format!(
+                " {} cloning {} into {} · {}",
+                spinner(),
+                clone.repo,
+                clone.dest,
+                age_secs(since)
+            ))
+            .fg(c(YELLOW))
+            .bold(),
+        ))
+    } else if clone.is_failed() {
+        Some(Line::from(
+            Span::from(format!(
+                " ⚠ clone of {} failed: {}",
+                clone.repo,
+                clone.error_line()
+            ))
+            .fg(c(RED)),
+        ))
+    } else {
+        None
+    }
+}
+
+fn pr_row(
+    pr: &PullRequest,
+    selected: bool,
+    width: usize,
+    now: u64,
+    cloning: bool,
+) -> Line<'static> {
     let (glyph, checks_color) = match pr.checks.state.as_str() {
         "failure" => ("✗", RED),
         "pending" => ("◐", YELLOW),
@@ -2844,6 +2882,8 @@ fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'sta
             format!("{} {}", spinner(), pr_work_label(&task.route)),
             YELLOW,
         ),
+        // The checkout is on its way: not read-only, not there yet.
+        (None, _) if cloning => (format!("{} cloning", spinner()), YELLOW),
         (None, false) => ("⌂".to_string(), SUBTEXT0),
         _ => (String::new(), SUBTEXT0),
     };
@@ -6012,6 +6052,7 @@ mod pr_tests {
             prs,
             polled_at: Some("2026-10-27T10:00:00Z".to_string()),
             error: None,
+            ..Default::default()
         };
         app.pulls = Some(PullsState::default());
         app.online = true;
@@ -6031,6 +6072,101 @@ mod pr_tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn clone_of(state: &str, error: Option<&str>) -> crate::model::CloneStatus {
+        crate::model::CloneStatus {
+            repo: "acme/app".into(),
+            dest: "/code/app".into(),
+            state: state.into(),
+            started_at: "2026-10-27T10:00:00Z".into(),
+            finished_at: None,
+            error: error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_cloning_repo_has_a_line_with_its_age_and_a_failed_one_its_last_error_line() {
+        let now = unix_secs("2026-10-27T10:02:30Z").unwrap();
+        let line = |c: &crate::model::CloneStatus| clone_line(c, now).map(|l| l.to_string());
+        let text = line(&clone_of("cloning", None)).unwrap();
+        assert!(
+            text.ends_with("cloning acme/app into /code/app · 2m"),
+            "{text}"
+        );
+        let failed = line(&clone_of(
+            "failed",
+            Some("Cloning into 'app'...\nfatal: repository not found"),
+        ))
+        .unwrap();
+        assert!(
+            failed.ends_with("clone of acme/app failed: fatal: repository not found"),
+            "{failed}"
+        );
+        assert_eq!(
+            line(&clone_of("done", None)),
+            None,
+            "a landed clone is a toast, not a line"
+        );
+    }
+
+    #[test]
+    fn the_pr_view_lists_the_clones_and_a_row_of_a_cloning_repo_says_cloning_not_read_only() {
+        let mut app = app_with(vec![
+            pr(
+                12,
+                "Export CSV",
+                "review_requested",
+                "success",
+                false,
+                false,
+            ),
+            pr(
+                13,
+                "Other repo",
+                "review_requested",
+                "success",
+                false,
+                false,
+            ),
+        ]);
+        app.prs.prs[1].repo = "acme/other".into();
+        let plain = render(120, 20, &app);
+        let row = |text: &str, n: &str| {
+            text.lines()
+                .find(|l| l.contains(n))
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert!(
+            row(&plain, "#12 Export").contains('⌂')
+                && !row(&plain, "#12 Export").contains("cloning"),
+            "{plain}"
+        );
+        app.prs.clones = vec![clone_of("cloning", None)];
+        let text = render(120, 20, &app);
+        assert!(
+            row(&text, "#12 Export").contains("cloning") && !row(&text, "#12 Export").contains('⌂'),
+            "{text}"
+        );
+        assert!(
+            text.contains("acme/app into /code/app"),
+            "the clone has its own line: {text}"
+        );
+        assert!(
+            !row(&text, "#13 Other").contains("cloning"),
+            "another repo is untouched: {text}"
+        );
+        app.prs.clones = vec![clone_of("failed", Some("fatal: repository not found"))];
+        let text = render(120, 20, &app);
+        assert!(
+            text.contains("clone of acme/app failed: fatal: repository not found"),
+            "{text}"
+        );
+        assert!(
+            row(&text, "#12 Export").contains('⌂'),
+            "a failed clone leaves the row read-only: {text}"
+        );
     }
 
     #[test]

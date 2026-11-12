@@ -1442,6 +1442,44 @@ pub struct PrSnapshot {
     pub prs: Vec<PullRequest>,
     pub polled_at: Option<String>,
     pub error: Option<String>,
+    /// The clones the machine runs or ran lately; an older machine sends none.
+    #[serde(default)]
+    pub clones: Vec<CloneStatus>,
+}
+
+/// One `git clone` the machine was asked for: running, or ended within the last ten minutes.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CloneStatus {
+    pub repo: String,
+    pub dest: String,
+    /// `cloning`, `done` or `failed`.
+    pub state: String,
+    pub started_at: String,
+    #[serde(default)]
+    pub finished_at: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl CloneStatus {
+    pub fn is_cloning(&self) -> bool {
+        self.state == "cloning"
+    }
+
+    pub fn is_failed(&self) -> bool {
+        self.state == "failed"
+    }
+
+    /// What went wrong, in the line git ends on.
+    pub fn error_line(&self) -> String {
+        self.error
+            .as_deref()
+            .and_then(|e| e.lines().rev().find(|l| !l.trim().is_empty()))
+            .unwrap_or("unknown error")
+            .trim()
+            .to_string()
+    }
 }
 
 /// Someone on Slack: you, an author, a bot.
@@ -3902,6 +3940,25 @@ mod pr_tests {
         assert_eq!(pr.task.as_ref().map(|t| t.route.as_str()), Some("review"));
         assert_eq!(pr.checks_label(), "✗ lint");
         assert_eq!(pr.review_label(), "approved");
+    }
+
+    #[test]
+    fn a_snapshot_carries_the_clones_and_an_older_machine_sends_none() {
+        let with: PrSnapshot = serde_json::from_str(
+            r#"{"prs":[],"polledAt":null,"error":null,"clones":[
+            {"repo":"o/a","dest":"/code/a","state":"failed","startedAt":"2026-11-12T10:00:00.000Z","finishedAt":"2026-11-12T10:01:00.000Z",
+             "error":"Cloning into 'a'...\nfatal: repository not found\n"},
+            {"repo":"o/b","dest":"/code/b","state":"cloning","startedAt":"2026-11-12T10:00:00.000Z","finishedAt":null,"error":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(with.clones.len(), 2);
+        assert!(with.clones[0].is_failed());
+        assert_eq!(with.clones[0].error_line(), "fatal: repository not found");
+        assert!(with.clones[1].is_cloning());
+        assert_eq!(with.clones[1].finished_at, None);
+        let without: PrSnapshot =
+            serde_json::from_str(r#"{"prs":[],"polledAt":null,"error":null}"#).unwrap();
+        assert!(without.clones.is_empty());
     }
 
     #[test]

@@ -34,12 +34,12 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        ARCHIVE_REASONS, COLUMNS, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Metrics,
-        PrAction, PrSnapshot, PullRequest, RECORD_FIELDS, RepoMetrics, SlackItem, SlackMetrics,
-        SlackOption, SlackSnapshot, SlackWatch, Slots, StreamMessage, Task, TaskDetail, TaskDiff,
-        TicketText, TriageRecord, answers_markdown, cases_markdown, iso_of, parse_answers,
-        parse_cases, parse_plan, parse_ticket, plan_edit_of, plan_markdown, priority_step,
-        questions_of, short_id, ticket_markdown,
+        ARCHIVE_REASONS, COLUMNS, CloneStatus, EngineCatalog, EngineInfo, EngineMetrics,
+        JiraIssueHit, Metrics, PrAction, PrSnapshot, PullRequest, RECORD_FIELDS, RepoMetrics,
+        SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots, StreamMessage,
+        Task, TaskDetail, TaskDiff, TicketText, TriageRecord, answers_markdown, cases_markdown,
+        iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of, plan_markdown,
+        priority_step, questions_of, short_id, ticket_markdown,
     },
     store,
     vim::Vim,
@@ -742,6 +742,9 @@ pub struct App {
     pub ticket_items: Vec<TicketEntry>,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
     pending_dispatch: Option<(String, PrAction)>,
+    /// Clones seen running, and clones already told of (a toast each), by `dest|startedAt`: a snapshot repeats a finished clone for ten minutes.
+    clones_running: BTreeSet<String>,
+    clones_told: BTreeSet<String>,
     /// The Slack inbox as the machine last sent it; empty until the first `slack.items` event.
     pub slack_snapshot: SlackSnapshot,
     /// The Slack view, open while this is `Some`.
@@ -874,6 +877,8 @@ impl App {
             tickets: None,
             ticket_items: Vec::new(),
             pending_dispatch: None,
+            clones_running: BTreeSet::new(),
+            clones_told: BTreeSet::new(),
             slack_snapshot: SlackSnapshot::default(),
             slack: None,
             slack_catalog: None,
@@ -1348,6 +1353,7 @@ impl App {
     /// A fresh every-repo snapshot: the tab's list, its cursor kept inside, and any dispatch a
     /// clone was holding for a PR only this list knows.
     fn take_prs_all(&mut self, snapshot: PrSnapshot) {
+        self.note_clones(&snapshot.clones);
         self.prs_all = snapshot;
         self.prs_all_note = None;
         self.clamp_pulls_cursor();
@@ -1404,9 +1410,60 @@ impl App {
                 self.notices.push(notice);
             }
         }
+        self.note_clones(&snapshot.clones);
         self.prs = snapshot;
         self.clamp_pulls_cursor();
         self.run_pending_dispatch();
+    }
+
+    /// The machine's clones: both snapshots carry them, the inbox's is the one polled most.
+    pub fn clones(&self) -> Vec<&CloneStatus> {
+        let mut out: Vec<&CloneStatus> = self.prs.clones.iter().collect();
+        for c in &self.prs_all.clones {
+            if !out
+                .iter()
+                .any(|o| o.dest == c.dest && o.started_at == c.started_at)
+            {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// The clone of `repo` still running, if any.
+    pub fn cloning(&self, repo: &str) -> Option<&CloneStatus> {
+        self.clones()
+            .into_iter()
+            .find(|c| c.is_cloning() && c.repo.eq_ignore_ascii_case(repo))
+    }
+
+    /// A toast, once, for a clone that landed (when this board saw it start) or failed; a failed clone also drops the dispatch it held.
+    fn note_clones(&mut self, clones: &[CloneStatus]) {
+        for c in clones {
+            let key = format!("{}|{}", c.dest, c.started_at);
+            if c.is_cloning() {
+                self.clones_running.insert(key);
+            } else if self.clones_told.contains(&key) {
+                continue;
+            } else if c.is_failed() {
+                self.clones_told.insert(key);
+                self.notify(
+                    format!("clone of {} failed: {}", c.repo, c.error_line()),
+                    true,
+                );
+                let prefix = format!("{}#", c.repo).to_lowercase();
+                if self
+                    .pending_dispatch
+                    .as_ref()
+                    .is_some_and(|(k, _)| k.to_lowercase().starts_with(&prefix))
+                {
+                    self.pending_dispatch = None;
+                }
+            } else if self.clones_running.contains(&key) {
+                self.clones_told.insert(key);
+                self.notify(format!("cloned {} into {}", c.repo, c.dest), false);
+            }
+        }
     }
 
     /// The PR under the cursor of the open PR view, on whichever list the tab reads.
@@ -3931,7 +3988,19 @@ impl App {
     fn pr_key(&mut self, key: PrKey, pr: &PullRequest) {
         if key.action().is_some() && pr.local_path.is_none() && pr.task.is_none() {
             if let Some(action) = key.action() {
-                self.open_clone_prompt(pr, Some(action));
+                if let Some(dest) = self.cloning(&pr.repo).map(|c| c.dest.clone()) {
+                    // The folder is on its way: hold the dispatch for it rather than ask for another.
+                    self.pending_dispatch = Some((pr.key(), action));
+                    self.notify(
+                        format!(
+                            "already cloning into {dest}; {} runs when it lands",
+                            action.wire()
+                        ),
+                        false,
+                    );
+                } else {
+                    self.open_clone_prompt(pr, Some(action));
+                }
             }
             return;
         }
@@ -3983,7 +4052,10 @@ impl App {
                 format!("{} is already checked out at {path}", pr.repo),
                 false,
             ),
-            None => self.open_clone_prompt(pr, None),
+            None => match self.cloning(&pr.repo).map(|c| c.dest.clone()) {
+                Some(dest) => self.notify(format!("already cloning into {dest}"), false),
+                None => self.open_clone_prompt(pr, None),
+            },
         }
     }
 
@@ -8645,6 +8717,7 @@ mod pr_tests {
                     prs,
                     polled_at: None,
                     error: None,
+                    ..Default::default()
                 },
             }))
             .unwrap();
@@ -8739,6 +8812,7 @@ mod pr_tests {
             prs: Vec::new(),
             polled_at: Some("2026-10-27T11:00:00Z".to_string()),
             error: None,
+            ..Default::default()
         };
         app.tx.send(Incoming::PrsPolled(Ok(fresh))).unwrap();
         app.pump();
@@ -8850,6 +8924,7 @@ mod pr_tests {
                     prs,
                     polled_at: Some("2026-10-27T10:00:00Z".to_string()),
                     error: None,
+                    ..Default::default()
                 },
             }))
             .unwrap();
@@ -9074,6 +9149,7 @@ mod pr_tests {
                     prs: vec![in_repo("acme/app", 1, "review_requested", false)],
                     polled_at: None,
                     error: None,
+                    ..Default::default()
                 },
             }))
             .unwrap();
@@ -9121,6 +9197,109 @@ mod pr_tests {
         );
     }
 
+    fn clone_state(repo: &str, dest: &str, state: &str, error: Option<&str>) -> CloneStatus {
+        CloneStatus {
+            repo: repo.into(),
+            dest: dest.into(),
+            state: state.into(),
+            started_at: "2026-11-12T10:00:00.000Z".into(),
+            finished_at: (state != "cloning").then(|| "2026-11-12T10:02:00.000Z".to_string()),
+            error: error.map(str::to_string),
+        }
+    }
+
+    fn send_clones(app: &mut App, all: bool, prs: Vec<PullRequest>, clones: Vec<CloneStatus>) {
+        let snapshot = PrSnapshot {
+            prs,
+            clones,
+            ..Default::default()
+        };
+        app.tx
+            .send(Incoming::Message(if all {
+                StreamMessage::PrsAll { snapshot }
+            } else {
+                StreamMessage::Prs { snapshot }
+            }))
+            .unwrap();
+        app.pump();
+    }
+
+    #[test]
+    fn a_clone_that_lands_toasts_once_however_many_snapshots_repeat_it() {
+        let mut app = app_with(vec![in_repo("acme/app", 1, "review_requested", false)]);
+        let prs = vec![in_repo("acme/app", 1, "review_requested", false)];
+        let cloning = clone_state("acme/app", "/code/app", "cloning", None);
+        send_clones(&mut app, false, prs.clone(), vec![cloning]);
+        assert!(
+            app.toast.is_none(),
+            "starting is not news: the click said so"
+        );
+        let done = clone_state("acme/app", "/code/app", "done", None);
+        send_clones(&mut app, false, prs.clone(), vec![done.clone()]);
+        let toast = app.toast.take().expect("a toast for the landing");
+        assert_eq!(toast.text, "cloned acme/app into /code/app");
+        assert!(!toast.error);
+        // The all-list says the same, and so does the next poll: nothing more.
+        send_clones(&mut app, true, prs.clone(), vec![done.clone()]);
+        send_clones(&mut app, false, prs, vec![done]);
+        assert!(
+            app.toast.is_none(),
+            "{:?}",
+            app.toast.as_ref().map(|t| &t.text)
+        );
+    }
+
+    #[test]
+    fn a_failed_clone_toasts_its_last_line_once_and_drops_the_dispatch_it_held() {
+        let mut app = app_with(vec![in_repo("acme/app", 1, "review_requested", false)]);
+        app.pending_dispatch = Some(("acme/app#1".into(), PrAction::Review));
+        let prs = vec![in_repo("acme/app", 1, "review_requested", false)];
+        let failed = clone_state(
+            "acme/app",
+            "/code/app",
+            "failed",
+            Some("Cloning into 'app'...\nfatal: repository not found"),
+        );
+        send_clones(&mut app, false, prs.clone(), vec![failed.clone()]);
+        let toast = app.toast.take().expect("a toast for the failure");
+        assert_eq!(
+            toast.text,
+            "clone of acme/app failed: fatal: repository not found"
+        );
+        assert!(toast.error);
+        assert!(
+            app.pending_dispatch.is_none(),
+            "nothing runs in a folder that never landed"
+        );
+        send_clones(&mut app, true, prs, vec![failed]);
+        assert!(app.toast.is_none());
+    }
+
+    #[test]
+    fn c_on_a_pr_whose_repo_is_cloning_says_so_and_opens_no_prompt() {
+        let mut app = app_with(vec![in_repo("acme/app", 1, "review_requested", false)]);
+        send_clones(
+            &mut app,
+            false,
+            vec![in_repo("acme/app", 1, "review_requested", false)],
+            vec![clone_state("acme/app", "/code/app", "cloning", None)],
+        );
+        app.handle_key(KeyEvent::from(KeyCode::Char('P')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('C')));
+        assert!(matches!(app.mode, Mode::Normal), "no prompt");
+        assert_eq!(
+            app.toast.as_ref().map(|t| t.text.as_str()),
+            Some("already cloning into /code/app")
+        );
+        // A dispatch key waits for the clone instead of asking for a second folder.
+        app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+        assert!(matches!(app.mode, Mode::Normal), "no prompt");
+        assert_eq!(
+            app.pending_dispatch.as_ref().map(|(k, a)| (k.as_str(), *a)),
+            Some(("acme/app#1", PrAction::Review))
+        );
+    }
+
     #[test]
     fn prs_that_need_you_count_on_the_badge_and_raise_a_notice_once() {
         let mut app = app_with(vec![
@@ -9140,6 +9319,7 @@ mod pr_tests {
                     ],
                     polled_at: None,
                     error: None,
+                    ..Default::default()
                 },
             }))
             .unwrap();
@@ -11764,6 +11944,7 @@ mod view_stack_tests {
                     prs,
                     polled_at: None,
                     error: None,
+                    ..Default::default()
                 };
                 app.pulls = Some(PullsState {
                     split: crate::pulls::PrSplit::ReadyToMerge,
