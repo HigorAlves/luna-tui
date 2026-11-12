@@ -1,7 +1,7 @@
 // The entry, end to end without a model: a dry run of every agent pack renders the prompt,
 // prints the SDK options and leaves a result the machine's contract accepts; the evidence
 // pack reads the QA manifest; a bad input still leaves a result that says why.
-import { AGENT_PACKS, type AgentPack, PACKS, type PackId, RunEvent, StageOutput, resolveEngine } from "@hardness/contracts";
+import { AGENT_PACKS, type AgentPack, PACKS, type PackId, RunEvent, StageOutput, helpersOn, resolveEngine } from "@hardness/contracts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -82,11 +82,11 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain("Keep it small.");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     const def = PACKS[pack] as AgentPack;
-    expect(options).toMatchObject({ agent: def.agent, agents: [def.agent, ...def.helpers.filter((h) => resolveEngine(h.engine).runtime === "claude").map((h) => h.role)], model: resolveEngine(def.engines.default).modelId, effort: def.effort, maxTurns: 5, permissionMode: "dontAsk", settingSources: [], hooks: ["PreToolUse"], mcpServers: ["luna"] });
+    expect(options).toMatchObject({ agent: def.agent, agents: [def.agent, ...helpersOn(def, "claude").filter((h) => resolveEngine(h.engine).runtime === "claude").map((h) => h.role)], model: resolveEngine(def.engines.default).modelId, effort: def.effort, maxTurns: 5, permissionMode: "dontAsk", settingSources: [], hooks: ["PreToolUse"], mcpServers: ["luna"] });
     // Commits and PRs are the person's: no attribution from the SDK.
     expect(options.settings).toEqual({ attribution: false, includeCoAuthoredBy: false });
     // A helper on another runtime is reached through `delegate`, beside the pack's own tools.
-    const delegating = def.helpers.some((h) => resolveEngine(h.engine).runtime !== "claude") ? ["mcp__luna__delegate"] : [];
+    const delegating = helpersOn(def, "claude").some((h) => resolveEngine(h.engine).runtime !== "claude") ? ["mcp__luna__delegate"] : [];
     const { tools, allowedTools } = claudeTools(def.access);
     expect(options).toMatchObject({ tools: [...tools, ...delegating], allowedTools: [...allowedTools, ...delegating] });
     if (pack === "verifying") expect(options.allowedTools).toContain("mcp__luna__delegate");

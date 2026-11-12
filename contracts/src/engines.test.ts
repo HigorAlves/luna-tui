@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, STRONGER, StageInput, credentialOwner, engineBudgetKeyProblem, helperPack, readOnly, resolveEngine, retired, stronger } from "./index.ts";
+import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, STRONGER, StageInput, credentialOwner, engineBudgetKeyProblem, helperPack, helpersOn, readOnly, resolveEngine, retired, stronger } from "./index.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -82,7 +82,10 @@ describe("the engines each pack may run on", () => {
 
   it.each(AGENT_PACKS.map((p) => [p.id, p] as const))("%s: helpers run as agent roles, each once, on engines that can serve an agent at the pack's effort", (_id, pack) => {
     expect(new Set(pack.helpers.map((h) => h.role)).size).toBe(pack.helpers.length);
-    for (const helper of pack.helpers) {
+    // The runtime the stage runs on when the helper has that engine: the default's for `engine`, the key for an `on` entry.
+    const parentOf = resolveEngine(pack.engines.default).runtime;
+    const onEach = pack.helpers.flatMap((h) => [{ role: h.role, engine: h.engine, parent: parentOf }, ...Object.entries(h.on ?? {}).flatMap(([runtime, engine]) => (engine ? [{ role: h.role, engine, parent: runtime }] : []))]);
+    for (const helper of onEach) {
       expect(helper.role, `${pack.id}: a helper is not the pack's own role`).not.toBe(pack.agent);
       const engine = resolveEngine(helper.engine);
       // A decision runtime has no role, tools or prompt: it cannot be a helper.
@@ -90,16 +93,23 @@ describe("the engines each pack may run on", () => {
       expect(engine.caps, helper.engine).toMatchObject({ tools: true, structured: true });
       expect(engine.caps.effort, `${helper.engine} at ${pack.effort}`).toContain(pack.effort);
       expect(retired(MODELS[ENGINES[helper.engine].model], today), helper.engine).toBe(false);
-      // A helper on Claude beside a Claude default is a subagent: the role needs the Agent tool.
-      if (engine.runtime === "claude" && resolveEngine(pack.engines.default).runtime === "claude") expect(pack.access.agent, `${pack.id} dispatches ${helper.role}`).toBe(true);
+      // A helper on Claude under a stage on Claude is a subagent: the role needs the Agent tool.
+      if (engine.runtime === "claude" && helper.parent === "claude") expect(pack.access.agent, `${pack.id} dispatches ${helper.role}`).toBe(true);
     }
   });
 
   it("keeps today's subagents on their engines, and gives the verifier a second opinion on Codex", () => {
-    expect(PACKS.reviewing.helpers).toEqual([{ role: "security-reviewer", engine: "claude:opus" }]);
-    expect(PACKS.addressing.helpers).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
-    expect(PACKS.triage.helpers).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
-    expect(PACKS.verifying.helpers).toEqual([{ role: "second-opinion", engine: "codex:sol" }]);
+    expect(helpersOn(PACKS.reviewing, "claude")).toEqual([{ role: "security-reviewer", engine: "claude:opus" }]);
+    expect(helpersOn(PACKS.addressing, "claude")).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
+    expect(helpersOn(PACKS.triage, "claude")).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
+    expect(helpersOn(PACKS.verifying, "claude")).toEqual([{ role: "second-opinion", engine: "codex:sol" }]);
+  });
+
+  it("puts a helper on the stage's own subscription when it runs on eve, and keeps a second opinion in another family", () => {
+    expect(helpersOn(PACKS.triage, "eve")).toEqual([{ role: "reply-drafter", engine: "codex:luna" }]);
+    expect(helpersOn(PACKS.verifying, "eve")).toEqual([{ role: "second-opinion", engine: "claude:opus" }]);
+    expect(helpersOn(PACKS.reviewing, "eve")).toEqual([{ role: "security-reviewer", engine: "claude:opus" }]);
+    expect(helpersOn(PACKS.triage_signals, "eve")).toEqual([]);
   });
 
   it("runs a helper as a read-only pack of its own on the helper's engine, answering in a reply and findings", () => {

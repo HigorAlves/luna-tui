@@ -9,7 +9,7 @@ import { FACTORY_DEFAULTS } from "./config-v22.ts";
 import { decisionEngines } from "./decision-defaults.ts";
 import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./access.ts";
 import type { EngineId } from "./engines.ts";
-import type { Effort } from "./models.ts";
+import type { Effort, RuntimeId } from "./models.ts";
 import { AnswerScenario, AnswerStep } from "./plan.ts";
 import { DiffSummaryAnswer } from "./reports.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
@@ -368,6 +368,14 @@ export type ChatTriageAnswer = SlackTriageAnswer;
 export interface Helper {
   role: AgentRole;
   engine: EngineId;
+  /** The engine instead when the stage runs on that runtime: a second opinion stays in another family (D9), and a cheap helper on the stage's own subscription. */
+  on?: Partial<Record<RuntimeId, EngineId>>;
+}
+
+/** The helpers a stage on `runtime` has, each on the engine it runs on there. */
+export function helpersOn(pack: Pack, runtime: RuntimeId): Array<{ role: AgentRole; engine: EngineId }> {
+  if (pack.kind !== "agent") return [];
+  return pack.helpers.map(({ role, engine, on }) => ({ role, engine: on?.[runtime] ?? engine }));
 }
 
 /** What a helper run through `delegate` answers: its reply to the agent that asked, and findings
@@ -935,7 +943,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     id: "triage",
     kind: "agent",
     agent: "triage-planner",
-    helpers: [{ role: "reply-drafter", engine: "claude:haiku" }],
+    helpers: [{ role: "reply-drafter", engine: "claude:haiku", on: { eve: "codex:luna" } }],
     skills: ["code-discovery"],
     access: access(READ_ONLY, { agent: true, web: true, commands: ["gh issue view"], luna: ["decision_get", "card_search"] }),
     writable: false,
@@ -1064,7 +1072,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     kind: "agent",
     agent: "verifier",
     // A second opinion on another engine before the verdict: a child run through `delegate`.
-    helpers: [{ role: "second-opinion", engine: "codex:sol" }],
+    helpers: [{ role: "second-opinion", engine: "codex:sol", on: { eve: "claude:opus" } }],
     skills: ["review-contract", "caveman-review"],
     access: access(READ_ONLY, {
       write: true,
@@ -1554,7 +1562,7 @@ export function classificationLine(c: TaskClassification): string {
 /** A helper as the pack its child run is: the helper's role on its engine, the parent's access
  *  narrowed to reading, no helpers of its own (delegation has depth 1), no skills, the parent's
  *  effort, and the helper's reply as its answer. Its id stays the parent's: it has no pack of its own. */
-export function helperPack(parent: AgentPack, helper: Helper): AgentPack {
+export function helperPack(parent: AgentPack, helper: { role: AgentRole; engine: EngineId }): AgentPack {
   return {
     id: parent.id,
     kind: "agent",
