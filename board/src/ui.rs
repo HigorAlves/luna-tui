@@ -2758,12 +2758,14 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
         .title(Line::from(format!(" {} {} ", state.split.label(), items.len())).bold());
     let inner = list_block.inner(list_area);
     let mut lines = Vec::new();
-    if items.is_empty() && state.split == PrSplit::AllRepos && app.prs_all_note.is_some() {
-        // An older machine has no every-repo list: say so instead of a cheerful "nothing here".
-        if let Some(note) = &app.prs_all_note {
-            lines.push(Line::from(Span::from(format!("  {note}")).fg(c(YELLOW))));
-        }
-    } else if items.is_empty() {
+    // The every-repo list could not be had or refreshed: say why above whatever list the board still has, and instead of a cheerful "nothing here".
+    let note = (state.split == PrSplit::AllRepos)
+        .then_some(app.prs_all_note.as_ref())
+        .flatten();
+    if let Some(note) = note {
+        lines.push(Line::from(Span::from(format!("  {note}")).fg(c(YELLOW))));
+    }
+    if items.is_empty() && note.is_none() {
         if app.slack_snapshot.scope.as_deref() == Some("opted_in")
             && app.slack_snapshot.opted_in == Some(0)
         {
@@ -2773,7 +2775,7 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
         }
     }
     // A window of rows around the cursor, so a long split never hides the selected PR.
-    let visible = (inner.height as usize).max(1);
+    let visible = (inner.height as usize).saturating_sub(lines.len()).max(1);
     let start = selected
         .saturating_sub(visible / 2)
         .min(items.len().saturating_sub(visible));

@@ -70,7 +70,7 @@ pub enum Incoming {
     /// The answer to `R` in Pulls, polled off the UI thread.
     PrsPolled(Result<PrSnapshot, String>),
     /// The same for the All repos tab; an older machine answers with an error, which the tab shows.
-    PrsAllPolled(Result<PrSnapshot, String>),
+    PrsAllPolled(Result<PrSnapshot, ListError>),
     /// The answer to `R` in Slack, polled off the UI thread.
     SlackPolled(Result<SlackSnapshot, String>),
 }
@@ -88,6 +88,35 @@ pub struct Machine {
 }
 
 type Reply = Result<Response<Body>, ureq::Error>;
+
+/// Why a call for the All repos list failed, keeping the HTTP status beside the message: only a 404 says the machine lacks the route.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListError {
+    /// The machine's status, or none when it never answered.
+    pub status: Option<u16>,
+    pub message: String,
+}
+
+impl ListError {
+    #[cfg(test)]
+    pub fn new(status: Option<u16>, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+
+    /// The machine answered 404: an older machine without `/github/prs/all`.
+    pub fn not_found(&self) -> bool {
+        self.status == Some(404)
+    }
+}
+
+impl std::fmt::Display for ListError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
 
 impl Machine {
     /// `HARDNESS_MACHINE_URL`, or whichever of the dev and Docker machines is up (dev first).
@@ -609,17 +638,24 @@ impl Machine {
     }
 
     /// Every open PR in the repos you can reach, as the machine last polled it.
-    pub fn prs_all(&self) -> Result<PrSnapshot, String> {
-        Self::typed(self.agent.get(self.url("/github/prs/all")).call())
+    pub fn prs_all(&self) -> Result<PrSnapshot, ListError> {
+        Self::typed_listed(self.agent.get(self.url("/github/prs/all")).call())
     }
 
-    /// Polls every reachable repo now and answers the fresh snapshot.
-    pub fn refresh_prs_all(&self) -> Result<PrSnapshot, String> {
-        Self::typed(
+    /// Asks the machine to poll every reachable repo. It starts the poll in the background and answers 202 at once with the list as it stands;
+    /// the fresh list arrives as a `github.prs.all` event. An older machine answers once the poll is done.
+    pub fn refresh_prs_all(&self) -> Result<PrSnapshot, ListError> {
+        Self::typed_listed(
             self.slow
                 .post(self.url("/github/prs/all/refresh"))
                 .send_json(json!({})),
         )
+    }
+
+    /// `typed`, with the HTTP status kept in the error.
+    fn typed_listed<T: DeserializeOwned>(reply: Reply) -> Result<T, ListError> {
+        let status = reply.as_ref().ok().map(|r| r.status().as_u16());
+        Self::typed(reply).map_err(|message| ListError { status, message })
     }
 
     /// Dispatches a PR task; answers the task the machine started.
@@ -1622,5 +1658,91 @@ mod coverage_refusal_tests {
             .unwrap();
         assert_eq!(task.state, "implementing");
         assert_eq!(seen.recv().unwrap().1["untestable"], json!(["C5"]));
+    }
+}
+
+#[cfg(test)]
+mod prs_all_tests {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        net::TcpListener,
+        sync::mpsc,
+        thread,
+    };
+
+    use super::*;
+
+    /// A machine that answers every request with `status`, `content_type` and `body`, and sends each request line down the channel.
+    fn machine_saying(
+        status: &'static str,
+        content_type: &'static str,
+        body: &'static str,
+    ) -> (Machine, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut first = String::new();
+                reader.read_line(&mut first).unwrap_or(0);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let _ = tx.send(first.trim().to_string());
+                let _ = reader.into_inner().write_all(
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), rx)
+    }
+
+    #[test]
+    fn a_refresh_answered_202_hands_back_the_list_as_it_stands() {
+        let (machine, seen) = machine_saying(
+            "202 Accepted",
+            "application/json",
+            r#"{"prs":[],"polledAt":"2026-10-27T10:00:00Z","error":null}"#,
+        );
+        let snapshot = machine.refresh_prs_all().unwrap();
+        assert_eq!(snapshot.polled_at.as_deref(), Some("2026-10-27T10:00:00Z"));
+        assert_eq!(
+            seen.recv().unwrap(),
+            "POST /github/prs/all/refresh HTTP/1.1"
+        );
+    }
+
+    #[test]
+    fn a_404_is_told_apart_from_other_errors() {
+        let (machine, _) = machine_saying("404 Not Found", "text/plain", "404 Not Found");
+        let error = machine.refresh_prs_all().unwrap_err();
+        assert!(error.not_found(), "{error}");
+        let error = machine.prs_all().unwrap_err();
+        assert!(error.not_found(), "{error}");
+        let (machine, _) = machine_saying(
+            "500 Internal Server Error",
+            "application/json",
+            r#"{"error":"boom","message":"GitHub is down"}"#,
+        );
+        let error = machine.refresh_prs_all().unwrap_err();
+        assert!(!error.not_found());
+        assert_eq!(error.to_string(), "GitHub is down");
+    }
+
+    #[test]
+    fn an_unreachable_machine_is_not_a_404() {
+        let error = crate::testkit::dead_machine()
+            .refresh_prs_all()
+            .unwrap_err();
+        assert!(!error.not_found());
+        assert!(error.to_string().contains("machine unreachable"), "{error}");
     }
 }

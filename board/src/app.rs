@@ -30,7 +30,7 @@ use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
 use crate::tickets::{TicketEntry, TicketsState};
 use crate::{
-    client::{Incoming, Machine, Refused},
+    client::{Incoming, ListError, Machine, Refused},
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
@@ -829,10 +829,18 @@ pub struct App {
     scan_rx: Receiver<(String, herdr::Stage)>,
 }
 
-/// What the empty All repos tab says when the machine did not give a list: a machine older than
-/// `/github/prs/all` answers 404, and the reason is worth a line, not a toast on every start.
-fn prs_all_note(error: &str) -> String {
-    format!("no every-repo list: an older machine lacks /github/prs/all ({error})")
+/// What the All repos tab says when the machine did not give a list: a machine older than
+/// `/github/prs/all` answers 404, and the reason is worth a line, not a toast on every start. Any other
+/// error is shown as it is, since the route exists and something else went wrong.
+fn prs_all_note(error: &ListError) -> String {
+    if error.not_found() {
+        format!(
+            "no every-repo list: an older machine lacks /github/prs/all ({})",
+            error.message
+        )
+    } else {
+        format!("could not refresh every-repo list: {}", error.message)
+    }
 }
 
 impl App {
@@ -8995,8 +9003,13 @@ mod pr_tests {
     #[test]
     fn an_older_machine_without_the_every_repo_list_leaves_the_tab_empty_with_a_note() {
         let mut app = app_with(vec![pr(1, "mine", true, true)]);
+        press(&mut app, 'P');
+        press(&mut app, '7');
         app.tx
-            .send(Incoming::PrsAllPolled(Err("machine unreachable".into())))
+            .send(Incoming::PrsAllPolled(Err(ListError::new(
+                Some(404),
+                "unexpected reply from the machine: 404 Not Found",
+            ))))
             .unwrap();
         app.pump();
         assert!(
@@ -9007,8 +9020,6 @@ mod pr_tests {
             app.prs_all_note
         );
         assert!(app.toast.is_none(), "a note, not a toast on every start");
-        press(&mut app, 'P');
-        press(&mut app, '7');
         assert!(app.pr_under_cursor().is_none());
         press(&mut app, 'o');
         press(&mut app, 'C');
@@ -9019,6 +9030,105 @@ mod pr_tests {
         );
         send_all(&mut app, vec![in_repo("acme/app", 1, "mine", true)]);
         assert!(app.prs_all_note.is_none(), "a good list clears the note");
+    }
+
+    #[test]
+    fn an_error_other_than_404_is_shown_as_it_is_and_is_not_an_older_machine() {
+        let mut app = app_with(vec![]);
+        app.tx
+            .send(Incoming::PrsAllPolled(Err(ListError::new(
+                None,
+                "machine unreachable: timeout: global",
+            ))))
+            .unwrap();
+        app.pump();
+        let note = app.prs_all_note.clone().unwrap();
+        assert_eq!(
+            note,
+            "could not refresh every-repo list: machine unreachable: timeout: global"
+        );
+        assert!(!note.contains("older machine"), "{note}");
+        assert!(app.toast.is_none());
+        press(&mut app, 'P');
+        press(&mut app, '7');
+        let screen = crate::testkit::render(&mut app, 140, 20);
+        assert!(
+            screen.contains("could not refresh every-repo list")
+                && !screen.contains("older machine"),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn an_error_never_empties_the_list_the_board_already_has_and_the_note_sits_above_it() {
+        let mut app = app_with(vec![]);
+        send_all(
+            &mut app,
+            vec![
+                in_repo("acme/app", 1, "mine", true),
+                in_repo("acme/app", 2, "mine", true),
+            ],
+        );
+        for error in [
+            ListError::new(None, "machine unreachable: timeout: global"),
+            ListError::new(
+                Some(404),
+                "unexpected reply from the machine: 404 Not Found",
+            ),
+            ListError::new(Some(500), "GitHub is down"),
+        ] {
+            app.tx.send(Incoming::PrsAllPolled(Err(error))).unwrap();
+            app.pump();
+            assert_eq!(app.prs_all.prs.len(), 2, "the list stays");
+            assert!(app.prs_all_note.is_some());
+        }
+        press(&mut app, 'P');
+        press(&mut app, '7');
+        let screen = crate::testkit::render(&mut app, 140, 20);
+        let rows: Vec<&str> = screen.lines().collect();
+        let note_row = rows
+            .iter()
+            .position(|r| r.contains("could not refresh"))
+            .or_else(|| rows.iter().position(|r| r.contains("older machine")));
+        let note_row = note_row.unwrap_or_else(|| panic!("{screen}"));
+        let pr_row = rows
+            .iter()
+            .position(|r| r.contains("PR 1"))
+            .unwrap_or_else(|| panic!("{screen}"));
+        assert!(note_row < pr_row, "the note is above the PRs\n{screen}");
+        assert!(screen.contains("All repos 2"), "{screen}");
+    }
+
+    #[test]
+    fn a_refresh_answered_202_keeps_the_list_and_clears_the_note() {
+        let mut app = app_with(vec![]);
+        send_all(&mut app, vec![in_repo("acme/app", 1, "mine", true)]);
+        app.tx
+            .send(Incoming::PrsAllPolled(Err(ListError::new(None, "slow"))))
+            .unwrap();
+        app.pump();
+        assert!(app.prs_all_note.is_some());
+        app.prs_all_polling = true;
+        // The machine answers 202 with the list it holds; the poll's result arrives later as an event.
+        app.tx
+            .send(Incoming::PrsAllPolled(Ok(PrSnapshot {
+                prs: vec![in_repo("acme/app", 1, "mine", true)],
+                polled_at: Some("2026-10-27T10:00:00Z".to_string()),
+                ..Default::default()
+            })))
+            .unwrap();
+        app.pump();
+        assert!(!app.prs_all_polling);
+        assert_eq!(app.prs_all.prs.len(), 1);
+        assert!(app.prs_all_note.is_none());
+        send_all(
+            &mut app,
+            vec![
+                in_repo("acme/app", 1, "mine", true),
+                in_repo("acme/app", 2, "mine", true),
+            ],
+        );
+        assert_eq!(app.prs_all.prs.len(), 2, "the event updates the list");
     }
 
     #[test]
