@@ -943,7 +943,9 @@ describe("the review loop: CI and conflicts", () => {
     const world = loopWorld();
     const rebase = vi.fn(async () => ({ ok: false as const, error: "conflict", conflicts: ["a.ts"] }));
     const { run } = review({ ...world, loop: { ...world.loop, rebase } }, { prFacts: async () => node({ mergeable: "CONFLICTING" }), prMerged: async () => open }, []);
-    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("rebase stops on: a.ts") } });
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { verdict: "conflict_unresolvable", reason: expect.stringContaining("rebase stops on: a.ts; merging instead did not resolve it") } });
+    // The merge of the base was tried first (PR #214 waited for a person on a conflict no agent was asked to resolve).
+    expect(world.git.some((a) => a[0] === "merge" && a.includes("--no-commit"))).toBe(true);
     expect(world.pushes()).toEqual([]);
   });
 });

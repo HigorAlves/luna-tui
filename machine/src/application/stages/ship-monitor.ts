@@ -8,7 +8,9 @@ import { shipSla, quietDays } from "../../domain/ship-sla.ts";
 import { viewSnapshot } from "../ship-view.ts";
 import { PrReplyAnswer, type EvidencePack, type Risk, type ShipContext, type ShipEventClass, type TaskState, eventClassOf } from "@hardness/contracts";
 
-import { HOST_GIT, type RebaseResult, rebaseOntoBase, rebaseOntoDefault, stackOf, unstack as hostUnstack, forgetBase } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, type RebaseResult, isBranchName, leaveStack, rebaseOntoBase, rebaseOntoDefault, stackOf, unstack as hostUnstack, forgetBase } from "../../adapters/git/worktree.ts";
+import { at } from "../../adapters/git/machine-repo.ts";
+import { mergeRound } from "./ship-merge.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
 
 import { lunaYamlFreeze } from "../../adapters/freeze/luna-yaml.ts";
@@ -37,6 +39,9 @@ import { prExtraOf, prTemplateOf, pushBranch } from "./deliver.ts";
 import { FACTORY_DEFAULTS } from "@hardness/contracts";
 import { type TruthSink, commentIntentTruth, eventClassTruth, fixScopeTruth } from "../decision-truth.ts";
 import { type EvidenceHandle, type FixDeps, type ReviewLoop, SECRET_REASON, carriesSecret, escalated, fixRound, headOfWorktree, judgeShip, postable, resetTo, restampPack, subContext } from "./ship-fixes.ts";
+
+/** Merge rounds (a conflict the addressing pack resolves) per watch, before a conflict is a person's. */
+export const MERGE_ROUNDS_MAX = 2;
 
 const DAY_MS = 86_400_000;
 /** The bounds of the loop: fix rounds per thread and per PR, CI re-runs and rebases. Every bound reached asks a person. */
@@ -515,6 +520,31 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
     };
 
     /**
+     * A rebase that stopped on conflicts is answered with a merge of the same base whose conflicts the addressing pack resolves (`mergeRound`),
+     * at most `MERGE_ROUNDS_MAX` times per watch; null when there is no loop to run it, the rounds are spent or the base cannot be read, and the
+     * caller asks a person as before. PR #214: a stacked docs card's rebase stopped on docs/api.md and waited for a person.
+     */
+    const mergeInstead = async (baseBranch: string | null, conflicts: string[], pack: EvidencePack | null, why: string): Promise<Outcome | { failed: string } | null> => {
+      const wt = task.worktreePath;
+      if (!deps.loop || !wt || !baseBranch || !isBranchName(baseBranch) || conflicts.length === 0) return null;
+      if ((cursor.merges ?? 0) >= MERGE_ROUNDS_MAX) return null;
+      const run = runOf();
+      const fetched = await run("git", [...HOST_GIT, ...at(wt), "fetch", "--quiet", "--no-tags", "--end-of-options", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`]);
+      if (fetched.code !== 0) return null;
+      const tip = (await run("git", [...HOST_GIT, ...at(wt), "rev-parse", "--verify", `refs/remotes/origin/${baseBranch}^{commit}`])).stdout.trim();
+      if (!/^[0-9a-f]{40,64}$/.test(tip)) return null;
+      cursor.merges = (cursor.merges ?? 0) + 1;
+      await saveCursor(deps.stateDir, task.id, cursor);
+      await note(`${why}; merging ${baseBranch} instead, the conflicts in ${conflicts.slice(0, 5).join(", ")} resolved by the addressing pack`);
+      const out = await mergeRound(fixDeps(), context, { slug, number, base: { sha: tip, name: baseBranch }, label: String(cursor.merges), pack });
+      // A merge that did not land leaves the person the same question as before, with why the merge did not answer it.
+      if (!out.ok && out.result.detail?.escalation !== "head_moved") return { failed: plain(String(out.result.detail?.reason ?? "the merge did not land"), 300) };
+      return { result: out.result };
+    };
+    /** The person's question after a stopped rebase, with what the merge round said when one ran. */
+    const afterMerge = (said: string, merged: Outcome | { failed: string } | null): string => (merged && "failed" in merged ? `${said}; merging instead did not resolve it: ${merged.failed}` : said);
+
+    /**
      * A stacked card's parent, read from facts (never a model): a parent that changed rebases the card onto its new tip (at most `STACK_REBASES_MAX`
      * times); a parent that merged moves the card onto the default branch and retargets its PR; a parent that is gone is a person's call. A rebase that
      * stops pushes nothing and asks a person, and the next run tries again.
@@ -564,6 +594,21 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         const local = await headOfWorktree(run, wt);
         if (!local || local !== head) return { result: escalated("the worktree is not at the PR's head; the branch is not moved off its parent", "head_moved") };
         const moved = await (stack.unstack ?? hostUnstack)(run, wt, task.repoPath, defaultOf);
+        if (!moved.ok && moved.conflicts.length > 0) {
+          // The parent's commits are on the default branch now: merging it is the same move, with the conflicts resolved, and the PR then aims there.
+          const target = defaultBranch ?? (await defaultOf(task.repoPath));
+          const merged = await mergeInstead(target, moved.conflicts, pack, "the parent merged and moving the branch onto the default branch stopped");
+          if (merged && !("failed" in merged)) {
+            if (merged.result?.detail?.escalation === "head_moved") {
+              if (target && prBase !== target) await deps.github.retargetPr(slug, number, target).catch(() => {});
+              // Off the stack, as `unstack` leaves a card: no parent's branch to follow, the merged default branch as its base.
+              await leaveStack(runOf(), wt);
+              await stack.clearBase?.(task.id);
+            }
+            return merged;
+          }
+          return stuck(afterMerge(`the parent merged and moving the branch onto the default branch stops on: ${moved.conflicts.join(", ")}`, merged));
+        }
         if (!moved.ok) return stuck(moved.conflicts.length > 0 ? `the parent merged and moving the branch onto the default branch stops on: ${moved.conflicts.join(", ")}` : `the parent merged and the branch could not be moved onto the default branch: ${plain(moved.error, 200)}`);
         const done = await settled(run, local, "the branch is moved onto the default branch");
         if (done.result) return done;
@@ -591,6 +636,11 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         cursor.stackRebases = (cursor.stackRebases ?? 0) + 1;
         await saveCursor(deps.stateDir, task.id, cursor);
         const result = await (stack.rebase ?? rebaseOntoBase)(run, wt, task.repoPath, defaultOf);
+        if (!result.ok && result.conflicts.length > 0) {
+          const merged = await mergeInstead(sf.parent.branch, result.conflicts, pack, "the parent changed and the rebase stopped on a conflict");
+          if (merged && !("failed" in merged)) return merged;
+          return stuck(afterMerge(`the parent changed and the rebase stops on: ${result.conflicts.join(", ")}`, merged));
+        }
         if (!result.ok) return stuck(result.conflicts.length > 0 ? `the parent changed and the rebase stops on: ${result.conflicts.join(", ")}` : `the parent changed and the branch could not be rebased: ${plain(result.error, 200)}`);
         const done = await settled(run, local, "the branch is rebased onto its parent");
         if (done.result) return done;
@@ -615,6 +665,12 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       await saveCursor(deps.stateDir, task.id, cursor);
       const rebase = deps.loop?.rebase ?? ((r, w, repo) => rebaseOntoDefault(r, w, repo));
       const result = await rebase(run, wt, task.repoPath ?? wt);
+      if (!result.ok && result.conflicts.length > 0) {
+        const base = (await deps.github.prFacts(slug, number).catch(() => null))?.baseRefName ?? null;
+        const merged = await mergeInstead(base, result.conflicts, pack, "the default branch moved and the rebase stopped on a conflict");
+        if (merged && !("failed" in merged)) return merged;
+        return stuck(afterMerge(`the default branch moved and the rebase stops on: ${result.conflicts.join(", ")}`, merged));
+      }
       if (!result.ok) return stuck(result.conflicts.length > 0 ? `the default branch moved and the rebase stops on: ${result.conflicts.join(", ")}` : `the branch conflicts with the default branch and could not be rebased: ${result.error}`);
       const pushError = await pushBranch(run, branch, wt, { force: true, lease: local });
       if (pushError) {

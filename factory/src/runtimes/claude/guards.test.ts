@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { branchPrefixFor, guardBash, guardWrite, preToolUseGuards } from "./guards.ts";
+import type { GuardStep } from "../../core/economy/guard.ts";
+import type { EconomySession } from "../../core/economy/session.ts";
+import { branchPrefixFor, guardBash, guardWrite, postToolUseEconomy, preToolUseGuards } from "./guards.ts";
 import type { GuardContext } from "./guards.ts";
 
 const WRITABLE: GuardContext = { writable: true, branch: "task/abc" };
@@ -572,5 +574,92 @@ describe("branchPrefixFor", () => {
     expect(guardBash('git commit -m "fix: login"', { writable: true, branch: "main", branchPrefix: branchPrefixFor({ branch: "bug/PLAT-123", source: null }) })).toMatch(/commits must go on the "bug\/PLAT-123" branch/);
     expect(branchPrefixFor({ branch: "", source: null })).toBe("task/");
     expect(guardBash('git commit -m "fix: lint"', { writable: true, branch: "feat/export", branchPrefix: branchPrefixFor({ branch: "feat/export", source: { kind: "github_pr", repo: "o/a", number: 1, url: "u", headRef: "feat/export", baseRef: "main" } }) })).toBeNull();
+  });
+});
+
+describe("postToolUseEconomy", () => {
+  function setup(step: GuardStep = { kind: "none" }) {
+    const seen: Array<{ tool: string; output: string; ok: boolean }> = [];
+    const heard: Array<[string, unknown, GuardStep]> = [];
+    const session: EconomySession = {
+      settled: (call) => {
+        seen.push({ tool: call.tool, output: call.output, ok: call.ok });
+        return { observation: { intent: "test" }, step };
+      },
+    };
+    const hooks = postToolUseEconomy(session, (id, observation, s) => heard.push([id, observation, s]));
+    const base = { session_id: "s", transcript_path: "", cwd: "/w", tool_name: "Bash", tool_input: { command: "pnpm test" }, tool_use_id: "u1" };
+    const post = (response: unknown) => hooks.PostToolUse[0]!.hooks[0]!({ ...base, hook_event_name: "PostToolUse", tool_response: response } as HookInput, "u1", { signal: new AbortController().signal });
+    const failure = (error: string) => hooks.PostToolUseFailure[0]!.hooks[0]!({ ...base, hook_event_name: "PostToolUseFailure", error } as HookInput, "u1", { signal: new AbortController().signal });
+    return { seen, heard, hooks, post, failure };
+  }
+
+  it("matches every tool, on both events", () => {
+    const { hooks } = setup();
+    expect([hooks.PostToolUse[0]!.matcher, hooks.PostToolUseFailure[0]!.matcher]).toEqual([undefined, undefined]);
+  });
+
+  it("reads a command's streams, a string and a structure as text, and reports the call as worked", async () => {
+    const { seen, post } = setup();
+    await post({ stdout: "out", stderr: "err", interrupted: false });
+    await post("plain");
+    await post({ type: "text", file: { content: "x" } });
+    expect(seen.map((s) => s.output)).toEqual(["out\nerr", "plain", ""]);
+    expect(seen.every((s) => s.ok)).toBe(true);
+  });
+
+  it("reads the text keys upstream reads, in its order, and a list by its items' text", async () => {
+    const { seen, post } = setup();
+    await post({ content: "c", output: "o", stderr: "e", stdout: "s", count: 3, nested: { stdout: "no" } });
+    await post([{ type: "text", text: "one" }, { type: "text", text: "two" }, { type: "image" }]);
+    expect(seen.map((s) => s.output)).toEqual(["s\ne\no\nc", "one\ntwo"]);
+  });
+
+  it("reads an Edit or Write response as no text at all", async () => {
+    const { seen, post } = setup();
+    await post({ filePath: "/w/a.md", oldString: "a", newString: "command not found", structuredPatch: [{ lines: ["+command not found"] }], userModified: false });
+    await post({ type: "create", filePath: "/w/a.md", content: "bash: pytest: command not found" });
+    expect(seen.map((s) => s.output)).toEqual(["", ""]);
+  });
+
+  it("caps a response at 20000 characters", async () => {
+    const { seen, post } = setup();
+    await post("x".repeat(30000));
+    expect(seen[0]!.output).toHaveLength(20000);
+  });
+
+  it("reads a failed call's error and reports it as failed", async () => {
+    const { seen, failure, heard } = setup();
+    expect(await failure("Exit code 1\nFAIL")).toEqual({});
+    expect(seen).toEqual([{ tool: "Bash", output: "Exit code 1\nFAIL", ok: false }]);
+    expect(heard).toEqual([["u1", { intent: "test" }, { kind: "none" }]]);
+  });
+
+  it("gives a redirect back to the model as additional context, on either event", async () => {
+    const { post, failure } = setup({ kind: "redirect", text: "step back" });
+    expect(await post("x")).toEqual({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "step back" } });
+    expect(await failure("x")).toEqual({ hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: "step back" } });
+  });
+
+  it("hands a subagent's call to the session as one, and never gives its redirect back", async () => {
+    const seen: unknown[] = [];
+    const hooks = postToolUseEconomy({ settled: (call) => (seen.push(call), { observation: { intent: "test" }, step: { kind: "redirect", text: "step back" } }) }, () => undefined);
+    const hook = hooks.PostToolUse[0]!.hooks[0]!;
+    const base = { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "pnpm test" }, tool_response: "x", tool_use_id: "u" };
+    expect(await hook({ ...base, agent_id: "sub-1" } as unknown as HookInput, "u", { signal: new AbortController().signal })).toEqual({});
+    expect(await hook(base as unknown as HookInput, "u", { signal: new AbortController().signal })).toMatchObject({ hookSpecificOutput: { additionalContext: "step back" } });
+    expect(seen).toMatchObject([{ subagent: true }, { subagent: false }]);
+  });
+
+  it("says nothing on a stop: the runtime ends the run itself", async () => {
+    const { post, heard } = setup({ kind: "stop", reason: "stuck" });
+    expect(await post("x")).toEqual({});
+    expect(heard[0]![2]).toEqual({ kind: "stop", reason: "stuck" });
+  });
+
+  it("fails open: a session that throws is no decision", async () => {
+    const hooks = postToolUseEconomy({ settled: () => { throw new Error("boom"); } }, () => undefined);
+    const out = await hooks.PostToolUse[0]!.hooks[0]!({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: {}, tool_response: "", tool_use_id: "u" } as unknown as HookInput, "u", { signal: new AbortController().signal });
+    expect(out).toEqual({});
   });
 });

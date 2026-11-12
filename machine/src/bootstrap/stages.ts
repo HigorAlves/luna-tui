@@ -30,7 +30,9 @@ import { judgePrivacy } from "../application/frame-privacy.ts";
 import { setupRunner } from "../application/stages/setup.ts";
 import { mergeRunner } from "../application/stages/ship.ts";
 import { shipWatchRunner } from "../application/stages/ship-watch.ts";
-import { type ShipDecide } from "../application/stages/ship-fixes.ts";
+import { type ReviewLoop, type ShipDecide } from "../application/stages/ship-fixes.ts";
+import { mergeRound } from "../application/stages/ship-merge.ts";
+import type { DeliverDeps } from "../application/stages/deliver.ts";
 import { type ShipMonitorDeps, shipMonitor } from "../application/stages/ship-monitor.ts";
 import { verifyRunner } from "../application/stages/verify.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
@@ -76,6 +78,8 @@ import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-prob
 
 export interface RealStagesResult {
   real: Partial<Record<TaskState, StageRunner>>;
+  /** Resolves a merge conflict with the addressing pack and proves it with the project's checks (`mergeRound`): the delivering stage takes it, the ship watch has its own copy of the same loop; absent when stages are stubs. */
+  resolveConflicts?: DeliverDeps["resolveConflicts"];
   /** The verifying stage's review pack, or null when agents are off; `main.ts` passes this
    *  straight into `verifyRunner({ runPack: verifyPack, ... })`. */
   verifyPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) => Promise<StageResult>) | null;
@@ -140,6 +144,8 @@ export async function buildRealStages(
   cards?: AgentDeps["cards"],
   /** What a stacked card's workspace is cut from (`Pipeline.baseOf`) and the base it drops (`Pipeline.clearBase`). */
   stack?: { baseFor: NonNullable<AgentDeps["baseFor"]>; clearBase: NonNullable<AgentDeps["clearBase"]>; /** The checklist's and the merge rule's view of the parent. */ facts: NonNullable<ShipMonitorDeps["stack"]>["facts"]; defaultBranch: NonNullable<ShipMonitorDeps["stack"]>["defaultBranch"]; /** Whether another open card is stacked on a card (its branch is kept). */ hasChildren?: (id: string) => Promise<boolean> },
+  /** The token economy: what each run starts with; absent, a run gets none. */
+  economy?: AgentDeps["economy"],
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -292,6 +298,7 @@ export async function buildRealStages(
     policies,
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure, graphReady } : {}),
+    ...(economy ? { economy } : {}),
   };
   const verifyPack = (context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary; image?: string }) =>
     runAgent(deps, context, "verifying", { ...(extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}), ...(extra?.coverage ? { coverage: extra.coverage } : {}), ...(extra?.image ? { image: extra.image } : {}) });
@@ -311,6 +318,20 @@ export async function buildRealStages(
       },
       changedPaths: (worktreePath) => changedSince(exec, worktreePath, since),
     })(context);
+  /** The review loop: the decisions bind late; the sub-runs are the same packs the stages run, on the task's own worktree. The ship watch and the delivering stage's conflict resolution share it. */
+  const reviewLoop: ReviewLoop = {
+    get decide() {
+      return shipDecisions.decide;
+    },
+    runPack: (pack, subContext, extra) => {
+      if (pack === "pr_reply") return runAgent(deps, subContext, "pr_reply", { ship: extra as ShipContext });
+      const more = extra as { threads?: AgentExtra["threads"]; baseCommit?: string; ci?: AgentExtra["ci"] };
+      return runAgent(deps, subContext, pack, { ...(more.threads ? { threads: more.threads } : {}), ...(more.baseCommit ? { baseCommit: more.baseCommit } : {}), ...(more.ci ? { ci: more.ci } : {}) });
+    },
+    checks: deltaChecks,
+    // A fix is made on a fresh clone at the PR's head and comes back as a fast-forward.
+    fresh: { ...hostFreshWorkspace, keep: (path: string, taskId: string, runId: string) => keepFolder({ stateDir: config.stateDir, taskId, runId, path }) },
+  };
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agents,
     // Build: a tests step (one failing, tagged test per scenario, committed by the machine) runs before the implementer.
@@ -521,20 +542,7 @@ export async function buildRealStages(
           // A changed test file points to its scenario: the Build Report's tagged tests.
           buildTests: async (taskId) => ((await evidenceDeps.reports?.(taskId).catch(() => null))?.build?.tests ?? []).map((t) => ({ scenario: t.scenario, file: t.file ?? null })),
           evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore },
-          // The review loop: the decisions bind late; the sub-runs are the same packs the stages run, on the task's own worktree.
-          loop: {
-            get decide() {
-              return shipDecisions.decide;
-            },
-            runPack: (pack, subContext, extra) => {
-              if (pack === "pr_reply") return runAgent(deps, subContext, "pr_reply", { ship: extra as ShipContext });
-              const more = extra as { threads?: AgentExtra["threads"]; baseCommit?: string; ci?: AgentExtra["ci"] };
-              return runAgent(deps, subContext, pack, { ...(more.threads ? { threads: more.threads } : {}), ...(more.baseCommit ? { baseCommit: more.baseCommit } : {}), ...(more.ci ? { ci: more.ci } : {}) });
-            },
-            checks: deltaChecks,
-            // A fix is made on a fresh clone at the PR's head and comes back as a fast-forward.
-            fresh: { ...hostFreshWorkspace, keep: (path: string, taskId: string, runId: string) => keepFolder({ stateDir: config.stateDir, taskId, runId, path }) },
-          },
+          loop: reviewLoop,
           stateDir: config.stateDir,
           pollMs: config.shipPoll.intervalMs,
         }),
@@ -543,7 +551,9 @@ export async function buildRealStages(
     shipping: mergeRunner({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch, ...(stack.hasChildren ? { hasChildren: stack.hasChildren } : {}) } } : {}), policies, evidence: { load: evidenceDeps.load }, truth: truth ?? null, stateDir: config.stateDir, ...(graphs?.rebuild ? { onMerged: graphs.rebuild } : {}), pollMs: config.shipPoll.intervalMs ?? FACTORY_DEFAULTS.ship.poll_minutes * 60_000 }),
     // The retro, after the merge: its proposal waits at the same state for a person, and a card with nothing to learn closes by itself.
     reviewing_memory: memoryReviewRunner({
-      runPack: async (context, ship) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}) }),
+      runPack: async (context, ship, factCandidates) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}), ...(factCandidates?.length ? { factCandidates } : {}) }),
+      // The learned facts that earned a place in the project context: the retro names them, a person approves.
+      candidates: async (context) => (context.task.repoPath && economy ? economy.promotable(context.task.repoPath, (await policies.for(context.task.repoPath)).factory.economy) : []),
       stateDir: config.stateDir,
       ...(retroFacts ? { facts: retroFacts } : {}),
       // worth_learning binds late, with the other ship decisions.
@@ -553,7 +563,9 @@ export async function buildRealStages(
       overrides: async (repoPath) => (await policies.for(repoPath)).decisions.worth_learning,
     }),
   };
-  return { real, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  const resolveConflicts: DeliverDeps["resolveConflicts"] = (context, input) =>
+    mergeRound({ github, loop: reviewLoop, policies, evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore }, stateDir: config.stateDir }, context, input);
+  return { real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

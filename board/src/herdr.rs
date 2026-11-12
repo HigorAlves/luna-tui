@@ -62,7 +62,23 @@ pub fn focus_task_tab(short_id: &str) -> bool {
 /// The command to run in the watch tab's pane, if the task has one. A task with no tab gets
 /// nothing: a stage starting never opens a tab, only `f` does.
 fn follow_command(existing_pane: Option<&str>, container: &str) -> Option<(String, String)> {
-    existing_pane.map(|pane| (pane.to_string(), format!("docker logs -f {container}")))
+    let command = logs_command(container)?;
+    existing_pane.map(|pane| (pane.to_string(), command))
+}
+
+/// What the board says when a container name is not one it will type into a terminal.
+pub const REFUSE_CONTAINER: &str = "refused: the container name is not a plain name";
+
+/// Whether `name` is a plain container name, `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`: the machine chose it, but it is typed
+/// into a terminal pane, so nothing a shell would read as more than one word gets there.
+pub fn valid_container(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric()) && name.len() <= 128 && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
+/// The line typed into a pane to tail `container`; none for a name that is not plain.
+fn logs_command(container: &str) -> Option<String> {
+    valid_container(container).then(|| format!("docker logs -f {container}"))
 }
 
 /// The latest stage container a task is running: what `f` opens a watch tab for.
@@ -115,8 +131,8 @@ pub fn open_and_focus(short_id: &str, stage: &Stage) {
     let Some(created) = json(&["tab", "create", "--cwd", &stage.cwd, "--label", &stage.label]) else {
         return;
     };
-    if let Some(pane) = created["result"]["root_pane"]["pane_id"].as_str() {
-        run(&["pane", "run", pane, &format!("docker logs -f {}", stage.container)]);
+    if let (Some(pane), Some(command)) = (created["result"]["root_pane"]["pane_id"].as_str(), logs_command(&stage.container)) {
+        run(&["pane", "run", pane, &command]);
     }
     if let Some(tab) = created["result"]["tab"]["tab_id"].as_str().or_else(|| created["result"]["tab_id"].as_str()) {
         run(&["tab", "focus", tab]);
@@ -219,6 +235,21 @@ mod tests {
     fn a_stage_starting_only_repoints_an_existing_pane() {
         assert_eq!(follow_command(None, "c2"), None, "no tab, no command: nothing is created");
         assert_eq!(follow_command(Some("p:2"), "c2"), Some(("p:2".to_string(), "docker logs -f c2".to_string())));
+    }
+
+    #[test]
+    fn a_container_name_is_typed_into_a_pane_only_when_it_is_a_plain_name() {
+        let long_ok = format!("a{}", "b".repeat(127));
+        let too_long = format!("a{}", "b".repeat(128));
+        for name in ["c1", "hardness-abc-triage", "a_b.c-d", "0abc", long_ok.as_str()] {
+            assert!(super::valid_container(name), "{name}");
+            assert_eq!(follow_command(Some("p:1"), name), Some(("p:1".to_string(), format!("docker logs -f {name}"))), "{name}");
+        }
+        for name in ["", "-rf", ".hidden", "_x", "c1; rm -rf ~", "c1 && id", "$(id)", "a`id`", "a\nb", "a\rb", "a b", "a|b", "a\u{1b}[2J", "né", too_long.as_str()] {
+            assert!(!super::valid_container(name), "{name:?}");
+            assert_eq!(follow_command(Some("p:1"), name), None, "{name:?} is refused, nothing is typed");
+        }
+        assert_eq!(super::REFUSE_CONTAINER, "refused: the container name is not a plain name");
     }
 
     #[test]

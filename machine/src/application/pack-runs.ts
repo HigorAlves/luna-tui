@@ -328,7 +328,7 @@ export class PackRuns implements PackRunsPort {
       if (run.error !== null) failure = signal?.aborted ? new RunAbortedError("the client left: the run was stopped") : run.credentialBusy ? new RunCredentialBusyError(run.error) : new RunFailedError(run.error);
       else {
         const out = run.output;
-        usage = { model: out.usage.model, engine, turns: out.usage.turns, durationMs: out.usage.durationMs, costUsd: out.usage.costUsd };
+        usage = { model: out.usage.model, engine, turns: out.usage.turns, durationMs: out.usage.durationMs, costUsd: out.usage.costUsd, ...(out.usage.tokens ? { tokens: { ...out.usage.tokens, cached: out.usage.tokens.cached ?? 0 } } : {}) };
         facts = runFacts(out.run);
         info = out.run ?? null;
         if (!out.ok) failure = out.rateLimited ? new RunRateLimitedError(outputError(out), resetsIso(out.resetsAt)) : new RunFailedError(outputError(out));

@@ -2,7 +2,7 @@
 import {
   type Approval,
   type Artifact,
-  COLUMN_OF,
+  columnOf,
   RUNNING,
   RUN_OR_GATE,
   type StageRun,
@@ -36,7 +36,7 @@ export const toTask = (
   branch: row.branch,
   worktreePath: row.worktreePath,
   state: row.state,
-  column: COLUMN_OF[row.state],
+  column: columnOf(row.state, row.resumeTo),
   // A state that holds a stage or a gate waits on a person only while an approval is open.
   waitingOnYou: waitsOnPerson(row.state, (glance?.gate ?? null) !== null),
   running: (RUNNING.has(row.state) || (RUN_OR_GATE.has(row.state) && (glance?.gate ?? null) === null)) && !row.queued,

@@ -16,61 +16,45 @@ use serde_json::Value;
 use tui_textarea::TextArea;
 
 use crate::detail::{self, DetailView};
+use crate::text::{self, cells};
+use crate::theme;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::keys::{self, Avail, HelpRow, Scope};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState};
 use crate::{
-    app::{App, Density, FloorState, GroupBy, Mode},
+    app::{App, Density, FloorState, GroupBy, Mode, View},
     model::{
         COLUMNS, EngineInfo, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
         fmt_usd, repo_colour_slot, sla_targets, spend_p90, now_secs, unix_secs,
     },
 };
 
-// Catppuccin Mocha, the theme herdr is configured with.
-pub(crate) const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
-pub(crate) const SURFACE0: Color = Color::Rgb(0x31, 0x32, 0x44);
-pub(crate) const SURFACE1: Color = Color::Rgb(0x45, 0x47, 0x5a);
-pub(crate) const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-pub(crate) const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
-pub(crate) const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
-pub(crate) const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
-pub(crate) const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
-pub(crate) const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
-pub(crate) const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
+pub(crate) use crate::theme::{ACCENT, BASE, BLUE, GREEN, LAVENDER, MUTED, PEACH, RED, SELECTED_BG, SUBTEXT0, SURFACE0, SURFACE1, YELLOW, c};
 
-pub(crate) const ACCENT: Color = BLUE;
-pub(crate) const MUTED: Color = SURFACE1;
-const SELECTED_BG: Color = SURFACE0;
-
-/// Narrowest a column may get before the board scrolls instead of squeezing.
-const MIN_COLUMN_WIDTH: u16 = 18;
-/// Width of a collapsed column in folded mode: wide enough for its header bar, not its cards.
+/// Narrowest a full column may get; below it the board collapses and then drops columns.
+const MIN_COLUMN_WIDTH: u16 = 20;
+/// Widest a full column grows; a wider screen keeps the leftover as margin.
+const MAX_COLUMN_WIDTH: u16 = 44;
+/// Width of a collapsed column: wide enough for its header bar (`Ship 1 ⏸1`), not its cards.
 const FOLD_WIDTH: u16 = 14;
 
-/// Colours are dropped when `NO_COLOR` is set. States still read from their glyph and label.
-pub(crate) fn c(color: Color) -> Color {
-    if env::var_os("NO_COLOR").is_some() {
-        Color::Reset
-    } else {
-        color
+/// The role a card's look is drawn in, everywhere it shows: the board card, the task view's border, bar and rail.
+pub(crate) fn look_style(look: Look) -> Style {
+    match look {
+        Look::Escalated => theme::lost(),
+        Look::NeedsYou | Look::Stale => theme::needs_you(),
+        Look::Working => theme::working(),
+        Look::Paused => theme::paused(),
+        Look::Queued | Look::Draft => theme::label(),
+        Look::Done => theme::done(),
+        Look::Archived => theme::dim(),
     }
 }
 
 pub(crate) fn look_color(look: Look) -> Color {
-    match look {
-        Look::Escalated => c(RED),
-        Look::NeedsYou => c(PEACH),
-        Look::Stale => c(PEACH),
-        Look::Working => c(YELLOW),
-        Look::Queued => c(SUBTEXT0),
-        Look::Paused => c(LAVENDER),
-        Look::Draft => c(SUBTEXT0),
-        Look::Done => c(GREEN),
-        Look::Archived => c(MUTED),
-    }
+    look_style(look).fg.unwrap_or(Color::Reset)
 }
 
 pub(crate) fn look_glyph(look: Look) -> &'static str {
@@ -114,25 +98,29 @@ pub fn draw(frame: &mut Frame, app: &App) {
     .areas(frame.area());
 
     frame.render_widget(header_line(app), header);
-    if let Some(floor) = &app.floor {
+    if let Some(floor) = app.floor.as_ref().filter(|_| app.active_view() == Some(View::Floor)) {
         render_floor(frame, body, floor);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
+        if let Mode::ConfirmBase { repo, base } = &app.mode {
+            let repo = crate::model::plain(repo, 200);
+            render_confirm_details(frame, " Approve base image ", &format!("approve the base image of {repo}?"), &[format!("image {}", crate::model::plain(base, 200)), "It runs with the stage's credential.".to_string()], PEACH);
+        }
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
         return;
     }
-    if let Some(digest) = app.digest.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+    if let Some(digest) = app.digest.as_ref().filter(|_| app.active_view() == Some(View::Digest) && matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_digest(frame, body, app, digest);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
         return;
     }
-    if let Some(inbox) = app.inbox.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::Help { .. })) {
+    if let Some(inbox) = app.inbox.as_ref().filter(|_| app.active_view() == Some(View::Inbox) && matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::Help { .. })) {
         render_inbox(frame, body, app, inbox);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if let Mode::ConfirmApproveAll(ids) = &app.mode {
             render_note(frame, " Approve them all? ", &format!("{} ticket(s) in Approve get a yes, each with no guidance.  y / n", ids.len()));
         }
@@ -141,27 +129,39 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.tickets.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::Command { .. })) {
+    if let Some(state) = app.tickets.as_ref().filter(|_| app.active_view() == Some(View::Tickets) && matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::Command { .. })) {
         render_tickets(frame, body, app, state);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
         return;
     }
-    if let Some(state) = app.backlog.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+    if let Some(state) = app.economy.as_ref().filter(|_| app.active_view() == Some(View::Economy) && matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::ConfirmMask { .. })) {
+        render_economy(frame, body, app, state);
+        frame.render_widget(footer_line(app, footer.width), footer);
+        if let Mode::ConfirmMask { pack, units, .. } = &app.mode {
+            let units: Vec<String> = units.iter().map(|u| crate::model::plain(u, 80)).collect();
+            render_confirm_details(frame, " Approve tool mask ", &format!("mask these tools for {}?", crate::model::plain(pack, 80)), &[units.join(", "), "The pack will not be offered them again.".to_string()], PEACH);
+        }
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
+        }
+        return;
+    }
+    if let Some(state) = app.backlog.as_ref().filter(|_| app.active_view() == Some(View::Backlog) && matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_backlog(frame, body, app, state);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
         return;
     }
-    if let Some(state) = app.pulls.as_ref().filter(|_| {
+    if let Some(state) = app.pulls.as_ref().filter(|_| app.active_view() == Some(View::Pulls) && {
         matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ConfirmClose { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help { .. })
     }) {
         render_pulls(frame, body, app, state);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         match &app.mode {
             Mode::ConfirmMerge { repo, number } => {
                 render_confirm_pr(frame, app, repo, *number, " Merge? ", "Merged the way the repo allows, and its branch is deleted.", GREEN);
@@ -176,7 +176,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.slack.as_ref().filter(|_| {
+    if let Some(state) = app.slack.as_ref().filter(|_| app.active_view() == Some(View::Slack) && {
         matches!(
             app.mode,
             Mode::Normal
@@ -191,7 +191,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         )
     }) {
         render_slack(frame, body, app, state);
-        frame.render_widget(footer_line(app), footer);
+        frame.render_widget(footer_line(app, footer.width), footer);
         if state.watches.is_some() {
             render_slack_watches(frame, app, state);
         }
@@ -209,31 +209,80 @@ pub fn draw(frame: &mut Frame, app: &App) {
         return;
     }
     render_board(frame, body, app);
-    frame.render_widget(footer_line(app), footer);
+    if !app.fold
+        && let Some(note) = board_note(app, body.width)
+    {
+        // Right-aligned on the header; the indicator has priority, so the left side is cut with `…` where the two meet.
+        let w = (note.width() as u16 + 1).min(header.width);
+        let left = Rect { width: header.width - w, ..header };
+        frame.render_widget(Clear, header);
+        frame.render_widget(header_fit(app, left.width as usize), left);
+        let rect = Rect { x: header.right() - w, width: w, ..header };
+        frame.render_widget(note, Rect { x: rect.x + 1, width: w - 1, ..rect });
+    }
+    frame.render_widget(footer_line(app, footer.width), footer);
 
+    // A prompt, picker, editor or palette opened from the task view leaves the card on screen under it.
+    let task_id = match &app.mode {
+        Mode::Detail(id) | Mode::EnginePicker { id, .. } => Some(id.as_str()),
+        _ => app.over_task(),
+    };
+    if let Some(task) = task_id.and_then(|id| app.task(id)) {
+        let actions = keys::card_actions(app);
+        let can = keys::card_action_help(app);
+        let view = DetailView {
+            task,
+            detail: app.detail.as_ref(),
+            section: app.detail_section,
+            cursor: app.detail_cursor,
+            scroll: &app.detail_scroll,
+            prs: &app.prs.prs,
+            diff: app.diff.as_ref().filter(|d| d.0 == task.id).map(|d| &d.1),
+            viewport: &app.detail_viewport,
+            follow: &app.detail_follow,
+            engines: app.engine_catalog.as_ref(),
+            tasks: &app.tasks,
+            actions: &actions,
+            can: &can,
+            refs: &app.detail_refs,
+            hits: &app.evidence_hits,
+        };
+        detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
+    }
     match &app.mode {
-        Mode::Detail(id) | Mode::EnginePicker { id, .. } => {
-            if let Some(task) = app.task(id) {
-                let view = DetailView {
-                    task,
-                    detail: app.detail.as_ref(),
-                    section: app.detail_section,
-                    cursor: app.detail_cursor,
-                    scroll: &app.detail_scroll,
-                    prs: &app.prs.prs,
-                    diff: app.diff.as_ref().filter(|d| d.0 == task.id).map(|d| &d.1),
-                    viewport: &app.detail_viewport,
-                    follow: &app.detail_follow,
-                    engines: app.engine_catalog.as_ref(),
-                };
-                detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
-            }
-            if let (Mode::EnginePicker { pack, cursor, .. }, Some(Ok(catalog))) = (&app.mode, &app.engine_catalog)
+        Mode::EnginePicker { pack, cursor, .. } => {
+            if let Some(Ok(catalog)) = &app.engine_catalog
                 && let Some(pack) = catalog.packs.iter().find(|p| p.id == *pack)
             {
                 render_engine_picker(frame, pack, &catalog.choices(pack), *cursor);
             }
         }
+        Mode::Reason { id, approve, text } => {
+            let short = app.task(id).map(|t| t.short_id().to_string()).unwrap_or_default();
+            let (title, border) = if *approve { (format!("guidance for the retry of #{short} (optional)"), ACCENT) } else { (format!("send back #{short} — why?"), ACCENT) };
+            let placeholder = if text.is_empty() && !*approve { app.task(id).and_then(|t| reason_placeholder(&t.state)) } else { None };
+            if app.over_task().is_some() {
+                render_prompt(frame, app, &title, text, placeholder.unwrap_or_default(), "enter send · esc cancel", border);
+            }
+        }
+        Mode::Reject { id, text } => {
+            let short = app.task(id).map(|t| t.short_id().to_string()).unwrap_or_default();
+            if app.over_task().is_some() {
+                render_prompt(frame, app, &format!("reject #{short} — why? (the card ends)"), text, "", "enter reject · esc cancel", RED);
+            }
+        }
+        Mode::EvidenceNote { id, text } => {
+            let short = app.task(id).map(|t| t.short_id().to_string()).unwrap_or_default();
+            if app.over_task().is_some() {
+                render_prompt(frame, app, &format!("#{short} — why was the pack not useful?"), text, "", "enter send · esc cancel", PEACH);
+            }
+        }
+        Mode::ConfirmApprove(held) => {
+            if let Some(task) = app.task(&held.id) {
+                render_approve(frame, &held.question, task);
+            }
+        }
+        Mode::ConfirmQuit => render_confirm_box(frame, &app.quit_question(), " Quit? ", "The machine keeps working; only the board closes.", PEACH),
         Mode::ConfirmDelete(id) => {
             if let Some(task) = app.task(id) {
                 render_confirm(
@@ -257,6 +306,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Mode::ArchiveReason { id, cursor } => {
             if let Some(task) = app.task(id) {
                 render_archive_reason(frame, task, *cursor);
+            }
+        }
+        Mode::EditChoice(id) => {
+            if let Some(task) = app.task(id) {
+                render_edit_choice(frame, task, app.detail.as_ref());
             }
         }
         Mode::EscalationReason { id, cursor } => {
@@ -361,6 +415,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::ConfirmMany { action, ids } => render_note(frame, " Marked tickets ", &format!("{}  y / n", action.question(ids.len()))),
+        Mode::ConfirmApproveMany { ids, question, .. } => render_approve_many(frame, app, ids, question),
+        Mode::ConfirmBase { .. } | Mode::ConfirmMask { .. } => {}
         Mode::JiraLink { id, query, hits, cursor } => {
             if let Some(task) = app.task(id) {
                 render_jira_link(frame, task, query, hits, *cursor);
@@ -378,6 +434,50 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
+/// `line` cut to `max` cells: whole spans while they fit, the one that crosses the edge shortened with `…`.
+fn clip_line(line: Line<'static>, max: usize) -> Line<'static> {
+    if line.width() <= max {
+        return line;
+    }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for span in line.spans {
+        let w = span.width();
+        if used + w <= max {
+            used += w;
+            spans.push(span);
+            continue;
+        }
+        let rest = max - used;
+        if rest > 0 {
+            spans.push(Span::styled(text::ellipsis(&span.content, rest), span.style));
+        }
+        break;
+    }
+    Line::from(spans)
+}
+
+/// The header cut to `width` with the needs-you count kept: the whole line when it fits, else the count in place of the totals (and
+/// before the offline text), and the app name goes last of all.
+fn header_fit(app: &App, width: usize) -> Line<'static> {
+    let full = header_line(app);
+    if full.width() <= width {
+        return full;
+    }
+    let waiting = app.tasks.iter().filter(|t| t.look().needs_person()).count();
+    let need = Span::from(format!("  {waiting} need you")).fg(c(if waiting > 0 { PEACH } else { SUBTEXT0 })).bold();
+    let mut spans = full.spans;
+    if app.online {
+        spans[1] = need.clone();
+    } else {
+        spans.insert(1, need.clone());
+    }
+    if spans[0].width() + need.width() > width {
+        spans.remove(0);
+    }
+    clip_line(Line::from(spans), width)
+}
+
 fn header_line(app: &App) -> Line<'static> {
     let mut spans = vec![Span::from(" Luna TUI ").fg(c(BASE)).bg(c(ACCENT)).bold()];
     if app.online {
@@ -387,7 +487,7 @@ fn header_line(app: &App) -> Line<'static> {
         let waiting = app
             .tasks
             .iter()
-            .filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated))
+            .filter(|t| t.look().needs_person())
             .count();
         let queued_part = if queued > 0 { format!(" · {queued} queued") } else { String::new() };
         spans.push(
@@ -425,20 +525,17 @@ fn header_line(app: &App) -> Line<'static> {
     if !app.filter.trim().is_empty() {
         spans.push(Span::from(format!("  [filter: {}]", app.filter)).fg(c(ACCENT)).bold());
     }
-    if app.floor.is_some() {
-        spans.push(Span::from("  [floor]").fg(c(BLUE)).bold());
-    }
-    if app.backlog.is_some() {
-        spans.push(Span::from("  [backlog]").fg(c(BLUE)).bold());
-    }
-    if app.tickets.is_some() {
-        spans.push(Span::from("  [tickets]").fg(c(BLUE)).bold());
-    }
-    if app.pulls.is_some() {
-        spans.push(Span::from("  [pulls]").fg(c(BLUE)).bold());
-    }
-    if app.slack.is_some() {
-        spans.push(Span::from("  [slack]").fg(c(BLUE)).bold());
+    let tag = match app.active_view() {
+        Some(View::Floor) => Some("  [floor]"),
+        Some(View::Backlog) => Some("  [backlog]"),
+        Some(View::Economy) => Some("  [economy]"),
+        Some(View::Tickets) => Some("  [tickets]"),
+        Some(View::Pulls) => Some("  [pulls]"),
+        Some(View::Slack) => Some("  [slack]"),
+        Some(View::Inbox | View::Digest) | None => None,
+    };
+    if let Some(tag) = tag {
+        spans.push(Span::from(tag).fg(c(BLUE)).bold());
     }
     if app.fold {
         spans.push(Span::from("  [folded]").fg(c(BLUE)).bold());
@@ -446,7 +543,7 @@ fn header_line(app: &App) -> Line<'static> {
     Line::from(spans)
 }
 
-fn footer_line(app: &App) -> Line<'static> {
+fn footer_line(app: &App, width: u16) -> Line<'static> {
     if let Some(toast) = &app.toast {
         let color = if toast.error { RED } else { GREEN };
         return Line::from(Span::from(format!(" {}", toast.text)).fg(c(color)).bold());
@@ -490,6 +587,8 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from(format!("{}▏", app.filter)),
             Span::from("   enter keep · esc clear").fg(c(SUBTEXT0)),
         ]),
+        // Over the task view the prompt is a box on the card; the footer keeps the two keys.
+        Mode::Reason { .. } | Mode::Reject { .. } | Mode::EvidenceNote { .. } if app.over_task().is_some() => hint(&[("enter", "send"), ("esc", "cancel")]),
         Mode::Reason { approve, text, .. } => {
             let placeholder = if text.is_empty() && !*approve { app.tasks.iter().find(|t| matches!(&app.mode, Mode::Reason { id, .. } if *id == t.id)).and_then(|t| reason_placeholder(&t.state)) } else { None };
             let prompt = if *approve {
@@ -514,17 +613,19 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from(format!("{text}▏")),
             Span::from("   enter reject (the card ends) · esc cancel").fg(c(SUBTEXT0)),
         ]),
-        Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) | Mode::ConfirmWorktree(_) => {
+        Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) | Mode::ConfirmWorktree(_) | Mode::ConfirmQuit => {
             hint(&[("y", "yes"), ("n", "no")])
         }
+        Mode::ConfirmApprove(_) => hint(&[("y/enter", "approve"), ("n/esc", "cancel")]),
         Mode::Actions { .. } | Mode::PrActions { .. } | Mode::SlackActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
         Mode::ConfirmClose { .. } => hint(&[("y", "close the PR"), ("n", "cancel")]),
         Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
         Mode::RecordEdit { .. } => hint(&[("j/k", "field"), ("h/l", "value"), ("enter", "send what changed"), ("esc", "cancel")]),
-        Mode::ArchiveReason { .. } => hint(&[("j/k 1-5", "pick"), ("enter", "archive"), ("esc", "cancel")]),
-        Mode::EscalationReason { .. } => hint(&[("j/k 1-6", "pick"), ("enter", "correct the reason"), ("esc", "cancel")]),
+        Mode::ArchiveReason { .. } => hint(&[(&format!("j/k 1-{}", crate::model::ARCHIVE_REASONS.len()), "pick"), ("enter", "archive"), ("esc", "cancel")]),
+        Mode::EditChoice(_) => hint(&[("p/c/t", "pick"), ("esc", "back to the task")]),
+        Mode::EscalationReason { .. } => hint(&[(&format!("j/k 1-{}", crate::model::ESCALATION_REASONS.len()), "pick"), ("enter", "correct the reason"), ("esc", "cancel")]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::EnginePicker { .. } => hint(&[("j/k", "move"), ("enter", "set"), ("esc", "back")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
@@ -535,6 +636,9 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::SlackWatchAdd { .. } => hint(&[("type", "@handle, #channel or a word"), ("↑/↓", "pick"), ("enter", "watch"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
+        Mode::ConfirmApproveMany { .. } => hint(&[("y", "approve them"), ("n", "cancel")]),
+        Mode::ConfirmBase { .. } => hint(&[("y", "approve the base image"), ("n/esc", "cancel")]),
+        Mode::ConfirmMask { .. } => hint(&[("y", "approve the tool mask"), ("n/esc", "cancel")]),
         Mode::Command { text, .. } => Line::from(vec![
             Span::from(" :").fg(c(ACCENT)).bold(),
             Span::from(format!("{text}▏")),
@@ -543,40 +647,50 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::Help { .. } => scope_footer(app, Scope::Help),
         // The views, the ticket popup and the Watches popup: a few short words, as before the
         // key registry. The sheet behind `?` lists the rest.
-        _ => view_footer(app),
+        _ => view_footer(app, width),
     }
 }
 
-fn view_footer(app: &App) -> Line<'static> {
+fn view_footer(app: &App, width: u16) -> Line<'static> {
     match keys::active_scope(app) {
-        Scope::Floor => hint(&[("tab", "next repo"), ("r", "refresh"), ("esc", "close")]),
-        Scope::Digest => hint(&[("j/k", "move"), ("enter", "jump to the ticket"), ("o", "open the PR"), ("esc", "close")]),
-        Scope::Inbox => hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]),
-        Scope::Pulls => hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]),
-        Scope::Backlog => hint(&[("j/k", "move"), ("p", "promote"), ("b", "bump"), ("d", "decline"), ("R", "refetch"), ("esc", "close")]),
-        Scope::Tickets => hint(&[("j/k", "move"), ("a", "approve"), ("e", "edit"), ("x", "ignore"), ("c", "card"), ("s", "backlog"), ("R", "refetch"), ("esc", "close")]),
-        Scope::Watches => hint(&[("j/k", "move"), ("n", "add"), ("e", "floor"), ("d", "delete"), ("space", "on/off"), ("esc", "close")]),
-        Scope::Slack => hint(&[
-            ("j/k", "move"),
-            ("h/l 1-6", "split"),
-            ("r", "reply"),
-            ("t", "ticket"),
-            ("d", "done"),
-            ("s", "snooze"),
-            ("! -", "priority"),
-            ("W", "watches"),
-            ("o", "open"),
-            ("R", "poll"),
-            ("esc", "close"),
-        ]),
-        Scope::Detail => {
-            let shippable = matches!(&app.mode, Mode::Detail(id) if app.task(id).is_some_and(|t| t.state == "awaiting_ship"));
-            let (rows, scroll) = if app.detail_section.has_cursor() { (("jk", "pick"), ("JK", "scroll")) } else { (("jk", "scroll"), ("^d/^u", "page")) };
-            let act = if shippable { ("S", "ship") } else { ("a", "advance") };
-            hint(&[("h/l 1-9", "section"), rows, scroll, act, ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
-        }
-        _ => hint(&[("?", "help"), ("n", "new"), ("a", "advance"), ("enter", "open"), ("x", "actions"), ("=", "density"), ("/", "filter"), ("q", "quit")]),
+        Scope::Detail => detail_footer(app, width),
+        scope => fitted_footer(&keys::view_footer(app, scope), &[("?", "all keys")], width),
     }
+}
+
+/// The task view's footer: the keys that work on this card now, in priority order (`keys::detail_footer`),
+/// as many as fit `width`, then `? all keys` and `esc back`. The actions the decision bar offers are
+/// repeated here, so a key the bar had no room for is still on screen; nothing else is listed that
+/// does not work (an edit on a running card, a send back at no gate).
+fn detail_footer(app: &App, width: u16) -> Line<'static> {
+    fitted_footer(&keys::detail_footer(app), &[("?", "all keys"), ("esc", "back")], width)
+}
+
+/// A footer fitted to `width`: `keys` in priority order while they fit beside `tail`, whole hints only,
+/// then `tail`. On a terminal too narrow for the tail, its first hint alone.
+fn fitted_footer(keys: &[(String, String)], tail: &[(&str, &str)], width: u16) -> Line<'static> {
+    let seg = |key: &str, desc: &str| vec![Span::from(format!(" {key} ")).fg(c(BASE)).bg(c(ACCENT)), Span::from(format!(" {desc}  ")).fg(c(SUBTEXT0))];
+    let tail_spans: Vec<Span<'static>> = tail.iter().flat_map(|(k, d)| seg(k, d)).collect();
+    let room = (width as usize).saturating_sub(1);
+    let mut spans = vec![Span::raw(" ")];
+    let mut used = 0;
+    let tail_w: usize = tail_spans.iter().map(Span::width).sum();
+    for (key, desc) in keys {
+        let one = seg(key, desc);
+        let w: usize = one.iter().map(Span::width).sum();
+        if used + w + tail_w > room {
+            break;
+        }
+        used += w;
+        spans.extend(one);
+    }
+    // The tail keeps its place when it fits; on a terminal too narrow for it, `?` alone.
+    if used + tail_w <= room {
+        spans.extend(tail_spans);
+    } else if let Some((k, d)) = tail.first() {
+        spans.extend(seg(k, d));
+    }
+    Line::from(spans)
 }
 
 /// How many keys the footer shows: `?` and seven more fit in 120 columns with these labels.
@@ -617,28 +731,170 @@ fn hint(keys: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
+/// One drawn column: its width and whether its cards show or only its header bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Slot {
+    pub column: usize,
+    pub width: u16,
+    pub full: bool,
+}
+
+/// Which columns the board draws at a width, and how wide. The columns not in `slots` are hidden.
+#[derive(Debug)]
+pub(crate) struct BoardLayout {
+    pub slots: Vec<Slot>,
+}
+
+impl BoardLayout {
+    pub fn hidden(&self) -> Vec<usize> {
+        (0..COLUMNS.len()).filter(|c| !self.slots.iter().any(|s| s.column == *c)).collect()
+    }
+}
+
+/// Fits the eight columns to `width`. All eight at `MIN_COLUMN_WIDTH` or more when they fit, sharing
+/// the width up to `MAX_COLUMN_WIDTH`. When they do not: Done narrows to its header first, then the
+/// empty columns (farthest from the cursor first), and only then do columns drop. A drop takes the
+/// farthest column from the cursor, but one with a card that needs the person goes last: those stay in
+/// view as long as anything else can go. The focused column is never narrowed by the width and never
+/// dropped. A column folded by hand (`zc`) stays narrow.
+pub(crate) fn board_layout(app: &App, width: u16) -> BoardLayout {
+    let n = COLUMNS.len();
+    let focus = app.focus.min(n - 1);
+    let needs: Vec<bool> = (0..n).map(|c| app.indices(c).iter().any(|&i| app.tasks[i].look().needs_person())).collect();
+    let empty: Vec<bool> = (0..n).map(|c| app.indices(c).is_empty()).collect();
+    let mut full: Vec<bool> = (0..n).map(|c| !app.folded.contains(&c)).collect();
+    let mut shown = vec![true; n];
+    let fits = |full: &[bool], shown: &[bool]| -> bool {
+        let used: u32 = (0..n).filter(|&c| shown[c]).map(|c| u32::from(if full[c] { MIN_COLUMN_WIDTH } else { FOLD_WIDTH })).sum();
+        used <= u32::from(width)
+    };
+
+    if let Some(done) = COLUMNS.iter().position(|c| *c == "Done")
+        && !fits(&full, &shown)
+        && done != focus
+        && !needs[done]
+    {
+        full[done] = false;
+    }
+    // Farthest from the cursor first; on a tie the right-hand column goes first.
+    let mut by_distance: Vec<usize> = (0..n).collect();
+    by_distance.sort_by_key(|&c| (std::cmp::Reverse(c.abs_diff(focus)), std::cmp::Reverse(c)));
+    for &c in &by_distance {
+        if !fits(&full, &shown) && c != focus && full[c] && empty[c] {
+            full[c] = false;
+        }
+    }
+    for pass in [false, true] {
+        for &c in &by_distance {
+            if !fits(&full, &shown) && c != focus && shown[c] && needs[c] == pass {
+                shown[c] = false;
+            }
+        }
+    }
+    let shown: Vec<usize> = (0..n).filter(|&c| shown[c]).collect();
+    let narrow = shown.iter().filter(|&&c| !full[c]).count() as u16 * FOLD_WIDTH;
+    let wide = shown.iter().filter(|&&c| full[c]).count() as u16;
+    let room = width.saturating_sub(narrow);
+    let even = room.checked_div(wide).unwrap_or(0);
+    // Past the cap the rest is margin; under it, an uneven width goes one cell at a time to the first columns.
+    let (share, extra) = (even.min(MAX_COLUMN_WIDTH), if even < MAX_COLUMN_WIDTH { room.checked_rem(wide).unwrap_or(0) } else { 0 });
+    let mut given = 0;
+    let slots = shown
+        .into_iter()
+        .map(|column| {
+            if full[column] {
+                given += 1;
+                Slot { column, width: share + u16::from(given <= extra), full: true }
+            } else {
+                Slot { column, width: FOLD_WIDTH, full: false }
+            }
+        })
+        .collect();
+    BoardLayout { slots }
+}
+
+/// The header's right side when a column is not fully shown: `→ Ship 1 ⏸ · Done 12`. Each column that is
+/// hidden or collapsed with how many of its cards need you, else how many it holds. The arrow points to
+/// where they are, from the cursor.
+pub(crate) fn board_note(app: &App, width: u16) -> Option<Line<'static>> {
+    let layout = board_layout(app, width);
+    let mut aside: Vec<usize> = layout.hidden();
+    aside.extend(layout.slots.iter().filter(|s| !s.full).map(|s| s.column));
+    aside.sort_unstable();
+    if aside.is_empty() {
+        return None;
+    }
+    let arrow = match (aside.iter().any(|&c| c < app.focus), aside.iter().any(|&c| c > app.focus)) {
+        (true, true) => "↔",
+        (true, false) => "←",
+        _ => "→",
+    };
+    let mut spans = vec![Span::styled(format!("{arrow} "), theme::label())];
+    for (i, column) in aside.into_iter().enumerate() {
+        let indices = app.indices(column);
+        let need = indices.iter().filter(|&&j| app.tasks[j].look().needs_person()).count();
+        spans.push(Span::styled(format!("{}{} ", if i == 0 { "" } else { "· " }, COLUMNS[column]), theme::label()));
+        spans.push(if need > 0 { Span::styled(format!("{need} {}", look_glyph(Look::NeedsYou)), theme::needs_you().bold()) } else { Span::styled(indices.len().to_string(), theme::label()) });
+        spans.push(Span::raw(" "));
+    }
+    spans.pop();
+    Some(Line::from(spans))
+}
+
+/// Cells a card's lines get inside a column `area_width` wide: the border, the padding and the gutter go.
+fn card_width(area_width: u16) -> usize {
+    usize::from(area_width.saturating_sub(6))
+}
+
 fn render_board(frame: &mut Frame, area: Rect, app: &App) {
     if app.fold {
         render_board_folded(frame, area, app);
         return;
     }
-    let visible = ((area.width / MIN_COLUMN_WIDTH) as usize).clamp(1, COLUMNS.len());
-    let start = app
-        .focus
-        .saturating_sub(visible - 1)
-        .min(COLUMNS.len() - visible);
-    // A folded column (`zc`; Done by default) keeps only its header bar; the others share the rest.
-    let constraints: Vec<Constraint> = (0..visible)
-        .map(|slot| if app.folded.contains(&(start + slot)) { Constraint::Length(FOLD_WIDTH) } else { Constraint::Fill(1) })
-        .collect();
-    let rects = Layout::horizontal(constraints).split(area);
+    let layout = board_layout(app, area.width);
+    let rects = Layout::horizontal(layout.slots.iter().map(|s| Constraint::Length(s.width))).split(area);
 
     app.column_rects.borrow_mut().clear();
-    for (slot, rect) in rects.iter().enumerate() {
-        let column = start + slot;
-        app.column_rects.borrow_mut().push((column, *rect));
-        render_column(frame, *rect, app, column, !app.folded.contains(&column));
+    for (slot, rect) in layout.slots.iter().zip(rects.iter()) {
+        app.column_rects.borrow_mut().push((slot.column, *rect));
+        render_column(frame, *rect, app, slot.column, slot.full);
     }
+}
+
+/// Which card a click `row` lines below a column's top border lands on, counting each card's own
+/// height (as drawn: marked, new, by density) and the repo separators, from the first item the list
+/// scrolled to in the last frame.
+pub(crate) fn card_at_row(app: &App, column: usize, area_width: u16, row: usize) -> usize {
+    let width = card_width(area_width);
+    let indices = app.indices(column);
+    let by_repo = app.group == GroupBy::Repo;
+    let offset = app.list_offsets.borrow().get(column).copied().unwrap_or(0);
+    let mut item = 0;
+    let mut top = 0;
+    let mut last_repo: Option<Option<&str>> = None;
+    for (position, &i) in indices.iter().enumerate() {
+        let task = &app.tasks[i];
+        if by_repo && last_repo != Some(task.repo_name()) {
+            if item >= offset {
+                top += 1;
+            }
+            item += 1;
+            last_repo = Some(task.repo_name());
+        }
+        if item >= offset {
+            top += board_card_lines(app, task, None, width).len();
+        }
+        item += 1;
+        if row < top {
+            return position;
+        }
+    }
+    indices.len().saturating_sub(1)
+}
+
+/// A card's lines as the board draws them, for the renderer and for hit-testing alike.
+fn board_card_lines(app: &App, task: &Task, spend_p90: Option<f64>, width: usize) -> Vec<Line<'static>> {
+    card_lines(task, spend_p90, app.marked.contains(&task.id), app.is_new(task), app.density, width)
 }
 
 /// Every column at once: the focused one expanded, the rest collapsed to their header bar.
@@ -671,10 +927,18 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
         Span::from(format!(" {} ", COLUMNS[column])).bold(),
         Span::from(format!("{} ", indices.len())).fg(c(SUBTEXT0)),
     ];
-    for look in [Look::Escalated, Look::NeedsYou, Look::Working, Look::Queued, Look::Paused] {
-        let count = indices.iter().filter(|&&i| app.tasks[i].look() == look).count();
-        if count > 0 {
-            title.push(Span::from(format!("{}{count} ", look_glyph(look))).fg(look_color(look)));
+    if expanded {
+        for look in [Look::Escalated, Look::NeedsYou, Look::Working, Look::Queued, Look::Paused] {
+            let count = indices.iter().filter(|&&i| app.tasks[i].look() == look).count();
+            if count > 0 {
+                title.push(Span::from(format!("{}{count} ", look_glyph(look))).fg(look_color(look)));
+            }
+        }
+    } else {
+        // Collapsed: the count, and what needs you, so a card waiting on the person is never only a number.
+        let need = indices.iter().filter(|&&i| app.tasks[i].look().needs_person()).count();
+        if need > 0 {
+            title.push(Span::styled(format!("{}{need} ", look_glyph(Look::NeedsYou)), theme::needs_you()));
         }
     }
 
@@ -693,7 +957,7 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
 
     let p90 = spend_p90(&app.tasks);
     // Two cells go to the highlight symbol, one to the padding each side.
-    let width = usize::from(area.width.saturating_sub(6));
+    let width = card_width(area.width);
     let by_repo = app.group == GroupBy::Repo;
     let mut items: Vec<ListItem> = Vec::new();
     let mut positions = Vec::with_capacity(indices.len());
@@ -706,24 +970,29 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
             last_repo = Some(task.repo_name());
         }
         positions.push(items.len());
-        items.push(card(task, p90, app.marked.contains(&task.id), app.is_new(task), app.density, width));
+        items.push(ListItem::new(board_card_lines(app, task, p90, width)));
     }
     let list = List::new(items)
         .block(block)
         .highlight_style(selection_style())
-        .highlight_symbol("▌ ");
+        .highlight_symbol("› ");
 
     let mut state = ListState::default();
     if focused && !indices.is_empty() {
         state.select(positions.get(app.selection[column]).copied().or(positions.last().copied()));
     }
     frame.render_stateful_widget(list, area, &mut state);
+    let mut offsets = app.list_offsets.borrow_mut();
+    if offsets.len() <= column {
+        offsets.resize(column + 1, 0);
+    }
+    offsets[column] = state.offset();
 }
 
 /// Under `gr` ordering: `── luna-tui 3 ─────`, a line that names the group the cards below
 /// belong to, in the repo's colour.
 fn repo_separator(repo: Option<&str>, count: usize, width: usize) -> ListItem<'static> {
-    let name = repo.unwrap_or("no repo");
+    let name = repo.map_or("no repo".to_string(), |r| crate::model::plain(r, 60));
     let colour = repo.map_or(SUBTEXT0, |r| REPO_COLOURS[repo_colour_slot(r)]);
     let head = format!("── {name} {count} ");
     let rule = "─".repeat(width.saturating_sub(head.chars().count()));
@@ -733,10 +1002,10 @@ fn repo_separator(repo: Option<&str>, count: usize, width: usize) -> ListItem<'s
 /// A board card. One colour per repo, so a column scans by repo: the bar and the name share it.
 const REPO_COLOURS: [Color; REPO_COLOUR_SLOTS] = [BLUE, GREEN, PEACH, LAVENDER, YELLOW, RED];
 
-/// The card's first line: the marks, a repo-coloured bar, the issue number, the title. The
-/// title leads so a narrow column cuts the identifiers, never the words. A ticket past one of
-/// its SLA clocks leads with `‼` and goes red, like an overdue Slack row.
-fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
+/// What leads a card's first line: the marks, a repo-coloured bar, the issue number. The title
+/// follows, so a narrow column cuts the identifiers, never the words. A ticket past one of its SLA
+/// clocks leads with `‼` and goes red, like an overdue Slack row.
+fn card_prefix(task: &Task, marked: bool, is_new: bool) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     if marked {
         spans.push(Span::from("◆ ").fg(c(ACCENT)).bold());
@@ -754,17 +1023,53 @@ fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
         spans.push(Span::from("⚙ ").fg(c(SUBTEXT0)));
     }
     spans.push(Span::from(task.issue_prefix()).fg(c(SUBTEXT0)));
-    let title = Span::from(task.title.clone()).bold();
-    spans.push(if task.overdue() { title.fg(c(RED)) } else { title });
-    Line::from(spans)
+    spans
 }
 
-fn card(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> ListItem<'static> {
-    ListItem::new(card_lines(task, spend_p90, marked, is_new, density, width))
+/// A title in at most two lines: the first `first` cells wide (the prefix took the rest of the row),
+/// the second `rest` wide, ending in `…` when the title does not fit. A title that fits is one line.
+fn title_lines(title: &str, first: usize, rest: usize) -> Vec<String> {
+    let first = first.max(4);
+    let rest = rest.max(4);
+    let head = text::wrap(title, first, 0).into_iter().next().unwrap_or_default();
+    let taken = head.split_whitespace().count();
+    let words: Vec<&str> = title.split_whitespace().collect();
+    // A single word wider than the line wraps mid-word: cut it with an ellipsis instead.
+    if head.split_whitespace().collect::<Vec<_>>() != words[..taken.min(words.len())] || cells(&head) > first {
+        return vec![text::ellipsis(title, first)];
+    }
+    let remainder = words[taken..].join(" ");
+    if remainder.is_empty() {
+        return vec![head];
+    }
+    let mut second = text::wrap(&remainder, rest, 0);
+    if second.len() > 1 || second.first().is_some_and(|l| cells(l) > rest) {
+        return vec![head, text::ellipsis(&remainder, rest)];
+    }
+    vec![head, second.remove(0)]
 }
 
-/// The card's lines by density: the head; `#id · repo`; the status with its age and badges;
-/// and, when comfortable, the worked / diff / tests line. Compact is the head alone with the
+/// `spans` cut to `width` cells: the span that crosses the edge ends in `…`, the ones after it go.
+fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let mut out = Vec::with_capacity(spans.len());
+    let mut used = 0;
+    for span in spans {
+        let w = span.width();
+        if used + w <= width {
+            used += w;
+            out.push(span);
+            continue;
+        }
+        let room = width.saturating_sub(used);
+        out.push(Span::styled(text::ellipsis(&span.content, room), span.style));
+        break;
+    }
+    Line::from(out)
+}
+
+/// The card's lines by density: the title (two lines when it needs them, ending in `…` when it
+/// needs more); `#id · repo`; the status with its age and badges; and, when comfortable, the worked /
+/// diff / tests line. Every line fits `width`, cut with `…`. Compact is the title alone with the
 /// status glyph and the age.
 fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> Vec<Line<'static>> {
     let look = task.look();
@@ -777,6 +1082,7 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     } else {
         SUBTEXT0
     };
+    let title = crate::model::plain(&task.title, 400);
     if density == Density::Compact {
         let mut spans = Vec::new();
         if marked {
@@ -789,17 +1095,30 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
             spans.push(Span::from("‼ ").fg(c(RED)).bold());
         }
         spans.push(Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)));
-        let used: usize = spans.iter().map(Span::width).sum::<usize>() + age.chars().count() + 1;
-        let title = Span::from(truncate(&task.title, width.saturating_sub(used).max(4))).bold();
+        let used: usize = spans.iter().map(Span::width).sum::<usize>() + cells(&age) + 1;
+        let title = Span::from(text::ellipsis(&title, width.saturating_sub(used).max(4))).bold();
         spans.push(if task.overdue() { title.fg(c(RED)) } else { title });
         spans.push(Span::from(format!(" {age}")).fg(c(age_colour)));
         return vec![Line::from(spans)];
     }
-    let head = card_head(task, marked, is_new);
+
+    let mut lines = Vec::new();
+    let mut head = card_prefix(task, marked, is_new);
+    let prefix: usize = head.iter().map(Span::width).sum();
+    let mut parts = title_lines(&title, width.saturating_sub(prefix), width.saturating_sub(1)).into_iter();
+    let bold = |text: String| {
+        let span = Span::from(text).bold();
+        if task.overdue() { span.fg(c(RED)) } else { span }
+    };
+    head.push(bold(parts.next().unwrap_or_default()));
+    lines.push(fit_spans(head, width));
+    for part in parts {
+        lines.push(Line::from(vec![Span::raw(" "), bold(part)]));
+    }
 
     let mut ids = format!("  #{}", task.short_id());
     if let Some(repo) = task.repo_name() {
-        ids.push_str(&format!(" · {repo}"));
+        ids.push_str(&format!(" · {}", crate::model::plain(repo, 60)));
     }
     if let Some(number) = task.source.as_ref().and_then(|s| s.number) {
         ids.push_str(&format!(" · gh#{number}"));
@@ -807,60 +1126,53 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     if let Some(key) = task.jira_key() {
         ids.push_str(&format!(" · {key}"));
     }
-    let ids = Line::from(Span::from(ids).fg(c(SUBTEXT0)));
+    if let Some(part) = &task.split_part {
+        ids.push_str(&format!(" · part {}/{}", part.n, part.of));
+    }
+    lines.push(Line::from(Span::from(text::ellipsis(&ids, width)).fg(c(SUBTEXT0))));
 
-    let mut meta = vec![
-        Span::raw("  "),
-        Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(look_color(look)).bold(),
-        Span::from(format!(" · {age}")).fg(c(age_colour)),
-    ];
+    let mut badges: Vec<Span<'static>> = Vec::new();
     if task.worktree_path.is_some() {
-        meta.push(Span::from(" ⎇").fg(c(ACCENT)));
+        badges.push(Span::from(" ⎇").fg(c(ACCENT)));
     }
     if task.retries.total > 1 {
-        meta.push(Span::from(format!(" ×{}", task.retries.total)).fg(c(PEACH)));
+        badges.push(Span::from(format!(" ×{}", task.retries.total)).fg(c(PEACH)));
     }
     if task.repo_path.is_none() && task.state == "draft" {
-        meta.push(Span::from(" no repo").fg(c(SUBTEXT0)));
+        badges.push(Span::from(" no repo").fg(c(SUBTEXT0)));
     }
     // A dim `$` on the tickets above the p90 of spend: the expensive ones at a glance.
     if task.spent_usd.zip(spend_p90).is_some_and(|(spent, p90)| spent > p90) {
-        meta.push(Span::from(" $").fg(c(SUBTEXT0)));
+        badges.push(Span::from(" $").fg(c(SUBTEXT0)));
     }
-    let mut lines = vec![head, ids, Line::from(meta)];
+    // The status and its age come first: a status too long for the card ends in `…`, and a badge that does not fit is left out.
+    let age_part = format!(" · {age}");
+    let label = format!("{} {}", look_glyph(look), task.status_label());
+    let room = width.saturating_sub(2 + text::cells(&age_part));
+    let status = if room >= 8 { text::ellipsis(&label, room) } else { label };
+    let mut used = 2 + text::cells(&status) + text::cells(&age_part);
+    let mut meta = vec![Span::raw("  "), Span::from(status).fg(look_color(look)).bold(), Span::from(age_part).fg(c(age_colour))];
+    for badge in badges {
+        if used + badge.width() <= width {
+            used += badge.width();
+            meta.push(badge);
+        }
+    }
+    lines.push(fit_spans(meta, width));
     if density == Density::Comfortable {
-        lines.push(task.triad().map_or_else(Line::default, |t| Line::from(Span::from(format!("  {t}")).fg(c(SUBTEXT0)))));
+        lines.push(task.triad().map_or_else(Line::default, |t| Line::from(Span::from(text::ellipsis(&format!("  {t}"), width)).fg(c(SUBTEXT0)))));
     }
     lines
 }
 
 pub(crate) fn bullets(items: &[String]) -> Vec<Line<'static>> {
-    items.iter().map(|item| Line::from(format!("  • {item}"))).collect()
+    items.iter().map(|item| Line::from(format!("  • {}", detail::plain(item)))).collect()
 }
 
 pub(crate) fn json_list(value: &Value) -> Vec<String> {
     value
         .as_array()
-        .map(|items| items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect())
-        .unwrap_or_default()
-}
-
-/// "title (~N LOC)" per proposed slice; entries without a title are skipped.
-pub(crate) fn slice_lines(value: &Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    let title = item["title"].as_str()?;
-                    Some(match item["est_loc"].as_u64() {
-                        Some(loc) => format!("{title} (~{loc} LOC)"),
-                        None => title.to_string(),
-                    })
-                })
-                .collect()
-        })
+        .map(|items| items.iter().filter_map(|i| i.as_str().map(detail::plain)).collect())
         .unwrap_or_default()
 }
 
@@ -985,10 +1297,15 @@ pub(crate) fn pack_lines(value: &Value) -> Vec<String> {
 /// Counts, calibration and the proposed rules text from `requested.rules`, at most 12 lines of
 /// it, each cut to `width` columns. Empty when the review proposed nothing.
 pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
-    let markdown = value["markdown"].as_str().unwrap_or("");
+    // The rules text is a model's: every control character, an escape sequence included, becomes a space.
+    let markdown = detail::plain(value["markdown"].as_str().unwrap_or(""));
     let recalibration = value["recalibration"].as_array().map_or(0, Vec::len);
     let updates = value["promptUpdates"].as_array().map_or(0, Vec::len);
-    if markdown.trim().is_empty() && recalibration == 0 && updates == 0 {
+    let promotions: Vec<String> = value["factPromotions"]
+        .as_array()
+        .map(|a| a.iter().map(|p| format!("promote to {}: {}", crate::detail::plain(p["section"].as_str().unwrap_or("")).replace('\n', " "), crate::detail::plain(p["text"].as_str().unwrap_or("")).replace('\n', " "))).collect())
+        .unwrap_or_default();
+    if markdown.trim().is_empty() && recalibration == 0 && updates == 0 && promotions.is_empty() {
         return Vec::new();
     }
     const MAX: usize = 12;
@@ -1005,6 +1322,7 @@ pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     if recalibration > 0 || updates > 0 {
         lines.push(format!("recalibration: {recalibration} · prompt updates: {updates}"));
     }
+    lines.extend(promotions.iter().map(|l| l.chars().take(width).collect::<String>()));
     lines.extend(text.iter().take(MAX).map(|l| l.chars().take(width).collect::<String>()));
     if text.len() > MAX {
         lines.push(format!("… +{} more", text.len() - MAX));
@@ -1020,13 +1338,13 @@ pub(crate) fn proof_lines(value: &Value) -> Vec<(bool, String)> {
     let mut lines = Vec::new();
     for item in items {
         let ok = item["ok"].as_bool().unwrap_or(false);
-        let name = item["name"].as_str().unwrap_or("check");
-        let cmd = item["cmd"].as_str().unwrap_or("");
+        let name = detail::plain(item["name"].as_str().unwrap_or("check"));
+        let cmd = detail::plain(item["cmd"].as_str().unwrap_or(""));
         lines.push((ok, format!("{} {name}: {cmd}", if ok { "✓" } else { "✗" })));
         if !ok && let Some(tail) = item["tail"].as_str() {
             let shown: Vec<&str> = tail.lines().filter(|l| !l.trim().is_empty()).collect();
             for line in shown.iter().rev().take(TAIL).rev() {
-                lines.push((ok, format!("    {line}")));
+                lines.push((ok, format!("    {}", detail::plain(line))));
             }
         }
     }
@@ -1085,14 +1403,93 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
 
 /// Popup asking to confirm a delete or an abort.
 fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
-    render_confirm_box(frame, &format!("#{} {}", task.short_id(), task.title), title, note, RED);
+    render_confirm_box(frame, &format!("#{} {}", task.short_id(), crate::model::plain(&task.title, 400)), title, note, RED);
+}
+
+/// A confirmation that spells out what it is about: the heading, then each detail wrapped to the box (an image
+/// reference or a list of tools is read whole, never cut), then the yes / no chips.
+fn render_confirm_details(frame: &mut Frame, title: &str, heading: &str, details: &[String], accent: Color) {
+    let width = frame.area().width.saturating_sub(4).clamp(20, 68);
+    let room = usize::from(width).saturating_sub(6).max(8);
+    let mut lines = vec![Line::from(Span::from(truncate(heading, room)).bold())];
+    for detail in details {
+        let chars: Vec<char> = detail.chars().collect();
+        for chunk in chars.chunks(room) {
+            lines.push(Line::from(Span::from(chunk.iter().collect::<String>()).fg(c(SUBTEXT0))));
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::from(" y ").fg(c(BASE)).bg(c(accent)),
+        Span::from(" yes   ").fg(c(SUBTEXT0)),
+        Span::from(" n ").fg(c(BASE)).bg(c(ACCENT)),
+        Span::from(" no").fg(c(SUBTEXT0)),
+    ]));
+    let area = centered(frame.area(), width, (lines.len() as u16 + 2).min(frame.area().height));
+    frame.render_widget(Clear, area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(accent))).padding(Padding::horizontal(2)).title(Line::from(title).fg(c(accent)).bold());
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// Popup asking to confirm an approval: what is approved and the card, in the delete box's shape.
+fn render_approve(frame: &mut Frame, question: &str, task: &Task) {
+    render_confirm_box(frame, question, " Approve ", &crate::model::plain(&task.title, 400), GREEN);
+}
+
+/// The box over marked cards at gates: `approve 3 cards? 2 plans · 1 ship`, up to five of them by short id and
+/// title (machine text, so plain), then the yes / no chips.
+fn render_approve_many(frame: &mut Frame, app: &App, ids: &[(String, &'static str)], question: &str) {
+    const LISTED: usize = 5;
+    let width = frame.area().width.saturating_sub(4).clamp(20, 68);
+    let room = (width as usize).saturating_sub(6);
+    let mut lines = vec![Line::from(Span::from(text::ellipsis(question, room)).bold())];
+    for task in ids.iter().filter_map(|(id, _)| app.task(id)).take(LISTED) {
+        let label = format!("#{}  {}", task.short_id(), crate::model::plain(&task.title, 400));
+        lines.push(Line::from(Span::from(text::ellipsis(&label, room)).fg(c(SUBTEXT0))));
+    }
+    if ids.len() > LISTED {
+        lines.push(Line::from(Span::from(format!("… and {} more", ids.len() - LISTED)).fg(c(SUBTEXT0))));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::from(" y ").fg(c(BASE)).bg(c(GREEN)),
+        Span::from(" yes   ").fg(c(SUBTEXT0)),
+        Span::from(" n ").fg(c(BASE)).bg(c(ACCENT)),
+        Span::from(" no").fg(c(SUBTEXT0)),
+    ]));
+    let area = centered(frame.area(), width, lines.len() as u16 + 2);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(GREEN))).padding(Padding::horizontal(2)).title(Line::from(" Approve ").fg(c(GREEN)).bold());
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// Popup asking to confirm a PR merge or close, in the same box as a ticket delete: the
 /// item's name in bold, what happens in muted text, then the yes / no chips.
 fn render_confirm_pr(frame: &mut Frame, app: &App, repo: &str, number: u64, title: &str, note: &str, accent: Color) {
-    let name = app.prs.prs.iter().find(|p| p.repo == repo && p.number == number).map_or(String::new(), |p| format!("  {}", p.title));
+    let name = app.prs.prs.iter().find(|p| p.repo == repo && p.number == number).map_or(String::new(), |p| format!("  {}", crate::model::plain(&p.title, 400)));
     render_confirm_box(frame, &format!("{repo}#{number}{name}"), title, note, accent);
+}
+
+/// A one-line prompt over the task view: 3 rows, bordered, titled with what it asks, near the bottom of
+/// the popup so the card stays visible above it. The tail of a long text shows, with the caret.
+fn render_prompt(frame: &mut Frame, app: &App, title: &str, text: &str, placeholder: &str, keys_hint: &str, accent: Color) {
+    let popup = detail::popup_area(frame.area(), app.detail_full);
+    let width = popup.width.saturating_sub(4).clamp(1, 72);
+    let area = Rect::new(popup.x + popup.width.saturating_sub(width) / 2, popup.bottom().saturating_sub(5), width, 3).intersection(frame.area());
+    frame.render_widget(Clear, area);
+    let room = (width as usize).saturating_sub(4);
+    let typed: String = text.chars().rev().take(room.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
+    let mut spans = vec![Span::from(format!("{typed}▏"))];
+    if text.is_empty() && !placeholder.is_empty() {
+        spans.push(Span::from(format!(" {}", truncate(placeholder, room.saturating_sub(2)))).fg(c(SUBTEXT0)));
+    }
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(accent)))
+        .padding(Padding::horizontal(1))
+        .title(Line::from(format!(" {} ", truncate(title, (width as usize).saturating_sub(4)))).fg(c(accent)).bold())
+        .title_bottom(Line::from(format!(" {keys_hint} ")).fg(c(SUBTEXT0)).right_aligned());
+    frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
 }
 
 fn render_confirm_box(frame: &mut Frame, heading: &str, title: &str, note: &str, accent: Color) {
@@ -1246,13 +1643,13 @@ fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
         let selected = row == inbox.cursor.min(items.len().saturating_sub(1));
         let bar = if selected { "▌ " } else { "  " };
         let what = task.reason.clone().unwrap_or_else(|| task.status_label());
-        let repo = task.repo_name().map(|r| format!("{r} · ")).unwrap_or_default();
+        let repo = task.repo_name().map(|r| format!("{} · ", crate::model::plain(r, 60))).unwrap_or_default();
         let mut line = vec![
             Span::from(bar).fg(c(ACCENT)),
             Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)),
             Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)),
             Span::from(repo).fg(c(SUBTEXT0)),
-            Span::from(task.title.clone()).bold(),
+            Span::from(crate::model::plain(&task.title, 400)).bold(),
             Span::from(format!("   {what}")).fg(look_color(look)),
             Span::from(format!(" · {}", age(&task.updated_at, now))).fg(c(SUBTEXT0)),
         ];
@@ -1302,6 +1699,49 @@ fn render_backlog(frame: &mut Frame, area: Rect, app: &App, state: &crate::backl
         }
         None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
     };
+    frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
+}
+
+/// The Economy view: facts, tools and the loop guard as one list under headings; the row's detail, the cost and the envelopes beside it.
+fn render_economy(frame: &mut Frame, area: Rect, app: &App, state: &crate::economy::EconomyState) {
+    let data = &app.economy_data;
+    let rows = data.rows();
+    let selected = state.cursor.min(rows.len().saturating_sub(1));
+    let [list_area, detail_area] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let name = state.repo.trim_end_matches('/').rsplit('/').next().unwrap_or_default();
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).title(Line::from(format!(" Economy {} ", crate::detail::plain(name).replace('\n', " "))).bold());
+    let inner = block.inner(list_area);
+    let width = inner.width.saturating_sub(2) as usize;
+    // One display line per row, a heading line where the section changes; the cursor's line decides what scrolls into view.
+    let mut display: Vec<Line> = Vec::new();
+    let mut at = 0;
+    let mut section = "";
+    for (i, row) in rows.iter().enumerate() {
+        if row.section != section {
+            section = row.section;
+            display.push(Line::from(Span::from(section).fg(c(BLUE)).bold()));
+        }
+        if i == selected {
+            at = display.len();
+        }
+        let text = truncate(&row.text, width);
+        display.push(if i == selected { Line::from(Span::from(format!("▸ {text}")).fg(c(BASE)).bg(c(ACCENT)).bold()) } else { Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0))) });
+    }
+    if display.is_empty() {
+        display.push(Line::from(Span::from("  nothing learned yet").fg(c(SUBTEXT0))));
+    }
+    let visible = (inner.height as usize).max(1);
+    let start = at.saturating_sub(visible / 2).min(display.len().saturating_sub(visible));
+    let shown: Vec<Line> = display.into_iter().skip(start).take(visible).collect();
+    frame.render_widget(Paragraph::new(shown).block(block), list_area);
+    let side = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(MUTED))).padding(Padding::horizontal(1)).title(Line::from(" Detail ").bold());
+    let mut lines: Vec<Line> = match rows.get(selected) {
+        Some(row) => data.detail_lines(row).into_iter().enumerate().map(|(i, l)| if i == 0 { Line::from(Span::from(l).bold()) } else { Line::from(Span::from(l).fg(c(SUBTEXT0))) }).collect(),
+        None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+    };
+    lines.push(Line::default());
+    lines.push(Line::from(Span::from("Cost").fg(c(BLUE)).bold()));
+    lines.extend(data.cost_lines().into_iter().map(|l| Line::from(Span::from(l).fg(c(SUBTEXT0)))));
     frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
 }
 
@@ -1457,7 +1897,7 @@ fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'sta
         Span::from("▌").fg(c(repo_colour)),
         Span::from(format!("{:<10} ", truncate(repo_name, 10))).fg(c(repo_colour)),
         Span::from(format!("{number:>5} ")).fg(c(SUBTEXT0)),
-        Span::from(format!("{:<room$}", truncate(&pr.title, room))).bold(),
+        Span::from(format!("{:<room$}", truncate(&crate::model::plain(&pr.title, 400), room))).bold(),
         Span::from(format!("  {age:>3}  ")).fg(c(SUBTEXT0)),
         Span::from(format!("{tag:<PR_TAG_WIDTH$}")).fg(c(tag_color)).bold(),
     ];
@@ -1990,8 +2430,7 @@ fn render_slack_watch_add(frame: &mut Frame, app: &App, query: &str, cursor: usi
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// `s`: how long the item sleeps.
-/// `Z`: why the ticket is archived. The five reasons the machine knows, one per line.
+/// `Z`: why the ticket is archived. The reasons the machine knows, one per line.
 fn render_archive_reason(frame: &mut Frame, task: &Task, cursor: usize) {
     let area = centered(frame.area(), 52, crate::model::ARCHIVE_REASONS.len() as u16 + 4);
     frame.render_widget(Clear, area);
@@ -2014,6 +2453,24 @@ fn render_archive_reason(frame: &mut Frame, task: &Task, cursor: usize) {
             ])
         })
         .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `e` on the Review page: `edit   p the plan   c the cases   t the ticket`, over the task.
+fn render_edit_choice(frame: &mut Frame, task: &Task, detail: Option<&crate::model::TaskDetail>) {
+    let area = centered(frame.area(), 40, 7);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" edit #{} ", task.short_id())).bold());
+    let plan = detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some());
+    let row = |key: &'static str, what: &'static str, on: bool| {
+        let style = if on { Style::new() } else { Style::new().fg(c(SUBTEXT0)) };
+        Line::from(vec![Span::from(format!("{key}  ")).fg(c(ACCENT)).bold(), Span::from(what).style(style)])
+    };
+    let lines = vec![row("p", "the plan", plan), row("c", "the cases", true), row("t", "the ticket", true)];
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -2248,7 +2705,7 @@ fn render_digest(frame: &mut Frame, area: Rect, app: &App, digest: &DigestState)
             Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)),
             Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)),
             Span::from(repo).fg(c(SUBTEXT0)),
-            Span::from(task.title.clone()).bold(),
+            Span::from(crate::model::plain(&task.title, 400)).bold(),
             Span::from(format!("   {what}")).fg(look_color(look)),
             Span::from(format!(" · {}", age(&task.updated_at, now))).fg(c(SUBTEXT0)),
         ];
@@ -2975,7 +3432,7 @@ mod tests {
             "waitingOnYou":false,"running":false,"queued":false,
             "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         for (i, spent) in [0.1, 0.2, 0.3, 5.0].into_iter().enumerate() {
             let mut task: Task = serde_json::from_str(&CARD_TASK.replace("Login page", &format!("Ticket {i}"))).unwrap();
             task.spent_usd = Some(spent);
@@ -3052,7 +3509,7 @@ mod tests {
 
     #[test]
     fn ordering_by_repo_names_each_group_and_keeps_the_selection_on_its_card() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         for (i, repo) in ["/r/notch", "/r/luna-tui", "/r/notch"].iter().enumerate() {
             let task: Task = serde_json::from_str(&format!(
                 r#"{{"id":"{i}{i}{i}{i}{i}{i}{i}{i}0000","title":"Ticket {i}","description":"","criteria":[],
@@ -3076,13 +3533,13 @@ mod tests {
         let luna = rows.iter().position(|r| r.contains("── luna-tui")).unwrap();
         let notch = rows.iter().position(|r| r.contains("── notch")).unwrap();
         assert!(luna < notch, "groups in name order: {text}");
-        let selected = rows.iter().find(|r| r.contains("▌ ")).expect("a highlighted row");
+        let selected = rows.iter().find(|r| r.contains("› ")).expect("a highlighted row");
         assert!(selected.contains("Ticket"), "the highlight sits on a card, not a separator: {selected}");
     }
 
     #[test]
     fn the_inbox_says_caught_up_when_empty_and_lists_the_split_s_tickets_otherwise() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let render = |app: &App| {
             let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
             terminal.draw(|f| render_inbox(f, f.area(), app, app.inbox.as_ref().unwrap())).unwrap();
@@ -3109,7 +3566,7 @@ mod tests {
 
     #[test]
     fn a_marked_card_wears_a_diamond_and_the_header_counts_the_marks() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task: Task = serde_json::from_str(
             r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
             "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
@@ -3119,8 +3576,8 @@ mod tests {
         )
         .unwrap();
         app.tasks.push(task.clone());
-        assert!(!card_head(&task, false, false).to_string().contains('◆'));
-        assert!(card_head(&task, true, false).to_string().contains('◆'));
+        assert!(!card_lines(&task, None, false, false, Density::Cozy, 60)[0].to_string().contains('◆'));
+        assert!(card_lines(&task, None, true, false, Density::Cozy, 60)[0].to_string().contains('◆'));
         app.marked.insert(task.id.clone());
         app.online = true;
         let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
@@ -3129,7 +3586,7 @@ mod tests {
 
     #[test]
     fn the_header_shows_running_over_slots_and_a_draining_chip() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.online = true;
         let text = |app: &App| header_line(app).spans.iter().map(|s| s.content.to_string()).collect::<String>();
         assert!(text(&app).contains("0 running"), "{}", text(&app));
@@ -3150,13 +3607,13 @@ mod tests {
             "createdAt":"2026-10-22T20:00:00.000Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#,
         )
         .unwrap();
-        assert!(card_head(&task, false, true).to_string().contains('•'));
-        assert!(!card_head(&task, false, false).to_string().contains('•'));
+        assert!(card_lines(&task, None, false, true, Density::Cozy, 60)[0].to_string().contains('•'));
+        assert!(!card_lines(&task, None, false, false, Density::Cozy, 60)[0].to_string().contains('•'));
     }
 
     #[test]
     fn the_digest_groups_what_changed_newest_first() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.last_seen_secs = crate::model::unix_secs("2026-10-22T21:00:00Z");
         let task: Task = serde_json::from_str(
             r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
@@ -3180,7 +3637,7 @@ mod tests {
 
     #[test]
     fn header_names_the_product_luna_tui() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("Luna TUI"), "{text}");
         assert!(!text.contains("Hardness"), "{text}");
@@ -3240,7 +3697,7 @@ mod tests {
 
     #[test]
     fn the_header_counts_the_overdue_tickets_with_a_red_bang() {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.online = true;
         let task: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
         app.tasks.push(task);
@@ -3268,13 +3725,6 @@ mod tests {
         assert_eq!(rows[1][1], "–");
         assert_eq!(rows[1][4], "$0.40");
         assert_eq!(rows[2][2], "1.5m");
-    }
-
-    #[test]
-    fn slice_lines_show_title_and_size() {
-        let v: Value = serde_json::json!([{"title":"Add route","est_loc":80},{"title":"No size"},{"est_loc":5},"junk"]);
-        assert_eq!(slice_lines(&v), ["Add route (~80 LOC)", "No size"]);
-        assert!(slice_lines(&Value::Null).is_empty());
     }
 
     #[test]
@@ -3363,6 +3813,25 @@ mod tests {
     }
 
     #[test]
+    fn rules_lines_list_the_fact_promotions_as_plain_text_even_with_nothing_else() {
+        let v: Value = serde_json::json!({"factPromotions": [{"id": "f1", "text": "CI=1\u{1b}[2J\nx", "section": "Commands"}, {"id": "f2", "text": "pnpm test", "section": "Tests"}]});
+        let lines = rules_lines(&v, 60);
+        assert_eq!(lines, vec!["0 incident(s) · 0 pattern(s)".to_string(), "promote to Commands: CI=1 [2J x".to_string(), "promote to Tests: pnpm test".to_string()]);
+    }
+
+    #[test]
+    fn the_rules_text_of_a_retro_is_plain_whatever_the_model_wrote() {
+        let hostile = "A\u{1b}[31mB\rC\u{7}D\u{202e}E";
+        let v: Value = serde_json::json!({"markdown": format!("- {hostile}\n- ok"), "factPromotions": [{"text": hostile, "section": hostile}]});
+        let lines = rules_lines(&v, 80);
+        let all = lines.join("\n");
+        for bad in ['\u{1b}', '\r', '\u{7}', '\u{202e}'] {
+            assert!(!all.contains(bad), "{bad:?} reached a rules line: {all:?}");
+        }
+        assert!(lines.contains(&"- A [31mB C D E".to_string()) && lines.contains(&"- ok".to_string()), "{lines:?}");
+    }
+
+    #[test]
     fn rules_lines_add_the_recalibration_and_prompt_update_counts_when_present() {
         let v: Value = serde_json::json!({"markdown": "- one\n", "incidents": 1, "patterns": 0,
             "recalibration": [{"dimension": "size"}, {"dimension": "risk"}], "promptUpdates": [{"pack": "implementing", "change": "x"}]});
@@ -3381,7 +3850,6 @@ mod pr_tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
-    use crate::client::Machine;
     use crate::model::{PrSnapshot, PullRequest};
 
     fn pr(number: u64, title: &str, split: &str, checks: &str, local: bool, task: bool) -> PullRequest {
@@ -3398,7 +3866,7 @@ mod pr_tests {
     }
 
     fn app_with(prs: Vec<PullRequest>) -> App {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.clear();
         app.prs = PrSnapshot { prs, polled_at: Some("2026-10-27T10:00:00Z".to_string()), error: None };
         app.pulls = Some(PullsState::default());
@@ -3497,6 +3965,22 @@ mod pr_tests {
         assert!(text.contains("↳ threads are answered on your own PRs"), "{text}");
         assert!(text.contains("@them · h → main"), "the menu carries the PR widget: {text}");
     }
+
+    /// The study measured this footer at 113 cells: at 100 columns it drops its lowest hints whole and ends with the help hint.
+    #[test]
+    fn the_footer_fits_a_hundred_columns_and_ends_with_the_help_hint() {
+        let mut app = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, false)]);
+        app.pulls = Some(PullsState { split: crate::pulls::PrSplit::ReadyToMerge, cursor: 0 });
+        for width in [40u16, 60, 80, 100, 140] {
+            let line = footer_line(&app, width);
+            let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+            assert!(line.width() <= width as usize, "{width}: {} cells: {text}", line.width());
+            assert!(text.trim_end().ends_with("?  all keys"), "{width}: {text}");
+        }
+        let text: String = footer_line(&app, 100).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains(" m  merge ") && text.contains(" o  open ") && text.contains(" R  poll "), "{text}");
+        assert!(!text.contains("threads"), "the lowest hints went first: {text}");
+    }
 }
 
 #[cfg(test)]
@@ -3504,12 +3988,11 @@ mod slack_render_tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
-    use crate::client::Machine;
     use crate::model::{SlackMetrics, SlackSnapshot, unix_secs};
     use crate::slack::{WatchesState, fixtures::snapshot};
 
     fn app_with(snapshot: SlackSnapshot) -> App {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.clear();
         app.slack_snapshot = snapshot;
         app.slack = Some(SlackState::default());
@@ -3693,6 +4176,22 @@ mod slack_render_tests {
         let text: String = (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect();
         assert!(!text.contains("Slack ·"), "nothing without the metrics");
     }
+
+    /// The study measured this footer at 135 cells: at 100 columns it drops its lowest hints whole and ends with the help hint.
+    #[test]
+    fn the_footer_fits_a_hundred_columns_and_ends_with_the_help_hint() {
+        let app = app_with(snapshot());
+        for width in [40u16, 60, 80, 100, 140] {
+            let line = footer_line(&app, width);
+            let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+            assert!(line.width() <= width as usize, "{width}: {} cells: {text}", line.width());
+            assert!(text.trim_end().ends_with("?  all keys"), "{width}: {text}");
+        }
+        let text: String = footer_line(&app, 100).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains(" r  reply ") && text.contains(" t  ticket ") && !text.contains("priority down"), "{text}");
+        let wide: String = footer_line(&app, 200).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(wide.contains(" R  poll ") && wide.contains(" j/k  move "), "{wide}");
+    }
 }
 
 #[cfg(test)]
@@ -3704,7 +4203,6 @@ mod help_sheet_tests {
     };
 
     use super::*;
-    use crate::client::Machine;
     use crate::model::Task;
 
     fn task(id: &str, state: &str, repo: bool) -> Task {
@@ -3721,7 +4219,7 @@ mod help_sheet_tests {
     }
 
     fn app_with(state: &str, repo: bool) -> App {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks = vec![task("a1b2c3d4e5f6", state, repo)];
         app.focus = app.tasks[0].column_index();
         app.toast = None;
@@ -3741,7 +4239,7 @@ mod help_sheet_tests {
     }
 
     fn footer(app: &App) -> String {
-        footer_line(app).spans.iter().map(|s| s.content.to_string()).collect()
+        footer_line(app, 200).spans.iter().map(|s| s.content.to_string()).collect()
     }
 
     #[test]
@@ -3752,11 +4250,11 @@ mod help_sheet_tests {
         let text = screen(&app, 120, 40).join("\n");
         assert!(text.contains(" Keys · ticket #a1b2c3d4 Login page · approve plan "), "{text}");
         assert!(text.contains("/ search"), "{text}");
-        assert!(text.contains("a         approve the plan") || text.contains("a    approve the plan"), "the gate's a, bright: {text}");
+        assert!(text.contains("a         open to approve") || text.contains("a    open to approve"), "the gate's a, bright: {text}");
         assert!(text.contains("(not at the ship gate)"), "x S dim with its reason: {text}");
         assert!(text.contains("(no memory review waiting)"), "{text}");
         assert!(!text.contains("approve the setup") && !text.contains("a    start"), "the other a meanings are hidden: {text}");
-        assert!(text.contains("h l  j k  gg  G  1-8  ] [  enter"), "Move folds to a strip: {text}");
+        assert!(text.contains("h l  j k  gg  G  1-8  tab shift+tab  ] [  enter"), "Move folds to a strip: {text}");
         assert!(text.contains("enter runs · esc closes · ? long form"), "{text}");
         for heading in ["Gate", "Ticket", "Move", "Filter & order", "Views", "Marks & bulk", "App", "Commands (type after :)"] {
             assert!(text.contains(heading), "heading {heading}: {text}");
@@ -3883,7 +4381,7 @@ mod help_sheet_tests {
 
     #[test]
     fn floor_and_digest_stay_open_after_closing_help_and_the_sheet_draws_over_them() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.floor = Some(FloorState::default());
         press(&mut app, KeyCode::Char('?'));
         assert!(matches!(app.mode, Mode::Help { scope: Scope::Floor, .. }));
@@ -3904,20 +4402,46 @@ mod help_sheet_tests {
     #[test]
     fn the_footer_is_a_few_short_words_per_view() {
         let board = footer(&app_with("awaiting_approval", true));
-        assert!(board.starts_with("  ?  help   n  new   a  advance   enter  open   x  actions   =  density   /  filter   q  quit"), "{board}");
-        let mut pulls = App::new(Machine::from_env());
+        assert!(board.starts_with("  a  open to approve   r  send back   N  reject   e  edit   enter  open task   x  actions   /  filter   q  quit   tab  next to do   n  new"), "{board}");
+        assert!(board.trim_end().ends_with("?  all keys"), "{board}");
+        let mut quiet = app_with("implementing", false);
+        quiet.tasks[0].waiting_on_you = false;
+        assert!(!footer(&quiet).contains("next to do"), "the jump key is offered only while a card needs you");
+        let mut pulls = App::new(crate::testkit::dead_machine());
         pulls.pulls = Some(PullsState::default());
         pulls.toast = None;
         let line = footer(&pulls);
-        assert!(line.contains(" m  merge ") && line.contains(" c/v/t  CI fix / review / threads ") && line.contains(" R  poll "), "{line}");
-        let mut floor = App::new(Machine::from_env());
+        assert!(line.contains(" R  poll ") && !line.contains(" m  merge "), "no PR selected: only the keys that work are offered: {line}");
+        let mut floor = App::new(crate::testkit::dead_machine());
         floor.floor = Some(FloorState::default());
         floor.toast = None;
-        assert!(footer(&floor).contains(" r  refresh "), "{}", footer(&floor));
+        assert!(footer(&floor).contains(" R  refresh ") && !footer(&floor).contains(" r  refresh "), "{}", footer(&floor));
         let mut help = app_with("draft", true);
         press(&mut help, KeyCode::Char('?'));
         let line = footer(&help);
         assert!(line.contains(" enter  run the row's key ") && line.contains(" /  search every view's keys "), "{line}");
+    }
+
+    #[test]
+    fn the_reason_pickers_footers_count_their_real_reasons() {
+        let mut app = app_with("awaiting_approval", true);
+        app.mode = Mode::ArchiveReason { id: "a1b2c3d4e5f6".into(), cursor: 0 };
+        assert!(footer(&app).contains(" j/k 1-7  pick "), "{}", footer(&app));
+        app.mode = Mode::EscalationReason { id: "a1b2c3d4e5f6".into(), cursor: 0 };
+        assert!(footer(&app).contains(" j/k 1-6  pick "), "{}", footer(&app));
+    }
+
+    #[test]
+    fn the_hidden_columns_indicator_keeps_its_place_and_the_offline_message_is_cut_with_an_ellipsis() {
+        let mut app = app_with("awaiting_approval", true);
+        app.online = false;
+        app.offline_reason = "connection refused while reaching the machine".into();
+        let row = screen(&app, 110, 24)[0].clone();
+        let note = board_note(&app, 110).expect("110 columns hide some").spans.iter().map(|s| s.content.to_string()).collect::<String>();
+        assert!(row.trim_end().ends_with(note.trim_end()), "the indicator is whole at the right: {row}");
+        assert!(row.contains("…") && row.contains("Luna TUI") && row.contains("1 need you") && row.contains("machine"), "the offline text is what is shortened, the count stays: {row}");
+        let before_note = row.trim_end().strip_suffix(note.trim_end()).unwrap();
+        assert!(before_note.trim_end().ends_with('…'), "cut at the edge of the indicator, not clipped under it: {row}");
     }
 
     #[test]
@@ -3976,9 +4500,509 @@ mod help_sheet_tests {
         assert!(text.contains(" #a1b2c3d4 Login page "), "{text}");
         assert!(text.contains("P   resume every ticket paused on the limit"), "{text}");
         assert!(text.contains("S   ship: approve and open the PR") && text.contains("↳ not at the ship gate"), "{text}");
-        assert!(text.contains("a   approve the plan") && text.contains("R   set the repo"), "{text}");
+        assert!(text.contains("a   open to approve") && text.contains("R   set the repo"), "{text}");
         assert!(text.contains("↳ has a repo; x or :repo <name> replaces it"), "{text}");
         press(&mut app, KeyCode::Char('a'));
-        assert!(matches!(app.mode, Mode::Normal), "a menu key runs and closes");
+        assert!(matches!(app.mode, Mode::Detail(_)), "a at a gate opens the task, as on the board");
+    }
+
+    fn split_task(id: &str, title: &str, extra: &str) -> Task {
+        serde_json::from_str(&format!(
+            r#"{{"id":"{id}-0000-4000-8000-000000000000","title":"{title}","description":"","criteria":[],
+            "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,{extra}
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    fn drawn(app: &App, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect();
+        rows.join("\n")
+    }
+
+    // @scenario:S1
+    #[test]
+    fn a_split_origin_names_its_children_and_a_child_names_its_origin_by_title() {
+        let origin = split_task("aaaaaaaa", "Export everything", r#""archiveReason":"split","splitInto":["bbbbbbbb-0000-4000-8000-000000000000","cccccccc-0000-4000-8000-000000000000"],"#);
+        let one = split_task("bbbbbbbb", "Export CSV rows", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":1,"of":2},"#);
+        let two = split_task("cccccccc", "Export JSON rows", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":2},"#);
+        let mut app = App::new(crate::testkit::dead_machine());
+        app.tasks = vec![origin.clone(), one.clone(), two];
+        app.mode = Mode::Detail(origin.id.clone());
+        let text = drawn(&app, 160, 50);
+        assert!(text.contains("Export CSV rows") && text.contains("Export JSON rows"), "{text}");
+        app.mode = Mode::Detail(one.id.clone());
+        let text = drawn(&app, 160, 50);
+        assert!(text.contains("Export everything"), "{text}");
+    }
+
+    // @scenario:S2
+    #[test]
+    fn a_cozy_card_row_says_which_part_it_is() {
+        let task = split_task("abcdef12", "Login page", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#);
+        let text = card_lines(&task, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("part 2/3"), "{text}");
+    }
+
+    // @scenario:S3
+    #[test]
+    fn a_comfortable_card_row_says_which_part_it_is() {
+        let task = split_task("abcdef12", "Login page", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#);
+        let text = card_lines(&task, None, false, false, Density::Comfortable, 60).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("part 2/3"), "{text}");
+    }
+
+    // @scenario:S10
+    #[test]
+    fn a_split_card_keeps_its_title_and_id_rows_and_a_plain_card_has_no_part_marker() {
+        let task = split_task("abcdef12", "Login page", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#);
+        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect();
+        assert!(lines[0].contains("Login page") && lines.iter().any(|l| l.contains("#abcdef12")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("part 2/3")), "{lines:?}");
+        let plain = split_task("abcdef12", "Login page", "");
+        let lines: Vec<String> = card_lines(&plain, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect();
+        assert!(!lines.iter().any(|l| l.contains("part ")), "{lines:?}");
+    }
+
+    #[test]
+    fn every_view_footer_comes_from_the_registry_fits_and_ends_with_the_help_hint() {
+        use crate::{app::FloorState, backlog::BacklogState, digest::DigestState, economy::EconomyState, inbox::InboxState, tickets::TicketsState};
+        let board = || app_with("awaiting_approval", true);
+        let views: Vec<(&str, App)> = vec![
+            ("board", board()),
+            ("floor", { let mut a = board(); a.floor = Some(FloorState::default()); a }),
+            ("inbox", { let mut a = board(); a.inbox = Some(InboxState::default()); a }),
+            ("digest", { let mut a = board(); a.digest = Some(DigestState { cursor: 0 }); a }),
+            ("pulls", { let mut a = board(); a.pulls = Some(PullsState::default()); a }),
+            ("backlog", { let mut a = board(); a.backlog = Some(BacklogState { cursor: 0 }); a }),
+            ("economy", { let mut a = board(); a.economy = Some(EconomyState { repo: "/repo".into(), cursor: 0 }); a }),
+            ("tickets", { let mut a = board(); a.tickets = Some(TicketsState { cursor: 0 }); a }),
+            ("slack", { let mut a = board(); a.slack = Some(crate::slack::SlackState::default()); a }),
+        ];
+        for (name, app) in &views {
+            for width in [30u16, 50, 80, 100, 140, 200] {
+                let line = footer_line(app, width);
+                let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+                assert!(line.width() <= width as usize, "{name} at {width}: {} cells: {text}", line.width());
+                assert!(text.contains("?  all keys") || width < 40, "{name} at {width}: {text}");
+            }
+            // Only keys that work: the first hint is the heaviest `On` binding of the scope.
+            let scope = keys::active_scope(app);
+            let first = keys::view_footer(app, scope);
+            assert!(!first.is_empty() && first.iter().all(|(k, _)| k != "?"), "{name}: {first:?}");
+        }
+        let text: String = footer_line(&views[0].1, 80).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.starts_with("  a  open to approve   r  send back") && text.trim_end().ends_with("?  all keys"), "{text}");
+    }
+
+    // The task view's footer: the keys that work on this card, cut to the width, ending with the help hint.
+    mod task_view_footer {
+        use super::*;
+        use crate::testkit::{escalated_app, plan_gate_app, running_build_app, ship_stage_app};
+
+        /// The fixture cards, with the "machine offline" toast of the test run cleared (a toast replaces the footer).
+        fn quiet(mut app: App) -> App {
+            app.toast = None;
+            app
+        }
+
+        fn line(app: &App, width: u16) -> (String, usize) {
+            let line = footer_line(app, width);
+            (line.spans.iter().map(|s| s.content.to_string()).collect(), line.width())
+        }
+
+        #[test]
+        fn the_footer_never_exceeds_the_width_and_ends_with_the_help_hint() {
+            for app in [plan_gate_app(), running_build_app(), escalated_app(), ship_stage_app()].map(quiet) {
+                for width in [80, 100, 120, 200] {
+                    let (text, cells) = line(&app, width);
+                    assert!(cells <= width as usize, "{cells} cells in {width}: {text}");
+                    assert!(text.trim_end().ends_with("esc  back") && text.contains("?  all keys"), "{width}: {text}");
+                }
+            }
+        }
+
+        #[test]
+        fn a_wider_terminal_shows_more_keys_and_a_narrow_one_drops_the_lowest_priority_first() {
+            let app = quiet(plan_gate_app());
+            let (wide, _) = line(&app, 200);
+            let (narrow, _) = line(&app, 60);
+            for want in ["a  approve", "r  send back", "e  edit", "h/l  section", "j/k  scroll", "^d/^u  page"] {
+                assert!(wide.contains(want), "{want}: {wide}");
+            }
+            assert!(narrow.contains("a  approve") && !narrow.contains("^d/^u"), "{narrow}");
+            assert!(narrow.len() < wide.len());
+        }
+
+        #[test]
+        fn a_running_card_footer_offers_no_gate_key_and_the_footer_repeats_the_bar_s_actions() {
+            let (running, _) = line(&quiet(running_build_app()), 200);
+            for banned in ["advance", "send back", "edit", "approve", "reject"] {
+                assert!(!running.contains(banned), "{banned}: {running}");
+            }
+            let app = quiet(plan_gate_app());
+            let (footer, _) = line(&app, 200);
+            for (key, label) in crate::keys::card_actions(&app) {
+                assert!(footer.contains(&format!(" {key} ")) && footer.contains(&label), "the bar's {key} {label} is in the footer: {footer}");
+            }
+        }
+
+        #[test]
+        fn j_k_pick_where_a_section_has_rows() {
+            let mut app = quiet(escalated_app());
+            app.detail_section = crate::detail::Section::Runs;
+            let (text, _) = line(&app, 200);
+            assert!(text.contains("j/k  pick") && text.contains("J/K  scroll"), "{text}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod board_tests {
+    use super::*;
+    use crate::testkit::{self, full_board_app, render};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn app_at(focus: usize) -> App {
+        let mut app = full_board_app();
+        app.folded.clear();
+        app.focus = focus;
+        app
+    }
+
+    fn header(screen: &str) -> &str {
+        screen.lines().next().unwrap_or("")
+    }
+
+    fn names(columns: &[usize]) -> Vec<&'static str> {
+        columns.iter().map(|&c| COLUMNS[c]).collect()
+    }
+
+    #[test]
+    fn at_200_columns_all_eight_show_with_two_line_titles_and_no_indicator() {
+        let mut app = app_at(0);
+        let screen = render(&mut app, 200, 50);
+        for name in COLUMNS {
+            assert!(screen.contains(&format!(" {name} ")), "{name} missing in\n{screen}");
+        }
+        assert!(!header(&screen).contains('→') && !header(&screen).contains('←'), "{}", header(&screen));
+        let lines: Vec<&str> = screen.lines().collect();
+        let first = lines.iter().position(|l| l.contains("Add CSV export to")).expect("the plan card's first title line");
+        assert!(lines[first + 1].contains("reports"), "the title wraps to a second line: {}", lines[first + 1]);
+        let long = lines.iter().position(|l| l.contains("Retry failed")).expect("the long title");
+        assert!(lines[long + 1].contains('…'), "a title past two lines ends in an ellipsis: {}", lines[long + 1]);
+    }
+
+    #[test]
+    fn at_200_columns_each_column_takes_a_share_and_none_passes_the_cap() {
+        let app = app_at(0);
+        let layout = board_layout(&app, 200);
+        assert_eq!(layout.slots.len(), 8);
+        assert!(layout.slots.iter().all(|s| s.full && (MIN_COLUMN_WIDTH..=MAX_COLUMN_WIDTH).contains(&s.width)));
+        assert_eq!(layout.slots.iter().map(|s| s.width).sum::<u16>(), 200, "an uneven width is shared out, not left over");
+        let wide = board_layout(&app, 400);
+        assert!(wide.slots.iter().all(|s| s.width == MAX_COLUMN_WIDTH), "the cap holds on a very wide screen");
+    }
+
+    #[test]
+    fn done_narrows_to_its_header_and_count_before_any_other_column_changes() {
+        let app = app_at(0);
+        let layout = board_layout(&app, 156);
+        let done = COLUMNS.len() - 1;
+        assert!(layout.hidden().is_empty(), "{:?}", names(&layout.hidden()));
+        assert_eq!(layout.slots.iter().filter(|s| !s.full).map(|s| s.column).collect::<Vec<_>>(), vec![done], "only Done narrows");
+        let mut app = app_at(0);
+        let screen = render(&mut app, 156, 40);
+        assert!(screen.contains(" Done 4 "), "Done keeps its header and count: {screen}");
+        assert!(header(&screen).contains("→ Done 4"), "the header names what is collapsed: {}", header(&screen));
+    }
+
+    #[test]
+    fn at_120_columns_every_column_is_drawn_or_named_and_the_one_that_needs_you_is_drawn() {
+        let mut app = app_at(0);
+        let screen = render(&mut app, 120, 40);
+        let layout = board_layout(&app, 120);
+        let head = header(&screen);
+        for (column, name) in COLUMNS.iter().enumerate() {
+            let drawn = layout.slots.iter().any(|s| s.column == column);
+            assert!(drawn || head.contains(name), "{name} is neither drawn nor named: {head}");
+        }
+        assert!(layout.slots.iter().any(|s| COLUMNS[s.column] == "Ship" && s.full), "Ship waits on you, so it stays full");
+        assert!(screen.contains("Rate limit"), "{screen}");
+        assert!(head.contains("Evidence 1") && head.contains("Done 4"), "the columns that dropped are counted: {head}");
+    }
+
+    #[test]
+    fn at_120_columns_with_the_cursor_far_right_the_far_left_columns_without_a_gate_are_what_drop() {
+        let app = app_at(7);
+        let layout = board_layout(&app, 120);
+        assert!(layout.slots.iter().any(|s| s.column == 7 && s.full), "the focused column is full width");
+        assert_eq!(names(&layout.hidden()), vec!["Intake", "Triage"], "Plan and Build wait on you and stay");
+        let note = board_note(&app, 120).expect("something is hidden").to_string();
+        assert_eq!(note, "← Intake 2 · Triage 1");
+    }
+
+    #[test]
+    fn at_80_columns_the_focused_column_is_full_and_the_header_says_what_is_not() {
+        let mut app = app_at(3);
+        let screen = render(&mut app, 80, 24);
+        let head = header(&screen);
+        assert!(head.contains('↔'), "{head}");
+        assert!(screen.contains(" Build ") && screen.contains("Retry failed"), "the focused column shows its cards: {screen}");
+        assert!(head.contains("Intake 2") && head.contains("Done 4"), "{head}");
+        let layout = board_layout(&app, 80);
+        assert!(layout.slots.iter().filter(|s| matches!(COLUMNS[s.column], "Plan" | "Build" | "Ship")).all(|s| s.full), "the three that wait on you are full");
+        assert!(layout.slots.iter().map(|s| s.width).sum::<u16>() <= 80);
+        let mut app = app_at(0);
+        let screen = render(&mut app, 80, 24);
+        assert!(header(&screen).contains("→") && screen.contains(" Intake "), "{screen}");
+    }
+
+    #[test]
+    fn the_cursor_entering_a_collapsed_or_hidden_column_makes_it_full() {
+        for width in [80, 100, 120, 140] {
+            for focus in 0..COLUMNS.len() {
+                let app = app_at(focus);
+                let layout = board_layout(&app, width);
+                let slot = layout.slots.iter().find(|s| s.column == focus).unwrap_or_else(|| panic!("focus {focus} is not drawn at {width}"));
+                assert!(slot.full, "focus {focus} at {width} is narrow");
+            }
+        }
+    }
+
+    #[test]
+    fn empty_columns_collapse_before_any_column_drops() {
+        let mut app = app_at(0);
+        app.tasks.retain(|t| !matches!(t.column.as_str(), "Triage" | "Verify" | "Evidence"));
+        let layout = board_layout(&app, 140);
+        assert!(layout.hidden().is_empty(), "{:?}", names(&layout.hidden()));
+        let narrow: Vec<&str> = layout.slots.iter().filter(|s| !s.full).map(|s| COLUMNS[s.column]).collect();
+        assert_eq!(narrow, vec!["Triage", "Verify", "Evidence", "Done"]);
+        let mut app = app_at(0);
+        app.tasks.retain(|t| !matches!(t.column.as_str(), "Triage" | "Verify" | "Evidence"));
+        let screen = render(&mut app, 140, 40);
+        assert!(header(&screen).contains("Triage 0") && header(&screen).contains("Evidence 0"), "{}", header(&screen));
+    }
+
+    #[test]
+    fn a_card_that_needs_you_in_ship_is_visible_or_named_at_every_width() {
+        for width in (60..=220).step_by(10) {
+            for focus in 0..COLUMNS.len() {
+                let mut app = app_at(focus);
+                let screen = render(&mut app, width, 40);
+                let named = header(&screen).contains("Ship 1 ⏸");
+                assert!(screen.contains(testkit::SHIP_STAGE_TITLE.split(' ').next().unwrap()) && screen.contains("Rate limit") || named, "width {width} focus {focus}:\n{screen}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_title_that_needs_the_ellipsis_gets_one_and_a_short_one_does_not() {
+        let app = full_board_app();
+        let long = app.tasks.iter().find(|t| t.title.starts_with("Retry failed")).unwrap();
+        let lines: Vec<String> = card_lines(long, None, false, false, Density::Cozy, 20).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines.len(), 4, "two title lines, ids, status: {lines:?}");
+        assert!(lines[1].ends_with('…') && lines[1].chars().count() <= 20, "{lines:?}");
+        assert!(lines.iter().all(|l| cells(l) <= 20), "nothing runs past the column: {lines:?}");
+        let short = app.tasks.iter().find(|t| t.title.starts_with("Paginate")).unwrap();
+        let lines: Vec<String> = card_lines(short, None, false, false, Density::Cozy, 30).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines.len(), 3, "a title on one line takes no spare line: {lines:?}");
+        assert!(!lines.iter().any(|l| l.contains('…')), "{lines:?}");
+        let compact: Vec<String> = card_lines(long, None, false, false, Density::Compact, 24).iter().map(|l| l.to_string()).collect();
+        assert_eq!(compact.len(), 1);
+        assert!(compact[0].contains('…') && cells(&compact[0]) <= 24, "{compact:?}");
+    }
+
+    #[test]
+    fn the_status_line_is_cut_with_an_ellipsis_never_mid_word() {
+        let app = full_board_app();
+        let task = app.tasks.iter().find(|t| t.state == "awaiting_ship").unwrap();
+        let lines: Vec<String> = card_lines(task, None, false, false, Density::Cozy, 12).iter().map(|l| l.to_string()).collect();
+        let status = lines.last().unwrap();
+        assert!(status.ends_with('…') && cells(status) <= 12, "{status:?}");
+        let ids = &lines[lines.len() - 2];
+        assert!(cells(ids) <= 12 && ids.ends_with('…'), "{ids:?}");
+    }
+
+    #[test]
+    fn the_selected_card_is_marked_by_a_gutter_arrow_and_a_background_not_by_the_repo_bar() {
+        let mut app = app_at(0);
+        let mut terminal = Terminal::new(TestBackend::new(200, 50)).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row = (0..50).find(|&y| (0..200).any(|x| buffer[(x, y)].symbol() == "›")).expect("a gutter arrow");
+        let x = (0..200).find(|&x| buffer[(x, row)].symbol() == "›").unwrap();
+        assert_eq!(buffer[(x + 2, row)].symbol(), "▌", "the repo bar still follows the gutter");
+        let highlighted = |cell: &ratatui::buffer::Cell| cell.bg == selection_style().bg.unwrap_or(Color::Reset) && cell.bg != Color::Reset || cell.modifier.contains(Modifier::REVERSED);
+        let card_rows = (row..row + 3).filter(|&y| highlighted(&buffer[(x + 4, y)])).count();
+        assert_eq!(card_rows, 3, "the selection covers every line of the card");
+        assert_eq!((0..200).filter(|&x| buffer[(x, row)].symbol() == "›").count(), 1, "one selected card on the screen");
+        app.focus = 3;
+    }
+
+    #[test]
+    fn a_click_on_a_card_selects_it_whatever_height_the_cards_above_have() {
+        let mut app = app_at(0);
+        render(&mut app, 200, 50);
+        let rects = app.column_rects.borrow().clone();
+        let (build, rect) = rects.iter().find(|(c, _)| COLUMNS[*c] == "Build").copied().unwrap();
+        let first_height = card_lines(&app.tasks[app.indices(build)[0]], None, false, false, app.density, usize::from(rect.width - 6)).len();
+        app.click(rect.x + 3, rect.y + 1 + first_height as u16);
+        assert_eq!(app.focus, build);
+        assert_eq!(app.selection[build], 1, "the second card, below a first one of {first_height} lines");
+    }
+
+    /// Five Intake cards whose titles fit a 19-cell card unmarked and wrap once a mark or a dot is in front of them.
+    fn intake_of_five() -> App {
+        let mut app = app_at(0);
+        app.tasks.retain(|t| t.column != "Intake");
+        for (n, title) in ["Rotate signing key", "Rename the backlog", "Retire legacy code", "Rebuild the search", "Reword the readme!"].iter().enumerate() {
+            let json = testkit::task_json(&format!("i{n}aaaaaaaaaa"), title, "draft", "Intake", serde_json::json!({"repoPath": null}));
+            app.tasks.push(serde_json::from_value(json).unwrap());
+        }
+        app.folded.clear();
+        app
+    }
+
+    /// Clicks the id row of every Intake card, as drawn, and returns which card each click selected.
+    fn click_each_intake_card(app: &mut App) -> Vec<usize> {
+        let intake_rect = |app: &App| app.column_rects.borrow().iter().find(|(c, _)| COLUMNS[*c] == "Intake").copied().unwrap();
+        // A terminal on which the Intake column is 25 wide: cards of 19 cells.
+        let width = (60..200).find(|&w| {
+            render(app, w, 60);
+            intake_rect(app).1.width == 25
+        });
+        let screen = render(app, width.expect("a width with a 25-wide Intake column"), 60);
+        let (intake, rect) = intake_rect(app);
+        let rows: Vec<&str> = screen.lines().collect();
+        let mut picked = Vec::new();
+        for n in 0..5 {
+            let y = (rect.y..rect.bottom()).find(|&y| rows[usize::from(y)].contains(&format!("#i{n}aaaaaa"))).expect("the card's id row is on the screen");
+            app.click(rect.x + 3, y);
+            picked.push(app.selection[intake]);
+        }
+        picked
+    }
+
+    #[test]
+    fn a_click_lands_on_the_card_under_the_pointer_below_marked_cards_that_wrap() {
+        let mut app = intake_of_five();
+        for n in 0..3 {
+            app.marked.insert(format!("i{n}aaaaaaaaaa"));
+        }
+        assert_eq!(click_each_intake_card(&mut app), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_click_lands_on_the_card_under_the_pointer_below_new_cards_that_wrap() {
+        let mut app = intake_of_five();
+        app.last_seen_secs = Some(1);
+        for task in &mut app.tasks {
+            task.updated_at = if ["i0", "i1", "i2"].iter().any(|p| task.id.starts_with(p)) { "2026-10-22T10:00:00.000Z".into() } else { "1970-01-01T00:00:00.000Z".into() };
+        }
+        assert_eq!(click_each_intake_card(&mut app), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_click_in_a_column_scrolled_to_its_last_card_lands_on_the_card_drawn_there() {
+        let mut app = intake_of_five();
+        app.selection[0] = 4;
+        let width = (60..200).find(|&w| {
+            render(&mut app, w, 12);
+            app.column_rects.borrow().iter().any(|(c, r)| COLUMNS[*c] == "Intake" && r.width == 25)
+        });
+        let screen = render(&mut app, width.unwrap(), 12);
+        let rect = app.column_rects.borrow().iter().find(|(c, _)| COLUMNS[*c] == "Intake").map(|(_, r)| *r).unwrap();
+        let y = (rect.y..rect.bottom()).find(|&y| screen.lines().nth(usize::from(y)).is_some_and(|l| l.contains("#i4aaaaaa"))).expect("the last card is in view");
+        assert!(!screen.contains("#i0aaaaaa"), "the first card scrolled out of view");
+        app.selection[0] = 0;
+        app.click(rect.x + 3, y);
+        assert_eq!(app.selection[0], 4);
+    }
+
+    #[test]
+    fn tab_visits_what_needs_you_in_pipeline_order_wraps_and_matches_the_header_count() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        let mut app = app_at(0);
+        let key = |app: &mut App, code: KeyCode| {
+            app.handle_key(KeyEvent::from(code));
+            app.focus_task().map(|t| t.title.clone()).unwrap_or_default()
+        };
+        assert_eq!(key(&mut app, KeyCode::Tab), testkit::PLAN_GATE_TITLE);
+        assert_eq!(key(&mut app, KeyCode::Tab), testkit::ESCALATED_TITLE);
+        assert_eq!(key(&mut app, KeyCode::Tab), testkit::SHIP_STAGE_TITLE);
+        assert_eq!(key(&mut app, KeyCode::Tab), testkit::PLAN_GATE_TITLE, "wraps around");
+        assert_eq!(key(&mut app, KeyCode::BackTab), testkit::SHIP_STAGE_TITLE, "shift+tab goes back, wrapping");
+        assert_eq!(key(&mut app, KeyCode::BackTab), testkit::ESCALATED_TITLE);
+        let stops = app.tasks.iter().filter(|t| t.look().needs_person()).count();
+        app.online = true;
+        let screen = render(&mut app, 200, 50);
+        assert!(header(&screen).contains(&format!("{stops} need you")), "{}", header(&screen));
+        app.tasks.retain(|t| !t.look().needs_person());
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing needs you"));
+    }
+}
+
+#[cfg(test)]
+mod age_tests {
+    #[test]
+    fn a_long_status_is_cut_before_its_age_is_at_200_columns() {
+        let mut app = crate::testkit::full_board_app();
+        let screen = crate::testkit::render(&mut app, 200, 24);
+        for status in ["approve", "implement", "choose", "verifying"] {
+            let line = screen.lines().find(|l| l.contains(status)).unwrap_or_else(|| panic!("{status}\n{screen}"));
+            let cell: String = line.chars().skip(line.find(status).map(|b| line[..b].chars().count()).unwrap() - 2).take(22).collect();
+            assert!(cell.contains(" · ") && !cell.contains("·…"), "{status}: {cell:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use crate::testkit::{full_board_app, render};
+
+    #[test]
+    fn at_80_columns_the_needs_you_count_stays_in_the_header_beside_the_hidden_columns_note() {
+        let mut app = full_board_app();
+        app.online = true;
+        let stops = app.tasks.iter().filter(|t| t.look().needs_person()).count();
+        for width in [80u16, 100, 120] {
+            let screen = render(&mut app, width, 24);
+            let header = screen.lines().next().unwrap();
+            assert!(header.contains(&format!("{stops} need you")), "{width}: {header}");
+        }
+        let wide = render(&mut app, 200, 24);
+        assert!(wide.lines().next().unwrap().contains("tickets"), "with room the totals stay");
+    }
+
+    #[test]
+    fn offline_the_count_comes_before_the_reason_which_is_what_gets_cut() {
+        let mut app = full_board_app();
+        let stops = app.tasks.iter().filter(|t| t.look().needs_person()).count();
+        let header = render(&mut app, 80, 24).lines().next().unwrap().to_string();
+        assert!(header.contains(&format!("{stops} need you")) && header.contains("machine"), "{header}");
+    }
+}
+
+#[cfg(test)]
+mod help_over_task_tests {
+    use crate::testkit::{PLAN_GATE_TITLE, plan_gate_app, render};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+    #[test]
+    fn the_key_sheet_opens_over_the_task_which_stays_on_screen_and_esc_returns_to_it() {
+        let mut app = plan_gate_app();
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        let screen = render(&mut app, 180, 50);
+        assert!(screen.contains(" Keys"), "{screen}");
+        assert!(screen.contains(PLAN_GATE_TITLE) && screen.contains("approve the plan?"), "the task is behind the sheet:\n{screen}");
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(&app.mode, crate::app::Mode::Detail(_)), "back in the task");
     }
 }

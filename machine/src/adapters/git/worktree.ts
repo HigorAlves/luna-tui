@@ -75,12 +75,16 @@ export type GitExec = (command: string, args: string[], options?: { cwd?: string
 
 const FETCH_TIMEOUT = 60_000;
 
-export type RebaseResult = { ok: true; onto: string; /** Files in conflict the rebase settled by taking the parent's side (`RebaseOptions.parentWins`). */ resolved?: string[] } | { ok: false; error: string; conflicts: string[] };
+export type RebaseResult = { ok: true; onto: string; /** Files in conflict the rebase settled by taking the parent's side (`RebaseOptions.parentWins`). */ resolved?: string[]; /** The replay stopped on a conflict the branch's final result does not have, so the base was merged in instead (`RebaseOptions.mergeFallback`). */ merged?: true } | { ok: false; error: string; conflicts: string[] };
 
 /** How a rebase may settle a conflict by itself: `parentWins(path)` says the card has no claim on a file, so the parent's version stands. A conflict
  *  in any other file stops the rebase, which is aborted as before. */
 export interface RebaseOptions {
   parentWins?: (path: string) => boolean;
+  /** A rebase replays the card's commits one by one, so a file an early commit changed and a later one put back conflicts with a base that
+   *  changed it, though the card's final result never touched it. When a replay stops, the base is merged into the branch instead: the merge compares
+   *  final results, so only a conflict the card really has stops it, and a merge that conflicts is aborted. On by default (default branch only); `false` is the rebase alone. */
+  mergeFallback?: boolean;
 }
 
 /** A branch name git would accept as a positional: the default branch is read from a ref in the common git
@@ -160,6 +164,16 @@ async function settleRebase(run: GitExec, worktreePath: string, first: { code: n
   return { ok: true, resolved: [...resolved] };
 }
 
+/** `git merge` of the fetched base into the card's branch, for a rebase whose replay stopped: aborted, with the files in conflict, when the final results conflict too. */
+async function mergeBaseInstead(run: GitExec, worktreePath: string, ref: string, label: string): Promise<{ ok: true } | { ok: false; conflicts: string[] }> {
+  const git = (...args: string[]) => run("git", [...HOST_GIT, ...at(worktreePath), ...args]);
+  const merged = await git("-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-verify", "-m", `Merge ${label} into the branch`, ref);
+  if (merged.code === 0) return { ok: true };
+  const conflicts = conflictsOf(await git("diff", "--name-only", "--diff-filter=U"));
+  await git("merge", "--abort");
+  return { ok: false, conflicts };
+}
+
 async function replayOwn(run: GitExec, worktreePath: string, onto: string, label: string, options: RebaseOptions = {}): Promise<RebaseResult> {
   const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), "-c", "commit.gpgsign=false", "rebase", "--empty=drop", "--onto", onto, BASE_REF]);
   const settled = await settleRebase(run, worktreePath, rebased, options);
@@ -213,12 +227,19 @@ export async function rebaseOntoBase(
   if (fetched.code !== 0) return failed("git fetch", fetched);
   const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), ...(recorded.sha ? ["-c", "commit.gpgsign=false"] : []), "rebase", "--empty=drop", `origin/${base}`]);
   const settled = await settleRebase(run, worktreePath, rebased, options);
-  if (!settled.ok) return settled;
+  let merged = false;
+  if (!settled.ok) {
+    // The replay stopped. Only the files the replay named can be a conflict the card does not really have: a merge says.
+    if (settled.conflicts.length === 0 || options.mergeFallback === false) return settled;
+    const instead = await mergeBaseInstead(run, worktreePath, `origin/${base}`, `origin/${base}`);
+    if (!instead.ok) return { ...settled, conflicts: instead.conflicts.length > 0 ? instead.conflicts : settled.conflicts };
+    merged = true;
+  }
   if (recorded.sha) {
     const tip = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", `origin/${base}^{commit}`]);
     if (tip.code === 0) await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, tip.stdout.trim()]);
   }
-  return { ok: true, onto: `origin/${base}`, ...(settled.resolved.length ? { resolved: settled.resolved } : {}) };
+  return { ok: true, onto: `origin/${base}`, ...(settled.ok && settled.resolved.length ? { resolved: settled.resolved } : {}), ...(merged ? { merged: true as const } : {}) };
 }
 
 /** The same function, under the name every caller before the stack used. */
@@ -462,6 +483,33 @@ export async function branchBase(worktreePath: string, repoPath: string): Promis
   }
   const base = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "HEAD", head]);
   return base.code === 0 ? base.stdout.trim() || null : null;
+}
+
+/**
+ * Where a card's scope is measured from: `start` (the commit its first implementing run began on), moved forward to the branch's base
+ * when the branch holds it: the machine's own base ref as it is; else `branchBase` (the merge-base with the repository's HEAD) when it descends
+ * from `start` and is in HEAD.
+ * A person who merges the default branch into the card's branch brings its commits in: measured from `start`, every file of theirs reads as the
+ * card's (PR #213: about 130 paths, two scope reds, an escalation). The base is a commit of the repository's or the machine's own ref, never
+ * one the card made, so moving to it cannot hide the card's own change.
+ */
+export async function scopeStartOf(worktreePath: string, repoPath: string, start: string): Promise<string> {
+  if (!/^[0-9a-f]{7,64}$/.test(start)) return start;
+  // The machine's own base ref, when the branch holds it: only the machine writes it (a cut, a rebase, a merge round), so it needs no tie to
+  // `start`. A card that started on a parent's tip which was then squash-merged (PR #214) has a start that is in no default-branch history.
+  const own = await exec("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "--verify", "--quiet", `${BASE_REF}^{commit}`]);
+  const ownSha = own.code === 0 ? own.stdout.trim() : "";
+  if (/^[0-9a-f]{40,64}$/.test(ownSha) && ownSha !== start && (await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", ownSha, "HEAD"])).code === 0) return ownSha;
+  const base = await branchBase(worktreePath, repoPath);
+  if (!base || base === start) return start;
+  const descends = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", start, base]);
+  const inHead = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "--is-ancestor", base, "HEAD"]);
+  return descends.code === 0 && inHead.code === 0 ? base : start;
+}
+
+/** The card is no longer stacked: the name of the parent's branch it followed is dropped, as `unstack` drops it (its base ref stays). */
+export async function leaveStack(run: GitExec, worktreePath: string): Promise<void> {
+  await run("git", [...HOST_GIT, ...at(worktreePath), "config", "--local", "--unset", BASE_KEY]);
 }
 
 /** The files the branch changed since it forked from the repo, worktree-relative; null when

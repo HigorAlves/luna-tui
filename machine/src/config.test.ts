@@ -48,6 +48,7 @@ describe("loadConfig", () => {
       threadReplies: true,
       publicUrl: null,
       groundTruth: true,
+      economy: true,
       decisions: { enabled: true, retentionDays: 365, maxMb: 4096 },
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null, scope: "opted_in" },
@@ -94,6 +95,8 @@ describe("loadConfig", () => {
     for (const bad of ["ftp://x", "javascript:alert(1)", "https://x y", "http://127.0.0.1:4317 ", "not a url", ""]) expect(loadConfig({ HOME: "/h", MACHINE_PUBLIC_URL: bad }).publicUrl, bad).toBeNull();
     expect(loadConfig({ HOME: "/h" }).groundTruth).toBe(true);
     expect(loadConfig({ HOME: "/h", MACHINE_GROUND_TRUTH: "off" }).groundTruth).toBe(false);
+    expect(loadConfig({ HOME: "/h" }).economy).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_ECONOMY: "off" }).economy).toBe(false);
     expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS: "off" }).decisions.enabled).toBe(false);
     expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS_RETENTION_DAYS: "7" }).decisions.retentionDays).toBe(7);
     expect(() => loadConfig({ HOME: "/h", MACHINE_DECISIONS_RETENTION_DAYS: "-1" })).toThrow(/MACHINE_DECISIONS_RETENTION_DAYS/);

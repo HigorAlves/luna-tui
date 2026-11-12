@@ -14,6 +14,7 @@ import { ensureClone, isClone, moveToClone, publishBranch, refreshScratch } from
 import {
   type Workspace,
   branchBase,
+  scopeStartOf,
   commonGitDir,
   gitIdentity,
   diffNameStatus,
@@ -52,13 +53,14 @@ import { checkpointPush } from "./checkpoint.ts";
 import { readScenarioReds } from "./scenario-reds.ts";
 
 import type { TruthSink } from "../decision-truth.ts";
-import { type Decide, buildChecks, buildWatch, cardSearchAnswers } from "./build-watch.ts";
+import { type Decide, buildChecks, buildWatch, cardSearchAnswers, loopAnswers } from "./build-watch.ts";
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, approvedScenarios, buildStageInput } from "../../domain/stage-input.ts";
 import { reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
+import type { Economy } from "../economy.ts";
 import type { Graph } from "../graph.ts";
 import { PolicyStore } from "../policy.ts";
 import { RepoImageError } from "../repo-images.ts";
@@ -97,6 +99,8 @@ export interface AgentDeps {
   history?: (taskId: string) => Promise<{ ledger: Ledger | null; runs: RunSummary[] }>;
   /** The machine's code graphs: a repo's current one is mounted read-only at /graph in every stage. */
   graph?: Graph;
+  /** The token economy: what each run starts with (the loop guard's envelope), folded again when it ends (the pipeline does that). Absent, a run gets none. */
+  economy?: Economy;
   /** Asked for when a repo has no graph yet, so the first build starts without a stage waiting on it. */
   ensureGraph?: (repoPath: string) => void;
   /** Waits for the repository's code graph before triage reads it (see plan.ts); absent, triage never waits. */
@@ -170,6 +174,8 @@ export interface AgentExtra {
   baseCommit?: string;
   /** pr_reply: the thread and the pack, built by the host; a reviewer's text only ever rides here. */
   ship?: ShipContext;
+  /** reviewing_memory: the learned facts the retro may promote. */
+  factCandidates?: Array<{ id: string; text: string }>;
   /** implementing: every path of the tests commit, protected from change. */
   testsFiles?: string[];
   /** implementing: the source files that hold Rust's inline tests, which the implementer may change. */
@@ -235,7 +241,10 @@ const OutOfMap = z.array(z.object({ path: z.string(), reason: z.string() }));
 export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
   // The image the stage's sandbox runs in is chosen once, inside the run, and carried out here: the record of Build's environment names it, never a second resolution.
   const chosen: { image?: string } = {};
-  const result = await runAgentIn(deps, context, pack, extra, chosen);
+  const ran = { container: false };
+  const result = await runAgentIn(deps, context, pack, extra, chosen, ran);
+  // The container's run is folded into the economy before anything else starts in the folder: the next container of a Build overwrites its events.
+  if (ran.container) await foldRun(deps, context, pack, result);
   // The environment a passing Build ran in: the run's own record, and the Build Report's `envHash`.
   const path = result.workspace?.worktreePath;
   if (pack !== "implementing" || result.outcome !== "pass" || !path || !deps.imageId) return result;
@@ -248,7 +257,40 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
 }
 
-async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}, chosen: { image?: string } = {}): Promise<StageResult> {
+/** The containers a run folder has held in this process, for the ordinal that tells them apart. */
+const containersIn = new Map<string, number>();
+const CONTAINERS_KEPT = 500;
+
+/** Folds one container run into the repository's economy: its pack, its folder's events, its tokens. Never throws. */
+async function foldRun(deps: AgentDeps, context: StageContext, pack: PackId, result: StageResult): Promise<void> {
+  const repoPath = context.task.repoPath;
+  if (!deps.economy || !repoPath) return;
+  try {
+    const nth = (containersIn.get(context.runId) ?? 0) + 1;
+    containersIn.delete(context.runId);
+    containersIn.set(context.runId, nth);
+    if (containersIn.size > CONTAINERS_KEPT) containersIn.delete(containersIn.keys().next().value!);
+    const config = (await (deps.policies ?? sharedPolicies).for(repoPath)).factory.economy;
+    const runtime = result.run?.info?.runtime;
+    const tokens = result.usage?.tokens;
+    await deps.economy.afterRun({
+      repoPath,
+      runId: nth === 1 ? context.runId : `${context.runId}#${nth}`,
+      folder: context.runId,
+      pack,
+      cardId: context.task.id,
+      outcome: result.rateLimited ? "rate_limited" : result.outcome,
+      tokens: tokens ? { ...tokens, cached: tokens.cached ?? 0 } : null,
+      ...(runtime === "claude" || runtime === "eve" || runtime === "jev" ? { runtime } : {}),
+      ...(result.usage ? {} : { fold: false }),
+      config,
+    });
+  } catch {
+    // The economy never stops a stage.
+  }
+}
+
+async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}, chosen: { image?: string } = {}, ran: { container: boolean } = { container: false }): Promise<StageResult> {
   const { task } = context;
   if (!task.repoPath) {
     throw new Error("the task has no repoPath; create it with a repo to run real stages");
@@ -367,6 +409,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const testsCommit = testsRead
     ? { sha: context.testsCommit!, files: testsRead.nameStatus.split("\n").map((l) => l.split("\t")).filter(([status = ""]) => /^[AMCR]/.test(status)).map((cols) => cols[cols.length - 1] ?? "").filter(Boolean) }
     : null;
+  // What the economy hands this run; a run with no repository, or an economy that fails, starts without it.
+  const economyInput = task.repoPath ? await deps.economy?.inputFor(task.repoPath, pack, policy.factory.economy, context.runId).catch(() => undefined) : undefined;
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -394,6 +438,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : pack === "e2e" ? (e2eTarget ? [e2eTarget] : []) : policy.qaTargets,
     ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
+    ...(economyInput ? { economy: economyInput } : {}),
+    ...(extra.factCandidates?.length ? { factCandidates: extra.factCandidates } : {}),
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
   });
 
@@ -441,6 +487,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const pushErrors: string[] = [];
   let watch: ReturnType<typeof buildWatch> | null = null;
   let pushing: Promise<void> = Promise.resolve();
+  // Where the scope is measured from (see the comment below), moved past default-branch history the branch merged since (`scopeStartOf`).
+  const scopeFrom = input.plan != null ? (extra.scopeBase ?? context.firstInputCommit ?? (context.attempt === 1 ? inputCommit : null)) : inputCommit;
+  const scopeStart = scopeFrom && input.plan != null && task.repoPath && pack === "implementing" && !extra.checkout ? await scopeStartOf(workspace.path, task.repoPath, scopeFrom) : scopeFrom;
   // The machine's side of the checks the implementer asks for: a red slice and the change's scope.
   const checks =
     pack === "implementing" && !extra.checkout
@@ -449,7 +498,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           repoPath: task.repoPath,
           worktree: workspace.path,
           // The feature route measures the scope over the card's whole change, so a fix run that changes nothing still sees what an earlier run committed: from the vetted tests commit, else the commit the card's first implementing run started from (the machine's own stage_runs row; the first run's own start, read by the host before the container ran). Never from a ref or a later run's commit: with none of them the check fails closed. A route with no plan keeps the run's own commit.
-          inputCommit: input.plan != null ? (extra.scopeBase ?? context.firstInputCommit ?? (context.attempt === 1 ? inputCommit : null)) : inputCommit,
+          inputCommit: scopeStart,
           slices: input.plan?.slices ?? [],
           planned: plannedFiles(input.plan),
           planPresent: input.plan != null,
@@ -472,8 +521,22 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     pack === "triage" && deps.cards
       ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, selfSource: sourceKindOf(task), query }) })
       : null;
+  // The loop guard's question: any agent pack that runs shell commands has a guard to ask it (the machine's economy input says `judge: true` for the same packs).
+  const loopJudge =
+    PACKS[pack].kind === "agent" && PACKS[pack].access.commands.length > 0
+      ? loopAnswers({
+          pack,
+          writable: PACKS[pack].writable,
+          repoPath: task.repoPath,
+          get decide() {
+            return deps.decide ?? null;
+          },
+          overrides: policy.decisions,
+          log: (line) => void context.note?.(line).catch(() => {}),
+        })
+      : null;
   const startWatch = (): void => {
-    if ((!checks && !cardSearch) || watch) return;
+    if ((!checks && !cardSearch && !loopJudge) || watch) return;
     const hostExec = deps.hostExec;
     watch = buildWatch({
       outDir: join(runDir, "out"),
@@ -481,6 +544,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       log: (line) => void context.note?.(line).catch(() => {}),
       ...(checks ? { onRed: async (...a: Parameters<typeof checks.onRed>) => (await importer?.sync(), checks.onRed(...a)), onScopeRequest: async (...a: Parameters<typeof checks.onScopeRequest>) => (await importer?.sync(), checks.onScopeRequest(...a)) } : {}),
       ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
+      ...(loopJudge ? { onLoopRequest: loopJudge.onLoopRequest } : {}),
       onCommitted: async (slice) => {
         if (!checks) return;
         await importer?.sync();
@@ -605,6 +669,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     await pushing;
     credential.release();
   });
+    ran.container = true;
   } catch (error) {
     if (!(error instanceof EgressUnsupportedError)) throw error;
     return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };

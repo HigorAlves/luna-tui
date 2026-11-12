@@ -4,13 +4,13 @@
 // (runtimes/claude/run.ts, `outputFormat`). Pure: the caller passes the template and the
 // project context, so a test needs no files.
 import type { AgentPack, Pack, StageInput } from "@hardness/contracts";
-import { PACKS, type TaskClassification, answerJsonSchema, classificationLine, criteriaOf, scenarioText, verdictOf } from "@hardness/contracts";
+import { FACTS_HEADER, PACKS, type TaskClassification, answerJsonSchema, classificationLine, criteriaOf, manualHeader, scenarioText, verdictOf } from "@hardness/contracts";
 import type { TriageRecord } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
 import { CONVERSATION_VARIABLES, conversationText } from "./conversation-text.ts";
-import { renderSplit, renderTicket } from "./decide.ts";
-import { type Cut, DATA_NOTE, foreignBudget, foreignValueCut } from "./data-block.ts";
+import { renderCheck, renderSplit, renderTicket } from "./decide.ts";
+import { type Cut, DATA_NOTE, dataBlock, flatLine, foreignBudget, foreignValueCut } from "./data-block.ts";
 import { callText } from "./transcript.ts";
 
 const NONE = "(none)";
@@ -411,6 +411,9 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{task.record}}": recordText(input.task.record),
     "{{context.split}}": splitText(input.context.split),
     "{{context.ticket}}": input.context.ticket ? renderTicket(input.context.ticket) : NONE,
+    "{{context.check}}": input.context.check ? renderCheck(input.context.check) : NONE,
+    "{{context.propose}}": proposeText(input.context.propose),
+    "{{context.factCandidates}}": candidatesText(input.context.factCandidates),
     ...(input.context.conversation ? conversationText(input.context.conversation) : Object.fromEntries(Object.keys(CONVERSATION_VARIABLES).map((name) => [`{{context.conversation.${name}}}`, NONE]))),
     "{{context.plan.map}}": mapText(input.context.plan?.map),
     "{{context.plan.shortlist}}": shortlistText(input.context.plan?.shortlist),
@@ -536,7 +539,32 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     return `${offset > 0 && whole[offset - 1] !== "\n" ? "\n" : ""}${value}${whole[offset + key.length] !== undefined && whole[offset + key.length] !== "\n" ? "\n" : ""}`;
   });
   const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, DATA_NOTE, ""].join("\n");
-  return { prompt: header + body, cuts };
+  return { prompt: header + body + factsBlock(input.context.economy?.facts) + manualBlock(input.context.economy?.manual, input.task.repoPath), cuts };
+}
+
+/** What the repository's earlier runs learned of its environment, at the end of the prompt so the text before it stays the same from run to run. Each line is the machine's own template filled with a command spelling, a host or a variable name that a repository's output once carried, so the block is quoted as data like any foreign text: the header line stays as upstream words it. Nothing at all without facts. */
+function factsBlock(facts: readonly string[] | undefined): string {
+  if (!facts?.length) return "";
+  return `\n${FACTS_HEADER}\n${dataBlock("context.economy.facts", facts.map((f) => `- ${flatLine(f, 240)}`).join("\n"))}\n`;
+}
+
+/** What the repository's earlier runs showed and a proposer wrote down, and three runs confirmed, after the learned facts. Quoted as data like them; the header names the repository by its folder, cut to a safe charset. Nothing at all without lines. */
+function manualBlock(lines: readonly string[] | undefined, repoPath: string): string {
+  if (!lines?.length) return "";
+  return `\n${manualHeader(repoPath)}\n${dataBlock("context.economy.manual", lines.map((f) => `- ${flatLine(f, 240)}`).join("\n"))}\n`;
+}
+
+/** The proposer's input: the repository, the facts it holds and the runs, oldest first, each with its id for a citation. */
+function proposeText(propose: StageInput["context"]["propose"]): string {
+  if (!propose) return NONE;
+  const known = propose.known.length > 0 ? propose.known.map((k) => `- ${k}`).join("\n") : NONE;
+  const runs = propose.digests.map((d) => [`Run ${d.runId} (${d.pack}, card ${d.cardId}, ${d.outcome}, ${d.calls} observed calls)`, ...(d.lines.length > 0 ? d.lines.map((l) => `  ${l}`) : ["  (no lines)"])].join("\n"));
+  return [`Repository: ${propose.repo}`, "", "Facts already held (do not restate them):", known, "", "Runs, oldest first (each line: intent | command | how it ended):", runs.length > 0 ? runs.join("\n\n") : NONE].join("\n");
+}
+
+/** The learned facts the retro may promote, by id. */
+function candidatesText(candidates: StageInput["context"]["factCandidates"]): string {
+  return candidates?.length ? candidates.map((c) => `- ${c.id}: ${c.text}`).join("\n") : NONE;
 }
 
 /** A ticket's signals on one line, in the pack's question order: `kind bug (0.90) · area board
@@ -605,7 +633,7 @@ const CALL_TARGET_MAX = 160;
 export function callTarget(name: string, input: Record<string, unknown>): { target: string; fingerprint?: string } {
   // A search names its pattern and where it looks: four globs over /work are four calls, not a loop.
   const search = input.pattern !== undefined && input.path !== undefined ? `${input.pattern} in ${input.path}` : undefined;
-  const target = input.file_path ?? input.filePath ?? search ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? input.helper ?? "";
+  const target = input.file_path ?? input.filePath ?? search ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? input.helper ?? input.skill ?? "";
   // A paged read is a different call per page: a long file read in four pages is not a loop.
   const page = (name === "Read" || name === "read_file") && (input.offset !== undefined || input.limit !== undefined) ? `:${input.offset ?? 0}+${input.limit ?? ""}` : "";
   const whole = `${String(target)}${page}`;

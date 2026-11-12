@@ -15,14 +15,15 @@ const failed = (value: unknown): boolean => typeof value === "object" && value !
 
 /** The server config for `mcpServers.luna`, over the handlers' `call` (core/luna-tools.ts keeps
  *  the state), with `delegate` beside them when the run delegates: a helper that gave no answer
- *  is the call's error. Built by the Claude runtime only, so no other runtime loads the SDK for it. */
-export function lunaServer(call: RunContext["luna"]["call"], delegate: DelegateTool | null = null) {
+ *  is the call's error. `masked` names the luna tools a person's mask removed from this pack. Built by the Claude runtime only, so no other runtime loads the SDK for it. */
+export function lunaServer(call: RunContext["luna"]["call"], delegate: DelegateTool | null = null, masked: readonly string[] = []) {
   return createSdkMcpServer({
     name: "luna",
     version: "1.0.0",
     alwaysLoad: true,
     tools: [
-      ...(Object.keys(LUNA_TOOLS) as LunaTool[]).map((name) =>
+      // A masked tool (RFC 0007 §4) is not registered, so its definition is not sent.
+      ...(Object.keys(LUNA_TOOLS) as LunaTool[]).filter((name) => !masked.includes(name)).map((name) =>
         tool(name, LUNA_TOOLS[name].description, LUNA_TOOLS[name].input, async (args) => text(await call(name, args))),
       ),
       ...(delegate

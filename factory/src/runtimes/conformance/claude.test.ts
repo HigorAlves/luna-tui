@@ -9,8 +9,16 @@ import { scriptedQuery } from "../claude/fake.ts";
 import { CAPS_NO_TOOLS, DECISION_TABLE } from "./decision.ts";
 import { GOLDEN, conformance, masked, runScenario } from "./table.ts";
 
-conformance("claude", "claude:sonnet", (script) => claudeRuntime(scriptedQuery(script)), { resetsAt: true, schemaIssue: true, tools: true, text: true, delegate: true });
-conformance("claude (decide)", "claude:haiku", (script) => claudeRuntime(scriptedQuery(script)), { resetsAt: true, schemaIssue: true, ...CAPS_NO_TOOLS }, { table: DECISION_TABLE });
+conformance(
+  "claude",
+  "claude:sonnet",
+  (script) => {
+    const query = scriptedQuery(script);
+    return Object.assign(claudeRuntime(query), { told: () => query.told });
+  },
+  { resetsAt: true, schemaIssue: true, tools: true, text: true, delegate: true, economy: true },
+);
+conformance("claude (decide)", "claude:haiku", (script) => claudeRuntime(scriptedQuery(script)), { resetsAt: true, schemaIssue: true, ...CAPS_NO_TOOLS, economy: false }, { table: DECISION_TABLE });
 
 it("the Claude runtime's transcript of the golden run", async () => {
   const root = mkdtempSync(join(tmpdir(), "golden-"));

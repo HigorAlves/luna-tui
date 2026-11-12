@@ -3,7 +3,10 @@
 // reason for the model. Every decision, allowed or refused, is also handed to `onDecision`, which
 // the runtime turns into the call's event.
 import type { HookCallbackMatcher, HookInput, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import type { Observation } from "@hardness/contracts";
 
+import type { GuardStep } from "../../core/economy/guard.ts";
+import type { EconomySession } from "../../core/economy/session.ts";
 import { type GuardContext, type GuardDecision, type GuardedCall, checkCall } from "../../core/guards.ts";
 
 export { branchPrefixFor, guardBash, guardWrite, type GuardContext } from "../../core/guards.ts";
@@ -70,4 +73,50 @@ export function preToolUseGuards(ctx: GuardContext, onDecision?: OnDecision): Ho
     { matcher: `^(${READ_TOOLS.join("|")})$`, hooks: [asHook((input) => ({ tool: "read", input: readPath(input) }), ctx, onDecision)] },
     { matcher: "^WebFetch$", hooks: [asHook((input) => ({ tool: "fetch", input: toolInput(input) }), ctx, onDecision)] },
   ];
+}
+
+/** Hears what the economy session made of a finished call: the SDK's call id, its observation, the step. */
+export type OnSettled = (id: string, observation: Observation | undefined, step: GuardStep) => void;
+
+const RESULT_CAP = 20000;
+/** The keys of a response object that hold its text, in the order upstream reads them. */
+const TEXT_KEYS = ["stdout", "stderr", "output", "aggregated_output", "formatted_output", "content", "result", "error", "message", "text_result_for_llm"];
+
+/** A tool's response as text for the observer, as upstream's host reads it: a string as is; a list by its items' `text`; an Edit or
+ *  Write response (a `structuredPatch`, or the file tools' `create`/`update` shape) as nothing, since its fields echo what was written;
+ *  any other object by its string values under the text keys. The text is read and dropped, never emitted. */
+function outputText(response: unknown): string {
+  return responseText(response).slice(0, RESULT_CAP);
+}
+
+function responseText(response: unknown): string {
+  if (typeof response === "string") return response;
+  if (Array.isArray(response)) return response.flatMap((item) => (typeof item === "object" && item !== null && typeof (item as { text?: unknown }).text === "string" ? [(item as { text: string }).text] : [])).join("\n");
+  if (typeof response !== "object" || response === null) return "";
+  const fields = response as Record<string, unknown>;
+  if ("structuredPatch" in fields) return "";
+  if ((fields.type === "create" || fields.type === "update") && (typeof fields.filePath === "string" || typeof fields.file_path === "string")) return "";
+  return TEXT_KEYS.flatMap((key) => (typeof fields[key] === "string" ? [fields[key] as string] : [])).join("\n");
+}
+
+/** The PostToolUse and PostToolUseFailure matchers of the token economy, for every tool: each
+ *  finished call goes to the session, and a redirect goes back to the model as the hook's additional
+ *  context. Fails open, unlike the guards: a fault here costs the economy, never the run. */
+export function postToolUseEconomy(session: EconomySession, onSettled: OnSettled): { PostToolUse: HookCallbackMatcher[]; PostToolUseFailure: HookCallbackMatcher[] } {
+  const hook = (event: "PostToolUse" | "PostToolUseFailure") => async (input: HookInput, id: string | undefined): Promise<HookJSONOutput> => {
+    try {
+      if (!("tool_name" in input) || input.hook_event_name !== event) return {};
+      const failed = input.hook_event_name === "PostToolUseFailure";
+      const output = failed ? String(input.error ?? "") : outputText(input.tool_response);
+      const callId = id ?? input.tool_use_id;
+      // A subagent's call is observed for its event; the guard counts the main thread's calls only, and a redirect would land in the wrong context.
+      const subagent = typeof input.agent_id === "string" && input.agent_id !== "";
+      const { observation, step } = session.settled({ id: callId, tool: input.tool_name, input: input.tool_input, output, ok: !failed, subagent });
+      onSettled(callId, observation, step);
+      return !subagent && step.kind === "redirect" ? { hookSpecificOutput: { hookEventName: event, additionalContext: step.text } } : {};
+    } catch {
+      return {};
+    }
+  };
+  return { PostToolUse: [{ hooks: [hook("PostToolUse")] }], PostToolUseFailure: [{ hooks: [hook("PostToolUseFailure")] }] };
 }

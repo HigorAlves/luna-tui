@@ -3,6 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    path::{Path, PathBuf},
     process::Command,
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -17,13 +18,14 @@ use tui_textarea::TextArea;
 
 use std::collections::BTreeSet;
 
-use crate::detail::Section;
+use crate::detail::{EvidenceHit, Section};
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::keys::{self, Scope};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
 use crate::backlog::{BacklogEntry, BacklogState};
+use crate::economy::{Economy, EconomyState, Row, RowKind};
 use crate::tickets::{TicketEntry, TicketsState};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
@@ -32,7 +34,7 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        ARCHIVE_REASONS, COLUMNS, RECORD_FIELDS, TriageRecord, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
+        ARCHIVE_REASONS, COLUMNS, RECORD_FIELDS, TriageRecord, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
         StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of,
         plan_markdown, priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
@@ -40,25 +42,17 @@ use crate::{
     vim::Vim,
 };
 
+/// Two clicks on one file row within this long open it.
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
 /// How long a prefix key (`g`, `z`) waits before the footer lists its second keys.
 pub const WHICH_KEY_DELAY: Duration = Duration::from_millis(400);
-/// The platform's "open this URL" program and its arguments.
 /// The PATCH body of a done tap: `done: true`, and the reason a draft was dismissed when there is one.
 fn dismiss_patch(reason: Option<&str>) -> serde_json::Value {
     match reason {
         Some(reason) => serde_json::json!({ "done": true, "reason": reason }),
         None => serde_json::json!({ "done": true }),
     }
-}
-
-fn opener_command(url: &str) -> (&'static str, Vec<String>) {
-    let program = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    (program, vec![url.to_string()])
 }
 
 /// The local zone's seconds east of UTC, from `date +%z` (`+0100` → 3600); 0 when it cannot
@@ -93,9 +87,6 @@ fn start_cursor(section: Section) -> usize {
         _ => 0,
     }
 }
-
-/// Rows one card takes on the board, including its spacer line.
-pub const CARD_HEIGHT: usize = 3;
 
 /// The Floor view's numbers, one window each. A window stays `None` until its first fetch
 /// succeeds; a failed refresh keeps what was there.
@@ -203,6 +194,11 @@ pub fn bulk_targets(tasks: &[Task], ids: &[String], action: BulkAction) -> Vec<S
         .collect()
 }
 
+/// The link of the issue a ticket came from or is linked to (its source's, else Jira's): `o` on the board and `i` in the task view open it.
+pub(crate) fn issue_link(task: &Task) -> Option<String> {
+    task.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| task.jira.as_ref().map(|j| j.url.clone()))
+}
+
 /// Every ticket waiting on the usage window.
 pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
     tasks.iter().filter(|t| t.state == "paused_rate_limit").map(|t| t.id.clone()).collect()
@@ -212,6 +208,10 @@ pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
 const DETAIL_DEBOUNCE: Duration = Duration::from_millis(300);
 /// How long the `J` prompt waits after a keystroke before asking the machine to search.
 const JIRA_SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// The `:` commands that act on one ticket: typed in the task view they run on the open one and
+/// the view stays open.
+const CARD_COMMANDS: &[&str] = &["start", "whole", "dismiss", "finding", "dedup", "context", "dup", "undup", "repo", "jira", "ticket-edit"];
 
 /// How tall a card is: three lines (title; id and repo; status), four with the worked / diff /
 /// tests line, or one (glyph, title, age) so a busy column shows twice the tickets.
@@ -253,6 +253,59 @@ pub enum GroupBy {
     Age,
 }
 
+/// What an approval box was opened for: the card, the gate and the words it asked. `y` sends only while the card still waits
+/// at that gate (the same ask, when the machine gave it an id).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldApproval {
+    pub id: String,
+    pub gate: &'static str,
+    pub question: String,
+    pub approval: Option<String>,
+    /// `A` at the retro: approve and skip its rules.
+    pub skip_rules: bool,
+    /// `:whole`: approve and keep the card as one instead of splitting it.
+    pub keep_whole: bool,
+    /// `y` was pressed while the card's detail was out of date: the box waits for the fresh detail and decides then.
+    pub checking: bool,
+}
+
+/// The gate a card waits at, as an approval names it.
+pub struct Gate {
+    pub kind: &'static str,
+    pub question: String,
+}
+
+/// The full-screen views. At most one is open: opening one closes the others, and `App::active_view` is the one
+/// place that says which takes the keys and the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Floor,
+    Inbox,
+    Digest,
+    Pulls,
+    Backlog,
+    Economy,
+    Tickets,
+    Slack,
+}
+
+/// What the box says when the card changed under it.
+const MOVED_ON: &str = "the card moved on; nothing was approved";
+const MOVED_ON_UNSENT: &str = "the card moved on; nothing was sent";
+/// `approve 3 cards? 2 plans · 1 ship`: the count and the kinds, for the box over the marked cards.
+fn approve_many_question(ids: &[(String, &'static str)]) -> String {
+    let parts: Vec<String> = ["plan", "split", "ship", "release"]
+        .iter()
+        .filter_map(|kind| {
+            let n = ids.iter().filter(|(_, k)| k == kind).count();
+            (n > 0).then(|| format!("{n} {kind}{}", if n == 1 { "" } else { "s" }))
+        })
+        .collect();
+    format!("approve {} card{}? {}", ids.len(), if ids.len() == 1 { "" } else { "s" }, parts.join(" · "))
+}
+
+const CANNOT_CHECK: &str = "cannot check the card (offline); nothing was approved";
+
 pub enum Mode {
     Normal,
     Adding(String),
@@ -267,6 +320,8 @@ pub enum Mode {
         area: TextArea<'static>,
         vim: Vim,
     },
+    /// `e` on the Review page while the cases wait for your check: which of the plan, the cases or the ticket to edit.
+    EditChoice(String),
     /// Which side of `EditPlan` has keyboard focus. Tab switches; a save covers both.
     /// Editing triage's plan and the ticket side by side: left the plan (brief, criteria,
     /// assumptions — slices stay as triage wrote them), right the ticket's own text. Open
@@ -312,10 +367,24 @@ pub enum Mode {
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
+    /// `a` inside the open task at any gate: one yes names what is approved and the card, then the decision goes.
+    /// The box holds what it was opened for and never re-reads the card to decide what `y` does.
+    ConfirmApprove(HeldApproval),
+    /// `q` on the board while a card needs you or runs.
+    ConfirmQuit,
     /// `A` in the Inbox: approve every ticket in the split, after one yes.
-    ConfirmApproveAll(Vec<String>),
+    /// Each card with the committing kind it had when the box opened.
+    ConfirmApproveAll(Vec<(String, &'static str)>),
     /// A destructive key over the marked set: one yes for all of them.
     ConfirmMany { action: BulkAction, ids: Vec<String> },
+    /// `a` over marked cards at a gate that commits something: one yes names the count and the kinds, then
+    /// every decision goes. `question` is the wording the box opened with and `before` what the other marked cards got
+    /// already (they commit nothing). Each card holds the kind it had at open: `y` skips one that is no longer that.
+    ConfirmApproveMany { ids: Vec<(String, &'static str)>, question: String, before: String },
+    /// `A` on the Floor: approve a repository's base image, which runs with the stage's credential. Holds what was shown.
+    ConfirmBase { repo: String, base: String },
+    /// `a` on a proposed tool mask in the Economy: the pack and the units its proposal names.
+    ConfirmMask { repo: String, pack: String, units: Vec<String> },
     Actions {
         cursor: usize,
     },
@@ -397,7 +466,7 @@ pub enum PlanPane {
 /// Whether `task` is at the plan gate with its plan already fetched into `detail`, so `e`
 /// opens the two-pane plan editor instead of the plain ticket editor.
 fn has_open_plan(task: &Task, detail: Option<&TaskDetail>) -> bool {
-    task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some_and(|a| !matches!(a.outcome(), Some("split" | "split_failed"))))
+    task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some_and(|a| !matches!(a.outcome(), Some("split" | "split_failed" | "conversation" | "archive"))))
 }
 
 /// Whether the plan may still be edited: at its own gate, or at the test check, before anything
@@ -420,6 +489,14 @@ pub enum Outcome {
     Quit,
 }
 
+/// What `o` opens in the task view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenTarget {
+    Url(String),
+    Path { path: String, what: String },
+    EvidenceFolder,
+}
+
 pub struct Toast {
     pub text: String,
     pub error: bool,
@@ -427,7 +504,7 @@ pub struct Toast {
 }
 
 pub struct App {
-    machine: Machine,
+    pub(crate) machine: Machine,
     stream: Receiver<Incoming>,
     /// Our end of the stream, for work that answers from another thread (the detail fetch).
     tx: Sender<Incoming>,
@@ -444,7 +521,7 @@ pub struct App {
     notices: Vec<Notice>,
     /// Details of the ticket being viewed or previewed.
     pub detail: Option<TaskDetail>,
-    detail_stale: bool,
+    pub(crate) detail_stale: bool,
     pub focus: usize,
     pub selection: [usize; COLUMNS.len()],
     pub mode: Mode,
@@ -470,6 +547,9 @@ pub struct App {
     /// The Backlog view, open while this is `Some`, and the ranked items it fetched when it opened.
     pub backlog: Option<BacklogState>,
     pub backlog_items: Vec<BacklogEntry>,
+    /// The Economy view, open while this is `Some`, and what the machine said about its repository.
+    pub economy: Option<EconomyState>,
+    pub economy_data: Economy,
     /// The Tickets view, open while this is `Some`, and the tickets it fetched when it opened.
     pub tickets: Option<TicketsState>,
     pub ticket_items: Vec<TicketEntry>,
@@ -489,7 +569,7 @@ pub struct App {
     pub slots: Option<Slots>,
     /// The Digest view, open while this is `Some`.
     pub digest: Option<DigestState>,
-    /// Columns folded to their header; Done starts folded, it grows forever.
+    /// Columns folded to their header by hand (`zc`). The board also narrows columns by itself when the width is short.
     pub folded: BTreeSet<usize>,
     /// How tickets are ordered inside a column (`gs`/`gr`/`ga`).
     pub group: GroupBy,
@@ -506,6 +586,14 @@ pub struct App {
     pub home_repo: Option<String>,
     /// Column rectangles from the last frame, for mouse clicks.
     pub column_rects: RefCell<Vec<(usize, Rect)>>,
+    /// The first list item each column showed in the last frame (its scroll), for mouse clicks.
+    pub list_offsets: RefCell<Vec<usize>>,
+    /// The Evidence section's folder line and file rows from the last frame, for mouse clicks.
+    pub evidence_hits: RefCell<Vec<(Rect, EvidenceHit)>>,
+    /// The file row last clicked and when, for the double click that opens it.
+    last_click: Option<(usize, Instant)>,
+    /// What starts the platform's opener; tests record the call instead of spawning.
+    pub(crate) launch: crate::open::Launcher,
     /// How far the open ticket's detail popup is scrolled. `ui` clamps it to the content's
     /// actual height, which only it knows (it depends on the terminal width).
     pub detail_scroll: Cell<u16>,
@@ -519,6 +607,8 @@ pub struct App {
     /// and all of it.
     pub detail_section: Section,
     pub detail_cursor: usize,
+    /// The reference groups of the open section: which are open, and whether they hold the keys (`tab`). Reset with each card.
+    pub detail_refs: crate::reference::RefState,
     pub detail_full: bool,
     /// The branch diff of the ticket whose popup is open, once fetched: (task id, diff).
     pub diff: Option<(String, TaskDiff)>,
@@ -536,8 +626,11 @@ pub struct App {
     pub help_scroll: Cell<u16>,
     pub help_max: Cell<u16>,
     pub help_viewport: Cell<u16>,
-    /// The ticket whose Detail `?` was pressed in; closing the help returns to it.
-    help_return: Option<String>,
+    /// The task view a prompt, picker, editor, palette or help sheet was opened from: when it
+    /// closes the app returns there (`settle_return`), unless the card is gone.
+    pub(crate) return_to: Option<String>,
+    /// The card a palette command acts on while it runs: the open task's, when the palette was opened over one.
+    command_card: Option<String>,
     imported: bool,
     /// The latest stage container per task id, for `f` to open a watch tab on.
     stages: std::collections::HashMap<String, herdr::Stage>,
@@ -580,6 +673,8 @@ impl App {
             pulls: None,
             backlog: None,
             backlog_items: Vec::new(),
+            economy: None,
+            economy_data: Economy::default(),
             tickets: None,
             ticket_items: Vec::new(),
             pending_dispatch: None,
@@ -590,7 +685,7 @@ impl App {
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
-            folded: COLUMNS.iter().position(|c| *c == "Done").into_iter().collect(),
+            folded: BTreeSet::new(),
             group: GroupBy::default(),
             density: Density::default(),
             prefix: None,
@@ -598,11 +693,16 @@ impl App {
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
+            list_offsets: RefCell::new(Vec::new()),
+            evidence_hits: RefCell::new(Vec::new()),
+            last_click: None,
+            launch: Box::new(crate::open::spawn_detached),
             detail_scroll: Cell::new(0),
             detail_viewport: Cell::new(0),
             detail_follow: Cell::new(false),
             detail_section: Section::Overview,
             detail_cursor: 0,
+            detail_refs: Default::default(),
             detail_full: false,
             diff: None,
             diff_pending: None,
@@ -613,7 +713,8 @@ impl App {
             help_scroll: Cell::new(0),
             help_max: Cell::new(0),
             help_viewport: Cell::new(0),
-            help_return: None,
+            return_to: None,
+            command_card: None,
             imported: false,
             stages: std::collections::HashMap::new(),
             scan_tx,
@@ -641,6 +742,7 @@ impl App {
 
     /// Drops info messages once they are old. Errors stay until the next key press.
     pub fn tick(&mut self) {
+        self.settle_confirm();
         if self
             .toast
             .as_ref()
@@ -663,6 +765,7 @@ impl App {
                 if let Some(id) = selected {
                     self.select(&id, false);
                 }
+                self.follow_open_card();
                 self.import_legacy();
             }
             Err(error) => {
@@ -725,10 +828,11 @@ impl App {
                     }
                     let wanted = match &self.mode {
                         Mode::Detail(open) => open == &id,
-                        _ => self.selected_id().as_deref() == Some(id.as_str()),
+                        _ => self.over_task() == Some(id.as_str()) || self.selected_id().as_deref() == Some(id.as_str()),
                     };
                     if wanted {
                         self.detail = detail;
+                        self.resolve_check(&id);
                     }
                 }
                 Incoming::Diff { id, file, diff, generation } => {
@@ -807,6 +911,9 @@ impl App {
                 // herdr calls are subprocesses, so they stay off the UI thread.
                 // Recorded for `f`; an existing watch tab is re-pointed, none is ever opened.
                 Incoming::Message(StreamMessage::StageStarted { task_id, label, cwd, container }) => {
+                    if !herdr::valid_container(&container) {
+                        self.notify(herdr::REFUSE_CONTAINER, true);
+                    }
                     self.stages.insert(task_id.clone(), herdr::Stage { label, cwd, container: container.clone() });
                     thread::spawn(move || herdr::follow(short_id(&task_id), &container));
                 }
@@ -982,6 +1089,7 @@ impl App {
         self.diff_failed = None;
         self.detail_section = self.task(&id).map(Section::for_task).unwrap_or_default();
         self.detail_cursor = start_cursor(self.detail_section);
+        self.detail_refs.reset();
         self.detail_follow.set(true);
         self.mode = Mode::Detail(id);
     }
@@ -1016,6 +1124,26 @@ impl App {
         if let Some(id) = selected {
             self.select(&id, false);
         }
+        self.follow_open_card();
+    }
+
+    /// The open card changed state under the view: when the page it is on is no longer in its rail, the view moves to the
+    /// card's first page and says so. A page that still exists stays where it is.
+    fn follow_open_card(&mut self) {
+        let id = match &self.mode {
+            Mode::Detail(id) => id.clone(),
+            _ => match self.over_task() {
+                Some(id) => id.to_string(),
+                None => return,
+            },
+        };
+        let Some(task) = self.task(&id) else { return };
+        if crate::detail::order(task).contains(&self.detail_section) {
+            return;
+        }
+        let (first, column) = (Section::for_task(task), task.column.clone());
+        self.set_section(first);
+        self.notify(format!("the card moved to {}", crate::model::plain(&column, 40)), false);
     }
 
     /// The machine stopped answering: remembered, and told once per outage.
@@ -1035,7 +1163,7 @@ impl App {
     /// How many tickets wait on you right now: the Board tab's badge. On Slack that is every
     /// P0/P1 in Needs reply or Decide plus every open item past its reply SLA, each once.
     pub fn needs_you_count(&self) -> usize {
-        let tickets = self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count();
+        let tickets = self.tasks.iter().filter(|t| t.look().needs_person()).count();
         let prs = self.prs.prs.iter().filter(|p| p.split_enum().is_some_and(PrSplit::needs_me)).count();
         let slack = self
             .slack_snapshot
@@ -1106,6 +1234,7 @@ impl App {
             herdr::WatchAction::FocusExisting => {
                 herdr::focus_task_tab(&short);
             }
+            herdr::WatchAction::OpenAndFocus(stage) if !herdr::valid_container(&stage.container) => self.notify(herdr::REFUSE_CONTAINER, true),
             herdr::WatchAction::OpenAndFocus(stage) => {
                 thread::spawn(move || herdr::open_and_focus(&short, &stage));
             }
@@ -1124,6 +1253,7 @@ impl App {
         if matches!(&self.mode, Mode::Detail(open) if open == id) {
             self.mode = Mode::Normal;
         }
+        self.settle_confirm();
         self.clamp_selection();
     }
 
@@ -1131,7 +1261,7 @@ impl App {
     pub fn ensure_detail(&mut self) {
         let target = match &self.mode {
             Mode::Detail(id) => Some(id.clone()),
-            _ => self.selected_task().map(|t| t.id.clone()),
+            _ => self.over_task().map(str::to_string).or_else(|| self.selected_task().map(|t| t.id.clone())),
         };
         let Some(id) = target else {
             self.detail = None;
@@ -1201,7 +1331,7 @@ impl App {
     pub fn focus_task(&self) -> Option<&Task> {
         match &self.mode {
             Mode::Detail(id) => return self.task(id),
-            Mode::Help { .. } if self.help_return.is_some() => return self.task(self.help_return.as_deref().unwrap_or_default()),
+            _ if self.over_task().is_some() => return self.over_task().and_then(|id| self.task(id)),
             _ => {}
         }
         if let Some(state) = &self.inbox {
@@ -1251,10 +1381,7 @@ impl App {
     /// Closes the sheet: back to the popup it was opened over, else the view under it.
     fn close_help(&mut self) {
         self.help_scroll.set(0);
-        self.mode = match self.help_return.take() {
-            Some(id) => Mode::Detail(id),
-            None => Mode::Normal,
-        };
+        self.back_from_overlay();
     }
 
     /// The keys `handle_help` matches, besides the view's own that it passes on.
@@ -1362,7 +1489,7 @@ impl App {
     }
 
     fn passes_filter(&self, task: &Task) -> bool {
-        if self.needs_only && !matches!(task.look(), Look::NeedsYou | Look::Escalated) {
+        if self.needs_only && !task.look().needs_person() {
             return false;
         }
         if self.this_repo_only && task.repo_path != self.home_repo {
@@ -1447,6 +1574,40 @@ impl App {
         self.selected_task().map(|t| t.id.clone())
     }
 
+    /// The full-screen view that owns the screen and the keys: the one function draw, dispatch and the key tables ask.
+    pub fn active_view(&self) -> Option<View> {
+        [
+            (View::Floor, self.floor.is_some()),
+            (View::Inbox, self.inbox.is_some()),
+            (View::Digest, self.digest.is_some()),
+            (View::Pulls, self.pulls.is_some()),
+            (View::Backlog, self.backlog.is_some()),
+            (View::Economy, self.economy.is_some()),
+            (View::Tickets, self.tickets.is_some()),
+            (View::Slack, self.slack.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(view, open)| open.then_some(view))
+    }
+
+    /// Closes every full-screen view; a view that opens calls this first, so two are never open at once. (A task opened
+    /// from a view does not: the view waits under it and `esc` brings it back.)
+    fn close_views(&mut self) {
+        self.floor = None;
+        self.inbox = None;
+        self.digest = None;
+        self.pulls = None;
+        self.backlog = None;
+        self.economy = None;
+        self.tickets = None;
+        self.slack = None;
+    }
+
+    /// The card a command on "the ticket" acts on: the open task's when the command was typed over one, else the board's selection.
+    fn card_target(&self) -> Option<String> {
+        self.command_card.clone().or_else(|| self.selected_id())
+    }
+
     fn clamp_selection(&mut self) {
         for column in 0..COLUMNS.len() {
             let len = self.indices(column).len();
@@ -1454,11 +1615,12 @@ impl App {
         }
     }
 
-    /// Mouse wheel: scrolls the detail popup if it's open, otherwise moves the board selection.
+    /// Mouse wheel: scrolls the detail popup if it's open; moves the board selection only on the board itself, never
+    /// under a palette, a menu, a box, a picker or a prompt (the card they act on is the one they opened on).
     pub fn scroll(&mut self, delta: i16) {
         if matches!(self.mode, Mode::Detail(_)) {
             self.scroll_detail(delta);
-        } else {
+        } else if matches!(self.mode, Mode::Normal) {
             self.move_selection(delta as isize);
         }
     }
@@ -1476,6 +1638,9 @@ impl App {
 
     /// Clicking a card focuses its column and selects it. Ignores list scrolling.
     pub fn click(&mut self, x: u16, y: u16) {
+        if matches!(self.mode, Mode::Detail(_)) {
+            return self.click_detail(x, y);
+        }
         if !matches!(self.mode, Mode::Normal) {
             return;
         }
@@ -1490,9 +1655,8 @@ impl App {
         };
         self.focus = column;
         let row = y.saturating_sub(rect.y + 1) as usize;
-        let len = self.indices(column).len();
-        if len > 0 {
-            self.selection[column] = (row / CARD_HEIGHT).min(len - 1);
+        if !self.indices(column).is_empty() {
+            self.selection[column] = crate::ui::card_at_row(self, column, rect.width, row);
         }
     }
 
@@ -1630,6 +1794,23 @@ impl App {
         Outcome::Continue
     }
 
+    /// The chooser `e` opens on the Review page: `p` the plan, `c` the cases, `t` the ticket; esc goes back to the task.
+    fn handle_edit_choice(&mut self, key: KeyEvent, id: &str) -> Outcome {
+        let Some(task) = self.task(id).cloned() else {
+            self.mode = Mode::Normal;
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char('p') if plan_editable(&task, self.detail.as_ref()) || has_open_plan(&task, self.detail.as_ref()) => self.open_plan_editor(id),
+            KeyCode::Char('p') => self.notify("the plan can no longer be edited", false),
+            KeyCode::Char('c') => self.open_cases_editor(id),
+            KeyCode::Char('t') => self.open_ticket_editor(id),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
     /// Opens the repo search for `id`: type to filter, enter to set it on the ticket.
     fn open_repo_picker(&mut self, id: &str) {
         let all = repos_root().map(|root| discover_repos(&root)).unwrap_or_default();
@@ -1638,6 +1819,38 @@ impl App {
             return;
         }
         self.mode = Mode::RepoPicker { id: id.to_string(), query: String::new(), all, cursor: 0 };
+    }
+
+    /// Opens the approval box for `task`, holding the card, its gate and the words. Says so, and opens nothing, while the
+    /// card's detail is still on its way: the gate's kind (plan or split, ship or release) is read from it.
+    fn hold_approval(&mut self, task: &Task, skip_rules: bool) {
+        self.hold(task, skip_rules, false);
+    }
+
+    fn hold(&mut self, task: &Task, skip_rules: bool, keep_whole: bool) {
+        if matches!(task.state.as_str(), "awaiting_approval" | "awaiting_ship") && !self.shows_detail_of(&task.id) {
+            return self.notify("still reading this card; press again in a moment", false);
+        }
+        let Some(gate) = self.approval_gate(task) else { return };
+        let question = if skip_rules {
+            format!("approve the retro of #{} and skip its rules?", task.short_id())
+        } else if keep_whole {
+            format!("keep #{} whole and approve the plan?", task.short_id())
+        } else {
+            gate.question
+        };
+        let approval = self.open_approval_id(&task.id);
+        self.mode = Mode::ConfirmApprove(HeldApproval { id: task.id.clone(), gate: gate.kind, question, approval, skip_rules, keep_whole, checking: false });
+    }
+
+    /// The machine's id of the approval open on `id`, when its detail is the one loaded.
+    fn open_approval_id(&self, id: &str) -> Option<String> {
+        self.detail.as_ref().filter(|d| d.task.id == id).and_then(|d| d.open_approval()).and_then(|a| a.id.clone())
+    }
+
+    /// Whether the task view of `id` is where this key was pressed: the task itself, or a prompt or command opened over it.
+    fn task_is_open(&self, id: &str) -> bool {
+        matches!(&self.mode, Mode::Detail(open) if open == id) || self.command_card.as_deref() == Some(id) || self.over_task() == Some(id)
     }
 
     /// `a`: the one obvious next step for the ticket.
@@ -1666,7 +1879,7 @@ impl App {
             "paused_rate_limit" => self.act(|m| m.resume(id), "resumed"),
             "closed" => self.notify("this ticket is closed", false),
             "archived" => self.notify("this ticket is archived", false),
-            _ if task.waiting_on_you => self.act(|m| m.decide(id, true, None), "approved"),
+            _ if task.waiting_on_you && self.approval_gate(&task).is_some() => self.hold_approval(&task, false),
             _ => self.notify(format!("{} is running; X aborts it", task.status_label()), false),
         }
         Outcome::Continue
@@ -1677,11 +1890,23 @@ impl App {
         let Some(task) = self.task(id).cloned() else {
             return Outcome::Continue;
         };
+        // No gate is approved unseen: from anywhere but the open task, the key opens the task on its first page instead.
+        let approves = match key {
+            'a' | 'S' => task.waiting_on_you && self.approval_gate(&task).is_some(),
+            'A' => task.state == "reviewing_memory" && task.waiting_on_you,
+            _ => false,
+        };
+        if approves && !self.task_is_open(id) {
+            self.open_detail(id.to_string());
+            return Outcome::Continue;
+        }
         match key {
             'a' => return self.advance(id),
             'A' => {
-                if task.state == "reviewing_memory" {
-                    self.act(|m| m.approve_skipping_rules(id), "approved, rules skipped");
+                if task.state == "reviewing_memory" && task.waiting_on_you {
+                    self.hold_approval(&task, true);
+                } else if task.state == "reviewing_memory" {
+                    self.notify("the retro is still running", false);
                 } else {
                     self.notify("no memory review waiting on this ticket", false);
                 }
@@ -1693,9 +1918,15 @@ impl App {
                 self.notify(if task.state == "awaiting_ship" { "the machine is watching the PR; nothing to ship yet" } else { "nothing waiting to ship on this ticket" }, false);
             }
             'e' => {
+                if let Some(why) = crate::keys::edit_blocked(self, &task) {
+                    self.notify(why, false);
+                    return Outcome::Continue;
+                }
                 let in_popup = matches!(&self.mode, Mode::Detail(open) if open == id);
                 let section = self.detail_section;
-                if in_popup && section == Section::Tests && cases_editable(&task, self.detail.as_ref()) {
+                if in_popup && section == Section::Review && cases_editable(&task, self.detail.as_ref()) {
+                    self.mode = Mode::EditChoice(id.to_string());
+                } else if in_popup && section == Section::Tests && cases_editable(&task, self.detail.as_ref()) {
                     self.open_cases_editor(id);
                 } else if (in_popup && section == Section::Plan && plan_editable(&task, self.detail.as_ref())) || has_open_plan(&task, self.detail.as_ref()) {
                     self.open_plan_editor(id);
@@ -1774,14 +2005,8 @@ impl App {
             },
             'd' => self.mode = Mode::ConfirmDelete(id.to_string()),
             'f' => self.watch(&task),
-            'o' => match task.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| task.jira.as_ref().map(|j| j.url.clone())) {
-                Some(url) => {
-                    let (program, args) = opener_command(&url);
-                    // Detached: spawn and move on, never wait on the browser.
-                    if Command::new(program).args(args).spawn().is_err() {
-                        self.notify(format!("could not open {url}"), true);
-                    }
-                }
+            'o' | 'i' => match issue_link(&task) {
+                Some(url) => self.open_url(&url),
                 None => self.notify("no issue linked", false),
             },
             'J' => match task.jira_key() {
@@ -1926,30 +2151,64 @@ impl App {
         Outcome::Continue
     }
 
+    /// The card whose task view a prompt, picker, editor or sheet is open over: the task stays on
+    /// screen behind it, and `settle_return` brings the view back when it closes.
+    pub fn over_task(&self) -> Option<&str> {
+        match self.mode {
+            Mode::Normal | Mode::Detail(_) => None,
+            _ => self.return_to.as_deref(),
+        }
+    }
+
+    /// Closes an overlay: back to the task view it was opened over, else the board.
+    fn back_from_overlay(&mut self) {
+        self.mode = match self.return_to.take() {
+            Some(id) if self.task(&id).is_some() => Mode::Detail(id),
+            _ => Mode::Normal,
+        };
+    }
+
+    /// After every key: a mode opened from the task view remembers it, a mode that closed to the
+    /// board returns to it (the card may be gone by then, and then the board is right), and the task
+    /// view itself holds no way back.
+    fn settle_return(&mut self, from: Option<String>) {
+        match &self.mode {
+            Mode::Detail(_) => self.return_to = None,
+            Mode::Normal => self.back_from_overlay(),
+            _ => {
+                if from.is_some() {
+                    self.return_to = from;
+                }
+            }
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Outcome {
+        let from = match &self.mode {
+            Mode::Detail(id) => Some(id.clone()),
+            _ => None,
+        };
+        let outcome = self.dispatch_key(key);
+        self.settle_return(from);
+        outcome
+    }
+
+    fn dispatch_key(&mut self, key: KeyEvent) -> Outcome {
         if self.toast.as_ref().is_some_and(|t| t.error) {
             self.toast = None;
         }
-        if self.floor.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_floor(key);
-        }
-        if self.inbox.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_inbox(key);
-        }
-        if self.digest.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_digest(key);
-        }
-        if self.pulls.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_pulls(key);
-        }
-        if self.backlog.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_backlog(key);
-        }
-        if self.tickets.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_tickets(key);
-        }
-        if self.slack.is_some() && matches!(self.mode, Mode::Normal) {
-            return self.handle_slack(key);
+        if matches!(self.mode, Mode::Normal) {
+            match self.active_view() {
+                Some(View::Floor) => return self.handle_floor(key),
+                Some(View::Inbox) => return self.handle_inbox(key),
+                Some(View::Digest) => return self.handle_digest(key),
+                Some(View::Pulls) => return self.handle_pulls(key),
+                Some(View::Backlog) => return self.handle_backlog(key),
+                Some(View::Economy) => return self.handle_economy(key),
+                Some(View::Tickets) => return self.handle_tickets(key),
+                Some(View::Slack) => return self.handle_slack(key),
+                None => {}
+            }
         }
         match &self.mode {
             Mode::Normal => self.handle_normal(key),
@@ -1960,6 +2219,10 @@ impl App {
             Mode::Adding(_) => self.handle_adding(key),
             Mode::EditTicket { .. } => self.handle_edit_ticket(key),
             Mode::EditCases { .. } => self.handle_edit_cases(key),
+            Mode::EditChoice(id) => {
+                let id = id.clone();
+                self.handle_edit_choice(key, &id)
+            }
             Mode::Answer { .. } => self.handle_answer(key),
             Mode::EditPlan { .. } => self.handle_edit_plan(key),
             Mode::Filter => self.handle_filter(key),
@@ -1967,15 +2230,20 @@ impl App {
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::Reject { .. } => self.handle_reject(key),
             Mode::EvidenceNote { .. } => self.handle_evidence_note(key),
+            Mode::ConfirmApprove(_) => self.handle_confirm_approve(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
                 self.handle_confirm(key, &id)
             }
+            Mode::ConfirmQuit => self.handle_confirm_quit(key),
             Mode::ArchiveReason { .. } => self.handle_archive_reason(key),
             Mode::EscalationReason { .. } => self.handle_escalation_reason(key),
             Mode::RecordEdit { .. } => self.handle_record_edit(key),
             Mode::ConfirmApproveAll(_) => self.handle_confirm_approve_all(key),
             Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
+            Mode::ConfirmApproveMany { .. } => self.handle_confirm_approve_many(key),
+            Mode::ConfirmBase { .. } => self.handle_confirm_base(key),
+            Mode::ConfirmMask { .. } => self.handle_confirm_mask(key),
             Mode::Actions { .. } => self.handle_actions(key),
             Mode::RepoPicker { .. } => self.handle_repo_picker(key),
             Mode::ConfirmMerge { .. } => self.handle_confirm_merge(key),
@@ -2082,13 +2350,28 @@ impl App {
             self.notify("that repository has no base waiting".to_string(), false);
             return;
         };
-        match self.machine.approve_base(&repo, &base) {
-            Ok(()) => {
-                self.notify(format!("approved base {}", crate::model::plain(&base, 60)), false);
-                self.refresh_floor();
+        self.mode = Mode::ConfirmBase { repo, base };
+    }
+
+    /// `y` in the base box: the machine checks the reference is the one in the repository's luna.yaml.
+    fn handle_confirm_base(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                let Mode::ConfirmBase { repo, base } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                match self.machine.approve_base(&repo, &base) {
+                    Ok(()) => {
+                        self.notify(format!("approved base {}", crate::model::plain(&base, 60)), false);
+                        self.refresh_floor();
+                    }
+                    Err(e) => self.notify(format!("approve base: {e}"), true),
+                }
             }
-            Err(e) => self.notify(format!("approve base: {e}"), true),
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
         }
+        Outcome::Continue
     }
 
     /// The second key of `z…` (fold) and `g…` (group): `zc`/`zo` fold/unfold the focused
@@ -2118,7 +2401,7 @@ impl App {
         for column in 0..COLUMNS.len() {
             for (row, &i) in self.indices(column).iter().enumerate() {
                 let task = &self.tasks[i];
-                if matches!(task.look(), Look::NeedsYou | Look::Escalated) {
+                if task.look().needs_person() {
                     stops.push((column, row, task.id.clone()));
                 }
             }
@@ -2175,7 +2458,6 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => next.cursor = state.cursor.saturating_sub(1),
             KeyCode::Enter => {
                 if let Some(id) = under_cursor {
-                    self.digest = None;
                     self.select(&id, true);
                     self.open_detail(id);
                 }
@@ -2202,12 +2484,7 @@ impl App {
             .and_then(|d| d.approvals.iter().find_map(|a| a.requested["prUrl"].as_str().map(String::from)));
         let issue = self.task(id).and_then(|t| t.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| t.jira.as_ref().map(|j| j.url.clone())));
         match pr.or(issue) {
-            Some(url) => {
-                let (program, args) = opener_command(&url);
-                if Command::new(program).args(args).spawn().is_err() {
-                    self.notify(format!("could not open {url}"), true);
-                }
-            }
+            Some(url) => self.open_url(&url),
             None => self.notify("no PR or issue linked to this ticket yet", false),
         }
     }
@@ -2252,16 +2529,15 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(id) = under_cursor {
-                    self.inbox = None;
                     self.select(&id, true);
                     self.open_detail(id);
                 }
                 return Outcome::Continue;
             }
             KeyCode::Char('A') => {
-                let approve: Vec<String> = inbox::items(&self.tasks, Split::Approve, now).iter().map(|&i| self.tasks[i].id.clone()).collect();
+                let approve: Vec<(String, &'static str)> = inbox::items(&self.tasks, Split::Approve, now).iter().map(|&i| &self.tasks[i]).filter_map(|t| self.committing_kind(t).map(|kind| (t.id.clone(), kind))).collect();
                 if approve.is_empty() {
-                    self.notify("nothing to approve", false);
+                    self.notify("nothing to approve together; enter opens a card to approve it", false);
                 } else {
                     self.mode = Mode::ConfirmApproveAll(approve);
                 }
@@ -2269,7 +2545,7 @@ impl App {
             }
             KeyCode::Char(c) => {
                 if let Some(id) = under_cursor {
-                    return self.ticket_key(c, &id);
+                    return self.board_key(c, &id);
                 }
             }
             _ => {}
@@ -2285,6 +2561,7 @@ impl App {
         {
             self.take_prs(snapshot);
         }
+        self.close_views();
         self.pulls = Some(PullsState::default());
     }
 
@@ -2337,7 +2614,6 @@ impl App {
                 if let Some(pr) = under {
                     match pr.task.as_ref().map(|t| t.id.clone()) {
                         Some(id) if self.task(&id).is_some() => {
-                            self.pulls = None;
                             self.select(&id, true);
                             self.open_detail(id);
                         }
@@ -2384,6 +2660,7 @@ impl App {
     }
 
     fn open_backlog(&mut self) {
+        self.close_views();
         self.backlog = Some(BacklogState::default());
         self.refresh_backlog();
     }
@@ -2427,6 +2704,132 @@ impl App {
         Outcome::Continue
     }
 
+    /// The row under the Economy cursor.
+    pub fn economy_row(&self) -> Option<Row> {
+        self.economy_data.row_at(self.economy.as_ref()?.cursor)
+    }
+
+    /// Fetches the repository's economy; a failure is a toast and the view keeps what it had.
+    fn refresh_economy(&mut self) -> bool {
+        let Some(repo) = self.economy.as_ref().map(|s| s.repo.clone()) else {
+            return false;
+        };
+        match self.machine.economy(&repo) {
+            Ok(data) => {
+                self.economy_data = data;
+                let last = self.economy_data.rows().len().saturating_sub(1);
+                if let Some(state) = self.economy.as_mut() {
+                    state.cursor = state.cursor.min(last);
+                }
+                true
+            }
+            Err(error) => {
+                self.notify(error, true);
+                false
+            }
+        }
+    }
+
+    /// Opens the view for the repository of the card under the cursor.
+    fn open_economy(&mut self) {
+        let card = self.card_target().and_then(|id| self.task(&id).cloned());
+        let Some(repo) = card.and_then(|t| t.repo_path).filter(|p| !p.trim().is_empty()) else {
+            self.notify("select a card with a repository", true);
+            return;
+        };
+        self.economy_data = Economy::default();
+        self.close_views();
+        self.economy = Some(EconomyState { repo, cursor: 0 });
+        if !self.refresh_economy() {
+            self.economy = None;
+        }
+    }
+
+    /// The keys `handle_economy` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_ECONOMY: &[&str] = &["esc", "q", "?", "j", "k", "R", "d", "a", "r", "I"];
+
+    /// The Economy view's keys: move, refetch, drop a fact, approve or restore the mask, import past runs.
+    fn handle_economy(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.economy.clone() else {
+            return Outcome::Continue;
+        };
+        let count = self.economy_data.rows().len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.economy = None,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('j') | KeyCode::Down => self.economy = Some(EconomyState { cursor: (state.cursor + 1).min(count.saturating_sub(1)), ..state }),
+            KeyCode::Char('k') | KeyCode::Up => self.economy = Some(EconomyState { cursor: state.cursor.saturating_sub(1), ..state }),
+            KeyCode::Char('R') => {
+                self.refresh_economy();
+            }
+            KeyCode::Char('I') => match self.machine.economy_act("import", &state.repo, serde_json::json!({})) {
+                Ok(body) => {
+                    self.refresh_economy();
+                    self.notify(format!("imported {} runs", body["runs"].as_u64().unwrap_or(0)), false);
+                }
+                Err(error) => self.notify(error, true),
+            },
+            KeyCode::Char(c @ ('d' | 'a' | 'r')) => {
+                let Some(row) = self.economy_row() else {
+                    self.notify("no row selected", true);
+                    return Outcome::Continue;
+                };
+                let call = match (c, &row.kind) {
+                    ('d', RowKind::Fact(i)) if row.can_drop(&self.economy_data) => Some((format!("facts/{}/drop", self.economy_data.facts[*i].id), serde_json::json!({}), "dropped", "nothing to drop", "dropped")),
+                    ('a', RowKind::Proposed { pack, .. }) => Some(("mask/approve".to_string(), serde_json::json!({ "pack": pack }), "approved", "nothing to approve", "approved")),
+                    ('r', RowKind::Masked { pack, unit } | RowKind::Proposed { pack, unit, .. }) => Some(("mask/restore".to_string(), serde_json::json!({ "pack": pack, "unit": unit }), "restored", "nothing to restore", "restored")),
+                    _ => None,
+                };
+                let Some((path, extra, done, nothing, field)) = call else {
+                    self.notify(match c {
+                        'd' => "only a candidate or active fact can be dropped",
+                        'a' => "only a proposed mask can be approved",
+                        _ => "only a masked or proposed tool can be restored",
+                    }, true);
+                    return Outcome::Continue;
+                };
+                if c == 'a' {
+                    // It trusts the pack with a narrower toolset: name the pack and every unit before it goes.
+                    if let RowKind::Proposed { pack, .. } = &row.kind {
+                        let units = self.economy_data.tools.get(pack).map(|t| t.proposal.iter().map(|p| p.unit.clone()).collect()).unwrap_or_default();
+                        self.mode = Mode::ConfirmMask { repo: state.repo.clone(), pack: pack.clone(), units };
+                    }
+                    return Outcome::Continue;
+                }
+                self.run_economy_act(&path, &state.repo, extra, (done, nothing, field));
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    fn run_economy_act(&mut self, path: &str, repo: &str, extra: serde_json::Value, (done, nothing, field): (&str, &str, &str)) {
+        match self.machine.economy_act(path, repo, extra) {
+            Ok(body) => {
+                let did = body.get(field).and_then(|v| v.as_bool()).unwrap_or(false);
+                self.refresh_economy();
+                self.notify(if did { done } else { nothing }, false);
+            }
+            Err(error) => self.notify(error, true),
+        }
+    }
+
+    /// `y` in the mask box approves the pack's proposal; `n` and esc send nothing.
+    fn handle_confirm_mask(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                let Mode::ConfirmMask { repo, pack, .. } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                self.run_economy_act("mask/approve", &repo, serde_json::json!({ "pack": pack }), ("approved", "nothing to approve", "approved"));
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
     /// The ticket under the Tickets cursor.
     pub fn ticket_under_cursor(&self) -> Option<TicketEntry> {
         let state = self.tickets.as_ref()?;
@@ -2447,6 +2850,7 @@ impl App {
     }
 
     fn open_tickets(&mut self) {
+        self.close_views();
         self.tickets = Some(TicketsState::default());
         self.refresh_tickets();
     }
@@ -2525,7 +2929,7 @@ impl App {
 
     /// `:dedup duplicate <slot> | related <slots> | neither` on the selected ticket: the answer to Intake's dedup gate.
     fn answer_dedup(&mut self, rest: &str) {
-        let Some(id) = self.selected_id() else {
+        let Some(id) = self.card_target() else {
             self.notify("select a ticket first", true);
             return;
         };
@@ -2542,7 +2946,7 @@ impl App {
 
     /// `:dup <id prefix>`: the selected ticket is a duplicate of that one.
     fn merge_selected(&mut self, rest: &str) {
-        let Some(id) = self.selected_id() else {
+        let Some(id) = self.card_target() else {
             self.notify("select a ticket first", true);
             return;
         };
@@ -2554,7 +2958,7 @@ impl App {
 
     /// `:undup`: the selected, merged ticket comes back as a new card.
     fn unmerge_selected(&mut self) {
-        let Some(id) = self.selected_id() else {
+        let Some(id) = self.card_target() else {
             self.notify("select a ticket first", true);
             return;
         };
@@ -2567,7 +2971,7 @@ impl App {
 
     /// `:context repo|project|text <value>` on the selected ticket: what Intake's gate asked for.
     fn give_context(&mut self, rest: &str) {
-        let Some(id) = self.selected_id() else {
+        let Some(id) = self.card_target() else {
             self.notify("select a ticket first", true);
             return;
         };
@@ -2591,11 +2995,24 @@ impl App {
         }
     }
 
-    /// Opens a URL in the browser, detached; says so when it cannot.
+    /// Opens a link in the browser through `open`, which refuses anything but a plain https link; says so when it cannot.
     fn open_url(&mut self, url: &str) {
-        let (program, args) = opener_command(url);
-        if Command::new(program).args(args).spawn().is_err() {
-            self.notify(format!("could not open {url}"), true);
+        if let Err(why) = crate::open::open_url_with(&mut *self.launch, url) {
+            self.notify(why, true);
+        }
+    }
+
+    /// Opens a file or folder; `what` is what the toast says it opened. The card's roots are the machine's state folder and
+    /// the repository and worktree of the card (`open::open_path` refuses anything that resolves outside them).
+    fn open_file(&mut self, id: &str, path: &str, what: &str) {
+        let mut roots: Vec<PathBuf> = crate::open::state_dir().into_iter().collect();
+        if let Some(task) = self.task(id) {
+            roots.extend(task.repo_path.iter().chain(task.worktree_path.iter()).map(PathBuf::from));
+        }
+        match crate::open::open_path_with(&mut *self.launch, Path::new(path), &roots) {
+            Ok(crate::open::Opened::Opened) => self.notify(format!("opened {what}"), false),
+            Ok(crate::open::Opened::Revealed) => self.notify(format!("revealed {what} in the folder"), false),
+            Err(why) => self.notify(why, true),
         }
     }
 
@@ -2748,6 +3165,7 @@ impl App {
         {
             self.take_slack(snapshot);
         }
+        self.close_views();
         self.slack = Some(SlackState::default());
         self.prefetch_slack_catalog();
     }
@@ -2806,7 +3224,6 @@ impl App {
                     match item.task_id() {
                         Some(id) if self.task(id).is_some() => {
                             let id = id.to_string();
-                            self.slack = None;
                             self.select(&id, true);
                             self.open_detail(id);
                         }
@@ -3075,7 +3492,6 @@ impl App {
                         if let Some(item) = self.slack_item_mut(&id) {
                             item.linked.task_id = Some(task_id.clone());
                         }
-                        self.slack = None;
                         self.select(&task_id, true);
                         self.open_detail(task_id.clone());
                         if no_repo {
@@ -3268,14 +3684,8 @@ impl App {
                 let Mode::ConfirmApproveAll(ids) = std::mem::replace(&mut self.mode, Mode::Normal) else {
                     return Outcome::Continue;
                 };
-                let total = ids.len();
-                let mut done = 0;
-                for id in ids {
-                    if self.machine.decide(&id, true, None).is_ok() {
-                        done += 1;
-                    }
-                }
-                self.notify(format!("approved {done} of {total}"), done < total);
+                let (text, error) = self.approve_each(&ids);
+                self.notify(text, error);
             }
             KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
             _ => {}
@@ -3283,11 +3693,33 @@ impl App {
         Outcome::Continue
     }
 
+    /// Sends a yes to each card that is still what the box was opened for: it exists, waits, and commits the same kind.
+    /// The cards that moved on are skipped and counted. Returns the words for the footer and whether they are an error.
+    fn approve_each(&mut self, ids: &[(String, &'static str)]) -> (String, bool) {
+        let (mut done, mut moved, mut failed) = (0, 0, 0);
+        for (id, kind) in ids {
+            if !self.task(id).is_some_and(|t| self.committing_kind(t) == Some(*kind)) {
+                moved += 1;
+            } else if self.machine.decide(id, true, None).is_ok() {
+                done += 1;
+            } else {
+                failed += 1;
+            }
+        }
+        let text = match (moved, failed) {
+            (0, 0) => format!("approved {done} of {}", ids.len()),
+            (_, 0) => format!("approved {done} · skipped {moved} that moved on"),
+            (0, _) => format!("approved {done} of {}", ids.len()),
+            _ => format!("approved {done} · skipped {moved} that moved on · {failed} failed"),
+        };
+        (text, moved + failed > 0)
+    }
+
     /// The keys `handle_normal` matches: its own, the second keys `prefixed` takes, then
     /// everything `ticket_key` takes (`S` opens Slack here, so it is not ship).
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
-        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "B", "S", "v", "V", "?", ":",
+        "q", "Q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "tab", "shift+tab", "]", "[", "F", "I", "D", "P", "B", "$", "S", "v", "V", "?", ":",
         "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p", "K",
     ];
 
@@ -3299,7 +3731,8 @@ impl App {
             return Outcome::Continue;
         }
         match key.code {
-            KeyCode::Char('q') => return Outcome::Quit,
+            KeyCode::Char('q') if self.pending_counts() != (0, 0) => self.mode = Mode::ConfirmQuit,
+            KeyCode::Char('q' | 'Q') => return Outcome::Quit,
             KeyCode::Char('h') | KeyCode::Left => self.switch_column(-1),
             KeyCode::Char('l') | KeyCode::Right => self.switch_column(1),
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
@@ -3338,16 +3771,24 @@ impl App {
                     self.focus = column;
                 }
             }
-            KeyCode::Char(']') => self.hop_needs_you(true),
-            KeyCode::Char('[') => self.hop_needs_you(false),
+            KeyCode::Char(']') | KeyCode::Tab => self.hop_needs_you(true),
+            KeyCode::Char('[') | KeyCode::BackTab => self.hop_needs_you(false),
             KeyCode::Char('F') => {
+                self.close_views();
                 self.floor = Some(FloorState::default());
                 self.refresh_floor();
             }
-            KeyCode::Char('I') => self.inbox = Some(InboxState::default()),
-            KeyCode::Char('D') => self.digest = Some(DigestState::default()),
+            KeyCode::Char('I') => {
+                self.close_views();
+                self.inbox = Some(InboxState::default());
+            }
+            KeyCode::Char('D') => {
+                self.close_views();
+                self.digest = Some(DigestState::default());
+            }
             KeyCode::Char('P') => self.open_pulls(),
             KeyCode::Char('B') => self.open_backlog(),
+            KeyCode::Char('$') => self.open_economy(),
             KeyCode::Char('K') => self.open_tickets(),
             KeyCode::Char('S') => self.open_slack(),
             KeyCode::Char('v') => {
@@ -3396,7 +3837,7 @@ impl App {
                     return self.bulk_key(c);
                 }
                 if let Some(id) = self.selected_id() {
-                    return self.ticket_key(c, &id);
+                    return self.board_key(c, &id);
                 }
             }
             _ => {}
@@ -3404,13 +3845,31 @@ impl App {
         Outcome::Continue
     }
 
+    /// A ticket key from the board or its `x` menu. `a` at a gate opens the task on its first page
+    /// instead of approving (`ticket_key`): you read what you approve, and approve inside.
+    fn board_key(&mut self, c: char, id: &str) -> Outcome {
+        self.ticket_key(c, id)
+    }
+
     /// `a`, `X`, `d` or `w` over the marked set. `a` goes straight to the machine for the
     /// tickets whose next step needs no words from you; the destructive three ask once.
     fn bulk_key(&mut self, c: char) -> Outcome {
         let ids: Vec<String> = self.marked.iter().cloned().collect();
         if c == 'a' {
+            // What commits something (the plan, a split, shipping, the release) waits for one yes; the rest goes now.
+            let (committing, rest): (Vec<(String, &'static str)>, Vec<String>) = {
+                let mut committing = Vec::new();
+                let mut rest = Vec::new();
+                for id in &ids {
+                    match self.task(id).and_then(|t| self.committing_kind(t)) {
+                        Some(kind) => committing.push((id.clone(), kind)),
+                        None => rest.push(id.clone()),
+                    }
+                }
+                (committing, rest)
+            };
             let (mut done, mut skipped) = (0, 0);
-            for id in &ids {
+            for id in &rest {
                 let Some(task) = self.task(id).cloned() else { continue };
                 let ok = match task.state.as_str() {
                     "draft" if task.repo_path.is_some() => self.machine.start(id).is_ok(),
@@ -3419,7 +3878,6 @@ impl App {
                         skipped += 1;
                         continue;
                     }
-                    _ if task.waiting_on_you => self.machine.decide(id, true, None).is_ok(),
                     _ => {
                         skipped += 1;
                         continue;
@@ -3429,9 +3887,18 @@ impl App {
                     done += 1;
                 }
             }
-            self.marked.clear();
             let skip = if skipped > 0 { format!("; {skipped} need words from you or are running") } else { String::new() };
-            self.notify(format!("advanced {done} of {}{skip}", ids.len()), false);
+            let before = if rest.is_empty() { String::new() } else { format!("advanced {done} of {}{skip}", rest.len()) };
+            if committing.is_empty() {
+                self.marked.clear();
+                self.notify(before, false);
+            } else {
+                for id in &rest {
+                    self.marked.remove(id);
+                }
+                let question = approve_many_question(&committing);
+                self.mode = Mode::ConfirmApproveMany { ids: committing, question, before };
+            }
             return Outcome::Continue;
         }
         let action = match c {
@@ -3444,6 +3911,48 @@ impl App {
             self.notify("none of the marked tickets can take that", false);
         } else {
             self.mode = Mode::ConfirmMany { action, ids: targets };
+        }
+        Outcome::Continue
+    }
+
+    /// What approving `task` would commit, when it is a gate that asks first: `plan`, `split`, `ship` or `release`.
+    /// The retro's rules are not approved in bulk, as before: they need reading.
+    pub fn committing_kind(&self, task: &Task) -> Option<&'static str> {
+        if !task.waiting_on_you || task.state == "reviewing_memory" {
+            return None;
+        }
+        let question = self.approval_question(task)?;
+        Some(if question.contains("split") {
+            "split"
+        } else if question.contains("release") {
+            "release"
+        } else if question.starts_with("ship") {
+            "ship"
+        } else {
+            "plan"
+        })
+    }
+
+    fn handle_confirm_approve_many(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                let Mode::ConfirmApproveMany { ids, before, .. } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                let (text, error) = self.approve_each(&ids);
+                self.marked.clear();
+                let before = if before.is_empty() { String::new() } else { format!("{before}; ") };
+                self.notify(format!("{before}{text}"), error);
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                let Mode::ConfirmApproveMany { before, .. } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                if !before.is_empty() {
+                    self.notify(format!("{before}; the rest not approved"), false);
+                }
+            }
+            _ => {}
         }
         Outcome::Continue
     }
@@ -3509,56 +4018,115 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "tab", "space", "1-9", "+", "?", ":", "o", "O", "i", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            let down = key.code == KeyCode::Char('d');
             match key.code {
+                KeyCode::Char('d' | 'u') if self.detail_refs.focus && self.detail_refs.page(if down { 1 } else { -1 }) => {}
                 KeyCode::Char('d') => self.scroll_detail(half_page),
                 KeyCode::Char('u') => self.scroll_detail(-half_page),
                 _ => {}
             }
             return Outcome::Continue;
         }
+        if self.detail_refs.focus {
+            // The reference holds the keys: its headers move and fold; everything else is as in the main text.
+            let section = self.detail_section;
+            match key.code {
+                KeyCode::Esc | KeyCode::Tab => self.detail_refs.focus = false,
+                KeyCode::Enter | KeyCode::Char(' ') => self.detail_refs.toggle(section),
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if !self.detail_refs.scroll_into(1) {
+                        self.detail_refs.step(1);
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if !self.detail_refs.scroll_into(-1) {
+                        self.detail_refs.step(-1);
+                    }
+                }
+                _ => return self.handle_detail_main(key, id, half_page),
+            }
+            self.detail_follow.set(true);
+            return Outcome::Continue;
+        }
+        self.handle_detail_main(key, id, half_page)
+    }
+
+    fn handle_detail_main(&mut self, key: KeyEvent, id: &str, half_page: i16) -> Outcome {
         match key.code {
+            KeyCode::Enter if self.detail_section == Section::Evidence && self.detail_rows() > 0 => self.open_artifact(id, self.detail_row()),
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Tab => {
+                self.detail_refs.flip_focus();
+                self.detail_follow.set(true);
+            }
+            KeyCode::Char(' ') => {}
             KeyCode::Char('j') | KeyCode::Down => self.move_in_detail(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_in_detail(-1),
             KeyCode::Char('J') => self.scroll_detail(1),
             KeyCode::Char('K') => self.scroll_detail(-1),
             KeyCode::PageDown => self.scroll_detail(half_page),
             KeyCode::PageUp => self.scroll_detail(-half_page),
-            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => self.set_section(self.detail_section.next()),
-            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.set_section(self.detail_section.prev()),
+            KeyCode::Char('l') | KeyCode::Right => self.step_section(true),
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.step_section(false),
             KeyCode::Char(digit @ '1'..='9') => {
-                if let Some(section) = Section::from_digit(digit) {
+                let (order, _) = self.detail_rail();
+                if let Some(section) = Section::from_digit(digit, &order) {
                     self.set_section(section);
                 }
             }
             KeyCode::Char('+') => self.detail_full = !self.detail_full,
             KeyCode::Char('?') => {
-                self.help_return = Some(id.to_string());
                 self.open_help();
             }
             KeyCode::Char('o') => match self.detail_open_target() {
-                Some(target) => self.open_url(&target),
+                Some(target) => self.open_target(id, target),
+                None if self.detail_section == Section::Evidence => self.notify("no evidence yet", false),
                 None if self.detail_section.has_cursor() => self.notify("nothing to open here", false),
                 None => return self.ticket_key('o', id),
             },
+            KeyCode::Char('O') => match self.detail_pr_url() {
+                Some(url) => self.open_target(id, OpenTarget::Url(url)),
+                None => self.notify("no PR yet", false),
+            },
             KeyCode::Char('E') => self.open_engine_picker(id),
-            KeyCode::Char('M') => self.mode = Mode::Command { text: "dup ".into(), pick: None },
-            KeyCode::Char('U') => self.unmerge_selected(),
+            KeyCode::Char(':') => self.open_card_command(id, ""),
+            KeyCode::Char('M') => self.open_card_command(id, "dup "),
+            KeyCode::Char('U') => {
+                self.command_card = Some(id.to_string());
+                self.unmerge_selected();
+                self.command_card = None;
+            }
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
         Outcome::Continue
     }
 
+    /// `:` (and `M`) in the task view: the palette over the open card. The commands that read the
+    /// board's selection (`:whole`, `:dismiss`, `:dup`, ...) find this card there, and the task view
+    /// is back when the palette closes (`handle_command`).
+    fn open_card_command(&mut self, id: &str, text: &str) {
+        self.select(id, true);
+        self.return_to = Some(id.to_string());
+        self.mode = Mode::Command { text: text.to_string(), pick: None };
+    }
+
+    /// Leaves the palette: back to the task view it was opened over, else the board.
+    fn close_command(&mut self) {
+        self.back_from_overlay();
+    }
+
     /// `E`: the picker for the selected stage of the Engines section.
     fn open_engine_picker(&mut self, id: &str) {
         if self.detail_section != Section::Engines {
-            return self.notify("E picks an engine in the Engines section (9)", false);
+            let (order, _) = self.detail_rail();
+            let how = order.iter().position(|s| *s == Section::Engines).filter(|i| *i < 9).map_or("h/l".to_string(), |i| (i + 1).to_string());
+            return self.notify(format!("E picks an engine in the Engines section ({how})"), false);
         }
         let pack = match &self.engine_catalog {
             Some(Ok(catalog)) => catalog.task_packs().get(self.detail_row()).map(|p| p.id.clone()),
@@ -3598,13 +4166,32 @@ impl App {
         Outcome::Continue
     }
 
+    /// The open card's rail: the sections with content (numbered for `1`-`9`) and those that come later.
+    fn detail_rail(&self) -> (Vec<Section>, Vec<Section>) {
+        let Mode::Detail(id) = &self.mode else { return (Section::ALL.to_vec(), Vec::new()) };
+        let Some(task) = self.task(id) else { return (Section::ALL.to_vec(), Vec::new()) };
+        let has_diff = task.diff.is_some() || self.diff.as_ref().is_some_and(|(for_id, _)| for_id == id);
+        crate::detail::rail(task, self.detail.as_ref(), has_diff, &self.prs.prs)
+    }
+
+    /// `l` / `h`: the next or previous section of the rail, those with content first and then the ones that come later.
+    fn step_section(&mut self, forward: bool) {
+        let (mut order, later) = self.detail_rail();
+        order.extend(later);
+        let to = if forward { self.detail_section.next(&order) } else { self.detail_section.prev(&order) };
+        self.set_section(to);
+    }
+
     /// Switches the popup's section; each starts at the top, Runs and Evidence on their
     /// latest row, the others on their first.
-    fn set_section(&mut self, section: Section) {
+    pub(crate) fn set_section(&mut self, section: Section) {
         if section != self.detail_section {
             self.detail_section = section;
             self.detail_scroll.set(0);
             self.detail_cursor = start_cursor(section);
+            self.detail_refs.focus = false;
+            self.detail_refs.cursor = 0;
+            self.detail_refs.side_offset.set(0);
             self.detail_follow.set(true);
             self.diff_failed = None;
             if section == Section::Engines {
@@ -3636,7 +4223,7 @@ impl App {
     }
 
     /// How many rows the open section's cursor can land on.
-    fn detail_rows(&self) -> usize {
+    pub(crate) fn detail_rows(&self) -> usize {
         let detail = self.open_detail_of();
         match self.detail_section {
             Section::Runs => detail.map_or(0, |d| d.stage_runs.len()),
@@ -3647,10 +4234,10 @@ impl App {
         }
     }
 
-    /// What `o` opens in the popup, by section: the selected file inside the worktree (Diff),
-    /// the selected artifact (Evidence), the PR's URL from the inbox or the ship gate (PR).
-    /// `None` elsewhere: `o` then means what it means on the board, the linked issue.
-    pub fn detail_open_target(&self) -> Option<String> {
+    /// What `o` opens in the popup, by section: the selected file inside the worktree (Diff), the evidence folder (Evidence, and
+    /// every other section of a card that has artifacts), the PR's URL (PR). `None` elsewhere: `o` then means what it means on
+    /// the board, the linked issue.
+    pub fn detail_open_target(&self) -> Option<OpenTarget> {
         let Mode::Detail(id) = &self.mode else { return None };
         let task = self.task(id)?;
         match self.detail_section {
@@ -3658,21 +4245,84 @@ impl App {
                 let (_, diff) = self.diff.as_ref().filter(|(for_id, _)| for_id == id)?;
                 let file = diff.files.get(self.detail_row())?;
                 let root = task.worktree_path.as_deref()?;
-                Some(format!("{}/{}", root.trim_end_matches('/'), file.path))
+                Some(OpenTarget::Path { path: format!("{}/{}", root.trim_end_matches('/'), file.path), what: crate::model::plain(&file.path, 80) })
             }
-            Section::Evidence => self.open_detail_of()?.artifacts.get(self.detail_row()).map(|a| a.path.clone()),
-            Section::Pr => crate::detail::pr_for(task, &self.prs.prs)
-                .map(|pr| pr.url.clone())
-                .or_else(|| self.open_detail_of().and_then(|d| d.latest_approval("awaiting_ship")).and_then(|a| a.requested["prUrl"].as_str().map(str::to_string))),
+            Section::Pr => self.detail_pr_url().map(OpenTarget::Url),
+            _ if self.open_detail_of().is_some_and(|d| !d.artifacts.is_empty()) => Some(OpenTarget::EvidenceFolder),
             _ => None,
+        }
+    }
+
+    /// The open card's PR: the inbox's row for its branch, else what the ship gate reported.
+    pub fn detail_pr_url(&self) -> Option<String> {
+        let Mode::Detail(id) = &self.mode else { return None };
+        let task = self.task(id)?;
+        let detail = self.open_detail_of();
+        crate::detail::pr_for(task, &self.prs.prs)
+            .map(|pr| pr.url.clone())
+            .or_else(|| detail.and_then(crate::detail::pr_url))
+            .or_else(|| detail.and_then(|d| d.ship.as_ref()).filter(|s| s.pr.number > 0).map(|s| s.pr.url.clone()))
+    }
+
+    /// Opens what `o` or `O` named, and says in fixed words what it did.
+    fn open_target(&mut self, id: &str, target: OpenTarget) {
+        match target {
+            OpenTarget::Url(url) => match crate::open::open_url_with(&mut *self.launch, &url) {
+                Ok(()) => self.notify("opened the PR", false),
+                Err(why) => self.notify(why, true),
+            },
+            OpenTarget::Path { path, what } => self.open_file(id, &path, &what),
+            OpenTarget::EvidenceFolder => self.open_evidence_folder(id),
+        }
+    }
+
+    /// Opens the folder the evidence lives in: the cursor's run's while the Evidence section is open, else the latest run's.
+    fn open_evidence_folder(&mut self, id: &str) {
+        let focus = (self.detail_section == Section::Evidence).then(|| self.detail_row());
+        let Some(detail) = self.open_detail_of() else { return };
+        match crate::detail::evidence_folder(detail, focus) {
+            Some(folder) => self.open_file(id, &folder.to_string_lossy(), "the evidence folder"),
+            None if detail.artifacts.is_empty() => self.notify("no evidence yet", false),
+            None => self.notify("the evidence files share no folder", false),
+        }
+    }
+
+    /// Opens artifact `index` (a place in `ordered_artifacts`).
+    fn open_artifact(&mut self, id: &str, index: usize) {
+        let Some(detail) = self.open_detail_of() else { return };
+        let Some(artifact) = crate::detail::ordered_artifacts(detail).get(index).map(|a| (a.path.clone(), a.label.clone())) else { return };
+        let what = if artifact.1.trim().is_empty() { "the file".to_string() } else { crate::model::plain(&artifact.1, 80) };
+        self.open_file(id, &artifact.0, &what);
+    }
+
+    /// A left click in the task view: on a file row of the Evidence section it moves the cursor there, and a second click on the same
+    /// row within half a second opens it; on the `Folder` line it opens the folder. Anywhere else it does nothing.
+    fn click_detail(&mut self, x: u16, y: u16) {
+        let Mode::Detail(id) = &self.mode else { return };
+        let id = id.clone();
+        let hit = self.evidence_hits.borrow().iter().find(|(rect, _)| x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()).map(|(_, hit)| *hit);
+        match hit {
+            Some(EvidenceHit::Folder) => self.open_evidence_folder(&id),
+            Some(EvidenceHit::File(i)) => {
+                let again = self.last_click.is_some_and(|(row, at)| row == i && at.elapsed() <= DOUBLE_CLICK);
+                self.detail_cursor = i;
+                self.detail_follow.set(true);
+                if again {
+                    self.last_click = None;
+                    self.open_artifact(&id, i);
+                } else {
+                    self.last_click = Some((i, Instant::now()));
+                }
+            }
+            None => self.last_click = None,
         }
     }
 
     /// Scrolls the open detail popup. `ui` clamps this to the content's actual height on the
     /// next frame, since only it knows that (it depends on the terminal width).
     fn scroll_detail(&self, delta: i16) {
-        let next = self.detail_scroll.get() as i16 + delta;
-        self.detail_scroll.set(next.max(0) as u16);
+        let next = i32::from(self.detail_scroll.get()) + i32::from(delta);
+        self.detail_scroll.set(next.clamp(0, i32::from(u16::MAX)) as u16);
     }
 
     /// Vim-style modal editing, like `$EDITOR` gave before editing moved in place: normal mode
@@ -3864,7 +4514,7 @@ impl App {
             KeyCode::Backspace => {
                 *pick = None;
                 if text.pop().is_none() {
-                    self.mode = Mode::Normal;
+                    self.close_command();
                 }
             }
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up => {
@@ -3879,7 +4529,7 @@ impl App {
                     });
                 }
             }
-            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Esc => self.close_command(),
             KeyCode::Enter => {
                 let matches = keys::completions(text);
                 let line = match (*pick, matches.as_slice()) {
@@ -3887,8 +4537,23 @@ impl App {
                     (None, [(only, _)]) => only.to_string(),
                     _ => text.trim().to_string(),
                 };
+                // A command on the card (the ones that name it) leaves the task view open; the ones
+                // that open a view, a prompt or the board's own state take the screen as on the board.
+                let open = self.return_to.take();
+                let name = line.split_whitespace().next().unwrap_or("");
+                let back = open.clone().filter(|_| CARD_COMMANDS.contains(&name) || matches!(name, "help" | "?"));
+                self.command_card = open;
                 self.mode = Mode::Normal;
-                return self.run_command(&line);
+                let outcome = self.run_command(&line);
+                self.command_card = None;
+                if let Some(id) = back {
+                    match self.mode {
+                        Mode::Normal => self.mode = Mode::Detail(id),
+                        Mode::Detail(_) => {}
+                        _ => self.return_to = Some(id),
+                    }
+                }
+                return outcome;
             }
             _ => {}
         }
@@ -3898,7 +4563,7 @@ impl App {
     /// The names `run_command` knows, aliases left out.
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
-        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "whole", "dismiss", "finding", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "whole", "dismiss", "finding", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "economy", "tickets", "ticket-edit", "context", "dedup", "dup", "undup", "slack", "jira",
         "help",
     ];
 
@@ -3918,12 +4583,12 @@ impl App {
                 self.needs_only = false;
                 self.clamp_selection();
             }
-            "repo" => match self.selected_id() {
+            "repo" => match self.card_target() {
                 None => self.notify("no ticket selected", true),
                 Some(id) if rest.is_empty() => self.open_repo_picker(&id),
                 Some(id) => self.set_repo_named(&id, rest),
             },
-            "start" => match self.selected_id() {
+            "start" => match self.card_target() {
                 Some(id) => return self.ticket_key('a', &id),
                 None => self.notify("no ticket selected", true),
             },
@@ -3956,16 +4621,21 @@ impl App {
                 }
                 Err(error) => self.notify(error, true),
             },
-            "whole" => match self.selected_id() {
+            "whole" => match self.card_target().and_then(|id| self.task(&id).cloned()) {
                 None => self.notify("no ticket selected", true),
-                Some(id) => self.act(|m| m.keep_whole(&id), "kept as one card: recorded, and flagged at every later gate"),
+                Some(task) if !(task.waiting_on_you && self.approval_gate(&task).is_some_and(|g| matches!(g.kind, "plan" | "split"))) => {
+                    self.notify("keep whole answers a plan or split gate; this card is not at one", true);
+                }
+                // As `a` at a gate: read the card first, approve inside it.
+                Some(task) if !self.task_is_open(&task.id) => self.open_detail(task.id),
+                Some(task) => self.hold(&task, false, true),
             },
-            "dismiss" => match (self.selected_id(), parse_dismiss(rest)) {
+            "dismiss" => match (self.card_target(), parse_dismiss(rest)) {
                 (None, _) => self.notify("no ticket selected", true),
                 (_, Err(error)) => self.notify(error, true),
                 (Some(id), Ok((finding, reason))) => self.act(|m| m.dismiss_finding(&id, &finding, reason.as_deref()), "finding dismissed"),
             },
-            "finding" => match (self.selected_id(), parse_finding(rest)) {
+            "finding" => match (self.card_target(), parse_finding(rest)) {
                 (None, _) => self.notify("no ticket selected", true),
                 (_, Err(error)) => self.notify(error, true),
                 (Some(id), Ok((severity, title))) => self.act(|m| m.add_finding(&id, &severity, &title), "finding added"),
@@ -3989,13 +4659,21 @@ impl App {
                 Err(error) => self.notify(error, true),
             },
             "floor" => {
+                self.close_views();
                 self.floor = Some(FloorState::default());
                 self.refresh_floor();
             }
-            "inbox" => self.inbox = Some(InboxState::default()),
-            "digest" => self.digest = Some(DigestState::default()),
+            "inbox" => {
+                self.close_views();
+                self.inbox = Some(InboxState::default());
+            }
+            "digest" => {
+                self.close_views();
+                self.digest = Some(DigestState::default());
+            }
             "prs" | "pulls" => self.open_pulls(),
             "backlog" => self.open_backlog(),
+            "economy" => self.open_economy(),
             "tickets" => self.open_tickets(),
             "ticket-edit" => self.ticket_edit(rest),
             "context" => self.give_context(rest),
@@ -4003,7 +4681,7 @@ impl App {
             "dup" => self.merge_selected(rest),
             "undup" => self.unmerge_selected(),
             "slack" => self.open_slack(),
-            "jira" => match self.selected_id() {
+            "jira" => match self.card_target() {
                 Some(id) if rest.is_empty() => return self.ticket_key('J', &id),
                 Some(id) => self.link_jira(&id, rest),
                 None => self.notify("no ticket selected", true),
@@ -4029,6 +4707,11 @@ impl App {
                 let (id, approve, reason) = (id.clone(), *approve, text.trim().to_string());
                 if !approve && reason.is_empty() {
                     self.notify("say why it goes back; the stage reads your reason", true);
+                    return Outcome::Continue;
+                }
+                if approve && !self.task(&id).is_some_and(|t| t.state == "escalated") {
+                    self.mode = Mode::Normal;
+                    self.notify(MOVED_ON_UNSENT, true);
                     return Outcome::Continue;
                 }
                 self.mode = Mode::Normal;
@@ -4131,7 +4814,7 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(ARCHIVE_REASONS.len() - 1),
             KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
             KeyCode::Enter => chosen = Some(*cursor),
-            KeyCode::Char(d @ '1'..='5') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Char(d @ '1'..='9') if (d as usize) - ('0' as usize) <= ARCHIVE_REASONS.len() => chosen = Some((d as usize) - ('1' as usize)),
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
             _ => {}
         }
@@ -4154,7 +4837,7 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(crate::model::ESCALATION_REASONS.len() - 1),
             KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
             KeyCode::Enter => chosen = Some(*cursor),
-            KeyCode::Char(d @ '1'..='6') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Char(d @ '1'..='9') if (d as usize) - ('0' as usize) <= crate::model::ESCALATION_REASONS.len() => chosen = Some((d as usize) - ('1' as usize)),
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
             _ => {}
         }
@@ -4167,6 +4850,7 @@ impl App {
     }
 
     fn handle_confirm(&mut self, key: KeyEvent, id: &str) -> Outcome {
+        // A delete or an abort wants the letter.
         match key.code {
             KeyCode::Char('y') => {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
@@ -4188,6 +4872,143 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// The approval box: `y` or enter sends the decision only while the card still waits at the gate the box was opened for.
+    /// While the card's detail is out of date the box checks first: it decides when the fresh detail lands.
+    fn handle_confirm_approve(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                let Mode::ConfirmApprove(held) = &self.mode else {
+                    return Outcome::Continue;
+                };
+                if held.checking {
+                    return Outcome::Continue;
+                }
+                if self.detail_stale || self.detail_pending.as_deref() == Some(held.id.as_str()) {
+                    if !self.online {
+                        self.mode = Mode::Normal;
+                        self.notify(CANNOT_CHECK, true);
+                        return Outcome::Continue;
+                    }
+                    self.ensure_detail();
+                    if let Mode::ConfirmApprove(held) = &mut self.mode {
+                        held.checking = true;
+                    }
+                    self.notify("checking the card…", false);
+                    return Outcome::Continue;
+                }
+                let Mode::ConfirmApprove(held) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                self.send_held(&held);
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// Sends what the box was opened for, if the card still waits at that gate.
+    fn send_held(&mut self, held: &HeldApproval) {
+        if !self.still_at_gate(held) {
+            self.notify(MOVED_ON, true);
+        } else if held.skip_rules {
+            self.act(|m| m.approve_skipping_rules(&held.id), "approved, rules skipped");
+        } else if held.keep_whole {
+            self.act(|m| m.keep_whole(&held.id), "kept as one card: recorded, and flagged at every later gate");
+        } else {
+            self.act(|m| m.decide(&held.id, true, None), "approved");
+        }
+    }
+
+    /// A fresh detail of `id` landed: a box that was waiting for it decides now, unless another refetch is already due.
+    fn resolve_check(&mut self, id: &str) {
+        let waiting = matches!(&self.mode, Mode::ConfirmApprove(held) if held.checking && held.id == id);
+        if !waiting || self.detail_stale || self.detail_pending.is_some() {
+            return;
+        }
+        let Mode::ConfirmApprove(held) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+            return;
+        };
+        if self.detail.is_none() {
+            self.notify(CANNOT_CHECK, true);
+        } else {
+            self.send_held(&held);
+        }
+        if matches!(self.mode, Mode::Normal) {
+            self.back_from_overlay();
+        }
+    }
+
+    /// Whether the card of `held` is still at the gate, and the same ask, that the box was opened for.
+    fn still_at_gate(&self, held: &HeldApproval) -> bool {
+        let Some(task) = self.task(&held.id) else { return false };
+        self.approval_gate(task).is_some_and(|gate| gate.kind == held.gate) && self.open_approval_id(&held.id) == held.approval
+    }
+
+    /// Closes an approval box whose card is gone, saying so: no mode may be left that draws nothing.
+    fn settle_confirm(&mut self) {
+        let gone = matches!(&self.mode, Mode::ConfirmApprove(held) if self.task(&held.id).is_none());
+        if gone {
+            self.mode = Mode::Normal;
+            self.return_to = None;
+            self.notify(MOVED_ON, true);
+        }
+    }
+
+    /// `q` on the board asked while something needs you or runs: y (enter, or q again) quits, n and esc stay.
+    fn handle_confirm_quit(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y' | 'q' | 'Q') | KeyCode::Enter => return Outcome::Quit,
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// What `q` would leave behind: the cards waiting on you (as the header counts them) and the cards running.
+    pub fn pending_counts(&self) -> (usize, usize) {
+        let needs = self.tasks.iter().filter(|t| t.look().needs_person()).count();
+        (needs, self.tasks.iter().filter(|t| t.running).count())
+    }
+
+    /// The question `q` asks: `quit? 2 cards need you, 1 running`.
+    pub fn quit_question(&self) -> String {
+        let (needs, running) = self.pending_counts();
+        format!("quit? {needs} {} you, {running} running", if needs == 1 { "card needs" } else { "cards need" })
+    }
+
+    /// What approving `task` commits, as the box asks it (`approve the plan of #abcdef12?`), when
+    /// the card waits at a gate that commits something; None at the gates and states that do not.
+    pub fn approval_question(&self, task: &Task) -> Option<String> {
+        self.approval_gate(task).filter(|gate| matches!(gate.kind, "plan" | "split" | "ship" | "release" | "memory")).map(|gate| gate.question)
+    }
+
+    /// The gate `task` waits at that `a` approves, with the words the box asks: the plan, a split, a reply or an archive
+    /// triage proposed, the setup, the cases, shipping, the release, the retro's rules. None while nothing waits on you
+    /// and at the states where `a` does something else (answer, start, resume, retry).
+    pub fn approval_gate(&self, task: &Task) -> Option<Gate> {
+        let short = task.short_id();
+        let open = self.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval());
+        let (kind, question) = match task.state.as_str() {
+            "awaiting_approval" => match open.and_then(|a| a.outcome()) {
+                None => ("plan", format!("approve the plan of #{short}?")),
+                Some("split") => ("split", format!("approve the split of #{short}?")),
+                Some("split_failed") => return None,
+                Some("conversation") => ("reply", format!("post the reply and close #{short}?")),
+                Some("archive") => ("archive", format!("archive #{short}?")),
+                Some(_) => ("approval", format!("approve #{short}?")),
+            },
+            _ if !task.waiting_on_you => return None,
+            "awaiting_ship" => if keys::open_ship_approval(self, task) { ("release", format!("approve the release of #{short}?")) } else { ("ship", format!("ship #{short}?")) },
+            "reviewing_memory" => ("memory", format!("approve the retro's rules of #{short}?")),
+            "awaiting_setup" => ("setup", format!("write the proposed luna.yaml for #{short}?")),
+            "awaiting_test_check" => ("tests", format!("approve the test cases of #{short}?")),
+            "draft" | "awaiting_answers" | "escalated" | "paused_rate_limit" | "closed" | "archived" => return None,
+            _ => ("approval", format!("approve #{short}?")),
+        };
+        Some(Gate { kind, question })
     }
 
     /// Type to filter, up/down to move, enter to set the highlighted repo on the ticket.
@@ -4278,7 +5099,7 @@ impl App {
                 return Outcome::Continue;
             }
             if let Some(id) = self.selected_id() {
-                return self.ticket_key(c, &id);
+                return self.board_key(c, &id);
             }
         }
         Outcome::Continue
@@ -4350,6 +5171,7 @@ pub(crate) mod handled {
     pub(crate) const INBOX: &[&str] = App::HANDLED_INBOX;
     pub(crate) const PULLS: &[&str] = App::HANDLED_PULLS;
     pub(crate) const BACKLOG: &[&str] = App::HANDLED_BACKLOG;
+    pub(crate) const ECONOMY: &[&str] = App::HANDLED_ECONOMY;
     pub(crate) const TICKETS: &[&str] = App::HANDLED_TICKETS;
     pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
     pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
@@ -4460,7 +5282,7 @@ mod tests {
     fn warns_when_the_machine_is_unreachable_on_startup() {
         // SAFETY: this test does not run alongside another that reads this var.
         unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
-        let app = App::new(Machine::from_env());
+        let app = App::new(crate::testkit::dead_machine());
         assert!(!app.online);
         let toast = app.toast.expect("a warning toast on startup");
         assert!(toast.error);
@@ -4486,7 +5308,7 @@ mod tests {
     fn tab_switches_focus_between_the_plan_and_ticket_panes() {
         // SAFETY: every test here sets the same value, so a parallel run can't race on it.
         unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.mode = plan_editor();
 
         app.handle_key(key(KeyCode::Tab));
@@ -4502,7 +5324,7 @@ mod tests {
     fn esc_in_normal_mode_cancels_the_whole_plan_editor() {
         // SAFETY: every test here sets the same value, so a parallel run can't race on it.
         unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.mode = plan_editor();
 
         app.handle_key(key(KeyCode::Esc));
@@ -4513,7 +5335,7 @@ mod tests {
     fn ctrl_s_returns_to_normal_whether_or_not_the_save_reaches_the_machine() {
         // SAFETY: every test here sets the same value, so a parallel run can't race on it.
         unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.mode = plan_editor();
 
         app.handle_key(KeyEvent::new(KeyCode::Char('s'), ratatui::crossterm::event::KeyModifiers::CONTROL));
@@ -4521,19 +5343,8 @@ mod tests {
     }
 
     #[test]
-    fn opener_command_uses_open_on_macos_and_xdg_open_elsewhere() {
-        let (program, args) = opener_command("https://github.com/acme/app/issues/42");
-        if cfg!(target_os = "macos") {
-            assert_eq!(program, "open");
-        } else {
-            assert_eq!(program, "xdg-open");
-        }
-        assert_eq!(args, vec!["https://github.com/acme/app/issues/42".to_string()]);
-    }
-
-    #[test]
     fn the_filter_matches_the_repo_name_as_well_as_title_and_id() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let mut task: Task = serde_json::from_str(
             r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
             "repoPath":"/Developer/projects/luna-tui","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
@@ -4553,7 +5364,7 @@ mod tests {
 
     #[test]
     fn a_ticket_reaching_a_gate_queues_a_notice_once_and_going_offline_queues_one() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let json = |state: &str, waiting: bool| -> Task {
             serde_json::from_str(&format!(
                 r#"{{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
@@ -4584,7 +5395,7 @@ mod tests {
 
     #[test]
     fn the_inbox_opens_with_i_moves_within_its_split_switches_splits_and_closes() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         for (id, state) in [("aaaaaaaa0000", "awaiting_approval"), ("bbbbbbbb0000", "awaiting_approval"), ("cccccccc0000", "escalated")] {
             app.tasks.push(serde_json::from_str(&format!(
                 r#"{{"id":"{id}","title":"t","description":"","criteria":[],
@@ -4673,7 +5484,7 @@ mod tests {
     fn the_setup_command_asks_the_machine_and_reports_its_answer() {
         let root = std::env::temp_dir().join(format!("luna-setup-cmd-{}", std::process::id()));
         std::fs::create_dir_all(root.join("app").join(".git")).unwrap();
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         type_command(&mut app, &format!("setup {}", root.join("app").display()));
         // Offline machine: the call fails and the toast carries the error, which proves it was made.
         assert!(app.toast.as_ref().is_some_and(|t| t.error), "an offline machine answers with an error toast: {:?}", app.toast.as_ref().map(|t| &t.text));
@@ -4684,7 +5495,7 @@ mod tests {
 
     #[test]
     fn v_marks_a_ticket_capital_v_marks_the_column_and_esc_clears_the_marks() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.tasks.push(ticket("bbbbbbbb0000", "implementing", true, true));
         app.tasks.push(ticket("cccccccc0000", "draft", false, false));
@@ -4708,7 +5519,7 @@ mod tests {
 
     #[test]
     fn c_opens_the_escalation_reason_picker_on_an_escalated_ticket_moves_and_esc_cancels_and_any_other_refuses() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "escalated", true, false));
         app.tasks.push(ticket("bbbbbbbb0000", "implementing", false, true));
         app.focus = app.tasks[0].column_index();
@@ -4729,7 +5540,7 @@ mod tests {
 
     #[test]
     fn z_opens_the_archive_reason_picker_on_a_live_ticket_moves_and_esc_cancels_and_an_ended_one_refuses() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "awaiting_approval", true, false));
         app.tasks.push(ticket("bbbbbbbb0000", "archived", false, false));
         app.focus = app.tasks[0].column_index();
@@ -4763,7 +5574,7 @@ mod tests {
 
     #[test]
     fn a_ticket_is_new_when_it_changed_after_the_board_was_last_open() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let closed = ticket("aaaaaaaa0000", "closed", false, false);
         app.last_seen_secs = None;
         assert!(!app.is_new(&closed), "a first run has no since");
@@ -4775,7 +5586,7 @@ mod tests {
 
     #[test]
     fn the_digest_opens_with_d_moves_and_closes() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.last_seen_secs = crate::model::unix_secs("2026-10-22T21:00:00Z");
         app.tasks.push(ticket("aaaaaaaa0000", "closed", false, false));
         app.tasks.push(ticket("bbbbbbbb0000", "escalated", false, false));
@@ -4790,10 +5601,10 @@ mod tests {
     }
 
     #[test]
-    fn done_is_folded_by_default_and_sorted_newest_first_and_z_prefix_folds_a_column() {
-        let mut app = App::new(Machine::from_env());
+    fn done_is_sorted_newest_first_and_z_prefix_folds_a_column() {
+        let mut app = App::new(crate::testkit::dead_machine());
         let done = COLUMNS.iter().position(|c| *c == "Done").unwrap();
-        assert!(app.folded.contains(&done), "Done starts folded");
+        assert!(!app.folded.contains(&done), "Done is not folded by hand; the board narrows it when the width is short");
         let mut old = ticket("aaaaaaaa0000", "closed", false, false);
         old.column = "Done".into();
         old.created_at = "2026-10-20T10:00:00.000Z".into();
@@ -4807,11 +5618,11 @@ mod tests {
         app.focus = done;
         let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
         press(&mut app, KeyCode::Char('z'));
-        press(&mut app, KeyCode::Char('o'));
-        assert!(!app.folded.contains(&done), "zo unfolds");
-        press(&mut app, KeyCode::Char('z'));
         press(&mut app, KeyCode::Char('c'));
         assert!(app.folded.contains(&done), "zc folds");
+        press(&mut app, KeyCode::Char('z'));
+        press(&mut app, KeyCode::Char('o'));
+        assert!(!app.folded.contains(&done), "zo unfolds");
         press(&mut app, KeyCode::Char('z'));
         press(&mut app, KeyCode::Char('z'));
         assert!(app.fold, "zz folds the whole board");
@@ -4819,7 +5630,7 @@ mod tests {
 
     #[test]
     fn g_prefix_groups_a_column_by_stage_repo_or_age() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let mut a = ticket("aaaaaaaa0000", "implementing", true, true);
         a.repo_path = Some("/r/zeta".into());
         a.created_at = "2026-10-22T10:00:00.000Z".into();
@@ -4849,7 +5660,7 @@ mod tests {
 
     #[test]
     fn the_detail_is_fetched_off_the_ui_thread_and_lands_through_the_stream() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.online = true;
         let task = ticket("aaaaaaaa0000", "awaiting_approval", false, false);
         app.tasks.push(task.clone());
@@ -4878,7 +5689,7 @@ mod tests {
 
     #[test]
     fn tab_in_the_floor_cycles_through_all_then_each_repo() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.floor = Some(FloorState::default());
         let repos: Vec<crate::model::RepoMetrics> = serde_json::from_str(
             r#"[{"repo":"/r/alpha","tasks":{"created":1,"closed":0,"open":1,"waitingOnYou":0,"running":0,"queued":0},
@@ -4901,7 +5712,7 @@ mod tests {
 
     #[test]
     fn tab_reaches_a_repository_with_no_task_numbers_and_a_approves_its_base() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.floor = Some(FloorState::default());
         let floor = app.floor.as_mut().unwrap();
         floor.repos = serde_json::from_str(
@@ -4928,7 +5739,7 @@ mod tests {
 
     #[test]
     fn a_started_stage_is_recorded_for_f_and_closing_or_deleting_forgets_it() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let started = |id: &str| {
             serde_json::from_str::<StreamMessage>(&format!(
                 r##"{{"type":"stage.started","taskId":"{id}","label":"#aaaaaaaa app","cwd":"/w","container":"c1"}}"##
@@ -4948,7 +5759,7 @@ mod tests {
 
     #[test]
     fn f_with_nothing_to_watch_shows_a_plain_notice() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "building", true, false));
         app.ticket_key('f', "aaaaaaaa0000");
         let toast = app.toast.as_ref().expect("a toast");
@@ -4957,8 +5768,20 @@ mod tests {
     }
 
     #[test]
+    fn f_on_a_stage_whose_container_name_is_not_a_plain_name_refuses_with_a_fixed_message() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        let task = ticket("aaaaaaaa0000", "building", true, true);
+        app.tasks.push(task.clone());
+        app.stages.insert(task.id.clone(), herdr::Stage { label: "#aaaaaaaa app".into(), cwd: "/w".into(), container: "c1; rm -rf ~".into() });
+        app.watch_with(&task, false);
+        let toast = app.toast.as_ref().expect("a toast");
+        assert!(toast.error && toast.text == herdr::REFUSE_CONTAINER, "{}", toast.text);
+        assert!(!toast.text.contains("rm"), "the message never repeats the name");
+    }
+
+    #[test]
     fn the_nothing_to_watch_branch_notices_without_error() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = ticket("aaaaaaaa0000", "building", true, true);
         app.tasks.push(task.clone());
         app.watch_with(&task, false);
@@ -4972,7 +5795,7 @@ mod tests {
         if herdr::available() {
             return;
         }
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = ticket("aaaaaaaa0000", "implementing", true, true);
         app.tasks.push(task.clone());
         let stage = herdr::Stage { label: "#aaaaaaaa app · t".into(), cwd: "/wt".into(), container: "c1".into() };
@@ -4987,7 +5810,7 @@ mod tests {
 
     #[test]
     fn a_stage_of_a_task_that_stopped_running_is_not_opened_by_f() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = ticket("aaaaaaaa0000", "awaiting_approval", false, true);
         app.tasks.push(task.clone());
         let stage = herdr::Stage { label: "#aaaaaaaa app".into(), cwd: "/wt".into(), container: "c1".into() };
@@ -4999,7 +5822,7 @@ mod tests {
 
     #[test]
     fn the_connect_scan_records_a_stage_without_overwriting_a_newer_one() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let stage = |c: &str| herdr::Stage { label: "#a".into(), cwd: "/w".into(), container: c.into() };
         app.stages.insert("t1".into(), stage("new"));
         app.scan_tx.send(("t1".into(), stage("old"))).unwrap();
@@ -5011,7 +5834,7 @@ mod tests {
 
     #[test]
     fn reconnecting_drops_stages_recorded_before_the_outage() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let stage = herdr::Stage { label: "#a".into(), cwd: "/w".into(), container: "finished".into() };
         app.stages.insert("t1".into(), stage);
         app.tx.send(Incoming::Online).unwrap();
@@ -5024,7 +5847,7 @@ mod tests {
         if herdr::available() {
             return;
         }
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.select("aaaaaaaa0000", true);
         let started = r##"{"type":"stage.started","taskId":"aaaaaaaa0000","label":"#aaaaaaaa app · t","cwd":"/wt","container":"c1"}"##;
@@ -5040,7 +5863,7 @@ mod tests {
 
     #[test]
     fn uppercase_f_opens_and_closes_the_floor_view() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.select("aaaaaaaa0000", true);
         app.handle_key(KeyEvent::from(KeyCode::Char('F')));
@@ -5052,7 +5875,7 @@ mod tests {
 
     #[test]
     fn a_later_stage_replaces_the_recorded_one_so_f_opens_the_newest_container() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = ticket("aaaaaaaa0000", "implementing", true, true);
         app.tasks.push(task.clone());
         for container in ["c1", "c2"] {
@@ -5072,7 +5895,7 @@ mod tests {
         if herdr::available() {
             return;
         }
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = ticket("aaaaaaaa0000", "implementing", true, true);
         app.tasks.push(task.clone());
         let stage = herdr::Stage { label: "#aaaaaaaa app · t".into(), cwd: "/wt".into(), container: "c1".into() };
@@ -5085,7 +5908,7 @@ mod tests {
 
     #[test]
     fn a_budget_alert_becomes_a_notice_and_a_toast_that_turns_red_at_the_ceiling() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let alert = |pct: u8| {
             serde_json::from_str::<StreamMessage>(&format!(
                 r#"{{"type":"budget.alert","alert":{{"scope":"repo","taskId":"aaaaaaaa0000","repo":"/r/luna-tui","pct":{pct},"spentUsd":18,"limitUsd":20}}}}"#
@@ -5107,7 +5930,7 @@ mod tests {
 
     #[test]
     fn a_shipped_task_becomes_a_notice_and_a_toast() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let shipped = serde_json::from_str::<StreamMessage>(
             r##"{"type":"task.shipped","shipped":{"id":"aaaaaaaa0000","title":"Export CSV","prUrl":"https://github.com/o/a/pull/7","number":7,"mergedSha":null,"format":null,"howToVerify":null,"media":[],"at":"t"}}"##,
         )
@@ -5123,7 +5946,7 @@ mod tests {
 
     #[test]
     fn an_engine_budget_alert_names_the_engine_with_or_without_a_task_or_repo() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         for line in [
             r#"{"type":"budget.alert","alert":{"scope":"engine","engine":"openai","taskId":null,"repo":null,"pct":80,"spentUsd":16,"limitUsd":20}}"#,
             r#"{"type":"budget.alert","alert":{"scope":"engine","engine":"openai:sol","taskId":"aaaaaaaa0000","repo":"/r/luna-tui","pct":100,"spentUsd":10,"limitUsd":10}}"#,
@@ -5151,7 +5974,7 @@ mod tests {
 
     #[test]
     fn a_on_a_ticket_awaiting_answers_opens_the_answers_in_place_and_ctrl_s_sends_them() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let mut task = ticket("aaaaaaaa0000", "awaiting_answers", false, false);
         task.waiting_on_you = true;
         app.tasks.push(task);
@@ -5181,7 +6004,7 @@ mod tests {
 
     #[test]
     fn gg_and_g_jump_within_the_column_and_a_digit_jumps_to_that_column() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         for (i, id) in ["aaaaaaaa0000", "bbbbbbbb0000", "cccccccc0000"].iter().enumerate() {
             let mut t = ticket(id, "implementing", true, true);
             t.created_at = format!("2026-10-2{i}T00:00:00.000Z");
@@ -5204,7 +6027,7 @@ mod tests {
 
     #[test]
     fn bracket_keys_hop_between_the_tickets_that_need_you_across_the_board() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         let mut plan = ticket("bbbbbbbb0000", "awaiting_approval", false, false);
         plan.waiting_on_you = true;
@@ -5238,7 +6061,7 @@ mod tests {
 
     #[test]
     fn the_colon_palette_runs_board_commands_by_name() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.tasks.push(ticket("bbbbbbbb0000", "implementing", true, true));
         app.toast = None;
@@ -5280,12 +6103,11 @@ mod tests {
 
     #[test]
     fn closing_help_returns_to_the_ticket_detail() {
-        let mut app = App::new(Machine::from_env());
-        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+        let mut app = crate::testkit::plan_gate_app();
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
         assert!(matches!(app.mode, Mode::Help { scope: Scope::Detail, .. }));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
-        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa1111"));
         app.mode = Mode::Normal;
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
         app.handle_key(KeyEvent::from(KeyCode::Char('q')));
@@ -5294,7 +6116,7 @@ mod tests {
 
     #[test]
     fn help_cursor_moves_with_j_and_k_and_clamps() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.focus = app.tasks[0].column_index();
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
@@ -5317,7 +6139,7 @@ mod tests {
 
     #[test]
     fn question_mark_opens_the_sheet_for_the_view_you_are_in() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
         assert!(matches!(app.mode, Mode::Help { scope: Scope::Board, .. }));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
@@ -5349,7 +6171,7 @@ mod tests {
 
     #[test]
     fn a_bright_key_closes_the_sheet_and_runs_a_dim_or_unknown_one_only_says_why() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.focus = app.tasks[0].column_index();
         app.toast = None;
@@ -5377,7 +6199,7 @@ mod tests {
 
     #[test]
     fn enter_runs_the_cursor_row_in_its_own_view_only() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.focus = app.tasks[0].column_index();
         app.toast = None;
@@ -5411,7 +6233,7 @@ mod tests {
 
     #[test]
     fn a_prefix_key_shows_its_second_keys_after_the_delay() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.handle_key(KeyEvent::from(KeyCode::Char('g')));
         assert!(app.which_key().is_none(), "nothing before the delay");
         app.age_prefix();
@@ -5429,7 +6251,7 @@ mod tests {
 
     #[test]
     fn the_colon_prompt_completes_commands() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.handle_key(KeyEvent::from(KeyCode::Char(':')));
         for ch in "fo".chars() {
             app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
@@ -5452,7 +6274,7 @@ mod tests {
 
     #[test]
     fn capital_r_searches_only_on_a_ticket_without_a_repo() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "draft", false, false));
         app.focus = app.tasks[0].column_index();
         app.toast = None;
@@ -5472,7 +6294,7 @@ mod tests {
 
     #[test]
     fn column_order_is_cached_per_frame_and_still_sees_a_new_ticket() {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         let build = app.tasks[0].column_index();
         assert_eq!(app.indices(build), vec![0]);
@@ -5525,7 +6347,7 @@ mod pr_tests {
     }
 
     fn app_with(prs: Vec<PullRequest>) -> App {
-        let mut app = App::new(Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.clear();
         app.toast = None;
         app.take_notices();
@@ -6099,7 +6921,7 @@ mod workspace_key_tests {
     }
 
     fn open(state: &str) -> App {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = task(state);
         app.tasks.push(task.clone());
         app.open_detail(task.id);
@@ -6109,7 +6931,7 @@ mod workspace_key_tests {
     #[test]
     fn enter_opens_on_the_section_the_gate_concerns_and_h_l_digits_switch() {
         let app = open("awaiting_approval");
-        assert_eq!(app.detail_section, Section::Plan);
+        assert_eq!(app.detail_section, Section::Review);
         let mut app = open("implementing");
         assert_eq!(app.detail_section, Section::Overview);
         press(&mut app, KeyCode::Char('l'));
@@ -6119,7 +6941,7 @@ mod workspace_key_tests {
         assert_eq!(app.detail_section, Section::Engines, "h wraps around");
         press(&mut app, KeyCode::Char('4'));
         assert_eq!(app.detail_section, Section::Runs);
-        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('l'));
         assert_eq!(app.detail_section, Section::Diff);
         assert!(matches!(app.mode, Mode::Detail(_)), "still open");
     }
@@ -6128,7 +6950,7 @@ mod workspace_key_tests {
     fn j_k_pick_a_run_in_runs_and_scroll_elsewhere_and_plus_toggles_the_size() {
         let mut app = open("implementing");
         app.detail = Some(detail_with_runs(&app.tasks[0], 3));
-        press(&mut app, KeyCode::Char('4'));
+        app.set_section(Section::Runs);
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
@@ -6136,7 +6958,7 @@ mod workspace_key_tests {
         assert_eq!(app.detail_scroll.get(), 0, "picking does not scroll");
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(app.detail_cursor, 1);
-        press(&mut app, KeyCode::Char('2'));
+        app.set_section(Section::Plan);
         assert_eq!(app.detail_cursor, 0, "a new section starts at its first row");
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.detail_scroll.get(), 1, "the Plan section scrolls");
@@ -6213,7 +7035,7 @@ mod workspace_key_tests {
     fn capital_j_k_and_the_page_keys_scroll_a_cursor_section_and_equals_is_not_size() {
         let mut app = open("implementing");
         app.detail = Some(detail_with_runs(&app.tasks[0], 3));
-        press(&mut app, KeyCode::Char('4'));
+        app.set_section(Section::Runs);
         press(&mut app, KeyCode::Char('j'));
         let cursor = app.detail_row();
         press(&mut app, KeyCode::Char('J'));
@@ -6305,15 +7127,16 @@ mod workspace_key_tests {
     #[test]
     fn runs_and_evidence_open_on_their_latest_row() {
         let mut app = open("escalated");
+        assert_eq!(app.detail_section, Section::Stopped, "an escalated card opens on why, not on the run table");
+        app.set_section(Section::Runs);
         assert_eq!(app.detail_section, Section::Runs);
         app.detail = Some(detail_with_runs(&app.tasks[0], 3));
         assert_eq!(app.detail_row(), 2, "the latest run, not the oldest");
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(app.detail_row(), 1);
-        press(&mut app, KeyCode::Char('4'));
-        press(&mut app, KeyCode::Char('5'));
+        app.set_section(Section::Diff);
         assert_eq!(app.detail_row(), 0, "the Diff starts on the first file");
-        press(&mut app, KeyCode::Char('4'));
+        app.set_section(Section::Runs);
         assert_eq!(app.detail_row(), 2, "coming back to Runs lands on the latest run again");
     }
 
@@ -6328,21 +7151,21 @@ mod workspace_key_tests {
     }
 
     #[test]
-    fn o_targets_the_selected_file_the_artifact_or_the_pr_by_section() {
+    fn o_targets_the_selected_file_the_evidence_folder_or_the_pr_by_section() {
         let mut app = open("implementing");
-        assert_eq!(app.detail_open_target(), None, "Overview falls through to the linked issue");
+        assert_eq!(app.detail_open_target(), None, "Overview with no artifacts falls through to the linked issue");
         press(&mut app, KeyCode::Char('5'));
         app.diff = Some(("abcdef123456".into(), files()));
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.detail_open_target().as_deref(), Some("/w/b.rs"), "the selected file inside the worktree");
+        assert_eq!(app.detail_open_target(), Some(OpenTarget::Path { path: "/w/b.rs".into(), what: "b.rs".into() }), "the selected file inside the worktree");
         press(&mut app, KeyCode::Char('6'));
         let mut detail = detail_with_runs(&app.tasks[0], 1);
         detail.artifacts = serde_json::from_str(r#"[{"id":"a1","stageRunId":"r1","kind":"log","path":"/out/files/verify.log","label":"verify","sha256":"x","createdAt":"2026-10-22T10:11:00Z"}]"#).unwrap();
         detail.approvals = serde_json::from_str(r#"[{"id":"s1","kind":"awaiting_ship","requested":{"prUrl":"https://github.com/acme/app/pull/9"},"decision":null,"reason":null,"createdAt":"2026-10-22T10:11:00Z","decidedAt":null}]"#).unwrap();
         app.detail = Some(detail);
-        assert_eq!(app.detail_open_target().as_deref(), Some("/out/files/verify.log"));
-        press(&mut app, KeyCode::Char('7'));
-        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/9"), "the ship gate's URL when the inbox has no row");
+        assert_eq!(app.detail_open_target(), Some(OpenTarget::EvidenceFolder), "Evidence: the folder, the file is enter's");
+        app.set_section(Section::Pr);
+        assert_eq!(app.detail_open_target(), Some(OpenTarget::Url("https://github.com/acme/app/pull/9".into())), "the ship gate's URL when the inbox has no row");
         let mut pr: PullRequest = serde_json::from_str(
             r#"{"repo":"acme/app","number":412,"title":"t","url":"https://github.com/acme/app/pull/412","author":"me","mine":true,"reviewRequested":false,
             "isDraft":false,"headRef":"task/abcdef12","baseRef":"main","fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE",
@@ -6351,7 +7174,7 @@ mod workspace_key_tests {
         .unwrap();
         pr.head_ref = "task/abcdef12".into();
         app.prs.prs.push(pr);
-        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/412"), "the inbox's PR first");
+        assert_eq!(app.detail_open_target(), Some(OpenTarget::Url("https://github.com/acme/app/pull/412".into())), "the inbox's PR first");
     }
 
     #[test]
@@ -6407,7 +7230,7 @@ mod edit_route_tests {
     }
 
     fn open(state: &str) -> App {
-        let mut app = App::new(crate::Machine::from_env());
+        let mut app = App::new(crate::testkit::dead_machine());
         let task = task(state);
         app.tasks.push(task.clone());
         app.detail = Some(detail(state));
@@ -6496,6 +7319,79 @@ mod jira_tests {
 
     fn toast(app: &App) -> String {
         app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    fn economy_json() -> Economy {
+        serde_json::from_value(serde_json::json!({
+            "envelopes": {}, "guard": [{ "action": "gate", "calls": 3, "at": "2026-11-01T00:00:00Z", "runId": "r", "pack": "build" }],
+            "cost": { "exec": 1, "overhead": 1, "overheadShare": 0.5, "overheadUnpriced": 0 },
+            "facts": [{ "id": "f1", "state": "active", "text": "CI=1" }, { "id": "f2", "state": "promoted", "text": "kept" }],
+            "tools": { "build": { "mask": ["WebSearch"], "proposal": [{ "unit": "NotebookEdit", "unusedRuns": 8, "cards": 5 }] } }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_economy_does_not_open_without_a_card_that_has_a_repository() {
+        let mut app = app_with(&[]);
+        press(&mut app, KeyCode::Char('$'));
+        assert!(app.economy.is_none());
+        assert_eq!(toast(&app), "select a card with a repository");
+        let mut card = task("t1", None);
+        card.repo_path = None;
+        let mut app = app_with(&[card]);
+        app.toast = None;
+        app.run_command("economy");
+        assert!(app.economy.is_none());
+        assert_eq!(toast(&app), "select a card with a repository");
+    }
+
+    #[test]
+    fn the_economy_stays_closed_when_the_machine_cannot_answer() {
+        let mut card = task("t1", None);
+        card.repo_path = Some("/repo".into());
+        let mut app = app_with(&[card]);
+        app.machine = Machine::at("http://127.0.0.1:9");
+        press(&mut app, KeyCode::Char('$'));
+        assert!(app.economy.is_none(), "{}", toast(&app));
+        assert!(app.toast.as_ref().is_some_and(|t| t.error));
+    }
+
+    #[test]
+    fn in_the_economy_the_cursor_stays_in_bounds_and_a_key_off_for_the_row_says_why() {
+        let mut app = app_with(&[]);
+        app.economy_data = economy_json();
+        app.economy = Some(EconomyState { repo: "/repo".into(), cursor: 0 });
+        assert_eq!(keys::active_scope(&app), keys::Scope::Economy);
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        assert_eq!(app.economy.as_ref().unwrap().cursor, 4, "five rows, the last is the loop guard's");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.economy.as_ref().unwrap().cursor, 3);
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "only a candidate or active fact can be dropped");
+        app.economy.as_mut().unwrap().cursor = 0;
+        press(&mut app, KeyCode::Char('a'));
+        assert_eq!(toast(&app), "only a proposed mask can be approved");
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(toast(&app), "only a masked or proposed tool can be restored");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.economy.is_none());
+    }
+
+    #[test]
+    fn the_economy_keys_are_off_with_a_reason_except_on_their_own_rows() {
+        let mut app = app_with(&[]);
+        app.economy_data = economy_json();
+        app.economy = Some(EconomyState { repo: "/repo".into(), cursor: 0 });
+        let avail = |app: &App, key: &str| keys::BINDINGS.iter().find(|b| b.scope == keys::Scope::Economy && b.keys == key).map(|b| (b.when)(app)).unwrap();
+        assert_eq!(avail(&app, "d"), keys::Avail::On);
+        assert!(matches!(avail(&app, "a"), keys::Avail::Off(_)) && matches!(avail(&app, "r"), keys::Avail::Off(_)));
+        app.economy.as_mut().unwrap().cursor = 3;
+        assert_eq!(avail(&app, "a"), keys::Avail::On);
+        assert_eq!(avail(&app, "r"), keys::Avail::On);
+        assert!(matches!(avail(&app, "d"), keys::Avail::Off(_)));
     }
 
     fn task(id: &str, key: Option<&str>) -> Task {
@@ -6734,4 +7630,1818 @@ pub fn record_changes(record: &TriageRecord, picks: &[usize; 5]) -> Vec<(String,
             (record.value_of(key) != Some(value)).then(|| (key.to_string(), value.to_string()))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod task_view_command_tests {
+    use super::confirm_tests::{posts, recording_machine};
+    use super::*;
+    use crate::testkit::{plan_gate_app, running_build_app};
+
+    /// The open Build card with a second card beside it in the same column, and a machine that records what is sent.
+    fn two_cards() -> (App, String, String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let mut app = running_build_app();
+        let mut other = app.tasks[0].clone();
+        other.id = "bbbbbbbb9999".into();
+        other.title = "Another build".into();
+        let (open, other_id) = (app.tasks[0].id.clone(), other.id.clone());
+        app.tasks.push(other);
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        (app, open, other_id, seen)
+    }
+
+    fn command(app: &mut App, line: &str) {
+        press(app, KeyCode::Char(':'));
+        type_text(app, line);
+        press(app, KeyCode::Enter);
+    }
+
+    /// The open card waits at its plan gate: the one place `:whole` answers.
+    fn at_plan_gate(app: &mut App) {
+        app.tasks[0].state = "awaiting_approval".into();
+        app.tasks[0].column = "Plan".into();
+        app.tasks[0].waiting_on_you = true;
+        app.tasks[0].running = false;
+    }
+
+    #[test]
+    fn a_command_typed_in_the_task_names_the_open_card_when_a_filter_hides_it() {
+        let (mut app, open, _, seen) = two_cards();
+        at_plan_gate(&mut app);
+        app.filter = "Another".into();
+        app.select("bbbbbbbb9999", true);
+        app.clamp_selection();
+        assert_eq!(app.selected_id().as_deref(), Some("bbbbbbbb9999"), "the board shows only the other card");
+        command(&mut app, "whole");
+        press(&mut app, KeyCode::Char('y'));
+        let sent = posts(&seen);
+        assert!(!sent.is_empty() && sent.iter().all(|p| p.starts_with(&format!("/tasks/{open}/"))), "{sent:?}");
+        assert!(matches!(&app.mode, Mode::Detail(id) if *id == open));
+    }
+
+    #[test]
+    fn a_wheel_notch_over_the_palette_does_not_move_the_card_a_command_acts_on() {
+        let (mut app, open, _, seen) = two_cards();
+        at_plan_gate(&mut app);
+        press(&mut app, KeyCode::Char(':'));
+        app.scroll(1);
+        type_text(&mut app, "whole");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('y'));
+        let sent = posts(&seen);
+        assert!(!sent.is_empty() && sent.iter().all(|p| p.starts_with(&format!("/tasks/{open}/"))), "{sent:?}");
+    }
+
+    /// Both cards wait at a plan gate in the Plan column, so the wheel can move the selection between them.
+    fn both_at_a_plan_gate(app: &mut App) {
+        for task in &mut app.tasks {
+            task.state = "awaiting_approval".into();
+            task.column = "Plan".into();
+            task.waiting_on_you = true;
+            task.running = false;
+        }
+    }
+
+    #[test]
+    fn a_wheel_notch_over_the_board_palette_does_not_move_the_card_a_command_acts_on() {
+        let (mut app, open, other, seen) = two_cards();
+        both_at_a_plan_gate(&mut app);
+        app.mode = Mode::Normal;
+        app.select(&other, true);
+        press(&mut app, KeyCode::Char(':'));
+        app.scroll(-1);
+        app.scroll(-1);
+        assert_eq!(app.selected_id().as_deref(), Some(other.as_str()), "the wheel left the selection");
+        command_in_palette(&mut app, "whole");
+        assert!(matches!(&app.mode, Mode::Detail(id) if *id == other), ":whole opened the selected card, not {open}");
+        assert!(posts(&seen).is_empty());
+    }
+
+    fn command_in_palette(app: &mut App, line: &str) {
+        type_text(app, line);
+        press(app, KeyCode::Enter);
+    }
+
+    #[test]
+    fn a_wheel_notch_over_the_x_menu_does_not_move_the_card_it_acts_on() {
+        let (mut app, _, other, _) = two_cards();
+        both_at_a_plan_gate(&mut app);
+        app.mode = Mode::Normal;
+        app.select(&other, true);
+        press(&mut app, KeyCode::Char('x'));
+        app.scroll(-1);
+        press(&mut app, KeyCode::Char('d'));
+        assert!(matches!(&app.mode, Mode::ConfirmDelete(id) if *id == other), "the delete box names the card the menu opened on");
+        app.scroll(-1);
+        assert_eq!(app.selected_id().as_deref(), Some(other.as_str()), "nor does the wheel over a confirm box");
+    }
+
+    #[test]
+    fn a_click_over_an_overlay_does_not_move_the_selection() {
+        let (mut app, _, other, _) = two_cards();
+        both_at_a_plan_gate(&mut app);
+        app.mode = Mode::Normal;
+        app.select(&other, true);
+        crate::testkit::render(&mut app, 200, 50);
+        press(&mut app, KeyCode::Char('x'));
+        let rect = app.column_rects.borrow().iter().find(|(c, _)| COLUMNS[*c] == "Plan").map(|(_, r)| *r).unwrap();
+        app.click(rect.x + 3, rect.y + 1);
+        assert_eq!(app.selected_id().as_deref(), Some(other.as_str()));
+    }
+
+    #[test]
+    fn economy_typed_in_a_task_opens_the_repository_of_the_open_card() {
+        let (mut app, _, _, _) = two_cards();
+        app.tasks[1].repo_path = Some("/work/OTHER".into());
+        app.filter = "Another".into();
+        app.select("bbbbbbbb9999", true);
+        app.clamp_selection();
+        command(&mut app, "economy");
+        assert_eq!(app.economy.as_ref().map(|e| e.repo.as_str()), Some("/work/app"), "{:?}", app.toast.as_ref().map(|t| &t.text));
+    }
+
+    #[test]
+    fn help_typed_in_a_task_returns_to_the_task_like_the_key_does() {
+        let mut app = plan_gate_app();
+        let id = app.tasks[0].id.clone();
+        command(&mut app, "help");
+        assert!(matches!(app.mode, Mode::Help { .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "esc from :help lands on the task");
+    }
+
+    #[test]
+    fn every_card_command_in_the_task_goes_to_the_open_card() {
+        let (_, open, other, _) = two_cards();
+        for line in ["whole", "dismiss F1", "finding nit rename x", "dup bbbbbbbb9", "undup", "context text hello", "jira PLAT-1"] {
+            let (mut app, _, _, seen) = two_cards();
+            app.filter = "Another".into();
+            app.select("bbbbbbbb9999", true);
+            app.clamp_selection();
+            if line == "undup" {
+                app.tasks[0].merged_into = Some(other.clone());
+            }
+            if line == "whole" {
+                at_plan_gate(&mut app);
+            }
+            command(&mut app, line);
+            if line == "whole" {
+                press(&mut app, KeyCode::Char('y'));
+            }
+            let sent = posts(&seen);
+            assert!(sent.iter().all(|p| !p.contains(&other)), ":{line} reached the other card: {sent:?}");
+            assert!(!sent.is_empty(), ":{line} sent nothing (toast {:?})", app.toast.as_ref().map(|t| &t.text));
+            assert!(sent.iter().all(|p| p.contains(&open)), ":{line}: {sent:?}");
+        }
+    }
+
+    #[test]
+    fn capital_u_and_m_in_the_task_act_on_the_open_card_too() {
+        let (mut app, open, other, seen) = two_cards();
+        app.filter = "Another".into();
+        app.select("bbbbbbbb9999", true);
+        app.clamp_selection();
+        app.tasks[0].merged_into = Some(other.clone());
+        press(&mut app, KeyCode::Char('U'));
+        let sent = posts(&seen);
+        assert!(!sent.is_empty() && sent.iter().all(|p| p.contains(&open)), "{sent:?}");
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for ch in text.chars() {
+            press(app, KeyCode::Char(ch));
+        }
+    }
+
+    #[test]
+    fn colon_in_the_task_view_opens_the_palette_over_the_card_and_esc_returns_to_it() {
+        let mut app = plan_gate_app();
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char(':'));
+        assert!(matches!(&app.mode, Mode::Command { text, .. } if text.is_empty()));
+        let screen = crate::testkit::render(&mut app, 120, 40);
+        assert!(screen.contains(crate::testkit::PLAN_GATE_TITLE), "the task view stays under the prompt:\n{screen}");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id));
+    }
+
+    #[test]
+    fn every_command_a_section_names_runs_in_the_task_view_and_leaves_it_open() {
+        for name in ["whole", "dedup", "context", "dismiss", "finding"] {
+            let mut app = running_build_app();
+            let id = app.tasks[0].id.clone();
+            press(&mut app, KeyCode::Char(':'));
+            type_text(&mut app, name);
+            press(&mut app, KeyCode::Enter);
+            assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), ":{name} left the task view");
+            assert!(app.toast.as_ref().is_none_or(|t| !t.text.contains("unknown command")), ":{name} is not a command here: {:?}", app.toast.as_ref().map(|t| &t.text));
+            assert_eq!(app.selected_id().as_deref(), Some(id.as_str()), ":{name} acts on the open card");
+        }
+    }
+
+    #[test]
+    fn a_command_that_opens_a_view_leaves_the_task_view_as_on_the_board() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, "inbox");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.inbox.is_some() && matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn a_view_opened_from_a_task_that_was_opened_from_another_view_leaves_only_one() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        app.inbox = Some(crate::inbox::InboxState::default());
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Detail(_)) && app.inbox.is_some(), "the task opened over the Inbox, which waits under it");
+        command(&mut app, "digest");
+        assert!(app.inbox.is_none() && app.digest.is_some(), "opening the Digest closed the Inbox");
+        assert_eq!(app.active_view(), Some(View::Digest));
+        assert_eq!(keys::active_scope(&app), keys::Scope::Digest);
+        let screen = crate::testkit::render(&mut app, 120, 30);
+        assert!(screen.contains("Digest · since"), "the view on screen is the Digest:\n{screen}");
+        press(&mut app, KeyCode::Char('A'));
+        assert!(!matches!(app.mode, Mode::ConfirmApproveAll(_)), "A reached the hidden Inbox");
+    }
+
+    #[test]
+    fn opening_any_view_closes_the_others_and_draw_and_keys_agree_on_the_one_left() {
+        let opens: [(&str, View); 4] = [("floor", View::Floor), ("inbox", View::Inbox), ("digest", View::Digest), ("tickets", View::Tickets)];
+        for (first, _) in opens {
+            for (second, view) in opens {
+                let mut app = plan_gate_app();
+                app.mode = Mode::Normal;
+                command(&mut app, first);
+                let id = app.tasks[0].id.clone();
+                app.open_detail(id);
+                command(&mut app, second);
+                let open = [app.floor.is_some(), app.inbox.is_some(), app.digest.is_some(), app.tickets.is_some()].iter().filter(|o| **o).count();
+                assert_eq!(open, 1, "{first} then {second}");
+                assert_eq!(app.active_view(), Some(view), "{first} then {second}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_open_page_follows_a_card_whose_state_took_it_out_of_the_rail() {
+        let mut app = plan_gate_app();
+        assert_eq!(app.detail_section, Section::Review);
+        let mut moved = app.tasks[0].clone();
+        moved.state = "implementing".into();
+        moved.column = "Build".into();
+        moved.waiting_on_you = false;
+        moved.running = true;
+        app.upsert(moved);
+        assert_eq!(app.detail_section, Section::Now, "the card's first page now");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("the card moved to Build"));
+        let (shown, later) = app.detail_rail();
+        assert!(shown.iter().chain(&later).any(|s| *s == app.detail_section), "the rail has an active row");
+    }
+
+    #[test]
+    fn a_page_that_still_exists_stays_when_the_card_changes() {
+        let mut app = plan_gate_app();
+        app.set_section(Section::Overview);
+        let mut changed = app.tasks[0].clone();
+        changed.title = "A new title".into();
+        app.toast = None;
+        app.upsert(changed);
+        assert_eq!(app.detail_section, Section::Overview);
+        assert!(app.toast.is_none());
+    }
+
+    #[test]
+    fn the_digit_the_rail_shows_is_the_digit_that_works() {
+        for mut app in [plan_gate_app(), running_build_app()] {
+            let (shown, later) = app.detail_rail();
+            let screen = crate::testkit::render(&mut app, 140, 40);
+            for (i, section) in shown.iter().enumerate().take(9) {
+                assert!(screen.contains(&format!("{} {}", i + 1, section.label())), "{} is numbered {}:\n{screen}", section.label(), i + 1);
+                press(&mut app, KeyCode::Char(char::from_digit(i as u32 + 1, 10).unwrap()));
+                assert_eq!(app.detail_section, *section, "digit {} goes where the rail says", i + 1);
+            }
+            for section in later {
+                assert!(!(1..=9).any(|d| screen.contains(&format!("{d} {}", section.label()))), "{} sits under later and has no digit", section.label());
+            }
+        }
+    }
+
+    #[test]
+    fn the_engines_hint_names_the_digit_the_rail_gives() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('E'));
+        let (order, _) = app.detail_rail();
+        let text = app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+        match order.iter().position(|s| *s == Section::Engines).filter(|i| *i < 9) {
+            Some(i) => assert!(text.contains(&format!("Engines section ({})", i + 1)), "{text}"),
+            None => assert!(text.contains("Engines section (h/l)"), "{text}"),
+        }
+    }
+
+    #[test]
+    fn the_registry_offers_the_colon_in_the_task_view_and_the_footer_shows_it() {
+        let app = plan_gate_app();
+        assert!(keys::footer_keys(&app, keys::Scope::Detail, 20).iter().any(|b| b.first() == ":"));
+        assert!(keys::detail_footer(&app).iter().any(|(k, l)| k == ":" && l == "command"));
+    }
+}
+
+#[cfg(test)]
+mod task_view_return_tests {
+    use super::*;
+    use crate::testkit::{ESCALATED_TITLE, PLAN_GATE_TITLE, RUNNING_BUILD_TITLE, SHIP_STAGE_TITLE, escalated_app, plan_gate_app, questions_app, render, running_build_app, ship_stage_app};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    /// One prompt, editor or picker reachable from the task view: the card, how to open it, what it
+    /// opens, the keys that confirm it, and the words its title shows.
+    struct Case {
+        name: &'static str,
+        app: App,
+        title: &'static str,
+        open: Vec<KeyCode>,
+        is_open: fn(&Mode) -> bool,
+        confirm: Vec<KeyEvent>,
+    }
+
+    fn keys_of(text: &str) -> Vec<KeyEvent> {
+        text.chars().map(|c| KeyEvent::from(KeyCode::Char(c))).collect()
+    }
+
+    fn cases() -> Vec<Case> {
+        let enter = || KeyEvent::from(KeyCode::Enter);
+        let save = || KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        let mut with_record = plan_gate_app();
+        with_record.tasks[0].record = Some(crate::model::TriageRecord::default());
+        let mut cases_gate = plan_gate_app();
+        if let Some(detail) = cases_gate.detail.as_mut() {
+            for approval in detail.approvals.iter_mut().filter(|a| a.kind.as_deref() == Some("awaiting_test_check")) {
+                approval.decision = None;
+            }
+        }
+        vec![
+            Case { name: "send back", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('r')], is_open: |m| matches!(m, Mode::Reason { approve: false, .. }), confirm: [keys_of("too wide"), vec![enter()]].concat() },
+            Case { name: "reject", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('N')], is_open: |m| matches!(m, Mode::Reject { .. }), confirm: [keys_of("no"), vec![enter()]].concat() },
+            Case { name: "escalation guidance", app: escalated_app(), title: ESCALATED_TITLE, open: vec![KeyCode::Char('a')], is_open: |m| matches!(m, Mode::Reason { approve: true, .. }), confirm: vec![enter()] },
+            Case { name: "evidence note", app: ship_stage_app(), title: SHIP_STAGE_TITLE, open: vec![KeyCode::Char('n')], is_open: |m| matches!(m, Mode::EvidenceNote { .. }), confirm: vec![enter()] },
+            Case { name: "plan editor", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('e')], is_open: |m| matches!(m, Mode::EditPlan { .. }), confirm: vec![save()] },
+            Case { name: "cases editor", app: cases_gate, title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('e'), KeyCode::Char('c')], is_open: |m| matches!(m, Mode::EditCases { .. }), confirm: vec![save()] },
+            Case { name: "ticket editor", app: running_build_app(), title: RUNNING_BUILD_TITLE, open: vec![KeyCode::Char('e')], is_open: |m| matches!(m, Mode::EditTicket { .. }), confirm: vec![save()] },
+            Case { name: "answers editor", app: questions_app(), title: "Fix the invoice rounding", open: vec![KeyCode::Char('a')], is_open: |m| matches!(m, Mode::Answer { .. }), confirm: vec![save()] },
+            Case { name: "archive reason", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('Z')], is_open: |m| matches!(m, Mode::ArchiveReason { .. }), confirm: vec![enter()] },
+            Case { name: "escalation reason", app: escalated_app(), title: ESCALATED_TITLE, open: vec![KeyCode::Char('C')], is_open: |m| matches!(m, Mode::EscalationReason { .. }), confirm: vec![enter()] },
+            Case { name: "record picker", app: with_record, title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('T')], is_open: |m| matches!(m, Mode::RecordEdit { .. }), confirm: vec![enter()] },
+            Case { name: "delete", app: plan_gate_app(), title: PLAN_GATE_TITLE, open: vec![KeyCode::Char('d')], is_open: |m| matches!(m, Mode::ConfirmDelete(_)), confirm: keys_of("y") },
+            Case { name: "abort", app: running_build_app(), title: RUNNING_BUILD_TITLE, open: vec![KeyCode::Char('X')], is_open: |m| matches!(m, Mode::ConfirmAbort(_)), confirm: keys_of("y") },
+            Case { name: "kill the worktree", app: ship_stage_app(), title: SHIP_STAGE_TITLE, open: vec![KeyCode::Char('w')], is_open: |m| matches!(m, Mode::ConfirmWorktree(_)), confirm: keys_of("y") },
+        ]
+    }
+
+    #[test]
+    fn every_prompt_editor_and_picker_keeps_the_card_on_screen_when_it_opens() {
+        for mut case in cases() {
+            for key in case.open.clone() {
+                press(&mut case.app, key);
+            }
+            assert!((case.is_open)(&case.app.mode), "{}: did not open", case.name);
+            let screen = render(&mut case.app, 140, 40);
+            assert!(screen.contains(case.title), "{}: the card's title left the screen:\n{screen}", case.name);
+        }
+    }
+
+    fn plan_gate_with_cases_waiting() -> App {
+        let mut app = plan_gate_app();
+        if let Some(detail) = app.detail.as_mut() {
+            for approval in detail.approvals.iter_mut().filter(|a| a.kind.as_deref() == Some("awaiting_test_check")) {
+                approval.decision = None;
+            }
+        }
+        app
+    }
+
+    #[test]
+    fn e_on_the_review_page_asks_what_to_edit_and_names_the_three_things() {
+        let mut app = plan_gate_with_cases_waiting();
+        assert_eq!(app.detail_section, Section::Review);
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditChoice(_)), "e asks first");
+        let screen = render(&mut app, 140, 40);
+        for needle in ["edit", "p  the plan", "c  the cases", "t  the ticket", PLAN_GATE_TITLE] {
+            assert!(screen.contains(needle), "{needle} missing in\n{screen}");
+        }
+    }
+
+    #[test]
+    fn the_chooser_reaches_each_editor_by_its_key_and_esc_returns_to_the_task() {
+        for (key, is_open) in [('p', (|m: &Mode| matches!(m, Mode::EditPlan { .. })) as fn(&Mode) -> bool), ('c', |m| matches!(m, Mode::EditCases { .. })), ('t', |m| matches!(m, Mode::EditTicket { .. }))] {
+            let mut app = plan_gate_with_cases_waiting();
+            press(&mut app, KeyCode::Char('e'));
+            press(&mut app, KeyCode::Char(key));
+            assert!(is_open(&app.mode), "{key} did not open its editor");
+        }
+        let mut app = plan_gate_with_cases_waiting();
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char('e'));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "esc returns to the task");
+    }
+
+    #[test]
+    fn closing_any_of_them_with_esc_returns_to_the_same_card_section_and_scroll() {
+        for mut case in cases() {
+            let id = case.app.tasks[0].id.clone();
+            let section = case.app.detail_section;
+            case.app.detail_scroll.set(2);
+            for key in case.open.clone() {
+                press(&mut case.app, key);
+            }
+            assert!((case.is_open)(&case.app.mode), "{}: did not open", case.name);
+            press(&mut case.app, KeyCode::Esc);
+            assert!(matches!(&case.app.mode, Mode::Detail(open) if *open == id), "{}: esc ended in another mode", case.name);
+            assert_eq!(case.app.detail_section, section, "{}: the section moved", case.name);
+            assert_eq!(case.app.detail_scroll.get(), 2, "{}: the scroll moved", case.name);
+        }
+    }
+
+    #[test]
+    fn confirming_any_of_them_returns_to_the_same_card_section_and_scroll() {
+        for mut case in cases() {
+            let id = case.app.tasks[0].id.clone();
+            let section = case.app.detail_section;
+            case.app.detail_scroll.set(2);
+            for key in case.open.clone() {
+                press(&mut case.app, key);
+            }
+            assert!((case.is_open)(&case.app.mode), "{}: did not open", case.name);
+            for key in case.confirm.clone() {
+                case.app.handle_key(key);
+            }
+            // Delete and the like are refused by the unreachable machine; the card is still there.
+            assert!(matches!(&case.app.mode, Mode::Detail(open) if *open == id), "{}: confirming ended in another mode", case.name);
+            assert_eq!(case.app.detail_section, section, "{}: the section moved", case.name);
+            assert_eq!(case.app.detail_scroll.get(), 2, "{}: the scroll moved", case.name);
+        }
+    }
+
+    #[test]
+    fn a_card_that_is_gone_after_the_action_returns_to_the_board() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('d'));
+        app.tasks.clear();
+        press(&mut app, KeyCode::Char('y'));
+        assert!(matches!(app.mode, Mode::Normal), "nothing to return to");
+        assert!(app.return_to.is_none(), "the way back is forgotten");
+    }
+
+    #[test]
+    fn a_prompt_opened_on_the_board_returns_to_the_board() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        app.select("aaaaaaaa1111", true);
+        press(&mut app, KeyCode::Char('r'));
+        assert!(matches!(app.mode, Mode::Reason { .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal), "the board, not a task view");
+    }
+
+    #[test]
+    fn the_send_back_prompt_is_a_box_over_the_task_not_a_footer_line() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('r'));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("send back #aaaaaaaa — why?"), "{screen}");
+        assert!(!screen.contains("send back because:"), "no footer prompt:\n{screen}");
+        assert!(screen.contains(PLAN_GATE_TITLE));
+    }
+}
+
+#[cfg(test)]
+mod view_stack_tests {
+    use super::*;
+    use crate::model::{PrSnapshot, SlackSnapshot};
+    use crate::slack::fixtures::item_json;
+    use crate::testkit::{plan_gate_app, task_json};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    /// Three cards at a gate, so every view has rows to move over; the board is showing.
+    fn board_of_three() -> App {
+        let mut app = plan_gate_app();
+        for (n, id) in ["bbbbbbbb2222", "cccccccc3333"].into_iter().enumerate() {
+            let json = task_json(id, &format!("Second card {n}"), "awaiting_approval", "Plan", serde_json::json!({"waitingOnYou": true, "updatedAt": format!("2026-10-22T1{}:00:00.000Z", n + 1)}));
+            app.tasks.push(serde_json::from_value(json).unwrap());
+        }
+        app.mode = Mode::Normal;
+        app.last_seen_secs = None;
+        app
+    }
+
+    fn pr_json(number: u64, task: &str) -> String {
+        format!(
+            r#"{{"repo":"acme/app","number":{number},"title":"PR {number}","url":"https://github.com/acme/app/pull/{number}","author":"me","mine":true,"reviewRequested":false,"isDraft":false,
+            "headRef":"feat/{number}","baseRef":"main","fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE","checks":{{"state":"none","passed":0,"total":0,"failed":[]}},
+            "unresolvedThreads":0,"split":"ready_to_merge","localPath":"/r/app","task":{{"id":"{task}","state":"awaiting_approval","route":"feature"}},"updatedAt":"2026-10-27T0{number}:00:00Z"}}"#
+        )
+    }
+
+    /// Opens each view with its cursor on the second row.
+    fn open_view(app: &mut App, view: &str) {
+        match view {
+            "inbox" => app.inbox = Some(InboxState { cursor: 1, ..InboxState::default() }),
+            "digest" => app.digest = Some(DigestState { cursor: 1 }),
+            "pulls" => {
+                let prs = ["aaaaaaaa1111", "bbbbbbbb2222", "cccccccc3333"].iter().enumerate().map(|(n, t)| serde_json::from_str(&pr_json(n as u64 + 1, t)).unwrap()).collect();
+                app.prs = PrSnapshot { prs, polled_at: None, error: None };
+                app.pulls = Some(PullsState { split: crate::pulls::PrSplit::ReadyToMerge, cursor: 1 });
+            }
+            "slack" => {
+                let items = ["aaaaaaaa1111", "bbbbbbbb2222", "cccccccc3333"]
+                    .iter()
+                    .enumerate()
+                    .map(|(n, t)| {
+                        let mut item: SlackItem = serde_json::from_str(&item_json(&format!("C0123:{n}"), "needs_reply", Some("P1"), &format!("2026-10-28T09:0{n}:00Z"))).unwrap();
+                        item.linked.task_id = Some((*t).to_string());
+                        item
+                    })
+                    .collect();
+                app.slack_snapshot = SlackSnapshot { items, ..SlackSnapshot::default() };
+                app.slack = Some(SlackState { cursor: 1, ..SlackState::default() });
+            }
+            other => panic!("no view {other}"),
+        }
+    }
+
+    fn cursor_of(app: &App, view: &str) -> usize {
+        match view {
+            "inbox" => app.inbox.as_ref().map(|s| s.cursor),
+            "digest" => app.digest.as_ref().map(|s| s.cursor),
+            "pulls" => app.pulls.as_ref().map(|s| s.cursor),
+            _ => app.slack.as_ref().map(|s| s.cursor),
+        }
+        .expect("the view is showing")
+    }
+
+    fn showing(app: &App, view: &str) -> bool {
+        match view {
+            "inbox" => app.inbox.is_some(),
+            "digest" => app.digest.is_some(),
+            "pulls" => app.pulls.is_some(),
+            _ => app.slack.is_some(),
+        }
+    }
+
+    #[test]
+    fn esc_in_a_task_opened_from_a_view_returns_to_the_view_with_its_cursor() {
+        for view in ["inbox", "digest", "pulls", "slack"] {
+            let mut app = board_of_three();
+            open_view(&mut app, view);
+            let under = app.focus_task().map(|t| t.id.clone());
+            press(&mut app, KeyCode::Enter);
+            let opened = match &app.mode {
+                Mode::Detail(id) => id.clone(),
+                other => panic!("{view}: enter did not open a task ({})", if matches!(other, Mode::Normal) { "board" } else { "another mode" }),
+            };
+            if let Some(under) = under {
+                assert_eq!(opened, under, "{view}: opened the row under the cursor");
+            }
+            assert!(showing(&app, view), "{view}: the view stays open under the task");
+            let title = app.task(&opened).map(|t| t.title.clone()).unwrap_or_default();
+            assert!(crate::testkit::render(&mut app, 140, 40).contains(&title), "{view}: the task is drawn");
+            press(&mut app, KeyCode::Esc);
+            assert!(matches!(app.mode, Mode::Normal) && showing(&app, view), "{view}: esc in the task returns to the view");
+            assert_eq!(cursor_of(&app, view), 1, "{view}: the cursor is where it was");
+            press(&mut app, KeyCode::Esc);
+            assert!(!showing(&app, view) && matches!(app.mode, Mode::Normal), "{view}: esc in the view returns to the board");
+        }
+    }
+
+    #[test]
+    fn q_in_a_task_opened_from_a_view_also_returns_to_the_view() {
+        let mut app = board_of_three();
+        open_view(&mut app, "inbox");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('q'));
+        assert!(app.inbox.is_some() && matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn esc_on_the_board_with_nothing_open_does_nothing() {
+        let mut app = board_of_three();
+        let before = (app.focus, app.selection);
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.inbox.is_none() && app.digest.is_none() && app.pulls.is_none() && app.slack.is_none());
+        assert_eq!((app.focus, app.selection), before);
+    }
+
+    #[test]
+    fn a_task_opened_from_the_board_returns_to_the_board() {
+        let mut app = board_of_three();
+        app.select("aaaaaaaa1111", true);
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn the_view_under_a_task_keeps_its_split() {
+        let mut app = board_of_three();
+        app.inbox = Some(InboxState { split: crate::inbox::Split::All, cursor: 2 });
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        let state = app.inbox.as_ref().expect("the inbox is back");
+        assert_eq!((state.split, state.cursor), (crate::inbox::Split::All, 2));
+    }
+}
+
+#[cfg(test)]
+mod confirm_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        sync::{Arc, Mutex},
+    };
+
+    use super::*;
+    use crate::testkit::{open_card, plan_gate_app, release_question_app, render, running_build_app, ship_stage_app, task_json};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    /// A machine that answers `{}` to everything and records each POST's path: how a test sees that a
+    /// request was (or was not) sent.
+    pub(super) fn recording_machine() -> (Machine, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let posts = Arc::new(Mutex::new(Vec::new()));
+        let seen = posts.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    request.push_str(&line);
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let mut parts = request.split_whitespace();
+                if let (Some("POST"), Some(path)) = (parts.next(), parts.next()) {
+                    seen.lock().unwrap().push(path.to_string());
+                }
+                let mut stream = reader.into_inner();
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), posts)
+    }
+
+    pub(super) fn posts(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        seen.lock().unwrap().clone()
+    }
+
+    fn at_split_gate() -> App {
+        let task = task_json("aaaaaaaa7777", "Split the export work", "awaiting_approval", "Plan", serde_json::json!({"waitingOnYou": true}));
+        open_card(task, serde_json::json!({"approvals": [{"id": "p1", "kind": "awaiting_approval", "decision": null, "createdAt": "2026-10-22T09:50:00Z", "requested": {"outcome": "split", "brief": "b"}}]}))
+    }
+
+    fn at_memory_review() -> App {
+        let task = task_json("aaaaaaaa8888", "Retro for the export", "reviewing_memory", "Ship", serde_json::json!({"waitingOnYou": true}));
+        open_card(task, serde_json::json!({}))
+    }
+
+    /// Every gate that commits something: the card, its decision path and what the box asks.
+    fn gates() -> Vec<(&'static str, App, &'static str)> {
+        vec![
+            ("plan", plan_gate_app(), "approve the plan of #aaaaaaaa?"),
+            ("split", at_split_gate(), "approve the split of #aaaaaaaa?"),
+            ("ship", ship_stage_app(), "ship #dddddddd?"),
+            ("release", release_question_app(), "approve the release of #ffffffff?"),
+            ("memory", at_memory_review(), "approve the retro's rules of #aaaaaaaa?"),
+        ]
+    }
+
+    #[test]
+    fn approving_at_a_gate_asks_once_naming_the_action_and_the_card() {
+        for (name, mut app, question) in gates() {
+            press(&mut app, KeyCode::Char('a'));
+            assert!(matches!(app.mode, Mode::ConfirmApprove(_)), "{name}: a asks first");
+            let screen = render(&mut app, 140, 40);
+            assert!(screen.contains(question), "{name}: the box asks {question:?}:\n{screen}");
+            assert!(screen.contains(" y  yes") && screen.contains(" n  no"), "{name}: the answers show:\n{screen}");
+            assert!(screen.contains(&app.tasks[0].title), "{name}: the card stays on screen");
+        }
+    }
+
+    #[test]
+    fn n_and_esc_cancel_back_to_the_task_and_send_nothing() {
+        for (name, mut app, _) in gates() {
+            let (machine, seen) = recording_machine();
+            app.machine = machine;
+            let id = app.tasks[0].id.clone();
+            for cancel in [KeyCode::Char('n'), KeyCode::Esc] {
+                press(&mut app, KeyCode::Char('a'));
+                press(&mut app, cancel);
+                assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "{name}: back on the task");
+            }
+            assert!(posts(&seen).is_empty(), "{name}: nothing was sent: {:?}", posts(&seen));
+        }
+    }
+
+    #[test]
+    fn y_and_enter_approve_and_return_to_the_task() {
+        for (name, mut app, _) in gates() {
+            let (machine, seen) = recording_machine();
+            app.machine = machine;
+            let id = app.tasks[0].id.clone();
+            press(&mut app, KeyCode::Char('a'));
+            assert!(posts(&seen).is_empty(), "{name}: asking sends nothing");
+            press(&mut app, KeyCode::Char('y'));
+            assert_eq!(posts(&seen), vec![format!("/tasks/{id}/decision")], "{name}: y sends the decision");
+            assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "{name}: back on the task");
+            press(&mut app, KeyCode::Char('a'));
+            press(&mut app, KeyCode::Enter);
+            assert_eq!(posts(&seen).len(), 2, "{name}: enter confirms too");
+        }
+    }
+
+    /// The board with marked cards: two plans, a ship, and a draft that commits nothing.
+    fn marked_gates() -> App {
+        let mut app = plan_gate_app();
+        let mut second = app.tasks[0].clone();
+        second.id = "aaaaaaaa2222".into();
+        second.title = "Second plan\u{1b}[31m with an escape".into();
+        let ship = ship_stage_app().tasks[0].clone();
+        let draft: Task = serde_json::from_value(task_json("eeeeeeee5555", "A draft", "draft", "Intake", serde_json::json!({}))).unwrap();
+        app.tasks.extend([second, ship, draft]);
+        app.mode = Mode::Normal;
+        app.toast = None;
+        app.marked = app.tasks.iter().map(|t| t.id.clone()).collect();
+        app
+    }
+
+    #[test]
+    fn a_over_marked_gates_asks_once_with_the_count_and_the_kinds_and_n_sends_nothing() {
+        let mut app = marked_gates();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(&app.mode, Mode::ConfirmApproveMany { ids, .. } if ids.len() == 3), "the draft is not counted");
+        assert_eq!(posts(&seen), vec!["/tasks/eeeeeeee5555/start".to_string()], "only what commits nothing went: the draft started");
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("approve 3 cards? 2 plans · 1 ship"), "{screen}");
+        assert!(screen.contains("#aaaaaaaa  ") && screen.contains("Second plan [31m with an escape") && !screen.contains('\u{1b}'), "{screen}");
+        assert!(screen.contains(" y  yes") && screen.contains(" n  no"), "{screen}");
+        press(&mut app, KeyCode::Char('x'));
+        assert!(matches!(app.mode, Mode::ConfirmApproveMany { .. }), "other keys do not answer");
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(posts(&seen).len(), 1, "n sends no decision");
+        let mut app = marked_gates();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && posts(&seen).len() == 1, "esc sends nothing either");
+    }
+
+    #[test]
+    fn y_over_marked_gates_sends_one_decision_per_committing_card() {
+        let mut app = marked_gates();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('y'));
+        let sent = posts(&seen);
+        let decisions: Vec<&String> = sent.iter().filter(|p| p.ends_with("/decision")).collect();
+        assert_eq!(decisions.len(), 3, "{sent:?}");
+        assert!(matches!(app.mode, Mode::Normal) && app.marked.is_empty());
+    }
+
+    #[test]
+    fn a_over_marked_cards_that_commit_nothing_keeps_its_behaviour() {
+        let mut app = marked_gates();
+        app.tasks.retain(|t| t.state == "draft");
+        app.marked = app.tasks.iter().map(|t| t.id.clone()).collect();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Normal), "no box when nothing commits");
+        assert_eq!(posts(&seen), vec!["/tasks/eeeeeeee5555/start".to_string()]);
+        assert!(app.marked.is_empty(), "{:?}", app.marked);
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.starts_with("advanced ") && t.text.contains(" of 1")), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
+    }
+
+    #[test]
+    fn other_keys_do_not_answer_the_box() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('x'));
+        assert!(matches!(app.mode, Mode::ConfirmApprove(_)));
+    }
+
+    #[test]
+    fn answers_that_commit_nothing_keep_their_flow() {
+        // Send back is a prompt, not a confirmation.
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('r'));
+        assert!(matches!(app.mode, Mode::Reason { approve: false, .. }));
+        // A card that is running has nothing to approve: no box, a word in the footer.
+        let mut app = running_build_app();
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("running")));
+        // Triage's questions open the answers editor.
+        let mut app = crate::testkit::questions_app();
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Answer { .. }));
+    }
+
+    #[test]
+    fn a_on_the_board_at_a_gate_opens_the_task_and_sends_nothing() {
+        for (name, mut app, _) in gates() {
+            let (machine, seen) = recording_machine();
+            app.machine = machine;
+            let id = app.tasks[0].id.clone();
+            let first = Section::for_task(&app.tasks[0]);
+            app.mode = Mode::Normal;
+            app.select(&id, true);
+            press(&mut app, KeyCode::Char('a'));
+            assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "{name}: the task opens");
+            assert_eq!(app.detail_section, first, "{name}: on its first page");
+            assert!(posts(&seen).is_empty(), "{name}: nothing was approved unseen");
+        }
+    }
+
+    fn at_outcome_gate(outcome: &str) -> App {
+        let task = task_json("aaaaaaaa6666", "Answer the question", "awaiting_approval", "Plan", serde_json::json!({"waitingOnYou": true}));
+        open_card(task, serde_json::json!({"approvals": [{"id": "p9", "kind": "awaiting_approval", "decision": null, "createdAt": "2026-10-22T09:50:00Z", "requested": {"outcome": outcome, "brief": "b", "reply": "hi"}}]}))
+    }
+
+    fn at_state(state: &str) -> App {
+        open_card(task_json("aaaaaaaa5555", "Set it up", state, "Plan", serde_json::json!({"waitingOnYou": true})), serde_json::json!({}))
+    }
+
+    /// Every gate `a` approves, the kinds the box did not cover before included, with the words its box asks.
+    fn every_gate() -> Vec<(&'static str, App, &'static str)> {
+        let mut all = gates();
+        all.extend([
+            ("reply", at_outcome_gate("conversation"), "post the reply and close #aaaaaaaa?"),
+            ("archive", at_outcome_gate("archive"), "archive #aaaaaaaa?"),
+            ("setup", at_state("awaiting_setup"), "write the proposed luna.yaml for #aaaaaaaa?"),
+            ("tests", at_state("awaiting_test_check"), "approve the test cases of #aaaaaaaa?"),
+        ]);
+        all
+    }
+
+    #[test]
+    fn a_at_every_gate_asks_inside_the_task_and_sends_only_on_y() {
+        for (name, mut app, question) in every_gate() {
+            let (machine, seen) = recording_machine();
+            app.machine = machine;
+            let id = app.tasks[0].id.clone();
+            press(&mut app, KeyCode::Char('a'));
+            let Mode::ConfirmApprove(held) = &app.mode else { panic!("{name}: a asks first") };
+            assert_eq!(held.question, question, "{name}");
+            assert!(posts(&seen).is_empty(), "{name}: asking sends nothing");
+            press(&mut app, KeyCode::Char('y'));
+            assert_eq!(posts(&seen), vec![format!("/tasks/{id}/decision")], "{name}");
+        }
+    }
+
+    #[test]
+    fn a_on_the_board_at_a_reply_archive_setup_or_tests_gate_opens_the_task_and_sends_nothing() {
+        for (name, mut app, _) in every_gate() {
+            let (machine, seen) = recording_machine();
+            app.machine = machine;
+            let id = app.tasks[0].id.clone();
+            app.mode = Mode::Normal;
+            app.select(&id, true);
+            press(&mut app, KeyCode::Char('a'));
+            assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "{name}: the task opens");
+            assert!(posts(&seen).is_empty(), "{name}: nothing was approved unseen");
+        }
+    }
+
+    #[test]
+    fn the_x_menu_and_the_inbox_open_the_task_instead_of_approving() {
+        for (name, mut app, _) in every_gate() {
+            let (machine, seen) = recording_machine();
+            app.machine = machine;
+            let id = app.tasks[0].id.clone();
+            app.mode = Mode::Actions { cursor: 0 };
+            app.select(&id, true);
+            press(&mut app, KeyCode::Char('a'));
+            assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "{name}: the x menu opens the task");
+            app.mode = Mode::Normal;
+            app.inbox = Some(crate::inbox::InboxState { split: crate::inbox::Split::All, cursor: 0 });
+            press(&mut app, KeyCode::Char('a'));
+            assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "{name}: Inbox a opens the task, not a box");
+            assert!(posts(&seen).is_empty(), "{name}: {:?}", posts(&seen));
+            press(&mut app, KeyCode::Char('a'));
+            assert!(matches!(&app.mode, Mode::ConfirmApprove(h) if h.id == id), "{name}: the box asks from inside the task");
+        }
+    }
+
+    #[test]
+    fn the_inbox_box_words_come_from_the_card_it_is_for() {
+        let mut app = at_split_gate();
+        app.mode = Mode::Normal;
+        app.inbox = Some(crate::inbox::InboxState::default());
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('a'));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("approve the split of #aaaaaaaa?") && !screen.contains("approve the plan"), "{screen}");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Detail(_)), "esc returns to the task");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.inbox.is_some() && matches!(app.mode, Mode::Normal), "and the Inbox is under it");
+    }
+
+    #[test]
+    fn a_card_still_loading_asks_nothing() {
+        let mut app = plan_gate_app();
+        app.detail = None;
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Detail(_)), "no box: the gate's kind is not known yet");
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.starts_with("still reading")), "{:?}", app.toast.as_ref().map(|t| &t.text));
+    }
+
+    #[test]
+    fn capital_a_at_the_retro_opens_the_task_from_outside_and_asks_inside() {
+        let (machine, seen) = recording_machine();
+        let mut app = at_memory_review();
+        app.machine = machine;
+        let id = app.tasks[0].id.clone();
+        app.mode = Mode::Normal;
+        app.select(&id, true);
+        press(&mut app, KeyCode::Char('A'));
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id) && posts(&seen).is_empty());
+        app.detail_stale = false;
+        press(&mut app, KeyCode::Char('A'));
+        let Mode::ConfirmApprove(held) = &app.mode else { panic!("A asks inside the task") };
+        assert!(held.skip_rules && held.question.contains("skip its rules"), "{held:?}");
+        assert!(posts(&seen).is_empty());
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(posts(&seen), vec![format!("/tasks/{id}/decision")]);
+    }
+
+    #[test]
+    fn y_after_the_card_moved_to_another_gate_sends_nothing_and_says_so() {
+        let (machine, seen) = recording_machine();
+        let mut app = plan_gate_app();
+        app.machine = machine;
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::ConfirmApprove(_)));
+        app.tasks[0].state = "awaiting_ship".into();
+        press(&mut app, KeyCode::Char('y'));
+        assert!(posts(&seen).is_empty(), "{:?}", posts(&seen));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("the card moved on; nothing was approved"));
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "the box closed, back on the task");
+    }
+
+    #[test]
+    fn y_after_the_same_gate_was_asked_again_sends_nothing() {
+        let (machine, seen) = recording_machine();
+        let mut app = release_question_app();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::ConfirmApprove(_)));
+        app.detail.as_mut().unwrap().approvals.last_mut().unwrap().id = Some("s2".into());
+        press(&mut app, KeyCode::Enter);
+        assert!(posts(&seen).is_empty(), "{:?}", posts(&seen));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("the card moved on; nothing was approved"));
+    }
+
+    #[test]
+    fn a_card_that_disappears_under_the_box_closes_it_with_the_message() {
+        let mut app = plan_gate_app();
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::ConfirmApprove(_)));
+        app.forget(&id);
+        assert!(matches!(app.mode, Mode::Normal), "no invisible mode");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("the card moved on; nothing was approved"));
+        // The same when the list was replaced under it, which `tick` settles.
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('a'));
+        app.tasks.clear();
+        app.tick();
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn start_on_the_board_at_a_gate_opens_the_task_and_inside_it_asks_and_returns_to_it() {
+        let (machine, seen) = recording_machine();
+        let mut app = plan_gate_app();
+        app.machine = machine;
+        let id = app.tasks[0].id.clone();
+        app.mode = Mode::Normal;
+        app.select(&id, true);
+        for ch in ":start".chars().map(KeyCode::Char).chain([KeyCode::Enter]) {
+            press(&mut app, ch);
+        }
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), ":start on the board opens the task");
+        assert!(posts(&seen).is_empty());
+        for ch in ":start".chars().map(KeyCode::Char).chain([KeyCode::Enter]) {
+            press(&mut app, ch);
+        }
+        assert!(matches!(app.mode, Mode::ConfirmApprove(_)), ":start inside the task asks");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "esc lands on the task, not the board");
+        assert!(posts(&seen).is_empty());
+    }
+
+    #[test]
+    fn start_on_a_draft_inside_the_task_goes_at_once_and_returns_to_the_task() {
+        let task = task_json("aaaaaaaa9999", "A draft", "draft", "Intake", serde_json::json!({}));
+        let mut app = open_card(task, serde_json::json!({}));
+        app.tasks[0].repo_path = Some("/work/app".into());
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        for ch in ":start".chars().map(KeyCode::Char).chain([KeyCode::Enter]) {
+            press(&mut app, ch);
+        }
+        assert_eq!(posts(&seen), vec!["/tasks/aaaaaaaa9999/start".to_string()]);
+        assert!(matches!(&app.mode, Mode::Detail(open) if open == "aaaaaaaa9999"));
+    }
+
+    #[test]
+    fn marked_cards_at_a_reply_or_setup_gate_are_not_approved_blind() {
+        let mut app = marked_gates();
+        let reply = at_outcome_gate("conversation").tasks[0].clone();
+        let setup = at_state("awaiting_setup").tasks[0].clone();
+        app.tasks.retain(|t| t.state == "draft");
+        app.tasks.extend([reply, setup]);
+        app.marked = app.tasks.iter().map(|t| t.id.clone()).collect();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        assert!(posts(&seen).iter().all(|p| p.ends_with("/start")), "{:?}", posts(&seen));
+    }
+
+    #[test]
+    fn inbox_capital_a_approves_together_only_what_asks_a_plain_yes() {
+        let mut app = at_outcome_gate("conversation");
+        app.mode = Mode::Normal;
+        app.inbox = Some(crate::inbox::InboxState::default());
+        press(&mut app, KeyCode::Char('A'));
+        assert!(matches!(app.mode, Mode::Normal), "a reply is read inside its card, not approved with the rest");
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        app.inbox = Some(crate::inbox::InboxState::default());
+        press(&mut app, KeyCode::Char('A'));
+        assert!(matches!(app.mode, Mode::ConfirmApproveAll(ref ids) if ids.len() == 1));
+    }
+
+    #[test]
+    fn the_split_and_release_bars_offer_their_answers_and_no_edit() {
+        let bar = |app: &App| crate::keys::detail_footer(app).into_iter().map(|(k, l)| format!("{k} {l}")).collect::<Vec<_>>();
+        let split = bar(&at_split_gate());
+        assert_eq!(split[..3], ["a approve", "r send back", "N reject"], "{split:?}");
+        assert!(!split.iter().any(|k| k.starts_with("e ")), "a split has no plan to edit: {split:?}");
+        let release = bar(&release_question_app());
+        assert_eq!(release[..2], ["a release", "N reject"], "{release:?}");
+        assert!(!release.iter().any(|k| k.starts_with("e ")), "{release:?}");
+        let plan = bar(&plan_gate_app());
+        assert!(plan.contains(&"e edit".to_string()), "the plan gate edits: {plan:?}");
+    }
+
+    #[test]
+    fn e_at_a_split_or_release_gate_says_why_it_edits_nothing_and_opens_no_editor() {
+        for mut app in [at_split_gate(), release_question_app()] {
+            press(&mut app, KeyCode::Char('e'));
+            assert!(matches!(app.mode, Mode::Detail(_)), "no editor opened");
+            let reg = crate::keys::bindings_for(&app, crate::keys::Scope::Detail).into_iter().find(|(b, _)| b.keys == "e").unwrap().1;
+            assert!(matches!(reg, crate::keys::Avail::Off(_)), "{reg:?}");
+            assert!(app.toast.is_some());
+        }
+    }
+
+    #[test]
+    fn e_at_a_reply_or_archive_gate_says_why_it_edits_nothing_and_the_bar_does_not_offer_it() {
+        for outcome in ["conversation", "archive"] {
+            let mut app = at_outcome_gate(outcome);
+            let bar: Vec<String> = crate::keys::detail_footer(&app).into_iter().map(|(k, l)| format!("{k} {l}")).collect();
+            assert!(!bar.iter().any(|k| k.starts_with("e ")), "{outcome}: the bar offers e: {bar:?}");
+            let screen = render(&mut app, 160, 40);
+            assert!(!screen.lines().any(|l| l.contains("e edit")), "{outcome}: the screen offers e edit:\n{screen}");
+            press(&mut app, KeyCode::Char('e'));
+            assert!(matches!(app.mode, Mode::Detail(_)), "{outcome}: no editor opened");
+            assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("nothing to edit")), "{outcome}: {:?}", app.toast.as_ref().map(|t| &t.text));
+            assert!(!has_open_plan(&app.tasks[0], app.detail.as_ref()), "{outcome}: there is no plan");
+        }
+    }
+
+    #[test]
+    fn a_on_the_board_keeps_its_meaning_on_other_cards() {
+        // A draft starts, as before.
+        let task = task_json("aaaaaaaa9999", "A draft", "draft", "Intake", serde_json::json!({}));
+        let mut app = open_card(task, serde_json::json!({}));
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        app.mode = Mode::Normal;
+        app.select("aaaaaaaa9999", true);
+        press(&mut app, KeyCode::Char('a'));
+        assert_eq!(posts(&seen), vec!["/tasks/aaaaaaaa9999/start".to_string()]);
+        // An escalated card asks for guidance.
+        let mut app = crate::testkit::escalated_app();
+        app.mode = Mode::Normal;
+        app.select("cccccccc3333", true);
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Reason { approve: true, .. }));
+    }
+
+    #[test]
+    fn the_board_says_what_a_will_do_for_the_selected_card() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        app.select("aaaaaaaa1111", true);
+        let label = |app: &App, scope: keys::Scope| keys::bindings_for(app, scope).into_iter().find(|(b, _)| b.first() == "a").map(|(b, _)| b.label);
+        assert_eq!(label(&app, keys::Scope::Board), Some("open to approve"));
+        app.toast = None;
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("open to approve"), "the board footer says it:\n{screen}");
+        app.open_detail("aaaaaaaa1111".to_string());
+        assert_eq!(label(&app, keys::Scope::Detail), Some("approve the plan"), "the task view still approves");
+    }
+
+    #[test]
+    fn q_asks_before_quitting_while_a_card_needs_you_or_runs() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Char('q'))), Outcome::Continue));
+        assert!(matches!(app.mode, Mode::ConfirmQuit));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("quit? 1 card needs you, 0 running"), "{screen}");
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Char('n'))), Outcome::Continue));
+        assert!(matches!(app.mode, Mode::Normal), "n stays");
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Esc)), Outcome::Continue));
+        assert!(matches!(app.mode, Mode::Normal), "esc stays");
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Char('y'))), Outcome::Quit), "y quits");
+    }
+
+    #[test]
+    fn q_counts_running_cards_too_and_quits_at_once_when_nothing_is_pending() {
+        let mut app = running_build_app();
+        app.mode = Mode::Normal;
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
+        let screen = render(&mut app, 140, 40);
+        assert!(screen.contains("quit? 0 cards need you, 1 running"), "{screen}");
+        let task = task_json("aaaaaaaa0001", "All done", "closed", "Done", serde_json::json!({}));
+        let mut quiet = open_card(task, serde_json::json!({}));
+        quiet.mode = Mode::Normal;
+        assert!(matches!(quiet.handle_key(KeyEvent::from(KeyCode::Char('q'))), Outcome::Quit), "nothing pending: quit at once");
+    }
+
+    #[test]
+    fn capital_q_quits_without_asking() {
+        let mut app = plan_gate_app();
+        app.mode = Mode::Normal;
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Char('Q'))), Outcome::Quit));
+    }
+}
+
+#[cfg(test)]
+mod evidence_open_tests {
+    use std::{ffi::OsString, fs, rc::Rc};
+
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+    use super::*;
+    use crate::{
+        keys::{self, Avail, Scope},
+        testkit::{open_card, render, ship_stage_app, task_json},
+    };
+
+    type Calls = Rc<RefCell<Vec<(String, Vec<OsString>)>>>;
+
+    /// The ship-stage card with its three artifacts in real files under a fresh folder that is the card's worktree,
+    /// and an opener that records its calls. Runs: verifying (r1) wrote `verify.log`, evidence (r2) the other two.
+    fn card(name: &str) -> (App, PathBuf, Calls) {
+        let root = std::env::temp_dir().join(format!("board-evidence-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut app = ship_stage_app();
+        let paths = [("r2", "runs/r2/files/limit-429.png"), ("r1", "runs/r1/files/verify.log"), ("r2", "runs/r2/files/evidence.md")];
+        for (artifact, (_, rel)) in app.detail.as_mut().unwrap().artifacts.iter_mut().zip(paths) {
+            let path = root.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"x").unwrap();
+            artifact.path = path.to_string_lossy().into_owned();
+        }
+        app.tasks[0].worktree_path = Some(root.to_string_lossy().into_owned());
+        let calls: Calls = Rc::default();
+        let log = calls.clone();
+        app.launch = Box::new(move |program, args| {
+            log.borrow_mut().push((program.to_string(), args.to_vec()));
+            Ok(())
+        });
+        (app, root, calls)
+    }
+
+    fn press(app: &mut App, c: char) {
+        app.handle_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    fn launched(calls: &Calls) -> Vec<OsString> {
+        calls.borrow().iter().filter_map(|(_, args)| args.last().cloned()).collect()
+    }
+
+    fn canon(path: &Path) -> OsString {
+        fs::canonicalize(path).unwrap().into_os_string()
+    }
+
+    #[test]
+    fn o_opens_the_evidence_folder_from_any_section_of_a_card_that_has_files() {
+        let (mut app, root, calls) = card("o-anywhere");
+        assert_eq!(app.detail_section, Section::Result);
+        press(&mut app, 'o');
+        assert_eq!(launched(&calls), vec![canon(&root.join("runs/r2/files"))], "the latest run's folder: the runs wrote to different ones");
+        assert_eq!(toast(&app), "opened the evidence folder");
+        assert!(!app.toast.as_ref().unwrap().error);
+    }
+
+    #[test]
+    fn in_the_evidence_section_o_opens_the_folder_of_the_run_under_the_cursor_and_enter_the_file() {
+        let (mut app, root, calls) = card("o-enter");
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 0;
+        assert_eq!(crate::detail::ordered_artifacts(app.detail.as_ref().unwrap())[0].label, "verify", "listed by run: verifying first");
+        press(&mut app, 'o');
+        assert_eq!(launched(&calls), vec![canon(&root.join("runs/r1/files"))]);
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(launched(&calls)[1], canon(&root.join("runs/r1/files/verify.log")));
+        assert_eq!(toast(&app), "opened verify");
+        assert!(matches!(app.mode, Mode::Detail(_)), "enter opened the file and did not close the view");
+        app.detail_cursor = 2;
+        press(&mut app, 'o');
+        assert_eq!(launched(&calls)[2], canon(&root.join("runs/r2/files")));
+    }
+
+    #[test]
+    fn enter_in_the_other_sections_still_closes_the_view() {
+        let (mut app, _, calls) = card("enter-closes");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(launched(&calls).is_empty());
+    }
+
+    #[test]
+    fn i_opens_the_linked_issue_from_any_section_while_o_keeps_the_evidence_folder() {
+        let (mut app, root, calls) = card("issue");
+        let link = serde_json::json!({"key": "PLAT-1", "url": "https://acme.atlassian.net/browse/PLAT-1"});
+        app.tasks[0].jira = Some(serde_json::from_value(link).unwrap());
+        for section in [Section::Result, Section::Evidence, Section::Activity] {
+            app.set_section(section);
+            press(&mut app, 'i');
+            assert_eq!(launched(&calls).last(), Some(&OsString::from("https://acme.atlassian.net/browse/PLAT-1")), "{section:?}");
+            assert!(crate::keys::bindings_for(&app, crate::keys::Scope::Detail).iter().any(|(b, a)| b.keys == "i" && a.is_on()));
+        }
+        press(&mut app, 'o');
+        assert!(launched(&calls).last().is_some_and(|l| l != &OsString::from("https://acme.atlassian.net/browse/PLAT-1")), "o still opens the evidence, not the issue");
+        let _ = root;
+        let (mut bare, _, calls) = card("no-issue");
+        press(&mut bare, 'i');
+        assert!(launched(&calls).is_empty());
+        assert_eq!(toast(&bare), "no issue linked");
+        let off = crate::keys::bindings_for(&bare, crate::keys::Scope::Detail).into_iter().find(|(b, _)| b.keys == "i").unwrap().1;
+        assert!(matches!(off, crate::keys::Avail::Off("no linked issue")));
+    }
+
+    #[test]
+    fn o_says_in_the_key_sheet_what_it_will_do_when_there_is_nothing_to_open() {
+        let mut app = crate::testkit::plan_gate_app();
+        let o = |app: &App| crate::keys::bindings_for(app, crate::keys::Scope::Detail).into_iter().find(|(b, _)| b.keys == "o").unwrap().1;
+        assert!(matches!(o(&app), crate::keys::Avail::Off("no issue linked")), "a card with no artifacts, PR or issue: {:?}", o(&app));
+        let link = serde_json::json!({"key": "PLAT-1", "url": "https://acme.atlassian.net/browse/PLAT-1"});
+        app.tasks[0].jira = Some(serde_json::from_value(link).unwrap());
+        assert!(o(&app).is_on(), "a linked issue gives it something to open");
+        app.set_section(Section::Diff);
+        assert!(matches!(o(&app), crate::keys::Avail::Off("nothing to open here")), "{:?}", o(&app));
+    }
+
+    #[test]
+    fn capital_o_opens_the_pr_and_says_so_when_there_is_none() {
+        let (mut app, _, calls) = card("pr");
+        press(&mut app, 'O');
+        assert_eq!(launched(&calls), vec![OsString::from("https://github.com/acme/app/pull/412")]);
+        assert_eq!(toast(&app), "opened the PR");
+        let (mut bare, _, calls) = card("no-pr");
+        bare.detail.as_mut().unwrap().ship = None;
+        press(&mut bare, 'O');
+        assert!(launched(&calls).is_empty());
+        assert_eq!(toast(&bare), "no PR yet");
+    }
+
+    #[test]
+    fn a_file_a_run_wrote_is_revealed_not_launched_unless_it_is_plain_to_view() {
+        let (mut app, root, calls) = card("reveal");
+        let hostile = root.join("runs/r2/files/run.command");
+        fs::write(&hostile, b"#!/bin/sh").unwrap();
+        app.detail.as_mut().unwrap().artifacts[0].path = hostile.to_string_lossy().into_owned();
+        app.detail.as_mut().unwrap().artifacts[0].label = "run.command".into();
+        app.set_section(Section::Evidence);
+        let row = crate::detail::ordered_artifacts(app.detail.as_ref().unwrap()).iter().position(|a| a.label == "run.command").unwrap();
+        app.detail_cursor = row;
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let real = canon(&hostile);
+        let last = calls.borrow().last().cloned().unwrap();
+        let expect: Vec<OsString> = if cfg!(target_os = "macos") { vec![OsString::from("-R"), real] } else { vec![canon(hostile.parent().unwrap())] };
+        assert_eq!(last.1, expect, "revealed, never opened");
+        assert_eq!(toast(&app), "revealed run.command in the folder");
+        let plain = crate::detail::ordered_artifacts(app.detail.as_ref().unwrap()).iter().position(|a| a.label != "run.command").unwrap();
+        app.detail_cursor = plain;
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(toast(&app).starts_with("opened "), "{}", toast(&app));
+    }
+
+    #[test]
+    fn the_evidence_folder_inside_a_bundle_is_revealed() {
+        let (mut app, root, calls) = card("bundle-folder");
+        let bundle = root.join("runs/r2/X.app/files");
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join("a.png"), b"x").unwrap();
+        for artifact in app.detail.as_mut().unwrap().artifacts.iter_mut() {
+            artifact.path = bundle.join("a.png").to_string_lossy().into_owned();
+        }
+        press(&mut app, 'o');
+        assert_eq!(toast(&app), "revealed the evidence folder in the folder");
+        let last = calls.borrow().last().cloned().unwrap();
+        assert!(if cfg!(target_os = "macos") { last.1.first() == Some(&OsString::from("-R")) } else { true });
+    }
+
+    #[test]
+    fn a_file_that_resolves_outside_the_card_is_refused_in_fixed_words() {
+        let (mut app, root, calls) = card("outside");
+        let stray = root.parent().unwrap().join(format!("board-evidence-stray-{}.txt", std::process::id()));
+        fs::write(&stray, b"secret").unwrap();
+        app.detail.as_mut().unwrap().artifacts[0].path = stray.to_string_lossy().into_owned();
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 1;
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let said = toast(&app);
+        let _ = fs::remove_file(&stray);
+        assert!(launched(&calls).is_empty());
+        assert_eq!(said, crate::open::REFUSE_OUTSIDE);
+        assert!(app.toast.as_ref().unwrap().error);
+    }
+
+    #[test]
+    fn a_missing_file_is_refused_and_a_card_without_files_says_so() {
+        let (mut app, root, calls) = card("gone");
+        fs::remove_dir_all(root.join("runs/r1")).unwrap();
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 0;
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(toast(&app), crate::open::REFUSE_MISSING);
+        let mut bare = open_card(task_json("bbbbbbbb2222", "Bare", "implementing", "Build", serde_json::json!({})), serde_json::json!({}));
+        bare.set_section(Section::Evidence);
+        press(&mut bare, 'o');
+        assert_eq!(toast(&bare), "no evidence yet");
+        assert!(launched(&calls).is_empty());
+    }
+
+    #[test]
+    fn the_registry_gives_each_key_its_reason() {
+        let reason = |app: &App, key: &str| keys::bindings_for(app, Scope::Detail).into_iter().find(|(b, _)| b.first() == key).map(|(_, a)| a).unwrap();
+        let (mut app, _, _) = card("avail");
+        assert_eq!(reason(&app, "O"), Avail::On);
+        assert_eq!(reason(&app, "o"), Avail::On);
+        assert_eq!(reason(&app, "enter"), Avail::Off("only in the Evidence section"));
+        app.set_section(Section::Evidence);
+        assert_eq!(reason(&app, "enter"), Avail::On);
+        app.detail.as_mut().unwrap().artifacts.clear();
+        app.detail.as_mut().unwrap().ship = None;
+        assert_eq!(reason(&app, "enter"), Avail::Off("no evidence yet"));
+        assert_eq!(reason(&app, "o"), Avail::Off("no evidence yet"));
+        assert_eq!(reason(&app, "O"), Avail::Off("no PR yet"));
+        let footer = |app: &App| keys::detail_footer(app).into_iter().map(|(k, l)| format!("{k} {l}")).collect::<Vec<_>>();
+        let (mut app, _, _) = card("footer");
+        assert!(footer(&app).contains(&"o open".to_string()), "{:?}", footer(&app));
+        assert!(footer(&app).contains(&"O PR".to_string()), "{:?}", footer(&app));
+        app.set_section(Section::Evidence);
+        assert!(footer(&app).contains(&"enter open file".to_string()), "{:?}", footer(&app));
+    }
+
+    /// The card on the Evidence section, drawn once so the rows have rectangles.
+    fn drawn(name: &str) -> (App, PathBuf, Calls) {
+        let (mut app, root, calls) = card(name);
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 0;
+        render(&mut app, 140, 40);
+        (app, root, calls)
+    }
+
+    fn rect_of(app: &App, hit: crate::detail::EvidenceHit) -> Rect {
+        app.evidence_hits.borrow().iter().find(|(_, h)| *h == hit).map(|(r, _)| *r).unwrap_or_else(|| panic!("no rectangle for {hit:?}: {:?}", app.evidence_hits.borrow()))
+    }
+
+    #[test]
+    fn a_click_selects_a_file_row_and_a_second_click_within_half_a_second_opens_it() {
+        use crate::detail::EvidenceHit::File;
+        let (mut app, root, calls) = drawn("click");
+        assert_eq!(app.evidence_hits.borrow().len(), 4, "the folder line and three rows");
+        let row = rect_of(&app, File(2));
+        app.click(row.x + 3, row.y);
+        assert_eq!(app.detail_row(), 2);
+        assert!(launched(&calls).is_empty(), "one click only selects");
+        app.click(row.x + 3, row.y);
+        assert_eq!(launched(&calls), vec![canon(&root.join("runs/r2/files/evidence.md"))]);
+        assert_eq!(toast(&app), "opened evidence pack");
+    }
+
+    #[test]
+    fn a_slow_second_click_or_a_click_on_another_row_only_selects() {
+        use crate::detail::EvidenceHit::File;
+        let (mut app, _, calls) = drawn("slow");
+        let (a, b) = (rect_of(&app, File(1)), rect_of(&app, File(2)));
+        app.click(a.x, a.y);
+        app.last_click = app.last_click.map(|(i, at)| (i, at - Duration::from_millis(600)));
+        app.click(a.x, a.y);
+        app.click(b.x, b.y);
+        assert_eq!(app.detail_row(), 2);
+        assert!(launched(&calls).is_empty());
+    }
+
+    #[test]
+    fn a_click_on_the_folder_line_opens_the_folder_and_a_click_elsewhere_changes_nothing() {
+        use crate::detail::EvidenceHit::Folder;
+        let (mut app, root, calls) = drawn("folder-click");
+        let line = rect_of(&app, Folder);
+        app.click(line.x + 2, line.y);
+        assert_eq!(launched(&calls), vec![canon(&root.join("runs/r1/files"))], "the folder of the run under the cursor");
+        let (cursor, mode_open) = (app.detail_row(), matches!(app.mode, Mode::Detail(_)));
+        app.click(0, 0);
+        app.click(line.x, line.y.saturating_sub(2));
+        assert_eq!((app.detail_row(), matches!(app.mode, Mode::Detail(_)), launched(&calls).len()), (cursor, mode_open, 1));
+    }
+
+    #[test]
+    fn rows_are_found_after_the_pane_scrolls() {
+        use crate::detail::EvidenceHit::File;
+        let (mut app, _, _) = card("scrolled");
+        app.set_section(Section::Evidence);
+        app.detail_cursor = 2;
+        render(&mut app, 100, 22);
+        let hits = app.evidence_hits.borrow().clone();
+        assert!(hits.iter().any(|(_, h)| *h == File(2)), "the cursor's row is on screen and clickable: {hits:?}");
+        assert!(hits.iter().all(|(r, _)| r.y >= 1 && r.height == 1));
+    }
+
+    #[test]
+    fn the_evidence_section_draws_the_folder_and_the_rows_by_run_wide_and_narrow() {
+        for (w, h) in [(180u16, 50u16), (100, 30)] {
+            let mut app = ship_stage_app();
+            app.set_section(Section::Evidence);
+            let screen = render(&mut app, w, h);
+            for needle in ["Folder  /out/files", "verifying · run 1", "evidence · run 1", "log", "verify", "/out/files/verify.log", "screenshot", "429 after the limit", "/out/files/limit-429.png", "report", "evidence pack"] {
+                assert!(screen.contains(needle), "{w}x{h}: {needle} missing in\n{screen}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_hostile_label_or_path_is_neutralised_and_a_long_path_is_cut_in_the_middle() {
+        let mut app = ship_stage_app();
+        let artifacts = &mut app.detail.as_mut().unwrap().artifacts;
+        artifacts[0].label = "shot\u{1b}[2J\r\u{7}\u{202e}x".into();
+        artifacts[0].path = "/out/files/\u{1b}]0;pwned\u{7}/a\u{85}b.png".into();
+        artifacts[2].path = format!("/out/files/{}/deep/er/report.md", "very-long-folder-name/".repeat(12));
+        app.set_section(Section::Evidence);
+        let screen = render(&mut app, 100, 30);
+        for bad in ['\u{1b}', '\r', '\u{7}', '\u{202e}', '\u{85}'] {
+            assert!(!screen.contains(bad), "{bad:?} reached the screen");
+        }
+        assert!(screen.contains("shot [2J"), "{screen}");
+        assert!(screen.contains("report.md") && screen.contains('…'), "the tail of a long path stays: {screen}");
+    }
+}
+
+#[cfg(test)]
+mod stale_approval_tests {
+    use super::confirm_tests::{posts, recording_machine};
+    use super::*;
+    use crate::testkit::{escalated_app, plan_gate_app, release_question_app, render};
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for ch in text.chars() {
+            press(app, KeyCode::Char(ch));
+        }
+    }
+
+    fn command(app: &mut App, line: &str) {
+        press(app, KeyCode::Char(':'));
+        type_text(app, line);
+        press(app, KeyCode::Enter);
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    /// Two plan gates on the board, a machine that records what is sent, and the board (not a task) in front.
+    fn two_plans() -> (App, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let mut app = plan_gate_app();
+        let mut second = app.tasks[0].clone();
+        second.id = "aaaaaaaa2222".into();
+        app.tasks.push(second);
+        app.mode = Mode::Normal;
+        app.marked = app.tasks.iter().map(|t| t.id.clone()).collect();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        (app, seen)
+    }
+
+    fn move_to_ship(app: &mut App, index: usize) {
+        app.tasks[index].state = "awaiting_ship".into();
+        app.tasks[index].column = "Ship".into();
+    }
+
+    fn box_lines(screen: &str) -> Vec<String> {
+        screen.lines().filter_map(|l| l.find("approve ").map(|at| l[at..].split('│').next().unwrap_or("").trim().to_string())).filter(|l| l.starts_with("approve 2 cards")).collect()
+    }
+
+    #[test]
+    fn whole_on_the_board_opens_the_task_first_and_sends_nothing() {
+        let (machine, seen) = recording_machine();
+        let mut app = plan_gate_app();
+        app.machine = machine;
+        let id = app.tasks[0].id.clone();
+        app.mode = Mode::Normal;
+        app.select(&id, true);
+        command(&mut app, "whole");
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id), "{:?}", toast(&app));
+        assert!(posts(&seen).is_empty());
+    }
+
+    #[test]
+    fn whole_inside_the_task_asks_in_its_own_words_and_y_sends_the_decision() {
+        let (machine, seen) = recording_machine();
+        let mut app = plan_gate_app();
+        app.machine = machine;
+        let id = app.tasks[0].id.clone();
+        command(&mut app, "whole");
+        let Mode::ConfirmApprove(held) = &app.mode else { panic!("the task asks first: {:?}", toast(&app)) };
+        assert_eq!(held.question, "keep #aaaaaaaa whole and approve the plan?");
+        assert!(posts(&seen).is_empty());
+        press(&mut app, KeyCode::Char('n'));
+        assert!(posts(&seen).is_empty() && matches!(&app.mode, Mode::Detail(open) if *open == id), "n sends nothing and lands on the task");
+        command(&mut app, "whole");
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(posts(&seen), vec![format!("/tasks/{id}/decision")]);
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id));
+    }
+
+    #[test]
+    fn whole_at_no_plan_or_split_gate_says_so_and_asks_nothing() {
+        let mut app = crate::testkit::running_build_app();
+        command(&mut app, "whole");
+        assert!(matches!(app.mode, Mode::Detail(_)), "no box");
+        assert!(toast(&app).contains("plan or split gate"), "{:?}", toast(&app));
+    }
+
+    #[test]
+    fn bulk_a_skips_a_card_that_moved_on_and_says_so() {
+        let (mut app, seen) = two_plans();
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::ConfirmApproveMany { .. }));
+        move_to_ship(&mut app, 1);
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(posts(&seen), vec!["/tasks/aaaaaaaa1111/decision".to_string()]);
+        assert!(toast(&app).starts_with("approved ") && toast(&app).contains("skipped 1 that moved on"), "{:?}", toast(&app));
+    }
+
+    #[test]
+    fn the_bulk_box_keeps_the_words_it_opened_with() {
+        let (mut app, _) = two_plans();
+        press(&mut app, KeyCode::Char('a'));
+        let before = box_lines(&render(&mut app, 140, 40));
+        assert!(before.iter().any(|l| l.contains("approve 2 cards? 2 plans")), "{before:?}");
+        move_to_ship(&mut app, 1);
+        assert_eq!(box_lines(&render(&mut app, 140, 40)), before, "the question does not change while it is open");
+    }
+
+    #[test]
+    fn bulk_a_skips_a_card_that_stopped_waiting() {
+        let (mut app, seen) = two_plans();
+        press(&mut app, KeyCode::Char('a'));
+        app.tasks[0].waiting_on_you = false;
+        app.tasks[0].state = "implementing".into();
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(posts(&seen), vec!["/tasks/aaaaaaaa2222/decision".to_string()]);
+    }
+
+    #[test]
+    fn inbox_capital_a_skips_a_card_that_moved_on_and_says_so() {
+        let (mut app, seen) = two_plans();
+        app.marked.clear();
+        app.inbox = Some(crate::inbox::InboxState::default());
+        press(&mut app, KeyCode::Char('A'));
+        assert!(matches!(app.mode, Mode::ConfirmApproveAll(ref ids) if ids.len() == 2));
+        move_to_ship(&mut app, 1);
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(posts(&seen), vec!["/tasks/aaaaaaaa1111/decision".to_string()]);
+        assert!(toast(&app).starts_with("approved ") && toast(&app).contains("skipped 1 that moved on"), "{:?}", toast(&app));
+    }
+
+    #[test]
+    fn enter_on_the_guidance_prompt_of_a_card_that_moved_on_sends_nothing() {
+        let (machine, seen) = recording_machine();
+        let mut app = escalated_app();
+        app.machine = machine;
+        app.mode = Mode::Normal;
+        let id = app.tasks[0].id.clone();
+        app.select(&id, true);
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Reason { approve: true, .. }));
+        app.tasks[0].state = "awaiting_approval".into();
+        app.tasks[0].waiting_on_you = true;
+        press(&mut app, KeyCode::Enter);
+        assert!(posts(&seen).is_empty(), "{:?}", posts(&seen));
+        assert_eq!(toast(&app), "the card moved on; nothing was sent");
+    }
+
+    #[test]
+    fn enter_on_the_guidance_prompt_of_a_card_still_escalated_sends_it() {
+        let (machine, seen) = recording_machine();
+        let mut app = escalated_app();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(posts(&seen), vec!["/tasks/cccccccc3333/decision".to_string()]);
+    }
+
+    /// The release gate with the box open, then a task event that makes the loaded detail stale.
+    fn box_over_a_stale_detail(online: bool) -> (App, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let (machine, seen) = recording_machine();
+        let mut app = release_question_app();
+        app.machine = machine;
+        app.online = online;
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::ConfirmApprove(_)));
+        let mut again = app.tasks[0].clone();
+        again.updated_at = "2026-10-22T11:00:00.000Z".into();
+        app.take_incoming(Incoming::Message(StreamMessage::Updated { task: again }));
+        assert!(app.detail_stale);
+        (app, seen)
+    }
+
+    #[test]
+    fn y_over_a_stale_detail_waits_for_the_fresh_one_and_sends_if_the_gate_is_the_same() {
+        let (mut app, seen) = box_over_a_stale_detail(true);
+        let id = app.tasks[0].id.clone();
+        let fresh = app.detail.clone();
+        press(&mut app, KeyCode::Char('y'));
+        assert!(posts(&seen).is_empty(), "nothing goes out on the old detail");
+        assert_eq!(toast(&app), "checking the card…");
+        assert!(matches!(app.mode, Mode::ConfirmApprove(_)), "the box stays until the check is done");
+        app.take_incoming(Incoming::Detail { id: id.clone(), detail: fresh });
+        assert_eq!(posts(&seen), vec![format!("/tasks/{id}/decision")]);
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id));
+    }
+
+    #[test]
+    fn y_over_a_stale_detail_sends_nothing_when_the_fresh_one_is_another_ask() {
+        let (mut app, seen) = box_over_a_stale_detail(true);
+        let id = app.tasks[0].id.clone();
+        let mut fresh = app.detail.clone().unwrap();
+        fresh.approvals.last_mut().unwrap().id = Some("s2".into());
+        press(&mut app, KeyCode::Char('y'));
+        app.take_incoming(Incoming::Detail { id, detail: Some(fresh) });
+        assert!(posts(&seen).is_empty(), "{:?}", posts(&seen));
+        assert_eq!(toast(&app), "the card moved on; nothing was approved");
+        assert!(matches!(app.mode, Mode::Detail(_)));
+    }
+
+    #[test]
+    fn y_over_a_stale_detail_offline_says_it_cannot_check_and_closes_the_box() {
+        let (mut app, seen) = box_over_a_stale_detail(false);
+        press(&mut app, KeyCode::Char('y'));
+        assert!(posts(&seen).is_empty());
+        assert_eq!(toast(&app), "cannot check the card (offline); nothing was approved");
+        assert!(matches!(app.mode, Mode::Detail(_)));
+    }
+
+    #[test]
+    fn n_while_the_check_is_pending_cancels_without_sending() {
+        let (mut app, seen) = box_over_a_stale_detail(true);
+        let id = app.tasks[0].id.clone();
+        let fresh = app.detail.clone();
+        press(&mut app, KeyCode::Char('y'));
+        press(&mut app, KeyCode::Char('n'));
+        app.take_incoming(Incoming::Detail { id, detail: fresh });
+        assert!(posts(&seen).is_empty());
+    }
+
+    #[test]
+    fn a_detail_for_the_open_card_lands_under_a_prompt_when_the_board_selects_another() {
+        let mut app = plan_gate_app();
+        let open = app.tasks[0].id.clone();
+        let mut other = app.tasks[0].clone();
+        other.id = "bbbbbbbb9999".into();
+        other.title = "Another".into();
+        app.tasks.push(other);
+        app.filter = "Another".into();
+        app.select("bbbbbbbb9999", true);
+        app.clamp_selection();
+        press(&mut app, KeyCode::Char(':'));
+        assert_eq!(app.over_task(), Some(open.as_str()));
+        let mut fresh = app.detail.clone().unwrap();
+        fresh.stage_runs.clear();
+        fresh.events.clear();
+        app.take_incoming(Incoming::Detail { id: open, detail: Some(fresh) });
+        assert!(app.detail.as_ref().is_some_and(|d| d.stage_runs.is_empty() && d.events.is_empty()), "the fresh detail was taken");
+    }
+
+    fn floor_with_a_pending_base() -> App {
+        let (machine, _) = recording_machine();
+        let mut app = App::new(machine);
+        app.floor = Some(FloorState::default());
+        let floor = app.floor.as_mut().unwrap();
+        floor.health = serde_json::from_str(
+            r#"[{"repo":"/r/fresh","image":{"inUse":"m","base":null,"builtAt":null,"lastFailure":null,"pendingBase":"python:3.13-slim"},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        press(&mut app, KeyCode::Tab);
+        app
+    }
+
+    #[test]
+    fn floor_capital_a_names_the_repository_and_the_image_before_it_approves_the_base() {
+        let mut app = floor_with_a_pending_base();
+        let (machine, seen) = recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('A'));
+        assert!(posts(&seen).is_empty(), "asking sends nothing");
+        let screen = render(&mut app, 120, 40);
+        assert!(screen.contains("/r/fresh") && screen.contains("python:3.13-slim"), "{screen}");
+        press(&mut app, KeyCode::Char('n'));
+        assert!(posts(&seen).is_empty());
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Esc);
+        assert!(posts(&seen).is_empty());
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(posts(&seen), vec!["/repos/base/approve".to_string()]);
+    }
+
+    fn economy_at_a_proposal() -> (App, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let (machine, seen) = recording_machine();
+        let mut app = App::new(machine);
+        app.tasks.clear();
+        app.economy_data = serde_json::from_value(serde_json::json!({
+            "tools": { "build": { "mask": ["WebSearch"], "proposal": [{ "unit": "NotebookEdit", "unusedRuns": 8, "cards": 5 }, { "unit": "WebFetch", "unusedRuns": 9, "cards": 6 }] } }
+        }))
+        .unwrap();
+        let cursor = app.economy_data.rows().iter().position(|r| r.can_approve()).expect("a proposed row");
+        app.economy = Some(crate::economy::EconomyState { repo: "/repo".into(), cursor });
+        (app, seen)
+    }
+
+    #[test]
+    fn economy_a_names_the_pack_and_the_units_before_it_approves_the_mask() {
+        let (mut app, seen) = economy_at_a_proposal();
+        press(&mut app, KeyCode::Char('a'));
+        assert!(posts(&seen).is_empty(), "asking sends nothing");
+        let screen = render(&mut app, 120, 40);
+        assert!(screen.contains("build") && screen.contains("NotebookEdit") && screen.contains("WebFetch"), "{screen}");
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Esc);
+        assert!(posts(&seen).is_empty());
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(posts(&seen), vec!["/economy/mask/approve".to_string()]);
+    }
 }

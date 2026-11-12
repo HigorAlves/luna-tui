@@ -441,7 +441,9 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         now: now(),
       });
       const out = await deps.video(context, {
-        scenarios: approvedCases(context.approvals),
+        // The film shows what a browser can show: the browser run's scenarios. The rest are proven by their tests (the site card's 25 scenarios,
+        // 22 of them checked by tests or by reading, asked for 25 demo scenes and fell back to captures).
+        scenarios: browserCases(approvedCases(context.approvals)),
         record: task.record ?? null,
         pack: { summary: facts_.summary, howToVerify: facts_.howToVerify, risk: facts_.risk },
         e2eDir: facts.qaDir,

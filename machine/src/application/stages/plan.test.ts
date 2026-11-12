@@ -341,7 +341,7 @@ describe("planStage", () => {
 
     it("takes the higher of the raised level and the scored one as the floor, written to risk.machine, so the new gate is high too", async () => {
       const raised = approval({ risk: { level: "high", reason: "touches billing", applied: true } });
-      const result = await setup().run(context({ approvals: [approval({ risk: { level: "low", reason: "r", applied: false } }), raised] }));
+      const result = await setup({}, { policies: { for: async () => ({ decisions: {}, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 2, outside_owning_team: true } } } }) } }).run(context({ approvals: [approval({ risk: { level: "low", reason: "r", applied: false } }), raised] }));
       expect(result.detail).toMatchObject({ risk: { level: "high", machine: "high" }, approvalRule: { needed: 2 } });
     });
 
@@ -367,7 +367,7 @@ describe("planStage", () => {
     const touching = (...files: string[]) => planned({ slices: [{ title: "g", est_loc: 3, touchpoints: files, acceptance: ["no panic", "stays selected"] }] });
 
     it.each([".github/workflows/release.yml", "CODEOWNERS", "luna.yaml", "pnpm-lock.yaml", "docs/CODEOWNERS"])("raises a low risk to high when a step touches %s, and the approvers rule reads it", async (file) => {
-      const { run } = setup({ plan: [touching("board/src/keys.rs", file)] });
+      const { run } = setup({ plan: [touching("board/src/keys.rs", file)] }, { policies: { for: async () => ({ decisions: {}, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 2, outside_owning_team: true } } } }) } });
       const result = await run(context({ task: lowTask }));
       expect(result.detail).toMatchObject({ risk: { level: "high", machine: "high" }, approvalRule: { needed: 2 }, riskRaised: expect.stringContaining(file) });
     });
@@ -455,7 +455,7 @@ describe("planStage", () => {
 
     it("uses the diagram's numbers when the repo says nothing", async () => {
       const result = await setup({}, { graph: codeowners([["@marta"]]) }).run(context({ task: highTask }));
-      expect(result.detail).toMatchObject({ approvalRule: { needed: 2, outside: "required" } });
+      expect(result.detail).toMatchObject({ approvalRule: { needed: 1, outside: "off" } });
     });
   });
 
@@ -680,6 +680,16 @@ describe("planStage", () => {
     expect(result.artifacts).toHaveLength(1);
     expect(result.usage).toEqual({ turns: 5, costUsd: 0.75 });
     expect(result.run).toMatchObject({ containerId: "tests-container" });
+  });
+
+  it("sums the sub-runs' tokens with every field, the cache writes too", async () => {
+    const withTokens = (result: StageResult, tokens: NonNullable<NonNullable<StageResult["usage"]>["tokens"]>): StageResult => ({ ...result, usage: { ...result.usage!, tokens } });
+    const { run } = setup({
+      plan: [withTokens(planned(), { input: 100, output: 10, cached: 5, cacheWrite5m: 40 })],
+      test_design: [withTokens(cased("no panic", "stays selected"), { input: 50, output: 5, cached: 1, cacheWrite1h: 7 })],
+    });
+    const result = await run(context());
+    expect(result.usage?.tokens).toEqual({ input: 150, output: 15, cached: 6, cacheWrite5m: 40, cacheWrite1h: 7 });
   });
 
   it("falls back to the ticket's criteria when the planner gave none", async () => {

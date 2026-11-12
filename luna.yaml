@@ -1,0 +1,106 @@
+# What Luna's own factory needs to work on this repo. The checks mirror .github/workflows/validate.yml,
+# so a card is proven by what CI will run. Fast checks come first; `paths` keeps a change to one package
+# from running the others (a docs-only card runs none of them).
+#
+# The packages: contracts (zod schemas shared by all), machine (the daemon, needs Postgres), factory (the
+# stage runner), evals (decision-pack evals), site (Next.js landing site), board (the Rust TUI).
+
+checks:
+  - name: contracts typecheck
+    run: pnpm --filter @hardness/contracts typecheck
+    paths: ["contracts/**"]
+    minutes: 1
+  - name: contracts tests
+    run: pnpm --filter @hardness/contracts test
+    paths: ["contracts/**"]
+    minutes: 1
+
+  - name: factory typecheck
+    run: pnpm --filter @hardness/factory typecheck
+    paths: ["factory/**", "contracts/**"]
+    minutes: 1
+  - name: factory tests
+    run: pnpm --filter @hardness/factory test
+    paths: ["factory/**", "contracts/**"]
+    minutes: 2
+
+  - name: evals typecheck
+    run: pnpm --filter @hardness/evals typecheck
+    paths: ["evals/**", "contracts/**"]
+    minutes: 1
+  - name: evals tests
+    run: pnpm --filter @hardness/evals test
+    paths: ["evals/**", "contracts/**"]
+    minutes: 1
+
+  - name: machine typecheck
+    run: pnpm --filter @hardness/machine typecheck
+    paths: ["machine/**", "contracts/**"]
+    minutes: 2
+  - name: machine tests
+    run: pnpm --filter @hardness/machine test
+    paths: ["machine/**", "contracts/**"]
+    minutes: 8
+  - name: golden fixtures
+    run: node machine/scripts/golden-task.mjs --selftest
+    paths: ["fixtures/**", "machine/scripts/golden-task.mjs"]
+    minutes: 2
+
+  - name: site facts
+    run: pnpm --filter site facts:check
+    paths: ["site/**", "contracts/**", "machine/*/Dockerfile"]
+    minutes: 1
+  - name: site lint
+    run: pnpm --filter site lint
+    paths: ["site/**"]
+    minutes: 1
+  - name: site typecheck
+    run: pnpm --filter site typecheck
+    paths: ["site/**"]
+    minutes: 2
+  - name: site tests
+    run: pnpm --filter site test
+    paths: ["site/**"]
+    minutes: 1
+  - name: site build
+    run: pnpm --filter site build
+    paths: ["site/**"]
+    minutes: 4
+
+  - name: board clippy
+    run: cargo clippy --all-targets -- -D warnings -A clippy::large_enum_variant
+    cwd: board
+    paths: ["board/**"]
+    minutes: 4
+  - name: board tests
+    run: cargo test
+    cwd: board
+    paths: ["board/**"]
+    minutes: 4
+
+# The machine's suite runs against a real Postgres (freshTestDatabase drops and recreates a schema per file).
+# The service is the same one CI starts; the key is its hostname. Throwaway local values only.
+services:
+  postgres:
+    image: postgres:16
+    env: { POSTGRES_USER: hardness, POSTGRES_PASSWORD: hardness, POSTGRES_DB: hardness }
+    ready: pg_isready -U hardness -d hardness
+    exports: { TEST_DATABASE_URL: "postgres://hardness:hardness@postgres:5432/hardness_test" }
+
+toolchains: { node: "24", rust: "1.99" }
+
+# The site's browser check: a card that changes a page is driven in a browser against its own branch.
+verify:
+  e2e:
+    start:
+      command: "pnpm --filter site dev --hostname 0.0.0.0 --port 3000"
+      port: 3000
+      ready: /
+      ready_timeout_s: 180
+
+sandbox:
+  egress:
+    # `next build` fetches the site's Google Fonts (next/font/google); the lockfiles' registries and GitHub are allowed already.
+    allow: [fonts.googleapis.com, fonts.gstatic.com]
+  cpu: 2
+  memory_gb: 4
