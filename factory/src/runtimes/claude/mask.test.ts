@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { FACTORY_RULES } from "../../core/render.ts";
 import { claudeRuntime, guardPolicy } from "./run.ts";
 
 const FACTORY = join(import.meta.dirname, "..", "..", "..");
@@ -62,6 +63,16 @@ describe("the Claude runtime with a mask", () => {
       if (old === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = old;
     }
+  });
+
+  it("tells the model which commands its shell may run, and that a refusal naming none does not mean the shell is broken", async () => {
+    const { options } = await optionsFor("plan");
+    const append = (options?.systemPrompt as { append: string }).append;
+    expect(append).toContain(FACTORY_RULES);
+    expect(append).toContain("git log, git diff");
+    expect(append).toContain("not that Bash is broken");
+    const none = (await optionsFor("ticket_reply")).options;
+    expect((none?.systemPrompt as { append: string }).append).not.toContain("not that Bash is broken");
   });
 
   it("registers only the luna tools the pack's access lists, so a pack is never offered a tool it is refused", async () => {

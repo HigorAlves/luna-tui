@@ -105,7 +105,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     additionalDirectories: [paths.input, paths.out, paths.scratch],
     agent: pack.agent,
     agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId),
-    systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: FACTORY_RULES },
+    systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: [FACTORY_RULES, ...commandsLine(pack.access.commands)].join("\n") },
     plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
     // With skills masked the SDK offers only the rest (it hides the others from the model and rejects their calls); with no mask the key is absent.
     ...(pack !== ctx.pack && ctx.pack.kind === "agent" && pack.skills.length !== ctx.pack.skills.length ? { skills: pack.skills.map((skill) => `${PLUGIN_NAME}:${skill}`) } : {}),
@@ -135,6 +135,13 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   }
 
   return drive(ctx, transport, prompt, options, calls, end);
+}
+
+/** The shell's command list as one more rule line. The SDK refuses an unlisted command with a generic message that names
+ *  no command (a model once read it as "Bash is broken" and escalated), and eve's guard names the list but this runtime's
+ *  rules did not. A pack with no commands has no shell, so no line. */
+function commandsLine(commands: string[]): string[] {
+  return commands.length === 0 ? [] : [`Commands this stage's Bash may run: ${commands.join(", ")}. A command outside them is refused with a message that names no command; that means the command is not listed, not that Bash is broken.`];
 }
 
 /** No attribution on a commit or a PR, from any run: they are the person's work. */
@@ -220,8 +227,11 @@ async function drive(ctx: RunContext, transport: Transport | undefined, prompt: 
           else if (block.type === "tool_use") calls.requested(block.id, block.name, block.input);
         }
       } else if (msg.type === "user" && Array.isArray(msg.message?.content)) {
-        // A call's result, without its output: the transcript has never shown it.
+        // A call's result, without its output: the transcript has never shown it, and events stay free of what a command printed (it can hold secrets). Only a denial's reason, below, is kept.
         for (const block of msg.message.content) if (block.type === "tool_result") calls.settled(block.tool_use_id, block.is_error !== true);
+      } else if (msg.type === "system" && msg.subtype === "permission_denied") {
+        // The SDK's own rules (dontAsk) refused a call the guard let through: say so, with the SDK's reason.
+        calls.denied(msg.tool_use_id, msg.message || msg.decision_reason || `permission to use ${msg.tool_name} was denied by the SDK's rules (${msg.decision_reason_type ?? "no reason given"})`);
       } else if (msg.type === "rate_limit_event") {
         const info = msg.rate_limit_info;
         if (info.status === "rejected") {

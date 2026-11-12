@@ -24,6 +24,7 @@ export class CallJoin {
   private readonly emitted = new Set<string>();
   private readonly names = new Map<string, string>();
   private readonly observations = new Map<string, Observation>();
+  private readonly denials = new Map<string, string>();
   private readonly emit: Emit;
   private readonly guarded: (tool: string) => boolean;
 
@@ -49,6 +50,15 @@ export class CallJoin {
     else if (!this.emitted.has(id)) this.decisions.set(id, { tool, input: asInput(input), decision });
   }
 
+  /** The runtime refused a call after the guard: the SDK's own rules (dontAsk) say no with a reason the guard never
+   *  saw. Until now such a call was logged as allowed and its result as a failure with no cause. A call still
+   *  waiting is emitted as refused; one the guard's allow already put out keeps that event, and the reason goes on its result. */
+  denied(id: string, reason: string): void {
+    this.denials.set(id, reason);
+    const waiting = this.requests.get(id);
+    if (waiting) this.call(id, waiting, { allow: false, reason });
+  }
+
   /** The economy session's reading of a call's result. It is put on the call's `tool_result`, so it has to
    *  arrive before `settled`: the SDK runs its post-tool hooks before it shows the result. */
   observed(id: string, observation: Observation | undefined): void {
@@ -61,7 +71,8 @@ export class CallJoin {
     if (waiting) this.call(id, waiting, { allow: true });
     const observation = this.observations.get(id);
     this.observations.delete(id);
-    this.emit({ kind: "tool_result", payload: { id, tool: this.names.get(id) ?? "call", ok, ...(error !== undefined && { error }), ...(observation !== undefined && { observation }) } });
+    const cause = error ?? (ok ? undefined : this.denials.get(id));
+    this.emit({ kind: "tool_result", payload: { id, tool: this.names.get(id) ?? "call", ok, ...(cause !== undefined && { error: cause }), ...(observation !== undefined && { observation }) } });
   }
 
   /** Emits every call still waiting: a request as allowed, a decision the stream never showed as decided. */
@@ -75,6 +86,9 @@ export class CallJoin {
     this.decisions.delete(id);
     if (this.emitted.has(id)) return;
     this.emitted.add(id);
+    // A guard's refusal keeps its own reason; the runtime's denial turns a guard's allow into a refusal.
+    const denial = this.denials.get(id);
+    if (decision.allow && denial !== undefined) decision = { allow: false, reason: denial };
     const { target, fingerprint } = callTarget(tool, input);
     this.emit({
       kind: "tool_call",
