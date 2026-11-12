@@ -5,7 +5,7 @@ import { GraphWatch } from "./graph-watch.ts";
 
 const stamp = (commit: string): GraphStamp => ({ schema: 1, commit, builtAt: "t", nodes: 1, edges: 1, communities: 1, graphify: "0.9.34" });
 
-function setup(opts: { stamps?: Record<string, string>; heads?: Record<string, string>; off?: string[]; failing?: string[] } = {}) {
+function setup(opts: { stamps?: Record<string, string>; heads?: Record<string, string>; off?: string[]; failing?: string[]; skip?: string[]; headless?: string[] } = {}) {
   const stamps = new Map(Object.entries(opts.stamps ?? {}));
   const heads = new Map(Object.entries(opts.heads ?? {}));
   const builds: string[] = [];
@@ -36,7 +36,11 @@ function setup(opts: { stamps?: Record<string, string>; heads?: Record<string, s
     graph,
     repos: async () => repos,
     policies: { for: async (repo) => ({ graph: !(opts.off ?? []).includes(repo) }) },
-    defaultHead: async (repo) => heads.get(repo)!,
+    defaultHead: async (repo) => {
+      if (opts.headless?.includes(repo)) throw new Error("git rev-parse HEAD failed: fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.");
+      return heads.get(repo)!;
+    },
+    skip: (repo) => (opts.skip ?? []).includes(repo),
     log: (message) => logs.push(message),
   });
   return { watch, builds, logs, overlap: () => overlap, setHead: (repo: string, head: string) => heads.set(repo, head) };
@@ -77,6 +81,13 @@ describe("GraphWatch", () => {
     const { watch, builds } = setup({ heads: { "/a": "1", "/b": "1" }, off: ["/a"] });
     await watch.tick();
     expect(builds).toEqual(["/b"]);
+  });
+
+  it("leaves a repo alone while it is being cloned, and a repo with no HEAD yet without a word", async () => {
+    const { watch, builds, logs } = setup({ heads: { "/a": "1", "/b": "1", "/c": "1" }, skip: ["/a"], headless: ["/b"] });
+    await watch.tick();
+    expect(builds).toEqual(["/c"]);
+    expect(logs).toEqual([]);
   });
 
   it("logs a failed build and goes on to the next repo", async () => {

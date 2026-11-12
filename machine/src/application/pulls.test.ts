@@ -382,11 +382,123 @@ describe("GitHubPulls.clone", () => {
     expect(pulls.snapshot.prs[0]?.localPath).toBe(dest);
   });
 
-  it("reports a failed clone in the snapshot's error", async () => {
-    const world: World = { hits: [], nodes: {}, cloneError: "repository not found" };
-    const { pulls } = setup(world);
-    await pulls.clone("o/c", join(root, "c"));
+  it("reports a failed clone in the clone's own entry, not in the snapshot's error", async () => {
+    const world: World = { hits: [], nodes: {}, cloneError: "Cloning into 'c'...\nfatal: repository not found" };
+    const { pulls } = setup(world, { now: () => new Date("2026-11-12T10:00:00Z") });
+    const dest = join(root, "c");
+    await pulls.clone("o/c", dest);
     await pulls.cloning;
-    expect(pulls.snapshot.error).toMatch(/clone.*not found/);
+    expect(pulls.snapshot.error).toBeNull();
+    expect(pulls.snapshot.clones).toEqual([
+      { repo: "o/c", dest, state: "failed", startedAt: "2026-11-12T10:00:00.000Z", finishedAt: "2026-11-12T10:00:00.000Z", error: expect.stringMatching(/fatal: repository not found$/) },
+    ]);
+  });
+});
+
+describe("GitHubPulls clone progress", () => {
+  const root = mkdtempSync(join(tmpdir(), "pulls-clone-progress-"));
+
+  /** An exec whose `git clone` waits until the test lets it finish. */
+  function held(outcome: { code: number; stderr: string } = { code: 0, stderr: "" }) {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const exec = async (_command: string, args: string[]) => {
+      if (args.includes("clone")) await gate;
+      return args.includes("clone") ? { code: outcome.code, stdout: "", stderr: outcome.stderr } : { code: 0, stdout: "", stderr: "" };
+    };
+    return { exec, release };
+  }
+
+  it("lists the clone as cloning in both snapshots and publishes both when it starts, then done when it lands", async () => {
+    let clock = new Date("2026-11-12T10:00:00Z");
+    const { exec, release } = held();
+    const { pulls, published, publishedAll } = setup({ hits: [], nodes: {} }, { exec, now: () => clock });
+    const dest = join(root, "big");
+    await pulls.clone("o/big", dest);
+    const cloning = { repo: "o/big", dest, state: "cloning", startedAt: "2026-11-12T10:00:00.000Z", finishedAt: null, error: null };
+    expect(pulls.snapshot.clones).toEqual([cloning]);
+    expect(pulls.all.clones).toEqual([cloning]);
+    expect(published.at(-1)?.clones).toEqual([cloning]);
+    expect(publishedAll.at(-1)?.clones).toEqual([cloning]);
+    clock = new Date("2026-11-12T10:02:00Z");
+    release();
+    await pulls.cloning;
+    const done = { ...cloning, state: "done", finishedAt: "2026-11-12T10:02:00.000Z" };
+    expect(pulls.snapshot.clones).toEqual([done]);
+    expect(pulls.all.clones).toEqual([done]);
+    expect(published.at(-1)?.clones).toEqual([done]);
+    expect(publishedAll.at(-1)?.clones).toEqual([done]);
+  });
+
+  it("reports the PR's checkout as null in both lists while its folder is being cloned, and the checkout once it lands", async () => {
+    const dest = join(root, "b2");
+    const { exec, release } = held();
+    const world: World = { hits: [hit(3, "o/b2")], reachable: [hit(3, "o/b2")], nodes: { 3: node(3, { headRepository: { nameWithOwner: "o/b2" } }) } };
+    // The half-made folder already resolves, as a real repo map finds it once `.git` exists.
+    const { pulls } = setup(world, { exec, resolveRepo: async (repo) => (repo === "o/b2" ? join(dest, "packages") : null) });
+    await pulls.clone("o/b2", dest);
+    await pulls.pollOnce();
+    await pulls.pollAllOnce();
+    expect(pulls.snapshot.prs[0]?.localPath).toBeNull();
+    expect(pulls.all.prs[0]?.localPath).toBeNull();
+    release();
+    await pulls.cloning;
+    expect(pulls.snapshot.prs[0]?.localPath).toBe(join(dest, "packages"));
+    expect(pulls.all.prs[0]?.localPath).toBe(join(dest, "packages"));
+  });
+
+  it("keeps a failure's error through later polls, and says the same to both lists", async () => {
+    const { exec, release } = held({ code: 128, stderr: "fatal: could not read Username" });
+    const { pulls, published, publishedAll } = setup({ hits: [], nodes: {} }, { exec });
+    await pulls.clone("o/c2", join(root, "c2"));
+    release();
+    await pulls.cloning;
+    await pulls.pollOnce();
+    await pulls.pollAllOnce();
+    for (const list of [pulls.snapshot, pulls.all]) {
+      expect(list.error).toBeNull();
+      expect(list.clones?.map((c) => [c.state, c.error])).toEqual([["failed", "fatal: could not read Username"]]);
+    }
+    expect(published.at(-1)?.clones?.[0]?.state).toBe("failed");
+    expect(publishedAll.at(-1)?.clones?.[0]?.state).toBe("failed");
+  });
+
+  it("forgets a finished clone ten minutes after it ended", async () => {
+    let clock = new Date("2026-11-12T10:00:00Z");
+    const { pulls } = setup({ hits: [], nodes: {} }, { now: () => clock });
+    await pulls.clone("o/d", join(root, "d"));
+    await pulls.cloning;
+    clock = new Date("2026-11-12T10:09:00Z");
+    await pulls.pollOnce();
+    expect(pulls.snapshot.clones).toHaveLength(1);
+    clock = new Date("2026-11-12T10:11:00Z");
+    await pulls.pollOnce();
+    expect(pulls.snapshot.clones).toEqual([]);
+  });
+
+  it("refuses a second clone into a folder that is being cloned, and does not take it for a checkout", async () => {
+    const { exec, release } = held();
+    const { pulls, remembered } = setup({ hits: [], nodes: {} }, { exec });
+    const dest = join(root, "e");
+    await pulls.clone("o/e", dest);
+    mkdirSync(dest, { recursive: true });
+    await expect(pulls.clone("o/e", dest)).rejects.toThrow(/already cloning/);
+    expect(remembered).toEqual([]);
+    release();
+    await pulls.cloning;
+    expect(remembered).toEqual([["o/e", dest]]);
+  });
+
+  it("names the repos being cloned by folder", async () => {
+    const { exec, release } = held();
+    const { pulls } = setup({ hits: [], nodes: {} }, { exec });
+    const dest = join(root, "f");
+    await pulls.clone("o/f", dest);
+    expect(pulls.isCloning(dest)).toBe(true);
+    expect(pulls.isCloning(join(dest, "sub"))).toBe(true);
+    expect(pulls.isCloning(join(root, "other"))).toBe(false);
+    release();
+    await pulls.cloning;
+    expect(pulls.isCloning(dest)).toBe(false);
   });
 });

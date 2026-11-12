@@ -5,7 +5,7 @@
 import { isAbsolute, dirname } from "node:path";
 import { realpath, stat } from "node:fs/promises";
 
-import type { PrAction, PrSnapshot, PullRequest } from "@hardness/contracts";
+import type { CloneStatus, PrAction, PrSnapshot, PullRequest } from "@hardness/contracts";
 
 import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../adapters/process/exec.ts";
@@ -77,6 +77,12 @@ export class CloneError extends Error {
   }
 }
 
+/** How long a finished clone (done or failed) stays in the snapshots, so the board can say how it ended. */
+const CLONE_KEPT_MS = 10 * 60_000;
+
+/** The last non-empty line of what git said: the part that names the failure. */
+const lastLine = (text: string): string => text.trim().split(/\r?\n/).filter((l) => l.trim() !== "").at(-1)?.trim() ?? "";
+
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
 /** What GitHub says when a budget is spent (the primary limit, or the secondary one). */
 const RATE_LIMITED = /rate limit|RATE_LIMITED/i;
@@ -113,6 +119,8 @@ export class GitHubPulls implements PullsPort {
   private me: { login: string; teams: string[] } | null = null;
   /** The last GraphQL node of each PR, read at `updatedAt`; both lists read and fill it. */
   private readonly facts = new Map<string, { node: PrNode; updatedAt: string; at: number }>();
+  /** The clones asked for, by destination: running ones, and finished ones for ten minutes. */
+  private readonly clones = new Map<string, CloneStatus>();
   private readonly now: () => Date;
 
   constructor(private readonly options: GitHubPullsOptions) {
@@ -209,10 +217,32 @@ export class GitHubPulls implements PullsPort {
     return feed === "inbox" ? this.snapshot : this.all;
   }
 
-  /** Stores the snapshot and publishes it when the PRs or the error changed. */
-  private replace(feed: Feed, next: PrSnapshot): PrSnapshot {
+  /** The clones to show: running ones first as they started, then the finished ones that are not yet ten minutes old. */
+  private cloneList(): CloneStatus[] {
+    const at = this.now().getTime();
+    for (const [dest, c] of this.clones) {
+      if (c.finishedAt !== null && at - Date.parse(c.finishedAt) >= CLONE_KEPT_MS) this.clones.delete(dest);
+    }
+    return [...this.clones.values()];
+  }
+
+  /** Whether `path` is a clone's folder, or inside one, that is still being made. */
+  isCloning(path: string): boolean {
+    for (const c of this.clones.values()) if (c.state === "cloning" && (path === c.dest || path.startsWith(`${c.dest}/`))) return true;
+    return false;
+  }
+
+  /** Stores the snapshot, with the clones and without a checkout that is still being made, and publishes it when the PRs, the error or the clones changed. */
+  private replace(feed: Feed, given: PrSnapshot): PrSnapshot {
     const before = this.listOf(feed);
-    const changed = JSON.stringify(next.prs) !== JSON.stringify(before.prs) || next.error !== before.error;
+    const clones = this.cloneList();
+    const next: PrSnapshot = {
+      ...given,
+      prs: given.prs.map((pr) => (pr.localPath !== null && this.isCloning(pr.localPath) ? { ...pr, localPath: null } : pr)),
+      clones,
+    };
+    const changed =
+      JSON.stringify(next.prs) !== JSON.stringify(before.prs) || next.error !== before.error || JSON.stringify(clones) !== JSON.stringify(before.clones ?? []);
     if (feed === "inbox") this.snapshot = next;
     else this.all = next;
     if (changed) (feed === "inbox" ? this.options.publish : this.options.publishAll)(next);
@@ -318,6 +348,12 @@ export class GitHubPulls implements PullsPort {
     this.replace("all", { ...this.all, prs });
   }
 
+  /** Both lists as they are, republished with the clones as they stand now: a clone started, landed or failed. */
+  private republish(): void {
+    this.replace("inbox", this.snapshot);
+    this.replace("all", this.all);
+  }
+
   /** Forgets facts older than they may be reused, so PRs that left both lists do not pile up. */
   private dropStaleFacts(): void {
     const at = this.now().getTime();
@@ -333,7 +369,10 @@ export class GitHubPulls implements PullsPort {
     const parent = await stat(dirname(dest)).catch(() => null);
     if (!parent?.isDirectory()) throw new CloneError(`the parent of "${dest}" does not exist`);
     const exec = this.options.exec ?? realExec;
+    if (this.isCloning(dest)) throw new CloneError(`already cloning into "${dest}"`);
     if (await stat(dest).catch(() => null)) {
+      // A clone of the same folder may have started while we looked; its half-made folder is no checkout to link.
+      if (this.isCloning(dest)) throw new CloneError(`already cloning into "${dest}"`);
       // The folder you picked already holds the repo (a renamed remote, a checkout the scan
       // never looked in): link it rather than refuse, and never clone over it.
       if (!(await isCheckoutRoot(exec, dest))) throw new CloneError(`"${dest}" already exists and is not a git checkout`);
@@ -341,14 +380,32 @@ export class GitHubPulls implements PullsPort {
       this.cloning = this.cloning.then(() => this.pollAfterClone());
       return;
     }
+    const started = this.now();
+    this.clones.set(dest, { repo, dest, state: "cloning", startedAt: started.toISOString(), finishedAt: null, error: null });
+    console.log(`clone: ${repo} into ${dest} started`);
+    this.republish();
     this.cloning = this.cloning.then(async () => {
-      // A clone is git with your own credentials, like every push the machine makes.
-      const cloned = await exec("git", [...HOST_GIT, "clone", `https://github.com/${repo}.git`, dest]);
-      if (cloned.code !== 0) {
-        this.replace("inbox", { ...this.snapshot, error: `clone of ${repo} failed: ${(cloned.stderr || cloned.stdout).trim()}` });
+      let failure: string | null = null;
+      try {
+        // A clone is git with your own credentials, like every push the machine makes.
+        const cloned = await exec("git", [...HOST_GIT, "clone", `https://github.com/${repo}.git`, dest]);
+        if (cloned.code !== 0) failure = (cloned.stderr || cloned.stdout).trim() || `git exited with ${cloned.code}`;
+      } catch (error) {
+        failure = messageOf(error);
+      }
+      const finished = this.now();
+      const seconds = Math.round((finished.getTime() - started.getTime()) / 1000);
+      const entry = this.clones.get(dest);
+      if (entry) this.clones.set(dest, { ...entry, state: failure === null ? "done" : "failed", finishedAt: finished.toISOString(), error: failure });
+      if (failure !== null) {
+        console.warn(`clone: ${repo} into ${dest} failed after ${seconds}s: ${lastLine(failure)}`);
+        this.republish();
         return;
       }
+      console.log(`clone: ${repo} into ${dest} done in ${seconds}s`);
       this.options.rememberRepo?.(repo, dest);
+      // The board hears it landed at once; the poll then shows the checkout.
+      this.republish();
       await this.pollAfterClone();
     });
   }

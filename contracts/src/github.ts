@@ -65,6 +65,20 @@ export interface PrSnapshot {
   prs: PullRequest[];
   polledAt: string | null;
   error: string | null;
+  /** The clones the machine is running or ran lately (done and failed ones stay ten minutes), in both lists; absent from an older machine. */
+  clones?: CloneStatus[];
+}
+
+/** One `git clone` the board asked for. A failed one keeps its `error` here, since a poll rewrites the snapshot's own. */
+export interface CloneStatus {
+  /** `owner/name` */
+  repo: string;
+  /** The folder being made. */
+  dest: string;
+  state: "cloning" | "done" | "failed";
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
 }
 
 export const PrActionInput = z.object({ action: PrAction });

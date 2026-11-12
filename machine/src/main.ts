@@ -933,6 +933,7 @@ graphWatch = new GraphWatch({
   graph,
   policies,
   repos: knownRepos,
+  skip: (repoPath) => pulls.isCloning(repoPath),
 });
 const graphTicker = config.agents && config.graphIntervalSecs !== null ? new Ticker(() => void graphWatch?.tick(), config.graphIntervalSecs * 1000) : null;
 if (graphTicker) {
