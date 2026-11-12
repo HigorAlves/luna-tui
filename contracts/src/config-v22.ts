@@ -168,7 +168,7 @@ export const FACTORY_DEFAULTS: FactoryConfig = {
   scoring: { weights: { who: 3, what: 3, impact: 2, time: 2, demand: 1 }, bands: { P0: 28, P1: 22, P2: 16 } },
   graph: { stale_commits: 50, first_build_minutes: 10 },
   fast_lane: { max_risk: "low", max_size: "S", excluded_types: ["infra", "data"], cross_team: false },
-  plan: { coverage_score_min: 0.85, coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 2, outside_owning_team: true }, sla: { reminder_days: 2, escalate_days: 5 } },
+  plan: { coverage_score_min: 0.85, coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 1, outside_owning_team: true }, sla: { reminder_days: 2, escalate_days: 5 } },
   size: { target_loc: [1000, 2000], hard_limit_loc: 2500, max_children: 8, max_rounds: 3, depth: 2 },
   build: { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90, backoff_minutes: [1, 30], regression_full_suite_minutes: 10 },
   sandbox: { cpu: 2, memory_gb: 4, keep_hours: 24, egress: { allow: [], registries: "always" }, install: { run: "on", scripts: "off" }, image: { base: null } },

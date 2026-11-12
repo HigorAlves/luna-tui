@@ -49,7 +49,7 @@ policy:
   max_concurrent: 1            # tasks this repo may run at once
   holdout_cases: false         # true keeps the scenarios away from the implementer
 plan:
-  approvers: { low: 1, medium: 1, high: 2, outside_owning_team: true }
+  approvers: { low: 1, medium: 1, high: 1, outside_owning_team: true }
 ship:
   auto_merge: medium_when_review_required   # off | low | medium | medium_when_review_required (the default)
   preview: off

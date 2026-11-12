@@ -1648,7 +1648,7 @@ export class Pipeline {
       if (gate) await this.learnFromGate(id, gate, "approved", { keepWhole: true });
       return kept;
     }
-    // The plan needs as many distinct names as its level asks (the repo's `plan.approvers`: two for high by default), at least one from outside
+    // The plan needs as many distinct names as its level asks (the repo's `plan.approvers`: one for every level by default), at least one from outside
     // the code owners on a high-risk plan whose owners CODEOWNERS names (never a model's word). The rule is computed under the task lock from
     // the gate as it is now (an edit that raised the risk is seen); the names so far are kept on the gate and the last one closes it. The level is
     // `requested.risk.level`: the higher of the machine's and a person's, never lower than the machine's.
