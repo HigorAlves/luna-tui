@@ -24,6 +24,12 @@ function run(over: Partial<SandboxRun> = {}): SandboxRun {
 }
 
 describe("sandboxArgs", () => {
+  it("runs under Docker's init, so a killed process group is reaped and not left as a zombie that still looks alive", () => {
+    const args = sandboxArgs(run(), "/in", "/out");
+    expect(args).toContain("--init");
+    expect(args.indexOf("--init")).toBeLessThan(args.indexOf("-e"));
+  });
+
   it("hardens the container and points HOME, TMPDIR and the SDK's config dir at the tmpfs", () => {
     const args = sandboxArgs(run(), "/state/runs/r1/in", "/state/runs/r1/out");
     expect(args).toEqual(expect.arrayContaining(["--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges"]));
@@ -138,6 +144,11 @@ describe("sandboxArgs", () => {
 });
 
 describe("sandboxExecArgs", () => {
+  it("runs a project's checks under Docker's init too: its suite kills process groups (exec.test.ts) and needs them reaped", () => {
+    const checks = sandboxExecArgs({ name: "chk0", image: "img:1", worktree: "/wt", argv: ["pnpm", "test"] } as never);
+    expect(checks).toContain("--init");
+  });
+
   // A project's own checks (verify Step A, the locked-test replay) run in the stage image,
   // not on the host: node_modules installed by a Linux container hold Linux binaries.
   const args = sandboxExecArgs({
