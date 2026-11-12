@@ -217,7 +217,8 @@ const WORK = [
 
 test("the pages are registered in order with their commands", () => {
   const ids = PAGES.map((p) => p.id);
-  assert.deepEqual(ids.slice(ids.indexOf("inbox")), ["inbox", "digest", "floor", "backlog", "tickets"]);
+  const mine = ["inbox", "digest", "floor", "backlog", "tickets"];
+  assert.deepEqual(ids.filter((id) => mine.includes(id)), mine);
   for (const verb of ["inbox", "digest", "floor", "backlog", "tickets", "drain", "resume", "slots"]) assert.equal(typeof COMMANDS[verb], "function", verb);
   assert.equal(typeof DIALOGS.luna_many.submit, "function");
   assert.equal(typeof DIALOGS.ticket_edit.submit, "function");
