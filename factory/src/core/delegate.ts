@@ -7,7 +7,7 @@
 // helpers, so no tool), children run one at a time, and each gets only what is left of the
 // parent's turns and time. The parent's stream gets a `child` event as each starts and as it ends,
 // and the parent's usage the children's cost (`withChildren`).
-import { type AgentPack, type AgentRole, type EngineId, HELPER_LIMITS, type Helper, type Pack, type RunEvent, type RuntimeId, type StageInput, credentialOwner, helperPack, helpersOn, resolveEngine } from "@hardness/contracts";
+import { type AgentPack, type AgentRole, type EngineId, HELPER_LIMITS, type Helper, type Pack, type ResolvedEngine, type RunEvent, type RuntimeId, type StageInput, credentialOwner, helperPack, helpersOn, resolveEngine } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -137,8 +137,11 @@ export function delegation(o: DelegationOptions): Delegation {
   };
 }
 
+/** What a child's limits and prompt are made from: the parent's pack, input, paths, clock and turns. */
+export type ChildOptions = Pick<DelegationOptions, "pack" | "input" | "paths" | "env" | "startedAt" | "turnsUsed">;
+
 /** The child's limits out of what the parent has left, or why there is not enough. */
-function childLimits(o: DelegationOptions, childTurns: number): StageInput["limits"] | { error: string } {
+export function childLimits(o: Pick<ChildOptions, "input" | "startedAt" | "turnsUsed">, childTurns: number): StageInput["limits"] | { error: string } {
   const { maxTurns, timeoutMs } = o.input.limits;
   const left = o.startedAt + deadlineMs(timeoutMs) - Date.now();
   // The parent keeps a margin to read the answer and give its own.
@@ -148,6 +151,31 @@ function childLimits(o: DelegationOptions, childTurns: number): StageInput["limi
   if (time < MIN_CHILD_MS) return { error: `the stage has ${Math.max(0, Math.round(left / 1000))} s left, not enough for a helper` };
   if (turns < MIN_CHILD_TURNS) return { error: `the stage has ${Math.max(0, turnsLeft)} turns left, not enough for a helper` };
   return { maxTurns: turns, timeoutMs: time };
+}
+
+/** A child that can run: its pack and engine, its folder, its prompt (the `helper.md` template
+ *  with the helper and the message in it) and the limits it gets. Nothing is written. */
+export interface PreparedChild {
+  pack: AgentPack;
+  engine: ResolvedEngine;
+  out: string;
+  template: string;
+  prompt: string;
+  limits: StageInput["limits"];
+}
+
+/** Everything both ways of running a child (the bridge's `delegate` and eve's native subagent) check
+ *  before one starts, in one place so they cannot drift: the helper's credential, the limits out
+ *  of what the parent has left, then the child's prompt. Returns why it cannot run instead. */
+export function prepareChild(o: ChildOptions, helper: Helper, message: string, n: number, childTurns: number): PreparedChild | { error: string } {
+  const missing = missingCredential(helper.engine, o.env);
+  if (missing) return { error: missing };
+  const limits = childLimits(o, childTurns);
+  if ("error" in limits) return limits;
+  const pack = helperPack(o.pack, helper);
+  const template = readFileSync(join(o.paths.factoryRoot, "prompts", pack.template), "utf8");
+  const prompt = template.replaceAll("{{agent}}", helper.role).replaceAll("{{parent}}", o.pack.id).replaceAll("{{message}}", () => message);
+  return { pack, engine: resolveEngine(helper.engine), out: join(o.paths.out, "children", String(n)), template, prompt, limits };
 }
 
 /** Runs one child to its settled outcome and writes its folder, however it ended. */
@@ -165,21 +193,20 @@ async function runChild(o: DelegationOptions, helper: Helper, message: string, n
   const luna = lunaHandlers({ ledgerPath: join(out, "ledger.json"), decisions: o.input.decisions, emit });
   const refused = (error: string): RunOutcome => ({ ...EMPTY_RUN, error });
   const runtime = o.runtimes[engine.runtime];
-  const limits = childLimits(o, childTurns);
   let info = null;
   let run: RunOutcome;
   if (!runtime) run = refused(`${engine.id} runs on ${engine.runtime}, which this factory does not carry`);
-  else if (missingCredential(helper.engine, o.env)) run = refused(missingCredential(helper.engine, o.env)!);
-  else if ("error" in limits) run = refused(limits.error);
   else {
     const scratch = mkdtempSync(join(tmpdir(), "luna-scratch-"));
     try {
-      const template = readFileSync(join(o.paths.factoryRoot, "prompts", pack.template), "utf8");
-      const prompt = template.replaceAll("{{agent}}", helper.role).replaceAll("{{parent}}", o.pack.id).replaceAll("{{message}}", () => message);
-      writeFileSync(join(out, "prompt.md"), prompt);
-      info = runInfo(runtime, engine, pack, template, o.paths.factoryRoot);
-      const input: StageInput = { ...o.input, engine: helper.engine, limits };
-      run = settle(await runtime.run({ pack, engine, input, prompt, paths: { ...o.paths, out, scratch }, luna, dry: false, emit, delegate: null }), pack);
+      const prepared = prepareChild(o, helper, message, n, childTurns);
+      if ("error" in prepared) run = refused(prepared.error);
+      else {
+        writeFileSync(join(out, "prompt.md"), prepared.prompt);
+        info = runInfo(runtime, engine, pack, prepared.template, o.paths.factoryRoot);
+        const input: StageInput = { ...o.input, engine: helper.engine, limits: prepared.limits };
+        run = settle(await runtime.run({ pack, engine, input, prompt: prepared.prompt, paths: { ...o.paths, out, scratch }, luna, dry: false, emit, delegate: null }), pack);
+      }
     } catch (e) {
       run = refused(`the helper's run failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
