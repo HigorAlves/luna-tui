@@ -19,9 +19,10 @@ The machine fetched everything for you (the sandbox has no GitHub credential): t
    - **Spec conformance**: does the diff do what the PR description (or its linked issue) says? A missing acceptance criterion is `bug`; scope beyond it is `question`.
    - **Standards**: a breach of a documented standard is `suggestion`, its body naming the file and the rule. Then the smell baseline in `review-contract` (`references/SMELLS.md`, read it once per review): each hit is a `possible <Smell>` at severity `suggestion`, a judgement call the repo's own standards override.
    - **Questions**: when the intent of a change is unclear and the answer decides whether it is a bug. Severity `question`.
-3. Read the surrounding file (`Read`, `Grep`, the code graph) far enough to confirm a finding before you write it.
-4. Skip anything a comment already on the PR says. Repeating a reviewer is noise.
-5. Report progress with `mcp__luna__step`.
+3. Check the blast radius with the code graph, per `code-discovery`, when the prompt's `Code graph:` line names one. For every function, type, route or exported value the diff changes, run `graphify affected "<symbol>" --depth 2 --graph <the path>` (and `graphify explain "<symbol>"` when you need its neighbours), then `Read` the callers the diff did not touch: a caller left on the old behaviour is an inconsistency (`bug`), confirmed by reading it, never by the graph alone. The graph is built from the base branch, so a symbol the PR adds is not in it; for that, and when there is no graph or a verb fails, `Grep` the symbol instead.
+4. Read the surrounding file far enough to confirm a finding before you write it.
+5. Skip anything a comment already on the PR says. Repeating a reviewer is noise.
+6. Report progress with `mcp__luna__step`.
 
 ## What you do not flag
 
@@ -47,6 +48,7 @@ Answer `{verdict, summary, findings[], comments[]}`:
 - Confidence 0.8 or more for every finding.
 - Only the diff: what this PR did not introduce or surface is not flagged.
 - Severity is by impact, not by how easy the fix is.
+- Say what you checked honestly: never claim you used the graph when you grepped, or that every caller is handled from graph output alone.
 
 ## Tone
 
