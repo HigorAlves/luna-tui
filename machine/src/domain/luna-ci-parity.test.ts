@@ -55,3 +55,13 @@ describe("luna.yaml's checks follow validate.yml", () => {
     expect(text).toContain(`go-version: "${arg("GO_VERSION")}"`);
   });
 });
+
+describe("the runner image", () => {
+  // Corepack's own cache lives on each container's tmpfs, so a check-time install downloaded pnpm through the egress proxy every time, and a network blip escalated the card as env_broken before any check ran.
+  it("carries the pnpm the repo pins, on the layer's PATH, so an install needs no download", () => {
+    const dockerfile = readFileSync(join(root, "machine/runner/Dockerfile"), "utf8");
+    expect(dockerfile).toMatch(/packageManager/);
+    expect(dockerfile).toContain("--prefix /opt/luna/pnpm");
+    expect(dockerfile).toContain("/opt/luna/bin/pnpm");
+  });
+});

@@ -88,6 +88,15 @@ COPY factory/package.json factory/
 RUN corepack enable \
  && corepack pnpm install --frozen-lockfile --prod --filter @hardness/factory... \
  && rm -rf /root/.cache /root/.local/share/pnpm
+# pnpm itself, at the version package.json pins, on the layer's PATH ahead of corepack's shim. A container keeps corepack's
+# cache on its own tmpfs (the machine sets COREPACK_HOME), so with corepack alone every check-time install downloaded pnpm
+# through the egress proxy, and one network blip escalated the card as env_broken. A repo that pins another version
+# downloads it, as before.
+RUN version="$(node -p "require('./package.json').packageManager.replace(/^pnpm@/, '').split('+')[0]")" \
+ && npm install -g --no-audit --no-fund --prefix /opt/luna/pnpm "pnpm@${version}" \
+ && ln -s /opt/luna/pnpm/lib/node_modules/pnpm/pnpm /opt/luna/bin/pnpm \
+ && /opt/luna/bin/pnpm --version \
+ && rm -rf /root/.npm
 COPY contracts/src contracts/src
 COPY factory factory
 # The eve agent of every pack an eve engine may run, compiled and built now (roles and packs are
