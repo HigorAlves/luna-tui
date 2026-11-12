@@ -1041,6 +1041,103 @@ fn evidence_pack(d: &TaskDetail) -> Option<&Value> {
 
 /// A card at or past shipping: the release question first when there is one, then what changed and why, what review found by
 /// level, the PR, the evidence and the ship checklist.
+/// A review of someone else's PR, waiting for "post the verdict?": what goes to GitHub if you say yes. The verdict, the
+/// body, every line comment where it lands, and what the review found, so the decision is made on what is posted.
+fn review_to_post(a: &Approval, width: usize) -> Vec<Line<'static>> {
+    let r = &a.requested;
+    let answer = &r["answer"];
+    let verdict = r["verdict"]
+        .as_str()
+        .or(answer["verdict"].as_str())
+        .unwrap_or("comment");
+    let (glyph, word, style) = match verdict {
+        "approve" => ("✓", "Approve", theme::done()),
+        "request_changes" => ("✗", "Request changes", theme::lost()),
+        _ => ("•", "Comment", theme::label()),
+    };
+    let posted = r["posted"].as_bool().unwrap_or(false);
+    let mut out = vec![
+        title("Review to post"),
+        Line::from(vec![
+            Span::styled(format!("  {glyph} {word}"), style),
+            Span::styled(
+                if posted {
+                    "  · posted".to_string()
+                } else {
+                    "  · not posted yet".to_string()
+                },
+                theme::dim(),
+            ),
+        ]),
+    ];
+    // The body is the one the machine will send: the review action's own payload when it is there, else the summary.
+    let body = r["actions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|act| act["kind"].as_str() == Some("pr_review_post"))
+        .and_then(|act| act["payload"]["body"].as_str())
+        .or(r["summary"].as_str())
+        .or(answer["summary"].as_str())
+        .unwrap_or("");
+    if !body.trim().is_empty() {
+        out.push(Line::default());
+        out.push(Line::from(Span::styled("  Body", theme::label())));
+        out.extend(text::markdown(body, width, 4));
+    }
+    let comments: Vec<&Value> = answer["comments"]
+        .as_array()
+        .map(|c| c.iter().collect())
+        .unwrap_or_default();
+    out.push(Line::default());
+    if comments.is_empty() {
+        out.push(muted("  No line comments.".to_string()));
+    } else {
+        out.push(Line::from(Span::styled(
+            format!("  Line comments ({})", comments.len()),
+            theme::label(),
+        )));
+        for c in comments {
+            let at = format!(
+                "    {}:{}  ",
+                plain(c["path"].as_str().unwrap_or("?")),
+                c["line"].as_i64().unwrap_or(0)
+            );
+            out.extend(hanging(
+                vec![Span::styled(at, theme::code())],
+                c["body"].as_str().unwrap_or(""),
+                width,
+            ));
+        }
+    }
+    let findings: Vec<&Value> = r["findings"]
+        .as_array()
+        .or(answer["findings"].as_array())
+        .map(|f| f.iter().collect())
+        .unwrap_or_default();
+    if !findings.is_empty() {
+        out.push(Line::default());
+        out.push(Line::from(Span::styled(
+            format!("  Findings ({})", findings.len()),
+            theme::label(),
+        )));
+        for f in findings {
+            let level = f["severity"].as_str().unwrap_or("note").replace('_', " ");
+            let lead = format!(
+                "    {level}  {}:{}  ",
+                plain(f["path"].as_str().unwrap_or("?")),
+                f["line"].as_i64().unwrap_or(0)
+            );
+            out.extend(hanging(
+                vec![Span::styled(lead, theme::flag())],
+                f["title"].as_str().unwrap_or(""),
+                width,
+            ));
+        }
+    }
+    out
+}
+
 pub(crate) fn result_page(
     task: &Task,
     detail: Option<&TaskDetail>,
@@ -1086,6 +1183,11 @@ pub(crate) fn result_page(
                 )),
             ]));
         }
+        main.push(Line::default());
+    } else if let Some(a) =
+        open.filter(|a| task.route == "review" && a.kind_or_guess() == "awaiting_ship")
+    {
+        main.extend(review_to_post(a, width));
         main.push(Line::default());
     } else if let Some(a) = open.filter(|a| a.kind_or_guess() == "reviewing_memory") {
         let blocks = gate_blocks(a, width);
@@ -1338,6 +1440,69 @@ mod tests {
             .map(|r| r.chars().skip(9).take(14).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// A review of someone else's PR waiting to post its verdict, as the machine stores the gate.
+    fn review_verdict_app(verdict: &str) -> crate::app::App {
+        use serde_json::json;
+        let task = crate::testkit::task_json(
+            "59a9958500aa",
+            "PR #2292: fix(cycles): stale a removed participant's rater feedback",
+            "awaiting_ship",
+            "Ship",
+            json!({"route": "review", "waitingOnYou": true}),
+        );
+        let summary = "Stales a removed participant's submissions before task cleanup, in all three removal paths.";
+        let requested = json!({
+            "verdict": verdict, "summary": summary, "posted": false, "reason": "verdict",
+            "answer": {"kind": "done", "verdict": verdict, "summary": summary,
+                "comments": [{"path": "src/cycles/remove.ts", "line": 42, "side": "RIGHT", "body": "This drops the rater rows before the audit copy is taken."}],
+                "findings": [{"path": "src/cycles/remove.ts", "line": 42, "severity": "should_fix", "title": "Audit copy taken too late", "body": "b", "confidence": 0.8}]},
+            "findings": [{"path": "src/cycles/remove.ts", "line": 42, "severity": "should_fix", "title": "Audit copy taken too late", "body": "b", "confidence": 0.8}],
+            "comments": 1,
+            "actions": [{"kind": "pr_review_post", "target": "https://github.com/viapeople-inc/Discover/pull/2292", "payload": {"event": "REQUEST_CHANGES", "body": summary}}]
+        });
+        let mut app = crate::testkit::open_card(
+            task,
+            json!({"approvals": [{"id": "r1", "kind": "awaiting_ship", "decision": null, "createdAt": "2026-11-12T15:42:08Z", "requested": requested}]}),
+        );
+        app.detail_section = Section::Result;
+        app
+    }
+
+    #[test]
+    fn a_review_waiting_to_post_shows_the_verdict_the_body_the_line_comments_and_the_findings() {
+        let mut app = review_verdict_app("request_changes");
+        let screen = render(&mut app, 180, 60);
+        let main = main_pane(&screen);
+        for needle in [
+            "Review to post",
+            "Request changes",
+            "Stales a removed participant's submissions",
+            "src/cycles/remove.ts:42",
+            "This drops the rater rows",
+            "should fix",
+            "Audit copy taken too late",
+            "not posted yet",
+        ] {
+            assert!(main.contains(needle), "no {needle:?} in\n{main}");
+        }
+    }
+
+    #[test]
+    fn an_approving_review_with_nothing_to_flag_says_so() {
+        let mut app = review_verdict_app("approve");
+        if let Some(d) = app.detail.as_mut() {
+            let r = &mut d.approvals[0].requested;
+            r["answer"]["comments"] = serde_json::json!([]);
+            r["answer"]["findings"] = serde_json::json!([]);
+            r["findings"] = serde_json::json!([]);
+            r["comments"] = serde_json::json!(0);
+        }
+        let screen = render(&mut app, 180, 60);
+        let main = main_pane(&screen);
+        assert!(main.contains("Approve"), "{main}");
+        assert!(main.contains("No line comments"), "{main}");
     }
 
     #[test]
