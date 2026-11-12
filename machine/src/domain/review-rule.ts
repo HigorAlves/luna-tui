@@ -44,6 +44,36 @@ export function approvedOnHead(reviews: ReviewOf[], head: string | null, me: str
   return approversOnHead(reviews, head, me).length > 0;
 }
 
+/** The one body that counts as a release approval in a PR comment: `/ship`, nothing else, in any case. The machine opens PRs under the token's own login, and GitHub never
+ *  lets a PR's author approve it, so this comment is how that login's person says it. The machine never posts this body (`refuseShipCommand`), so no comment of its own matches. */
+export const isShipCommand = (body: string): boolean => body.trim().toLowerCase() === "/ship";
+
+export interface CommentOf {
+  kind: string;
+  actor: string | null;
+  isBot: boolean;
+  association: string | null;
+  body: string;
+  at: string;
+}
+
+/** The logins whose `/ship` comment counts: a conversation comment made after `after` (ms; the head commit's time, or later), by an owner, member or collaborator. The
+ *  token's own login is allowed here, unlike a review: its comment is the person's, and a comment of the machine's own cannot be `/ship`. Oldest first, once each.
+ *  An unknown cutoff counts nothing (fail closed). */
+export function approversByComment(comments: CommentOf[], after: number | null): string[] {
+  if (after === null || !Number.isFinite(after)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const c of [...comments].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
+    const at = Date.parse(c.at);
+    if (c.kind !== "comment" || c.isBot || !c.actor || !isShipCommand(c.body) || !TRUSTED.has(c.association ?? "") || !Number.isFinite(at) || at <= after) continue;
+    if (seen.has(c.actor.toLowerCase())) continue;
+    seen.add(c.actor.toLowerCase());
+    out.push(c.actor);
+  }
+  return out;
+}
+
 /** The login of an owner, member or collaborator (not the token's own login) whose latest verdict on the PR is "changes requested"; null when there is none. */
 export function objectionOnPr(reviews: ReviewOf[], me: string | null): string | null {
   const latest = new Map<string, ReviewOf>();

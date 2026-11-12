@@ -2274,9 +2274,9 @@ export class Pipeline {
     if (owners.length > 0 && !owners.some((o) => sameName(o.replace(/^@/, ""), approver.replace(/^@/, "")))) throw new NotReleaseOwnerError(id, approver);
   }
 
-  /** The probe saw approving reviews of the PR at the head the question was asked about. The first reviewer the approver rules allow approves the release (a GitHub
-   *  review is an attestation, like a name typed on the board, so it is logged); none allowed leaves the question for the board. */
-  private async approveOnGitHub(task: TaskRow, gate: ApprovalRow, seen: { approvedBy: string[]; head: string }): Promise<void> {
+  /** The probe saw approving reviews, or `/ship` comments, on the PR at the head the question was asked about. The first login the approver rules allow approves the release
+   *  (a GitHub review or comment is an attestation, like a name typed on the board, so it is logged with how it came); none allowed leaves the question for the board. */
+  private async approveOnGitHub(task: TaskRow, gate: ApprovalRow, seen: { approvedBy: string[]; head: string; byComment?: string[] }): Promise<void> {
     if (typeof gate.requested.head === "string" && gate.requested.head !== seen.head) return;
     for (const login of seen.approvedBy) {
       try {
@@ -2285,8 +2285,9 @@ export class Pipeline {
         if (error instanceof ApproverRequiredError || error instanceof SameApproverError || error instanceof NotReleaseOwnerError) continue;
         throw error;
       }
-      await this.dispatch(task.id, { type: "approved", gate: "ship_approval" }, { decision: { decision: "approved", reason: `approved on GitHub by ${login}`, response: { approver: login, head: seen.head, github: true } }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
-      await this.log(task.id, "release.approved_on_github", { approver: login, head: seen.head });
+      const how = seen.byComment?.includes(login) ? "comment" : "review";
+      await this.dispatch(task.id, { type: "approved", gate: "ship_approval" }, { decision: { decision: "approved", reason: `approved on GitHub by ${login}${how === "comment" ? " (/ship)" : ""}`, response: { approver: login, head: seen.head, github: true } }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+      await this.log(task.id, "release.approved_on_github", { approver: login, head: seen.head, how });
       return;
     }
   }

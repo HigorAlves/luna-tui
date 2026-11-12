@@ -1034,9 +1034,9 @@ describe("an approving review on GitHub is the release approval", () => {
   const pack = (risk: "low" | "high") => ({ summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk, rollback: "revert", howToVerify: "run it", commitSha: "9c1f0e2a7b3d", media: [], at: "2026-11-04T00:00:00.000Z" });
   const one = { for: async () => ({ ...PREVIEW_ON, factory: { ...PREVIEW_ON.factory, plan: { ...PREVIEW_ON.factory.plan, approvers: { ...PREVIEW_ON.factory.plan.approvers, high: 1 } } } }) };
   /** A card whose plan Ana approved and whose release question is open; the probe says who approved the PR on GitHub. */
-  const at = async (approvedBy: string[], options: { risk?: "low" | "high"; owners?: string[]; policies?: typeof previewOn; head?: string } = {}) => {
+  const at = async (approvedBy: string[], options: { risk?: "low" | "high"; owners?: string[]; policies?: typeof previewOn; head?: string; byComment?: string[] } = {}) => {
     const risk = options.risk ?? "high";
-    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: options.policies ?? previewOn, hasConfig: () => true, shipGateProbe: (async () => ({ approvedBy, head: options.head ?? "h1" })) as never, shipProbeMs: 0 });
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: options.policies ?? previewOn, hasConfig: () => true, shipGateProbe: (async () => ({ approvedBy, head: options.head ?? "h1", ...(options.byComment ? { byComment: options.byComment } : {}) })) as never, shipProbeMs: 0 });
     stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk, question: "safe to release now?", ...(options.owners ? { releaseOwners: options.owners } : {}) } });
     const task = await p.createTask({ title: "Billing", criteria: ["c"], evidence: pack(risk) });
     await p.start(task.id);
@@ -1082,6 +1082,35 @@ describe("an approving review on GitHub is the release approval", () => {
     const owner = await at(["cy", "@Bo"], { owners: ["@bo"] });
     await owner.p.tick();
     expect((await owner.p.approvals(owner.id)).filter((a) => a.requested.gate === "ship_approval").at(-1)).toMatchObject({ decision: "approved", response: { approver: "@Bo" } });
+  });
+
+  it("a /ship comment is the release approval too, logged as a comment, with the login and the head", async () => {
+    const { p, id } = await at(["me"], { byComment: ["me"], policies: one });
+    await p.tick();
+    expect((await p.approvals(id)).filter((a) => a.requested.gate === "ship_approval").at(-1)).toMatchObject({ decision: "approved", response: { approver: "me", head: "h1", github: true } });
+    expect((await p.events(id)).find((e) => e.kind === "release.approved_on_github")?.payload).toMatchObject({ approver: "me", head: "h1", how: "comment" });
+  });
+
+  it("a review is logged as a review", async () => {
+    const { p, id } = await at(["cy"]);
+    await p.tick();
+    expect((await p.events(id)).find((e) => e.kind === "release.approved_on_github")?.payload).toMatchObject({ approver: "cy", how: "review" });
+  });
+
+  it("the separate-approver rule applies to a /ship comment: the plan's approver cannot release by it when two are asked, another person can", async () => {
+    const same = await at(["Ana"], { byComment: ["Ana"] });
+    await same.p.tick();
+    await stillOpen(same.p, same.id);
+    const other = await at(["ana", "cy"], { byComment: ["ana", "cy"] });
+    await other.p.tick();
+    expect((await other.p.approvals(other.id)).filter((a) => a.requested.gate === "ship_approval").at(-1)).toMatchObject({ decision: "approved", response: { approver: "cy" } });
+    expect((await other.p.events(other.id)).find((e) => e.kind === "release.approved_on_github")?.payload).toMatchObject({ how: "comment" });
+  });
+
+  it("named release owners apply to a /ship comment", async () => {
+    const stranger = await at(["cy"], { owners: ["bo"], byComment: ["cy"] });
+    await stranger.p.tick();
+    await stillOpen(stranger.p, stranger.id);
   });
 
   it("a review on another head than the one asked about does not count", async () => {

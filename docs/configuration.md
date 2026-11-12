@@ -279,6 +279,12 @@ A repository can turn a mechanism off, or tune a number inside its bounds. A tun
 
 `pnpm --filter @hardness/machine gates owner/name [--checks board,machine] [--dry-run]` applies a repository ruleset named `hardness gates` to the default branch. The ruleset needs one approving review from someone other than the last pusher. It dismisses reviews when the branch moves. It allows no deletion and no force-push. It needs the named checks green. GitHub enforces it whatever an agent does. The pipeline cannot approve its own PR. The machine's side of the same gate: a writable stage refuses any branch outside `task/`.
 
+## Approving a release on GitHub
+
+The machine opens PRs under the account its token belongs to. With `gh auth token` that is your own account, and GitHub never lets a PR's author approve it. So an approving review from you never counts. While a card's release question is open, a PR comment whose whole body is `/ship` (any case, trimmed) counts as the release approval instead. It must come after the head commit and after the question was asked, from an `OWNER`, `MEMBER` or `COLLABORATOR`. Your own login is allowed for a comment. The approver rules still apply: when `plan.approvers.high` is above 1, the plan's approver cannot release; when release owners are named, only they can. The machine records the login and the head, and logs `release.approved_on_github` with `how: comment`. The machine never posts a comment that is only `/ship`, so none of its own comments can count.
+
+The other way is to give the machine its own GitHub account: a separate account that is a collaborator on the repos, with its token as `GH_TOKEN` (`GITHUB_TOKEN`) for the machine. Then you are not the PR's author, and your normal approving review on the head counts as before (`how: review`).
+
 ## Environment cache
 
 Every stage and check container mounts a docker volume named `hardness-cache-<repo>` at `/cache`, with npm, pnpm, yarn, Go, cargo, pip and uv pointed at it. A retry, or the next task of the same repo, installs from that warm cache instead of the network. `docker volume rm hardness-cache-<repo>` starts a repo over. Stages run as a non-root user, so a cache volume that an older machine filled as root must be removed once, or its folders cannot be written: `docker volume ls -q --filter name=hardness-cache- | xargs docker volume rm`. It only costs a warm-up.

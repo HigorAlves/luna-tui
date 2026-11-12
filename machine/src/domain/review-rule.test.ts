@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseCodeowners } from "./codeowners.ts";
-import { approvedOnHead, approversOnHead, reviewRequirement } from "./review-rule.ts";
+import { approvedOnHead, approversByComment, approversOnHead, isShipCommand, reviewRequirement } from "./review-rule.ts";
 
 const owners = (text: string | null) => (text === null ? null : parseCodeowners(text));
 
@@ -76,5 +76,41 @@ describe("approversOnHead", () => {
     expect(approversOnHead(reviews, HEAD, "me")).toEqual(["ana"]);
     expect(approversOnHead(reviews, null, "me")).toEqual([]);
     expect(approversOnHead(reviews, HEAD, null)).toEqual([]);
+  });
+});
+
+describe("the /ship comment", () => {
+  const AFTER = Date.parse("2026-11-04T10:00:00Z");
+  const comment = (actor: string, body: string, at = "2026-11-04T11:00:00Z", association: string | null = "COLLABORATOR", extra: Record<string, unknown> = {}) => ({ kind: "comment" as const, actor, isBot: false, association, body, at, ...extra });
+  it("a body that is only /ship, trimmed and in any case, is the command; anything else is not", () => {
+    for (const body of ["/ship", "  /SHIP\n", "/Ship"]) expect(isShipCommand(body)).toBe(true);
+    for (const body of ["/ship it", "please /ship", "/shipping", "`/ship`", "", "/ship\n/ship"]) expect(isShipCommand(body)).toBe(false);
+  });
+  it("lists the owner, member or collaborator who commented it after the cutoff, oldest first, once each", () => {
+    const all = [comment("ana", "/ship"), comment("Bo", "/Ship", "2026-11-04T12:00:00Z", "OWNER"), comment("ana", "/ship", "2026-11-04T13:00:00Z"), comment("cy", "/ship", "2026-11-04T11:00:00Z", "MEMBER")];
+    expect(approversByComment(all, AFTER)).toEqual(["ana", "cy", "Bo"]);
+  });
+  it("does not count a comment from before the cutoff, from a stranger, a bot, a review comment, a deleted user, or an unreadable time", () => {
+    const none = [
+      comment("ana", "/ship", "2026-11-04T09:00:00Z"),
+      comment("ana", "/ship", "2026-11-04T10:00:00Z"),
+      comment("eve", "/ship", "2026-11-04T11:00:00Z", "NONE"),
+      comment("eve", "/ship", "2026-11-04T11:00:00Z", "CONTRIBUTOR"),
+      comment("eve", "/ship", "2026-11-04T11:00:00Z", null),
+      comment("bot", "/ship", "2026-11-04T11:00:00Z", "COLLABORATOR", { isBot: true }),
+      comment("ana", "/ship", "2026-11-04T11:00:00Z", "COLLABORATOR", { kind: "review_comment" }),
+      comment("ana", "/ship", "2026-11-04T11:00:00Z", "COLLABORATOR", { kind: "review" }),
+      comment("ana", "/ship", "not a time"),
+      comment("ana", "/ship", ""),
+      { ...comment("x", "/ship"), actor: null },
+      comment("ana", "/ship please"),
+    ];
+    expect(approversByComment(none, AFTER)).toEqual([]);
+  });
+  it("counts the token's own login: that is the point, GitHub never lets the PR's author review it", () => {
+    expect(approversByComment([comment("me", "/ship")], AFTER)).toEqual(["me"]);
+  });
+  it("counts nothing when the cutoff is unknown", () => {
+    expect(approversByComment([comment("ana", "/ship")], null)).toEqual([]);
   });
 });

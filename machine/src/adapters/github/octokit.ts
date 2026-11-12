@@ -1,7 +1,7 @@
 // The GitHub port on Octokit (REST, GraphQL and pagination). One client, one token, no CLI.
 // The client is injected so a test can hand in a stub shaped like Octokit; `createGitHub`
 // builds the real one from a token.
-import type { ReviewRule } from "../../domain/review-rule.ts";
+import { isShipCommand, type ReviewRule } from "../../domain/review-rule.ts";
 import { Octokit } from "octokit";
 
 import { PR_QUERY, type PrNode } from "../../domain/pull-request.ts";
@@ -81,6 +81,12 @@ export const FILE_AT_REF_MAX_BYTES = 256 * 1024;
 const RESOLVE_MUTATION = `mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){thread{isResolved}} }`;
 const RESOLVED_QUERY = `query($threadId:ID!){ node(id:$threadId){ ... on PullRequestReviewThread{isResolved} } }`;
 const READY_MUTATION = `mutation($id:ID!){ markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}} }`;
+
+/** A comment whose whole body is `/ship` is the release approval when a person writes it, and the machine's comments carry its own login, so the machine never posts one
+ *  (the probe has no other way to tell them apart). Every conversation comment the machine writes or edits goes through here. */
+function refuseShipCommand(body: string): void {
+  if (isShipCommand(body)) throw new GitHubError("refusing to post a comment that is only /ship: that is the release approval, and only a person gives it");
+}
 
 /** Re-throws anything Octokit raises as a GitHubError carrying GitHub's message. */
 async function call<T>(what: string, run: () => Promise<T>): Promise<T> {
@@ -444,6 +450,7 @@ export class OctokitGitHub implements GitHub {
   }
 
   async commentOnIssue(slug: string, number: number, body: string): Promise<void> {
+    refuseShipCommand(body);
     const { owner, repo } = repoRef(slug);
     await call(`commenting on ${slug}#${number}`, () => this.octokit.rest.issues.createComment({ owner, repo, issue_number: number, body }));
   }
@@ -530,6 +537,7 @@ export class OctokitGitHub implements GitHub {
   }
 
   async updateComment(slug: string, commentId: number, body: string): Promise<void> {
+    refuseShipCommand(body);
     const { owner, repo } = repoRef(slug);
     await call(`updating comment ${commentId} on ${slug}`, () => this.octokit.rest.issues.updateComment({ owner, repo, comment_id: commentId, body }));
   }

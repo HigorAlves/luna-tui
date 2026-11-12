@@ -415,6 +415,17 @@ describe("OctokitGitHub: publishing evidence", () => {
     expect(calls[0]).toEqual(["paginate issues.listComments", { owner: "o", repo: "a", issue_number: 3, per_page: 100 }]);
   });
 
+  it("never posts a comment whose whole body is /ship: that is the release approval, and the machine's own login must not be able to give it", async () => {
+    const { github, calls } = stub({ "issues.createComment": {}, "issues.updateComment": {} });
+    for (const body of ["/ship", "  /SHIP\n"]) {
+      await expect(github.commentOnIssue("o/a", 3, body)).rejects.toThrow(GitHubError);
+      await expect(github.updateComment("o/a", 7, body)).rejects.toThrow(/\/ship/);
+    }
+    expect(calls).toEqual([]);
+    await github.commentOnIssue("o/a", 3, "/ship it");
+    expect(calls).toEqual([["issues.createComment", { owner: "o", repo: "a", issue_number: 3, body: "/ship it" }]]);
+  });
+
   it("updates a comment by its id", async () => {
     const { github, calls } = stub({ "issues.updateComment": {} });
     await github.updateComment("o/a", 7, "new");
