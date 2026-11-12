@@ -45,4 +45,13 @@ describe("luna.yaml's checks follow validate.yml", () => {
     expect(matches("machine/scripts/golden-lib.mjs")).toBe(true);
     expect(matches("machine/scripts/golden-task.mjs")).toBe(true);
   });
+
+  // A moving "stable" would turn CI red on a new clippy lint while the card's check, on the runner's pinned toolchain, stayed green.
+  it("uses the toolchain versions the runner image pins", () => {
+    const dockerfile = readFileSync(join(root, "machine/runner/Dockerfile"), "utf8");
+    const arg = (name: string): string => dockerfile.match(new RegExp(`^ARG ${name}=(\\S+)`, "m"))![1]!;
+    const text = readFileSync(join(root, ".github/workflows/validate.yml"), "utf8");
+    expect(text).toContain(`dtolnay/rust-toolchain@${arg("RUST_VERSION")}`);
+    expect(text).toContain(`go-version: "${arg("GO_VERSION")}"`);
+  });
 });
