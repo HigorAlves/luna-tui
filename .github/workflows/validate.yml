@@ -145,6 +145,19 @@ jobs:
       - name: Tests
         run: cargo test
 
+  herdr-app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # The mod has no dependencies: its model, stream parser and drawing run under node --test,
+      # Herdr's host modules replaced by herdr-app/test/host.
+      - name: Tests
+        run: node --import ./herdr-app/test/host/register.js --test herdr-app/test/*.test.js
+
   site:
     runs-on: ubuntu-latest
     timeout-minutes: 10

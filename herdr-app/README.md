@@ -1,0 +1,95 @@
+# Luna for the Herdr app
+
+The factory's board as a pane in [Herdr](https://github.com/herdrdev/herdr-app), the desktop app for terminals and coding agents. It is a second client of the machine, beside the TUI board (`board/`). It reads the same API and the same event stream. It never decides anything the machine decides.
+
+It draws with Herdr's own theme colors, so it follows the light or dark theme you pick in Herdr. The layout follows the Luna design canvas:
+
+- A sidebar with the views (Everything, Waiting on you, Agents working, PR work), the projects and the machine's link.
+- The columns in three groups (Plan, Make, Ship), with Done folded to a rail.
+- An inspector beside the board. It shows the gate and its actions, then Details, Activity, Runs and Changes.
+
+## Install
+
+Install Herdr (`brew install --cask herdr-app` on Apple Silicon), then from this repository:
+
+```sh
+make herdr-app                                   # links herdr-app/luna into Herdr's mods and checks it
+herdr-app do tab.new --mod luna --name Luna      # opens it as a tab (or split a pane: pane.split {mod: "luna"})
+```
+
+The link is a symlink, so a `git pull` updates the mod. A save reloads its code in place. Reopen the tab when `init` changed, because a reload keeps the running copy's state.
+
+The mod finds the machine the way the TUI does:
+
+- **Where:** `HARDNESS_MACHINE_URL`, else the dev machine on `:4317`, then the Docker one on `:4318`.
+- **Token:** `MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`.
+- **Approver:** `LUNA_APPROVER` is sent as the approver, as the TUI sends it.
+
+It reads these through your login shell. The token is never shown.
+
+## What it does
+
+| Where | What |
+|---|---|
+| Board | Cards by column, the ones that need you first. A card that waits on you is framed in Herdr's `blocked` color, and a running one in `working`. The quick action on a card is Start, Approve, Retry or Resume. |
+| Inspector | **The gate:** the plan (risk, brief, steps, coverage gaps, a split), the questions, the test cases, the release checklist, the review to post with its verdict and line comments, the escalation with its output, the context or duplicate check. **Actions:** approve, send back, reject, keep whole, answer, give context, decide the duplicate, retry, resume, stop, archive, delete. An approval refused for coverage gaps opens the dialog that excuses them. |
+| PRs | The inbox (PRs involving you) and All repos, split as the machine splits them, with a repo filter. **Actions:** review, fix CI, address the threads, merge, open on GitHub. A PR you have not cloned offers Clone…, which opens the system folder picker. |
+| New task | Title, repository (the system folder picker, or one the board knows), description, criteria, and whether to start now. |
+| Alerts | A Herdr notification when a card starts waiting on you. |
+
+## Keys and commands
+
+Click the pane to give it the keyboard, or move onto it with `pane.go`. Then:
+
+| Key | Does |
+|---|---|
+| `j` / `k` (or the arrows) | the next or previous card |
+| `Enter` | the selected card's main action |
+| `Esc` | close the inspector |
+| `/` | search |
+| `n` | new task |
+| `r` | read the board again |
+| `1` / `2` | Board / PRs |
+
+The same commands can be bound in Herdr's `keys.json` under `"mod:luna"` (for example `"alt-l": "luna.next"`).
+
+A script or an agent can drive the pane through files. Write a file with one command per line into `~/.config/herdr-app/luna-inbox/`. Each file is read once and then removed. The commands:
+
+- the keys' commands: `next`, `prev`, `close`, `refresh`, `new`, `board`, `prs`, `approve`
+- `select <task id or its start>`
+- `tab details|activity|runs|changes`
+- `list inbox|all`
+- `act <action>` (an action from the inspector)
+- `done on|off`
+
+```sh
+echo "select 30f4574d" > ~/.config/herdr-app/luna-inbox/open
+```
+
+## How it is built
+
+Herdr mods are JavaScript that describe native GPUI elements. There is no DOM, no npm and no `setTimeout` (see `~/.config/herdr-app/AGENTS.md`).
+
+| File | Holds |
+|---|---|
+| `luna/main.js` | the state, the stream loop, the actions, the keys and the inbox |
+| `luna/model.js` | pure rules: columns, card looks, gate questions, actions per state, PR status and actions, stream updates |
+| `luna/wire.js` | the HTTP head, chunked framing and SSE parsing. Herdr's `fetch` answers whole bodies only, so `/events` is read off a `net` socket. |
+| `luna/api.js` | the machine client |
+| `luna/board.js`, `inspector.js`, `prs.js`, `dialogs.js`, `ui.js` | the drawing |
+| `luna/icons/` | line icons, tinted with the text color |
+
+A dialog is the same mod opened as a Herdr overlay with `props().dialog`. It makes its call to the machine and closes. The board sees the result on the stream. A task to select, or a repo to filter by, comes back through Herdr's shared state.
+
+## Tests
+
+```sh
+pnpm app:test
+```
+
+The tests cover:
+
+- `model.js` and `wire.js`, as plain functions
+- every page and every gate, drawn under Node with Herdr's host modules replaced by `test/host/` (a stand-in that chains every element call), so a field the machine leaves out crashes there and not in your pane
+
+`herdr-app check ~/.config/herdr-app/mods/luna` loads the mod in Herdr itself. It renders the first frame only.

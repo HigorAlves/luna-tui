@@ -4,7 +4,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 SETUP := scripts/setup
 
-.PHONY: help setup doctor tools credentials integrations luna-yaml up down board
+.PHONY: help setup doctor tools credentials integrations luna-yaml up down board herdr-app
 
 help: ## Show these targets
 	@bash -c 'source $(SETUP)/helpers/banner.sh && banner_show "make <target>"'
@@ -37,3 +37,6 @@ down: ## Stop the machine and Postgres, keeping their data
 
 board: ## Build the board and link it into herdr
 	@pnpm board:link
+
+herdr-app: ## Link the Luna mod into the Herdr desktop app (open it with: herdr-app do tab.new --mod luna --name Luna)
+	@pnpm app:link
