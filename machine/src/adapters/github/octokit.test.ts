@@ -57,7 +57,7 @@ function stub(answers: Record<string, unknown>) {
       calls.push(["graphql", { query, variables }]);
       const answer = answers.graphql;
       if (answer instanceof Error) throw answer;
-      return typeof answer === "function" ? (answer as (q: string) => unknown)(query) : answer;
+      return typeof answer === "function" ? (answer as (q: string, v?: Record<string, unknown>) => unknown)(query, variables) : answer;
     }),
     paginate: vi.fn(async (method: unknown, params?: Record<string, unknown>) => {
       calls.push([`paginate ${String(method)}`, params]);
@@ -83,6 +83,65 @@ describe("OctokitGitHub", () => {
     ]);
     expect(calls.map((c) => (c[1] as { q: string }).q)).toEqual(["is:pr is:open review-requested:@me", "is:pr is:open author:@me"]);
     expect(slugFromRepositoryUrl("https://api.github.com/repos/o/a")).toBe("o/a");
+  });
+
+  it("pages through every search result and stops at a short page", async () => {
+    const full = (from: number) => Array.from({ length: 100 }, (_, i) => item("o/a", from + i));
+    const { github, calls } = stub({
+      "search.issuesAndPullRequests": ({ q, page }: { q: string; page: number }) => ({
+        items: q.includes("review-requested") ? (page === 1 ? full(1) : page === 2 ? full(101) : [item("o/a", 201)]) : [item("o/a", 5)],
+      }),
+    });
+    const hits = await github.searchMyPrs();
+    expect(hits).toHaveLength(201);
+    const pages = calls.filter((c) => (c[1] as { q: string }).q.includes("review-requested")).map((c) => (c[1] as { page: number }).page);
+    expect(pages).toEqual([1, 2, 3]);
+  });
+
+  it("stops paging at GitHub's 1000 result cap", async () => {
+    let n = 0;
+    const { github, calls } = stub({
+      "search.issuesAndPullRequests": ({ q }: { q: string }) => ({ items: q.includes("author") ? [] : Array.from({ length: 100 }, () => item("o/a", ++n)) }),
+    });
+    expect(await github.searchMyPrs()).toHaveLength(1000);
+    expect(calls.filter((c) => (c[1] as { q: string }).q.includes("review-requested"))).toHaveLength(10);
+  });
+
+  it("lists every open PR of every repo you can reach, paging the repositories and skipping archived ones", async () => {
+    const pr = (number: number) => ({ number, updatedAt: `t${number}` });
+    const repoNode = (nameWithOwner: string, nodes: Array<{ number: number; updatedAt: string }>, extra: Record<string, unknown> = {}) => ({
+      nameWithOwner,
+      isArchived: false,
+      pullRequests: { totalCount: nodes.length, nodes },
+      ...extra,
+    });
+    const { github, calls } = stub({
+      graphql: (_query: string, variables?: Record<string, unknown>) =>
+        variables?.after == null
+          ? { viewer: { repositories: { pageInfo: { hasNextPage: true, endCursor: "c1" }, nodes: [repoNode("o/a", [pr(1), pr(2)]), repoNode("o/old", [pr(9)], { isArchived: true })] } } }
+          : { viewer: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [repoNode("org/b", [pr(3)]), repoNode("org/quiet", [])] } } },
+    });
+    const listed = await github.listOpenPrs();
+    expect(listed.hits).toEqual([
+      { repo: "o/a", number: 1, updatedAt: "t1" },
+      { repo: "o/a", number: 2, updatedAt: "t2" },
+      { repo: "org/b", number: 3, updatedAt: "t3" },
+    ]);
+    expect(listed.capped).toEqual([]);
+    const query = (calls[0]![1] as { query: string }).query;
+    expect(query).toContain("affiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]");
+    expect(query).toContain("ownerAffiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]");
+    expect(calls.map((c) => (c[1] as { variables: { after: string | null } }).variables.after)).toEqual([null, "c1"]);
+  });
+
+  it("says which repos have more open PRs than the 100 it reads", async () => {
+    const nodes = Array.from({ length: 100 }, (_, i) => ({ number: i + 1, updatedAt: "t" }));
+    const { github } = stub({
+      graphql: { viewer: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ nameWithOwner: "o/big", isArchived: false, pullRequests: { totalCount: 130, nodes } }] } } },
+    });
+    const listed = await github.listOpenPrs();
+    expect(listed.hits).toHaveLength(100);
+    expect(listed.capped).toEqual([{ repo: "o/big", open: 130 }]);
   });
 
   it("speaks gh pr checks' vocabulary for check runs and statuses", async () => {

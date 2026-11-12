@@ -14,6 +14,7 @@ export type FakeGitHub = { [K in keyof GitHub]: ReturnType<typeof vi.fn<Methods[
 const METHODS: Array<keyof GitHub> = [
   "viewer",
   "searchMyPrs",
+  "listOpenPrs",
   "prFacts",
   "prDiff",
   "prFiles",

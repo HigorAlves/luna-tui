@@ -14,6 +14,7 @@ import {
   type PrActivity,
   type PrRef,
   type PrReview,
+  type OpenPrs,
   type PrSearchHit,
   type ReviewPost,
   repoRef,
@@ -24,7 +25,7 @@ export interface OctokitLike {
   rest: {
     users: { getAuthenticated(): Promise<{ data: { login: string } }> };
     teams: { listForAuthenticatedUser: unknown; listMembersInOrg: unknown };
-    search: { issuesAndPullRequests(params: { q: string; per_page?: number }): Promise<{ data: { items: Array<{ number: number; repository_url: string; updated_at: string }> } }> };
+    search: { issuesAndPullRequests(params: { q: string; per_page?: number; page?: number }): Promise<{ data: { items: Array<{ number: number; repository_url: string; updated_at: string }> } }> };
     pulls: {
       get(params: Record<string, unknown>): Promise<{ data: unknown }>;
       list(params: Record<string, unknown>): Promise<{ data: Array<{ html_url: string; number: number; draft?: boolean }> }>;
@@ -93,6 +94,25 @@ async function call<T>(what: string, run: () => Promise<T>): Promise<T> {
   }
 }
 
+/** One search page, and how many pages GitHub's search will serve (it stops at 1000 results). */
+const SEARCH_PAGE = 100;
+const SEARCH_MAX_PAGES = 10;
+
+const AFFILIATIONS = "[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]";
+/** Every repo you own, collaborate on or reach through an organisation, with its newest 100 open PRs. Archived repos take no PRs, so they are not asked for. */
+const REACHABLE_PRS_QUERY = `query($after:String){ viewer{ repositories(affiliations:${AFFILIATIONS}, ownerAffiliations:${AFFILIATIONS}, isArchived:false, first:100, after:$after){
+  pageInfo{hasNextPage endCursor}
+  nodes{ nameWithOwner isArchived pullRequests(states:OPEN, first:100, orderBy:{field:UPDATED_AT, direction:DESC}){ totalCount nodes{number updatedAt} } } } } }`;
+
+interface ReachableReposAnswer {
+  viewer: {
+    repositories: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: Array<{ nameWithOwner: string; isArchived: boolean; pullRequests: { totalCount: number; nodes: Array<{ number: number; updatedAt: string }> } }>;
+    };
+  };
+}
+
 /** `owner/name` from the search API's `repository_url` (`https://api.github.com/repos/owner/name`). */
 export const slugFromRepositoryUrl = (url: string): string => url.replace(/^.*\/repos\//, "");
 
@@ -119,18 +139,41 @@ export class OctokitGitHub implements GitHub {
     const seen = new Set<string>();
     const hits: PrSearchHit[] = [];
     for (const filter of ["review-requested:@me", "author:@me"]) {
-      const { data } = await call("searching pull requests", () =>
-        this.octokit.rest.search.issuesAndPullRequests({ q: `is:pr is:open ${filter}`, per_page: 100 }),
-      );
-      for (const item of data.items) {
-        const repo = slugFromRepositoryUrl(item.repository_url);
-        const key = `${repo}#${item.number}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        hits.push({ repo, number: item.number, updatedAt: item.updated_at });
+      for (let page = 1; page <= SEARCH_MAX_PAGES; page++) {
+        const { data } = await call("searching pull requests", () =>
+          this.octokit.rest.search.issuesAndPullRequests({ q: `is:pr is:open ${filter}`, per_page: SEARCH_PAGE, page }),
+        );
+        for (const item of data.items) {
+          const repo = slugFromRepositoryUrl(item.repository_url);
+          const key = `${repo}#${item.number}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          hits.push({ repo, number: item.number, updatedAt: item.updated_at });
+        }
+        // A short page is the last one; GitHub's search never returns past 1000 results anyway.
+        if (data.items.length < SEARCH_PAGE) break;
       }
     }
     return hits;
+  }
+
+  async listOpenPrs(): Promise<OpenPrs> {
+    const hits: PrSearchHit[] = [];
+    const capped: OpenPrs["capped"] = [];
+    let after: string | null = null;
+    do {
+      const data: ReachableReposAnswer = await call("listing the open PRs of your repositories", () =>
+        this.octokit.graphql<ReachableReposAnswer>(REACHABLE_PRS_QUERY, { after }),
+      );
+      const repositories = data.viewer.repositories;
+      for (const repo of repositories.nodes) {
+        if (repo.isArchived) continue;
+        for (const pr of repo.pullRequests.nodes) hits.push({ repo: repo.nameWithOwner, number: pr.number, updatedAt: pr.updatedAt });
+        if (repo.pullRequests.totalCount > repo.pullRequests.nodes.length) capped.push({ repo: repo.nameWithOwner, open: repo.pullRequests.totalCount });
+      }
+      after = repositories.pageInfo.hasNextPage ? repositories.pageInfo.endCursor : null;
+    } while (after !== null);
+    return { hits, capped };
   }
 
   async prFacts(slug: string, number: number): Promise<PrNode | null> {
