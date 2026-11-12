@@ -682,7 +682,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
         const { owner, name, number } = prParams(c);
         const { action } = await body(c, PrActionInput);
         const slug = `${owner}/${name}`.toLowerCase();
-        const pr = pulls.snapshot.prs.find((p) => p.repo.toLowerCase() === slug && p.number === number);
+        // The inbox first, then the all-list: the All repos tab dispatches on PRs the inbox does not hold.
+        const pr = [...pulls.snapshot.prs, ...pulls.all.prs].find((p) => p.repo.toLowerCase() === slug && p.number === number);
         if (!pr) throw new TaskNotFoundError(`${owner}/${name}#${number}`);
         return c.json(await serialize(await prTasks.dispatch(pr, action)), 201);
       });

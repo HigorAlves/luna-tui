@@ -277,9 +277,10 @@ export class GitHubPulls implements PullsPort {
     return found.filter((pr): pr is PullRequest => pr !== null);
   }
 
-  /** The PR as the last poll saw it. */
+  /** The PR as the last poll saw it: the inbox first, then the all-list, so a PR the All repos tab shows can be acted on too. */
   find(repo: string, number: number): PullRequest | null {
-    return this.snapshot.prs.find((p) => key(p.repo, p.number) === key(repo, number)) ?? null;
+    const wanted = key(repo, number);
+    return this.snapshot.prs.find((p) => key(p.repo, p.number) === wanted) ?? this.all.prs.find((p) => key(p.repo, p.number) === wanted) ?? null;
   }
 
   /** Squash-merges a PR the snapshot shows as ready, then polls so it drops off the list. */

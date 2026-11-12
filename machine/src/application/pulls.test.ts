@@ -203,6 +203,17 @@ describe("GitHubPulls.pollAllOnce", () => {
     expect(publishedAll).toHaveLength(1);
   });
 
+  it("merges and closes a PR that only the all-list shows, as the All repos tab offers", async () => {
+    const { pulls, calls } = setup(world());
+    await pulls.pollAllOnce();
+    expect(pulls.snapshot.prs).toEqual([]);
+    expect(pulls.find("o/b", 5)?.number).toBe(5);
+    await pulls.close("o/b", 5);
+    expect(calls).toContainEqual(["close", "o/b", "5"]);
+    await pulls.merge("o/a", 1);
+    expect(calls.some((c) => c[0] === "merge" && c[1] === "o/a")).toBe(true);
+  });
+
   it("does not fetch a PR again while its updatedAt is the same, and shares what the inbox fetched", async () => {
     const w = world();
     const { pulls, calls } = setup(w);
