@@ -91,7 +91,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
       })
     : {};
   // `delegate` rides on the luna server when the pack hands work to a helper on another runtime.
-  const { tools, allowedTools } = claudeTools(pack.access);
+  const { tools, allowedTools } = claudeTools(pack.access, paths.work);
   const delegating = ctx.delegate ? [`mcp__luna__${DELEGATE}`] : [];
   const options = {
     cwd: paths.work,

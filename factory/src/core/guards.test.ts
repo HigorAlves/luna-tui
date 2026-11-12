@@ -29,6 +29,18 @@ describe("checkCall", () => {
     }
   });
 
+  it("matches `git -C <the worktree> <sub>` against the list as `git <sub>`, and any other directory is refused", () => {
+    const policy = { ...READ_ONLY, workRoot: "/work", commands: ["git log", "git diff"] };
+    for (const ok of ["git -C /work log --oneline -8", "git -C /work/ diff --stat", "git -C /work/src/.. log", "git log -1"]) {
+      expect(checkCall({ tool: "bash", input: { command: ok } }, policy), ok).toEqual({ allow: true });
+      expect(checkCall({ tool: "exec", input: { command: ok } }, policy), ok).toEqual({ allow: true });
+    }
+    for (const bad of ["git -C /work status", "git -C /work/docs log", "git -C /etc log", "git -C /work push", "git -C log", "git -C"]) {
+      expect(checkCall({ tool: "bash", input: { command: bad } }, policy), bad).toMatchObject({ allow: false });
+    }
+    expect(checkCall({ tool: "bash", input: { command: "git -C /work/docs log" } }, policy)).toMatchObject({ reason: expect.stringMatching(/allow-list/) });
+  });
+
   it("refuses a shell command with the rule's reason", () => {
     expect(checkCall({ tool: "bash", input: { command: "git push" } }, WRITABLE)).toEqual({ allow: false, reason: expect.stringMatching(/git push is not allowed/) });
   });

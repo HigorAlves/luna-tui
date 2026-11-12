@@ -639,12 +639,23 @@ function guardAllowList(command: string, policy: GuardContext): string | null {
   return null;
 }
 
+/** `git -C /work log` as `git log`: models write the worktree's own folder after -C all the time, and it changes
+ *  nothing, since a stage's shell already starts there. Only a -C that resolves exactly to the worktree is dropped;
+ *  any other directory stays in the command and so matches no listed prefix. */
+function withoutWorkDir(tokens: SimpleCommand, policy: GuardContext): SimpleCommand {
+  if (tokens[0] !== "git" || tokens[1] !== "-C" || tokens[2] === undefined) return tokens;
+  const work = posix.normalize(policy.workRoot ?? "/work");
+  const dir = posix.resolve(work, tokens[2]);
+  return dir === (work.length > 1 ? work.replace(/\/+$/, "") : work) ? ["git", ...tokens.slice(3)] : tokens;
+}
+
 /** The reason one simple command starts with no listed prefix (`git add` is argv[0] and its
  *  subcommand), or null. */
 function guardListed(tokens: SimpleCommand, policy: GuardContext): string | null {
   if (policy.commands === undefined) return null;
   const prefixes = policy.commands.map((p) => p.split(/\s+/));
-  if (prefixes.some((p) => p.every((word, i) => tokens[i] === word))) return null;
+  const listed = withoutWorkDir(tokens, policy);
+  if (prefixes.some((p) => p.every((word, i) => listed[i] === word))) return null;
   return `\`${tokens.join(" ")}\` is not on this stage's command allow-list (${policy.commands.join(", ")}): run one listed command per call`;
 }
 

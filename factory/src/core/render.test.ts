@@ -503,6 +503,8 @@ describe("renderPrompt", () => {
     expect(FACTORY_RULES).toContain("requested[]");
     expect(FACTORY_RULES).toContain("Never write outside /work and /out");
     expect(FACTORY_RULES).toContain("chained command");
+    expect(FACTORY_RULES).toContain("`git log`, not `git -C /work log`");
+    expect(factoryRules(EVE_TOOL_NAMES)).toContain("`git log`, not `git -C /work log`");
     expect(FACTORY_RULES).not.toContain('kind "questions"');
     expect(FACTORY_RULES).not.toContain("Answer ONLY");
     expect(FACTORY_RULES).not.toMatch(/human|controller/);

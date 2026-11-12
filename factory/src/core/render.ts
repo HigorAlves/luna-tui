@@ -149,14 +149,14 @@ export const CLAUDE_TOOL_NAMES: RuleToolNames = {
   read: "Read/Glob/Grep",
   step: "mcp__luna__step",
   guard: "a hook",
-  shell: "Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd",
+  shell: "Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd (git runs in /work already: write `git log`, not `git -C /work log`)",
 };
 export const EVE_TOOL_NAMES: RuleToolNames = {
   ask: "Never ask a question",
   read: "read_file, glob and grep",
   step: "step",
   guard: "a guard",
-  shell: "bash is not a shell: it runs one command on this stage's allow-list as one process, quotes read as a shell reads them and nothing else (no pipes, redirection, globs, variables, substitution or chaining), no cd",
+  shell: "bash is not a shell: it runs one command on this stage's allow-list as one process, quotes read as a shell reads them and nothing else (no pipes, redirection, globs, variables, substitution or chaining), no cd (git runs in /work already: write `git log`, not `git -C /work log`)",
 };
 
 /** The rules every stage runs under, in the runtime's tool names; the Claude runtime appends them
