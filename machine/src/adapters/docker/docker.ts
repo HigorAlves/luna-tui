@@ -25,6 +25,10 @@ export interface SandboxSize {
   memoryGb: number;
 }
 export const DEFAULT_SANDBOX_SIZE: SandboxSize = { cpu: 2, memoryGb: 4 };
+/** Docker's own init (tini) as PID 1. Without it the stage's entrypoint is PID 1 and never reaps: a process group the stage kills (a test runner's timeout, an abort)
+ *  leaves zombies that `kill(pid, 0)` still reports alive, and the repo's own suite (`exec.test.ts` "kills the group") fails inside the container and escalates the card. */
+export const INIT_ARGS = ["--init"];
+
 export const sandboxLimits = (size: SandboxSize = DEFAULT_SANDBOX_SIZE): string[] => ["--memory", `${size.memoryGb}g`, "--cpus", `${size.cpu}`, "--pids-limit", "1024"];
 export const SANDBOX_LIMITS = sandboxLimits();
 /** `docker wait` gets this long past the stage's own timeout before the container is forced down. */
@@ -165,7 +169,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   // but nothing it does needs write access outside its mounted worktree, /in, /out or /tmp.
   // The tmpfs is `exec`: Docker's default is noexec, and `go test` runs the test binary it
   // builds under TMPDIR. The worktree bind mount is executable anyway, so this hides nothing.
-  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
+  args.push(...INIT_ARGS, "--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
   args.push(
@@ -371,7 +375,7 @@ const identityEnv = (identity: { name: string; email: string } | null | undefine
 export function sandboxExecArgs(run: SandboxExec): string[] {
   const [command, ...rest] = run.argv;
   const args = ["run", "--rm", "--name", run.name, "--label", `${CONTAINER_LABEL}=1`];
-  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
+  args.push(...INIT_ARGS, "--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
   args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...COREPACK_ENV.flatMap((env) => ["-e", env]), ...blankedEnv(), ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));

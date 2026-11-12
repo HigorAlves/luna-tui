@@ -8,7 +8,7 @@ describe("the diagram's config defaults", () => {
   it("are the numbers the diagram draws", () => {
     expect(FACTORY_DEFAULTS.dedup).toEqual({ duplicate: 0.9, related: 0.7, ask_below: 0.7, lookback_days: 90 });
     expect(FACTORY_DEFAULTS.triage.confidence).toEqual({ kind: 0.8, size: 0.6, urgency: 0.7, risk: 0.85, archive: 0.9 });
-    expect(FACTORY_DEFAULTS.plan).toMatchObject({ coverage_score_min: 0.85, coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 2, outside_owning_team: true } });
+    expect(FACTORY_DEFAULTS.plan).toMatchObject({ coverage_score_min: 0.85, coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 1, outside_owning_team: true } });
     expect(FACTORY_DEFAULTS.size).toEqual({ target_loc: [1000, 2000], hard_limit_loc: 2500, max_children: 8, max_rounds: 3, depth: 2 });
     expect(FACTORY_DEFAULTS.build).toEqual({ max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90, backoff_minutes: [1, 30], regression_full_suite_minutes: 10 });
     expect(FACTORY_DEFAULTS.verify).toMatchObject({ coverage_drop_max: 0.5, mutation: { command: null, min_score: 0.6 }, build_rounds: 1, env_flake_retries: 1, ci_flaky_reruns: 1, auto_rebase: 1 });

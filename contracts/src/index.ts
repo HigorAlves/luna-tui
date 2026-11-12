@@ -104,6 +104,13 @@ export const COLUMN_OF: Record<TaskState, Column> = {
   addressing: "Build",
 };
 
+/** The column a card is shown in. A card that escalated, or paused on a rate limit, stays where its stage lives (the stage it resumes at), so a failed
+ *  delivery or a conflict at the ship watch is not shown as Build work. With no resume stage recorded it takes its state's own column. */
+export function columnOf(state: TaskState, resumeTo: TaskState | null | undefined): Column {
+  if ((state === "escalated" || state === "paused_rate_limit") && resumeTo && resumeTo !== "escalated" && resumeTo !== "paused_rate_limit") return COLUMN_OF[resumeTo];
+  return COLUMN_OF[state];
+}
+
 /** States a task ends in: nothing moves it again. */
 export const TERMINAL: ReadonlySet<TaskState> = new Set(["closed", "archived"]);
 export const isTerminal = (state: TaskState): boolean => TERMINAL.has(state);

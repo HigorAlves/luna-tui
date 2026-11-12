@@ -11,6 +11,7 @@ import { ensureClone, freshClone } from "./clone.ts";
 import { taskDiff } from "./diff.ts";
 import { machineGitDir } from "./machine-repo.ts";
 import { exec } from "../process/exec.ts";
+import { landedOnBase } from "../../application/stages/deliver.ts";
 import { branchBase, branchDiffStat, changedPaths, commitAll, rebaseOntoBase, forgetBase, rebaseOntoDefault, stackOf, unstack, workspaceFor } from "./worktree.ts";
 
 const cfg = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"];
@@ -281,6 +282,97 @@ describe("rebasing a stacked card", () => {
     expect(await unstack(exec, workspace.path, s.repo)).toMatchObject({ ok: false, conflicts: ["p9.txt"] });
     expect(wgit(workspace.path, "rev-parse", "HEAD")).toBe(before);
     expect(await stackOf(workspace.path)).toEqual({ sha: s.tip, branch: PARENT });
+  });
+});
+
+/** This machine's global git config signs commits: a test that makes commits turns it off for the process. */
+async function unsigned<T>(body: () => Promise<T>): Promise<T> {
+  const keep = { n: process.env.GIT_CONFIG_COUNT, k: process.env.GIT_CONFIG_KEY_0, v: process.env.GIT_CONFIG_VALUE_0 };
+  Object.assign(process.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "commit.gpgsign", GIT_CONFIG_VALUE_0: "false" });
+  try {
+    return await body();
+  } finally {
+    for (const [name, value] of [["GIT_CONFIG_COUNT", keep.n], ["GIT_CONFIG_KEY_0", keep.k], ["GIT_CONFIG_VALUE_0", keep.v]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+/** The default branch moves on origin: `file` gets `content` in a commit on main. */
+function mainMoves(s: ReturnType<typeof stacked>, file: string, content: string): void {
+  const other = join(s.root, "other-main");
+  if (!existsSync(other)) execFileSync("git", ["clone", "-q", s.remote, other]);
+  git(other, "pull", "-q", "origin", "main");
+  writeFileSync(join(other, file), content);
+  git(other, "add", "-A");
+  git(other, "commit", "-q", "-m", `main changes ${file}`);
+  git(other, "push", "-q", "origin", "main");
+}
+
+describe("a rebase whose replay stops on a conflict the branch's final result does not have", () => {
+  it("merges the default branch instead: an early commit that touched a file and a later one that put it back no longer escalate the card", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace);
+    // The card edits a.txt, then puts it back: its final diff does not touch a.txt, one of its commits does.
+    writeFileSync(join(workspace.path, "a.txt"), "mine\n");
+    await commitAll(workspace.path, "docs: first pass");
+    writeFileSync(join(workspace.path, "a.txt"), "a\n");
+    writeFileSync(join(workspace.path, "c.txt"), "c\n");
+    await commitAll(workspace.path, "docs: restore a, add c");
+    mainMoves(s, "a.txt", "theirs\n");
+    const result = await unsigned(() => rebaseOntoBase(exec, workspace.path, s.repo));
+    expect(result).toEqual({ ok: true, onto: "origin/main", merged: true });
+    expect(wgit(workspace.path, "show", "HEAD:a.txt")).toBe("theirs");
+    expect(wgit(workspace.path, "show", "HEAD:c.txt")).toBe("c");
+    expect(wgit(workspace.path, "rev-list", "--parents", "-n", "1", "HEAD").split(" ")).toHaveLength(3);
+    expect(wgit(workspace.path, "status", "--porcelain")).toBe("");
+    expect(wgit(workspace.path, "merge-base", "--is-ancestor", "refs/remotes/origin/main", "HEAD")).toBe("");
+  });
+
+  it("still stops when the final result conflicts too: the files are named and the folder is as it was", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace);
+    writeFileSync(join(workspace.path, "a.txt"), "mine\n");
+    await commitAll(workspace.path, "docs: change a");
+    const before = wgit(workspace.path, "rev-parse", "HEAD");
+    mainMoves(s, "a.txt", "theirs\n");
+    const result = await unsigned(() => rebaseOntoBase(exec, workspace.path, s.repo));
+    expect(result).toMatchObject({ ok: false, conflicts: ["a.txt"] });
+    expect(wgit(workspace.path, "rev-parse", "HEAD")).toBe(before);
+    expect(wgit(workspace.path, "status", "--porcelain")).toBe("");
+    expect(existsSync(join(machineGitDir(workspace.path), "MERGE_HEAD"))).toBe(false);
+    expect(existsSync(join(machineGitDir(workspace.path), "rebase-merge"))).toBe(false);
+  });
+
+  it("does not merge when the caller asks for the rebase alone", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace);
+    writeFileSync(join(workspace.path, "a.txt"), "mine\n");
+    await commitAll(workspace.path, "docs: first pass");
+    writeFileSync(join(workspace.path, "a.txt"), "a\n");
+    await commitAll(workspace.path, "docs: restore a");
+    mainMoves(s, "a.txt", "theirs\n");
+    expect(await unsigned(() => rebaseOntoBase(exec, workspace.path, s.repo, undefined, { mergeFallback: false }))).toMatchObject({ ok: false, conflicts: ["a.txt"] });
+  });
+});
+
+describe("what of a card's change the default branch already holds", () => {
+  it("splits the files the card changed into those identical on the default branch and those that still differ, and reads nothing it cannot", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace);
+    writeFileSync(join(workspace.path, "same.txt"), "x\n");
+    writeFileSync(join(workspace.path, "differs.txt"), "mine\n");
+    await commitAll(workspace.path, "docs: two files");
+    mainMoves(s, "same.txt", "x\n");
+    mainMoves(s, "differs.txt", "theirs\n");
+    wgit(workspace.path, "fetch", "-q", "origin", "main");
+    expect(await landedOnBase(exec, workspace.path, "refs/remotes/origin/main")).toEqual({ landed: ["same.txt"], remaining: ["differs.txt"] });
+    expect(await landedOnBase(exec, workspace.path, "refs/remotes/origin/nope")).toBeNull();
   });
 });
 

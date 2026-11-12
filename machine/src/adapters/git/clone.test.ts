@@ -338,7 +338,8 @@ describe("the card's branch in the user's repository", () => {
 });
 
 describe("what a card's workspace leaves behind", () => {
-  it("removes a failed move's repository, so no half-made workspace is left to be mistaken for the card's", async () => {
+  // Root reads a file whose mode is 000, so the move never fails there: a stage container that runs as root (the machine's own) cannot make this failure.
+  it.skipIf(process.getuid?.() === 0)("removes a failed move's repository, so no half-made workspace is left to be mistaken for the card's", async () => {
     const { repo, dir } = repository("move-fail-");
     const workspace = workspaceFor(task, repo, dir);
     await ensureWorktree(repo, workspace);

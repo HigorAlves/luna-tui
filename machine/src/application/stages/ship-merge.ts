@@ -13,6 +13,7 @@ import { postable } from "../../domain/postable.ts";
 import { messageOf } from "../github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { pushBranch } from "./deliver.ts";
+import { failureGist } from "../../domain/failure-gist.ts";
 import { type FixDeps, escalated, headOfWorktree, resetTo, subContext } from "./ship-fixes.ts";
 import { gatherPr } from "./pr-review.ts";
 
@@ -122,7 +123,7 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
   // The project's checks run on exactly what will be pushed.
   const checked = deps.loop.checks ? await deps.loop.checks(subContext(ctxWork, `merge-checks-${input.label}`), before) : null;
   if (!checked) return stop(escalated("no checks runner is wired to prove the merge"));
-  if (checked.outcome !== "pass") return stop(escalated(`the checks failed after merging ${input.base.name}: ${postable(String(checked.detail?.error ?? checked.detail?.summary ?? checked.outcome), 300)}`, "other", { findings: checked.detail?.findings ?? checked.findings ?? [] }));
+  if (checked.outcome !== "pass") return stop(escalated(`the checks failed after merging ${input.base.name}: ${failureGist(String(checked.detail?.error ?? checked.detail?.summary ?? checked.outcome), 300)}`, "other", { findings: checked.detail?.findings ?? checked.findings ?? [] }));
 
   const remoteNow = await deps.github.prHeadSha(input.slug, input.number).catch(() => null);
   if (remoteNow && remoteNow !== before) return stop(escalated(`someone pushed to the PR (${remoteNow.slice(0, 7)}) while the merge was checked; nothing was pushed`, "head_moved"));
