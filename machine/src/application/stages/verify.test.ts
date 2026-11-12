@@ -169,7 +169,7 @@ describe("verifying stage", () => {
     const { run, context, exec, runPack } = setup({ identity: null });
     const result = await run(context);
     expect(result.outcome).toBe("escalated");
-    expect(result.detail).toMatchObject({ step: "checks", reason: expect.stringMatching(/user\.name.*user\.email/) });
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "checks", reason: expect.stringMatching(/user\.name.*user\.email/) });
     expect(exec).not.toHaveBeenCalled();
     expect(runPack).not.toHaveBeenCalled();
   });

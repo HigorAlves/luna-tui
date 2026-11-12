@@ -7,7 +7,7 @@ import picomatch from "picomatch";
 import type { BlockedRow } from "../../adapters/docker/egress.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type CheckCommand, checkCommand } from "../../domain/checks.ts";
-import { envBrokenDetail } from "../env-broken.ts";
+import { envBrokenDetail, noIdentityDetail } from "../env-broken.ts";
 import { type SessionExec, openChecksSession } from "./checks-session.ts";
 
 const TAIL_LINES = 60;
@@ -97,6 +97,8 @@ export interface SweepDeps {
   /** The files the code graph names for a change to `files`: importers, dependents and tests; empty without a graph. */
   impact: (repoPath: string, files: string[]) => Promise<string[]>;
   policy: (repoPath: string) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec>; wholeSuiteMinutes: number }>;
+  /** The identity git resolves for the repository. A suite that commits needs one and the check container has no gitconfig: it gets this one, and with none the sweep escalates (as Verify does) rather than run as nobody. */
+  gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   timeoutMs?: number;
 }
 
@@ -120,9 +122,12 @@ export async function runSweep(deps: SweepDeps, input: { worktree: string; repoP
   const impact = changed && changed.length > 0 ? await deps.impact(input.repoPath, changed).catch(() => []) : [];
   const selected = selectSweep(checks, changed, impact, wholeSuiteMinutes);
   if (selected.length === 0) return { status: "skipped", ran: [], failed: [], note: "no check covers the change, so the regression sweep had nothing to run" };
+  const identity = deps.gitIdentity ? await deps.gitIdentity(input.repoPath) : undefined;
+  if (identity === null) return { status: "failed", ran: [], failed: [], escalated: noIdentityDetail(input.repoPath) };
+  const env = identity ? { ...input.env, GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email } : input.env;
   let run: CheckRun;
   try {
-    run = await runChecks({ commands: selected.map(checkCommand), exec: deps.exec, cwd: input.worktree, ...(input.signal ? { signal: input.signal } : {}), env: input.env, services, repoPath: input.repoPath, stage: "implementing", timeoutMs: deps.timeoutMs ?? SWEEP_TIMEOUT_MS, ...(input.onBlocked ? { onBlocked: input.onBlocked } : {}) });
+    run = await runChecks({ commands: selected.map(checkCommand), exec: deps.exec, cwd: input.worktree, ...(input.signal ? { signal: input.signal } : {}), env, services, repoPath: input.repoPath, stage: "implementing", timeoutMs: deps.timeoutMs ?? SWEEP_TIMEOUT_MS, ...(input.onBlocked ? { onBlocked: input.onBlocked } : {}) });
   } catch (error) {
     const escalated = envBrokenDetail(error);
     if (!escalated) throw error;

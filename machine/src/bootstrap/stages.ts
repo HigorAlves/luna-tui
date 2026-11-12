@@ -66,6 +66,7 @@ import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dir
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
+import { noIdentityDetail } from "../application/env-broken.ts";
 import { basename, join, resolve, sep } from "node:path";
 import { readdir } from "node:fs/promises";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
@@ -400,11 +401,10 @@ export async function buildRealStages(
       sweep: async (context) => {
         const { task } = context;
         if (!task.worktreePath || !task.repoPath) return { status: "skipped", ran: [], failed: [], note: "there was no worktree to sweep" };
-        const identity = await gitIdentity(task.repoPath);
-        const env = { ...process.env, ...(identity ? { GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email } : {}) };
         return runSweep(
           {
             exec: checksExec,
+            gitIdentity,
             changedPaths: changedPaths,
             impact: async (repoPath, files) => {
               const found = graphs ? await graphs.graph.impact(repoPath, files) : null;
@@ -415,7 +415,7 @@ export async function buildRealStages(
               return { checks: policy.checks, services: policy.services, wholeSuiteMinutes: policy.factory.build.regression_full_suite_minutes };
             },
           },
-          { worktree: task.worktreePath, repoPath: task.repoPath, signal: context.signal, env, onBlocked: (_check, rows) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}) },
+          { worktree: task.worktreePath, repoPath: task.repoPath, signal: context.signal, env: process.env, onBlocked: (_check, rows) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}) },
         );
       },
       checkpoint: async (context, worktree, follows) => {
@@ -432,6 +432,8 @@ export async function buildRealStages(
         head: headCommit,
         pending: stagePending,
         commit: async (path, subject, body) => {
+          // Without an identity git refuses with "empty ident name"; say what the machine lacks instead.
+          if (!(await gitIdentity(path))) throw new Error(String(noIdentityDetail(path).reason));
           const sha = await commitAll(path, `${subject}\n\n${body}`);
           if (!sha) throw new Error("the tests step has nothing to commit");
           return sha;

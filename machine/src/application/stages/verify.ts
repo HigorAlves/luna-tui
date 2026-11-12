@@ -18,6 +18,7 @@ import { addedLineNumbers, coverageFinding, mutationFinding, parseLcov, parseMut
 import { type EnvRecord, compareEnv } from "../../domain/env-hash.ts";
 import { verifySteps } from "../../domain/verify-order.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
+import { noIdentityDetail } from "../env-broken.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import { type SessionExec, openChecksSession } from "./checks-session.ts";
@@ -177,14 +178,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     // and the check container has no gitconfig: it gets yours, the one git resolves for the repo.
     const identity = await resolveIdentity(task.repoPath ?? cwd);
     if (!identity) {
-      return {
-        outcome: "escalated",
-        detail: {
-          step: "checks",
-          reason: `git has no identity for ${task.repoPath ?? cwd}: set user.name and user.email (git config) so checks and commits run as you`,
-          options: ["git config user.name / user.email in the repo or globally, then approve"],
-        },
-      };
+      return { outcome: "escalated", detail: noIdentityDetail(task.repoPath ?? cwd) };
     }
     const checkExec = deps.exec;
     if (!checkExec) {
