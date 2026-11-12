@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type ChatTriageContext, type TicketContext, type ConversationContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type SizeContext, type SplitContext, type IntakeContext, type CiContext, type CoverageSummary, type EconomyInput, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, type PrLinkContext, type ProposeContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { isDocsOnly } from "./docs-only.ts";
 
 export { PACK_LIMITS };
@@ -332,6 +332,7 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   // The ticket and conversation packs: their whole context is the ticket or the thread. Left out, a pack runs blind.
   const ticket: TicketContext | null = "ticket" in context ? context.ticket : null;
   const conversation: ConversationContext | null = "conversation" in context ? context.conversation : null;
+  const prLink: PrLinkContext | null = "prLink" in context ? context.prLink : null;
   const propose: ProposeContext | null = "propose" in context ? context.propose : null;
   return {
     schema: 3,
@@ -339,11 +340,11 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: (ticket ? `${ticket.key}: ${ticket.title}` : null) ?? (conversation ? "Conversation" : null) ?? (prLink ? prLink.pr.title : null) ?? (propose ? `Facts of ${propose.repo}` : null) ?? issue?.title ?? dedup?.title ?? size?.title ?? split?.origin.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(propose ? { propose } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}), ...(dedup ? { dedup } : {}), ...(size ? { size } : {}), ...(split ? { split } : {}), ...(ticket ? { ticket } : {}), ...(conversation ? { conversation } : {}), ...(prLink ? { prLink } : {}), ...(propose ? { propose } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

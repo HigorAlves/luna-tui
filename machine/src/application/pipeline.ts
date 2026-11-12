@@ -14,7 +14,7 @@ import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { ApproverRequiredError, CoverageGapsError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../domain/task.ts";
-import { type CardFields, type ContextMissing, type DedupContext, contextComplete } from "@hardness/contracts";
+import { type CardFields, type ContextMissing, type DedupContext, type ReviewLinks, contextComplete } from "@hardness/contracts";
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type DedupAnswer, checkDuplicates } from "./intake-dedup.ts";
 import type { Candidate } from "../domain/similarity.ts";
@@ -886,6 +886,16 @@ export class Pipeline {
   /** Logs a fact about a task from outside the engine (e.g. the thread it is reported in). */
   record(taskId: string, kind: string, payload: Record<string, unknown>): Promise<void> {
     return this.log(taskId, kind, payload);
+  }
+
+  /** A passed review's links, as the review stage found them: kept on the review's own card (`card.reviewLinks`), and each linked card logs
+   *  `card.pr_reviewed` with the PR's address and number and the review's id, so its activity shows it. A card that cannot be written to is skipped. */
+  async recordReview(taskId: string, links: ReviewLinks, pr: { url: string; number: number; repo: string }): Promise<void> {
+    const task = await this.get(taskId);
+    await this.store.updateTask(taskId, { card: { ...cardOf(task), reviewLinks: links } });
+    for (const linked of links.cards) {
+      await this.log(linked.id, "card.pr_reviewed", { prUrl: pr.url, number: pr.number, taskId }).catch((error: unknown) => console.warn(`review: could not log the review on card ${linked.id}`, error));
+    }
   }
 
   /** The task created from this external issue (or, with `github_pr`, the latest from this PR), if any. */

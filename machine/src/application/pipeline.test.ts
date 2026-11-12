@@ -4291,6 +4291,29 @@ describe("a Slack thread attached to a card", () => {
   });
 });
 
+describe("a PR review's links", () => {
+  const pr = { url: "https://github.com/acme/app/pull/12", number: 12, repo: "acme/app" };
+  it("are kept on the review's card, and each linked card logs the review with ids only", async () => {
+    const review = await pipeline.createTask({ title: "Review PR 12", route: "review" });
+    const work = await pipeline.createTask({ title: "Export CSV" });
+    const links = { at: "2026-11-12T10:00:00.000Z", jira: [{ key: "DISC-1", url: "https://x/DISC-1", summary: "Export", how: "key" as const }], cards: [{ id: work.id, title: "Export CSV", how: "fact" as const, fact: "branch" }] };
+    await pipeline.recordReview(review.id, links, pr);
+    expect((await pipeline.get(review.id)).card?.reviewLinks).toEqual(links);
+    expect((await pipeline.get(review.id)).card?.sources).toHaveLength(0);
+    const event = (await pipeline.events(work.id)).find((e) => e.kind === "card.pr_reviewed");
+    expect(event?.payload).toEqual({ prUrl: pr.url, number: 12, taskId: review.id });
+    // The review's own activity does not log it: it carries the links in its stage detail.
+    expect((await pipeline.events(review.id)).some((e) => e.kind === "card.pr_reviewed")).toBe(false);
+  });
+
+  it("a linked card that is gone does not fail the record", async () => {
+    const review = await pipeline.createTask({ title: "Review PR 12", route: "review" });
+    const links = { at: "t", jira: [], cards: [{ id: "00000000-0000-4000-8000-000000000000", title: "Gone", how: "decision" as const }] };
+    await expect(pipeline.recordReview(review.id, links, pr)).resolves.toBeUndefined();
+    expect((await pipeline.get(review.id)).card?.reviewLinks).toEqual(links);
+  });
+});
+
 describe("the address of a card's PR", () => {
   it("is known as soon as the PR exists (the stage that opened it finished), not only after a merge", async () => {
     const task = await pipeline.createTask({ title: "Login page" });

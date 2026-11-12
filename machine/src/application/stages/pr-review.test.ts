@@ -1,11 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "../../domain/task.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import { fakeJira } from "../../test/jira.ts";
 import type { Jira } from "../jira.ts";
+import type { LinkableCard, PrLinkDeps } from "../pr-link.ts";
 import type { StageContext, StageResult } from "../ports.ts";
-import { MAX_INLINE_COMMENTS, capComments, postVerdictRunner, prReviewRunner } from "./pr-review.ts";
+import { MAX_INLINE_COMMENTS, type PrReviewDeps, capComments, postVerdictRunner, prReviewRunner } from "./pr-review.ts";
 
 const node = {
   number: 12,
@@ -25,7 +26,7 @@ const node = {
   commits: { nodes: [] },
 };
 
-function setup(answer: Record<string, unknown> | null, opts: { postFails?: boolean; title?: string; jira?: Jira; projects?: () => Promise<string[]> } = {}) {
+function setup(answer: Record<string, unknown> | null, opts: { postFails?: boolean; title?: string; jira?: Jira; projects?: () => Promise<string[]>; links?: PrReviewDeps["links"] } = {}) {
   const github = fakeGitHub({
     prFacts: async () => (opts.title ? { ...node, title: opts.title } : node) as never,
     prDiff: async () => "diff --git a/a.ts b/a.ts\n+export const x = 1;\n",
@@ -55,7 +56,7 @@ function setup(answer: Record<string, unknown> | null, opts: { postFails?: boole
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run: prReviewRunner({ github, runPack, ...(opts.jira ? { jira: opts.jira } : {}), ...(opts.projects ? { projects: opts.projects } : {}) }), context, github, review: () => seen };
+  return { run: prReviewRunner({ github, runPack, ...(opts.jira ? { jira: opts.jira } : {}), ...(opts.projects ? { projects: opts.projects } : {}), ...(opts.links ? { links: opts.links } : {}) }), context, github, review: () => seen };
 }
 
 const posted = (github: ReturnType<typeof fakeGitHub>) => github.postReview.mock.calls;
@@ -133,6 +134,111 @@ describe("reviewing against the Jira tickets the PR names", () => {
     const other = setup(answer, { title: "Export CSV (DISC-939)", jira: fakeJira({ issues }), projects: async () => ["PLAT"] });
     await other.run(other.context);
     expect((other.review() as { tickets?: unknown[] }).tickets ?? []).toEqual([]);
+  });
+});
+
+describe("reviewing against the board cards and tickets the PR is linked to", () => {
+  const answer = { verdict: "approve", summary: "Fine.", findings: [], comments: [] };
+  const issues = [
+    { key: "DISC-939", summary: "Stale feedback", issueType: "Bug", status: "In Review", description: "Do it." },
+    { key: "DISC-12", summary: "Export to CSV", issueType: "Story", status: "To Do", description: "Users want a CSV." },
+  ];
+  const jiraLink = (key: string) => ({ key, url: `https://acme.atlassian.net/browse/${key}`, issueType: "Story", status: "To Do", priority: null, dueAt: null, syncedAt: null, blocked: null });
+  const card = (over: Partial<LinkableCard> & { id: string }): LinkableCard => ({ title: `Card ${over.id}`, description: "", criteria: [], state: "implementing", route: "feature", repoPath: "/r/a", branch: null, source: null, jira: null, stateSince: null, ...over });
+  const links = (cards: LinkableCard[], extra: Partial<PrLinkDeps> = {}) => {
+    const record = vi.fn(async (_taskId: string, _links: unknown, _pr: unknown) => {});
+    return { record, deps: { cards: async () => cards, prUrls: async () => [] as string[], record, ...extra } satisfies PrReviewDeps["links"] };
+  };
+  const decision = (answer: Record<string, unknown>) => {
+    const decide = vi.fn(async (_context: unknown) => answer);
+    return { decide, decision: { available: async () => true, decide, overrides: async () => ({}) } };
+  };
+
+  it("hands the pack a card matched by its branch, with its criteria and description, and records the link on the review and the card", async () => {
+    const board = [card({ id: "c1", title: "Export CSV", description: "Add the export.", criteria: ["rows are exported"], branch: "feat/export" }), card({ id: "c2", branch: "feat/other" })];
+    const { record, deps } = links(board);
+    const { run, context, review } = setup(answer, { links: deps });
+    const result = await run(context);
+    expect((review() as { cards: unknown[] }).cards).toEqual([{ id: "c1", title: "Export CSV", criteria: ["rows are exported"], description: "Add the export." }]);
+    const expected = { at: expect.any(String), jira: [], cards: [{ id: "c1", title: "Export CSV", how: "fact", fact: "branch" }] };
+    expect(result.detail).toMatchObject({ links: expected });
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith("t1", expected, { url: node.url, number: 12, repo: "o/a" });
+  });
+
+  it("fetches the Jira ticket of a linked card that the PR did not name and reads it like a named one", async () => {
+    const { deps } = links([card({ id: "c1", branch: "feat/export", jira: jiraLink("DISC-12") })]);
+    const { run, context, review } = setup(answer, { jira: fakeJira({ issues }), links: deps });
+    const result = await run(context);
+    expect((review() as { tickets: Array<{ key: string }> }).tickets.map((t) => t.key)).toEqual(["DISC-12"]);
+    expect(result.detail).toMatchObject({
+      tickets: [{ key: "DISC-12" }],
+      links: { jira: [{ key: "DISC-12", url: "https://acme.atlassian.net/browse/DISC-12", summary: "Export to CSV", how: "fact" }], cards: [{ id: "c1", how: "fact", fact: "branch" }] },
+    });
+  });
+
+  it("marks a ticket the PR names as `key`, and never asks the decision", async () => {
+    const asked = decision({ match: { choice: "slot1", confidence: 0.99 } });
+    const { deps } = links([], { decision: asked.decision });
+    const { run, context } = setup(answer, { title: "Export (DISC-939)", jira: fakeJira({ issues }), links: deps });
+    const result = await run(context);
+    expect(result.detail).toMatchObject({ links: { jira: [{ key: "DISC-939", how: "key" }], cards: [] } });
+    expect(asked.decide).not.toHaveBeenCalled();
+  });
+
+  it("links what the decision picks above its bar, and the reviewer reads it like a named ticket", async () => {
+    const asked = decision({ match: { choice: "slot2", confidence: 0.9 } });
+    const board = [card({ id: "c1", title: "Export the table", description: "Add a CSV.", criteria: ["a"] })];
+    const { record, deps } = links(board, { decision: asked.decision });
+    const { run, context, review } = setup(answer, { jira: fakeJira({ issues: [issues[1]!] }), projects: async () => ["DISC"], links: deps });
+    const result = await run(context);
+    expect(asked.decide).toHaveBeenCalledTimes(1);
+    expect((review() as { cards: Array<{ id: string }> }).cards.map((c) => c.id)).toEqual(["c1"]);
+    expect(result.detail).toMatchObject({ links: { jira: [], cards: [{ id: "c1", how: "decision" }] } });
+    expect(result.detail).not.toHaveProperty("links.suggestion");
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
+  it("under the bar it links nothing, hands the reviewer nothing and keeps the suggestion", async () => {
+    const asked = decision({ match: { choice: "slot1", confidence: 0.55 } });
+    const { record, deps } = links([], { decision: asked.decision });
+    const { run, context, review } = setup(answer, { jira: fakeJira({ issues: [issues[1]!] }), projects: async () => ["DISC"], links: deps });
+    const result = await run(context);
+    expect((review() as { tickets: unknown[]; cards?: unknown[] }).tickets).toEqual([]);
+    expect((review() as { cards?: unknown[] }).cards ?? []).toEqual([]);
+    const expected = { at: expect.any(String), jira: [], cards: [], suggestion: { kind: "jira", id: "DISC-12", title: "Export to CSV", confidence: 0.55, url: "https://acme.atlassian.net/browse/DISC-12" } };
+    expect(result.detail).toMatchObject({ links: expected });
+    expect(record).toHaveBeenCalledWith("t1", expected, expect.anything());
+  });
+
+  it("records nothing and puts no links in the detail when nothing linked and nothing was suggested", async () => {
+    const { record, deps } = links([card({ id: "c1", branch: "feat/other" })]);
+    const { run, context, review } = setup(answer, { links: deps });
+    const result = await run(context);
+    expect(result.detail).not.toHaveProperty("links");
+    expect((review() as { cards?: unknown[] }).cards).toBeUndefined();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("never fails the review when recording the links fails, and records nothing when the review did not pass", async () => {
+    const board = [card({ id: "c1", branch: "feat/export" })];
+    const bad = links(board);
+    bad.record.mockRejectedValue(new Error("db down"));
+    const ok = setup(answer, { links: bad.deps });
+    expect((await ok.run(ok.context)).outcome).toBe("pass");
+    const failed = links(board);
+    const escalated = setup(null, { links: failed.deps });
+    expect((await escalated.run(escalated.context)).outcome).toBe("escalated");
+    expect(failed.record).not.toHaveBeenCalled();
+  });
+
+  it("still reads the cards when Jira is not configured", async () => {
+    const { deps } = links([card({ id: "c1", branch: "feat/export", jira: jiraLink("DISC-12") })]);
+    const { run, context, review } = setup(answer, { links: deps });
+    const result = await run(context);
+    expect((review() as { tickets?: unknown[] }).tickets).toBeUndefined();
+    expect((review() as { cards: unknown[] }).cards).toHaveLength(1);
+    expect(result.detail).toMatchObject({ links: { jira: [], cards: [{ id: "c1" }] } });
   });
 });
 

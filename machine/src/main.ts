@@ -346,6 +346,18 @@ const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, ag
   economy,
   // The review route reads the Jira tickets a PR names, only when Jira is configured.
   config.jira ? jiraApi : null,
+  // The review route links a PR to the cards and tickets it is the work of: by fact from the board, else by the `pr_link` decision (Jev only), and keeps the links.
+  {
+    cards: () => pipeline.list(),
+    prUrls: async (id) => (await pipeline.events(id)).flatMap((e) => (e.kind === "stage.pr.opened" && typeof e.payload.url === "string" ? [e.payload.url] : [])),
+    decision: {
+      // The decision is metered and opt-in: without a Jev credential the fallback is skipped, not moved to a Claude engine.
+      available: async () => packRuns !== undefined && (await credentials.check("jev")).available,
+      decide: async (prLink) => (await ownCalls(packRuns!).run({ pack: "pr_link", context: { prLink }, stage: "reviewing" }, "review")).answer as Record<string, unknown>,
+      overrides: async (repoPath) => (repoPath ? (await policies.for(repoPath)).decisions.pr_link : undefined) ?? {},
+    },
+    record: (taskId, links, pr) => pipeline.recordReview(taskId, links, pr),
+  },
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {

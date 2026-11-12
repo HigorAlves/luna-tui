@@ -2,12 +2,13 @@
 // comments already on it (the sandbox has no GitHub credential), the pr-reviewer pack answers
 // with line-anchored comments and a verdict, and the host posts one COMMENT review at once.
 // An approve / request-changes verdict waits at the gate; `postVerdictRunner` posts it on `a`.
-import { PrReviewAnswer, type RequestedAction, type ReviewContext } from "@hardness/contracts";
+import { PrReviewAnswer, type RequestedAction, type ReviewContext, type ReviewLinks } from "@hardness/contracts";
 
 import { type GitHub, type ReviewPost, messageOf } from "../github.ts";
 import type { Jira } from "../jira.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
-import { gatherTickets } from "../review-tickets.ts";
+import { type LinkableCard, type PrLinkDeps, type PrLinks, linkReview } from "../pr-link.ts";
+import { readTickets } from "../review-tickets.ts";
 
 export interface PrReviewDeps {
   github: GitHub;
@@ -17,7 +18,16 @@ export interface PrReviewDeps {
   jira?: Jira | null;
   /** The Jira projects the machine knows for a repo checkout; absent, or none, accepts any project key. */
   projects?: (repoPath: string | null) => Promise<readonly string[]>;
+  /** The board cards and tickets the PR is linked to (by fact, else by the `pr_link` decision); absent, only the keys the PR names are read. */
+  links?: PrLinkDeps & {
+    /** Told once a review has passed with what it was linked to: the review's own card keeps it and each linked card logs the review. Never fails a review. */
+    record?(taskId: string, links: ReviewLinks, pr: { url: string; number: number; repo: string }): Promise<void>;
+  };
 }
+
+/** A card's description as the reviewer reads it: capped, the data block quotes the rest. */
+const CARD_DESCRIPTION_CAP = 4000;
+const cardOf = (c: LinkableCard) => ({ id: c.id, title: c.title, criteria: c.criteria, description: c.description.trim().slice(0, CARD_DESCRIPTION_CAP) });
 
 const EVENT_OF = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
 
@@ -69,12 +79,24 @@ export async function gatherPr(github: GitHub, repo: string, number: number): Pr
   };
 }
 
+/** What the review keeps of its links: the tickets that were read (with how they were found), the cards, and the suggestion; null when there is nothing to show. */
+export function reviewLinksOf(links: PrLinks, tickets: ReadonlyArray<{ key: string; url: string; summary: string }>): ReviewLinks | null {
+  const jira = links.jira.flatMap((j) => {
+    const t = tickets.find((x) => x.key === j.key);
+    return t ? [{ key: t.key, url: t.url, summary: t.summary, how: j.how }] : [];
+  });
+  const cards = links.cards.map((l) => ({ id: l.card.id, title: l.card.title, how: l.how, ...(l.fact ? { fact: l.fact } : {}) }));
+  if (jira.length === 0 && cards.length === 0 && !links.suggestion) return null;
+  return { at: new Date().toISOString(), jira, cards, ...(links.suggestion ? { suggestion: links.suggestion } : {}) };
+}
+
 export function prReviewRunner(deps: PrReviewDeps): StageRunner {
   const { github } = deps;
   return async (context) => {
     const pr = prOf(context);
     if (!pr) return { outcome: "fail", detail: { error: "not a PR task" } };
     let review: ReviewContext;
+    let links: PrLinks;
     try {
       const [facts, diff, files, existingComments] = await Promise.all([
         gatherPr(github, pr.repo, pr.number),
@@ -83,11 +105,15 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         github.prComments(pr.repo, pr.number),
       ]);
       review = { pr: facts, diff, files, existingComments };
-      if (deps.jira) {
-        // A ticket that cannot be read is skipped inside gatherTickets: Jira never fails a review.
-        const repoPath = context.task.repoPath ?? null;
-        review.tickets = await gatherTickets({ jira: deps.jira, ...(deps.projects ? { projects: () => deps.projects!(repoPath) } : {}) }, facts);
-      }
+      const repoPath = context.task.repoPath ?? null;
+      // What the PR is the work of: the keys it names, the cards that match by a recorded fact and, when nothing does, the decision's pick.
+      links = await linkReview(
+        { links: deps.links ?? { cards: async () => [], prUrls: async () => [] }, ...(deps.jira ? { jira: deps.jira } : {}), ...(deps.projects ? { projects: () => deps.projects!(repoPath) } : {}) },
+        { pr: facts, files: files.map((f) => f.path), repoPath, selfId: context.task.id },
+      );
+      // A ticket that cannot be read is skipped inside readTickets: Jira never fails a review. A ticket a linked card carries is read like a named one.
+      if (deps.jira) review.tickets = await readTickets(deps.jira, links.jira.map((j) => j.key));
+      if (links.cards.length > 0) review.cards = links.cards.map((l) => cardOf(l.card));
     } catch (error) {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }
@@ -109,17 +135,27 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       answer.findings,
     );
     const base = { ...pack, findings: answer.findings };
+    const reviewLinks = reviewLinksOf(links, review.tickets ?? []);
     const detail = {
       ...pack.detail,
       summary: answer.summary,
       // Which tickets the review was checked against, for the board's Result page.
       ...(review.tickets?.length ? { tickets: review.tickets.map((t) => ({ key: t.key, url: t.url, summary: t.summary })) } : {}),
+      // What the review was linked to and how (key | fact | decision), and a suggestion that stayed under the bar.
+      ...(reviewLinks ? { links: reviewLinks } : {}),
       verdict,
       ...(answer.verdict !== verdict ? { modelVerdict: answer.verdict } : {}),
       posted: false,
       comments: comments.length,
       reason: "verdict",
     };
+    if (reviewLinks && deps.links?.record) {
+      try {
+        await deps.links.record(context.task.id, reviewLinks, { url: pr.url, number: pr.number, repo: pr.repo });
+      } catch (error) {
+        console.warn(`review: could not record the links of ${pr.url} (${messageOf(error)})`);
+      }
+    }
     const requested: RequestedAction[] = [
       { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body: answer.summary, comments } },
     ];

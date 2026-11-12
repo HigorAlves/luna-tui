@@ -65,18 +65,8 @@ export interface TicketDeps {
   log?: (line: string) => void;
 }
 
-/** The tickets the PR names, read from Jira. Never throws: one that fails is skipped with a log line. */
-export async function gatherTickets(deps: TicketDeps, pr: { title: string; headRef: string; body: string | null }): Promise<ReviewTicket[]> {
-  const { jira } = deps;
-  if (!jira) return [];
-  const log = deps.log ?? ((line: string) => console.warn(line));
-  let projects: readonly string[] = [];
-  try {
-    projects = (await deps.projects?.()) ?? [];
-  } catch (error) {
-    log(`review: the repo's Jira projects could not be read (${messageOf(error)}); accepting any project key`);
-  }
-  const keys = findPrJiraKeys(pr, projects);
+/** The tickets under `keys`, read from Jira in that order. Never throws: one that fails is skipped with a log line. */
+export async function readTickets(jira: Jira, keys: readonly string[], log: (line: string) => void = (line) => console.warn(line)): Promise<ReviewTicket[]> {
   const read = await Promise.all(
     keys.map(async (key): Promise<ReviewTicket | null> => {
       try {
@@ -97,4 +87,18 @@ export async function gatherTickets(deps: TicketDeps, pr: { title: string; headR
     }),
   );
   return read.filter((t): t is ReviewTicket => t !== null);
+}
+
+/** The tickets the PR names, read from Jira. Never throws: one that fails is skipped with a log line. */
+export async function gatherTickets(deps: TicketDeps, pr: { title: string; headRef: string; body: string | null }): Promise<ReviewTicket[]> {
+  const { jira } = deps;
+  if (!jira) return [];
+  const log = deps.log ?? ((line: string) => console.warn(line));
+  let projects: readonly string[] = [];
+  try {
+    projects = (await deps.projects?.()) ?? [];
+  } catch (error) {
+    log(`review: the repo's Jira projects could not be read (${messageOf(error)}); accepting any project key`);
+  }
+  return readTickets(jira, findPrJiraKeys(pr, projects), log);
 }

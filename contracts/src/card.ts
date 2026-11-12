@@ -58,10 +58,10 @@ export const CardEntryFields = {
   links: z.record(short, long).optional(),
 };
 
-/** What a PR review was linked to, kept on the review's own card: `how` says whether the PR named it (`key`), a recorded fact matched it (`fact`: a card's Jira link, branch or PR) or the `pr_link` decision picked it (`decision`). */
+/** What a PR review was linked to, kept on the review's own card: `how` says whether the PR named it (`key`), a recorded fact matched it (`fact`: a card's Jira link, branch or PR, or the Jira ticket of such a card) or the `pr_link` decision picked it (`decision`). */
 export interface ReviewLinks {
   at: string;
-  jira: { key: string; url: string; summary: string; how: "key" | "decision" }[];
+  jira: { key: string; url: string; summary: string; how: "key" | "fact" | "decision" }[];
   cards: { id: string; title: string; how: "fact" | "decision"; /** Which fact: `jira`, `branch` or `pr`. */ fact?: string }[];
   /** The best candidate of a decision that stayed under its bar: shown, never acted on. */
   suggestion?: { kind: "jira" | "card"; id: string; title: string; confidence: number; url?: string };

@@ -24,7 +24,7 @@ import { type PlanDeps, planStage } from "../application/stages/plan.ts";
 import { type TriageSignalDeps, withTriageSignals } from "../application/stages/triage-signals.ts";
 import { prAddressRunner } from "../application/stages/pr-address.ts";
 import type { Jira } from "../application/jira.ts";
-import { prReviewRunner } from "../application/stages/pr-review.ts";
+import { type PrReviewDeps, prReviewRunner } from "../application/stages/pr-review.ts";
 import { videoPipeline } from "../application/stages/video.ts";
 import { scanImages } from "../application/video-jobs.ts";
 import { judgePrivacy } from "../application/frame-privacy.ts";
@@ -155,6 +155,8 @@ export async function buildRealStages(
   economy?: AgentDeps["economy"],
   /** The Jira port when Jira is configured (the review route reads the tickets a PR names); null or absent gives the reviewer none. */
   jira?: Jira | null,
+  /** What the review route links a PR to (the board's cards, the Jev fallback, where the links are kept); absent, only the keys a PR names are read. */
+  reviewLinks?: PrReviewDeps["links"],
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -554,6 +556,7 @@ export async function buildRealStages(
     reviewing: prReviewRunner({
       github,
       runPack: (context, review) => runAgent(deps, context, "reviewing", { review }),
+      ...(reviewLinks ? { links: reviewLinks } : {}),
       ...(jira
         ? {
             jira,
