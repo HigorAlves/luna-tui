@@ -1,7 +1,7 @@
 // The delivering stage: push the task's branch and open a draft PR on the host, so CI starts
 // early. The push is git with your own credentials; the PR is the GitHub port.
 import { at } from "../../adapters/git/machine-repo.ts";
-import { HOST_GIT, type RebaseResult, branchBase, defaultBranchFile, originSlugOf, rebaseOntoBase, stackOf, unstack as hostUnstack } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, type RebaseResult, branchBase, defaultBranchFile, isBranchName, originSlugOf, rebaseOntoBase, stackOf, unstack as hostUnstack } from "../../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../../adapters/process/exec.ts";
 import { PR_TEMPLATE_PATHS, type PrExtra, buildPr, mergePrSection } from "../../domain/prbody.ts";
 import { approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
@@ -12,6 +12,7 @@ import { cardOf } from "../../domain/card-fields.ts";
 import { isDocsOnly } from "../../domain/docs-only.ts";
 import { looksLikeTestPath } from "../../domain/locked-files.ts";
 import type { StackFacts } from "../stack.ts";
+import type { MergeInput, MergeOutcome } from "./ship-merge.ts";
 
 export type ExecFn = (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<ExecResult>;
 
@@ -27,6 +28,8 @@ export interface DeliverDeps {
   /** The commit the branch forked from and the one it is at, for the body; absent or null leaves them out. */
   commitsOf?: (worktreePath: string, repoPath: string) => Promise<{ base: string | null; head: string | null } | null>;
   /** A stacked card's parent (`stackFactsOf`), and what to do about it: drop the card's base, rebase, unstack (default: the host git helpers), the base commit the workspace records. Absent, a card's base is not looked at. */
+  /** Resolves a conflict the rebase and the plain merge could not (`mergeRound`: the addressing pack resolves the files, the project's checks prove the result, the merge is pushed). Absent, a conflict asks a person. */
+  resolveConflicts?: (context: StageContext, input: MergeInput) => Promise<MergeOutcome>;
   stacked?: {
     facts: (slug: string, task: TaskRow) => Promise<StackFacts | null>;
     clearBase: (taskId: string) => Promise<void>;
@@ -96,6 +99,22 @@ export async function openTaskPr(github: GitHub, slug: string, context: StageCon
   const { task } = context;
   const { title, body } = buildPr({ task, plan: approvedPlan(context.approvals), repoSlug: slug, ...(extra ? { extra } : {}) });
   return github.openPr(slug, { title, body, head: task.branch!, draft, ...(base ? { base } : {}) });
+}
+
+/** What a card changed since it forked, split by whether the default branch already holds that exact version of the file. Null when it cannot be read. */
+export async function landedOnBase(run: ExecFn, worktreePath: string, baseRef: string): Promise<{ landed: string[]; remaining: string[] } | null> {
+  const git = (...args: string[]) => run("git", [...HOST_GIT, ...at(worktreePath), ...args]);
+  const fork = await git("merge-base", "HEAD", baseRef);
+  const sha = fork.stdout.trim();
+  if (fork.code !== 0 || !/^[0-9a-f]{40,64}$/.test(sha)) return null;
+  const changed = await git("diff", "--no-renames", "-z", "--name-only", sha, "HEAD");
+  if (changed.code !== 0) return null;
+  const files = changed.stdout.split("\0").filter(Boolean);
+  if (files.length === 0) return null;
+  const landed: string[] = [];
+  const remaining: string[] = [];
+  for (const file of files) ((await git("diff", "--quiet", baseRef, "HEAD", "--", file)).code === 0 ? landed : remaining).push(file);
+  return { landed, remaining };
 }
 
 export function deliverRunner(deps: DeliverDeps): StageRunner {
@@ -175,13 +194,25 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
         const rebased: RebaseResult = await rebaseOntoBase(deps.exec, task.worktreePath, task.repoPath, base);
         if (!rebased.ok) {
           const files = rebased.conflicts.join(", ");
+          const baseName = (await base(task.repoPath)) ?? "the default branch";
+          const said = rebased.conflicts.length > 0 ? `the branch conflicts with ${baseName} and the rebase stopped on: ${files}` : `the branch conflicts with the default branch and could not be rebased: ${rebased.error}`;
+          const stop = (error: string, extra: Record<string, unknown> = {}): StageResult => ({ outcome: "fail", detail: { error, conflicts: rebased.conflicts, escalation: "other", ...extra } });
+          if (rebased.conflicts.length === 0 || !isBranchName(baseName)) return stop(said);
+          const baseRef = `refs/remotes/origin/${baseName}`;
+          // A card whose every changed file is already the default branch's version has nothing left to deliver: say so, run nothing.
+          const already = await landedOnBase(deps.exec, task.worktreePath, baseRef);
+          if (already && already.remaining.length === 0) {
+            return stop(`${said}. Every file this card changed is already on ${baseName} exactly as the card has it (${already.landed.slice(0, 10).join(", ")}): there is nothing left to deliver. Archive the card.`, { verdict: "already_on_base", landed: already.landed, options: ["archive the card"] });
+          }
+          if (!deps.resolveConflicts) return stop(said);
+          const tip = (await deps.exec("git", [...HOST_GIT, ...at(task.worktreePath), "rev-parse", "--verify", `${baseRef}^{commit}`])).stdout.trim();
+          if (!/^[0-9a-f]{40,64}$/.test(tip)) return stop(said);
+          const merged = await deps.resolveConflicts(context, { slug, number: ref.number, base: { sha: tip, name: baseName }, label: "deliver", pack: null });
+          if (!merged.ok) return stop(`${said}; merging instead did not resolve it: ${String(merged.result.detail?.reason ?? merged.result.detail?.error ?? "the merge did not land")}`);
           return {
-            outcome: "fail",
-            detail: {
-              error: rebased.conflicts.length > 0 ? `the branch conflicts with ${(await base(task.repoPath)) ?? "the default branch"} and the rebase stopped on: ${files}` : `the branch conflicts with the default branch and could not be rebased: ${rebased.error}`,
-              conflicts: rebased.conflicts,
-              escalation: "other",
-            },
+            outcome: "pass",
+            detail: { prUrl: ref.url, prNumber: ref.number, draft: ref.isDraft, reused: existing !== null, merged: true, resolved: merged.resolved, onto: `origin/${baseName}` },
+            events: [{ at: new Date().toISOString(), kind: "pr.opened", payload: { url: ref.url, number: ref.number } }],
           };
         }
         const forced = await pushBranch(deps.exec, task.branch, task.worktreePath, { force: true });
@@ -200,10 +231,11 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
 }
 
 /** The real runner needs the GitHub port, which main.ts builds from the token. */
-export const realDeliverRunner = (github: GitHub, stacked?: DeliverDeps["stacked"]): StageRunner => deliverRunner({
+export const realDeliverRunner = (github: GitHub, stacked?: DeliverDeps["stacked"], resolveConflicts?: DeliverDeps["resolveConflicts"]): StageRunner => deliverRunner({
     exec: realExec,
     github,
     ...(stacked ? { stacked } : {}),
+    ...(resolveConflicts ? { resolveConflicts } : {}),
     commitsOf: async (worktreePath, repoPath) => {
       const head = await realExec("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "HEAD"]).catch(() => null);
       return { base: await branchBase(worktreePath, repoPath).catch(() => null), head: head && head.code === 0 ? head.stdout.trim() : null };

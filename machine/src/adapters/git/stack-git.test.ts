@@ -11,6 +11,7 @@ import { ensureClone, freshClone } from "./clone.ts";
 import { taskDiff } from "./diff.ts";
 import { machineGitDir } from "./machine-repo.ts";
 import { exec } from "../process/exec.ts";
+import { landedOnBase } from "../../application/stages/deliver.ts";
 import { branchBase, branchDiffStat, changedPaths, commitAll, rebaseOntoBase, forgetBase, rebaseOntoDefault, stackOf, unstack, workspaceFor } from "./worktree.ts";
 
 const cfg = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"];
@@ -356,6 +357,22 @@ describe("a rebase whose replay stops on a conflict the branch's final result do
     await commitAll(workspace.path, "docs: restore a");
     mainMoves(s, "a.txt", "theirs\n");
     expect(await unsigned(() => rebaseOntoBase(exec, workspace.path, s.repo, undefined, { mergeFallback: false }))).toMatchObject({ ok: false, conflicts: ["a.txt"] });
+  });
+});
+
+describe("what of a card's change the default branch already holds", () => {
+  it("splits the files the card changed into those identical on the default branch and those that still differ, and reads nothing it cannot", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace);
+    writeFileSync(join(workspace.path, "same.txt"), "x\n");
+    writeFileSync(join(workspace.path, "differs.txt"), "mine\n");
+    await commitAll(workspace.path, "docs: two files");
+    mainMoves(s, "same.txt", "x\n");
+    mainMoves(s, "differs.txt", "theirs\n");
+    wgit(workspace.path, "fetch", "-q", "origin", "main");
+    expect(await landedOnBase(exec, workspace.path, "refs/remotes/origin/main")).toEqual({ landed: ["same.txt"], remaining: ["differs.txt"] });
+    expect(await landedOnBase(exec, workspace.path, "refs/remotes/origin/nope")).toBeNull();
   });
 });
 

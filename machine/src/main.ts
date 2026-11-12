@@ -300,7 +300,7 @@ const stackDeps = {
 };
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
-const { real, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe } = await buildRealStages(
+const { real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -385,7 +385,7 @@ const realVerifyRunner = verifyRunner({
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
 const runnerFor = buildRunnerFor({
   real,
-  realDeliverRunner: realDeliverRunner(github, { facts: stackDeps.facts, clearBase: stackDeps.clearBase }),
+  realDeliverRunner: realDeliverRunner(github, { facts: stackDeps.facts, clearBase: stackDeps.clearBase }, resolveConflicts),
   realVerifyRunner,
   shipRunner: shipRunner(github),
   stubRunnerFor: (stage) => stubs.runnerFor(stage),
