@@ -5,7 +5,9 @@
 // is done here by following its stream: its limits come out of what the parent has left
 // (prepareChild, the same checks), the runner counts its model calls and cancels it at its turn cap
 // or its time limit, its folder /out/children/<n>/ is written when it ends, and the parent's
-// stream gets a `child` event as it starts and as it ends. Children run one at a time.
+// stream gets a `child` event as it starts and as it ends. Children run one at a time. The child's
+// spend is not added to the parent's: eve records it on the parent's own stream as usage (the
+// parent's TurnFollower counts it there), so `spent.costUsd` is for reporting, never added.
 import type { AgentRole, EngineId, RunEvent } from "@hardness/contracts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
