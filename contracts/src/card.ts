@@ -58,6 +58,15 @@ export const CardEntryFields = {
   links: z.record(short, long).optional(),
 };
 
+/** What a PR review was linked to, kept on the review's own card: `how` says whether the PR named it (`key`), a recorded fact matched it (`fact`: a card's Jira link, branch or PR) or the `pr_link` decision picked it (`decision`). */
+export interface ReviewLinks {
+  at: string;
+  jira: { key: string; url: string; summary: string; how: "key" | "decision" }[];
+  cards: { id: string; title: string; how: "fact" | "decision"; /** Which fact: `jira`, `branch` or `pr`. */ fact?: string }[];
+  /** The best candidate of a decision that stayed under its bar: shown, never acted on. */
+  suggestion?: { kind: "jira" | "card"; id: string; title: string; confidence: number; url?: string };
+}
+
 /** What a card keeps of the entry contract (`cardFieldsOf`). A row written before wave 14 reads as one source and empty lists. */
 export interface CardFields {
   /** Every report of the card; the first is the card's own `source`, kept for every reader that knows one, and never changes. */
@@ -103,6 +112,8 @@ export interface CardFields {
   base?: { card: string; branch: string };
   /** Cards linked as related to this one (ids). */
   related?: string[];
+  /** For a review's card: what the PR was linked to (tickets and cards, and how), and a suggestion that stayed under the bar. */
+  reviewLinks?: ReviewLinks;
   /** The card this one was merged into (a card, or a backlog item); the card is `closed`. */
   mergedInto?: string;
   /** A linked ticket's scope or priority changed while the card was before Build: the field names and when, never the ticket's text. Its open gate and the next one carry it. */
