@@ -86,7 +86,7 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     const body = [
       `The branch conflicts with ${input.base.name} (${input.base.sha.slice(0, 7)}), which moved since the branch left it. The machine merged it; git's conflict markers are committed in:`,
       listed,
-      "Resolve every conflict in those files and touch no other file. Keep this card's change. Carry in what the base added or changed: it is newer than the branch, so a fact, a section or a code path the base brought stays, written the way this card writes (its style, its rules). Remove every marker line. Then commit.",
+      "Resolve every conflict in those files and touch no other file. Keep this card's change. Carry in what the base added or changed: it is newer than the branch, so a fact, a section or a code path the base brought stays, written the way this card writes (its style, its rules). Remove every marker line. Then commit. Run git as plain `git status` and `git commit` from the folder you are in; a command that starts `git -C` is refused.",
     ].join("\n");
     const thread = { id: "merge", path: null, line: null, comments: [{ author: "machine", body: body.slice(0, 6000), at: new Date().toISOString() }] };
     const addressed = await deps.loop.runPack("addressing", subContext(ctxWork, `merge-${input.label}`), { threads: { pr, threads: [thread] } });
@@ -95,6 +95,12 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     if (!answer.success) return stop(escalated("the addressing pack gave no usable answer for the conflicts", "other", { conflicts: conflicted.slice(0, 10) }));
     if (answer.data.kind === "escalated") return stop(escalated(postable(answer.data.reason || answer.data.summary || "the addressing pack asked for a person", 400), answer.data.escalation ?? "other", { conflicts: conflicted.slice(0, 10) }));
 
+    // The pack's own commit can be refused (its tool rules match a plain `git commit`, not `git -C <dir> commit`), leaving the resolution edited and uncommitted.
+    // The host commits it: the checks below read the commit like the pack's own, and only its tree ships.
+    if ((await git("status", "--porcelain")).stdout.trim() !== "") {
+      await git("add", "-A");
+      await git("commit", "--quiet", "--no-verify", "--no-gpg-sign", "-m", `luna: ${message} (resolution)`);
+    }
     const after = await headOfWorktree(run, work);
     if (!after || after === withMarkers) return stop(escalated(`the conflicts with ${input.base.name} were not resolved: nothing was committed`, "other", { conflicts: conflicted.slice(0, 10) }));
     if ((await git("merge-base", "--is-ancestor", withMarkers, after)).code !== 0) return stop(escalated("the resolution does not build on the merge; nothing was pushed"));

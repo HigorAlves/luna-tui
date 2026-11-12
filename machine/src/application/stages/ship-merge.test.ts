@@ -46,12 +46,12 @@ async function world(theirs: string) {
   return { root, remote, repo, workspace, before, base };
 }
 
-function deps(w: Awaited<ReturnType<typeof world>>, resolve: ((path: string) => void) | null, checks: StageResult = { outcome: "pass" }) {
+function deps(w: Awaited<ReturnType<typeof world>>, resolve: ((path: string) => void) | null, checks: StageResult = { outcome: "pass" }, packCommits = true) {
   const runPack = vi.fn(async (_pack: string, context: StageContext, _extra: unknown) => {
     // The pack edits the files in the folder it is given and commits there (its commits come back like this).
     const path = context.task.worktreePath!;
     resolve?.(path);
-    wgit(path, "commit", "-q", "-am", "resolve the conflict");
+    if (packCommits) wgit(path, "commit", "-q", "-am", "resolve the conflict");
     return { outcome: "pass", detail: { answer: { kind: "done", summary: "resolved", replies: [] } } } as StageResult;
   });
   const github = fakeGitHub({
@@ -91,6 +91,39 @@ describe("mergeRound: a branch that no longer merges", () => {
     expect(readFileSync(join(w.workspace.path, "doc.md"), "utf8")).toBe("one\nTWO, the card's rewrite, and a new fact\nthree\n");
     expect(wgit(w.workspace.path, "log", "--format=%s", head)).not.toContain("conflicts to resolve");
     expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(head);
+  });
+
+  it("commits the pack's edits itself when the pack could not (its tool rules refuse `git -C`), and still checks them", async () => {
+    const w = await world("conflict");
+    const { d, context } = deps(w, (path) => writeFileSync(join(path, "doc.md"), "one\nTWO, the card's rewrite, and a new fact\nthree\n"), { outcome: "pass" }, false);
+    const out = await mergeRound(d, context, input(w));
+    expect(out).toMatchObject({ ok: true, resolved: ["doc.md"] });
+    const head = wgit(w.workspace.path, "rev-parse", "HEAD");
+    expect(wgit(w.workspace.path, "rev-list", "--parents", "-n", "1", head).split(" ").slice(1)).toEqual([w.before, w.base]);
+    expect(readFileSync(join(w.workspace.path, "doc.md"), "utf8")).toBe("one\nTWO, the card's rewrite, and a new fact\nthree\n");
+    expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(head);
+  });
+
+  it("does not take an uncommitted edit outside the conflicted files, or markers left in them", async () => {
+    for (const [name, resolve, said] of [
+      ["outside", (path: string) => { writeFileSync(join(path, "doc.md"), "one\nresolved\nthree\n"); writeFileSync(join(path, "other.md"), "sneaked\n"); }, "changed files that had no conflict (other.md)"],
+      ["markers", (path: string) => writeFileSync(join(path, "doc.md"), readFileSync(join(path, "doc.md"), "utf8").replace("three", "3")), "conflict markers are left in doc.md"],
+    ] as const) {
+      const w = await world("conflict");
+      const { d, context } = deps(w, resolve, { outcome: "pass" }, false);
+      const out = await mergeRound(d, context, input(w));
+      expect(out.ok, name).toBe(false);
+      expect(String(out.result.detail?.reason), name).toContain(said);
+      expect(git(w.remote, "rev-parse", "refs/heads/card"), name).toBe(w.before);
+    }
+  });
+
+  it("says nothing was committed when the pack left the markers committed and edited nothing", async () => {
+    const w = await world("conflict");
+    const { d, context } = deps(w, null, { outcome: "pass" }, false);
+    const out = await mergeRound(d, context, input(w));
+    expect(out.ok).toBe(false);
+    expect(String(out.result.detail?.reason)).toMatch(/nothing was committed/);
   });
 
   it("pushes nothing when markers are left, when the pack touched another file, or when the checks fail", async () => {
