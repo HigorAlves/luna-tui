@@ -698,9 +698,9 @@ pub fn gate_question(task: &Task, detail: Option<&TaskDetail>) -> Option<String>
             _ => "answer the questions".to_string(),
         },
         "awaiting_ship" if task.route == "review" => "post the verdict?".to_string(),
-        "awaiting_ship" if release.is_some() && high => "approve the release? · high risk: a release owner, not one of the plan's approvers".to_string(),
+        "awaiting_ship" if release.is_some() && high => "approve the release? · high risk".to_string(),
         "awaiting_ship" if release.is_some() => "approve the release?".to_string(),
-        "awaiting_ship" if ship_risk_is_high(detail) => "ship this PR? · high risk: a release owner is asked after the checks".to_string(),
+        "awaiting_ship" if ship_risk_is_high(detail) => "ship this PR? · high risk: the release is asked after the checks".to_string(),
         "awaiting_ship" => "ship this PR?".to_string(),
         "reviewing_memory" => "apply the memory rules?".to_string(),
         _ => return None,
@@ -836,7 +836,7 @@ fn rule_line(width: usize, tee: Option<usize>) -> Line<'static> {
     Line::from(text)
 }
 
-/// Whether the ship gate's Evidence Pack is High risk: shipping then needs an approver who did not approve the plan.
+/// Whether the ship gate's Evidence Pack is High risk: the release is then asked after the checks (and, when the repo asks two people of a High-risk plan, of someone who did not approve it).
 pub(crate) fn ship_risk_is_high(detail: Option<&TaskDetail>) -> bool {
     // The open or last gate's pack, else the task's own: the same source the Evidence section shows.
     detail.is_some_and(|d| match d.latest_approval("awaiting_ship") {
@@ -3039,7 +3039,7 @@ mod tests {
             detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":{"evidence":{"risk":risk}}})).unwrap()];
             gate_question(&task, Some(&detail)).unwrap()
         };
-        assert_eq!(question("high"), "ship this PR? · high risk: a release owner is asked after the checks");
+        assert_eq!(question("high"), "ship this PR? · high risk: the release is asked after the checks");
         assert_eq!(question("low"), "ship this PR?");
     }
 
@@ -3219,7 +3219,7 @@ mod tests {
             gate_question(&task, Some(&detail))
         };
         assert_eq!(strip(serde_json::json!({"gate":"ship_approval","risk":"low"}), true).unwrap(), "approve the release?");
-        assert!(strip(serde_json::json!({"gate":"ship_approval","risk":"high"}), true).unwrap().contains("high risk: a release owner, not one of the plan's approvers"));
+        assert!(strip(serde_json::json!({"gate":"ship_approval","risk":"high"}), true).unwrap().contains("approve the release? · high risk"));
         assert_eq!(strip(serde_json::json!({"evidence":{"risk":"low"}}), true).unwrap(), "ship this PR?");
         assert_eq!(strip(serde_json::json!({}), false), None, "a watched PR is not a gate");
     }

@@ -232,7 +232,9 @@ export class ApproverRequiredError extends Error {
   constructor(id: string, gate: "plan" | "ship" = "plan", needed = 2) {
     super(
       gate === "ship"
-        ? `task ${id}: a pack of High risk ships only with a ship approver who did not approve the plan; send your name as the approver`
+        ? needed > 1
+          ? `task ${id}: a pack of High risk ships only with a ship approver who did not approve the plan; send your name as the approver`
+          : `task ${id}: this release needs one of the gate's release owners; send your name as the approver`
         : `task ${id}: this plan needs ${needed} named approvers; send your name as the approver`,
     );
     this.name = "ApproverRequiredError";

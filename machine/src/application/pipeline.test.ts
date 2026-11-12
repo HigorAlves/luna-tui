@@ -842,6 +842,33 @@ describe("the ship approval (the release question after readiness)", () => {
     expect((await stagesRun(id)).slice(-2)).toEqual(["shipping", "reviewing_memory"]);
   });
 
+  it("lets the plan's approver release a High-risk card, named or not, when the repo asks one approver of a High-risk plan (the default)", async () => {
+    const one = { ...PREVIEW_ON, factory: { ...PREVIEW_ON.factory, plan: { ...PREVIEW_ON.factory.plan, approvers: { ...PREVIEW_ON.factory.plan.approvers, high: 1 } } } };
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: { for: async () => one }, hasConfig: () => true });
+    for (const approver of ["ana", undefined]) {
+      stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk: "high", question: "safe to release now?" } });
+      const task = await p.createTask({ title: "Login page", criteria: ["Bad password shows an error"], evidence: pack("high") });
+      await p.start(task.id);
+      await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+      await p.decide(task.id, "approved");
+      expect((await p.approvals(task.id)).find((a) => a.decision === null)?.requested.gate).toBe("ship_approval");
+      expect((await p.decide(task.id, "approved", undefined, undefined, approver ? { approver } : {})).state, String(approver)).toBe("closed");
+    }
+  });
+
+  it("still asks a release owner the gate names, by name, when the repo asks one approver", async () => {
+    const one = { ...PREVIEW_ON, factory: { ...PREVIEW_ON.factory, plan: { ...PREVIEW_ON.factory.plan, approvers: { ...PREVIEW_ON.factory.plan.approvers, high: 1 } } } };
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: { for: async () => one }, hasConfig: () => true });
+    stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk: "high", question: "safe to release now?", releaseOwners: ["bo"] } });
+    const task = await p.createTask({ title: "Login page", criteria: ["c"], evidence: pack("high") });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await p.decide(task.id, "approved");
+    await expect(p.decide(task.id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+    await expect(p.decide(task.id, "approved", undefined, undefined, { approver: "ana" })).rejects.toBeInstanceOf(NotReleaseOwnerError);
+    expect((await p.decide(task.id, "approved", undefined, undefined, { approver: "bo" })).state).toBe("closed");
+  });
+
   it("refuses a High-risk approval with no name, and leaves the question open", async () => {
     const id = await atRelease("high");
     await expect(pipeline.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);

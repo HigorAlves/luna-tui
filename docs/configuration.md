@@ -129,7 +129,7 @@ policy:
   max_concurrent: 1                       # running tasks this repo may hold at once (over MACHINE_MAX_PER_REPO)
   holdout_cases: false                    # true keeps test_design's cases away from the implementer; verifying still judges by them
   graph: on                               # off keeps the machine from building a code graph of this repo (default on; see MACHINE_GRAPH_INTERVAL)
-  auto_merge: off                         # DEPRECATED spelling, read when `ship.auto_merge` is not set; what the machine may merge by itself once a shipped PR is ready: off (default: never), low, or medium (low and medium); a high-risk PR is merged only when this is not off and a ship approver, who is none of the plan's approvers, approved the preview
+  auto_merge: off                         # DEPRECATED spelling, read when `ship.auto_merge` is not set; what the machine may merge by itself once a shipped PR is ready: off (default: never), low, or medium (low and medium); a high-risk PR is merged only when this is not off and a ship approver approved the release (someone who is none of the plan's approvers when `plan.approvers.high` is above 1)
   decisions:                              # per decision pack, per question: when an answer is acted on (proceed) and when a person decides (below flag)
     triage_signals:                       # also risk_score, coverage_check, plan_check, red_check, scope_check, finding_classify, e2e_failure_cause, ci_failure_class, evidence_format, frame_privacy, event_class, comment_intent, fix_scope, evidence_valid and worth_learning; a question left out keeps the pack's bar
       kind: { proceed: 0.8, flag: 0.5 }

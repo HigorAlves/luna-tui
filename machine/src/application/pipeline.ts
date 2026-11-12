@@ -1686,18 +1686,25 @@ export class Pipeline {
         if (rule.outside === "required" && !outsideSatisfied(names, owners)) throw new OutsideApproverRequiredError(id, names.at(-1) ?? "");
       };
     }
-    // The release question (the watch asks it after readiness): a High-risk card ships only on the word of someone who is none of the plan's approvers and,
-    // when the gate names release owners, one of them. Team handles cannot be checked here: the name is an attestation. Nothing a model wrote picks them.
+    // The release question (the watch asks it after readiness): a High-risk card ships, when the repo asks two people of a High-risk plan, only on the word
+    // of someone who is none of the plan's approvers and, when the gate names release owners, one of them. Team handles cannot be checked here: the name is an attestation. Nothing a model wrote picks them.
     const release = task.state === "awaiting_ship" && task.route !== "review" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_ship" && a.decision === null && a.requested.gate === "ship_approval") : undefined;
     if (release && decision === "sent_back") throw new TransitionError(task, { type: "sent_back" });
     if (release && decision === "approved") {
       if (release.requested.risk === "high" || task.evidence?.risk === "high") {
-        const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
-        const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
-        if (!approver) throw new ApproverRequiredError(id, "ship");
-        if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
+        // Someone other than the plan's approvers is asked only where the repo asks for two people on a High-risk plan (`plan.approvers.high` above 1):
+        // with one operator (the default) the person who approved the plan approves the release.
+        const separate = (await this.policyFor(task.repoPath)).factory.plan.approvers.high > 1;
         const owners = Array.isArray(release.requested.releaseOwners) ? release.requested.releaseOwners.map(String) : [];
-        if (owners.length > 0 && !owners.some((o) => sameName(o, approver))) throw new NotReleaseOwnerError(id, approver);
+        if (separate || owners.length > 0) {
+          if (!approver) throw new ApproverRequiredError(id, "ship", separate ? 2 : 1);
+          if (separate) {
+            const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
+            const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
+            if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
+          }
+          if (owners.length > 0 && !owners.some((o) => sameName(o, approver))) throw new NotReleaseOwnerError(id, approver);
+        }
       }
       if (typeof release.requested.head === "string") answered = { ...answered, head: release.requested.head };
     }
