@@ -78,6 +78,18 @@ describe("delivering", () => {
     expect(github.calls).toEqual([]);
   });
 
+  it("says the machine has no GitHub credential when git could not ask for one, as an environment problem rather than the card's", async () => {
+    for (const stderr of ["fatal: could not read Username for 'https://github.com': No such device or address", "fatal: Authentication failed for 'https://github.com/acme/widgets.git/'", "fatal: could not read Password for 'https://x@github.com': terminal prompts disabled"]) {
+      const github = fakeGitHub();
+      const { run, context } = setup(github, { push: bad(stderr) });
+      const result = await run(context);
+      expect(result.outcome).toBe("fail");
+      expect(String(result.detail?.error)).toMatch(/no GitHub credential.*GH_TOKEN.*pnpm start/);
+      expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true });
+      expect(github.calls).toEqual([]);
+    }
+  });
+
   it("fails with GitHub's words when opening the PR fails, and when the task has no branch", async () => {
     const github = fakeGitHub({ findPr: async () => null });
     const { run, context } = setup(github);
