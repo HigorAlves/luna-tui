@@ -509,6 +509,8 @@ export type StreamMessage =
   | { type: "stage.started"; taskId: string; label: string; cwd: string; container: string }
   | { type: "task.closed"; id: string }
   | { type: "github.prs"; snapshot: PrSnapshot }
+  /** Every open PR in the repos you can reach (`GET /github/prs/all`), polled beside the inbox. */
+  | { type: "github.prs.all"; snapshot: PrSnapshot }
   | { type: "slack.items"; snapshot: SlackSnapshot }
   | { type: "task.shipped"; shipped: TaskShipped };
 
