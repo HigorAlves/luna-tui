@@ -6152,6 +6152,7 @@ mod pr_tests {
         );
         app.mode = Mode::ClonePrompt {
             repo: "acme/app".into(),
+            number: 1,
             query: "proj".into(),
             all: vec!["/r".into(), "/r/projects".into()],
             cursor: 0,

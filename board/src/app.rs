@@ -494,6 +494,8 @@ pub enum Mode {
     /// `C` opens it with no `then`: a clone for its own sake.
     ClonePrompt {
         repo: String,
+        /// The PR the prompt was opened on, so a held dispatch finds it once the clone lands.
+        number: u64,
         query: String,
         all: Vec<String>,
         cursor: usize,
@@ -3955,6 +3957,7 @@ impl App {
         }
         self.mode = Mode::ClonePrompt {
             repo: pr.repo.clone(),
+            number: pr.number,
             query: String::new(),
             all,
             cursor: 0,
@@ -4005,6 +4008,7 @@ impl App {
     fn handle_clone_prompt(&mut self, key: KeyEvent) -> Outcome {
         let Mode::ClonePrompt {
             repo,
+            number,
             query,
             all,
             cursor,
@@ -4035,14 +4039,14 @@ impl App {
                 let Some(folder) = matches.get(*cursor).map(|f| f.to_string()) else {
                     return Outcome::Continue;
                 };
-                let (repo, then) = (repo.clone(), *then);
+                let (repo, number, then) = (repo.clone(), *number, *then);
                 let name = repo.rsplit('/').next().unwrap_or(&repo).to_string();
                 let dest = format!("{}/{name}", folder.trim_end_matches('/'));
                 self.mode = Mode::Normal;
                 match self.machine.clone_repo(&repo, &dest) {
                     Ok(()) => match then {
                         Some(action) => {
-                            self.pending_dispatch = Some((repo.clone(), action));
+                            self.pending_dispatch = Some((format!("{repo}#{number}"), action));
                             self.notify(
                                 format!(
                                     "cloning {repo} into {dest}; {} runs when it lands",
@@ -8905,6 +8909,7 @@ mod pr_tests {
         press(&mut app, 'P');
         app.mode = Mode::ClonePrompt {
             repo: "acme/app".into(),
+            number: 7,
             query: String::new(),
             all: vec!["/code/".into()],
             cursor: 0,
@@ -8926,6 +8931,7 @@ mod pr_tests {
         // The dispatch path keeps its follow-up.
         app.mode = Mode::ClonePrompt {
             repo: "acme/app".into(),
+            number: 7,
             query: String::new(),
             all: vec!["/code".into()],
             cursor: 0,
@@ -8935,6 +8941,11 @@ mod pr_tests {
         assert_eq!(
             app.pending_dispatch.as_ref().map(|(_, a)| *a),
             Some(PrAction::Review)
+        );
+        // The held dispatch is keyed by the PR, as `run_pending_dispatch` looks it up (`owner/name#N`).
+        assert_eq!(
+            app.pending_dispatch.as_ref().map(|(k, _)| k.as_str()),
+            Some("acme/app#7")
         );
     }
 
