@@ -84,6 +84,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`. You need a `.env`
 | `RUNNER_VIDEO_IMAGE` | `hardness-runner-video:dev` | the video image (narration, cards, compose, measure); without it Evidence's video format degrades to captures |
 | `WORKTREES_DIR` | `~/Developer/worktrees` | where task worktrees are created, as `<worktreesDir>/<repo>/<branch>` |
 | `MACHINE_STATE_DIR` | `~/.local/state/hardness` | where run artifacts, transcripts and ingested output live |
+| `MACHINE_STAGE_USER` | `pnpm start` passes your `uid:gid`; else unset | the user stage and check containers run as. The compose machine runs as root, so its own uid is no use here. A root machine with nothing set leaves the container on the runner image's `node` user. A stage never runs as root: a value of `0:…` is ignored. On the host (`pnpm dev`) the machine's own uid:gid is used |
 | `MACHINE_RETENTION_DAYS` | `90` | days to keep a closed task's events/stage-runs before pruning (`0` disables pruning); also how long a failed Slack triage or Jira intake run keeps its folder, and a `POST /runs` call its `pack_runs` row |
 | `MACHINE_WORKTREE_RETENTION_DAYS` | `7` | days after a task closes before the nightly sweep removes its worktree and deletes its branch if merged (`0` disables). The same sweep removes run folders no stage run owns and untags superseded `hardness-runner*:<sha>` images |
 | `MACHINE_RESTART_POLICY` | `requeue` | what happens to a task mid-stage when the machine stops: `requeue` parks it (its stage re-runs on the next boot, no approval), `escalate` leaves it for you to resume. A stage container still running when the machine comes back (a crash, not a shutdown) is re-attached instead: the machine waits on it and ingests its result (`stage.reattached`) |
@@ -279,7 +280,7 @@ A repository can turn a mechanism off, or tune a number inside its bounds. A tun
 
 ## Environment cache
 
-Every stage and check container mounts a docker volume named `hardness-cache-<repo>` at `/cache`, with npm, pnpm, yarn, Go, cargo, pip and uv pointed at it. A retry, or the next task of the same repo, installs from that warm cache instead of the network. `docker volume rm hardness-cache-<repo>` starts a repo over.
+Every stage and check container mounts a docker volume named `hardness-cache-<repo>` at `/cache`, with npm, pnpm, yarn, Go, cargo, pip and uv pointed at it. A retry, or the next task of the same repo, installs from that warm cache instead of the network. `docker volume rm hardness-cache-<repo>` starts a repo over. Stages run as a non-root user, so a cache volume that an older machine filled as root must be removed once, or its folders cannot be written: `docker volume ls -q --filter name=hardness-cache- | xargs docker volume rm`. It only costs a warm-up.
 
 ## Compose
 

@@ -126,8 +126,8 @@ export interface SandboxRun {
   noProxy?: string[];
   /** `uid:gid` the container runs as. The run folder, the session dir and the worktree are bind
    *  mounts owned by the host user, so the stage must be that user to write them (the image's
-   *  `node` user is uid 1000, which is not the host user on a Linux host). Defaults to the
-   *  machine's own uid:gid; null keeps the image's user. */
+   *  `node` user is uid 1000, which is not the host user on a Linux host). Defaults to `hostUser()`;
+   *  null keeps the image's user. */
   user?: string | null;
   /** Extra bind mounts, after the credential's (a repo's code graph at `/graph`, read-only). */
   mounts?: CredentialMount[];
@@ -135,9 +135,12 @@ export interface SandboxRun {
   entrypoint?: string[];
 }
 
-/** The machine's own uid:gid, the owner of everything it mounts; undefined where the platform has none. */
+/** The uid:gid a stage or check container runs as. `MACHINE_STAGE_USER` first: in the compose machine, whose own uid is root's, `pnpm start` passes the host user's. Else the machine's own uid:gid (`pnpm dev` runs on the host). A root machine with nothing set gets undefined, so the container keeps the image's `node` user: a stage must never run as root, which hides the permission failures CI would show and lets Claude Code refuse some modes. */
 export function hostUser(): string | undefined {
-  return typeof process.getuid === "function" && typeof process.getgid === "function" ? `${process.getuid()}:${process.getgid()}` : undefined;
+  const given = process.env.MACHINE_STAGE_USER?.trim();
+  if (given && /^\d+:\d+$/.test(given) && !given.startsWith("0:")) return given;
+  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") return undefined;
+  return process.getuid() === 0 ? undefined : `${process.getuid()}:${process.getgid()}`;
 }
 
 export interface SandboxResult {

@@ -1,10 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
-import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
+import { CACHE_ENV, SecretsMissingError, type RunDeps, cacheVolumeFor, hostUser, execInSandbox, runSandbox, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
 import { EgressUnsupportedError } from "./egress.ts";
 
 function run(over: Partial<SandboxRun> = {}): SandboxRun {
@@ -71,6 +71,38 @@ describe("sandboxArgs", () => {
     expect(sandboxArgs(run({ user: "1234:1234" }), "/i", "/o")).toContain("1234:1234");
     const check = sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["pnpm", "test"] });
     expect(check[check.indexOf("--user") + 1]).toMatch(/^\d+:\d+$/);
+  });
+
+  describe("hostUser", () => {
+    const stageUser = process.env.MACHINE_STAGE_USER;
+    afterEach(() => {
+      if (stageUser === undefined) delete process.env.MACHINE_STAGE_USER;
+      else process.env.MACHINE_STAGE_USER = stageUser;
+    });
+
+    it("takes the host user the machine was told, because the machine's own uid is the container's root", () => {
+      process.env.MACHINE_STAGE_USER = "4242:4343";
+      expect(hostUser()).toBe("4242:4343");
+    });
+
+    it("ignores a value that is not a non-root uid:gid", () => {
+      for (const bad of ["root", "0:0", "0:20"]) {
+        process.env.MACHINE_STAGE_USER = bad;
+        expect(hostUser()).not.toBe(bad);
+      }
+    });
+
+    it("never hands root to a container: with nothing set and the machine running as root, the image's own user stays", () => {
+      delete process.env.MACHINE_STAGE_USER;
+      const uid = vi.spyOn(process, "getuid").mockReturnValue(0);
+      try {
+        expect(hostUser()).toBeUndefined();
+        expect(sandboxArgs(run(), "/i", "/o")).not.toContain("--user");
+        expect(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["true"] })).not.toContain("--user");
+      } finally {
+        uid.mockRestore();
+      }
+    });
   });
 
   it("mounts the worktree read-only unless writable", () => {
