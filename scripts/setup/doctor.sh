@@ -56,11 +56,27 @@ if docker_running; then
 fi
 port="$(env_get MACHINE_DOCKER_PORT)"; port="${port:-4318}"
 token="${MACHINE_API_TOKEN:-$(tr -d '[:space:]' <"$CONFIG_DIR/machine-api-token" 2>/dev/null)}"
-# The header from a file descriptor, so the token is never in curl's argv.
-if curl -fsS -m 3 -H @<(printf 'authorization: Bearer %s\n' "$token") "http://127.0.0.1:$port/health" &>/dev/null; then
-  ok "machine" "http://127.0.0.1:$port"
-else off "machine" "not answering on :$port (make up)"; fi
-if command -v herdr &>/dev/null && herdr plugin list 2>/dev/null | grep -q '^- hardness.board '; then ok "board" "linked in herdr"; else off "board" "not linked (make board)"; fi
+# The header from a file descriptor, so the token is never in curl's argv. The last line is the status; a 503 body lists what the machine cannot do (no GitHub token, no git identity, stub stages).
+health=$(curl -sS -m 3 -w '\n%{http_code}' -H @<(printf 'authorization: Bearer %s\n' "$token") "http://127.0.0.1:$port/health" 2>/dev/null) || health=""
+health_status="${health##*$'\n'}"
+case "$health_status" in
+  200) ok "machine" "http://127.0.0.1:$port" ;;
+  503)
+    bad "machine" "answers on :$port but cannot do its job:"
+    while IFS= read -r problem; do [ -n "$problem" ] && echo -e "      ${RED}-${NC} $problem"; done <<<"$(health_problems "${health%$'\n'*}")"
+    ;;
+  *) off "machine" "not answering on :$port (make up)" ;;
+esac
+if command -v herdr &>/dev/null; then
+  # Captured first: `herdr plugin list | grep -q` fails under pipefail when herdr is still writing as grep quits.
+  plugins=$(herdr plugin list 2>/dev/null) || plugins=""
+  case "$(board_link_state "$plugins" "$ROOT")" in
+    linked) ok "board" "linked in herdr" ;;
+    elsewhere) off "board" "linked to another checkout (make board)" ;;
+    disabled) off "board" "linked but disabled in herdr" ;;
+    *) off "board" "not linked (make board)" ;;
+  esac
+else off "board" "herdr is not installed"; fi
 
 echo
 if [ "$MISSING" -eq 0 ]; then success "Ready."; else error "$MISSING required item(s) missing. make setup walks you through them."; exit 1; fi

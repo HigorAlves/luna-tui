@@ -23,7 +23,8 @@ import type { StageContext, StageResult, StageRunner } from "../application/port
 import { type PlanDeps, planStage } from "../application/stages/plan.ts";
 import { type TriageSignalDeps, withTriageSignals } from "../application/stages/triage-signals.ts";
 import { prAddressRunner } from "../application/stages/pr-address.ts";
-import { prReviewRunner } from "../application/stages/pr-review.ts";
+import type { Jira } from "../application/jira.ts";
+import { type PrReviewDeps, prReviewRunner } from "../application/stages/pr-review.ts";
 import { videoPipeline } from "../application/stages/video.ts";
 import { scanImages } from "../application/video-jobs.ts";
 import { judgePrivacy } from "../application/frame-privacy.ts";
@@ -60,12 +61,13 @@ import { buildEgress } from "./egress.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
-import { hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
+import { hostBaselineWorkspace, hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
 import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, nestedLockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
+import { noIdentityDetail } from "../application/env-broken.ts";
 import { basename, join, resolve, sep } from "node:path";
 import { readdir } from "node:fs/promises";
 import { readRegularFile } from "../adapters/fs/bounded.ts";
@@ -77,6 +79,8 @@ import { type GitHub, noTokenGitHub } from "../application/github.ts";
 import { type ShipGateProbe, shipGateProbe } from "../application/ship-gate-probe.ts";
 
 export interface RealStagesResult {
+  /** Why every stage is a stub (no Claude credential, no runner image, no egress image), for `GET /health`; null when stages are real, and when agents are off on purpose (`MACHINE_AGENTS=off`). */
+  stubReason: string | null;
   real: Partial<Record<TaskState, StageRunner>>;
   /** Resolves a merge conflict with the addressing pack and proves it with the project's checks (`mergeRound`): the delivering stage takes it, the ship watch has its own copy of the same loop; absent when stages are stubs. */
   resolveConflicts?: DeliverDeps["resolveConflicts"];
@@ -99,7 +103,6 @@ export async function egressImageProblem(image: string, label: (image: string, n
   return (await label(image, "dev.hardness.egress")) === null ? `image ${image} has no egress proxy (label dev.hardness.egress): rebuild it with pnpm runner:build` : null;
 }
 
-/** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
 /** What the retro reads about a task: the last implementing ledger and every earlier run. */
 export type TaskHistory = (taskId: string) => Promise<{ ledger: Ledger | null; runs: RunSummary[] }>;
 
@@ -108,6 +111,10 @@ export interface ImageEventSink {
   sink: (event: RepoImageEvent) => void;
 }
 
+/** Every stage a stub: what `buildRealStages` returns when it cannot run agents, with the reason (null for `MACHINE_AGENTS=off`, which is a choice). */
+const stubbed = (stubReason: string | null): RealStagesResult => ({ stubReason, real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null });
+
+/** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
 export async function buildRealStages(
   config: Config,
   watcher: Watcher,
@@ -146,24 +153,28 @@ export async function buildRealStages(
   stack?: { baseFor: NonNullable<AgentDeps["baseFor"]>; clearBase: NonNullable<AgentDeps["clearBase"]>; /** The checklist's and the merge rule's view of the parent. */ facts: NonNullable<ShipMonitorDeps["stack"]>["facts"]; defaultBranch: NonNullable<ShipMonitorDeps["stack"]>["defaultBranch"]; /** Whether another open card is stacked on a card (its branch is kept). */ hasChildren?: (id: string) => Promise<boolean> },
   /** The token economy: what each run starts with; absent, a run gets none. */
   economy?: AgentDeps["economy"],
+  /** The Jira port when Jira is configured (the review route reads the tickets a PR names); null or absent gives the reviewer none. */
+  jira?: Jira | null,
+  /** What the review route links a PR to (the board's cards, the Jev fallback, where the links are kept); absent, only the keys a PR names are read. */
+  reviewLinks?: PrReviewDeps["links"],
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
-    return { real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null };
+    return stubbed(null);
   }
   // Every pack defaults to a Claude engine, so without Claude's credential nothing runs for real.
   if (!(await loadCredential())) {
     console.warn("no Claude credential in ~/.config/hardness: every stage is a stub");
-    return { real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null };
+    return stubbed("no Claude credential in ~/.config/hardness");
   }
   if (!(await imageExists(config.runnerImage))) {
     console.warn(`image ${config.runnerImage} is missing (pnpm runner:build): every stage is a stub`);
-    return { real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null };
+    return stubbed(`image ${config.runnerImage} is missing (pnpm runner:build)`);
   }
   const noProxy = config.egress.enabled ? await egressImageProblem(config.runnerImage) : null;
   if (noProxy) {
     console.warn(`${noProxy}: every stage is a stub`);
-    return { real: {}, verifyPack: null, checksExec: null, proofRig: null, agentDeps: null, shipGateProbe: null };
+    return stubbed(noProxy);
   }
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
@@ -211,13 +222,31 @@ export async function buildRealStages(
   // The machine installs from the lockfile before a stage that writes, and before a check on a card's workspace (Verify's fresh one included).
   const install = (input: InstallInput): Promise<InstallOutcome> =>
     ensureInstalled({ stateDir: config.stateDir, policies, repoImages, imageId, lockfilesAt, nestedLockfilesAt, exec: execInSandbox, ...(egress ? { egress } : {}), removeNested: removeNestedRepositories, dirtyFiles, restoreFiles, configChanged: (i) => configFilesChanged({ cardBlobs: (w, c, names) => lockfilesAt(w, c, names), userBlobs: (r, c, names) => blobsAtRepo(r, c, names), baseOf: (w, r) => branchBase(w, r) }, i) }, input);
-  const checksExec: typeof sandboxChecks = async (command, args, options = {}) => {
+  const installFor = async (options: { repoPath?: string; cwd?: string; signal?: AbortSignal }): Promise<void> => {
     if (options.repoPath && options.cwd && isClone(options.cwd)) {
       const installed = await install({ taskId: "_checks", repoPath: options.repoPath, workspace: options.cwd, commit: await headCommit(options.cwd), ...(options.signal ? { signal: options.signal } : {}) });
       if (!installed.ok) throw new InstallFailedError(installed.detail);
     }
-    return sandboxChecks(command, args, options);
   };
+  const checksExec: typeof sandboxChecks = Object.assign(
+    async (command: string, args: string[], options: Parameters<typeof sandboxChecks>[2] = {}) => {
+      await installFor(options);
+      return sandboxChecks(command, args, options);
+    },
+    {
+      // A pass of checks shares one set of services; each check still installs first, as above.
+      session: async (opened: Parameters<typeof sandboxChecks.session>[0]) => {
+        const session = await sandboxChecks.session(opened);
+        return {
+          exec: async (command: string, args: string[], options: Parameters<typeof session.exec>[2] = {}) => {
+            await installFor(options);
+            return session.exec(command, args, options);
+          },
+          close: session.close,
+        };
+      },
+    },
+  );
   // The app the browser run drives (`verify.e2e.start`): the repository's image, its own network with the check list, never the agent's.
   const appDeps: AppDeps = {
     policies,
@@ -307,12 +336,13 @@ export async function buildRealStages(
   const saveEvidence = (taskId: string, pack: EvidencePack) => evidenceDeps.save(taskId, { evidence: pack });
   const evidenceStore = new EvidenceStore(config.stateDir);
   /** The project's checks over what changed since `since` (a commit the machine read): luna.yaml's list, no review pack. */
-  const deltaChecks = (context: StageContext, since: string) =>
+  const deltaChecks = (context: StageContext, since: string, base?: string) =>
     verifyRunner({
       exec: checksExec,
       runPack: null,
       stateDir: config.stateDir,
-      policy: async (repoPath) => {
+      // A red check is asked again on the base: a merge round names the base's own tip, a fix the commit the branch left.
+      baseline: { ...hostBaselineWorkspace, ...(base ? { base: async () => base } : {}) },      policy: async (repoPath) => {
         const { checks, services, decisions, factory } = await policies.for(repoPath);
         return { checks, services, decisions, verify: factory.verify };
       },
@@ -377,11 +407,10 @@ export async function buildRealStages(
       sweep: async (context) => {
         const { task } = context;
         if (!task.worktreePath || !task.repoPath) return { status: "skipped", ran: [], failed: [], note: "there was no worktree to sweep" };
-        const identity = await gitIdentity(task.repoPath);
-        const env = { ...process.env, ...(identity ? { GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email } : {}) };
         return runSweep(
           {
             exec: checksExec,
+            gitIdentity,
             changedPaths: changedPaths,
             impact: async (repoPath, files) => {
               const found = graphs ? await graphs.graph.impact(repoPath, files) : null;
@@ -392,7 +421,7 @@ export async function buildRealStages(
               return { checks: policy.checks, services: policy.services, wholeSuiteMinutes: policy.factory.build.regression_full_suite_minutes };
             },
           },
-          { worktree: task.worktreePath, repoPath: task.repoPath, signal: context.signal, env, onBlocked: (_check, rows) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}) },
+          { worktree: task.worktreePath, repoPath: task.repoPath, signal: context.signal, env: process.env, onBlocked: (_check, rows) => void Promise.all(blockedPayloads(rows, "check").map((payload) => context.emit?.("sandbox.egress_blocked", payload))).catch(() => {}) },
         );
       },
       checkpoint: async (context, worktree, follows) => {
@@ -409,6 +438,8 @@ export async function buildRealStages(
         head: headCommit,
         pending: stagePending,
         commit: async (path, subject, body) => {
+          // Without an identity git refuses with "empty ident name"; say what the machine lacks instead.
+          if (!(await gitIdentity(path))) throw new Error(String(noIdentityDetail(path).reason));
           const sha = await commitAll(path, `${subject}\n\n${body}`);
           if (!sha) throw new Error("the tests step has nothing to commit");
           return sha;
@@ -454,6 +485,8 @@ export async function buildRealStages(
     ci_watch: ciWatchRunner({
       github,
       runPack: (context, ci) => runAgent(deps, context, "ci_watch", { ci }),
+      // A conflict the rebase cannot settle goes to the same merge round Deliver uses (declared below, called later).
+      resolveConflicts: (context, input) => resolveConflicts!(context, input),
       // What kind of red it is is a typed decision (ci_failure_class), bound late like the other decisions; the investigator is asked for the fix only for a real failure.
       get decide() {
         return verifyDecisions?.decide ?? null;
@@ -520,7 +553,21 @@ export async function buildRealStages(
         : null,
     }),
     // The PR tasks' own stages: the host fetches the diff or the threads, the pack answers.
-    reviewing: prReviewRunner({ github, runPack: (context, review) => runAgent(deps, context, "reviewing", { review }) }),
+    reviewing: prReviewRunner({
+      github,
+      runPack: (context, review) => runAgent(deps, context, "reviewing", { review }),
+      ...(reviewLinks ? { links: reviewLinks } : {}),
+      ...(jira
+        ? {
+            jira,
+            // The repo's own luna.yaml names its Jira project; a PR's keys of other projects are not read.
+            projects: async (repoPath: string | null) => {
+              const project = repoPath ? (await policies.for(repoPath)).jira?.project : null;
+              return project ? [project] : [];
+            },
+          }
+        : {}),
+    }),
     addressing: prAddressRunner({ github, runPack: (context, threads) => runAgent(deps, context, "addressing", { threads }) }),
     // The watch: the PR is made ready with the pack on it, then watched until a merge is due or a person is needed.
     awaiting_ship: shipWatchRunner({
@@ -565,7 +612,7 @@ export async function buildRealStages(
   };
   const resolveConflicts: DeliverDeps["resolveConflicts"] = (context, input) =>
     mergeRound({ github, loop: reviewLoop, policies, evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishByPolicy, store: evidenceStore }, stateDir: config.stateDir }, context, input);
-  return { real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { stubReason: null, real, resolveConflicts, verifyPack, checksExec, proofRig, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

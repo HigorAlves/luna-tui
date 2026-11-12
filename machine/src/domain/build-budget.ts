@@ -27,7 +27,8 @@ interface RunFacts {
   endedAt: Date | null;
 }
 
-const round1 = (n: number): number => Math.round(n * 10) / 10;
+const objectOf = (value: unknown): Record<string, unknown> | undefined => (value && typeof value === "object" ? (value as Record<string, unknown>) : undefined);
+const round1 =(n: number): number => Math.round(n * 10) / 10;
 
 export function buildBudget(runs: readonly RunFacts[], events: readonly { kind: string; payload: Record<string, unknown> }[], limits: BuildLimits, now: Date = new Date()): BuildBudget {
   const mine = runs.filter((r) => r.stage === "implementing");
@@ -36,6 +37,8 @@ export function buildBudget(runs: readonly RunFacts[], events: readonly { kind: 
   let machineIterations = 0;
   let consecutiveReds = 0;
   let tokens: number | null = null;
+  let lastCommit: string | null = null;
+  let verifyFailedSince = false;
   for (const { kind, payload } of events) {
     if (kind === "stage.slice.red") {
       ledgerIterations += 1;
@@ -48,8 +51,16 @@ export function buildBudget(runs: readonly RunFacts[], events: readonly { kind: 
     } else if (kind === "build.sweep_failed") {
       ledgerIterations += 1;
       machineIterations += 1;
+    } else if (kind === "stage.finished" && payload.stage === "verifying") {
+      if (payload.outcome === "fail") verifyFailedSince = true;
     } else if (kind === "stage.finished" && payload.stage === "implementing") {
-      machineIterations += 1;
+      // A run entered from a verify failure that passed on the commit the last run ended on changed nothing (Verify blamed the environment, say):
+      // it is no iteration. Only that case is skipped, so a stuck agent that never commits still spends the card, and Verify's own loop cap bounds the bounces.
+      const commit = objectOf(objectOf(payload.detail)?.env)?.commit;
+      const noop = verifyFailedSince && payload.outcome === "pass" && typeof commit === "string" && commit === lastCommit;
+      if (!noop) machineIterations += 1;
+      lastCommit = typeof commit === "string" ? commit : null;
+      verifyFailedSince = false;
       const t = payload.tokens as { input?: unknown; output?: unknown } | undefined;
       // Only non-negative whole numbers count: a row with anything else (a negative, a fraction) is ignored, never allowed to lower what was spent.
       if (t && Number.isInteger(t.input) && Number.isInteger(t.output) && (t.input as number) >= 0 && (t.output as number) >= 0) tokens = (tokens ?? 0) + (t.input as number) + (t.output as number);

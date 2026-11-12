@@ -66,7 +66,10 @@ pub fn state_path() -> PathBuf {
 }
 
 fn read_state(path: &PathBuf) -> BoardState {
-    fs::read_to_string(path).ok().and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
 }
 
 /// When the board was last open, if it ever was.
@@ -78,7 +81,10 @@ pub fn last_seen_secs_at(path: &PathBuf) -> Option<u64> {
 pub fn write_last_seen_at(path: &PathBuf, secs: u64) -> std::io::Result<()> {
     let mut state = read_state(path);
     state.last_seen_secs = Some(secs);
-    fs::write(path, serde_json::to_string_pretty(&state).unwrap_or_default())
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&state).unwrap_or_default(),
+    )
 }
 
 #[cfg(test)]

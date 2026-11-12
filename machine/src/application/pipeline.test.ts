@@ -553,6 +553,24 @@ describe("Build's budget", () => {
     expect((await p.events(task.id)).filter((e) => e.kind === "build.budget_reset")).toHaveLength(1);
   });
 
+  it("starts Build with a fresh budget when a person approves a plan made after Build already ran, and logs the first approval of a plan with nothing to reset as no reset", async () => {
+    const ran: string[] = [];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), { outcome: "fail" as const, events: events(16) }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(1);
+    expect((await p.events(task.id)).filter((e) => e.kind === "build.budget_reset")).toHaveLength(0);
+    expect((await p.get(task.id)).state).toBe("escalated");
+    // The person sends the card back to be planned again, then approves the new plan.
+    await p.decide(task.id, "sent_back", "re-plan it");
+    expect((await p.get(task.id)).state).toBe("awaiting_approval");
+    await p.decide(task.id, "approved");
+    // The new plan's Build runs on a budget of its own instead of escalating on the old one at once.
+    expect(ran).toHaveLength(2);
+    expect((await p.events(task.id)).filter((e) => e.kind === "build.budget_reset")).toHaveLength(1);
+  });
+
   it("counts the runtime's tokens from the finish row, and a run that reports none leaves them uncounted", async () => {
     const ran: string[] = [];
     const usage = { turns: 1, costUsd: null, tokens: { input: 1_900_000, output: 100_001 } };
@@ -842,6 +860,33 @@ describe("the ship approval (the release question after readiness)", () => {
     expect((await stagesRun(id)).slice(-2)).toEqual(["shipping", "reviewing_memory"]);
   });
 
+  it("lets the plan's approver release a High-risk card, named or not, when the repo asks one approver of a High-risk plan (the default)", async () => {
+    const one = { ...PREVIEW_ON, factory: { ...PREVIEW_ON.factory, plan: { ...PREVIEW_ON.factory.plan, approvers: { ...PREVIEW_ON.factory.plan.approvers, high: 1 } } } };
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: { for: async () => one }, hasConfig: () => true });
+    for (const approver of ["ana", undefined]) {
+      stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk: "high", question: "safe to release now?" } });
+      const task = await p.createTask({ title: "Login page", criteria: ["Bad password shows an error"], evidence: pack("high") });
+      await p.start(task.id);
+      await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+      await p.decide(task.id, "approved");
+      expect((await p.approvals(task.id)).find((a) => a.decision === null)?.requested.gate).toBe("ship_approval");
+      expect((await p.decide(task.id, "approved", undefined, undefined, approver ? { approver } : {})).state, String(approver)).toBe("closed");
+    }
+  });
+
+  it("still asks a release owner the gate names, by name, when the repo asks one approver", async () => {
+    const one = { ...PREVIEW_ON, factory: { ...PREVIEW_ON.factory, plan: { ...PREVIEW_ON.factory.plan, approvers: { ...PREVIEW_ON.factory.plan.approvers, high: 1 } } } };
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: { for: async () => one }, hasConfig: () => true });
+    stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk: "high", question: "safe to release now?", releaseOwners: ["bo"] } });
+    const task = await p.createTask({ title: "Login page", criteria: ["c"], evidence: pack("high") });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await p.decide(task.id, "approved");
+    await expect(p.decide(task.id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+    await expect(p.decide(task.id, "approved", undefined, undefined, { approver: "ana" })).rejects.toBeInstanceOf(NotReleaseOwnerError);
+    expect((await p.decide(task.id, "approved", undefined, undefined, { approver: "bo" })).state).toBe("closed");
+  });
+
   it("refuses a High-risk approval with no name, and leaves the question open", async () => {
     const id = await atRelease("high");
     await expect(pipeline.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
@@ -982,6 +1027,102 @@ describe("the open release question is probed once per poll interval", () => {
     await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
     await p.tick();
     expect(probe).not.toHaveBeenCalled();
+  });
+});
+
+describe("an approving review on GitHub is the release approval", () => {
+  const pack = (risk: "low" | "high") => ({ summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk, rollback: "revert", howToVerify: "run it", commitSha: "9c1f0e2a7b3d", media: [], at: "2026-11-04T00:00:00.000Z" });
+  const one = { for: async () => ({ ...PREVIEW_ON, factory: { ...PREVIEW_ON.factory, plan: { ...PREVIEW_ON.factory.plan, approvers: { ...PREVIEW_ON.factory.plan.approvers, high: 1 } } } }) };
+  /** A card whose plan Ana approved and whose release question is open; the probe says who approved the PR on GitHub. */
+  const at = async (approvedBy: string[], options: { risk?: "low" | "high"; owners?: string[]; policies?: typeof previewOn; head?: string; byComment?: string[] } = {}) => {
+    const risk = options.risk ?? "high";
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: options.policies ?? previewOn, hasConfig: () => true, shipGateProbe: (async () => ({ approvedBy, head: options.head ?? "h1", ...(options.byComment ? { byComment: options.byComment } : {}) })) as never, shipProbeMs: 0 });
+    stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk, question: "safe to release now?", ...(options.owners ? { releaseOwners: options.owners } : {}) } });
+    const task = await p.createTask({ title: "Billing", criteria: ["c"], evidence: pack(risk) });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await p.decide(task.id, "approved");
+    expect((await p.approvals(task.id)).find((a) => a.decision === null)?.requested.gate).toBe("ship_approval");
+    return { p, id: task.id };
+  };
+  const stillOpen = async (p: Pipeline, id: string) => {
+    expect((await p.get(id)).state).toBe("awaiting_ship");
+    expect((await p.approvals(id)).find((a) => a.decision === null)?.requested.gate).toBe("ship_approval");
+    expect((await p.events(id)).some((e) => e.kind === "release.approved_on_github")).toBe(false);
+  };
+
+  it("approves the release in the reviewer's name, with the head, logs it, and ships", async () => {
+    const { p, id } = await at(["cy"]);
+    await p.tick();
+    const gate = (await p.approvals(id)).filter((a) => a.requested.gate === "ship_approval").at(-1)!;
+    expect(gate).toMatchObject({ decision: "approved", response: { approver: "cy", head: "h1" } });
+    expect((await p.events(id)).find((e) => e.kind === "release.approved_on_github")?.payload).toMatchObject({ approver: "cy", head: "h1" });
+    expect((await stagesRun(id)).slice(-2)).toEqual(["shipping", "reviewing_memory"]);
+  });
+
+  it("when the repo asks two people, the plan's approver's review is not the release approval, another reviewer's is", async () => {
+    const same = await at(["Ana "]);
+    await same.p.tick();
+    await stillOpen(same.p, same.id);
+    const both = await at(["ana", "cy"]);
+    await both.p.tick();
+    expect((await both.p.approvals(both.id)).filter((a) => a.requested.gate === "ship_approval").at(-1)).toMatchObject({ decision: "approved", response: { approver: "cy" } });
+  });
+
+  it("by default (one approver) the plan's approver's own review releases a High-risk card", async () => {
+    const { p, id } = await at(["ana"], { policies: one });
+    await p.tick();
+    expect((await p.get(id)).state).toBe("closed");
+  });
+
+  it("when the gate names release owners, only a review by one of them counts", async () => {
+    const stranger = await at(["cy"], { owners: ["bo"] });
+    await stranger.p.tick();
+    await stillOpen(stranger.p, stranger.id);
+    const owner = await at(["cy", "@Bo"], { owners: ["@bo"] });
+    await owner.p.tick();
+    expect((await owner.p.approvals(owner.id)).filter((a) => a.requested.gate === "ship_approval").at(-1)).toMatchObject({ decision: "approved", response: { approver: "@Bo" } });
+  });
+
+  it("a /ship comment is the release approval too, logged as a comment, with the login and the head", async () => {
+    const { p, id } = await at(["me"], { byComment: ["me"], policies: one });
+    await p.tick();
+    expect((await p.approvals(id)).filter((a) => a.requested.gate === "ship_approval").at(-1)).toMatchObject({ decision: "approved", response: { approver: "me", head: "h1", github: true } });
+    expect((await p.events(id)).find((e) => e.kind === "release.approved_on_github")?.payload).toMatchObject({ approver: "me", head: "h1", how: "comment" });
+  });
+
+  it("a review is logged as a review", async () => {
+    const { p, id } = await at(["cy"]);
+    await p.tick();
+    expect((await p.events(id)).find((e) => e.kind === "release.approved_on_github")?.payload).toMatchObject({ approver: "cy", how: "review" });
+  });
+
+  it("the separate-approver rule applies to a /ship comment: the plan's approver cannot release by it when two are asked, another person can", async () => {
+    const same = await at(["Ana"], { byComment: ["Ana"] });
+    await same.p.tick();
+    await stillOpen(same.p, same.id);
+    const other = await at(["ana", "cy"], { byComment: ["ana", "cy"] });
+    await other.p.tick();
+    expect((await other.p.approvals(other.id)).filter((a) => a.requested.gate === "ship_approval").at(-1)).toMatchObject({ decision: "approved", response: { approver: "cy" } });
+    expect((await other.p.events(other.id)).find((e) => e.kind === "release.approved_on_github")?.payload).toMatchObject({ how: "comment" });
+  });
+
+  it("named release owners apply to a /ship comment", async () => {
+    const stranger = await at(["cy"], { owners: ["bo"], byComment: ["cy"] });
+    await stranger.p.tick();
+    await stillOpen(stranger.p, stranger.id);
+  });
+
+  it("a review on another head than the one asked about does not count", async () => {
+    const { p, id } = await at(["cy"], { head: "h0" });
+    await p.tick();
+    await stillOpen(p, id);
+  });
+
+  it("applies to a low-risk release question too", async () => {
+    const { p, id } = await at(["cy"], { risk: "low" });
+    await p.tick();
+    expect((await p.get(id)).state).toBe("closed");
   });
 });
 
@@ -1833,6 +1974,53 @@ describe("editing the plan before approving", () => {
     });
   });
 
+  describe("approving a plan gate that still has criteria no scenario names", () => {
+    const plan = { goal: "g", steps: [], acceptance_criteria: [{ id: "C1", text: "a" }, { id: "C2", text: "b" }], out_of_scope: [], assumptions: [], rollback: "r", version: 1, next_criterion: 2 };
+    const cases = [{ id: "S1", title: "t1", criterion: "a", criterion_ref: "C1", type: "happy", approach: "x" }];
+    const report = { score: 0.5, bar: 0.85, gaps: ["C2"], thin: [], untestable: [] as string[], open: ["C2 has no scenario: b"], per: [] };
+    const atGate = async (coverageReport: Record<string, unknown> = report) => {
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["a", "b"], assumptions: [], plan, cases, coverageReport, flagged: ["coverage"] } });
+      const task = await newTask();
+      await pipeline.start(task.id);
+      return task.id;
+    };
+    const gate = async (id: string) => (await pipeline.approvals(id)).find((a) => a.kind === "awaiting_approval")!;
+
+    it("refuses the approval and keeps the gate open, because Build would refuse the plan seconds later", async () => {
+      const id = await atGate();
+      await expect(pipeline.decide(id, "approved")).rejects.toMatchObject({ name: "CoverageGapsError", message: expect.stringContaining("C2") });
+      expect((await pipeline.get(id)).state).toBe("awaiting_approval");
+      expect((await gate(id)).decision).toBeNull();
+    });
+
+    it("takes the criteria the person marks untestable into the report, shows them and approves", async () => {
+      const id = await atGate();
+      await pipeline.decide(id, "approved", undefined, { untestable: ["C2"] });
+      // The stub's plan has no files or map, so Build still refuses it for those; what matters is that no criterion is named missing.
+      const entry = (await pipeline.events(id)).find((e) => e.kind === "build.entry_contract");
+      expect(JSON.stringify(entry?.payload.missing)).not.toMatch(/criterion/);
+      const approved = await gate(id);
+      expect(approved.decision).toBe("approved");
+      expect(approved.requested.coverageReport).toMatchObject({ gaps: ["C2"], untestable: ["C2"], open: [] });
+      expect(approved.requested.flagged).toEqual(expect.arrayContaining([expect.stringMatching(/C2 \(b\)/)]));
+    });
+
+    it("refuses when the person names only some of the open criteria, and ignores a name that is not a gap", async () => {
+      const id = await atGate({ ...report, gaps: ["C1", "C2"], open: ["C1 has no scenario: a", "C2 has no scenario: b"] });
+      await expect(pipeline.decide(id, "approved", undefined, { untestable: ["C2", "C9"] })).rejects.toMatchObject({ name: "CoverageGapsError", message: expect.stringContaining("C1") });
+      expect((await gate(id)).requested.coverageReport).toMatchObject({ untestable: [] });
+    });
+
+    it("approves a gate whose gaps the machine already excused, and one with no coverage report", async () => {
+      await pipeline.decide(await atGate({ ...report, untestable: ["C2"], open: [] }), "approved");
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+      const bare = await newTask();
+      await pipeline.start(bare.id);
+      await pipeline.decide(bare.id, "approved");
+      expect((await pipeline.get(bare.id)).state).not.toBe("awaiting_approval");
+    });
+  });
+
   it("edits a gate written before the v2.2 Plan (no `plan` key) as it always did", async () => {
     stubs.plan("test_design", { outcome: "pass", detail: { brief: "old", criteria: ["c1"], assumptions: [] } });
     const task = await newTask();
@@ -1844,7 +2032,7 @@ describe("editing the plan before approving", () => {
   });
 
   it("is what gets adopted once you approve", async () => {
-    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [], cases: [{ id: "S1", title: "t", criterion: "c1", criterion_ref: "C1", type: "happy", approach: "x" }] } });
     const task = await newTask();
     await pipeline.start(task.id);
 
@@ -2089,6 +2277,21 @@ describe("retries and escalation", () => {
     expect(escalated.retries).toMatchObject({ verify: 2 });
   });
 
+  it("names each failure behind a verify cap, and does not call a mixed set 'could not answer'", async () => {
+    const env = { outcome: "fail" as const, detail: { step: "env", summary: "the sandbox image does not match the repo" } };
+    const review = { outcome: "fail" as const, detail: { step: "review", summary: "review found an unhandled error" } };
+    const unanswered = { outcome: "fail" as const, detail: { runFailed: true, error: "MODEL_CALL_FAILED UND_ERR_SOCKET" } };
+    const checks = { outcome: "fail" as const, detail: { step: "checks", summary: "2 checks failed" } };
+    stubs.plan("verifying", env, review, unanswered, checks);
+    const task = await newTask();
+    const escalated = await startAndApprove(task.id);
+    expect(escalated.state).toBe("escalated");
+    expect(escalated.reason).toBe("verify failed 4 times: env (the sandbox image does not match the repo); review (review found an unhandled error); unanswered (MODEL_CALL_FAILED UND_ERR_SOCKET); checks (2 checks failed)");
+    expect(escalated.retries).toMatchObject({ verify: 3, unanswered: 1 });
+    const gate = (await pipeline.approvals(task.id)).find((a) => a.kind === "escalated" && a.decision === null)!;
+    expect(gate.requested.failures).toEqual([{ kind: "env", line: expect.any(String) }, { kind: "review", line: expect.any(String) }, { kind: "unanswered", line: expect.any(String) }, { kind: "checks", line: expect.any(String) }]);
+  });
+
   it("escalates after three verify failures, then resumes with your guidance", async () => {
     stubs.plan("verifying", fail, fail, fail);
     const task = await newTask();
@@ -2105,6 +2308,17 @@ describe("retries and escalation", () => {
     const resumed = await pipeline.decide(task.id, "approved", "Mock the clock in the test");
     expect(resumed.state).toBe("awaiting_ship");
     expect(resumed.reason).toBeNull();
+  });
+
+  it("escalates a check that is red on the base as env_broken at once: Build does not run again and nothing counts against the verify cap", async () => {
+    const red = { outcome: "escalated" as const, detail: { escalation: "env_broken", envBroken: true, red_on_base: true, step: "checks", reason: "machine tests fails on the base commit abc1234 too, so this change did not cause it (src/clone.test.ts)" } };
+    stubs.plan("verifying", red);
+    const task = await newTask();
+    const escalated = await startAndApprove(task.id);
+    expect(escalated).toMatchObject({ state: "escalated", reason: expect.stringContaining("fails on the base commit abc1234 too") });
+    expect(escalated.retries).toMatchObject({ verify: 0, total: 1 });
+    expect((await pipeline.stageRuns(task.id)).filter((r) => r.stage === "implementing")).toHaveLength(1);
+    expect((await pipeline.approvals(task.id)).find((a) => a.kind === "escalated")?.requested).toMatchObject({ escalation: "env_broken" });
   });
 
   it("escalates with the agent's own reason when it stops on purpose, without verifying", async () => {
@@ -3890,6 +4104,48 @@ describe("closing the loop", () => {
   });
 });
 
+describe("a card whose own PR merged while it was outside the ship watch", () => {
+  it("ends the way a shipped card ends: ship.merged, the retro, no CI watch or Evidence, and the runner is told the PRs recorded for the card", async () => {
+    const ran: string[] = [];
+    const seen: Array<number[] | undefined> = [];
+    const detail = { merged: { sha: "m".repeat(40), at: "2026-11-10T00:36:48Z", by: "person" }, prUrl: "https://github.com/o/a/pull/214", number: 214, alreadyMerged: true };
+    const p = new Pipeline(db, (stage) => async (context) => {
+      ran.push(stage);
+      if (stage === "delivering") {
+        seen.push(context.recordedPrs);
+        return { outcome: "pass", detail, events: [{ at: new Date().toISOString(), kind: "pr.opened", payload: { url: "https://github.com/o/a/pull/214", number: 214 } }] };
+      }
+      return stubs.runnerFor(stage)(context);
+    }, { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await newTask();
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toContain("reviewing_memory");
+    expect(ran).not.toContain("ci_watch");
+    expect(ran).not.toContain("evidence");
+    expect(seen).toEqual([[]]);
+    const events = await p.events(task.id);
+    expect(events.find((e) => e.kind === "ship.merged")?.payload).toMatchObject({ prUrl: "https://github.com/o/a/pull/214", number: 214, mergedSha: "m".repeat(40), by: "person" });
+  });
+
+  it("hands Deliver the numbers of the PRs it opened for the card, oldest first", async () => {
+    const seen: Array<number[] | undefined> = [];
+    const opened = (number: number) => ({ outcome: "pass" as const, detail: { prNumber: number }, events: [{ at: new Date().toISOString(), kind: "pr.opened", payload: { url: `u/${number}`, number } }] });
+    const results = [opened(214), opened(221), opened(230)];
+    const p = new Pipeline(db, (stage) => async (context) => {
+      if (stage === "delivering") return seen.push(context.recordedPrs), results[seen.length - 1]!;
+      if (stage === "ci_watch") return { outcome: "fail", detail: { error: "red" } };
+      return stubs.runnerFor(stage)(context);
+    }, { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await newTask();
+    await p.start(task.id);
+    for (let i = 0; i < 2; i++) await p.decide(task.id, "approved");
+    expect(seen[0]).toEqual([]);
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen[1]).toEqual([214]);
+  });
+});
+
 describe("a PR closed without a merge archives its card", () => {
   const closed = { outcome: "fail" as const, detail: { prClosed: true } };
   const reasons = async (p: Pipeline, id: string) => ({ task: await p.get(id), kinds: (await p.events(id)).map((e) => e.kind) });
@@ -4032,6 +4288,29 @@ describe("a Slack thread attached to a card", () => {
     const task = await pipeline.createTask({ title: "Login page" });
     await db.query("update tasks set record = $1 where id = $2", [JSON.stringify({ urgencyDetail: { priority: "P1", subScores: {} } }), task.id]);
     expect(await pipeline.attachThread(task.id, thread)).toEqual({ priority: "P1" });
+  });
+});
+
+describe("a PR review's links", () => {
+  const pr = { url: "https://github.com/acme/app/pull/12", number: 12, repo: "acme/app" };
+  it("are kept on the review's card, and each linked card logs the review with ids only", async () => {
+    const review = await pipeline.createTask({ title: "Review PR 12", route: "review" });
+    const work = await pipeline.createTask({ title: "Export CSV" });
+    const links = { at: "2026-11-12T10:00:00.000Z", jira: [{ key: "DISC-1", url: "https://x/DISC-1", summary: "Export", how: "key" as const }], cards: [{ id: work.id, title: "Export CSV", how: "fact" as const, fact: "branch" }] };
+    await pipeline.recordReview(review.id, links, pr);
+    expect((await pipeline.get(review.id)).card?.reviewLinks).toEqual(links);
+    expect((await pipeline.get(review.id)).card?.sources).toHaveLength(0);
+    const event = (await pipeline.events(work.id)).find((e) => e.kind === "card.pr_reviewed");
+    expect(event?.payload).toEqual({ prUrl: pr.url, number: 12, taskId: review.id });
+    // The review's own activity does not log it: it carries the links in its stage detail.
+    expect((await pipeline.events(review.id)).some((e) => e.kind === "card.pr_reviewed")).toBe(false);
+  });
+
+  it("a linked card that is gone does not fail the record", async () => {
+    const review = await pipeline.createTask({ title: "Review PR 12", route: "review" });
+    const links = { at: "t", jira: [], cards: [{ id: "00000000-0000-4000-8000-000000000000", title: "Gone", how: "decision" as const }] };
+    await expect(pipeline.recordReview(review.id, links, pr)).resolves.toBeUndefined();
+    expect((await pipeline.get(review.id)).card?.reviewLinks).toEqual(links);
   });
 });
 

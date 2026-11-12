@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "match.choice",
+      "value": "slot3"
+    }
+  ],
+  "rubric": "The PR fixes the dead Pay button; the board card in slot three reports it.",
+  "label": {
+    "match": {
+      "choice": "slot3"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "match": "the PR implements or fixes slot 3"
+    },
+    "why": "The PR repairs the click handler of the Pay button on checkout, which is the card in slot three. The Jira tickets are a footer and a theme.",
+    "second": {
+      "label": {
+        "match": {
+          "choice": "slot3"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

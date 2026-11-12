@@ -125,8 +125,16 @@ pub struct EconomyState {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RowKind {
     Fact(usize),
-    Masked { pack: String, unit: String },
-    Proposed { pack: String, unit: String, unused_runs: u64, cards: u64 },
+    Masked {
+        pack: String,
+        unit: String,
+    },
+    Proposed {
+        pack: String,
+        unit: String,
+        unused_runs: u64,
+        cards: u64,
+    },
     Guard(usize),
 }
 
@@ -144,7 +152,10 @@ fn flat(text: &str) -> String {
 }
 
 fn state_rank(state: &str) -> usize {
-    ["active", "candidate", "promoted", "retired", "dropped"].iter().position(|s| *s == state).unwrap_or(5)
+    ["active", "candidate", "promoted", "retired", "dropped"]
+        .iter()
+        .position(|s| *s == state)
+        .unwrap_or(5)
 }
 
 impl Economy {
@@ -155,23 +166,67 @@ impl Economy {
         facts.sort_by_key(|i| state_rank(&self.facts[*i].state));
         for i in facts {
             let f = &self.facts[i];
-            rows.push(Row { section: "Facts", kind: RowKind::Fact(i), text: format!("{:<9} {:<8} {}", flat(&f.state), flat(&f.source), flat(&f.text)) });
+            rows.push(Row {
+                section: "Facts",
+                kind: RowKind::Fact(i),
+                text: format!(
+                    "{:<9} {:<8} {}",
+                    flat(&f.state),
+                    flat(&f.source),
+                    flat(&f.text)
+                ),
+            });
         }
         for (pack, tools) in &self.tools {
             for unit in &tools.mask {
-                rows.push(Row { section: "Tools", kind: RowKind::Masked { pack: pack.clone(), unit: unit.clone() }, text: format!("masked   {}: {}", flat(pack), flat(unit)) });
+                rows.push(Row {
+                    section: "Tools",
+                    kind: RowKind::Masked {
+                        pack: pack.clone(),
+                        unit: unit.clone(),
+                    },
+                    text: format!("masked   {}: {}", flat(pack), flat(unit)),
+                });
             }
             for p in &tools.proposal {
-                let text = format!("proposed {}: {}  unused in {} runs over {} cards", flat(pack), flat(&p.unit), p.unused_runs, p.cards);
-                rows.push(Row { section: "Tools", kind: RowKind::Proposed { pack: pack.clone(), unit: p.unit.clone(), unused_runs: p.unused_runs, cards: p.cards }, text });
+                let text = format!(
+                    "proposed {}: {}  unused in {} runs over {} cards",
+                    flat(pack),
+                    flat(&p.unit),
+                    p.unused_runs,
+                    p.cards
+                );
+                rows.push(Row {
+                    section: "Tools",
+                    kind: RowKind::Proposed {
+                        pack: pack.clone(),
+                        unit: p.unit.clone(),
+                        unused_runs: p.unused_runs,
+                        cards: p.cards,
+                    },
+                    text,
+                });
             }
         }
         let mut events: Vec<usize> = (0..self.guard.len()).collect();
         events.sort_by(|a, b| self.guard[*b].at.cmp(&self.guard[*a].at));
         for i in events.into_iter().take(GUARD_ROWS) {
             let g = &self.guard[i];
-            let cause = g.cause.as_deref().map(|c| format!("  {}", flat(c))).unwrap_or_default();
-            rows.push(Row { section: "Loop guard", kind: RowKind::Guard(i), text: format!("{:<8} {}  {} calls{cause}", flat(&g.action), flat(&g.pack), g.calls) });
+            let cause = g
+                .cause
+                .as_deref()
+                .map(|c| format!("  {}", flat(c)))
+                .unwrap_or_default();
+            rows.push(Row {
+                section: "Loop guard",
+                kind: RowKind::Guard(i),
+                text: format!(
+                    "{:<8} {}  {} calls{cause}",
+                    flat(&g.action),
+                    flat(&g.pack),
+                    g.calls
+                ),
+            });
         }
         rows
     }
@@ -190,19 +245,48 @@ impl Economy {
                 let f = &self.facts[*i];
                 vec![
                     flat(&f.text),
-                    format!("{} · {} · {}", flat(&f.state), flat(&f.source), flat(&f.family)),
-                    format!("confirmed {} · contradicted {}", f.confirmations, f.contradictions),
+                    format!(
+                        "{} · {} · {}",
+                        flat(&f.state),
+                        flat(&f.source),
+                        flat(&f.family)
+                    ),
+                    format!(
+                        "confirmed {} · contradicted {}",
+                        f.confirmations, f.contradictions
+                    ),
                     format!("exercised {} · fired {}", f.exercised, f.fired),
                     format!("id {}", flat(&f.id)),
                 ]
             }
-            RowKind::Masked { pack, unit } => vec![format!("{}: {} is masked", flat(pack), flat(unit)), "r restores it".to_string()],
-            RowKind::Proposed { pack, unit, unused_runs, cards } => {
-                vec![format!("{}: {} is proposed for the mask", flat(pack), flat(unit)), format!("unused in {unused_runs} runs over {cards} cards"), "a approves the pack's proposal, r drops this unit".to_string()]
+            RowKind::Masked { pack, unit } => vec![
+                format!("{}: {} is masked", flat(pack), flat(unit)),
+                "r restores it".to_string(),
+            ],
+            RowKind::Proposed {
+                pack,
+                unit,
+                unused_runs,
+                cards,
+            } => {
+                vec![
+                    format!("{}: {} is proposed for the mask", flat(pack), flat(unit)),
+                    format!("unused in {unused_runs} runs over {cards} cards"),
+                    "a approves the pack's proposal, r drops this unit".to_string(),
+                ]
             }
             RowKind::Guard(i) => {
                 let g = &self.guard[*i];
-                let mut lines = vec![format!("{} on {} after {} calls", flat(&g.action), flat(&g.pack), g.calls), flat(&g.at), format!("run {}", flat(&g.run_id))];
+                let mut lines = vec![
+                    format!(
+                        "{} on {} after {} calls",
+                        flat(&g.action),
+                        flat(&g.pack),
+                        g.calls
+                    ),
+                    flat(&g.at),
+                    format!("run {}", flat(&g.run_id)),
+                ];
                 lines.extend(g.cause.iter().map(|c| format!("cause {}", flat(c))));
                 lines.extend(g.failure.iter().map(|f| format!("failure {}", flat(f))));
                 lines
@@ -213,12 +297,24 @@ impl Economy {
     /// The Cost block and the envelopes, below the detail pane.
     pub fn cost_lines(&self) -> Vec<String> {
         let c = &self.cost;
-        let mut lines = vec![format!("effective tokens: exec {:.0} · overhead {:.0}", c.exec, c.overhead), format!("overhead share {:.1}%", c.overhead_share * 100.0)];
+        let mut lines = vec![
+            format!(
+                "effective tokens: exec {:.0} · overhead {:.0}",
+                c.exec, c.overhead
+            ),
+            format!("overhead share {:.1}%", c.overhead_share * 100.0),
+        ];
         if c.overhead_unpriced > 0 {
-            lines.push(format!("{} overhead runs had no token count", c.overhead_unpriced));
+            lines.push(format!(
+                "{} overhead runs had no token count",
+                c.overhead_unpriced
+            ));
         }
         for (pack, e) in &self.envelopes {
-            let value = e.envelope.map_or_else(|| format!("learning ({} samples)", e.samples), |v| format!("{v:.0}"));
+            let value = e.envelope.map_or_else(
+                || format!("learning ({} samples)", e.samples),
+                |v| format!("{v:.0}"),
+            );
             lines.push(format!("{}: {value}", flat(pack)));
         }
         lines
@@ -280,7 +376,9 @@ mod tests {
 
     #[test]
     fn a_minimal_status_without_facts_or_tools_still_parses() {
-        let e = economy(serde_json::json!({ "envelopes": {}, "guard": [], "cost": { "exec": 0, "overhead": 0, "overheadShare": 0, "overheadUnpriced": 0 } }));
+        let e = economy(
+            serde_json::json!({ "envelopes": {}, "guard": [], "cost": { "exec": 0, "overhead": 0, "overheadShare": 0, "overheadUnpriced": 0 } }),
+        );
         assert!(e.facts.is_empty() && e.tools.is_empty() && e.rows().is_empty());
         assert!(e.row_at(3).is_none());
     }
@@ -289,10 +387,36 @@ mod tests {
     fn rows_run_facts_by_state_then_tools_then_the_loop_guard_newest_first() {
         let rows = full().rows();
         let sections: Vec<&str> = rows.iter().map(|r| r.section).collect();
-        assert_eq!(sections, ["Facts", "Facts", "Facts", "Facts", "Tools", "Tools", "Loop guard", "Loop guard"]);
+        assert_eq!(
+            sections,
+            [
+                "Facts",
+                "Facts",
+                "Facts",
+                "Facts",
+                "Tools",
+                "Tools",
+                "Loop guard",
+                "Loop guard"
+            ]
+        );
         let facts: Vec<&RowKind> = rows.iter().take(4).map(|r| &r.kind).collect();
-        assert_eq!(facts, [&RowKind::Fact(2), &RowKind::Fact(1), &RowKind::Fact(3), &RowKind::Fact(0)], "active, candidate, promoted, dropped");
-        assert!(rows[4].text.starts_with("masked") && rows[5].text.contains("proposed") && rows[5].text.contains("unused in 8 runs over 5 cards"), "{rows:?}");
+        assert_eq!(
+            facts,
+            [
+                &RowKind::Fact(2),
+                &RowKind::Fact(1),
+                &RowKind::Fact(3),
+                &RowKind::Fact(0)
+            ],
+            "active, candidate, promoted, dropped"
+        );
+        assert!(
+            rows[4].text.starts_with("masked")
+                && rows[5].text.contains("proposed")
+                && rows[5].text.contains("unused in 8 runs over 5 cards"),
+            "{rows:?}"
+        );
         assert_eq!(rows[6].kind, RowKind::Guard(1), "the newest event first");
     }
 
@@ -308,7 +432,13 @@ mod tests {
     fn d_a_and_r_are_on_only_for_the_rows_they_act_on() {
         let e = full();
         let rows = e.rows();
-        let avail = |i: usize| (rows[i].can_drop(&e), rows[i].can_approve(), rows[i].can_restore());
+        let avail = |i: usize| {
+            (
+                rows[i].can_drop(&e),
+                rows[i].can_approve(),
+                rows[i].can_restore(),
+            )
+        };
         assert_eq!(avail(0), (true, false, false), "an active fact");
         assert_eq!(avail(1), (true, false, false), "a candidate fact");
         assert_eq!(avail(2), (false, false, false), "a promoted fact");
@@ -321,7 +451,11 @@ mod tests {
     #[test]
     fn the_cursor_stays_inside_the_list() {
         let e = full();
-        assert_eq!(e.row_at(999).unwrap().kind, RowKind::Guard(0), "past the end is the last row");
+        assert_eq!(
+            e.row_at(999).unwrap().kind,
+            RowKind::Guard(0),
+            "past the end is the last row"
+        );
         assert_eq!(e.row_at(0).unwrap().kind, RowKind::Fact(2));
     }
 
@@ -333,7 +467,10 @@ mod tests {
         assert_eq!(lines[2], "3 overhead runs had no token count");
         assert_eq!(&lines[3..], ["build: 48000", "plan: learning (2 samples)"]);
         let none = economy(serde_json::json!({})).cost_lines();
-        assert!(none.iter().all(|l| !l.contains("no token count")), "{none:?}");
+        assert!(
+            none.iter().all(|l| !l.contains("no token count")),
+            "{none:?}"
+        );
     }
 
     #[test]
@@ -353,6 +490,11 @@ mod tests {
             lines.extend(e.detail_lines(row));
         }
         lines.extend(e.cost_lines());
-        assert!(lines.iter().all(|l| !l.contains('\u{1b}') && !l.contains('\n')), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .all(|l| !l.contains('\u{1b}') && !l.contains('\n')),
+            "{lines:?}"
+        );
     }
 }

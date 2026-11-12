@@ -312,7 +312,27 @@ function guardGit(args: string[], ctx: GuardContext): string | null {
   if (sub === "commit") return guardCommit(rest, ctx);
   // `git rm -r .` empties the worktree as `rm -r .` does: the same refusal.
   if (sub === "rm") return guardRm(rest);
+  if (sub === "restore") return guardRestore(rest);
   return null;
+}
+
+/** `git restore` in a writable stage puts named files back from a revision (`--source=<sha> -- docs/api.md`): the
+ *  one command for undoing an out-of-scope change or taking one side of a conflict. Like `rm -r .` and `reset --hard`,
+ *  it may not take the whole tree: a restore must name files. */
+function guardRestore(rest: string[]): string | null {
+  const refuse = "git restore must name the files to restore (`git restore --source=<sha> -- <path>`): the whole worktree is never restored at once";
+  if (rest.some((a) => longOption(a, ["pathspec-from-file"]) === "pathspec-from-file")) return refuse;
+  const pathspecs: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i] as string;
+    if (arg === "--") {
+      pathspecs.push(...rest.slice(i + 1));
+      break;
+    }
+    if (arg === "-s" || arg === "--source") i++;
+    else if (!arg.startsWith("-")) pathspecs.push(arg);
+  }
+  return pathspecs.length === 0 || pathspecs.some((p) => /^(:\/|(\.\/)*)(\.|\*)?\/?$/.test(p)) ? refuse : null;
 }
 
 /** The long option `arg` names as git reads it, among `names`: git takes any unambiguous prefix
@@ -619,12 +639,23 @@ function guardAllowList(command: string, policy: GuardContext): string | null {
   return null;
 }
 
+/** `git -C /work log` as `git log`: models write the worktree's own folder after -C all the time, and it changes
+ *  nothing, since a stage's shell already starts there. Only a -C that resolves exactly to the worktree is dropped;
+ *  any other directory stays in the command and so matches no listed prefix. */
+function withoutWorkDir(tokens: SimpleCommand, policy: GuardContext): SimpleCommand {
+  if (tokens[0] !== "git" || tokens[1] !== "-C" || tokens[2] === undefined) return tokens;
+  const work = posix.normalize(policy.workRoot ?? "/work");
+  const dir = posix.resolve(work, tokens[2]);
+  return dir === (work.length > 1 ? work.replace(/\/+$/, "") : work) ? ["git", ...tokens.slice(3)] : tokens;
+}
+
 /** The reason one simple command starts with no listed prefix (`git add` is argv[0] and its
  *  subcommand), or null. */
 function guardListed(tokens: SimpleCommand, policy: GuardContext): string | null {
   if (policy.commands === undefined) return null;
   const prefixes = policy.commands.map((p) => p.split(/\s+/));
-  if (prefixes.some((p) => p.every((word, i) => tokens[i] === word))) return null;
+  const listed = withoutWorkDir(tokens, policy);
+  if (prefixes.some((p) => p.every((word, i) => listed[i] === word))) return null;
   return `\`${tokens.join(" ")}\` is not on this stage's command allow-list (${policy.commands.join(", ")}): run one listed command per call`;
 }
 

@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "pr_link",
+  "pack": "pr_link",
+  "attempt": 1,
+  "task": {
+    "id": "pr-link",
+    "title": "Speed up the report page",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "prLink": {
+      "pr": {
+        "title": "Speed up the report page",
+        "branch": "perf/report-page",
+        "body": "Memoizes the totals and lazy-loads the charts.",
+        "files": [
+          "src/reports/ReportPage.tsx",
+          "src/reports/totals.ts"
+        ]
+      },
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "jira",
+          "id": "DISC-84",
+          "title": "Reports are slow for large accounts",
+          "excerpt": "Accounts with many orders wait several seconds for the report page."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

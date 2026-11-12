@@ -355,6 +355,26 @@ describe("the intake_dedup decision pack", () => {
   });
 });
 
+describe("the pr_link decision pack", () => {
+  it("asks one choice among none and the candidates by slot, with a confidence, acts at the proceed bar and has no role or prompt", async () => {
+    const { PACKS, PrLinkContext, applyPolicy } = await import("./index.ts");
+    const pack = PACKS.pr_link;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["match"]);
+    expect(Object.keys((pack.questions.match as { criteria: object }).criteria)).toEqual(["none", ...Array.from({ length: 10 }, (_, i) => `slot${i + 1}`)]);
+    expect(pack.answer.safeParse({ match: { choice: "slot7", confidence: 0.9 } }).success).toBe(true);
+    expect(pack.answer.safeParse({ match: { choice: "slot11", confidence: 0.9 } }).success).toBe(false);
+    expect(pack.policy.match).toEqual({ proceed: 0.7, flag: 0.5 });
+    expect(applyPolicy(pack, { match: { choice: "slot1", confidence: 0.69 } }).overall).not.toBe("proceed");
+    expect(applyPolicy(pack, { match: { choice: "slot1", confidence: 0.7 } }).overall).toBe("proceed");
+    const pr = { title: "t", branch: "b", body: "x", files: ["a.ts"] };
+    const candidate = (slot: number) => ({ slot, kind: "jira", id: `DISC-${slot}`, title: "a", excerpt: "b" });
+    expect(PrLinkContext.safeParse({ pr, candidates: Array.from({ length: 10 }, (_, i) => candidate(i + 1)) }).success).toBe(true);
+    expect(PrLinkContext.safeParse({ pr, candidates: Array.from({ length: 11 }, (_, i) => candidate(i + 1)) }).success).toBe(false);
+    expect(PrLinkContext.safeParse({ pr, candidates: [{ ...candidate(1), kind: "slack" }] }).success).toBe(false);
+  });
+});
+
 describe("the ticket_validity decision pack", () => {
   it("asks six typed questions in one call, has no role or prompt, and names a duplicate by slot", async () => {
     const { PACKS, TicketContext } = await import("./index.ts");

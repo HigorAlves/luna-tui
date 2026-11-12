@@ -9,8 +9,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// Board columns: the diagram's seven stages, then Done. Same order as the machine's contracts (`COLUMNS`; a task's column is `COLUMN_OF[state]` there).
-pub const COLUMNS: [&str; 8] =
-    ["Intake", "Triage", "Plan", "Build", "Verify", "Evidence", "Ship", "Done"];
+pub const COLUMNS: [&str; 8] = [
+    "Intake", "Triage", "Plan", "Build", "Verify", "Evidence", "Ship", "Done",
+];
 
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Diff {
@@ -85,18 +86,36 @@ impl TaskSource {
 
     /// `notch LUNA-14` for a task Luna Notch sent, else None: the card and the popup header wear it.
     pub fn notch_tag(&self) -> Option<String> {
-        (self.kind == "notch").then(|| format!("notch {}", self.reference.as_deref().unwrap_or_default()).trim_end().to_string())
+        (self.kind == "notch").then(|| {
+            format!("notch {}", self.reference.as_deref().unwrap_or_default())
+                .trim_end()
+                .to_string()
+        })
     }
 
     /// `GitHub     acme/app#42 · url`, `Jira       PLAT-123 · url`, `Luna Notch LUNA-14 · PLAT-9`
     /// or `Slack      #channel · permalink`, for the ticket popup.
     pub fn detail_line(&self) -> String {
         match (self.repo.as_deref(), self.number) {
-            (Some(repo), Some(number)) => format!("GitHub     {repo}#{number} · {}", self.url.as_deref().unwrap_or("")),
-            _ if self.kind == "jira" => format!("Jira       {} · {}", self.key.as_deref().unwrap_or("?"), self.url.as_deref().unwrap_or("")),
+            (Some(repo), Some(number)) => format!(
+                "GitHub     {repo}#{number} · {}",
+                self.url.as_deref().unwrap_or("")
+            ),
+            _ if self.kind == "jira" => format!(
+                "Jira       {} · {}",
+                self.key.as_deref().unwrap_or("?"),
+                self.url.as_deref().unwrap_or("")
+            ),
             _ if self.kind == "notch" => {
-                let jira = self.jira_key.as_deref().map(|k| format!(" · {k}")).unwrap_or_default();
-                format!("Luna Notch {}{jira}", self.reference.as_deref().unwrap_or("?"))
+                let jira = self
+                    .jira_key
+                    .as_deref()
+                    .map(|k| format!(" · {k}"))
+                    .unwrap_or_default();
+                format!(
+                    "Luna Notch {}{jira}",
+                    self.reference.as_deref().unwrap_or("?")
+                )
             }
             _ => format!(
                 "Slack      {} · {}",
@@ -154,8 +173,16 @@ pub struct TriageRecord {
 
 /// What `E` corrects, in the order its picker lists them: the machine's key, a label and the values it accepts.
 pub const RECORD_FIELDS: [(&str, &str, &[&str]); 5] = [
-    ("kind", "kind", &["bug", "feature", "task", "chore", "question", "incident"]),
-    ("typeOfWork", "type of work", &["frontend", "backend", "infra", "data", "docs", "mixed"]),
+    (
+        "kind",
+        "kind",
+        &["bug", "feature", "task", "chore", "question", "incident"],
+    ),
+    (
+        "typeOfWork",
+        "type of work",
+        &["frontend", "backend", "infra", "data", "docs", "mixed"],
+    ),
     ("size", "size", &["XS", "S", "M", "L", "XL"]),
     ("riskPrelim", "risk", &["low", "medium", "high"]),
     ("priority", "priority", &["P0", "P1", "P2", "P3"]),
@@ -307,8 +334,16 @@ impl JiraBlocked {
     /// `no transition to "In Review" from "Blocked"`, with Jira's own words after a dash when
     /// it gave any.
     pub fn line(&self) -> String {
-        let head = format!("no transition to \"{}\" from \"{}\"", self.wanted, self.current.as_deref().unwrap_or("?"));
-        if self.why.trim().is_empty() { head } else { format!("{head} — {}", self.why.trim()) }
+        let head = format!(
+            "no transition to \"{}\" from \"{}\"",
+            self.wanted,
+            self.current.as_deref().unwrap_or("?")
+        );
+        if self.why.trim().is_empty() {
+            head
+        } else {
+            format!("{head} — {}", self.why.trim())
+        }
     }
 }
 
@@ -338,7 +373,11 @@ impl JiraLink {
     pub fn summary(&self, now: u64) -> String {
         let mut parts = vec![self.key.clone()];
         parts.extend(self.status.clone());
-        parts.extend(self.due_at.as_deref().map(|due| format!("due {}", due_day(due, now))));
+        parts.extend(
+            self.due_at
+                .as_deref()
+                .map(|due| format!("due {}", due_day(due, now))),
+        );
         parts.extend(self.priority.clone());
         parts.join(" · ")
     }
@@ -427,20 +466,33 @@ impl TaskSla {
             parts.push((format!("gate {}", gate.label(now)), gate.tone(now)));
         }
         if let Some(stage) = &self.stage {
-            parts.push((format!("stage {} {}", stage.stage.as_deref().unwrap_or("running"), stage.label(now)), stage.tone(now)));
+            parts.push((
+                format!(
+                    "stage {} {}",
+                    stage.stage.as_deref().unwrap_or("running"),
+                    stage.label(now)
+                ),
+                stage.tone(now),
+            ));
         }
         if let Some(cycle) = &self.cycle {
             parts.push((format!("cycle {}", cycle.label(now)), cycle.tone(now)));
         }
         if let Some(due) = &self.jira_due {
-            parts.push((format!("jira due {}", due_day(&due.due_at, now)), due.tone(now)));
+            parts.push((
+                format!("jira due {}", due_day(&due.due_at, now)),
+                due.tone(now),
+            ));
         }
         parts
     }
 
     /// Any clock past its target: the card and the Overview go red.
     pub fn any_overdue(&self) -> bool {
-        [&self.gate, &self.stage, &self.cycle, &self.jira_due].into_iter().flatten().any(|c| c.overdue)
+        [&self.gate, &self.stage, &self.cycle, &self.jira_due]
+            .into_iter()
+            .flatten()
+            .any(|c| c.overdue)
     }
 
     pub fn gate_overdue(&self) -> bool {
@@ -579,7 +631,11 @@ pub struct Approval {
 /// A score as the board prints it: `2`, `1.5`.
 fn score_text(v: &Value) -> Option<String> {
     let n = v.as_f64()?;
-    Some(if n.fract() == 0.0 { format!("{n:.0}") } else { format!("{n:.1}") })
+    Some(if n.fract() == 0.0 {
+        format!("{n:.0}")
+    } else {
+        format!("{n:.1}")
+    })
 }
 
 impl Approval {
@@ -616,10 +672,14 @@ impl Approval {
     pub fn risk_line(&self) -> Option<String> {
         let risk = &self.requested["risk"];
         let level = risk["level"].as_str()?;
-        let scores: Vec<String> = [("blast", "blast_radius"), ("reversibility", "reversibility"), ("data", "data_sensitivity")]
-            .iter()
-            .filter_map(|(label, key)| Some(format!("{label} {}", score_text(&risk["scores"][*key])?)))
-            .collect();
+        let scores: Vec<String> = [
+            ("blast", "blast_radius"),
+            ("reversibility", "reversibility"),
+            ("data", "data_sensitivity"),
+        ]
+        .iter()
+        .filter_map(|(label, key)| Some(format!("{label} {}", score_text(&risk["scores"][*key])?)))
+        .collect();
         let mut head = level.to_string();
         if let Some(product) = risk["product"].as_f64() {
             head.push_str(&format!(" · product {}", product.round() as i64));
@@ -627,7 +687,11 @@ impl Approval {
         if let Some(complexity) = risk["complexity"].as_str() {
             head.push_str(&format!(" · complexity {complexity}"));
         }
-        Some(if scores.is_empty() { head } else { format!("{head} ({})", scores.join(" · ")) })
+        Some(if scores.is_empty() {
+            head
+        } else {
+            format!("{head} ({})", scores.join(" · "))
+        })
     }
 
     /// What a person set the risk to at the gate, with the reason and whether it applied (a lower level is kept, not applied).
@@ -638,43 +702,76 @@ impl Approval {
         if o["applied"].as_bool() == Some(true) {
             return Some(format!("you set {level}: applied ({reason})"));
         }
-        let machine = self.requested["risk"]["machine"].as_str().or_else(|| self.requested["risk"]["level"].as_str()).unwrap_or("its");
-        Some(format!("you set {level}, below the machine's {machine}: kept as ground truth ({reason}); approvers and Ship read {machine}"))
+        let machine = self.requested["risk"]["machine"]
+            .as_str()
+            .or_else(|| self.requested["risk"]["level"].as_str())
+            .unwrap_or("its");
+        Some(format!(
+            "you set {level}, below the machine's {machine}: kept as ground truth ({reason}); approvers and Ship read {machine}"
+        ))
     }
 
     /// Why the machine raised the plan's risk after the plan was written (a step reaches the control plane); absent otherwise.
     pub fn risk_raised_line(&self) -> Option<String> {
-        self.requested["riskRaised"].as_str().filter(|t| !t.trim().is_empty()).map(String::from)
+        self.requested["riskRaised"]
+            .as_str()
+            .filter(|t| !t.trim().is_empty())
+            .map(String::from)
     }
 
     /// How many names the plan needs and who may be among them, in the gate's words (an attestation); absent on a gate from before the rule.
     pub fn rule_line(&self) -> Option<String> {
-        self.requested["approvalRule"]["text"].as_str().filter(|t| !t.trim().is_empty()).map(String::from)
+        self.requested["approvalRule"]["text"]
+            .as_str()
+            .filter(|t| !t.trim().is_empty())
+            .map(String::from)
     }
 
     /// Names the plan needs: its rule's, else two for a High-risk plan and one otherwise.
     pub(crate) fn names_needed(&self) -> u64 {
-        self.requested["approvalRule"]["needed"].as_u64().unwrap_or(if self.requested["risk"]["level"].as_str() == Some("high") { 2 } else { 1 })
+        self.requested["approvalRule"]["needed"].as_u64().unwrap_or(
+            if self.requested["risk"]["level"].as_str() == Some("high") {
+                2
+            } else {
+                1
+            },
+        )
     }
 
     /// The plan stage's checks in the order they ran: coverage, plan, risk, each `proceed`, `flag`, `ask` or `skipped`.
     pub fn checks(&self) -> Vec<(String, String)> {
         ["coverage", "plan", "risk"]
             .iter()
-            .filter_map(|name| Some((name.to_string(), self.requested["verdicts"][*name].as_str()?.to_string())))
+            .filter_map(|name| {
+                Some((
+                    name.to_string(),
+                    self.requested["verdicts"][*name].as_str()?.to_string(),
+                ))
+            })
             .collect()
     }
 
     /// Who approved: the names kept on the open gate, else the ones the decision carried.
     pub fn approvers(&self) -> Vec<String> {
-        let names = |v: &Value| -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|n| n.as_str().map(String::from)).collect()).unwrap_or_default() };
+        let names = |v: &Value| -> Vec<String> {
+            v.as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|n| n.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         let open = names(&self.requested["approvers"]);
         if !open.is_empty() {
             return open;
         }
         match &self.response {
             Some(r) if r["approvers"].is_array() => names(&r["approvers"]),
-            Some(r) => r["approver"].as_str().map(|n| vec![n.to_string()]).unwrap_or_default(),
+            Some(r) => r["approver"]
+                .as_str()
+                .map(|n| vec![n.to_string()])
+                .unwrap_or_default(),
             None => Vec::new(),
         }
     }
@@ -687,19 +784,29 @@ impl Approval {
         }
         let needed = self.names_needed();
         if needed > 1 {
-            return Some(format!("{} of {needed} ({})", names.len(), names.join(", ")));
+            return Some(format!(
+                "{} of {needed} ({})",
+                names.len(),
+                names.join(", ")
+            ));
         }
         Some(format!("approved by {}", names.join(", ")))
     }
 
     /// The reply a conversation gate would post on the ticket.
     pub fn reply(&self) -> Option<String> {
-        self.requested["reply"].as_str().filter(|r| !r.trim().is_empty()).map(String::from)
+        self.requested["reply"]
+            .as_str()
+            .filter(|r| !r.trim().is_empty())
+            .map(String::from)
     }
 
     /// The children a split gate proposes (empty at any other gate).
     pub fn split_children(&self) -> Vec<&Value> {
-        self.requested["split"]["children"].as_array().map(|a| a.iter().collect()).unwrap_or_default()
+        self.requested["split"]["children"]
+            .as_array()
+            .map(|a| a.iter().collect())
+            .unwrap_or_default()
     }
 
     pub fn archive_reason(&self) -> Option<String> {
@@ -873,7 +980,11 @@ impl TaskDetail {
     /// What every run of this ticket cost so far; None when no run reported a cost.
     pub fn spent_usd(&self) -> Option<f64> {
         let costs: Vec<f64> = self.stage_runs.iter().filter_map(|r| r.cost_usd).collect();
-        if costs.is_empty() { None } else { Some(costs.iter().sum()) }
+        if costs.is_empty() {
+            None
+        } else {
+            Some(costs.iter().sum())
+        }
     }
 
     /// The gate the task waits at, with what the stage before it produced.
@@ -883,17 +994,28 @@ impl TaskDetail {
 
     /// The newest approval of `kind`, decided or not: the plan stays readable after `a`.
     pub fn latest_approval(&self, kind: &str) -> Option<&Approval> {
-        self.approvals.iter().rev().find(|a| a.kind_or_guess() == kind)
+        self.approvals
+            .iter()
+            .rev()
+            .find(|a| a.kind_or_guess() == kind)
     }
 
     /// The engine the running stage is on, as `codex:sol`; None when nothing runs on one.
     pub fn running_engine(&self) -> Option<&str> {
-        self.stage_runs.iter().rev().find(|r| r.status == "running")?.engine.as_deref()
+        self.stage_runs
+            .iter()
+            .rev()
+            .find(|r| r.status == "running")?
+            .engine
+            .as_deref()
     }
 
     /// The newest run of `pack`, by the task states it runs in: a stage that ran keeps its engine.
     pub fn last_run_of(&self, pack: &PackInfo) -> Option<&StageRun> {
-        self.stage_runs.iter().rev().find(|r| pack.states.contains(&r.stage))
+        self.stage_runs
+            .iter()
+            .rev()
+            .find(|r| pack.states.contains(&r.stage))
     }
 
     /// The newest verifying run that reported per-case verdicts.
@@ -923,8 +1045,10 @@ impl TaskDetail {
 
     /// The gate that carries the cases: a legacy test check, else the plan gate that holds them.
     pub fn cases_approval(&self) -> Option<&Approval> {
-        self.latest_approval("awaiting_test_check")
-            .or_else(|| self.latest_approval("awaiting_approval").filter(|a| a.requested["cases"].is_array()))
+        self.latest_approval("awaiting_test_check").or_else(|| {
+            self.latest_approval("awaiting_approval")
+                .filter(|a| a.requested["cases"].is_array())
+        })
     }
 }
 
@@ -972,7 +1096,11 @@ impl EngineInfo {
     /// `$16.00 / $20.00`, `$3.10 / no cap`; None when the machine does not report the spend.
     pub fn month_line(&self) -> Option<String> {
         let spent = self.spent_this_month_usd?;
-        Some(format!("${spent:.2} / {}", self.budget_usd.map_or("no cap".to_string(), |b| format!("${b:.2}"))))
+        Some(format!(
+            "${spent:.2} / {}",
+            self.budget_usd
+                .map_or("no cap".to_string(), |b| format!("${b:.2}"))
+        ))
     }
 
     /// At or past its monthly cap: the machine will not start it.
@@ -999,21 +1127,41 @@ pub struct EngineChoice {
 impl EngineCatalog {
     /// The packs that run in a task and call a model, in registry order.
     pub fn task_packs(&self) -> Vec<&PackInfo> {
-        self.packs.iter().filter(|p| !p.states.is_empty() && p.kind != "script" && !p.engines.allowed.is_empty()).collect()
+        self.packs
+            .iter()
+            .filter(|p| !p.states.is_empty() && p.kind != "script" && !p.engines.allowed.is_empty())
+            .collect()
     }
 
     /// The picker for `pack`: the default first, then each allowed engine, the ones this machine
     /// cannot run kept but off with the reason.
     pub fn choices(&self, pack: &PackInfo) -> Vec<EngineChoice> {
-        let mut rows = vec![EngineChoice { engine: None, label: format!("default ({})", pack.engines.default), off: None }];
+        let mut rows = vec![EngineChoice {
+            engine: None,
+            label: format!("default ({})", pack.engines.default),
+            off: None,
+        }];
         for id in &pack.engines.allowed {
             let off = match self.engines.iter().find(|e| e.id == *id) {
                 Some(e) if e.available => None,
-                Some(e) => Some(e.reason.clone().unwrap_or_else(|| "no credential on this machine".into())),
+                Some(e) => Some(
+                    e.reason
+                        .clone()
+                        .unwrap_or_else(|| "no credential on this machine".into()),
+                ),
                 None => Some("unknown to this machine".into()),
             };
-            let model = self.engines.iter().find(|e| e.id == *id).map(|e| e.model_id.clone()).unwrap_or_default();
-            rows.push(EngineChoice { engine: Some(id.clone()), label: format!("{id}  {model}").trim_end().to_string(), off });
+            let model = self
+                .engines
+                .iter()
+                .find(|e| e.id == *id)
+                .map(|e| e.model_id.clone())
+                .unwrap_or_default();
+            rows.push(EngineChoice {
+                engine: Some(id.clone()),
+                label: format!("{id}  {model}").trim_end().to_string(),
+                off,
+            });
         }
         rows
     }
@@ -1030,7 +1178,11 @@ pub fn cases_of(requested: &Value) -> Vec<TestCase> {
                     Some(TestCase {
                         title: item["title"].as_str()?.to_string(),
                         criterion: item["criterion"].as_str().map(str::to_string),
-                        approach: item["approach"].as_str().or_else(|| item["test"].as_str()).unwrap_or_default().to_string(),
+                        approach: item["approach"]
+                            .as_str()
+                            .or_else(|| item["test"].as_str())
+                            .unwrap_or_default()
+                            .to_string(),
                         result: None,
                     })
                 })
@@ -1045,7 +1197,12 @@ pub fn criteria_summary(detail: &TaskDetail) -> Vec<CriterionRow> {
     let plan = detail.latest_approval("awaiting_approval").map(|a| {
         a.requested["criteria"]
             .as_array()
-            .map(|items| items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect::<Vec<_>>())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|i| i.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default()
     });
     let mut names: Vec<String> = plan.clone().unwrap_or_default();
@@ -1058,12 +1215,19 @@ pub fn criteria_summary(detail: &TaskDetail) -> Vec<CriterionRow> {
     names
         .into_iter()
         .map(|criterion| {
-            let mine: Vec<&TestCase> = cases.iter().filter(|c| c.criterion.as_deref() == Some(criterion.as_str())).collect();
+            let mine: Vec<&TestCase> = cases
+                .iter()
+                .filter(|c| c.criterion.as_deref() == Some(criterion.as_str()))
+                .collect();
             let judged: Vec<bool> = mine.iter().filter_map(|c| c.result).collect();
             CriterionRow {
                 planned: plan.as_ref().map(|p| p.contains(&criterion)),
                 cases: mine.len(),
-                verify: if judged.is_empty() { None } else { Some((judged.iter().filter(|ok| **ok).count(), judged.len())) },
+                verify: if judged.is_empty() {
+                    None
+                } else {
+                    Some((judged.iter().filter(|ok| **ok).count(), judged.len()))
+                },
                 criterion,
             }
         })
@@ -1079,13 +1243,28 @@ fn clock(iso: &str) -> &str {
 /// approval. One line each, `hh:mm  what`.
 pub fn plan_history(detail: &TaskDetail) -> Vec<String> {
     let mut lines = Vec::new();
-    for approval in detail.approvals.iter().filter(|a| a.kind_or_guess() == "awaiting_approval") {
+    for approval in detail
+        .approvals
+        .iter()
+        .filter(|a| a.kind_or_guess() == "awaiting_approval")
+    {
         if let Some(revisions) = approval.requested["revisions"].as_array() {
             for revision in revisions {
                 let at = revision["at"].as_str().unwrap_or("");
-                let mut fields: Vec<&str> = revision["after"].as_object().map(|o| o.keys().map(String::as_str).collect()).unwrap_or_default();
+                let mut fields: Vec<&str> = revision["after"]
+                    .as_object()
+                    .map(|o| o.keys().map(String::as_str).collect())
+                    .unwrap_or_default();
                 fields.sort_unstable();
-                lines.push(format!("{}  {} edited", clock(at), if fields.is_empty() { "plan".to_string() } else { fields.join(", ") }));
+                lines.push(format!(
+                    "{}  {} edited",
+                    clock(at),
+                    if fields.is_empty() {
+                        "plan".to_string()
+                    } else {
+                        fields.join(", ")
+                    }
+                ));
             }
         }
         if let (Some(decision), Some(at)) = (&approval.decision, approval.decided_at.as_deref()) {
@@ -1222,8 +1401,18 @@ impl PullRequest {
         match self.checks.state.as_str() {
             "none" => "no checks".to_string(),
             "failure" => {
-                let names: Vec<&str> = self.checks.failed.iter().map(|c| c.name.as_str()).take(2).collect();
-                let more = if self.checks.failed.len() > 2 { format!(" +{}", self.checks.failed.len() - 2) } else { String::new() };
+                let names: Vec<&str> = self
+                    .checks
+                    .failed
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .take(2)
+                    .collect();
+                let more = if self.checks.failed.len() > 2 {
+                    format!(" +{}", self.checks.failed.len() - 2)
+                } else {
+                    String::new()
+                };
                 format!("✗ {}{more}", names.join(", "))
             }
             "pending" => format!("◐ {}/{}", self.checks.passed, self.checks.total),
@@ -1245,13 +1434,52 @@ impl PullRequest {
     }
 }
 
-/// `GET /github/prs` and the `github.prs` stream event.
+/// `GET /github/prs` and the `github.prs` stream event; `GET /github/prs/all` and the
+/// `github.prs.all` event carry the same shape.
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PrSnapshot {
     pub prs: Vec<PullRequest>,
     pub polled_at: Option<String>,
     pub error: Option<String>,
+    /// The clones the machine runs or ran lately; an older machine sends none.
+    #[serde(default)]
+    pub clones: Vec<CloneStatus>,
+}
+
+/// One `git clone` the machine was asked for: running, or ended within the last ten minutes.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CloneStatus {
+    pub repo: String,
+    pub dest: String,
+    /// `cloning`, `done` or `failed`.
+    pub state: String,
+    pub started_at: String,
+    #[serde(default)]
+    pub finished_at: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl CloneStatus {
+    pub fn is_cloning(&self) -> bool {
+        self.state == "cloning"
+    }
+
+    pub fn is_failed(&self) -> bool {
+        self.state == "failed"
+    }
+
+    /// What went wrong, in the line git ends on.
+    pub fn error_line(&self) -> String {
+        self.error
+            .as_deref()
+            .and_then(|e| e.lines().rev().find(|l| !l.trim().is_empty()))
+            .unwrap_or("unknown error")
+            .trim()
+            .to_string()
+    }
 }
 
 /// Someone on Slack: you, an author, a bot.
@@ -1530,7 +1758,9 @@ impl SlackItem {
 
     /// 0 for P0 … 3 for P3, 4 when untriaged: lower sorts first.
     pub fn priority_rank(&self) -> usize {
-        self.priority().and_then(|p| SLACK_PRIORITIES.iter().position(|x| *x == p)).unwrap_or(SLACK_PRIORITIES.len())
+        self.priority()
+            .and_then(|p| SLACK_PRIORITIES.iter().position(|x| *x == p))
+            .unwrap_or(SLACK_PRIORITIES.len())
     }
 
     /// P0 or P1: what counts on the badge and raises a notice.
@@ -1540,7 +1770,12 @@ impl SlackItem {
 
     /// Triage's one-line summary, or the message's first line until triage ran.
     pub fn summary(&self) -> &str {
-        match self.triage.as_ref().map(|t| t.summary.as_str()).filter(|s| !s.is_empty()) {
+        match self
+            .triage
+            .as_ref()
+            .map(|t| t.summary.as_str())
+            .filter(|s| !s.is_empty())
+        {
             Some(summary) => summary,
             None => self.text.lines().next().unwrap_or(""),
         }
@@ -1577,7 +1812,10 @@ impl SlackItem {
 
     /// Due within five minutes and not yet overdue: the row's age turns yellow.
     pub fn due_soon(&self, now: u64) -> bool {
-        !self.overdue && self.due_in(now).is_some_and(|left| (0..=300).contains(&left))
+        !self.overdue
+            && self
+                .due_in(now)
+                .is_some_and(|left| (0..=300).contains(&left))
     }
 
     /// The ticket made from this item, if any.
@@ -1735,7 +1973,10 @@ impl SlackMetrics {
     pub fn within_sla_of(&self, priority: &str) -> (u64, Option<f64>) {
         let within = self.within_sla.get(priority).copied().unwrap_or(0);
         let replied = self.replied.get(priority).copied().unwrap_or(0);
-        (within, (replied > 0).then(|| within as f64 / replied as f64))
+        (
+            within,
+            (replied > 0).then(|| within as f64 / replied as f64),
+        )
     }
 }
 
@@ -1751,7 +1992,12 @@ pub enum StreamMessage {
     Deleted { id: String },
     /// A stage container is running: follow it in the task's watch tab.
     #[serde(rename = "stage.started", rename_all = "camelCase")]
-    StageStarted { task_id: String, label: String, cwd: String, container: String },
+    StageStarted {
+        task_id: String,
+        label: String,
+        cwd: String,
+        container: String,
+    },
     /// The task is done or deleted: its watch tab can go.
     #[serde(rename = "task.closed")]
     Closed { id: String },
@@ -1761,6 +2007,9 @@ pub enum StreamMessage {
     /// The PR inbox changed; the whole snapshot rides along.
     #[serde(rename = "github.prs")]
     Prs { snapshot: PrSnapshot },
+    /// Every open PR in the repos you can reach changed; the whole snapshot rides along.
+    #[serde(rename = "github.prs.all")]
+    PrsAll { snapshot: PrSnapshot },
     /// The Slack inbox changed; the whole snapshot rides along, watches included.
     #[serde(rename = "slack.items")]
     Slack { snapshot: SlackSnapshot },
@@ -1806,17 +2055,32 @@ pub struct BudgetAlert {
 impl BudgetAlert {
     /// `repo luna-tui at 90%: $18.00 of $20.00 this month`; `engine openai at 80%: …`.
     pub fn line(&self) -> String {
-        let repo = self.repo.as_deref().and_then(|p| p.trim_end_matches('/').rsplit('/').next());
+        let repo = self
+            .repo
+            .as_deref()
+            .and_then(|p| p.trim_end_matches('/').rsplit('/').next());
         let (what, when) = match self.scope.as_str() {
-            "task" => (format!("task #{}", short_id(self.task_id.as_deref().unwrap_or("?"))), ""),
+            "task" => (
+                format!("task #{}", short_id(self.task_id.as_deref().unwrap_or("?"))),
+                "",
+            ),
             "repo" => (format!("repo {}", repo.unwrap_or("?")), " this month"),
             "engine" => {
                 let engine = self.engine.as_deref().unwrap_or("?");
-                (repo.map_or_else(|| format!("engine {engine}"), |repo| format!("engine {engine} in {repo}")), " this month")
+                (
+                    repo.map_or_else(
+                        || format!("engine {engine}"),
+                        |repo| format!("engine {engine} in {repo}"),
+                    ),
+                    " this month",
+                )
             }
             _ => ("the day".to_string(), ""),
         };
-        format!("{what} at {}%: ${:.2} of ${:.2}{when}", self.pct, self.spent_usd, self.limit_usd)
+        format!(
+            "{what} at {}%: ${:.2} of ${:.2}{when}",
+            self.pct, self.spent_usd, self.limit_usd
+        )
     }
 }
 
@@ -1972,19 +2236,35 @@ pub struct GraphHealth {
 pub fn plain(text: &str, max: usize) -> String {
     let flat = crate::text::sanitize(text, false);
     let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() <= max { flat } else { format!("{}…", flat.chars().take(max.saturating_sub(1)).collect::<String>()) }
+    if flat.chars().count() <= max {
+        flat
+    } else {
+        format!(
+            "{}…",
+            flat.chars().take(max.saturating_sub(1)).collect::<String>()
+        )
+    }
 }
 
 impl RepoHealth {
     pub fn name(&self) -> &str {
-        self.repo.trim_end_matches('/').rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("(none)")
+        self.repo
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|n| !n.is_empty())
+            .unwrap_or("(none)")
     }
 
     /// The image in one line: the machine's, or its own with its base, when it was built and the last failure.
     pub fn image_line(&self, now: u64) -> String {
         let i = &self.image;
         let mut line = match &i.base {
-            Some(base) => format!("image: own on {} ({})", plain(base, 40), plain(&i.in_use, 40)),
+            Some(base) => format!(
+                "image: own on {} ({})",
+                plain(base, 40),
+                plain(&i.in_use, 40)
+            ),
             None => "image: machine's".to_string(),
         };
         if let Some(at) = &i.built_at {
@@ -1998,7 +2278,12 @@ impl RepoHealth {
 
     /// The base waiting for approval, on its own line, with the key: approving trusts that image with the stage's credential.
     pub fn pending_line(&self) -> Option<String> {
-        self.image.pending_base.as_ref().map(|base| format!("base waiting for you: {} (A approves; it will run with the stage's credential)", plain(base, 80)))
+        self.image.pending_base.as_ref().map(|base| {
+            format!(
+                "base waiting for you: {} (A approves; it will run with the stage's credential)",
+                plain(base, 80)
+            )
+        })
     }
 
     /// The graph in one line: off, building, or its commit, distance, Graphify, age and last failure.
@@ -2008,7 +2293,10 @@ impl RepoHealth {
             return "graph: off".to_string();
         }
         let mut line = match &g.commit {
-            Some(commit) => format!("graph: {}", plain(&commit.chars().take(7).collect::<String>(), 7)),
+            Some(commit) => format!(
+                "graph: {}",
+                plain(&commit.chars().take(7).collect::<String>(), 7)
+            ),
             None => "graph: none yet".to_string(),
         };
         if let Some(behind) = g.behind {
@@ -2272,14 +2560,19 @@ pub const REPO_COLOUR_SLOTS: usize = 6;
 /// A stable slot for a repo name, so the same repo keeps its colour across restarts and
 /// machines: a small hash, nothing more.
 pub fn repo_colour_slot(name: &str) -> usize {
-    let hash = name.bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ u32::from(b));
+    let hash = name
+        .bytes()
+        .fold(5381u32, |h, b| h.wrapping_mul(33) ^ u32::from(b));
     (hash as usize) % REPO_COLOUR_SLOTS
 }
 
 impl Task {
     /// The repo's basename (`luna-tui` for `/Users/me/Developer/projects/luna-tui`), if any.
     pub fn repo_name(&self) -> Option<&str> {
-        self.repo_path.as_deref().and_then(|p| p.trim_end_matches('/').rsplit('/').next()).filter(|n| !n.is_empty())
+        self.repo_path
+            .as_deref()
+            .and_then(|p| p.trim_end_matches('/').rsplit('/').next())
+            .filter(|n| !n.is_empty())
     }
 
     pub fn short_id(&self) -> &str {
@@ -2294,9 +2587,16 @@ impl Task {
             return format!("{tag} ");
         }
         match self.source.as_ref() {
-            Some(TaskSource { number: Some(number), .. }) => format!("#{number} "),
+            Some(TaskSource {
+                number: Some(number),
+                ..
+            }) => format!("#{number} "),
             Some(TaskSource { kind, .. }) if kind == "slack" => "⌁ ".to_string(),
-            Some(TaskSource { kind, key: Some(key), .. }) if kind == "jira" => format!("{key} "),
+            Some(TaskSource {
+                kind,
+                key: Some(key),
+                ..
+            }) if kind == "jira" => format!("{key} "),
             _ => String::new(),
         }
     }
@@ -2346,7 +2646,12 @@ impl Task {
             "archived" => Look::Archived,
             _ if self.waiting_on_you => Look::NeedsYou,
             _ if self.queued => Look::Queued,
-            _ if self.running && unix_secs(&self.updated_at).is_some_and(|t| now.saturating_sub(t) > STALE_SECS) => Look::Stale,
+            _ if self.running
+                && unix_secs(&self.updated_at)
+                    .is_some_and(|t| now.saturating_sub(t) > STALE_SECS) =>
+            {
+                Look::Stale
+            }
             _ => Look::Working,
         }
     }
@@ -2354,14 +2659,20 @@ impl Task {
     /// The card's second line: `worked 4m · +142 −18 · tests 7/9`, the parts the task has.
     pub fn triad(&self) -> Option<String> {
         let parts: Vec<String> = [
-            self.worked_ms.map(|ms| format!("worked {}", fmt_ms(Some(ms)))),
+            self.worked_ms
+                .map(|ms| format!("worked {}", fmt_ms(Some(ms)))),
             self.diff.map(|d| format!("+{} −{}", d.added, d.removed)),
-            self.tests.map(|t| format!("tests {}/{}", t.passed, t.total)),
+            self.tests
+                .map(|t| format!("tests {}/{}", t.passed, t.total)),
         ]
         .into_iter()
         .flatten()
         .collect();
-        if parts.is_empty() { None } else { Some(parts.join(" · ")) }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" · "))
+        }
     }
 
     /// What the task is doing, in words: the gate it waits at or the stage that runs.
@@ -2388,7 +2699,11 @@ impl Task {
             "test_design" => "test design".to_string(),
             other => other.to_string(),
         };
-        if self.queued { format!("queued: {stage}") } else { stage }
+        if self.queued {
+            format!("queued: {stage}")
+        } else {
+            stage
+        }
     }
 }
 
@@ -2405,7 +2720,15 @@ pub struct PlanEdit {
 /// `requested` (an older run, or one with nothing to say) come back empty.
 pub fn plan_edit_of(requested: &Value) -> PlanEdit {
     let strings = |value: &Value| -> Vec<String> {
-        value.as_array().map(|items| items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect()).unwrap_or_default()
+        value
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|i| i.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
     };
     PlanEdit {
         brief: requested["brief"].as_str().unwrap_or_default().to_string(),
@@ -2415,7 +2738,8 @@ pub fn plan_edit_of(requested: &Value) -> PlanEdit {
 }
 
 pub fn plan_markdown(edit: &PlanEdit) -> String {
-    let mut out = format!("# Plan
+    let mut out = format!(
+        "# Plan
 
 ## Brief
 
@@ -2423,18 +2747,26 @@ pub fn plan_markdown(edit: &PlanEdit) -> String {
 
 ## Criteria to build
 
-", edit.brief);
+",
+        edit.brief
+    );
     for item in &edit.criteria {
-        out.push_str(&format!("- {item}
-"));
+        out.push_str(&format!(
+            "- {item}
+"
+        ));
     }
-    out.push_str("
+    out.push_str(
+        "
 ## Assumptions
 
-");
+",
+    );
     for item in &edit.assumptions {
-        out.push_str(&format!("- {item}
-"));
+        out.push_str(&format!(
+            "- {item}
+"
+        ));
     }
     out
 }
@@ -2478,8 +2810,13 @@ pub fn parse_plan(markdown: &str) -> PlanEdit {
         }
     }
 
-    edit.brief = brief.join("
-").trim().to_string();
+    edit.brief = brief
+        .join(
+            "
+",
+        )
+        .trim()
+        .to_string();
     edit
 }
 
@@ -2490,13 +2827,19 @@ pub fn cases_markdown(cases: &[TestCase]) -> String {
     let mut out = String::from("# Test cases\n");
     let mut groups: Vec<(Option<&str>, Vec<&TestCase>)> = Vec::new();
     for case in cases {
-        match groups.iter_mut().find(|(c, _)| *c == case.criterion.as_deref()) {
+        match groups
+            .iter_mut()
+            .find(|(c, _)| *c == case.criterion.as_deref())
+        {
             Some((_, cases)) => cases.push(case),
             None => groups.push((case.criterion.as_deref(), vec![case])),
         }
     }
     for (criterion, cases) in groups {
-        out.push_str(&format!("\n## {}\n\n", criterion.unwrap_or("(no criterion)")));
+        out.push_str(&format!(
+            "\n## {}\n\n",
+            criterion.unwrap_or("(no criterion)")
+        ));
         for case in cases {
             out.push_str(&format!("- {}\n", case.title));
             for line in case.approach.lines().filter(|l| !l.trim().is_empty()) {
@@ -2515,13 +2858,19 @@ pub fn parse_cases(markdown: &str) -> Vec<TestCase> {
     for line in markdown.lines() {
         if let Some(heading) = line.strip_prefix("## ") {
             let heading = heading.trim();
-            criterion = (!heading.is_empty() && heading != "(no criterion)").then(|| heading.to_string());
+            criterion =
+                (!heading.is_empty() && heading != "(no criterion)").then(|| heading.to_string());
         } else if line.starts_with("# ") {
             continue;
         } else if let Some(title) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
             let title = title.trim();
             if !title.is_empty() {
-                cases.push(TestCase { title: title.to_string(), criterion: criterion.clone(), approach: String::new(), result: None });
+                cases.push(TestCase {
+                    title: title.to_string(),
+                    criterion: criterion.clone(),
+                    approach: String::new(),
+                    result: None,
+                });
             }
         } else if let Some(case) = cases.last_mut() {
             let text = line.trim();
@@ -2590,7 +2939,10 @@ pub fn parse_ticket(markdown: &str, fallback_title: &str) -> TicketText {
                 Section::Description => description.push(line),
                 Section::Criteria => {
                     let item = line.trim_start().trim_start_matches("- ").trim();
-                    let item = item.trim_start_matches("[ ] ").trim_start_matches("[x] ").trim();
+                    let item = item
+                        .trim_start_matches("[ ] ")
+                        .trim_start_matches("[x] ")
+                        .trim();
                     if !item.is_empty() {
                         text.criteria.push(item.to_string());
                     }
@@ -2697,7 +3049,12 @@ pub fn iso_of(secs: u64) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z", rem / 3600, (rem % 3600) / 60, rem % 60)
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
 }
 
 /// How long ago an ISO timestamp was, compact: `45s`, `12m`, `3h`, `2d`.
@@ -2829,7 +3186,13 @@ pub(crate) mod tests {
     #[test]
     fn there_is_no_backlog_column_and_a_new_ticket_sits_in_intake() {
         assert_eq!(COLUMNS.len(), 8);
-        assert_eq!(COLUMNS, ["Intake", "Triage", "Plan", "Build", "Verify", "Evidence", "Ship", "Done"], "the diagram's seven stages, then Done");
+        assert_eq!(
+            COLUMNS,
+            [
+                "Intake", "Triage", "Plan", "Build", "Verify", "Evidence", "Ship", "Done"
+            ],
+            "the diagram's seven stages, then Done"
+        );
         assert_eq!(COLUMNS[0], "Intake");
         let task: Task = serde_json::from_str(&task_json("")).unwrap();
         assert_eq!(task.column_index(), 0);
@@ -2839,13 +3202,21 @@ pub(crate) mod tests {
 
     #[test]
     fn an_archived_ticket_looks_archived_says_so_and_carries_its_reason() {
-        let json = task_json("").replace(r#""state":"draft""#, r#""state":"archived""#).replace(r#""reason":null"#, r#""reason":"duplicate","archiveReason":"duplicate""#);
+        let json = task_json("")
+            .replace(r#""state":"draft""#, r#""state":"archived""#)
+            .replace(
+                r#""reason":null"#,
+                r#""reason":"duplicate","archiveReason":"duplicate""#,
+            );
         let task: Task = serde_json::from_str(&json).unwrap();
         assert!(matches!(task.look(), Look::Archived));
         assert_eq!(task.status_label(), "archived");
         assert_eq!(task.archive_reason.as_deref(), Some("duplicate"));
         let plain: Task = serde_json::from_str(&task_json("")).unwrap();
-        assert_eq!(plain.archive_reason, None, "a machine from before archiving sends none");
+        assert_eq!(
+            plain.archive_reason, None,
+            "a machine from before archiving sends none"
+        );
     }
 
     #[test]
@@ -2874,7 +3245,8 @@ pub(crate) mod tests {
         assert_eq!(detail.stage_runs[0].turns, Some(18));
         assert_eq!(detail.stage_runs[1].cost_usd, None);
         assert_eq!(detail.spent_usd(), Some(0.5));
-        let bare: StageRun = serde_json::from_str(r#"{"stage":"triage","attempt":1,"status":"passed"}"#).unwrap();
+        let bare: StageRun =
+            serde_json::from_str(r#"{"stage":"triage","attempt":1,"status":"passed"}"#).unwrap();
         assert_eq!(bare.cost_usd, None);
     }
 
@@ -2886,9 +3258,18 @@ pub(crate) mod tests {
             task
         };
         assert_eq!(spend_p90(&[t(Some(0.1)), t(Some(0.2))]), None);
-        let tasks = [t(Some(0.1)), t(Some(0.2)), t(Some(0.3)), t(Some(5.0)), t(None)];
+        let tasks = [
+            t(Some(0.1)),
+            t(Some(0.2)),
+            t(Some(0.3)),
+            t(Some(5.0)),
+            t(None),
+        ];
         let p90 = spend_p90(&tasks).unwrap();
-        assert!(tasks[3].spent_usd.unwrap() > p90 && tasks[2].spent_usd.unwrap() <= p90, "p90 {p90}");
+        assert!(
+            tasks[3].spent_usd.unwrap() > p90 && tasks[2].spent_usd.unwrap() <= p90,
+            "p90 {p90}"
+        );
         assert_eq!(t(None).spent_usd, None);
     }
 
@@ -2910,13 +3291,28 @@ pub(crate) mod tests {
         let mut task: Task = serde_json::from_str(&task_json("")).unwrap();
         assert_eq!(task.triad(), None);
         task.worked_ms = Some(240_000.0);
-        task.diff = Some(Diff { added: 142, removed: 18 });
-        task.tests = Some(Tests { passed: 7, total: 9 });
-        assert_eq!(task.triad().as_deref(), Some("worked 4m · +142 −18 · tests 7/9"));
+        task.diff = Some(Diff {
+            added: 142,
+            removed: 18,
+        });
+        task.tests = Some(Tests {
+            passed: 7,
+            total: 9,
+        });
+        assert_eq!(
+            task.triad().as_deref(),
+            Some("worked 4m · +142 −18 · tests 7/9")
+        );
         task.diff = None;
         assert_eq!(task.triad().as_deref(), Some("worked 4m · tests 7/9"));
-        let full: Task = serde_json::from_str(&task_json(r#","workedMs":1500,"diff":{"added":1,"removed":0},"tests":{"passed":1,"total":1}"#)).unwrap();
-        assert_eq!(full.triad().as_deref(), Some("worked 1.5s · +1 −0 · tests 1/1"));
+        let full: Task = serde_json::from_str(&task_json(
+            r#","workedMs":1500,"diff":{"added":1,"removed":0},"tests":{"passed":1,"total":1}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            full.triad().as_deref(),
+            Some("worked 1.5s · +1 −0 · tests 1/1")
+        );
     }
 
     #[test]
@@ -2926,18 +3322,32 @@ pub(crate) mod tests {
         task.running = true;
         let updated = unix_secs(&task.updated_at).unwrap();
         assert!(matches!(task.look_at(updated + 60), Look::Working));
-        assert!(matches!(task.look_at(updated + STALE_SECS + 1), Look::Stale));
+        assert!(matches!(
+            task.look_at(updated + STALE_SECS + 1),
+            Look::Stale
+        ));
         task.running = false;
         task.queued = true;
-        assert!(matches!(task.look_at(updated + STALE_SECS + 1), Look::Queued), "a queued task is waiting, not stale");
-        assert!(Look::Stale < Look::Working, "stale sorts before working: it needs a look");
+        assert!(
+            matches!(task.look_at(updated + STALE_SECS + 1), Look::Queued),
+            "a queued task is waiting, not stale"
+        );
+        assert!(
+            Look::Stale < Look::Working,
+            "stale sorts before working: it needs a look"
+        );
     }
 
     #[test]
     fn health_carries_the_pool_and_an_older_machine_s_slots_still_load() {
-        let health: Health = serde_json::from_str(r#"{"ok":true,"slots":{"max":4,"active":1,"draining":true}}"#).unwrap();
+        let health: Health =
+            serde_json::from_str(r#"{"ok":true,"slots":{"max":4,"active":1,"draining":true}}"#)
+                .unwrap();
         assert!(health.ok);
-        assert_eq!((health.slots.max, health.slots.active, health.slots.draining), (4, 1, true));
+        assert_eq!(
+            (health.slots.max, health.slots.active, health.slots.draining),
+            (4, 1, true)
+        );
         let old: Slots = serde_json::from_str(r#"{"max":2,"active":0}"#).unwrap();
         assert!(!old.draining);
         let bare: Health = serde_json::from_str(r#"{"ok":true}"#).unwrap();
@@ -2953,9 +3363,15 @@ pub(crate) mod tests {
         let source = task.source.expect("source present");
         assert_eq!(source.number, Some(42));
         assert_eq!(source.repo.as_deref(), Some("acme/app"));
-        assert_eq!(source.url.as_deref(), Some("https://github.com/acme/app/issues/42"));
+        assert_eq!(
+            source.url.as_deref(),
+            Some("https://github.com/acme/app/issues/42")
+        );
         assert_eq!(source.link(), Some("https://github.com/acme/app/issues/42"));
-        assert_eq!(source.detail_line(), "GitHub     acme/app#42 · https://github.com/acme/app/issues/42");
+        assert_eq!(
+            source.detail_line(),
+            "GitHub     acme/app#42 · https://github.com/acme/app/issues/42"
+        );
     }
 
     #[test]
@@ -2968,34 +3384,56 @@ pub(crate) mod tests {
         assert_eq!(source.kind, "slack");
         assert!(source.repo.is_none() && source.number.is_none() && source.url.is_none());
         assert_eq!(source.channel.as_deref(), Some("#payments-oncall"));
-        assert_eq!(source.link(), Some("https://acme.slack.com/archives/C0123/p1730112345000100"));
-        assert!(source.detail_line().starts_with("Slack      #payments-oncall · https://"));
+        assert_eq!(
+            source.link(),
+            Some("https://acme.slack.com/archives/C0123/p1730112345000100")
+        );
+        assert!(
+            source
+                .detail_line()
+                .starts_with("Slack      #payments-oncall · https://")
+        );
         assert_eq!(task.card_label(), "⌁ Login page");
     }
 
     #[test]
     fn task_with_a_jira_source_deserialises_and_wears_the_key() {
-        let json = task_json(r#","source":{"kind":"jira","key":"PLAT-123","url":"https://acme.atlassian.net/browse/PLAT-123","issueType":"Story"}"#);
+        let json = task_json(
+            r#","source":{"kind":"jira","key":"PLAT-123","url":"https://acme.atlassian.net/browse/PLAT-123","issueType":"Story"}"#,
+        );
         let task: Task = serde_json::from_str(&json).unwrap();
         let source = task.source.clone().expect("source present");
         assert_eq!(source.kind, "jira");
         assert_eq!(source.key.as_deref(), Some("PLAT-123"));
         assert_eq!(source.issue_type.as_deref(), Some("Story"));
-        assert_eq!(source.link(), Some("https://acme.atlassian.net/browse/PLAT-123"));
-        assert_eq!(source.detail_line(), "Jira       PLAT-123 · https://acme.atlassian.net/browse/PLAT-123");
+        assert_eq!(
+            source.link(),
+            Some("https://acme.atlassian.net/browse/PLAT-123")
+        );
+        assert_eq!(
+            source.detail_line(),
+            "Jira       PLAT-123 · https://acme.atlassian.net/browse/PLAT-123"
+        );
         assert_eq!(task.issue_prefix(), "PLAT-123 ");
         assert_eq!(task.card_label(), "PLAT-123 Login page");
     }
 
     #[test]
     fn task_from_luna_notch_wears_notch_and_its_ref() {
-        let task: Task = serde_json::from_str(&task_json(r#","source":{"kind":"notch","ref":"LUNA-14","id":"wo_1","jiraKey":"PLAT-9"}"#)).unwrap();
+        let task: Task = serde_json::from_str(&task_json(
+            r#","source":{"kind":"notch","ref":"LUNA-14","id":"wo_1","jiraKey":"PLAT-9"}"#,
+        ))
+        .unwrap();
         let source = task.source.clone().expect("source present");
         assert_eq!(source.notch_tag().as_deref(), Some("notch LUNA-14"));
         assert_eq!(source.detail_line(), "Luna Notch LUNA-14 · PLAT-9");
         assert_eq!(task.issue_prefix(), "notch LUNA-14 ");
         let bare: Task = serde_json::from_str(&task_json(r#","source":{"kind":"notch"}"#)).unwrap();
-        assert_eq!(bare.issue_prefix(), "notch ", "a notch source without its ref still loads and says notch");
+        assert_eq!(
+            bare.issue_prefix(),
+            "notch ",
+            "a notch source without its ref still loads and says notch"
+        );
         assert_eq!(bare.source.unwrap().detail_line(), "Luna Notch ?");
     }
 
@@ -3021,7 +3459,10 @@ pub(crate) mod tests {
         assert_eq!(jira.key, "PLAT-123");
         assert_eq!(jira.status.as_deref(), Some("In Progress"));
         assert_eq!(jira.summary(now), "PLAT-123 · In Progress · due Fri · High");
-        assert_eq!(jira.blocked.as_ref().unwrap().line(), "no transition to \"In Review\" from \"Blocked\" — transition not allowed");
+        assert_eq!(
+            jira.blocked.as_ref().unwrap().line(),
+            "no transition to \"In Review\" from \"Blocked\" — transition not allowed"
+        );
         assert_eq!(task.jira_key(), Some("PLAT-123"));
 
         let sla = task.sla.clone().expect("clocks");
@@ -3030,17 +3471,34 @@ pub(crate) mod tests {
         assert!(!sla.stage_overdue());
         let parts = sla.parts(now);
         assert_eq!(parts[0], ("gate overdue 40m".to_string(), Tone::Over));
-        assert_eq!(parts[1], ("stage implementing 1h of 4h".to_string(), Tone::Warn));
+        assert_eq!(
+            parts[1],
+            ("stage implementing 1h of 4h".to_string(), Tone::Warn)
+        );
         assert_eq!(parts[2], ("cycle 10h of 3d".to_string(), Tone::Plain));
         assert_eq!(parts[3], ("jira due Fri".to_string(), Tone::Plain));
 
-        let sparse: Task = serde_json::from_str(&task_json(r#","jira":null,"sla":{"gate":null,"stage":null,"cycle":null,"jiraDue":null}"#)).unwrap();
-        assert!(sparse.jira.is_none() && !sparse.overdue() && sparse.sla.unwrap().parts(now).is_empty());
+        let sparse: Task = serde_json::from_str(&task_json(
+            r#","jira":null,"sla":{"gate":null,"stage":null,"cycle":null,"jiraDue":null}"#,
+        ))
+        .unwrap();
+        assert!(
+            sparse.jira.is_none() && !sparse.overdue() && sparse.sla.unwrap().parts(now).is_empty()
+        );
         let old: Task = serde_json::from_str(&task_json("")).unwrap();
         assert!(old.jira.is_none() && old.sla.is_none());
         let bare: JiraLink = serde_json::from_str(r#"{"key":"X-1","url":"u"}"#).unwrap();
         assert_eq!(bare.summary(now), "X-1");
-        assert_eq!(JiraBlocked { wanted: "Done".into(), current: None, why: String::new(), at: String::new() }.line(), "no transition to \"Done\" from \"?\"");
+        assert_eq!(
+            JiraBlocked {
+                wanted: "Done".into(),
+                current: None,
+                why: String::new(),
+                at: String::new()
+            }
+            .line(),
+            "no transition to \"Done\" from \"?\""
+        );
     }
 
     #[test]
@@ -3051,7 +3509,11 @@ pub(crate) mod tests {
         assert_eq!(due_day("2026-10-30T17:00:00Z", now), "Fri");
         assert_eq!(due_day("2026-11-03T17:00:00Z", now), "Tue");
         assert_eq!(due_day("2026-11-04T17:00:00Z", now), "11-04");
-        assert_eq!(due_day("2026-10-20T17:00:00Z", now), "10-20", "a past date is a date");
+        assert_eq!(
+            due_day("2026-10-20T17:00:00Z", now),
+            "10-20",
+            "a past date is a date"
+        );
         assert_eq!(due_day("garbage", now), "garbage");
     }
 
@@ -3062,7 +3524,10 @@ pub(crate) mod tests {
         assert_eq!(hits[0].status.as_deref(), Some("In Progress"));
         let status: JiraStatus = serde_json::from_str(r#"{"configured":true,"site":"https://acme.atlassian.net","tokenExpiresAt":null,"error":null}"#).unwrap();
         assert!(status.configured && status.error.is_none());
-        let off: JiraStatus = serde_json::from_str(r#"{"configured":false,"site":null,"tokenExpiresAt":null,"error":"no token"}"#).unwrap();
+        let off: JiraStatus = serde_json::from_str(
+            r#"{"configured":false,"site":null,"tokenExpiresAt":null,"error":"no token"}"#,
+        )
+        .unwrap();
         assert_eq!(off.error.as_deref(), Some("no token"));
     }
 
@@ -3074,7 +3539,8 @@ pub(crate) mod tests {
 
     #[test]
     fn task_with_an_unknown_source_kind_still_deserialises() {
-        let json = task_json(r#","source":{"kind":"linear","repo":"ENG","number":7,"url":"https://x/7"}"#);
+        let json =
+            task_json(r#","source":{"kind":"linear","repo":"ENG","number":7,"url":"https://x/7"}"#);
         let task: Task = serde_json::from_str(&json).unwrap();
         assert_eq!(task.source.unwrap().kind, "linear");
     }
@@ -3085,12 +3551,30 @@ pub(crate) mod tests {
         assert_eq!(snapshot.items.len(), 3);
         assert_eq!(snapshot.watches.len(), 2);
         assert_eq!(snapshot.socket, "connected");
-        assert_eq!((snapshot.sla_for(Some("P0")), snapshot.sla_for(Some("P2")), snapshot.sla_for(Some("P9")), snapshot.sla_for(None)), (600, 3600, 0, 0));
+        assert_eq!(
+            (
+                snapshot.sla_for(Some("P0")),
+                snapshot.sla_for(Some("P2")),
+                snapshot.sla_for(Some("P9")),
+                snapshot.sla_for(None)
+            ),
+            (600, 3600, 0, 0)
+        );
         assert_eq!(sla_targets(&snapshot.sla), "10m/30m/1h/1h");
-        assert_eq!(snapshot.items[0].due_at.as_deref(), Some("2026-10-28T09:58:00.000Z"));
-        assert!(!snapshot.items[0].overdue && snapshot.items[2].overdue && snapshot.items[1].due_at.is_none());
+        assert_eq!(
+            snapshot.items[0].due_at.as_deref(),
+            Some("2026-10-28T09:58:00.000Z")
+        );
+        assert!(
+            !snapshot.items[0].overdue
+                && snapshot.items[2].overdue
+                && snapshot.items[1].due_at.is_none()
+        );
         assert_eq!(snapshot.me.as_ref().map(|m| m.name.as_str()), Some("higor"));
-        assert_eq!(snapshot.polled_at.as_deref(), Some("2026-10-28T10:00:00.000Z"));
+        assert_eq!(
+            snapshot.polled_at.as_deref(),
+            Some("2026-10-28T10:00:00.000Z")
+        );
         let item = &snapshot.items[0];
         assert_eq!(item.id, "C0123:1730112345.0001");
         assert_eq!(item.channel_label(), "#payments-oncall");
@@ -3100,21 +3584,41 @@ pub(crate) mod tests {
         assert_eq!(item.context[1].user.name, "joão");
         assert_eq!(item.matched, vec!["me".to_string()]);
         assert_eq!((item.count, item.replies), (1, 3));
-        assert!(item.done_at.is_none() && item.snoozed_until.is_none() && item.reopened_at.is_none());
+        assert!(
+            item.done_at.is_none() && item.snoozed_until.is_none() && item.reopened_at.is_none()
+        );
         assert_eq!(item.priority(), Some("P0"));
         assert_eq!(item.priority_rank(), 0);
         assert!(item.urgent());
         assert_eq!(item.summary(), "approve rollback");
-        assert_eq!(item.split_enum(), Some(crate::slack::SlackSplit::NeedsReply));
+        assert_eq!(
+            item.split_enum(),
+            Some(crate::slack::SlackSplit::NeedsReply)
+        );
         let triage = item.triage.as_ref().unwrap();
         assert_eq!(triage.refs[0].reference, "acme/app#212");
         assert!(triage.deadline.is_none() && triage.expects_reply && !triage.overridden);
-        assert_eq!(item.linked.pr.as_ref().map(|p| (p.number, p.split.as_str())), Some((212, "ci_failed")));
+        assert_eq!(
+            item.linked
+                .pr
+                .as_ref()
+                .map(|p| (p.number, p.split.as_str())),
+            Some((212, "ci_failed"))
+        );
         assert!(item.task_id().is_none());
-        let untriaged: SlackItem = serde_json::from_str(&crate::slack::fixtures::item_json("x", "fyi", None, "2026-10-28T07:00:00Z")).unwrap();
+        let untriaged: SlackItem = serde_json::from_str(&crate::slack::fixtures::item_json(
+            "x",
+            "fyi",
+            None,
+            "2026-10-28T07:00:00Z",
+        ))
+        .unwrap();
         assert!(untriaged.triage.is_none() && !untriaged.urgent());
         assert_eq!(untriaged.priority_rank(), 4);
-        assert!(untriaged.summary().starts_with("@higor checkout"), "the text stands in for the summary");
+        assert!(
+            untriaged.summary().starts_with("@higor checkout"),
+            "the text stands in for the summary"
+        );
         let watch = &snapshot.watches[1];
         assert!(watch.builtin && watch.enabled);
         assert_eq!(watch.priority.as_deref(), Some("P2"));
@@ -3123,7 +3627,10 @@ pub(crate) mod tests {
         let sparse: SlackSnapshot = serde_json::from_str(r#"{"items":[],"watches":[],"me":null,"polledAt":null,"error":"no token","socket":"off"}"#).unwrap();
         assert_eq!(sparse.error.as_deref(), Some("no token"));
         assert_eq!(sparse.socket, "off");
-        assert!(sparse.sla.is_empty(), "a machine from before the SLA sends none");
+        assert!(
+            sparse.sla.is_empty(),
+            "a machine from before the SLA sends none"
+        );
         assert_eq!(sla_targets(&sparse.sla), "–/–/–/–");
         let metrics: SlackMetrics = serde_json::from_str(
             r#"{"since":"2026-10-21T00:00:00.000Z","items":{"P0":1,"P1":4,"P2":10,"P3":20},"replied":{"P0":1,"P1":3,"P2":2,"P3":0},
@@ -3137,8 +3644,18 @@ pub(crate) mod tests {
         assert_eq!(metrics.within_hour_rate(), Some(0.5));
         assert_eq!(metrics.time_to_reply["P1"].median, Some(3600.0));
         assert_eq!(metrics.within_sla_of("P0"), (1, Some(1.0)));
-        assert_eq!(metrics.within_sla_of("P1").1.map(|s| (s * 100.0).round() as u64), Some(67));
-        assert_eq!(metrics.within_sla_of("P3"), (0, None), "nothing replied, no share");
+        assert_eq!(
+            metrics
+                .within_sla_of("P1")
+                .1
+                .map(|s| (s * 100.0).round() as u64),
+            Some(67)
+        );
+        assert_eq!(
+            metrics.within_sla_of("P3"),
+            (0, None),
+            "nothing replied, no share"
+        );
         assert_eq!(metrics.sla["P1"], 1800);
     }
 
@@ -3152,7 +3669,11 @@ pub(crate) mod tests {
         assert_eq!(linked.card_label(), "#42 Login page");
         assert_eq!(plain.card_label(), "Login page");
         let setup: Task = serde_json::from_str(&task_json(r#","route":"setup""#)).unwrap();
-        assert_eq!(setup.card_label(), "⚙ Login page", "a setup task reads apart on the board");
+        assert_eq!(
+            setup.card_label(),
+            "⚙ Login page",
+            "a setup task reads apart on the board"
+        );
     }
 
     #[test]
@@ -3165,7 +3686,11 @@ pub(crate) mod tests {
         });
         assert_eq!(
             plan_edit_of(&requested),
-            PlanEdit { brief: "Build the exporter".into(), criteria: vec!["c1".into(), "c2".into()], assumptions: vec!["a1".into()] }
+            PlanEdit {
+                brief: "Build the exporter".into(),
+                criteria: vec!["c1".into(), "c2".into()],
+                assumptions: vec!["a1".into()]
+            }
         );
         assert_eq!(plan_edit_of(&Value::Null), PlanEdit::default());
     }
@@ -3183,26 +3708,70 @@ pub(crate) mod tests {
 
     #[test]
     fn plan_edit_with_no_assumptions_round_trips() {
-        let edit = PlanEdit { brief: "b".into(), criteria: vec!["c".into()], assumptions: vec![] };
+        let edit = PlanEdit {
+            brief: "b".into(),
+            criteria: vec!["c".into()],
+            assumptions: vec![],
+        };
         assert_eq!(parse_plan(&plan_markdown(&edit)), edit);
     }
 
     #[test]
     fn cases_round_trip_through_their_markdown_grouped_by_criterion() {
         let cases = vec![
-            TestCase { title: "rejects a bad password".into(), criterion: Some("handles a/b & c".into()), approach: "run the suite".into(), result: Some(true) },
-            TestCase { title: "escapes a quoted comma".into(), criterion: Some("handles a/b & c".into()), approach: "read the output; \"a,b\" stays one cell".into(), result: None },
-            TestCase { title: "writes EF BB BF first".into(), criterion: Some("exports UTF-8".into()), approach: "hexdump the first 3 bytes".into(), result: None },
-            TestCase { title: "an orphan".into(), criterion: None, approach: String::new(), result: None },
+            TestCase {
+                title: "rejects a bad password".into(),
+                criterion: Some("handles a/b & c".into()),
+                approach: "run the suite".into(),
+                result: Some(true),
+            },
+            TestCase {
+                title: "escapes a quoted comma".into(),
+                criterion: Some("handles a/b & c".into()),
+                approach: "read the output; \"a,b\" stays one cell".into(),
+                result: None,
+            },
+            TestCase {
+                title: "writes EF BB BF first".into(),
+                criterion: Some("exports UTF-8".into()),
+                approach: "hexdump the first 3 bytes".into(),
+                result: None,
+            },
+            TestCase {
+                title: "an orphan".into(),
+                criterion: None,
+                approach: String::new(),
+                result: None,
+            },
         ];
         let markdown = cases_markdown(&cases);
         assert!(markdown.starts_with("# Test cases\n\n## handles a/b & c\n\n- rejects a bad password\n  run the suite\n- escapes a quoted comma\n"), "{markdown}");
-        assert!(markdown.contains("\n## (no criterion)\n\n- an orphan\n"), "{markdown}");
-        let expected: Vec<TestCase> = cases.iter().cloned().map(|c| TestCase { result: None, ..c }).collect();
+        assert!(
+            markdown.contains("\n## (no criterion)\n\n- an orphan\n"),
+            "{markdown}"
+        );
+        let expected: Vec<TestCase> = cases
+            .iter()
+            .cloned()
+            .map(|c| TestCase { result: None, ..c })
+            .collect();
         assert_eq!(parse_cases(&markdown), expected);
-        assert_eq!(parse_cases("## c\n- t\n  line one\n  line two\n")[0].approach, "line one\nline two", "a multi-line approach keeps its lines");
-        let steps = vec![TestCase { title: "t".into(), criterion: None, approach: "step one\nstep two".into(), result: None }];
-        assert_eq!(parse_cases(&cases_markdown(&steps)), steps, "and round-trips");
+        assert_eq!(
+            parse_cases("## c\n- t\n  line one\n  line two\n")[0].approach,
+            "line one\nline two",
+            "a multi-line approach keeps its lines"
+        );
+        let steps = vec![TestCase {
+            title: "t".into(),
+            criterion: None,
+            approach: "step one\nstep two".into(),
+            result: None,
+        }];
+        assert_eq!(
+            parse_cases(&cases_markdown(&steps)),
+            steps,
+            "and round-trips"
+        );
         assert!(parse_cases("# nothing\n").is_empty());
     }
 
@@ -3217,7 +3786,10 @@ pub(crate) mod tests {
         let markdown = ticket_markdown(&text);
         // The repo isn't in the markdown: it's set only through the repo picker, never by
         // editing this text, so it never round-trips through it.
-        let expected = TicketText { repo_path: None, ..text };
+        let expected = TicketText {
+            repo_path: None,
+            ..text
+        };
         assert_eq!(parse_ticket(&markdown, "x"), expected);
     }
 
@@ -3250,10 +3822,19 @@ pub(crate) mod tests {
         assert_eq!(m.queue.utilisation, None);
         assert_eq!(m.gates.answered, 8);
         assert_eq!(m.gates.within_sla, Some(0.75));
-        assert_eq!(m.gates.wait_ms["awaiting_approval"].median, Some(1_800_000.0));
+        assert_eq!(
+            m.gates.wait_ms["awaiting_approval"].median,
+            Some(1_800_000.0)
+        );
         let old: Metrics = serde_json::from_str(&METRICS_JSON.replace(r#""gates":{"withinSla":0.75,"answered":8,"waitMs":{"awaiting_approval":{"median":1800000,"p90":5400000},"awaiting_ship":{"median":null,"p90":null}}},"#, "")).unwrap();
-        assert_eq!(old.gates.answered, 0, "a machine without the gate SLA still loads");
-        assert!(old.by_engine.is_none(), "a machine without groupBy=engine still loads");
+        assert_eq!(
+            old.gates.answered, 0,
+            "a machine without the gate SLA still loads"
+        );
+        assert!(
+            old.by_engine.is_none(),
+            "a machine without groupBy=engine still loads"
+        );
     }
 
     #[test]
@@ -3269,7 +3850,10 @@ pub(crate) mod tests {
         assert_eq!(flow.plan_cycle_ms.n, 2);
         assert_eq!(flow.coverage_rounds.value, Some(1.5));
         assert_eq!(flow.build_runs.value, None);
-        assert_eq!(flow.change_failure_rate.reason.as_deref(), Some("nothing records a failed change yet"));
+        assert_eq!(
+            flow.change_failure_rate.reason.as_deref(),
+            Some("nothing records a failed change yet")
+        );
         let old: Metrics = serde_json::from_str(METRICS_JSON).unwrap();
         assert!(old.flow.is_none());
     }
@@ -3278,15 +3862,33 @@ pub(crate) mod tests {
     fn engine_rows_and_month_caps_deserialise_and_a_machine_without_them_still_loads() {
         let m: Metrics = serde_json::from_str(&super::engine_tests::metrics_json(true)).unwrap();
         let rows = m.by_engine.unwrap();
-        assert_eq!((rows[0].name(), rows[0].stage_runs, rows[0].rate_limited, rows[0].cost_usd), ("claude:opus", 12, 2, 4.2));
+        assert_eq!(
+            (
+                rows[0].name(),
+                rows[0].stage_runs,
+                rows[0].rate_limited,
+                rows[0].cost_usd
+            ),
+            ("claude:opus", 12, 2, 4.2)
+        );
         assert_eq!((rows[1].name(), rows[1].mean_turns), ("(none)", None));
         let engines: Vec<EngineInfo> = serde_json::from_str(
             r#"[{"id":"a","available":false,"spentThisMonthUsd":20,"budgetUsd":20},{"id":"b","available":true,"spentThisMonthUsd":3.1,"budgetUsd":null},{"id":"c","available":true}]"#,
         )
         .unwrap();
-        assert_eq!((engines[0].month_line().as_deref(), engines[0].at_cap()), (Some("$20.00 / $20.00"), true));
-        assert_eq!((engines[1].month_line().as_deref(), engines[1].at_cap()), (Some("$3.10 / no cap"), false));
-        assert_eq!((engines[2].month_line(), engines[2].at_cap()), (None, false), "a machine before caps");
+        assert_eq!(
+            (engines[0].month_line().as_deref(), engines[0].at_cap()),
+            (Some("$20.00 / $20.00"), true)
+        );
+        assert_eq!(
+            (engines[1].month_line().as_deref(), engines[1].at_cap()),
+            (Some("$3.10 / no cap"), false)
+        );
+        assert_eq!(
+            (engines[2].month_line(), engines[2].at_cap()),
+            (None, false),
+            "a machine before caps"
+        );
     }
 
     #[test]
@@ -3324,15 +3926,39 @@ mod pr_tests {
              "failed":[{"name":"lint","state":"FAILURE","url":null}]},"unresolvedThreads":2,"split":"review_requested",
              "localPath":null,"task":{"id":"t1","state":"reviewing","route":"review"},"updatedAt":"2026-10-27T09:00:00Z","extra":1}]}}"#;
         let message: StreamMessage = serde_json::from_str(json).unwrap();
-        let StreamMessage::Prs { snapshot } = message else { panic!("not a prs message") };
+        let StreamMessage::Prs { snapshot } = message else {
+            panic!("not a prs message")
+        };
         assert_eq!(snapshot.polled_at.as_deref(), Some("2026-10-27T10:00:00Z"));
         let pr = &snapshot.prs[0];
         assert_eq!(pr.key(), "o/a#12");
-        assert_eq!(pr.split_enum(), Some(crate::pulls::PrSplit::ReviewRequested));
+        assert_eq!(
+            pr.split_enum(),
+            Some(crate::pulls::PrSplit::ReviewRequested)
+        );
         assert_eq!(pr.checks.failed[0].name, "lint");
         assert_eq!(pr.task.as_ref().map(|t| t.route.as_str()), Some("review"));
         assert_eq!(pr.checks_label(), "✗ lint");
         assert_eq!(pr.review_label(), "approved");
+    }
+
+    #[test]
+    fn a_snapshot_carries_the_clones_and_an_older_machine_sends_none() {
+        let with: PrSnapshot = serde_json::from_str(
+            r#"{"prs":[],"polledAt":null,"error":null,"clones":[
+            {"repo":"o/a","dest":"/code/a","state":"failed","startedAt":"2026-11-12T10:00:00.000Z","finishedAt":"2026-11-12T10:01:00.000Z",
+             "error":"Cloning into 'a'...\nfatal: repository not found\n"},
+            {"repo":"o/b","dest":"/code/b","state":"cloning","startedAt":"2026-11-12T10:00:00.000Z","finishedAt":null,"error":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(with.clones.len(), 2);
+        assert!(with.clones[0].is_failed());
+        assert_eq!(with.clones[0].error_line(), "fatal: repository not found");
+        assert!(with.clones[1].is_cloning());
+        assert_eq!(with.clones[1].finished_at, None);
+        let without: PrSnapshot =
+            serde_json::from_str(r#"{"prs":[],"polledAt":null,"error":null}"#).unwrap();
+        assert!(without.clones.is_empty());
     }
 
     #[test]
@@ -3370,10 +3996,12 @@ mod detail_tests {
     fn a_task_detail_reads_the_build_progress_and_an_older_machine_has_none() {
         let with: TaskDetail = serde_json::from_str(&r#"{"task":TASKJSON,"stageRuns":[],"approvals":[],"events":[],"buildProgress":{"scenarios":[{"id":"S1","state":"red"}],"budget":{"iterations":1,"tokens":null,"minutes":2.0,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},"lastCheckpoint":null}}"#.replace("TASKJSON", TASK)).unwrap();
         assert_eq!(with.build_progress.unwrap().scenarios[0].id, "S1");
-        let without: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{TASK},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        let without: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{TASK},"stageRuns":[],"approvals":[],"events":[]}}"#
+        ))
+        .unwrap();
         assert!(without.build_progress.is_none());
     }
-
 
     fn detail() -> TaskDetail {
         serde_json::from_str(&format!(
@@ -3404,11 +4032,20 @@ mod detail_tests {
         let d = detail();
         assert_eq!(d.approvals[0].kind.as_deref(), Some("awaiting_approval"));
         assert_eq!(d.approvals[0].reason.as_deref(), Some("criteria too vague"));
-        assert_eq!(d.approvals[0].decided_at.as_deref(), Some("2026-10-22T09:40:00Z"));
-        let old: Approval = serde_json::from_str(r#"{"requested":{"brief":"b"},"decision":null}"#).unwrap();
+        assert_eq!(
+            d.approvals[0].decided_at.as_deref(),
+            Some("2026-10-22T09:40:00Z")
+        );
+        let old: Approval =
+            serde_json::from_str(r#"{"requested":{"brief":"b"},"decision":null}"#).unwrap();
         assert_eq!(old.kind, None);
-        assert_eq!(old.kind_or_guess(), "awaiting_approval", "a plan-shaped request reads as the plan gate");
-        let cases: Approval = serde_json::from_str(r#"{"requested":{"cases":[]},"decision":null}"#).unwrap();
+        assert_eq!(
+            old.kind_or_guess(),
+            "awaiting_approval",
+            "a plan-shaped request reads as the plan gate"
+        );
+        let cases: Approval =
+            serde_json::from_str(r#"{"requested":{"cases":[]},"decision":null}"#).unwrap();
         assert_eq!(cases.kind_or_guess(), "awaiting_test_check");
     }
 
@@ -3448,14 +4085,33 @@ mod detail_tests {
               "verdicts":{"coverage":"proceed","plan":"flag","risk":"proceed"},"flagged":["plan"],"approvers":["ana"]}}"#,
         );
         assert_eq!(g.outcome(), None);
-        assert_eq!(g.outcome_line().as_deref(), Some("fast lane · the plan check was unsure; planned in full"));
-        assert_eq!(g.risk_line().as_deref(), Some("high (blast 2 · reversibility 1.5 · data 0)"));
-        assert_eq!(g.checks(), [("coverage".to_string(), "proceed".to_string()), ("plan".to_string(), "flag".to_string()), ("risk".to_string(), "proceed".to_string())]);
+        assert_eq!(
+            g.outcome_line().as_deref(),
+            Some("fast lane · the plan check was unsure; planned in full")
+        );
+        assert_eq!(
+            g.risk_line().as_deref(),
+            Some("high (blast 2 · reversibility 1.5 · data 0)")
+        );
+        assert_eq!(
+            g.checks(),
+            [
+                ("coverage".to_string(), "proceed".to_string()),
+                ("plan".to_string(), "flag".to_string()),
+                ("risk".to_string(), "proceed".to_string())
+            ]
+        );
         assert_eq!(g.approvals_line().as_deref(), Some("1 of 2 (ana)"));
-        let full = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"brief":"b","lane":"full","risk":{"level":"low","scores":{}}}}"#);
+        let full = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"brief":"b","lane":"full","risk":{"level":"low","scores":{}}}}"#,
+        );
         assert_eq!(full.outcome_line().as_deref(), Some("plan"));
         assert_eq!(full.risk_line().as_deref(), Some("low"));
-        assert_eq!(full.approvals_line(), None, "no one has approved a low-risk plan yet, and it needs one name only");
+        assert_eq!(
+            full.approvals_line(),
+            None,
+            "no one has approved a low-risk plan yet, and it needs one name only"
+        );
     }
 
     #[test]
@@ -3467,68 +4123,123 @@ mod detail_tests {
         assert_eq!(g.approvals_line().as_deref(), Some("1 of 3 (ana)"));
         assert!(g.rule_line().unwrap().contains("attestation"));
         // A gate from before the rule: high needs two, anything else one, and there is no rule text.
-        let old = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high"},"approvers":["ana"]}}"#);
-        assert_eq!((old.approvals_line().as_deref(), old.rule_line()), (Some("1 of 2 (ana)"), None));
-        let medium = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"medium"},"approvalRule":{"needed":1,"outside":"off","text":"Needs 1 approver."},"approvers":["ana"]}}"#);
+        let old = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high"},"approvers":["ana"]}}"#,
+        );
+        assert_eq!(
+            (old.approvals_line().as_deref(), old.rule_line()),
+            (Some("1 of 2 (ana)"), None)
+        );
+        let medium = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"medium"},"approvalRule":{"needed":1,"outside":"off","text":"Needs 1 approver."},"approvers":["ana"]}}"#,
+        );
         assert_eq!(medium.approvals_line().as_deref(), Some("approved by ana"));
     }
 
     #[test]
     fn the_gate_says_why_the_machine_raised_the_risk_after_the_plan() {
-        let g = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"high"},"riskRaised":"a step touches a control-plane file: CODEOWNERS"}}"#);
-        assert_eq!(g.risk_raised_line().as_deref(), Some("a step touches a control-plane file: CODEOWNERS"));
+        let g = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"high"},"riskRaised":"a step touches a control-plane file: CODEOWNERS"}}"#,
+        );
+        assert_eq!(
+            g.risk_raised_line().as_deref(),
+            Some("a step touches a control-plane file: CODEOWNERS")
+        );
         assert_eq!(gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"low"}}}"#).risk_raised_line(), None);
     }
 
     #[test]
     fn a_risk_a_person_set_is_shown_with_its_reason_and_whether_it_applied() {
-        let raised = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"medium"},"overrides":{"risk":{"level":"high","reason":"touches billing","applied":true}}}}"#);
-        assert_eq!(raised.risk_override_line().as_deref(), Some("you set high: applied (touches billing)"));
-        let lowered = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"high"},"overrides":{"risk":{"level":"low","reason":"behind a flag","applied":false}}}}"#);
-        assert_eq!(lowered.risk_override_line().as_deref(), Some("you set low, below the machine's high: kept as ground truth (behind a flag); approvers and Ship read high"));
+        let raised = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"medium"},"overrides":{"risk":{"level":"high","reason":"touches billing","applied":true}}}}"#,
+        );
+        assert_eq!(
+            raised.risk_override_line().as_deref(),
+            Some("you set high: applied (touches billing)")
+        );
+        let lowered = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"high"},"overrides":{"risk":{"level":"low","reason":"behind a flag","applied":false}}}}"#,
+        );
+        assert_eq!(
+            lowered.risk_override_line().as_deref(),
+            Some(
+                "you set low, below the machine's high: kept as ground truth (behind a flag); approvers and Ship read high"
+            )
+        );
         assert_eq!(gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"low"}}}"#).risk_override_line(), None);
     }
 
     #[test]
     fn the_risk_line_adds_the_product_and_the_complexity_when_the_plan_stage_gave_them() {
-        let g = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"medium","product":9,"complexity":"L","scores":{"blast_radius":2,"reversibility":2,"data_sensitivity":0}}}}"#);
-        assert_eq!(g.risk_line().as_deref(), Some("medium · product 9 · complexity L (blast 2 · reversibility 2 · data 0)"));
+        let g = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"medium","product":9,"complexity":"L","scores":{"blast_radius":2,"reversibility":2,"data_sensitivity":0}}}}"#,
+        );
+        assert_eq!(
+            g.risk_line().as_deref(),
+            Some("medium · product 9 · complexity L (blast 2 · reversibility 2 · data 0)")
+        );
     }
 
     #[test]
     fn a_decided_gate_reads_its_approvers_off_the_response() {
-        let g = gate(r#"{"kind":"awaiting_approval","decision":"approved","requested":{"risk":{"level":"high"}},"response":{"approvers":["ana","bo"],"approver":"bo"}}"#);
+        let g = gate(
+            r#"{"kind":"awaiting_approval","decision":"approved","requested":{"risk":{"level":"high"}},"response":{"approvers":["ana","bo"],"approver":"bo"}}"#,
+        );
         assert_eq!(g.approvers(), ["ana", "bo"]);
         assert_eq!(g.approvals_line().as_deref(), Some("2 of 2 (ana, bo)"));
-        let one = gate(r#"{"kind":"awaiting_approval","decision":"approved","requested":{"risk":{"level":"low"}},"response":{"approver":"ana"}}"#);
+        let one = gate(
+            r#"{"kind":"awaiting_approval","decision":"approved","requested":{"risk":{"level":"low"}},"response":{"approver":"ana"}}"#,
+        );
         assert_eq!(one.approvals_line().as_deref(), Some("approved by ana"));
     }
 
     #[test]
     fn a_triage_gate_is_a_reply_or_an_archive_with_its_text_and_reason() {
-        let reply = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"outcome":"conversation","reply":"Use `pnpm dev`.","brief":"asks how"}}"#);
+        let reply = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"outcome":"conversation","reply":"Use `pnpm dev`.","brief":"asks how"}}"#,
+        );
         assert_eq!(reply.outcome(), Some("conversation"));
         assert_eq!(reply.outcome_line().as_deref(), Some("conversation"));
         assert_eq!(reply.reply().as_deref(), Some("Use `pnpm dev`."));
-        let archive = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"outcome":"archive","archiveReason":"duplicate"}}"#);
-        assert_eq!(archive.outcome_line().as_deref(), Some("archive (duplicate)"));
+        let archive = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"outcome":"archive","archiveReason":"duplicate"}}"#,
+        );
+        assert_eq!(
+            archive.outcome_line().as_deref(),
+            Some("archive (duplicate)")
+        );
         assert_eq!(archive.archive_reason().as_deref(), Some("duplicate"));
-        let legacy = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"brief":"b"}}"#);
-        assert_eq!((legacy.outcome_line(), legacy.risk_line(), legacy.approvals_line()), (None, None, None));
+        let legacy =
+            gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"brief":"b"}}"#);
+        assert_eq!(
+            (
+                legacy.outcome_line(),
+                legacy.risk_line(),
+                legacy.approvals_line()
+            ),
+            (None, None, None)
+        );
         assert!(legacy.checks().is_empty());
     }
 
     #[test]
-    fn the_scenarios_come_from_the_plan_gate_that_carries_them_and_a_legacy_test_check_still_wins() {
+    fn the_scenarios_come_from_the_plan_gate_that_carries_them_and_a_legacy_test_check_still_wins()
+    {
         let plan_only: TaskDetail = serde_json::from_str(&format!(
             r#"{{"task":{TASK},"stageRuns":[],"events":[],"approvals":[{{"id":"p","kind":"awaiting_approval","decision":null,
               "requested":{{"brief":"b","cases":[{{"title":"t","criterion":"c1","approach":"run it"}}]}}}}]}}"#
         ))
         .unwrap();
         assert_eq!(plan_only.cases().len(), 1);
-        assert_eq!(plan_only.cases_approval().map(|a| a.kind_or_guess()), Some("awaiting_approval"));
+        assert_eq!(
+            plan_only.cases_approval().map(|a| a.kind_or_guess()),
+            Some("awaiting_approval")
+        );
         let legacy = detail();
-        assert_eq!(legacy.cases_approval().map(|a| a.kind_or_guess()), Some("awaiting_test_check"));
+        assert_eq!(
+            legacy.cases_approval().map(|a| a.kind_or_guess()),
+            Some("awaiting_test_check")
+        );
         assert_eq!(legacy.cases().len(), 3);
         let none: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{TASK},"stageRuns":[],"events":[],"approvals":[{{"id":"p","kind":"awaiting_approval","decision":null,"requested":{{"brief":"b"}}}}]}}"#)).unwrap();
         assert!(none.cases_approval().is_none() && none.cases().is_empty());
@@ -3537,9 +4248,20 @@ mod detail_tests {
     #[test]
     fn a_run_knows_how_long_it_took_and_a_running_one_counts_from_its_start() {
         let d = detail();
-        assert_eq!(d.stage_runs[0].took(unix_secs("2026-10-22T12:00:00Z").unwrap()).as_deref(), Some("3m"));
-        assert_eq!(d.stage_runs[2].took(unix_secs("2026-10-22T10:15:00Z").unwrap()).as_deref(), Some("4m"));
-        let bare: StageRun = serde_json::from_str(r#"{"stage":"triage","attempt":1,"status":"passed"}"#).unwrap();
+        assert_eq!(
+            d.stage_runs[0]
+                .took(unix_secs("2026-10-22T12:00:00Z").unwrap())
+                .as_deref(),
+            Some("3m")
+        );
+        assert_eq!(
+            d.stage_runs[2]
+                .took(unix_secs("2026-10-22T10:15:00Z").unwrap())
+                .as_deref(),
+            Some("4m")
+        );
+        let bare: StageRun =
+            serde_json::from_str(r#"{"stage":"triage","attempt":1,"status":"passed"}"#).unwrap();
         assert_eq!(bare.took(0), None);
         assert!(bare.cases.is_empty());
     }
@@ -3549,7 +4271,10 @@ mod detail_tests {
         let d = detail();
         assert_eq!(d.artifacts.len(), 1);
         assert_eq!(d.artifacts[0].kind, "screenshot");
-        let old: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{TASK},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        let old: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{TASK},"stageRuns":[],"approvals":[],"events":[]}}"#
+        ))
+        .unwrap();
         assert!(old.artifacts.is_empty());
     }
 
@@ -3560,12 +4285,18 @@ mod detail_tests {
         assert_eq!(cases.len(), 3);
         assert_eq!(cases[0].criterion.as_deref(), Some("handles a/b & c"));
         assert_eq!(cases[1].criterion.as_deref(), Some("handles a/b & c"));
-        assert_eq!(cases[2].criterion.as_deref(), Some("exports UTF-8 with a BOM"));
+        assert_eq!(
+            cases[2].criterion.as_deref(),
+            Some("exports UTF-8 with a BOM")
+        );
         assert_eq!(cases[0].title, "rejects a bad password");
         assert_eq!(cases[0].approach, "run the suite");
         assert_eq!(cases[0].result, Some(true));
         assert_eq!(cases[1].result, Some(false));
-        assert_eq!(cases[2].approach, "hexdump", "an older `test` field still reads as the approach");
+        assert_eq!(
+            cases[2].approach, "hexdump",
+            "an older `test` field still reads as the approach"
+        );
     }
 
     #[test]
@@ -3573,14 +4304,36 @@ mod detail_tests {
         let d = detail();
         let rows = criteria_summary(&d);
         let names: Vec<&str> = rows.iter().map(|r| r.criterion.as_str()).collect();
-        assert_eq!(names, ["handles a/b & c", "exports UTF-8 with a BOM", "declares charset in header"]);
-        assert_eq!((rows[0].planned, rows[0].cases, rows[0].verify), (Some(true), 2, Some((1, 2))));
-        assert_eq!((rows[1].planned, rows[1].cases, rows[1].verify), (Some(true), 1, Some((1, 1))));
-        assert_eq!((rows[2].planned, rows[2].cases, rows[2].verify), (Some(false), 0, None));
-        let bare: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{TASK},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        assert_eq!(
+            names,
+            [
+                "handles a/b & c",
+                "exports UTF-8 with a BOM",
+                "declares charset in header"
+            ]
+        );
+        assert_eq!(
+            (rows[0].planned, rows[0].cases, rows[0].verify),
+            (Some(true), 2, Some((1, 2)))
+        );
+        assert_eq!(
+            (rows[1].planned, rows[1].cases, rows[1].verify),
+            (Some(true), 1, Some((1, 1)))
+        );
+        assert_eq!(
+            (rows[2].planned, rows[2].cases, rows[2].verify),
+            (Some(false), 0, None)
+        );
+        let bare: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{TASK},"stageRuns":[],"approvals":[],"events":[]}}"#
+        ))
+        .unwrap();
         let rows = criteria_summary(&bare);
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].planned, None, "no plan yet: the column is empty, not a cross");
+        assert_eq!(
+            rows[0].planned, None,
+            "no plan yet: the column is empty, not a cross"
+        );
     }
 }
 
@@ -3602,31 +4355,47 @@ pub(crate) mod engine_tests {
     pub fn metrics_json(by_engine: bool) -> String {
         let rows = r#""byEngine":[{"engine":"claude:opus","stageRuns":12,"firstPassRate":0.75,"escalations":1,"rateLimited":2,"meanTurns":14.5,"meanDurationMs":90000,"costUsd":4.2},
             {"engine":null,"stageRuns":3,"firstPassRate":null,"escalations":0,"rateLimited":0,"meanTurns":null,"meanDurationMs":null,"costUsd":0}],"futureKey""#;
-        if by_engine { tests::METRICS_JSON.replace(r#""futureKey""#, rows) } else { tests::METRICS_JSON.to_string() }
+        if by_engine {
+            tests::METRICS_JSON.replace(r#""futureKey""#, rows)
+        } else {
+            tests::METRICS_JSON.to_string()
+        }
     }
 
     pub fn catalog() -> EngineCatalog {
-        EngineCatalog { packs: serde_json::from_str(PACKS).unwrap(), engines: serde_json::from_str(ENGINES).unwrap() }
+        EngineCatalog {
+            packs: serde_json::from_str(PACKS).unwrap(),
+            engines: serde_json::from_str(ENGINES).unwrap(),
+        }
     }
 
     #[test]
     fn a_task_and_a_run_from_before_engines_still_parse() {
         let task: Task = serde_json::from_str(&tests::task_json("")).unwrap();
         assert!(task.stages.is_empty());
-        let task: Task = serde_json::from_str(&tests::task_json(r#","stages":{"triage":"codex:sol"}"#)).unwrap();
-        assert_eq!(task.stages.get("triage").map(String::as_str), Some("codex:sol"));
-        let old: StageRun = serde_json::from_str(r#"{"stage":"triage","attempt":1,"status":"running"}"#).unwrap();
+        let task: Task =
+            serde_json::from_str(&tests::task_json(r#","stages":{"triage":"codex:sol"}"#)).unwrap();
+        assert_eq!(
+            task.stages.get("triage").map(String::as_str),
+            Some("codex:sol")
+        );
+        let old: StageRun =
+            serde_json::from_str(r#"{"stage":"triage","attempt":1,"status":"running"}"#).unwrap();
         assert_eq!(old.engine, None);
     }
 
     #[test]
-    fn only_the_packs_a_task_runs_are_offered_and_an_engine_without_its_credential_is_off_with_why() {
+    fn only_the_packs_a_task_runs_are_offered_and_an_engine_without_its_credential_is_off_with_why()
+    {
         let catalog = catalog();
         let ids: Vec<&str> = catalog.task_packs().iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, ["triage", "test_design"]);
         let choices = catalog.choices(catalog.task_packs()[0]);
         assert_eq!(choices.len(), 3);
-        assert_eq!((choices[0].engine.as_deref(), choices[0].label.as_str()), (None, "default (claude:opus)"));
+        assert_eq!(
+            (choices[0].engine.as_deref(), choices[0].label.as_str()),
+            (None, "default (claude:opus)")
+        );
         assert_eq!(choices[1].off, None);
         assert_eq!(choices[2].engine.as_deref(), Some("codex:sol"));
         assert_eq!(choices[2].off.as_deref(), Some("no ~/.codex/auth.json"));
@@ -3635,9 +4404,15 @@ pub(crate) mod engine_tests {
     #[test]
     fn a_detail_from_before_the_ship_view_parses_and_a_new_one_carries_it() {
         let task = tests::task_json("");
-        let old: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        let old: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[]}}"#
+        ))
+        .unwrap();
         assert_eq!(old.ship, None);
-        let null: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[],"ship":null}}"#)).unwrap();
+        let null: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[],"ship":null}}"#
+        ))
+        .unwrap();
         assert_eq!(null.ship, None);
         let new: TaskDetail = serde_json::from_str(&format!(
             r#"{{"task":{task},"stageRuns":[],"approvals":[],"events":[],"ship":{{"pr":{{"slug":"o/a","number":3,"url":"https://github.com/o/a/pull/3"}},"head":"abc","ready":false,
@@ -3646,8 +4421,18 @@ pub(crate) mod engine_tests {
         ))
         .unwrap();
         let ship = new.ship.unwrap();
-        assert_eq!((ship.pr.number, ship.fix_rounds, ship.review.required), (3, 2, None));
-        assert_eq!(ship.checklist, vec![ShipItem { id: "ci".into(), ok: false, detail: "CI is running".into() }]);
+        assert_eq!(
+            (ship.pr.number, ship.fix_rounds, ship.review.required),
+            (3, 2, None)
+        );
+        assert_eq!(
+            ship.checklist,
+            vec![ShipItem {
+                id: "ci".into(),
+                ok: false,
+                detail: "CI is running".into()
+            }]
+        );
         let sparse: ShipView = serde_json::from_str("{}").unwrap();
         assert!(!sparse.ready && sparse.checklist.is_empty());
     }

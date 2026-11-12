@@ -187,6 +187,8 @@ export const PackId = z.enum([
   "conversation_reply",
   // A decision at the Ticket Machine: what to do with a scored ticket where the scores alone cannot tell (do now, schedule, decline, needs decision).
   "ticket_recommend",
+  // A decision on a PR under review (a PR-link context, run on demand): which open Jira ticket or board card, if any, the PR implements; the machine asks it only when no fact linked the review.
+  "pr_link",
   // Drafts the reply that declines a ticket, from the ticket and its assessment as data; the draft waits for a person.
   "ticket_reply",
   // The loop guard's judge (a check context of kind loop, run on demand by the build watch): is a run stuck, and why.
@@ -249,6 +251,31 @@ const PrFacts = z.object({
   headRef: z.string(),
 });
 
+/** A Jira ticket the PR names, as the reviewer checks the change against it (foreign text: rendered as quoted data). */
+export const ReviewTicket = z.object({
+  key: z.string(),
+  url: z.string(),
+  type: z.string(),
+  status: z.string(),
+  summary: z.string(),
+  /** Plain text, capped by the host. */
+  description: z.string(),
+  /** The issue's acceptance criteria when its description has a section for them; null otherwise. */
+  acceptanceCriteria: z.string().nullable(),
+});
+export type ReviewTicket = z.infer<typeof ReviewTicket>;
+
+/** A board card the review is linked to, as the reviewer checks the change against it (foreign text: rendered as quoted data). */
+export const ReviewCard = z.object({
+  id: z.string().min(1),
+  title: z.string(),
+  /** The card's acceptance criteria, as plain lines. */
+  criteria: z.array(z.string()),
+  /** The card's description, an excerpt capped by the host. */
+  description: z.string(),
+});
+export type ReviewCard = z.infer<typeof ReviewCard>;
+
 /** For reviewing (a PR task): what the host fetched about someone's PR. */
 export const ReviewContext = z.object({
   pr: PrFacts,
@@ -258,6 +285,10 @@ export const ReviewContext = z.object({
   existingComments: z.array(
     z.object({ path: z.string().nullable(), line: z.number().int().nullable(), author: z.string(), body: z.string() }),
   ),
+  /** The Jira tickets the PR names (title, head branch, body), when Jira is connected; absent reads as none linked. */
+  tickets: z.array(ReviewTicket).optional(),
+  /** The board cards the review is linked to (by a fact, or by the pr_link decision); absent reads as none. Their criteria and description are a spec too. */
+  cards: z.array(ReviewCard).optional(),
 });
 export type ReviewContext = z.infer<typeof ReviewContext>;
 
@@ -948,6 +979,20 @@ export const DedupContext = z.object({
 });
 export type DedupContext = z.infer<typeof DedupContext>;
 
+/** What pr_link reads: the PR under review and up to ten candidates (open Jira tickets and open board cards, numbered by slot), flattened and capped by the machine. A stranger wrote all of it. */
+export const PrLinkContext = z.object({
+  pr: z.object({
+    title: z.string().max(500),
+    branch: z.string().max(300),
+    /** An excerpt of the PR's description. */
+    body: z.string().max(3000),
+    /** The changed paths. */
+    files: z.array(z.string().max(300)).max(40),
+  }),
+  candidates: z.array(z.object({ slot: z.number().int().min(1).max(10), kind: z.enum(["jira", "card"]), id: z.string().max(200), title: z.string().max(500), excerpt: z.string().max(1000) })).max(10),
+});
+export type PrLinkContext = z.infer<typeof PrLinkContext>;
+
 /** What the Ticket Machine's decision packs read: one ticket, flattened and capped by the machine (a ticket is a stranger's words), with its enrichment. */
 export const TicketContext = z.object({
   key: z.string().max(200),
@@ -1164,6 +1209,8 @@ export const StageInput = z.object({
     split: SplitContext.nullable().optional(),
     /** For intake_dedup: the new report and the shortlist to judge. */
     dedup: DedupContext.nullable().optional(),
+    /** For pr_link: the PR under review and the candidates to judge. */
+    prLink: PrLinkContext.nullable().optional(),
     /** For the Ticket Machine's decisions (ticket_validity): the ticket and its enrichment. */
     ticket: TicketContext.nullable().optional(),
     /** For the Conversation Machine's decisions (conversation_assess): the thread, its author and the candidates. */

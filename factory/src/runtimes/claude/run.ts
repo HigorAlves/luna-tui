@@ -49,6 +49,13 @@ function instructions(pack: Pack, factoryRoot: string): Instructions {
 
 export const claude: Runtime = claudeRuntime();
 
+/** Where the SDK saves an output too large to show inline (`<config dir>/projects/<cwd>/<session>/tool-results/`) and tells
+ *  the model to read it. Only that folder, never the config dir, which holds the SDK's own state; the session mount is per
+ *  task, so it also holds the card's earlier runs' results, which a stage may read. Not set outside a container. */
+function sessionResults(): string[] {
+  return env.CLAUDE_CONFIG_DIR ? [join(env.CLAUDE_CONFIG_DIR, "projects", "*", "*", "tool-results")] : [];
+}
+
 /** The stage's guard policy: the pack's write access and branch, and the roots every path a tool
  *  names must lie in. The skills' own files are read-only roots, as is the stage input. */
 export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "input" | "paths">): GuardContext {
@@ -59,7 +66,7 @@ export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "i
     branchPrefix: branchPrefixFor(input.task),
     workRoot: paths.work,
     outRoot: paths.out,
-    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin"), GRAPH_ROOT] },
+    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin"), GRAPH_ROOT, ...sessionResults()] },
     web: pack.kind === "agent" && pack.access.web,
     // e2e signs in with the credentials its targets name (`env:QA_PASSWORD`), inline as "$QA_PASSWORD".
     expandable: (input.context.qaTargets ?? []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])),
@@ -73,7 +80,6 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   const mask = input.context.economy?.mask;
   const pack = maskedPack(ctx.pack, mask);
   if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
-  const maskedLuna = ctx.pack.access.luna.filter((tool) => !pack.access.luna.includes(tool));
   // A call's event joins the stream's tool_use and the hook's decision, whichever comes first.
   const calls = new CallJoin(emit, isGuarded);
   // The token economy (RFC 0007), when the machine sent its input: each finished call is read and folded
@@ -91,13 +97,15 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
       })
     : {};
   // `delegate` rides on the luna server when the pack hands work to a helper on another runtime.
-  const { tools, allowedTools } = claudeTools(pack.access);
+  const { tools, allowedTools } = claudeTools(pack.access, paths.work);
   const delegating = ctx.delegate ? [`mcp__luna__${DELEGATE}`] : [];
   const options = {
     cwd: paths.work,
+    // The folders a stage reads or writes beside /work: without them the SDK refuses a shell read of /in/stage.json that the guard's roots allow.
+    additionalDirectories: [paths.input, paths.out, paths.scratch],
     agent: pack.agent,
     agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId),
-    systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: FACTORY_RULES },
+    systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: [FACTORY_RULES, ...commandsLine(pack.access.commands)].join("\n") },
     plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
     // With skills masked the SDK offers only the rest (it hides the others from the model and rejects their calls); with no mask the key is absent.
     ...(pack !== ctx.pack && ctx.pack.kind === "agent" && pack.skills.length !== ctx.pack.skills.length ? { skills: pack.skills.map((skill) => `${PLUGIN_NAME}:${skill}`) } : {}),
@@ -109,7 +117,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     permissionMode: "dontAsk" as const,
     maxTurns: input.limits.maxTurns,
     outputFormat: { type: "json_schema" as const, schema: answerJsonSchema(pack) },
-    mcpServers: { luna: lunaServer(luna.call, ctx.delegate ?? null, maskedLuna) },
+    mcpServers: { luna: lunaServer(luna.call, ctx.delegate ?? null, pack.access.luna) },
     hooks: {
       PreToolUse: preToolUseGuards(guardPolicy({ ...ctx, pack }), (id, tool, toolInput, decision) => calls.decided(id, tool, toolInput, decision)),
       ...economy,
@@ -127,6 +135,13 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   }
 
   return drive(ctx, transport, prompt, options, calls, end);
+}
+
+/** The shell's command list as one more rule line. The SDK refuses an unlisted command with a generic message that names
+ *  no command (a model once read it as "Bash is broken" and escalated), and eve's guard names the list but this runtime's
+ *  rules did not. A pack with no commands has no shell, so no line. */
+function commandsLine(commands: string[]): string[] {
+  return commands.length === 0 ? [] : [`Commands this stage's Bash may run: ${commands.join(", ")}. A command outside them is refused with a message that names no command; that means the command is not listed, not that Bash is broken.`];
 }
 
 /** No attribution on a commit or a PR, from any run: they are the person's work. */
@@ -212,8 +227,11 @@ async function drive(ctx: RunContext, transport: Transport | undefined, prompt: 
           else if (block.type === "tool_use") calls.requested(block.id, block.name, block.input);
         }
       } else if (msg.type === "user" && Array.isArray(msg.message?.content)) {
-        // A call's result, without its output: the transcript has never shown it.
+        // A call's result, without its output: the transcript has never shown it, and events stay free of what a command printed (it can hold secrets). Only a denial's reason, below, is kept.
         for (const block of msg.message.content) if (block.type === "tool_result") calls.settled(block.tool_use_id, block.is_error !== true);
+      } else if (msg.type === "system" && msg.subtype === "permission_denied") {
+        // The SDK's own rules (dontAsk) refused a call the guard let through: say so, with the SDK's reason.
+        calls.denied(msg.tool_use_id, msg.message || msg.decision_reason || `permission to use ${msg.tool_name} was denied by the SDK's rules (${msg.decision_reason_type ?? "no reason given"})`);
       } else if (msg.type === "rate_limit_event") {
         const info = msg.rate_limit_info;
         if (info.status === "rejected") {

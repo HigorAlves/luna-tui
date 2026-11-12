@@ -13,7 +13,7 @@ const checks = (...states: Array<[string, string]>): Check[] =>
 const finding = { path: "a.ts", line: 1, start_line: null, severity: "test", title: "red", body: "", suggestion_code: null, confidence: 1 };
 const pack = (answer: Record<string, unknown>): StageResult => ({ outcome: "pass", detail: { answer } });
 
-function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] }; classOf?: string | null; reruns?: number; autoRebase?: number; learn?: boolean; lastRed?: { recordId: string; job: string } | null; staleAfterRerun?: number }) {
+function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] }; classOf?: string | null; reruns?: number; autoRebase?: number; learn?: boolean; lastRed?: { recordId: string; job: string } | null; staleAfterRerun?: number; resolveConflicts?: unknown; defaultBranch?: string | null; defaultRebase?: boolean; exec?: (command: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }> }) {
   let poll = 0;
   let facts = 0;
   // A re-run's jobs get new ids, as on GitHub: after the n-th re-run a check's link ends in /job/<n+1> (after `staleAfterRerun` polls that
@@ -32,10 +32,11 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
       reruns++;
       sinceRerun = 0;
     },
+    ...(opts.defaultBranch !== undefined ? { defaultBranch: async () => opts.defaultBranch ?? null } : {}),
     ...(opts.mergeable ? { prFacts: async () => ({ mergeable: opts.mergeable![Math.min(facts++, opts.mergeable!.length - 1)] }) as never } : {}),
   });
   const rebase = vi.fn(async () => opts.rebase ?? { ok: true as const, onto: "origin/main" });
-  const exec = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
+  const exec = vi.fn(opts.exec ?? (async (..._args: unknown[]) => ({ code: 0, stdout: "", stderr: "" })));
   const runPack = vi.fn(async (_context: StageContext, _ci?: unknown) => opts.pack ?? pack({ verdict: "green" }));
   const sleeps: number[] = [];
   const decide = vi.fn<Decide>(async () => tagged({ answer: { class: { choice: opts.classOf ?? "real", confidence: 0.9 } }, recordId: "rec-ci" }));
@@ -52,7 +53,8 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
     maxWaitMs: opts.maxWaitMs ?? 1_000,
     parentRef: async () => opts.parent?.ref ?? null,
     graceMs: opts.graceMs,
-    rebase,
+    ...(opts.defaultRebase ? {} : { rebase }),
+    ...(opts.resolveConflicts ? { resolveConflicts: opts.resolveConflicts as never } : {}),
     exec,
     sleep: async (ms) => {
       sleeps.push(ms);
@@ -69,6 +71,22 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
   } as StageContext;
   return { run, context, github, runPack, sleeps, rebase, exec, decide, learned };
 }
+
+describe("ci_watch on a card whose own PR already merged", () => {
+  it("passes as shipped without watching a check, rebasing or pushing", async () => {
+    const { run, context, github, rebase, exec } = setup({ polls: [checks(["lint", "FAILURE"])] });
+    github.prMerged.mockResolvedValue({ merged: true, mergedSha: "m".repeat(40), state: "closed", mergedAt: "2026-11-10T00:36:48Z" });
+    github.prFacts.mockResolvedValue({ baseRefName: "main" } as never);
+    github.defaultBranch.mockResolvedValue("main");
+    const result = await run({ ...context, recordedPrs: [214] });
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ alreadyMerged: true, number: 214, merged: { by: "person" } });
+    expect(github.prChecks).not.toHaveBeenCalled();
+    expect(rebase).not.toHaveBeenCalled();
+    // Only the read of the branch's head, to look for commits made after the merge: nothing is pushed or rebased.
+    expect(exec.mock.calls.filter((c) => !(c[1] as string[]).includes("rev-parse"))).toEqual([]);
+  });
+});
 
 describe("ci_failure_class learns from what happened next", () => {
   const red = (...later: Check[][]) => [checks(["lint", "FAILURE"]), ...later];
@@ -337,6 +355,56 @@ describe("ci_watch on a conflicting PR", () => {
     expect(result).toMatchObject({ outcome: "pass", detail: { step: "checks", rebased: true } });
     expect(rebase).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["push", "--force-with-lease", "origin", "hardness/t1"]));
+  });
+
+  it("puts the branch back where it was when the forced push after the rebase fails, and pins the lease to that head", async () => {
+    const BEFORE = "e".repeat(40);
+    const { run, context, exec } = setup({
+      polls: [green],
+      mergeable: ["CONFLICTING"],
+      exec: async (_command, args) => (args.includes("rev-parse") ? { code: 0, stdout: `${BEFORE}\n`, stderr: "" } : args.some((a) => a.startsWith("--force-with-lease")) ? { code: 1, stdout: "", stderr: "could not read Username" } : { code: 0, stdout: "", stderr: "" }),
+    });
+    const result = await run(context);
+    expect(result.outcome).toBe("fail");
+    expect(String(result.detail?.error)).toContain("could not read Username");
+    expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["push", `--force-with-lease=refs/heads/hardness/t1:${BEFORE}`, "origin", "hardness/t1"]));
+    expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["reset", "--hard", "--quiet", BEFORE]));
+  });
+
+  describe("when the rebase stops on a real conflict", () => {
+    const TIP = "c".repeat(40);
+    const stops = { ok: false as const, error: "stopped", conflicts: ["a.ts"] };
+    const tipExec = async (_command: string, args: string[]) => ({ code: 0, stdout: args.some((a) => a.startsWith("refs/remotes/origin/")) ? `${TIP}\n` : "", stderr: "" });
+    const merged = () => vi.fn(async () => ({ ok: true as const, head: "d".repeat(40), resolved: ["a.ts"], result: { outcome: "escalated" as const, detail: {} } }));
+
+    it("hands it to the merge round against GitHub's default branch, and watches the checks again without a forced push", async () => {
+      const resolveConflicts = merged();
+      const { run, context, exec } = setup({ polls: [green], mergeable: ["CONFLICTING", "MERGEABLE"], rebase: stops, exec: tipExec, resolveConflicts, defaultBranch: "main" });
+      const result = await run(context);
+      expect(result).toMatchObject({ outcome: "pass", detail: { step: "checks", rebased: true } });
+      expect(resolveConflicts).toHaveBeenCalledWith(expect.objectContaining({ task: expect.objectContaining({ id: "t1" }) }), { slug: "a/b", number: 7, base: { sha: TIP, name: "main" }, label: "ci", pack: null });
+      expect(exec).not.toHaveBeenCalledWith("git", expect.arrayContaining(["--force-with-lease"]));
+    });
+
+    it("escalates with the files and the merge round's reason when it did not land", async () => {
+      const resolveConflicts = vi.fn(async () => ({ ok: false as const, result: { outcome: "escalated" as const, detail: { reason: "the checks failed after merging main" } } }));
+      const { run, context } = setup({ polls: [green], mergeable: ["CONFLICTING"], rebase: stops, exec: tipExec, resolveConflicts, defaultBranch: "main" });
+      const result = await run(context);
+      expect(result.outcome).toBe("escalated");
+      expect(result.detail).toMatchObject({ verdict: "conflict_unresolvable", reason: expect.stringMatching(/stops on: a\.ts.*merging instead did not resolve it: the checks failed after merging main/) });
+    });
+
+    it("escalates as before when no merge round is wired", async () => {
+      const { run, context } = setup({ polls: [green], mergeable: ["CONFLICTING"], rebase: stops, defaultBranch: "main" });
+      expect((await run(context)).detail).toMatchObject({ verdict: "conflict_unresolvable", reason: expect.stringContaining("a.ts") });
+    });
+  });
+
+  it("rebases onto the default branch GitHub names, not the one the user's checkout is on", async () => {
+    const { run, context, exec } = setup({ polls: [green], mergeable: ["CONFLICTING", "MERGEABLE"], defaultRebase: true, defaultBranch: "trunk" });
+    expect(await run(context)).toMatchObject({ outcome: "pass", detail: { rebased: true } });
+    expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["fetch", "--quiet", "--end-of-options", "origin", "trunk"]), expect.anything());
+    expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["rebase", "--empty=drop", "origin/trunk"]));
   });
 
   it("goes to a person, with no rebase and no push, when verify.auto_rebase is 0", async () => {

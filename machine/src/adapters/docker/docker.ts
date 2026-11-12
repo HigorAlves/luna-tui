@@ -126,8 +126,8 @@ export interface SandboxRun {
   noProxy?: string[];
   /** `uid:gid` the container runs as. The run folder, the session dir and the worktree are bind
    *  mounts owned by the host user, so the stage must be that user to write them (the image's
-   *  `node` user is uid 1000, which is not the host user on a Linux host). Defaults to the
-   *  machine's own uid:gid; null keeps the image's user. */
+   *  `node` user is uid 1000, which is not the host user on a Linux host). Defaults to `hostUser()`;
+   *  null keeps the image's user. */
   user?: string | null;
   /** Extra bind mounts, after the credential's (a repo's code graph at `/graph`, read-only). */
   mounts?: CredentialMount[];
@@ -135,9 +135,12 @@ export interface SandboxRun {
   entrypoint?: string[];
 }
 
-/** The machine's own uid:gid, the owner of everything it mounts; undefined where the platform has none. */
+/** The uid:gid a stage or check container runs as. `MACHINE_STAGE_USER` first: in the compose machine, whose own uid is root's, `pnpm start` passes the host user's. Else the machine's own uid:gid (`pnpm dev` runs on the host). A root machine with nothing set gets undefined, so the container keeps the image's `node` user: a stage must never run as root, which hides the permission failures CI would show and lets Claude Code refuse some modes. */
 export function hostUser(): string | undefined {
-  return typeof process.getuid === "function" && typeof process.getgid === "function" ? `${process.getuid()}:${process.getgid()}` : undefined;
+  const given = process.env.MACHINE_STAGE_USER?.trim();
+  if (given && /^\d+:\d+$/.test(given) && !given.startsWith("0:")) return given;
+  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") return undefined;
+  return process.getuid() === 0 ? undefined : `${process.getuid()}:${process.getgid()}`;
 }
 
 export interface SandboxResult {
@@ -182,6 +185,8 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     // Temp files live on the tmpfs; the SDK's sessions too, unless a host dir is mounted below.
     "-e", "TMPDIR=/tmp",
     "-e", `CLAUDE_CONFIG_DIR=${run.sessionMount ? "/session" : "/tmp/claude"}`,
+    // Claude Code's telemetry and error reports go to a host the egress list does not allow: every Claude stage would log a refusal that buries a real one.
+    "-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
     // The credential is passed by name; its value is only in docker's environment.
     ...Object.keys(run.credential.env).flatMap((name) => ["-e", name]),
     // A scoped secret the same way: by name here, the value only in docker's environment.
@@ -441,11 +446,14 @@ export function sandboxExecutor(
     /** The owner's store of this repository's scoped secrets; a check gets only the names it declares. */
     secrets?: SecretStore;
   },
-  run: typeof execInSandbox = execInSandbox) {
-  return async (
+  run: typeof execInSandbox = execInSandbox,
+  given: Partial<RunDeps> = {}) {
+  const deps: RunDeps = { ...HOST_DEPS, ...given };
+  const one = async (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[]; image?: string; egressAllow?: readonly string[] } = {},
+    options: ExecOptions = {},
+    shared?: SharedRun,
   ): Promise<ExecResult & { blocked?: BlockedRow[] }> => {
     if (!options.cwd) throw new Error("sandboxExecutor needs cwd: the worktree to mount");
     // The image is the repository's, named by the caller: never guessed from the folder. No repository, the machine's image.
@@ -467,7 +475,7 @@ export function sandboxExecutor(
       if (loaded.missing.length > 0) throw new SecretsMissingError(loaded.missing, images.secrets.folder(options.repoPath));
       secrets = loaded.values;
     }
-    return run(
+    const result = await run(
       {
         ...(secrets ? { secrets } : {}),
         name: `hardness-check-${randomUUID().slice(0, 8)}`,
@@ -477,15 +485,72 @@ export function sandboxExecutor(
         argv: [command, ...args],
         env,
         // A file not yet on disk (the setup proposal, a file being proved) adds its own `sandbox.egress.allow` on top of the machine's list.
-        ...(images.egress ? { egress: withAllow(await images.egress(options.repoPath), options.egressAllow) } : {}),
+        // In a session the network is the session's: it was opened once, with the list, for every check of the pass.
+        ...(images.egress && !shared ? { egress: withAllow(await images.egress(options.repoPath), options.egressAllow) } : {}),
         ...(images.limitsOf ? { limits: await images.limitsOf(options.repoPath) } : {}),
         gitIdentity,
         services: options.services,
         cacheVolume: cacheVolumeFor(dirname(options.cwd)),
+        ...(shared ? { ...(shared.card ? { cardNetwork: shared.card } : {}), servicesUp: true, network: shared.services.network, serviceEnv: shared.services.env } : {}),
       },
       { signal: options.signal, timeoutMs: options.timeoutMs },
     );
+    return shared ? { ...result, blocked: await shared.fresh(hostRedactor(secrets ?? {})) } : result;
   };
+
+  /** One pass of checks on one card network, with the repository's services started once: each check
+   *  joins them instead of starting its own Postgres, network and proxy. `close` removes them. */
+  const session = async (options: SessionOptions): Promise<ChecksSession> => {
+    const spec = images.egress ? withAllow(await images.egress(options.repoPath), options.egressAllow) : null;
+    const name = `hardness-checks-${randomUUID().slice(0, 8)}`;
+    const card = spec ? await deps.openCardNetwork(name, spec, { proxyImage: spec.proxyImage }) : null;
+    let services: Awaited<ReturnType<RunDeps["startServices"]>>;
+    try {
+      services = await deps.startServices(name, options.services, card ? { network: { name: card.name, dns: card.dns } } : {});
+    } catch (error) {
+      await card?.teardown();
+      throw error;
+    }
+    // The proxy lists everything it refused so far: a check is told only of what is new since the last.
+    const seen = new Set<string>();
+    const fresh = async (redactHost: (host: string) => string): Promise<BlockedRow[]> => {
+      const rows = card ? ((await card.blocked()) as BlockedRow[]) : [];
+      const added = rows.filter((row) => !seen.has(`${row.via}|${row.host}|${row.port}`));
+      for (const row of added) seen.add(`${row.via}|${row.host}|${row.port}`);
+      return added.map((row) => ({ ...row, host: redactHost(row.host) }));
+    };
+    let closed = false;
+    return {
+      exec: (command, args, execOptions) => one(command, args, execOptions, { card, services, fresh }),
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        await services.teardown();
+        await card?.teardown();
+      },
+    };
+  };
+  const exec = (command: string, args: string[], options: ExecOptions = {}): Promise<ExecResult & { blocked?: BlockedRow[] }> => one(command, args, options);
+  return Object.assign(exec, { session });
+}
+
+type ExecOptions = { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[]; image?: string; egressAllow?: readonly string[] };
+export interface SessionOptions {
+  cwd: string;
+  repoPath?: string;
+  services: Record<string, ServiceSpec>;
+  egressAllow?: readonly string[];
+}
+/** What a session hands each check: the network and the services it shares. */
+interface SharedRun {
+  card: CardNetwork | null;
+  services: { network: string | null; env: Record<string, string> };
+  fresh: (redactHost: (host: string) => string) => Promise<BlockedRow[]>;
+}
+/** An exec that shares one network and one set of services with the others of its pass; `close` removes them. */
+export interface ChecksSession {
+  exec: (command: string, args: string[], options?: ExecOptions) => Promise<ExecResult & { blocked?: BlockedRow[] }>;
+  close(): Promise<void>;
 }
 
 /** A step declares a secret the owner's store does not hold: nothing ran. The detail names the secret and the folder, never a value. */

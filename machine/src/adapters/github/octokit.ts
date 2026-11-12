@@ -1,10 +1,10 @@
 // The GitHub port on Octokit (REST, GraphQL and pagination). One client, one token, no CLI.
 // The client is injected so a test can hand in a stub shaped like Octokit; `createGitHub`
 // builds the real one from a token.
-import type { ReviewRule } from "../../domain/review-rule.ts";
+import { isShipCommand, type ReviewRule } from "../../domain/review-rule.ts";
 import { Octokit } from "octokit";
 
-import { PR_QUERY, type PrNode } from "../../domain/pull-request.ts";
+import { PR_QUERY, type PrNode, prFields } from "../../domain/pull-request.ts";
 import {
   type Check,
   type GhIssue,
@@ -14,6 +14,7 @@ import {
   type PrActivity,
   type PrRef,
   type PrReview,
+  type OpenPrs,
   type PrSearchHit,
   type ReviewPost,
   repoRef,
@@ -24,7 +25,7 @@ export interface OctokitLike {
   rest: {
     users: { getAuthenticated(): Promise<{ data: { login: string } }> };
     teams: { listForAuthenticatedUser: unknown; listMembersInOrg: unknown };
-    search: { issuesAndPullRequests(params: { q: string; per_page?: number }): Promise<{ data: { items: Array<{ number: number; repository_url: string; updated_at: string }> } }> };
+    search: { issuesAndPullRequests(params: { q: string; per_page?: number; page?: number }): Promise<{ data: { items: Array<{ number: number; repository_url: string; updated_at: string }> } }> };
     pulls: {
       get(params: Record<string, unknown>): Promise<{ data: unknown }>;
       list(params: Record<string, unknown>): Promise<{ data: Array<{ html_url: string; number: number; draft?: boolean }> }>;
@@ -81,6 +82,12 @@ const RESOLVE_MUTATION = `mutation($threadId:ID!){ resolveReviewThread(input:{th
 const RESOLVED_QUERY = `query($threadId:ID!){ node(id:$threadId){ ... on PullRequestReviewThread{isResolved} } }`;
 const READY_MUTATION = `mutation($id:ID!){ markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}} }`;
 
+/** A comment whose whole body is `/ship` is the release approval when a person writes it, and the machine's comments carry its own login, so the machine never posts one
+ *  (the probe has no other way to tell them apart). Every conversation comment the machine writes or edits goes through here. */
+function refuseShipCommand(body: string): void {
+  if (isShipCommand(body)) throw new GitHubError("refusing to post a comment that is only /ship: that is the release approval, and only a person gives it");
+}
+
 /** Re-throws anything Octokit raises as a GitHubError carrying GitHub's message. */
 async function call<T>(what: string, run: () => Promise<T>): Promise<T> {
   try {
@@ -91,6 +98,73 @@ async function call<T>(what: string, run: () => Promise<T>): Promise<T> {
     const status = (error as { status?: number })?.status;
     throw new GitHubError(`${what} failed${status ? ` (${status})` : ""}: ${message}`);
   }
+}
+
+/** One search page, and how many pages GitHub's search will serve (it stops at 1000 results). */
+const SEARCH_PAGE = 100;
+const SEARCH_MAX_PAGES = 10;
+
+const AFFILIATIONS = "[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]";
+/** The nested lists the bulk read keeps short: it reads hundreds of PRs a call, and GitHub prices a call by the nodes it could return. */
+const BULK_LIMITS = { requests: 50, threads: 50, contexts: 50 };
+/** Pass 1 pages the repositories this many at a time; it asks for a count and no PR, so a page is cheap. */
+const REPOS_PAGE = 100;
+/** The most PRs one repo gives per page. */
+const BULK_PRS = 50;
+/** GitHub prices a call by the PR slots it asks for (repos x `first`, times the nested lists), not by the PRs it gets: a pass 2 call asks for
+ *  `first` close to what its repos hold, and holds at most this many repos and about this many slots, so a call stays at a few points. */
+const PASS2_MAX_REPOS = 5;
+const PASS2_MAX_SLOTS = 125;
+/** The `first` a repo with this many open PRs is asked with: the smallest bucket that holds it, and a page of 50 beyond (the rest is paged on its own). */
+const PASS2_BUCKETS = [5, 10, 25, 50];
+/** A repo's PRs are paged up to this many pages (500 PRs); a repo with more is reported as capped. */
+const BULK_MAX_PR_PAGES = 10;
+
+const BULK_PR_FIELDS = prFields(BULK_LIMITS);
+const RATE_LIMIT = "rateLimit{cost remaining}";
+/** Pass 1: every repo you own, collaborate on or reach through an organisation, with how many PRs it has open and nothing else. Archived repos take no PRs, so they are not asked for. */
+const REACHABLE_REPOS_QUERY = `query($after:String){ ${RATE_LIMIT} viewer{ repositories(affiliations:${AFFILIATIONS}, ownerAffiliations:${AFFILIATIONS}, isArchived:false, first:${REPOS_PAGE}, after:$after){
+  pageInfo{hasNextPage endCursor}
+  nodes{ id nameWithOwner isArchived pullRequests(states:OPEN){ totalCount } } } } }`;
+/** Pass 2: the newest open PRs of some repos by id, `first` of each and the fields the inbox reads of each. */
+const repoPrsQuery = (first: number) => `query($ids:[ID!]!){ ${RATE_LIMIT} nodes(ids:$ids){ ... on Repository { nameWithOwner
+  pullRequests(states:OPEN, first:${first}, orderBy:{field:UPDATED_AT, direction:DESC}){ pageInfo{hasNextPage endCursor} nodes{ ${BULK_PR_FIELDS} } } } } }`;
+/** The next page of one repo's open PRs. */
+const REPO_PRS_QUERY = `query($owner:String!,$name:String!,$after:String){ ${RATE_LIMIT} repository(owner:$owner,name:$name){
+  pullRequests(states:OPEN, first:${BULK_PRS}, after:$after, orderBy:{field:UPDATED_AT, direction:DESC}){ pageInfo{hasNextPage endCursor} nodes{ ${BULK_PR_FIELDS} } } } }`;
+
+interface PrPage {
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+  nodes: PrNode[];
+}
+
+/** What GitHub says a call cost, on every query of the poll. */
+interface RateLimited {
+  rateLimit?: { cost: number; remaining: number } | null;
+}
+
+interface ReachableReposAnswer extends RateLimited {
+  viewer: {
+    repositories: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: Array<{ id: string; nameWithOwner: string; isArchived?: boolean; pullRequests: { totalCount: number } }>;
+    };
+  };
+}
+
+interface RepoPrsAnswer extends RateLimited {
+  nodes: Array<{ nameWithOwner: string; pullRequests: PrPage } | null>;
+}
+
+/** The `first` that pass 2 asks of a repo holding `open` PRs. */
+const bucketOf = (open: number): number => PASS2_BUCKETS.find((b) => open <= b) ?? BULK_PRS;
+
+/** Splits the repos of one bucket into calls of at most PASS2_MAX_REPOS repos and about PASS2_MAX_SLOTS requested PRs. */
+function chunkRepos<T>(items: T[], first: number): T[][] {
+  const size = Math.max(1, Math.min(PASS2_MAX_REPOS, Math.floor(PASS2_MAX_SLOTS / first)));
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
 }
 
 /** `owner/name` from the search API's `repository_url` (`https://api.github.com/repos/owner/name`). */
@@ -119,18 +193,121 @@ export class OctokitGitHub implements GitHub {
     const seen = new Set<string>();
     const hits: PrSearchHit[] = [];
     for (const filter of ["review-requested:@me", "author:@me"]) {
-      const { data } = await call("searching pull requests", () =>
-        this.octokit.rest.search.issuesAndPullRequests({ q: `is:pr is:open ${filter}`, per_page: 100 }),
-      );
-      for (const item of data.items) {
-        const repo = slugFromRepositoryUrl(item.repository_url);
-        const key = `${repo}#${item.number}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        hits.push({ repo, number: item.number, updatedAt: item.updated_at });
+      for (let page = 1; page <= SEARCH_MAX_PAGES; page++) {
+        const { data } = await call("searching pull requests", () =>
+          this.octokit.rest.search.issuesAndPullRequests({ q: `is:pr is:open ${filter}`, per_page: SEARCH_PAGE, page }),
+        );
+        for (const item of data.items) {
+          const repo = slugFromRepositoryUrl(item.repository_url);
+          const key = `${repo}#${item.number}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          hits.push({ repo, number: item.number, updatedAt: item.updated_at });
+        }
+        // A short page is the last one; GitHub's search never returns past 1000 results anyway.
+        if (data.items.length < SEARCH_PAGE) break;
       }
     }
     return hits;
+  }
+
+  /** Two passes, because GitHub prices a call by the PR slots it asks for and most repos hold no open PR. Pass 1 pages every reachable repo for its open count alone;
+   *  pass 2 reads the PRs of the repos with some, by id, a few repos a call with `first` close to what they hold. A repo with more than a page is paged on its own. */
+  async listOpenPrs(): Promise<OpenPrs> {
+    let calls = 0;
+    let points = 0;
+    let remaining: number | null = null;
+    const spend = (answer: RateLimited): void => {
+      calls++;
+      if (answer.rateLimit) {
+        points += answer.rateLimit.cost;
+        remaining = answer.rateLimit.remaining;
+      }
+    };
+
+    // Pass 1: the repos, and how many open PRs each has.
+    const withPrs: Array<{ id: string; slug: string; open: number }> = [];
+    let after: string | null = null;
+    do {
+      const data: ReachableReposAnswer = await call("listing the open PRs of your repositories", () =>
+        this.octokit.graphql<ReachableReposAnswer>(REACHABLE_REPOS_QUERY, { after }),
+      );
+      spend(data);
+      const repositories = data.viewer.repositories;
+      for (const repo of repositories.nodes) {
+        if (repo.isArchived || repo.pullRequests.totalCount < 1) continue;
+        withPrs.push({ id: repo.id, slug: repo.nameWithOwner, open: repo.pullRequests.totalCount });
+      }
+      after = repositories.pageInfo.hasNextPage ? repositories.pageInfo.endCursor : null;
+    } while (after !== null);
+
+    // Pass 2: the PRs of the repos that have some, grouped by bucket so no call asks for far more than its repos hold.
+    const buckets = new Map<number, typeof withPrs>();
+    for (const repo of withPrs) {
+      const first = bucketOf(repo.open);
+      buckets.set(first, [...(buckets.get(first) ?? []), repo]);
+    }
+    const read = new Map<string, { prs: PrNode[]; page: PrPage; open: number }>();
+    const skipped: NonNullable<OpenPrs["skipped"]> = [];
+    // GitHub refuses a query it finds too heavy ("Resource limits for this query exceeded"), times out on one (502), or now and then answers
+    // nothing: such a call is split in half and asked again, down to one repo, which is then skipped and named. One heavy repo never empties the list.
+    const readChunk = async (chunk: typeof withPrs, first: number): Promise<void> => {
+      let data: RepoPrsAnswer;
+      try {
+        data = await call(`listing the open PRs of ${chunk.length} repositories`, async () => {
+          const answer = await this.octokit.graphql<RepoPrsAnswer | undefined>(repoPrsQuery(first), { ids: chunk.map((r) => r.id) });
+          if (!answer?.nodes) throw new GitHubError("GitHub answered no data");
+          return answer;
+        });
+      } catch (error) {
+        if (chunk.length > 1) {
+          const half = Math.ceil(chunk.length / 2);
+          await readChunk(chunk.slice(0, half), first);
+          await readChunk(chunk.slice(half), first);
+          return;
+        }
+        calls++;
+        skipped.push({ repo: chunk[0]!.slug, error: String((error as { message?: string })?.message ?? error).split("\n")[0]!.slice(0, 200) });
+        return;
+      }
+      spend(data);
+      for (const node of data.nodes) {
+        // A repo that went away between the passes answers null.
+        if (!node?.pullRequests) continue;
+        const open = chunk.find((r) => r.slug === node.nameWithOwner)?.open ?? node.pullRequests.nodes.length;
+        read.set(node.nameWithOwner, { prs: [...node.pullRequests.nodes], page: node.pullRequests, open });
+      }
+    };
+    for (const [first, group] of [...buckets].sort((x, y) => x[0] - y[0])) {
+      for (const chunk of chunkRepos(group, first)) await readChunk(chunk, first);
+    }
+
+    // A repo with more than one page of open PRs is paged on its own, a few pages at most.
+    const capped: OpenPrs["capped"] = [];
+    for (const [slug, entry] of read) {
+      let pages = 1;
+      while (entry.page.pageInfo.hasNextPage && pages < BULK_MAX_PR_PAGES) {
+        const { owner, repo: name } = repoRef(slug);
+        const cursor: string | null = entry.page.pageInfo.endCursor;
+        const more: { repository: { pullRequests: PrPage } | null } & RateLimited = await call(`listing the open PRs of ${slug}`, () =>
+          this.octokit.graphql<{ repository: { pullRequests: PrPage } | null } & RateLimited>(REPO_PRS_QUERY, { owner, name, after: cursor }),
+        );
+        spend(more);
+        pages++;
+        entry.page = more.repository?.pullRequests ?? { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+        entry.prs.push(...entry.page.nodes);
+      }
+      if (entry.page.pageInfo.hasNextPage) capped.push({ repo: slug, open: entry.open });
+    }
+
+    // Out in the order pass 1 listed the repos, newest first within a repo.
+    const prs: OpenPrs["prs"] = [];
+    for (const { slug } of withPrs) {
+      for (const node of read.get(slug)?.prs ?? []) prs.push({ repo: slug, node });
+    }
+    console.log(`github prs (all): ${prs.length} PRs in ${read.size} repos, ${calls} calls, ${points} points, ${remaining ?? "?"} left`);
+    if (skipped.length > 0) console.warn(`github prs (all): skipped ${skipped.length} repos GitHub would not read: ${skipped.map((s) => `${s.repo} (${s.error})`).join("; ")}`);
+    return { prs, capped, calls, ...(skipped.length > 0 ? { skipped } : {}) };
   }
 
   async prFacts(slug: string, number: number): Promise<PrNode | null> {
@@ -401,6 +578,7 @@ export class OctokitGitHub implements GitHub {
   }
 
   async commentOnIssue(slug: string, number: number, body: string): Promise<void> {
+    refuseShipCommand(body);
     const { owner, repo } = repoRef(slug);
     await call(`commenting on ${slug}#${number}`, () => this.octokit.rest.issues.createComment({ owner, repo, issue_number: number, body }));
   }
@@ -487,6 +665,7 @@ export class OctokitGitHub implements GitHub {
   }
 
   async updateComment(slug: string, commentId: number, body: string): Promise<void> {
+    refuseShipCommand(body);
     const { owner, repo } = repoRef(slug);
     await call(`updating comment ${commentId} on ${slug}`, () => this.octokit.rest.issues.updateComment({ owner, repo, comment_id: commentId, body }));
   }

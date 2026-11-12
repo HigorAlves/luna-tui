@@ -20,11 +20,12 @@ use ureq::{
 
 use crate::backlog::BacklogEntry;
 use crate::economy::Economy;
-use crate::tickets::{TicketEntry, encode_key};
 use crate::model::{
-    EngineCatalog, EngineInfo, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
-    StreamMessage, Task, TaskDetail, TaskDiff, TestCase, TicketText,
+    EngineCatalog, EngineInfo, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction,
+    PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots, StreamMessage, Task,
+    TaskDetail, TaskDiff, TestCase, TicketText,
 };
+use crate::tickets::{TicketEntry, encode_key};
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -43,17 +44,33 @@ pub enum Incoming {
     Offline(String),
     Message(StreamMessage),
     /// A `/tasks/:id` answer, fetched off the UI thread.
-    Detail { id: String, detail: Option<TaskDetail> },
+    Detail {
+        id: String,
+        detail: Option<TaskDetail>,
+    },
     /// A `/tasks/:id/diff` answer: the files, and `file`'s patch when one was asked for.
     /// `generation` is the app's diff generation when the fetch left; an answer from an
     /// older one is stale (the branch moved meanwhile) and is dropped.
-    Diff { id: String, file: Option<String>, diff: Result<TaskDiff, String>, generation: u64 },
+    Diff {
+        id: String,
+        file: Option<String>,
+        diff: Result<TaskDiff, String>,
+        generation: u64,
+    },
     /// The watch picker's completions (user groups, channels), fetched off the UI thread when the Slack view opens.
-    SlackCatalog { groups: Vec<SlackOption>, channels: Vec<SlackOption> },
+    SlackCatalog {
+        groups: Vec<SlackOption>,
+        channels: Vec<SlackOption>,
+    },
     /// A `/jira/search` answer for `query`, fetched off the UI thread; dropped when the prompt has moved on.
-    JiraHits { query: String, hits: Result<Vec<JiraIssueHit>, String> },
+    JiraHits {
+        query: String,
+        hits: Result<Vec<JiraIssueHit>, String>,
+    },
     /// The answer to `R` in Pulls, polled off the UI thread.
     PrsPolled(Result<PrSnapshot, String>),
+    /// The same for the All repos tab; an older machine answers with an error, which the tab shows.
+    PrsAllPolled(Result<PrSnapshot, ListError>),
     /// The answer to `R` in Slack, polled off the UI thread.
     SlackPolled(Result<SlackSnapshot, String>),
 }
@@ -72,6 +89,35 @@ pub struct Machine {
 
 type Reply = Result<Response<Body>, ureq::Error>;
 
+/// Why a call for the All repos list failed, keeping the HTTP status beside the message: only a 404 says the machine lacks the route.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListError {
+    /// The machine's status, or none when it never answered.
+    pub status: Option<u16>,
+    pub message: String,
+}
+
+impl ListError {
+    #[cfg(test)]
+    pub fn new(status: Option<u16>, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+
+    /// The machine answered 404: an older machine without `/github/prs/all`.
+    pub fn not_found(&self) -> bool {
+        self.status == Some(404)
+    }
+}
+
+impl std::fmt::Display for ListError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
 impl Machine {
     /// `HARDNESS_MACHINE_URL`, or whichever of the dev and Docker machines is up (dev first).
     pub fn from_env() -> Self {
@@ -82,9 +128,23 @@ impl Machine {
     }
 
     fn with(base: String, candidates: Vec<String>, token: Option<String>) -> Self {
-        let agent = builder(&token).http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT)).build().into();
-        let slow = builder(&token).http_status_as_error(false).timeout_global(Some(POLL_TIMEOUT)).build().into();
-        Self { base: Arc::new(RwLock::new(base)), candidates, agent, slow, token }
+        let agent = builder(&token)
+            .http_status_as_error(false)
+            .timeout_global(Some(REQUEST_TIMEOUT))
+            .build()
+            .into();
+        let slow = builder(&token)
+            .http_status_as_error(false)
+            .timeout_global(Some(POLL_TIMEOUT))
+            .build()
+            .into();
+        Self {
+            base: Arc::new(RwLock::new(base)),
+            candidates,
+            agent,
+            slow,
+            token,
+        }
     }
 
     /// A machine at a known address, for tests that stand up their own.
@@ -104,7 +164,12 @@ impl Machine {
 
     /// Follows `/events` on a background thread; see `spawn_stream`.
     pub fn follow_stream(&self, tx: Sender<Incoming>) {
-        spawn_stream(Arc::clone(&self.base), self.candidates.clone(), self.token.clone(), tx);
+        spawn_stream(
+            Arc::clone(&self.base),
+            self.candidates.clone(),
+            self.token.clone(),
+            tx,
+        );
     }
 
     fn url(&self, path: &str) -> String {
@@ -118,22 +183,40 @@ impl Machine {
 
     /// `json`, keeping the machine's error code (`stage_started`) beside its message.
     fn coded(reply: Reply) -> Result<Value, (String, String)> {
-        let mut response = reply.map_err(|e| (String::new(), format!("machine unreachable: {e}")))?;
+        Self::coded_body(reply).map_err(|(code, message, _)| (code, message))
+    }
+
+    /// `coded`, and the whole error body with it, for the refusals that carry more than a message (`gaps`).
+    fn coded_body(reply: Reply) -> Result<Value, (String, String, Value)> {
+        let mut response = reply.map_err(|e| {
+            (
+                String::new(),
+                format!("machine unreachable: {e}"),
+                Value::Null,
+            )
+        })?;
         let status = response.status().as_u16();
         if status == 204 {
             return Ok(Value::Null);
         }
-        let body: Value = response
-            .body_mut()
-            .read_json()
-            .map_err(|e| (String::new(), format!("unexpected reply from the machine: {e}")))?;
+        let body: Value = response.body_mut().read_json().map_err(|e| {
+            (
+                String::new(),
+                format!("unexpected reply from the machine: {e}"),
+                Value::Null,
+            )
+        })?;
         if status >= 400 {
             let code = body["error"].as_str().unwrap_or_default().to_string();
             // A 409 `not_schedulable` names what the item waits for: the message carries it.
             if body["blockedBy"].is_array() {
-                return Err((code, crate::backlog::refusal_text(&body)));
+                return Err((code, crate::backlog::refusal_text(&body), body));
             }
-            return Err((code, body["message"].as_str().unwrap_or("request failed").to_string()));
+            let message = body["message"]
+                .as_str()
+                .unwrap_or("request failed")
+                .to_string();
+            return Err((code, message, body));
         }
         Ok(body)
     }
@@ -152,7 +235,14 @@ impl Machine {
 
     /// The stage pool, from `/health`.
     pub fn health(&self) -> Result<Health, String> {
-        Self::typed(self.agent.get(self.url("/health")).call())
+        match self.agent.get(self.url("/health")).call() {
+            // A machine that cannot do its job (no GitHub token, no git identity, stub stages) answers 503 with its problems and still its pool.
+            Ok(mut response) if response.status().as_u16() == 503 => response
+                .body_mut()
+                .read_json()
+                .map_err(|e| format!("unexpected reply from the machine: {e}")),
+            reply => Self::typed(reply),
+        }
     }
 
     /// Take no new work; running stages finish.
@@ -167,13 +257,22 @@ impl Machine {
 
     /// Resize the pool at run time.
     pub fn set_slots(&self, max: u64) -> Result<Slots, String> {
-        Self::typed(self.agent.patch(self.url("/slots")).send_json(json!({ "max": max })))
+        Self::typed(
+            self.agent
+                .patch(self.url("/slots"))
+                .send_json(json!({ "max": max })),
+        )
     }
 
     /// Metrics for a window: `7d` or `30d`.
     /// One repo's numbers (`Some(None)` is the tasks with no repo); `group` adds a row per
     /// `repo` or per `engine`.
-    pub fn metrics_for(&self, since: &str, repo: Option<Option<&str>>, group: Option<&str>) -> Result<Metrics, String> {
+    pub fn metrics_for(
+        &self,
+        since: &str,
+        repo: Option<Option<&str>>,
+        group: Option<&str>,
+    ) -> Result<Metrics, String> {
         let mut query = format!("/metrics?since={since}");
         if let Some(repo) = repo {
             query.push_str(&format!("&repo={}", urlencoding(repo.unwrap_or(""))));
@@ -190,8 +289,14 @@ impl Machine {
 
     /// The task branch against its base; with `file`, that file's patch too.
     pub fn diff(&self, id: &str, file: Option<&str>) -> Result<TaskDiff, String> {
-        let query = file.map(|f| format!("?file={}", urlencoding(f))).unwrap_or_default();
-        Self::typed(self.agent.get(self.url(&format!("/tasks/{id}/diff{query}"))).call())
+        let query = file
+            .map(|f| format!("?file={}", urlencoding(f)))
+            .unwrap_or_default();
+        Self::typed(
+            self.agent
+                .get(self.url(&format!("/tasks/{id}/diff{query}")))
+                .call(),
+        )
     }
 
     pub fn create(&self, text: &TicketText) -> Result<Task, String> {
@@ -213,20 +318,35 @@ impl Machine {
             "criteria": text.criteria,
             "repoPath": text.repo_path,
         });
-        Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}"))).send_json(body))
+        Self::typed(
+            self.agent
+                .patch(self.url(&format!("/tasks/{id}")))
+                .send_json(body),
+        )
     }
 
     /// Edits triage's proposed plan while it awaits your approval. Slices aren't sent: they
     /// stay as triage wrote them.
     pub fn edit_plan(&self, id: &str, edit: &PlanEdit) -> Result<Task, String> {
         let body = json!({ "brief": edit.brief, "criteria": edit.criteria, "assumptions": edit.assumptions });
-        Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/plan"))).send_json(body))
+        Self::typed(
+            self.agent
+                .patch(self.url(&format!("/tasks/{id}/plan")))
+                .send_json(body),
+        )
     }
 
     /// Corrects the Triage Record at a gate: `(key, value)` pairs from `RECORD_FIELDS`, enum values only.
     pub fn edit_record(&self, id: &str, changes: &[(String, String)]) -> Result<Task, String> {
-        let body: serde_json::Map<String, Value> = changes.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
-        Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/record"))).send_json(Value::Object(body)))
+        let body: serde_json::Map<String, Value> = changes
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect();
+        Self::typed(
+            self.agent
+                .patch(self.url(&format!("/tasks/{id}/record")))
+                .send_json(Value::Object(body)),
+        )
     }
 
     /// Replaces test_design's cases while they wait for your check.
@@ -235,7 +355,11 @@ impl Machine {
             .iter()
             .map(|c| json!({ "title": c.title, "criterion": c.criterion, "approach": c.approach }))
             .collect();
-        Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/cases"))).send_json(json!({ "cases": cases })))
+        Self::typed(
+            self.agent
+                .patch(self.url(&format!("/tasks/{id}/cases")))
+                .send_json(json!({ "cases": cases })),
+        )
     }
 
     /// `GET /packs` and `GET /engines` together: what each stage may run on, and what this
@@ -254,7 +378,12 @@ impl Machine {
 
     /// Approves the exact base the repository's luna.yaml names now; the machine refuses any other reference.
     pub fn approve_base(&self, repo: &str, base: &str) -> Result<(), String> {
-        Self::json(self.agent.post(self.url("/repos/base/approve")).send_json(json!({ "repo": repo, "base": base }))).map(|_| ())
+        Self::json(
+            self.agent
+                .post(self.url("/repos/base/approve"))
+                .send_json(json!({ "repo": repo, "base": base })),
+        )
+        .map(|_| ())
     }
 
     pub fn engines(&self) -> Result<Vec<EngineInfo>, String> {
@@ -262,8 +391,16 @@ impl Machine {
     }
 
     /// Sets the task's engine for one pack; `None` goes back to luna.yaml's, else the pack's default.
-    pub fn set_stage_engine(&self, id: &str, pack: &str, engine: Option<&str>) -> Result<Task, String> {
-        let reply = self.agent.patch(self.url(&format!("/tasks/{id}/stages"))).send_json(json!({ "stages": { pack: engine } }));
+    pub fn set_stage_engine(
+        &self,
+        id: &str,
+        pack: &str,
+        engine: Option<&str>,
+    ) -> Result<Task, String> {
+        let reply = self
+            .agent
+            .patch(self.url(&format!("/tasks/{id}/stages")))
+            .send_json(json!({ "stages": { pack: engine } }));
         let body = Self::coded(reply).map_err(|(code, message)| match code.as_str() {
             "stage_started" => format!("{pack} already ran on this ticket; its engine stays"),
             _ => message,
@@ -288,7 +425,22 @@ impl Machine {
     /// Approves (or sends back) whatever the task waits on, with an optional reason, as
     /// `LUNA_APPROVER` when it is set: a plan of High risk needs two distinct names.
     pub fn decide(&self, id: &str, approve: bool, reason: Option<&str>) -> Result<Task, String> {
-        self.post(&format!("/tasks/{id}/decision"), decision_body(approve, reason, approver().as_deref()))
+        self.post(
+            &format!("/tasks/{id}/decision"),
+            decision_body(approve, reason, approver().as_deref()),
+        )
+    }
+
+    /// Approves as `decide` does, excusing `untestable` criteria at a plan gate whose coverage report has gaps. A plan with a gap
+    /// left answers `409 coverage_gaps`: that comes back as `Refused::CoverageGaps`, so the board can offer the picker.
+    pub fn approve_excusing(&self, id: &str, untestable: &[String]) -> Result<Task, Refused> {
+        let reply = self
+            .agent
+            .post(self.url(&format!("/tasks/{id}/decision")))
+            .send_json(approval_body(untestable, approver().as_deref()));
+        let body = Self::coded_body(reply)
+            .map_err(|(code, message, body)| refusal_of(code, message, &body))?;
+        serde_json::from_value(body).map_err(|e| Refused::Other(format!("unexpected reply: {e}")))
     }
 
     /// Keeps a split card as one card: the split gate approved with `keepWhole`, recorded with the approver's name. Only a split gate takes it.
@@ -302,7 +454,10 @@ impl Machine {
 
     /// Rejects the plan the task waits on: the card ends archived as rejected and the comment is kept. Only the plan gate takes it.
     pub fn reject(&self, id: &str, comment: &str) -> Result<Task, String> {
-        self.post(&format!("/tasks/{id}/decision"), reject_body(comment, approver().as_deref()))
+        self.post(
+            &format!("/tasks/{id}/decision"),
+            reject_body(comment, approver().as_deref()),
+        )
     }
 
     /// Approves the memory review without writing its proposed rules to project-context.md.
@@ -318,7 +473,10 @@ impl Machine {
             .iter()
             .map(|(q, a)| (q.clone(), Value::String(a.clone())))
             .collect();
-        self.post(&format!("/tasks/{id}/answers"), json!({ "answers": answers }))
+        self.post(
+            &format!("/tasks/{id}/answers"),
+            json!({ "answers": answers }),
+        )
     }
 
     pub fn abort(&self, id: &str) -> Result<Task, String> {
@@ -336,23 +494,45 @@ impl Machine {
     }
 
     /// Says whether the card's Evidence Pack was useful (`y` / `n`), with a short note for a no. The machine keeps it as ground truth; it labels no decision.
-    pub fn evidence_feedback(&self, id: &str, useful: bool, note: Option<&str>) -> Result<Task, String> {
-        self.post(&format!("/tasks/{id}/evidence/feedback"), evidence_feedback_body(useful, note))
+    pub fn evidence_feedback(
+        &self,
+        id: &str,
+        useful: bool,
+        note: Option<&str>,
+    ) -> Result<Task, String> {
+        self.post(
+            &format!("/tasks/{id}/evidence/feedback"),
+            evidence_feedback_body(useful, note),
+        )
     }
 
     /// Dismisses a finding the last Verify reported (the card waits at the ship gate, or its PR is watched); the reason is kept as ground truth, out of the stream.
-    pub fn dismiss_finding(&self, id: &str, finding: &str, reason: Option<&str>) -> Result<Task, String> {
-        self.post(&format!("/tasks/{id}/findings/{}/dismiss", path_segment(finding)), dismiss_body(reason))
+    pub fn dismiss_finding(
+        &self,
+        id: &str,
+        finding: &str,
+        reason: Option<&str>,
+    ) -> Result<Task, String> {
+        self.post(
+            &format!("/tasks/{id}/findings/{}/dismiss", path_segment(finding)),
+            dismiss_body(reason),
+        )
     }
 
     /// Adds a finding Verify missed, with a severity (`blocker`, `should_fix`, `nit`) and a title.
     pub fn add_finding(&self, id: &str, severity: &str, title: &str) -> Result<Task, String> {
-        self.post(&format!("/tasks/{id}/findings"), json!({ "severity": severity, "title": title }))
+        self.post(
+            &format!("/tasks/{id}/findings"),
+            json!({ "severity": severity, "title": title }),
+        )
     }
 
     /// Corrects the reason an escalation was decided with, to one of `ESCALATION_REASONS`; the card stays where it is.
     pub fn correct_escalation_reason(&self, id: &str, reason: &str) -> Result<Task, String> {
-        self.post(&format!("/tasks/{id}/escalation-reason"), json!({ "reason": reason }))
+        self.post(
+            &format!("/tasks/{id}/escalation-reason"),
+            json!({ "reason": reason }),
+        )
     }
 
     pub fn resume(&self, id: &str) -> Result<Task, String> {
@@ -371,7 +551,11 @@ impl Machine {
 
     /// A repository's economy; a 404 is the machine running with the economy off.
     pub fn economy(&self, repo: &str) -> Result<Economy, String> {
-        let reply = self.agent.get(self.url("/economy")).query("repo", repo).call();
+        let reply = self
+            .agent
+            .get(self.url("/economy"))
+            .query("repo", repo)
+            .call();
         if reply.as_ref().is_ok_and(|r| r.status().as_u16() == 404) {
             return Err(crate::economy::OFF.to_string());
         }
@@ -384,7 +568,11 @@ impl Machine {
         if let (Some(out), Some(add)) = (body.as_object_mut(), extra.as_object()) {
             out.extend(add.clone());
         }
-        Self::json(self.agent.post(self.url(&format!("/economy/{path}"))).send_json(body))
+        Self::json(
+            self.agent
+                .post(self.url(&format!("/economy/{path}")))
+                .send_json(body),
+        )
     }
 
     /// The tickets the ticket machine holds, with their drafts.
@@ -394,17 +582,30 @@ impl Machine {
 
     /// A tap on a ticket: `approve`, `edit`, `ignore`, `card` or `backlog`; `body` carries the draft id and hash (and the text for an edit).
     pub fn ticket_act(&self, key: &str, action: &str, body: Value) -> Result<(), String> {
-        Self::json(self.agent.post(self.url(&format!("/tickets/{}/{action}", encode_key(key)))).send_json(body)).map(|_| ())
+        Self::json(
+            self.agent
+                .post(self.url(&format!("/tickets/{}/{action}", encode_key(key))))
+                .send_json(body),
+        )
+        .map(|_| ())
     }
 
     /// `bump`, `promote` or `decline` on a backlog item.
     pub fn backlog_act(&self, id: &str, action: &str) -> Result<(), String> {
-        Self::json(self.agent.post(self.url(&format!("/backlog/{id}/{action}"))).send_json(json!({}))).map(|_| ())
+        Self::json(
+            self.agent
+                .post(self.url(&format!("/backlog/{id}/{action}")))
+                .send_json(json!({})),
+        )
+        .map(|_| ())
     }
 
     /// A person's answer at Intake's dedup gate: `choice` is `duplicate`, `related` or `neither`, `of` ids the gate listed.
     pub fn answer_dedup(&self, id: &str, choice: &str, of: &[String]) -> Result<Task, String> {
-        self.post(&format!("/tasks/{id}/dedup"), json!({ "choice": choice, "of": of }))
+        self.post(
+            &format!("/tasks/{id}/dedup"),
+            json!({ "choice": choice, "of": of }),
+        )
     }
 
     /// The task is a duplicate of `into`: it closes, merged into it.
@@ -429,27 +630,70 @@ impl Machine {
 
     /// Polls GitHub now and answers the fresh snapshot.
     pub fn refresh_prs(&self) -> Result<PrSnapshot, String> {
-        Self::typed(self.slow.post(self.url("/github/prs/refresh")).send_json(json!({})))
+        Self::typed(
+            self.slow
+                .post(self.url("/github/prs/refresh"))
+                .send_json(json!({})),
+        )
+    }
+
+    /// Every open PR in the repos you can reach, as the machine last polled it.
+    pub fn prs_all(&self) -> Result<PrSnapshot, ListError> {
+        Self::typed_listed(self.agent.get(self.url("/github/prs/all")).call())
+    }
+
+    /// Asks the machine to poll every reachable repo. It starts the poll in the background and answers 202 at once with the list as it stands;
+    /// the fresh list arrives as a `github.prs.all` event. An older machine answers once the poll is done.
+    pub fn refresh_prs_all(&self) -> Result<PrSnapshot, ListError> {
+        Self::typed_listed(
+            self.slow
+                .post(self.url("/github/prs/all/refresh"))
+                .send_json(json!({})),
+        )
+    }
+
+    /// `typed`, with the HTTP status kept in the error.
+    fn typed_listed<T: DeserializeOwned>(reply: Reply) -> Result<T, ListError> {
+        let status = reply.as_ref().ok().map(|r| r.status().as_u16());
+        Self::typed(reply).map_err(|message| ListError { status, message })
     }
 
     /// Dispatches a PR task; answers the task the machine started.
     pub fn pr_action(&self, repo: &str, number: u64, action: PrAction) -> Result<Task, String> {
-        self.post(&pr_path(repo, number, "actions"), json!({ "action": action.wire() }))
+        self.post(
+            &pr_path(repo, number, "actions"),
+            json!({ "action": action.wire() }),
+        )
     }
 
     /// Squash-merges a PR the machine shows as ready.
     pub fn merge_pr(&self, repo: &str, number: u64) -> Result<(), String> {
-        Self::json(self.agent.post(self.url(&pr_path(repo, number, "merge"))).send_json(json!({}))).map(|_| ())
+        Self::json(
+            self.agent
+                .post(self.url(&pr_path(repo, number, "merge")))
+                .send_json(json!({})),
+        )
+        .map(|_| ())
     }
 
     /// Closes the PR without merging; its branch stays.
     pub fn close_pr(&self, repo: &str, number: u64) -> Result<(), String> {
-        Self::json(self.agent.post(self.url(&pr_path(repo, number, "close"))).send_json(json!({}))).map(|_| ())
+        Self::json(
+            self.agent
+                .post(self.url(&pr_path(repo, number, "close")))
+                .send_json(json!({})),
+        )
+        .map(|_| ())
     }
 
     /// Asks the machine to clone `owner/name` into `dest`; the next snapshot shows the checkout.
     pub fn clone_repo(&self, repo: &str, dest: &str) -> Result<(), String> {
-        Self::json(self.agent.post(self.url("/github/clone")).send_json(json!({ "repo": repo, "dest": dest }))).map(|_| ())
+        Self::json(
+            self.agent
+                .post(self.url("/github/clone"))
+                .send_json(json!({ "repo": repo, "dest": dest })),
+        )
+        .map(|_| ())
     }
 
     /// The Slack inbox as the machine last polled it, watches included.
@@ -459,31 +703,67 @@ impl Machine {
 
     /// Polls Slack now and answers the fresh snapshot.
     pub fn refresh_slack(&self) -> Result<SlackSnapshot, String> {
-        Self::typed(self.slow.post(self.url("/slack/refresh")).send_json(json!({})))
+        Self::typed(
+            self.slow
+                .post(self.url("/slack/refresh"))
+                .send_json(json!({})),
+        )
     }
 
     /// `done`, `snoozedUntil`, `seen` or `priority` on one item; answers the item as the
     /// machine now has it, which the next snapshot repeats.
     pub fn patch_slack_item(&self, id: &str, patch: Value) -> Result<Value, String> {
-        Self::json(self.agent.patch(self.url(&slack_item_path(id, ""))).send_json(patch))
+        Self::json(
+            self.agent
+                .patch(self.url(&slack_item_path(id, "")))
+                .send_json(patch),
+        )
     }
 
     /// Posts `text` as you, in the item's thread (or channel). Nothing is added to it.
     /// Posts `text` in the item's thread as you; `nudge` has the machine prefix a mention of the item's author.
     /// `draft` is the id and hash of the waiting draft you were shown: with them the machine settles that draft, without them it only posts.
-    pub fn slack_reply(&self, id: &str, text: &str, nudge: bool, draft: Option<(&str, &str)>) -> Result<(), String> {
-        Self::json(self.agent.post(self.url(&slack_item_path(id, "/reply"))).send_json(slack_reply_body(text, nudge, draft))).map(|_| ())
+    pub fn slack_reply(
+        &self,
+        id: &str,
+        text: &str,
+        nudge: bool,
+        draft: Option<(&str, &str)>,
+    ) -> Result<(), String> {
+        Self::json(
+            self.agent
+                .post(self.url(&slack_item_path(id, "/reply")))
+                .send_json(slack_reply_body(text, nudge, draft)),
+        )
+        .map(|_| ())
     }
 
     /// What you say a thread is about: a stored answer (and a truth record), never a post. `target` is an id of the item's stored shortlist.
-    pub fn slack_relation(&self, id: &str, relation: &str, target: Option<&str>) -> Result<crate::model::SlackItem, String> {
-        let value = Self::json(self.agent.post(self.url(&slack_item_path(id, "/relation"))).send_json(json!({ "relation": relation, "target": target })))?;
+    pub fn slack_relation(
+        &self,
+        id: &str,
+        relation: &str,
+        target: Option<&str>,
+    ) -> Result<crate::model::SlackItem, String> {
+        let value = Self::json(
+            self.agent
+                .post(self.url(&slack_item_path(id, "/relation")))
+                .send_json(json!({ "relation": relation, "target": target })),
+        )?;
         serde_json::from_value(value).map_err(|e| e.to_string())
     }
 
     /// A Backlog ticket from the item; `repo_path` None leaves the repo to set later.
-    pub fn slack_task(&self, id: &str, title: &str, repo_path: Option<&str>) -> Result<Task, String> {
-        self.post(&slack_item_path(id, "/task"), json!({ "title": title, "repoPath": repo_path }))
+    pub fn slack_task(
+        &self,
+        id: &str,
+        title: &str,
+        repo_path: Option<&str>,
+    ) -> Result<Task, String> {
+        self.post(
+            &slack_item_path(id, "/task"),
+            json!({ "title": title, "repoPath": repo_path }),
+        )
     }
 
     pub fn slack_watches(&self) -> Result<Vec<SlackWatch>, String> {
@@ -497,16 +777,29 @@ impl Machine {
 
     /// `{label?, channels?, priority?, enabled?}`; answers the watch as it now is.
     pub fn patch_slack_watch(&self, id: &str, patch: Value) -> Result<SlackWatch, String> {
-        Self::typed(self.agent.patch(self.url(&format!("/slack/watches/{}", urlencoding(id)))).send_json(patch))
+        Self::typed(
+            self.agent
+                .patch(self.url(&format!("/slack/watches/{}", urlencoding(id))))
+                .send_json(patch),
+        )
     }
 
     pub fn delete_slack_watch(&self, id: &str) -> Result<(), String> {
-        Self::json(self.agent.delete(self.url(&format!("/slack/watches/{}", urlencoding(id)))).call()).map(|_| ())
+        Self::json(
+            self.agent
+                .delete(self.url(&format!("/slack/watches/{}", urlencoding(id))))
+                .call(),
+        )
+        .map(|_| ())
     }
 
     /// How fast you answer, over `7d` or `30d`.
     pub fn slack_metrics(&self, since: &str) -> Result<SlackMetrics, String> {
-        Self::typed(self.agent.get(self.url(&format!("/slack/metrics?since={since}"))).call())
+        Self::typed(
+            self.agent
+                .get(self.url(&format!("/slack/metrics?since={since}")))
+                .call(),
+        )
     }
 
     /// The workspace's user groups, for the watch picker's `@` completions.
@@ -526,7 +819,11 @@ impl Machine {
 
     /// Drops the ticket's Jira link; the issue itself is not touched.
     pub fn unlink_jira(&self, id: &str) -> Result<Task, String> {
-        Self::typed(self.agent.delete(self.url(&format!("/tasks/{id}/jira"))).call())
+        Self::typed(
+            self.agent
+                .delete(self.url(&format!("/tasks/{id}/jira")))
+                .call(),
+        )
     }
 
     /// Creates a Jira issue from the ticket, in the repo's project or `project`, and links it.
@@ -540,7 +837,11 @@ impl Machine {
 
     /// Issues matching a key or free text, your open ones first.
     pub fn jira_search(&self, q: &str) -> Result<Vec<JiraIssueHit>, String> {
-        Self::typed(self.agent.get(self.url(&format!("/jira/search?q={}", urlencoding(q)))).call())
+        Self::typed(
+            self.agent
+                .get(self.url(&format!("/jira/search?q={}", urlencoding(q))))
+                .call(),
+        )
     }
 
     /// Whether Jira is configured and reachable.
@@ -579,7 +880,10 @@ fn candidates(over: Option<String>) -> Vec<String> {
 
 /// The first candidate that answers, or the first one when none does.
 fn pick(candidates: &[String], healthy: impl Fn(&str) -> bool) -> &str {
-    candidates.iter().find(|c| healthy(c)).unwrap_or(&candidates[0])
+    candidates
+        .iter()
+        .find(|c| healthy(c))
+        .unwrap_or(&candidates[0])
 }
 
 /// `MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`: the token the machine asks
@@ -589,9 +893,14 @@ fn api_token() -> Option<String> {
 }
 
 fn token_from(var: Option<String>, home: Option<String>) -> Option<String> {
-    let bare = |value: String| Some(value.split_whitespace().collect::<String>()).filter(|v| !v.is_empty());
+    let bare = |value: String| {
+        Some(value.split_whitespace().collect::<String>()).filter(|v| !v.is_empty())
+    };
     var.and_then(bare).or_else(|| {
-        let path = std::path::Path::new(&home?).join(".config").join("hardness").join("machine-api-token");
+        let path = std::path::Path::new(&home?)
+            .join(".config")
+            .join("hardness")
+            .join("machine-api-token");
         std::fs::read_to_string(path).ok().and_then(bare)
     })
 }
@@ -599,13 +908,19 @@ fn token_from(var: Option<String>, home: Option<String>) -> Option<String> {
 /// An agent's config, sending `Authorization: Bearer <token>` on every call when there is a token.
 fn builder(token: &Option<String>) -> ConfigBuilder<AgentScope> {
     let config = Agent::config_builder();
-    let Some(value) = token.as_ref().and_then(|t| HeaderValue::from_str(&format!("Bearer {t}")).ok()) else {
+    let Some(value) = token
+        .as_ref()
+        .and_then(|t| HeaderValue::from_str(&format!("Bearer {t}")).ok())
+    else {
         return config;
     };
-    config.middleware(move |mut request: ureq::http::Request<ureq::SendBody>, next: ureq::middleware::MiddlewareNext| {
-        request.headers_mut().insert("authorization", value.clone());
-        next.handle(request)
-    })
+    config.middleware(
+        move |mut request: ureq::http::Request<ureq::SendBody>,
+              next: ureq::middleware::MiddlewareNext| {
+            request.headers_mut().insert("authorization", value.clone());
+            next.handle(request)
+        },
+    )
 }
 
 /// `pick` against the real `/health`; skips probing when there is only one candidate.
@@ -613,14 +928,30 @@ fn pick_up(candidates: &[String], token: &Option<String>) -> String {
     if candidates.len() == 1 {
         return candidates[0].clone();
     }
-    let probe: Agent = builder(token).timeout_global(Some(PROBE_TIMEOUT)).build().into();
-    pick(candidates, |base| probe.get(format!("{base}/health")).call().is_ok()).to_string()
+    // A machine with problems answers 503: it is up, and the one to talk to.
+    let probe: Agent = builder(token)
+        .http_status_as_error(false)
+        .timeout_global(Some(PROBE_TIMEOUT))
+        .build()
+        .into();
+    pick(candidates, |base| {
+        probe
+            .get(format!("{base}/health"))
+            .call()
+            .is_ok_and(|r| r.status().is_success() || r.status().as_u16() == 503)
+    })
+    .to_string()
 }
 
 /// Follows `/events` on a background thread, reconnecting while the machine is down. Each
 /// (re)connect picks the machine again, so switching between `pnpm start` and `pnpm dev`
 /// needs no restart. Stops once the receiving side is gone.
-fn spawn_stream(shared: Arc<RwLock<String>>, candidates: Vec<String>, token: Option<String>, tx: Sender<Incoming>) {
+fn spawn_stream(
+    shared: Arc<RwLock<String>>,
+    candidates: Vec<String>,
+    token: Option<String>,
+    tx: Sender<Incoming>,
+) {
     thread::spawn(move || {
         // No timeout: the stream stays open for as long as the board runs.
         let agent: Agent = builder(&token).http_status_as_error(false).build().into();
@@ -655,7 +986,8 @@ fn spawn_stream(shared: Arc<RwLock<String>>, candidates: Vec<String>, token: Opt
 /// snapshot does not say which window it covers. Unknown event types are never an error.
 fn parse_stream_event(event: &str, data: &str) -> Option<StreamMessage> {
     match event {
-        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" | "github.prs" | "slack.items" | "task.shipped" => {
+        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed"
+        | "budget.alert" | "github.prs" | "github.prs.all" | "slack.items" | "task.shipped" => {
             serde_json::from_str(data).ok()
         }
         _ => None,
@@ -693,7 +1025,9 @@ fn urlencoding(value: &str) -> String {
     let mut out = String::new();
     for byte in value.bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(byte as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
             _ => out.push_str(&format!("%{byte:02X}")),
         }
     }
@@ -702,22 +1036,64 @@ fn urlencoding(value: &str) -> String {
 
 /// Who is deciding: `LUNA_APPROVER`, when it names someone.
 fn approver() -> Option<String> {
-    std::env::var("LUNA_APPROVER").ok().map(|name| name.trim().to_string()).filter(|name| !name.is_empty())
+    std::env::var("LUNA_APPROVER")
+        .ok()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
 }
 
 /// The body of `POST /tasks/:id/decision`; the approver rides along only when there is one.
 fn decision_body(approve: bool, reason: Option<&str>, approver: Option<&str>) -> Value {
-    let mut body = json!({ "decision": if approve { "approved" } else { "sent_back" }, "reason": reason });
+    let mut body =
+        json!({ "decision": if approve { "approved" } else { "sent_back" }, "reason": reason });
     if let Some(name) = approver {
         body["approver"] = json!(name);
     }
     body
 }
 
+/// The body of an approval that may excuse criteria as untestable (`untestable` rides along only when there are some).
+fn approval_body(untestable: &[String], approver: Option<&str>) -> Value {
+    let mut body = decision_body(true, None, approver);
+    if !untestable.is_empty() {
+        body["untestable"] = json!(untestable);
+    }
+    body
+}
+
+/// Why the machine refused a decision: the criteria with no scenario that nobody excused, or just its message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Refused {
+    CoverageGaps(Vec<String>),
+    Other(String),
+}
+
+fn refusal_of(code: String, message: String, body: &Value) -> Refused {
+    let gaps: Vec<String> = body["gaps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|g| g.as_str().map(str::to_string))
+        .collect();
+    if code == "coverage_gaps" && !gaps.is_empty() {
+        Refused::CoverageGaps(gaps)
+    } else {
+        Refused::Other(message)
+    }
+}
+
 /// The body of an Evidence feedback: the fixed value, and the note only when there is one (trimmed, at most 500 characters, as the machine allows).
 /// One path segment, percent-encoded: a finding id is the machine's, but a typed one is not trusted to keep a `/` or a `?` out of the URL.
 fn path_segment(text: &str) -> String {
-    text.bytes().map(|b| if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.') { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+    text.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.') {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
 }
 
 fn dismiss_body(reason: Option<&str>) -> Value {
@@ -750,33 +1126,112 @@ mod tests {
 
     #[test]
     fn a_reply_carries_the_draft_id_and_hash_only_when_it_was_opened_on_a_draft() {
-        assert_eq!(slack_reply_body("hi", false, Some(("d1", "abc"))), json!({ "text": "hi", "nudge": false, "draftId": "d1", "draftHash": "abc" }));
-        assert_eq!(slack_reply_body("hi", true, None), json!({ "text": "hi", "nudge": true }));
+        assert_eq!(
+            slack_reply_body("hi", false, Some(("d1", "abc"))),
+            json!({ "text": "hi", "nudge": false, "draftId": "d1", "draftHash": "abc" })
+        );
+        assert_eq!(
+            slack_reply_body("hi", true, None),
+            json!({ "text": "hi", "nudge": true })
+        );
     }
 
     #[test]
     fn a_decision_names_its_approver_when_there_is_one_and_stays_as_it_was_when_not() {
-        assert_eq!(decision_body(true, None, None), json!({ "decision": "approved", "reason": null }));
-        assert_eq!(decision_body(false, Some("split it"), Some("ana")), json!({ "decision": "sent_back", "reason": "split it", "approver": "ana" }));
+        assert_eq!(
+            decision_body(true, None, None),
+            json!({ "decision": "approved", "reason": null })
+        );
+        assert_eq!(
+            decision_body(false, Some("split it"), Some("ana")),
+            json!({ "decision": "sent_back", "reason": "split it", "approver": "ana" })
+        );
+    }
+
+    #[test]
+    fn an_approval_excusing_criteria_carries_them_with_the_approver_and_none_when_there_are_none() {
+        assert_eq!(
+            approval_body(&[], None),
+            json!({ "decision": "approved", "reason": null }),
+            "a plain approval is the body it always was"
+        );
+        assert_eq!(
+            approval_body(&["C4".into(), "C5".into()], Some("ana")),
+            json!({ "decision": "approved", "reason": null, "approver": "ana", "untestable": ["C4", "C5"] })
+        );
+    }
+
+    #[test]
+    fn a_refusal_names_the_coverage_gaps_when_the_machine_says_409_coverage_gaps() {
+        let gaps = json!({ "error": "coverage_gaps", "message": "C2 has no scenario", "gaps": ["C2", "C5"] });
+        assert_eq!(
+            refusal_of("coverage_gaps".into(), "C2 has no scenario".into(), &gaps),
+            Refused::CoverageGaps(vec!["C2".into(), "C5".into()])
+        );
+        // Any other refusal, or one with no ids, is only its message.
+        assert_eq!(
+            refusal_of(
+                "same_approver".into(),
+                "ana already approved".into(),
+                &json!({})
+            ),
+            Refused::Other("ana already approved".into())
+        );
+        assert_eq!(
+            refusal_of(
+                "coverage_gaps".into(),
+                "no ids".into(),
+                &json!({ "gaps": [] })
+            ),
+            Refused::Other("no ids".into())
+        );
     }
 
     #[test]
     fn the_feedback_body_is_the_fixed_value_and_a_note_only_when_there_is_one() {
-        assert_eq!(evidence_feedback_body(true, None), json!({ "useful": true }));
-        assert_eq!(evidence_feedback_body(false, Some("too long")), json!({ "useful": false, "note": "too long" }));
-        assert_eq!(evidence_feedback_body(false, Some("  ")), json!({ "useful": false }));
-        assert_eq!(evidence_feedback_body(false, Some(&"x".repeat(900)))["note"].as_str().unwrap().chars().count(), 500);
+        assert_eq!(
+            evidence_feedback_body(true, None),
+            json!({ "useful": true })
+        );
+        assert_eq!(
+            evidence_feedback_body(false, Some("too long")),
+            json!({ "useful": false, "note": "too long" })
+        );
+        assert_eq!(
+            evidence_feedback_body(false, Some("  ")),
+            json!({ "useful": false })
+        );
+        assert_eq!(
+            evidence_feedback_body(false, Some(&"x".repeat(900)))["note"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            500
+        );
     }
 
     #[test]
     fn a_rejection_is_the_rejected_decision_with_its_comment_and_the_approver_when_there_is_one() {
-        assert_eq!(reject_body("not now", None), json!({ "decision": "rejected", "reason": "not now" }));
-        assert_eq!(reject_body("not now", Some("ana")), json!({ "decision": "rejected", "reason": "not now", "approver": "ana" }));
+        assert_eq!(
+            reject_body("not now", None),
+            json!({ "decision": "rejected", "reason": "not now" })
+        );
+        assert_eq!(
+            reject_body("not now", Some("ana")),
+            json!({ "decision": "rejected", "reason": "not now", "approver": "ana" })
+        );
     }
 
     #[test]
     fn metrics_stream_events_are_ignored_not_errors() {
-        assert!(parse_stream_event("task.metrics", r#"{"type":"task.metrics","metrics":{"x":1}}"#).is_none());
+        assert!(
+            parse_stream_event(
+                "task.metrics",
+                r#"{"type":"task.metrics","metrics":{"x":1}}"#
+            )
+            .is_none()
+        );
         assert!(parse_stream_event("task.future", "not json").is_none());
         let deleted = parse_stream_event("task.deleted", r#"{"type":"task.deleted","id":"a"}"#);
         assert!(matches!(deleted, Some(StreamMessage::Deleted { .. })));
@@ -819,7 +1274,10 @@ mod tests {
     #[test]
     fn with_nothing_up_the_dev_machine_is_assumed_and_an_override_is_the_only_candidate() {
         assert_eq!(pick(&candidates(None), |_| false), DEV_URL);
-        assert_eq!(candidates(Some("http://box:9000/".into())), vec!["http://box:9000".to_string()]);
+        assert_eq!(
+            candidates(Some("http://box:9000/".into())),
+            vec!["http://box:9000".to_string()]
+        );
     }
 }
 
@@ -838,11 +1296,31 @@ mod token_tests {
         let home = env::temp_dir().join(format!("board-token-{}", std::process::id()));
         let dir = home.join(".config").join("hardness");
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(token_from(None, Some(home.to_string_lossy().to_string())), None);
+        assert_eq!(
+            token_from(None, Some(home.to_string_lossy().to_string())),
+            None
+        );
         std::fs::write(dir.join("machine-api-token"), "from-file\n").unwrap();
-        assert_eq!(token_from(None, Some(home.to_string_lossy().to_string())).as_deref(), Some("from-file"));
-        assert_eq!(token_from(Some(" from-env ".into()), Some(home.to_string_lossy().to_string())).as_deref(), Some("from-env"));
-        assert_eq!(token_from(Some(String::new()), Some(home.to_string_lossy().to_string())).as_deref(), Some("from-file"));
+        assert_eq!(
+            token_from(None, Some(home.to_string_lossy().to_string())).as_deref(),
+            Some("from-file")
+        );
+        assert_eq!(
+            token_from(
+                Some(" from-env ".into()),
+                Some(home.to_string_lossy().to_string())
+            )
+            .as_deref(),
+            Some("from-env")
+        );
+        assert_eq!(
+            token_from(
+                Some(String::new()),
+                Some(home.to_string_lossy().to_string())
+            )
+            .as_deref(),
+            Some("from-file")
+        );
         assert_eq!(token_from(None, None), None);
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -878,6 +1356,55 @@ mod token_tests {
 }
 
 #[cfg(test)]
+mod unhealthy_tests {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        net::TcpListener,
+    };
+
+    use super::*;
+
+    /// A machine whose `/health` answers 503 with its problems and its pool, as one without a GitHub token does.
+    fn unhealthy_machine() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let body = r#"{"ok":false,"problems":["no GitHub token"],"slots":{"max":3,"active":1,"draining":false}}"#;
+                let reply = format!(
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = reader.into_inner().write_all(reply.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[test]
+    fn a_machine_with_problems_still_shows_its_pool() {
+        let machine = Machine::at(&unhealthy_machine());
+        let health = machine.health().unwrap();
+        assert!(!health.ok);
+        assert_eq!((health.slots.max, health.slots.active), (3, 1));
+    }
+
+    #[test]
+    fn a_machine_with_problems_is_still_the_one_that_is_up() {
+        let base = unhealthy_machine();
+        let candidates = vec!["http://127.0.0.1:1".to_string(), base.clone()];
+        assert_eq!(pick_up(&candidates, &None), base);
+    }
+}
+
+#[cfg(test)]
 mod pr_tests {
     use super::*;
 
@@ -885,19 +1412,57 @@ mod pr_tests {
     fn the_pr_routes_are_built_from_the_repo_and_number() {
         assert_eq!(pr_path("o/a", 12, "merge"), "/github/prs/o/a/12/merge");
         assert_eq!(pr_path("o/a", 12, "actions"), "/github/prs/o/a/12/actions");
-        let event = parse_stream_event("github.prs", r#"{"type":"github.prs","snapshot":{"prs":[],"polledAt":null,"error":"x"}}"#);
-        assert!(matches!(event, Some(StreamMessage::Prs { ref snapshot }) if snapshot.error.as_deref() == Some("x")));
+        let event = parse_stream_event(
+            "github.prs",
+            r#"{"type":"github.prs","snapshot":{"prs":[],"polledAt":null,"error":"x"}}"#,
+        );
+        assert!(
+            matches!(event, Some(StreamMessage::Prs { ref snapshot }) if snapshot.error.as_deref() == Some("x"))
+        );
+    }
+
+    #[test]
+    fn the_every_repo_event_is_its_own_message_beside_the_inbox() {
+        let event = parse_stream_event(
+            "github.prs.all",
+            r#"{"type":"github.prs.all","snapshot":{"prs":[],"polledAt":"2026-10-27T10:00:00Z","error":"y"}}"#,
+        );
+        assert!(
+            matches!(event, Some(StreamMessage::PrsAll { ref snapshot }) if snapshot.error.as_deref() == Some("y")),
+            "{event:?}"
+        );
+        let inbox = parse_stream_event(
+            "github.prs",
+            r#"{"type":"github.prs","snapshot":{"prs":[],"polledAt":null,"error":null}}"#,
+        );
+        assert!(matches!(inbox, Some(StreamMessage::Prs { .. })));
     }
 
     #[test]
     fn the_slack_routes_encode_the_item_id_and_the_stream_event_is_parsed() {
-        assert_eq!(slack_item_path("C0123:1730112345.0001", ""), "/slack/items/C0123%3A1730112345.0001");
-        assert_eq!(slack_item_path("C0123:1.2", "/reply"), "/slack/items/C0123%3A1.2/reply");
-        let data = format!(r#"{{"type":"slack.items","snapshot":{}}}"#, crate::slack::fixtures::snapshot_json());
+        assert_eq!(
+            slack_item_path("C0123:1730112345.0001", ""),
+            "/slack/items/C0123%3A1730112345.0001"
+        );
+        assert_eq!(
+            slack_item_path("C0123:1.2", "/reply"),
+            "/slack/items/C0123%3A1.2/reply"
+        );
+        let data = format!(
+            r#"{{"type":"slack.items","snapshot":{}}}"#,
+            crate::slack::fixtures::snapshot_json()
+        );
         let event = parse_stream_event("slack.items", &data);
-        assert!(matches!(event, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.len() == 3 && snapshot.socket == "connected"));
-        let bare = parse_stream_event("slack.items", r#"{"type":"slack.items","snapshot":{"items":[],"watches":[],"me":null,"polledAt":null,"error":null,"socket":"off"}}"#);
-        assert!(matches!(bare, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.is_empty()));
+        assert!(
+            matches!(event, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.len() == 3 && snapshot.socket == "connected")
+        );
+        let bare = parse_stream_event(
+            "slack.items",
+            r#"{"type":"slack.items","snapshot":{"items":[],"watches":[],"me":null,"polledAt":null,"error":null,"socket":"off"}}"#,
+        );
+        assert!(
+            matches!(bare, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.is_empty())
+        );
     }
 
     #[test]
@@ -941,8 +1506,13 @@ mod refusal_tests {
                 let _ = reader.into_inner().write_all(format!("HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{json}", json.len()).as_bytes());
             }
         });
-        let error = Machine::at(&format!("http://{addr}")).backlog_act("item-1", "promote").unwrap_err();
-        assert_eq!(error, "this item waits for 1 dependency that is not there yet: c1 (unreadable)");
+        let error = Machine::at(&format!("http://{addr}"))
+            .backlog_act("item-1", "promote")
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "this item waits for 1 dependency that is not there yet: c1 (unreadable)"
+        );
     }
 
     #[test]
@@ -971,13 +1541,208 @@ mod refusal_tests {
                 }
                 let mut body = vec![0; length];
                 let _ = reader.read_exact(&mut body);
-                let (status, json) = if first.contains("repo=%2Fno") { ("404 Not Found", r#"{"error":"not_found"}"#) } else { ("400 Bad Request", r#"{"error":"bad_request","message":"unknown repo"}"#) };
+                let (status, json) = if first.contains("repo=%2Fno") {
+                    ("404 Not Found", r#"{"error":"not_found"}"#)
+                } else {
+                    (
+                        "400 Bad Request",
+                        r#"{"error":"bad_request","message":"unknown repo"}"#,
+                    )
+                };
                 let _ = reader.into_inner().write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{json}", json.len()).as_bytes());
             }
         });
         let machine = Machine::at(&format!("http://{addr}"));
-        assert_eq!(machine.economy("/no").unwrap_err(), "the economy is off on this machine");
+        assert_eq!(
+            machine.economy("/no").unwrap_err(),
+            "the economy is off on this machine"
+        );
         assert_eq!(machine.economy("/other").unwrap_err(), "unknown repo");
-        assert_eq!(machine.economy_act("import", "/other", json!({})).unwrap_err(), "unknown repo");
+        assert_eq!(
+            machine
+                .economy_act("import", "/other", json!({}))
+                .unwrap_err(),
+            "unknown repo"
+        );
+    }
+}
+
+#[cfg(test)]
+mod coverage_refusal_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+    };
+
+    use super::*;
+
+    /// A machine that refuses a decision with `409 coverage_gaps` unless the body excuses C5, and says yes when it does. It sends each
+    /// request's path and body down the channel.
+    fn gap_machine() -> (Machine, mpsc::Receiver<(String, Value)>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    request.push_str(&line);
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let body: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+                let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
+                let excused = body["untestable"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id == "C5"));
+                let _ = tx.send((path, body));
+                let (status, answer) = if excused {
+                    (
+                        "200 OK",
+                        crate::testkit::task_json(
+                            "aaaaaaaa1111",
+                            "t",
+                            "implementing",
+                            "Build",
+                            json!({}),
+                        )
+                        .to_string(),
+                    )
+                } else {
+                    (
+                        "409 Conflict",
+                        r#"{"error":"coverage_gaps","message":"C5 has no scenario","gaps":["C5"]}"#
+                            .to_string(),
+                    )
+                };
+                let _ = reader.into_inner().write_all(
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{answer}",
+                        answer.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), rx)
+    }
+
+    #[test]
+    fn a_plain_approval_answered_409_coverage_gaps_comes_back_as_the_gaps() {
+        let (machine, seen) = gap_machine();
+        assert_eq!(
+            machine.approve_excusing("aaaaaaaa1111", &[]).unwrap_err(),
+            Refused::CoverageGaps(vec!["C5".into()])
+        );
+        let (path, body) = seen.recv().unwrap();
+        assert_eq!(path, "/tasks/aaaaaaaa1111/decision");
+        assert_eq!(body["decision"], "approved");
+        assert!(body.get("untestable").is_none(), "{body}");
+    }
+
+    #[test]
+    fn an_approval_excusing_the_gap_is_sent_with_untestable_and_goes_through() {
+        let (machine, seen) = gap_machine();
+        let task = machine
+            .approve_excusing("aaaaaaaa1111", &["C5".to_string()])
+            .unwrap();
+        assert_eq!(task.state, "implementing");
+        assert_eq!(seen.recv().unwrap().1["untestable"], json!(["C5"]));
+    }
+}
+
+#[cfg(test)]
+mod prs_all_tests {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        net::TcpListener,
+        sync::mpsc,
+        thread,
+    };
+
+    use super::*;
+
+    /// A machine that answers every request with `status`, `content_type` and `body`, and sends each request line down the channel.
+    fn machine_saying(
+        status: &'static str,
+        content_type: &'static str,
+        body: &'static str,
+    ) -> (Machine, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut first = String::new();
+                reader.read_line(&mut first).unwrap_or(0);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let _ = tx.send(first.trim().to_string());
+                let _ = reader.into_inner().write_all(
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), rx)
+    }
+
+    #[test]
+    fn a_refresh_answered_202_hands_back_the_list_as_it_stands() {
+        let (machine, seen) = machine_saying(
+            "202 Accepted",
+            "application/json",
+            r#"{"prs":[],"polledAt":"2026-10-27T10:00:00Z","error":null}"#,
+        );
+        let snapshot = machine.refresh_prs_all().unwrap();
+        assert_eq!(snapshot.polled_at.as_deref(), Some("2026-10-27T10:00:00Z"));
+        assert_eq!(
+            seen.recv().unwrap(),
+            "POST /github/prs/all/refresh HTTP/1.1"
+        );
+    }
+
+    #[test]
+    fn a_404_is_told_apart_from_other_errors() {
+        let (machine, _) = machine_saying("404 Not Found", "text/plain", "404 Not Found");
+        let error = machine.refresh_prs_all().unwrap_err();
+        assert!(error.not_found(), "{error}");
+        let error = machine.prs_all().unwrap_err();
+        assert!(error.not_found(), "{error}");
+        let (machine, _) = machine_saying(
+            "500 Internal Server Error",
+            "application/json",
+            r#"{"error":"boom","message":"GitHub is down"}"#,
+        );
+        let error = machine.refresh_prs_all().unwrap_err();
+        assert!(!error.not_found());
+        assert_eq!(error.to_string(), "GitHub is down");
+    }
+
+    #[test]
+    fn an_unreachable_machine_is_not_a_404() {
+        let error = crate::testkit::dead_machine()
+            .refresh_prs_all()
+            .unwrap_err();
+        assert!(!error.not_found());
+        assert!(error.to_string().contains("machine unreachable"), "{error}");
     }
 }

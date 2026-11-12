@@ -1,0 +1,63 @@
+{
+  "schema": 3,
+  "stage": "pr_link",
+  "pack": "pr_link",
+  "attempt": 1,
+  "task": {
+    "id": "pr-link",
+    "title": "Add CSV export to the orders table",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "prLink": {
+      "pr": {
+        "title": "Add CSV export to the orders table",
+        "branch": "feat/orders-csv",
+        "body": "Adds an Export button to the orders table that downloads the visible rows as a CSV.",
+        "files": [
+          "src/orders/export.ts",
+          "src/orders/OrdersTable.tsx",
+          "src/orders/export.test.ts"
+        ]
+      },
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "jira",
+          "id": "DISC-40",
+          "title": "Orders table is slow on Safari",
+          "excerpt": "Scrolling the orders table drops frames in Safari."
+        },
+        {
+          "slot": 2,
+          "kind": "jira",
+          "id": "DISC-31",
+          "title": "Export the orders table to CSV",
+          "excerpt": "Support wants to download the orders they see as a CSV file."
+        },
+        {
+          "slot": 3,
+          "kind": "card",
+          "id": "7f3c9a1e",
+          "title": "Pay button does nothing",
+          "excerpt": "Clicking Pay on the checkout page has no effect."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -50,6 +50,18 @@ check "out-of-range numbers are asked again" c "$(printf '9\nx\n3\n' | ui_choose
 check "many: y, n, and Enter on a preselected one" $'a\nc' "$(printf 'y\nn\n\n' | ui_choose_many h c a b c 2>/dev/null)"
 check "a secret reads whole" 'xoxp-1/2=3' "$(printf 'xoxp-1/2=3\n' | ui_secret k 2>/dev/null)"
 
+echo "health_problems"
+check "a healthy answer lists none" "" "$(health_problems '{"ok":true,"slots":{"max":2}}')"
+check "each problem on its own line" $'no GitHub token: a, b\ngit has no identity' "$(health_problems '{"ok":false,"problems":["no GitHub token: a, b","git has no identity"],"slots":{}}')"
+check "an answer that is not JSON lists none" "" "$(health_problems 'oops')"
+
+echo "board_link_state"
+plugins=$'1 plugin installed:\n- hardness.board (Luna TUI) enabled [local:/Users/x/luna/board]\n  config: /Users/x/.config/herdr/plugins/config/hardness.board'
+check "linked to this checkout (herdr's output must not break the pipe under pipefail)" linked "$(board_link_state "$plugins" /Users/x/luna)"
+check "linked to another checkout" elsewhere "$(board_link_state "$plugins" /Users/x/other)"
+check "disabled" disabled "$(board_link_state "${plugins/ enabled / disabled }" /Users/x/luna)"
+check "not listed" missing "$(board_link_state $'0 plugins installed' /Users/x/luna)"
+
 echo "banner"
 still=$(banner_show "tickets in, pull requests out" | cat)
 check "off a terminal it is plain text: no escape codes" 0 "$(printf '%s' "$still" | LC_ALL=C grep -c $'\033' || true)"

@@ -38,6 +38,17 @@ export interface PrSearchHit {
   updatedAt: string;
 }
 
+/** Every open PR in the repos you can reach, each with the node the per-PR query answers (its nested lists may be shorter), read in as few calls as GitHub allows. */
+export interface OpenPrs {
+  prs: Array<{ repo: string; node: PrNode }>;
+  /** Repos with more open PRs than the adapter pages through: `open` in all, the rest are not seen. */
+  capped: Array<{ repo: string; open: number }>;
+  /** How many GraphQL calls the read took, for the poll's log line. */
+  calls: number;
+  /** Repos GitHub refused to read even alone (too heavy, a 5xx): left out of the list, named here so the poll says so. */
+  skipped?: Array<{ repo: string; error: string }>;
+}
+
 /** One check on a ref, in the states ci_watch keys on (uppercase, GitHub's own vocabulary). */
 export interface Check {
   name: string;
@@ -105,6 +116,8 @@ export interface GitHub {
   viewer(): Promise<{ login: string; teams: string[] }>;
   /** Every open PR you authored or were asked to review, deduped. */
   searchMyPrs(): Promise<PrSearchHit[]>;
+  /** Every open PR in the repos you own, collaborate on or reach through an organisation (archived repos skipped), newest first within a repo, read in bulk: one call covers many repos and PRs. */
+  listOpenPrs(): Promise<OpenPrs>;
   /** The PR's node for the inbox query, or null when GitHub no longer shows it. */
   prFacts(slug: string, number: number): Promise<PrNode | null>;
   /** The unified diff, tail-capped by the adapter. */
@@ -182,6 +195,7 @@ export function noTokenGitHub(): GitHub {
   return {
     viewer: refuse,
     searchMyPrs: refuse,
+    listOpenPrs: refuse,
     prFacts: refuse,
     prDiff: refuse,
     prFiles: refuse,

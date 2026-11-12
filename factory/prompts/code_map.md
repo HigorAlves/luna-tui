@@ -29,7 +29,7 @@ Follow the `code-discovery` skill: query it with `graphify <verb> … --graph <t
 
 ## What to do
 1. Place the record's goal in the code with the graph: `god-nodes`, one `query` on the goal, `affected` on the symbols it names. At most a handful of calls.
-2. Answer `components`, `files` (repo-relative, at most 40, each `{path, role}` with `role` one of `change` (the change edits it), `read` (context only) or `test` (where its checks live)), `entry_points` (the handlers, commands or jobs where the flow the goal changes starts), `owners` (CODEOWNERS for those paths when the repo has one, else the top three of `git shortlog -sn --since=6.months -- <files>`), a calibrated `confidence` and, when something could not be placed, a `note`.
+2. Answer `components`, `files` (repo-relative, at most 40, each `{path, role}` with `role` one of `change` (the change edits it), `read` (context only) or `test` (where its checks live)), `entry_points` (the handlers, commands or jobs where the flow the goal changes starts), `owners` (CODEOWNERS for those paths when the repo has one, else the top three of `git shortlog -sn --since=6.months HEAD -- <files>`), a calibrated `confidence` and, when something could not be placed, a `note`.
 
 ## Rules
 - Read-only: no edits; the output is the map.

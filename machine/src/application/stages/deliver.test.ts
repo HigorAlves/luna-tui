@@ -78,6 +78,18 @@ describe("delivering", () => {
     expect(github.calls).toEqual([]);
   });
 
+  it("says the machine has no GitHub credential when git could not ask for one, as an environment problem rather than the card's", async () => {
+    for (const stderr of ["fatal: could not read Username for 'https://github.com': No such device or address", "fatal: Authentication failed for 'https://github.com/acme/widgets.git/'", "fatal: could not read Password for 'https://x@github.com': terminal prompts disabled"]) {
+      const github = fakeGitHub();
+      const { run, context } = setup(github, { push: bad(stderr) });
+      const result = await run(context);
+      expect(result.outcome).toBe("fail");
+      expect(String(result.detail?.error)).toMatch(/no GitHub credential.*GH_TOKEN.*pnpm start/);
+      expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true });
+      expect(github.calls).toEqual([]);
+    }
+  });
+
   it("fails with GitHub's words when opening the PR fails, and when the task has no branch", async () => {
     const github = fakeGitHub({ findPr: async () => null });
     const { run, context } = setup(github);
@@ -86,6 +98,57 @@ describe("delivering", () => {
     expect(String(result.detail?.error)).toMatch(/unexpected github.openPr/);
     const noBranch = setup(fakeGitHub(), { task: { branch: null } });
     expect((await noBranch.run(noBranch.context)).outcome).toBe("fail");
+  });
+});
+
+describe("a card whose own PR already merged", () => {
+  const merged = { merged: true, mergedSha: "m".repeat(40), state: "closed" as const, mergedAt: "2026-11-10T00:36:48Z" };
+  const open = { merged: false, mergedSha: null, state: "open" as const, mergedAt: null };
+  const squash = (extra: Record<string, unknown> = {}) => fakeGitHub({ prMerged: async () => merged, prFacts: async () => ({ baseRefName: "main" }) as never, defaultBranch: async () => "main", ...extra });
+
+  it("ships: nothing is pushed, rebased, merged or opened, and the stage names the merge the way a person's merge is named", async () => {
+    const github = squash();
+    const { run, context, calls } = setup(github);
+    const result = await run({ ...context, recordedPrs: [214] });
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ merged: { sha: "m".repeat(40), at: "2026-11-10T00:36:48Z", by: "person" }, prUrl: "https://github.com/acme/widgets/pull/214", number: 214, alreadyMerged: true });
+    // Only the read of the branch's head, to look for commits made after the merge (none can be told here): nothing is pushed, rebased or merged.
+    expect(calls.filter((c) => !c.includes("rev-parse"))).toEqual([]);
+    expect(github.openPr).not.toHaveBeenCalled();
+  });
+
+  it("looks at the newest recorded PR first, and finds the merged one among the older", async () => {
+    const asked: number[] = [];
+    const github = squash({ prMerged: async (_slug: string, number: number) => (asked.push(number), number === 214 ? merged : open) });
+    const { run, context } = setup(github);
+    const result = await run({ ...context, recordedPrs: [214, 221] });
+    expect(asked).toEqual([221, 214]);
+    expect(result.detail).toMatchObject({ number: 214, alreadyMerged: true });
+  });
+
+  it("goes on as before when no recorded PR is merged, or none is recorded", async () => {
+    const github = fakeGitHub({ prMerged: async () => open, findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: true }) });
+    const { run, context } = setup(github);
+    expect((await run({ ...context, recordedPrs: [3] })).detail).toMatchObject({ prNumber: 3, reused: true });
+    expect(github.prMerged).toHaveBeenCalledTimes(1);
+    const none = fakeGitHub({ findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: true }) });
+    const again = setup(none);
+    expect((await again.run(again.context)).outcome).toBe("pass");
+    expect(none.prMerged).not.toHaveBeenCalled();
+  });
+
+  it("is not a ship when the PR merged into another branch (a stacked card's parent)", async () => {
+    const github = squash({ prFacts: async () => ({ baseRefName: "task/parent", mergeable: "MERGEABLE" }) as never, findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: true }) });
+    const { run, context } = setup(github);
+    const result = await run({ ...context, recordedPrs: [214] });
+    expect(result.detail).not.toHaveProperty("alreadyMerged");
+    expect(result.detail).toMatchObject({ prNumber: 3 });
+  });
+
+  it("goes on when GitHub cannot say", async () => {
+    const github = fakeGitHub({ prMerged: async () => { throw new Error("rate limited"); }, findPr: async () => ({ url: "https://x/pull/3", number: 3, isDraft: true }) });
+    const { run, context } = setup(github);
+    expect((await run({ ...context, recordedPrs: [214] })).detail).toMatchObject({ prNumber: 3 });
   });
 });
 
@@ -160,6 +223,7 @@ describe("delivering a branch that conflicts with the default branch", () => {
     expect(result.detail).toMatchObject({ rebased: true, onto: "origin/main" });
     expect(calls).toEqual([
       [...G, "push", "-u", "origin", "hardness/t1"],
+      [...G, "rev-parse", "HEAD"],
       [...G, "fetch", "--quiet", "--end-of-options", "origin", "main"],
       [...G, "rebase", "--empty=drop", "origin/main"],
       [...G, "push", "--force-with-lease", "-u", "origin", "hardness/t1"],
@@ -291,6 +355,22 @@ describe("delivering a branch that conflicts with the default branch", () => {
     expect(String(result.detail?.error)).toContain("stale info");
   });
 
+  it("puts the branch back where it was when the forced push after the rebase fails, so the next delivery's plain push still works", async () => {
+    const BEFORE = "e".repeat(40);
+    const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+    const { run, context, calls } = setup(github, {
+      respond: (args) => (args.includes("rev-parse") ? ok(`${BEFORE}\n`) : args.some((a) => a.startsWith("--force-with-lease")) ? bad("could not read Username") : undefined),
+    });
+    const result = await run(context);
+    expect(result.outcome).toBe("fail");
+    expect(String(result.detail?.error)).toContain("could not read Username");
+    // The lease is the head the machine pushed before, never a bare lease that a concurrent fetch can move.
+    expect(calls).toContainEqual([...G, "push", `--force-with-lease=refs/heads/hardness/t1:${BEFORE}`, "-u", "origin", "hardness/t1"]);
+    const reset = calls.findIndex((c) => c.includes("reset"));
+    expect(calls[reset]).toEqual([...G, "reset", "--hard", "--quiet", BEFORE]);
+    expect(reset).toBeGreaterThan(calls.findIndex((c) => c.some((a) => a.startsWith("--force-with-lease"))));
+  });
+
   it("does nothing more on a mergeable PR, notes an UNKNOWN one, and ignores a prFacts that throws", async () => {
     for (const [mergeable, note] of [["MERGEABLE", false], ["UNKNOWN", true]] as const) {
       const { run, context, calls } = setup(fakeGitHub({ findPr: async () => pr, prFacts: facts(mergeable) }));
@@ -326,10 +406,13 @@ describe("delivering a stacked card", () => {
   const stacked = { card: { base: { card: PARENT, branch: "task/parent" } } };
   const facts = (state: "open" | "merged" | "gone", head: string | null = SHA) => async () => ({ parent: { id: PARENT, branch: "task/parent", number: 7, state, head }, defaultBranch: "main" });
 
-  function wire(over: { facts?: () => Promise<unknown>; existing?: { url: string; number: number; isDraft: boolean } | null; current?: string; rebase?: unknown; unstack?: unknown; task?: Record<string, unknown> } = {}) {
+  const TIP = "c".repeat(40);
+  function wire(over: { facts?: () => Promise<unknown>; existing?: { url: string; number: number; isDraft: boolean } | null; current?: string; rebase?: unknown; unstack?: unknown; task?: Record<string, unknown>; resolve?: unknown } = {}) {
     const pushes: string[][] = [];
     const exec = vi.fn(async (command: string, args: string[]) => {
       if (args.includes("push")) pushes.push(args);
+      // The base's tip the merge round starts from.
+      if (args.includes("rev-parse") && args.some((a) => a.startsWith("refs/remotes/origin/"))) return ok(`${TIP}\n`);
       return ok();
     });
     const github = fakeGitHub({
@@ -343,7 +426,7 @@ describe("delivering a stacked card", () => {
     const unstack = vi.fn((over.unstack as never) ?? (async () => ({ ok: true as const, onto: "origin/main" })));
     const clearBase = vi.fn(async () => {});
     const stackFacts = vi.fn(over.facts ?? facts("open"));
-    const run = deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => "main", stacked: { facts: stackFacts as never, clearBase, rebase: rebase as never, unstack: unstack as never, baseSha: async () => SHA } });
+    const run = deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => "main", stacked: { facts: stackFacts as never, clearBase, rebase: rebase as never, unstack: unstack as never, baseSha: async () => SHA }, ...(over.resolve ? { resolveConflicts: over.resolve as never } : {}) });
     const context = { task: { id: "t1", title: "part", description: "d", criteria: ["c"], branch: "task/child", worktreePath: "/wt", repoPath: "/repo", source: null, ...stacked, ...over.task } as unknown as TaskRow, stage: "delivering", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as StageContext;
     return { run, context, github, pushes, rebase, unstack, clearBase, stackFacts };
   }
@@ -385,6 +468,44 @@ describe("delivering a stacked card", () => {
     const { run, context, pushes } = wire({ facts: facts("open", MOVED), rebase: async () => ({ ok: false, error: "conflict", conflicts: ["a.ts"] }) });
     expect(await run(context)).toMatchObject({ outcome: "fail", detail: { conflicts: ["a.ts"], escalation: "other" } });
     expect(pushes).toEqual([]);
+  });
+
+  describe("when the move onto its base stops on a conflict", () => {
+    const EXISTING = { url: "https://github.com/acme/widgets/pull/9", number: 9, isDraft: true };
+    const merged = () => vi.fn(async () => ({ ok: true as const, head: "d".repeat(40), resolved: ["a.ts"], result: { outcome: "escalated" as const, detail: {} } }));
+
+    it("hands a stopped rebase onto the parent's new tip to the merge round, against the parent's branch, and carries on", async () => {
+      const resolve = merged();
+      const { run, context, pushes } = wire({ facts: facts("open", MOVED), existing: EXISTING, rebase: async () => ({ ok: false, error: "conflict", conflicts: ["a.ts"] }), resolve });
+      expect(await run(context)).toMatchObject({ outcome: "pass", detail: { prNumber: 9 } });
+      expect(resolve).toHaveBeenCalledWith(expect.anything(), { slug: "acme/widgets", number: 9, base: { sha: TIP, name: "task/parent" }, label: "deliver-stack", pack: null });
+      expect(pushes.every((p) => !p.includes("--force-with-lease"))).toBe(true);
+    });
+
+    it("hands a stopped unstack to the merge round against the default branch, then drops the base and leaves the stack", async () => {
+      const resolve = merged();
+      const { run, context, clearBase, github } = wire({ facts: facts("merged"), existing: EXISTING, current: "task/parent", unstack: async () => ({ ok: false, error: "conflict", conflicts: ["a.ts"] }), resolve });
+      expect(await run(context)).toMatchObject({ outcome: "pass" });
+      expect(resolve).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ base: { sha: TIP, name: "main" } }));
+      expect(clearBase).toHaveBeenCalledWith("t1");
+      expect(github.retargetPr).toHaveBeenCalledWith("acme/widgets", 9, "main");
+    });
+
+    it("fails with the files and the merge round's reason when it did not land, and pushes nothing", async () => {
+      const resolve = vi.fn(async () => ({ ok: false as const, result: { outcome: "escalated" as const, detail: { reason: "the checks failed" } } }));
+      const { run, context, pushes } = wire({ facts: facts("open", MOVED), existing: EXISTING, rebase: async () => ({ ok: false, error: "conflict", conflicts: ["a.ts"] }), resolve });
+      const result = await run(context);
+      expect(result).toMatchObject({ outcome: "fail", detail: { conflicts: ["a.ts"], escalation: "other" } });
+      expect(String(result.detail?.error)).toMatch(/stopped on: a\.ts.*merging instead did not resolve it: the checks failed/);
+      expect(pushes).toEqual([]);
+    });
+
+    it("asks a person as before when the card has no PR yet to merge on", async () => {
+      const resolve = merged();
+      const { run, context } = wire({ facts: facts("open", MOVED), rebase: async () => ({ ok: false, error: "conflict", conflicts: ["a.ts"] }), resolve });
+      expect(await run(context)).toMatchObject({ outcome: "fail", detail: { conflicts: ["a.ts"] } });
+      expect(resolve).not.toHaveBeenCalled();
+    });
   });
 
   it("retargets an existing PR that does not target the parent's branch", async () => {

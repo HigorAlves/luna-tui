@@ -10,7 +10,7 @@ import { readRegularFile } from "../../adapters/fs/bounded.ts";
 import { removeNestedRepositories } from "../../adapters/git/machine-repo.ts";
 import { bundleImporter } from "../../adapters/git/bundles.ts";
 import type { TaskRow } from "../../domain/task.ts";
-import { ensureClone, isClone, moveToClone, publishBranch, refreshScratch } from "../../adapters/git/clone.ts";
+import { ensureClone, isClone, isFreshWorkspace, moveToClone, publishBranch, refreshScratch } from "../../adapters/git/clone.ts";
 import {
   type Workspace,
   branchBase,
@@ -475,8 +475,11 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
         branch: workspace.branch,
         runId: context.runId,
         dir: join(runDir, "out", "bundles"),
-        // The card's branch shows in the user's repository too, written by the machine; a refusal is a note.
+        // The card's branch shows in the user's repository too, written by the machine; a refusal is a note. A fresh workspace (Verify, a fix or
+        // merge round) is not the card's: what it commits is shown only once the round brings it back and pushes it, never as it stands (a merge
+        // round's temporary commit holds conflict markers).
         onAccepted: async () => {
+          if (await isFreshWorkspace(workspace.path)) return;
           const shown = await publishBranch(task.repoPath!, workspace.path, workspace.branch);
           if (!shown.ok) await context.note?.(shown.note).catch(() => {});
         },

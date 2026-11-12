@@ -58,10 +58,26 @@ export interface PullRequest {
   body: string | null;
 }
 
-/** `GET /github/prs` and the `github.prs` stream event. */
+/** `GET /github/prs` and the `github.prs` stream event: the PRs that involve you (yours and those asking your review).
+ *  `GET /github/prs/all` and the `github.prs.all` event carry the same shape for every open PR in the repos you can reach
+ *  (owned, collaborator, organisation member): `split` is computed the same way, so a board can show either list. */
 export interface PrSnapshot {
   prs: PullRequest[];
   polledAt: string | null;
+  error: string | null;
+  /** The clones the machine is running or ran lately (done and failed ones stay ten minutes), in both lists; absent from an older machine. */
+  clones?: CloneStatus[];
+}
+
+/** One `git clone` the board asked for. A failed one keeps its `error` here, since a poll rewrites the snapshot's own. */
+export interface CloneStatus {
+  /** `owner/name` */
+  repo: string;
+  /** The folder being made. */
+  dest: string;
+  state: "cloning" | "done" | "failed";
+  startedAt: string;
+  finishedAt: string | null;
   error: string | null;
 }
 

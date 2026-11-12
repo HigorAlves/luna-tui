@@ -102,6 +102,33 @@ describe("runChecks and what a check was refused", () => {
   });
 });
 
+describe("runChecks and the repository's services", () => {
+  const services = { postgres: { image: "postgres:16" } };
+  const commands = [{ name: "a", cmd: "a", argv: ["a"] }, { name: "b", cmd: "b", argv: ["b"] }, { name: "c", cmd: "c", argv: ["c"] }];
+
+  it("starts them once for the whole pass and removes them at the end, when the exec can open a session", async () => {
+    const events: string[] = [];
+    const exec = Object.assign(async () => (events.push("exec outside"), ok), {
+      session: async () => (events.push("open"), { exec: async (cmd: string) => (events.push(`exec ${cmd}`), ok), close: async () => void events.push("close") }),
+    });
+    await runChecks({ commands, exec, cwd: "/w", env: {}, services, stage: "implementing", timeoutMs: 10_000 });
+    expect(events).toEqual(["open", "exec a", "exec b", "exec c", "close"]);
+  });
+
+  it("removes them when a check throws, and when the exec has no session or the repository has no services, runs as before", async () => {
+    const events: string[] = [];
+    const exec = Object.assign(async () => ok, { session: async () => ({ exec: async () => { throw new Error("no network"); }, close: async () => void events.push("close") }) });
+    await expect(runChecks({ commands, exec, cwd: "/w", env: {}, services, stage: "implementing", timeoutMs: 10_000 })).rejects.toThrow("no network");
+    expect(events).toEqual(["close"]);
+    const plain = await runChecks({ commands, exec: async () => ok, cwd: "/w", env: {}, services, stage: "implementing", timeoutMs: 10_000 });
+    expect(plain.reports).toHaveLength(3);
+    let opened = 0;
+    const idle = Object.assign(async () => ok, { session: async () => (opened++, { exec: async () => ok, close: async () => {} }) });
+    await runChecks({ commands, exec: idle, cwd: "/w", env: {}, stage: "implementing", timeoutMs: 10_000 });
+    expect(opened).toBe(0);
+  });
+});
+
 describe("runChecks and secrets", () => {
   it("passes each check only the names it declares: the one that declares none gets none", async () => {
     const seen: Record<string, unknown> = {};
@@ -124,5 +151,24 @@ describe("runSweep when the environment cannot run a check", () => {
 
   it("still throws what it does not know", async () => {
     await expect(sweep(new Error("disk full"))).rejects.toThrow("disk full");
+  });
+});
+
+describe("runSweep and the git identity", () => {
+  const policy = async () => ({ checks: [{ name: "lint", run: "x" }], services: {}, wholeSuiteMinutes: 10 });
+  const sweep = (identity: { name: string; email: string } | null, exec: Parameters<typeof runSweep>[0]["exec"]) =>
+    runSweep({ exec, changedPaths: async () => null, impact: async () => [], policy, gitIdentity: async () => identity }, { worktree: "/w", repoPath: "/r", env: { PATH: "/bin" } });
+
+  it("escalates as env_broken, as Verify does, instead of running the checks as nobody", async () => {
+    let ran = false;
+    const outcome = await sweep(null, async () => ((ran = true), { code: 0, stdout: "", stderr: "" }));
+    expect(ran).toBe(false);
+    expect(outcome).toMatchObject({ status: "failed", escalated: { escalation: "env_broken", envBroken: true, step: "checks", reason: expect.stringMatching(/git has no identity.*user\.name.*user\.email/) } });
+  });
+
+  it("hands the checks the identity git resolves, on top of the env it was given", async () => {
+    let seen: Record<string, string | undefined> = {};
+    await sweep({ name: "Ada L", email: "ada@x.dev" }, async (_c, _a, options) => ((seen = (options as { env: Record<string, string | undefined> }).env), { code: 0, stdout: "", stderr: "" }));
+    expect(seen).toMatchObject({ PATH: "/bin", GIT_AUTHOR_NAME: "Ada L", GIT_AUTHOR_EMAIL: "ada@x.dev", GIT_COMMITTER_NAME: "Ada L", GIT_COMMITTER_EMAIL: "ada@x.dev" });
   });
 });

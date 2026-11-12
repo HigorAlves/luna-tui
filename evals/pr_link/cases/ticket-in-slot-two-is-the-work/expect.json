@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "match.choice",
+      "value": "slot2"
+    }
+  ],
+  "rubric": "Three candidates; the second asks for exactly the export the PR adds.",
+  "label": {
+    "match": {
+      "choice": "slot2"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "match": "the PR implements or fixes slot 2"
+    },
+    "why": "The PR adds a CSV export of the orders table, which is what DISC-31 asks for. DISC-40 is about scrolling speed and the card is about checkout.",
+    "second": {
+      "label": {
+        "match": {
+          "choice": "slot2"
+        }
+      },
+      "agrees": true
+    }
+  }
+}

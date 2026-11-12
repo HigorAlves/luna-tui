@@ -7,12 +7,11 @@
 
 mod app;
 mod backlog;
-mod tickets;
 mod client;
 mod detail;
 mod digest;
-mod economy;
 mod discover;
+mod economy;
 mod herdr;
 mod inbox;
 mod intake;
@@ -25,10 +24,11 @@ mod pulls;
 mod reference;
 mod slack;
 mod store;
-mod text;
-mod theme;
 #[cfg(test)]
 mod testkit;
+mod text;
+mod theme;
+mod tickets;
 mod ui;
 mod vim;
 
@@ -38,8 +38,8 @@ use ratatui::{
     DefaultTerminal,
     crossterm::{
         event::{
-            self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseButton,
-            MouseEventKind,
+            self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+            EnableMouseCapture, Event, KeyEventKind, MouseButton, MouseEventKind,
         },
         execute,
     },
@@ -51,6 +51,7 @@ use client::Machine;
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     let quiet = notify::quiet(std::env::var("HARDNESS_BOARD_QUIET").ok().as_deref());
     let mut badge = (usize::MAX, usize::MAX);
+    let mut shown = String::new();
     loop {
         app.pump();
         tell(app, quiet, &mut badge);
@@ -58,6 +59,13 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         app.ensure_diff();
         app.ensure_jira_search();
         app.tick();
+        // A full repaint when the screen changes or ctrl-l asks for it: the terminal can drift from the last frame (a
+        // pane resize, a glyph it draws wider than counted), and an incremental draw never overwrites what it thinks is blank.
+        let screen = app.screen_key();
+        if app.take_redraw() || screen != shown {
+            terminal.clear()?;
+            shown = screen;
+        }
         terminal.draw(|frame| ui::draw(frame, app))?;
 
         if event::poll(Duration::from_millis(200))? {
@@ -66,6 +74,9 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     Outcome::Continue => {}
                     Outcome::Quit => return Ok(()),
                 },
+                Event::Paste(text) => app.handle_paste(&text),
+                // A resized pane: start the next frame from a clean screen.
+                Event::Resize(..) => terminal.clear()?,
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollDown => app.scroll(1),
                     MouseEventKind::ScrollUp => app.scroll(-1),
@@ -130,9 +141,9 @@ fn main() -> io::Result<()> {
     herdr::name_tab_and_pane();
     let mut app = App::new(Machine::from_env());
     let mut terminal = ratatui::init();
-    let _ = execute!(io::stdout(), EnableMouseCapture);
+    let _ = execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     let result = run(&mut terminal, &mut app);
-    let _ = execute!(io::stdout(), DisableMouseCapture);
+    let _ = execute!(io::stdout(), DisableBracketedPaste, DisableMouseCapture);
     ratatui::restore();
     // Next time, the Digest and the cards' new dots are measured from now.
     let _ = store::write_last_seen_at(&store::state_path(), model::now_secs());

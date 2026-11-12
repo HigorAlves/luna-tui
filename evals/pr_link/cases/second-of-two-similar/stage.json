@@ -1,0 +1,55 @@
+{
+  "schema": 3,
+  "stage": "pr_link",
+  "pack": "pr_link",
+  "attempt": 1,
+  "task": {
+    "id": "pr-link",
+    "title": "Handle an empty cart at checkout",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "prLink": {
+      "pr": {
+        "title": "Handle an empty cart at checkout",
+        "branch": "fix/empty-cart",
+        "body": "Checkout threw when the cart had no lines; it now shows the empty-cart page.",
+        "files": [
+          "src/checkout/Checkout.tsx",
+          "src/checkout/Checkout.test.tsx"
+        ]
+      },
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "jira",
+          "id": "DISC-61",
+          "title": "Handle an empty wishlist on the profile page",
+          "excerpt": "The profile page throws when the wishlist has no items."
+        },
+        {
+          "slot": 2,
+          "kind": "jira",
+          "id": "DISC-62",
+          "title": "Checkout crashes with an empty cart",
+          "excerpt": "Opening checkout with no items in the cart throws a TypeError."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

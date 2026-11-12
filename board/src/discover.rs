@@ -42,7 +42,9 @@ fn walk(dir: &Path, depth: usize, found: &mut Vec<String>) {
         return;
     };
     for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else { continue };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         if !file_type.is_dir() {
             continue;
         }
@@ -66,7 +68,8 @@ mod tests {
 
     #[test]
     fn finds_a_repo_directly_under_root_and_one_grouped_under_a_project() {
-        let root = std::env::temp_dir().join(format!("hardness-discover-test-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("hardness-discover-test-{}", std::process::id()));
         fs::create_dir_all(root.join("solo-repo/.git")).unwrap();
         fs::create_dir_all(root.join("a-project/backend/.git")).unwrap();
         fs::create_dir_all(root.join("a-project/frontend/.git")).unwrap();
@@ -77,8 +80,12 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                root.join("a-project/backend").to_string_lossy().into_owned(),
-                root.join("a-project/frontend").to_string_lossy().into_owned(),
+                root.join("a-project/backend")
+                    .to_string_lossy()
+                    .into_owned(),
+                root.join("a-project/frontend")
+                    .to_string_lossy()
+                    .into_owned(),
                 root.join("solo-repo").to_string_lossy().into_owned(),
             ]
         );
@@ -107,7 +114,9 @@ fn walk_folders(dir: &Path, depth: usize, found: &mut Vec<String>) {
         return;
     };
     for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else { continue };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         if !file_type.is_dir() {
             continue;
         }
@@ -133,7 +142,8 @@ mod folder_tests {
 
     #[test]
     fn lists_the_root_and_the_project_folders_but_never_a_repo() {
-        let root = std::env::temp_dir().join(format!("hardness-folders-test-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("hardness-folders-test-{}", std::process::id()));
         fs::create_dir_all(root.join("solo-repo/.git")).unwrap();
         fs::create_dir_all(root.join("a-project/backend/.git")).unwrap();
         fs::create_dir_all(root.join("a-project/sub/deeper")).unwrap();

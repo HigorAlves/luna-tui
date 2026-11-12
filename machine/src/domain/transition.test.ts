@@ -74,7 +74,7 @@ describe("typed escalations", () => {
     // The site card (2026-11-08): two Verify failures on the old plan, a replan, then one finding on the new plan escalated "verify failed 3 times".
     const set = { key: "k", rounds: 1 };
     const step = transition(at("verifying", { retries: { ...NO_RETRIES, verify: 2, e2e: 1, ci: 1, total: 5, findingSet: set } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" });
-    expect(step.retries).toEqual({ ...NO_RETRIES, total: 5, planWrong: 1 });
+    expect(step.retries).toEqual({ ...NO_RETRIES, total: 5, planWrong: 1, unanswered: 0, failures: {} });
     const failed = transition({ ...at("verifying"), retries: step.retries }, { type: "stage_done", outcome: "fail", reason: "a blocker" });
     expect(failed).toMatchObject({ state: "implementing", retries: { verify: 1 } });
   });
@@ -293,12 +293,45 @@ describe("retry loops", () => {
       const step = transition(at("verifying"), unanswered);
       expect(step.state).toBe("verifying");
       expect(step.effect).toEqual({ kind: "run", stage: "verifying" });
-      expect(step.retries).toMatchObject({ verify: 1, total: 0 });
+      expect(step.retries).toMatchObject({ unanswered: 1, verify: 0, total: 0 });
     });
 
     it("asks a person after the loop cap, resuming at Verify", () => {
-      const step = transition(at("verifying", { retries: { ...NO_RETRIES, verify: 2 } }), unanswered);
+      const step = transition(at("verifying", { retries: { ...NO_RETRIES, unanswered: 2 } }), unanswered);
       expect(step).toMatchObject({ state: "escalated", resumeTo: "verifying", reason: "verifying could not answer 3 times" });
+    });
+  });
+
+  describe("what an escalation says about the failures that caused it", () => {
+    const failed = (kind: string, line: string, extra: Partial<PipelineEvent> = {}): PipelineEvent => ({ type: "stage_done", outcome: "fail", failure: { kind, line }, ...extra } as PipelineEvent);
+
+    it("counts a Verify that could not answer on its own counter, so one unanswered run is not three", () => {
+      const first = transition(at("verifying"), failed("env", "the image did not match"));
+      const second = transition(at("verifying", { retries: first.retries }), failed("review", "a bug in the diff"));
+      const third = transition(at("verifying", { retries: second.retries }), { type: "stage_done", outcome: "fail", unanswered: true, failure: { kind: "unanswered", line: "MODEL_CALL_FAILED" } });
+      expect(third.state).toBe("verifying");
+      expect(third.retries).toMatchObject({ verify: 2, unanswered: 1 });
+    });
+
+    it("says 'could not answer' only after three unanswered runs", () => {
+      const unanswered: PipelineEvent = { type: "stage_done", outcome: "fail", unanswered: true, failure: { kind: "unanswered", line: "socket closed" } };
+      const step = [1, 2, 3].reduce((s) => transition(at("verifying", { retries: s.retries }), unanswered), { retries: NO_RETRIES } as Step);
+      expect(step).toMatchObject({ state: "escalated", reason: expect.stringContaining("verifying could not answer 3 times") });
+    });
+
+    it("lists each failure of the loop by kind when the cap is reached, and keeps the list on the step", () => {
+      const one = transition(at("verifying"), failed("env", "image mismatch"));
+      const two = transition(at("verifying", { retries: one.retries }), failed("review", "a finding"));
+      const three = transition(at("verifying", { retries: two.retries }), failed("checks", "2 checks failed"));
+      expect(three).toMatchObject({ state: "escalated", reason: "verify failed 3 times: env (image mismatch); review (a finding); checks (2 checks failed)" });
+      expect(three.failures).toEqual([{ kind: "env", line: "image mismatch" }, { kind: "review", line: "a finding" }, { kind: "checks", line: "2 checks failed" }]);
+    });
+
+    it("starts the list again when a plan found wrong goes back to the planner", () => {
+      const one = transition(at("verifying"), failed("env", "image mismatch"));
+      const back = transition(at("verifying", { retries: one.retries }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" });
+      expect(back.retries).toMatchObject({ verify: 0, unanswered: 0 });
+      expect(back.retries.failures ?? {}).toEqual({});
     });
   });
 
@@ -682,6 +715,12 @@ describe("awaiting_ship and reviewing_memory hold a running stage or an open gat
   });
   it("another escalation at awaiting_ship asks a person and resumes there", () => {
     expect(transition(at("awaiting_ship"), { type: "stage_done", outcome: "escalated", reason: "stuck" })).toMatchObject({ state: "escalated", resumeTo: "awaiting_ship", reason: "stuck" });
+  });
+  it("delivering or ci_watch that finds the card's own PR merged sends it to the retro, as a merge the watch saw would", () => {
+    for (const state of ["delivering", "ci_watch"] as const) {
+      expect(transition(at(state), { type: "stage_done", outcome: "pass", merged: true })).toMatchObject({ state: "reviewing_memory", effect: { kind: "run", stage: "reviewing_memory" } });
+    }
+    expect(transition(at("delivering"), { type: "stage_done", outcome: "pass" })).toMatchObject({ state: "ci_watch" });
   });
   it("shipping that is not ready hands the card back to the watch", () => {
     expect(transition(at("shipping"), { type: "stage_done", outcome: "fail", notReady: true })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
