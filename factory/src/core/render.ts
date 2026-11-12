@@ -49,7 +49,18 @@ const ticketsText = (tickets: NonNullable<StageInput["context"]["review"]>["tick
   return `Linked Jira tickets:\n${tickets.map(one).join("\n\n")}`;
 };
 
-/** The PR, the Jira tickets it names, its files, the comments already on it and the diff, as reviewing reads them. */
+/** The board cards the review is linked to, each with its acceptance criteria and description: a spec beside the tickets. Nothing, not even a heading, when none is linked. */
+const cardsText = (cards: NonNullable<StageInput["context"]["review"]>["cards"]): string | null => {
+  if (!cards || cards.length === 0) return null;
+  const one = (c: NonNullable<typeof cards>[number]): string => {
+    const criteria = c.criteria.length > 0 ? `Acceptance criteria:\n${c.criteria.map((line) => `- ${line}`).join("\n")}` : "Acceptance criteria: (none stated)";
+    const description = c.description.trim() !== "" ? c.description.trim() : "(no description)";
+    return `### Card ${c.id}: ${c.title}\n${criteria}\nDescription:\n${description}`;
+  };
+  return `Linked board cards:\n${cards.map(one).join("\n\n")}`;
+};
+
+/** The PR, the Jira tickets it names, the board cards it is linked to, its files, the comments already on it and the diff, as reviewing reads them. */
 const reviewText = (review: StageInput["context"]["review"]): string => {
   if (!review) return NONE;
   const body = review.pr.body && review.pr.body.trim() !== "" ? review.pr.body.trim() : "(no description)";
@@ -58,7 +69,8 @@ const reviewText = (review: StageInput["context"]["review"]): string => {
     review.existingComments.length > 0
       ? review.existingComments.map((c) => `- ${c.path ?? "(general)"}${c.line !== null ? `:${c.line}` : ""} @${c.author}: ${c.body}`).join("\n")
       : "- (none)";
-  return `${prLine(review.pr)}\n\n${body}\n\n${ticketsText(review.tickets)}\n\nFiles:\n${files}\n\nComments already on the PR:\n${comments}\n\nDiff:\n\`\`\`diff\n${review.diff}\n\`\`\``;
+  const cards = cardsText(review.cards);
+  return `${prLine(review.pr)}\n\n${body}\n\n${ticketsText(review.tickets)}${cards ? `\n\n${cards}` : ""}\n\nFiles:\n${files}\n\nComments already on the PR:\n${comments}\n\nDiff:\n\`\`\`diff\n${review.diff}\n\`\`\``;
 };
 
 /** The unresolved threads, each under its GraphQL id, as addressing reads them. */
