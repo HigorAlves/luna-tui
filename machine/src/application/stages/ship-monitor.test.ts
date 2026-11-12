@@ -939,6 +939,13 @@ describe("the review loop: CI and conflicts", () => {
     expect((await loadCursor(stateDir, "t1"))!.rebases).toBe(1);
   });
 
+  it("rebases onto the default branch GitHub names when no rebase is injected, not the one the user's checkout is on", async () => {
+    const world = loopWorld();
+    const { run } = review({ ...world, loop: { ...world.loop, rebase: undefined } }, { prFacts: async () => node({ mergeable: "CONFLICTING" }), prMerged: async () => open, defaultBranch: async () => "trunk" }, []);
+    await run();
+    expect(world.git.some((a) => a.includes("fetch") && a[a.length - 1] === "trunk")).toBe(true);
+  });
+
   it("asks a person when the rebase stops on a conflict", async () => {
     const world = loopWorld();
     const rebase = vi.fn(async () => ({ ok: false as const, error: "conflict", conflicts: ["a.ts"] }));

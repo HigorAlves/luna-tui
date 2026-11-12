@@ -6,14 +6,15 @@
 import type { CiContext, DecisionOverrides, Finding } from "@hardness/contracts";
 
 import { at } from "../../adapters/git/machine-repo.ts";
-import { HOST_GIT, type GitExec, type RebaseResult, originSlugOf, rebaseOntoDefault } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, type GitExec, type RebaseResult, isBranchName, originSlugOf, rebaseOntoDefault, stackOf } from "../../adapters/git/worktree.ts";
 import { exec } from "../../adapters/process/exec.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type Check, type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type CiFact, type TruthSink, ciClassTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
-import { headSha, pushBranch, restoreHead } from "./deliver.ts";
+import { headSha, parentWinsFor, pushBranch, restoreHead } from "./deliver.ts";
+import type { MergeInput, MergeOutcome } from "./ship-merge.ts";
 
 const MINUTE = 60_000;
 const RERUN_WAIT_MS = 15 * MINUTE;
@@ -37,6 +38,8 @@ export interface CiDeps {
   exec?: GitExec;
   /** Rebases the worktree onto the default branch (default: `rebaseOntoDefault`); tests inject a fake. */
   rebase?: (exec: GitExec, worktreePath: string, repoPath: string) => Promise<RebaseResult>;
+  /** Resolves a conflict the rebase could not (`mergeRound`: the addressing pack resolves the files, the project's checks prove the result, the merge is pushed). Absent, a conflict asks a person. */
+  resolveConflicts?: (context: StageContext, input: MergeInput) => Promise<MergeOutcome>;
   /** Runs ci_failure_class on a failing job and its log tail; null (or absent) leaves the class to the investigator, as before. Read at call time. */
   decide?: Decide | null;
   /** Where a fact that settles the class is written (`ci_failure_class`'s truth); absent, nothing is learned. */
@@ -93,7 +96,6 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
   const parentRef = deps.parentRef ?? parentOf;
   const graceMs = deps.graceMs ?? NEW_RUN_GRACE_MS;
   const run: GitExec = deps.exec ?? exec;
-  const rebase = deps.rebase ?? ((r: GitExec, worktree: string, repo: string) => rebaseOntoDefault(r, worktree, repo));
 
   return async (context) => {
     const { task, signal } = context;
@@ -104,6 +106,8 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     const origin = await slugOf(task.worktreePath);
     if (!origin) return { outcome: "fail", detail: { error: "the worktree's origin is not a GitHub repository" } };
     const slug: string = origin;
+    // The default branch is GitHub's answer for the slug (as in Deliver), never the branch the user's checkout is on; the parent wins the files the card's plan does not touch.
+    const rebase = deps.rebase ?? ((r: GitExec, worktree: string, repo: string) => rebaseOntoDefault(r, worktree, repo, () => deps.github.defaultBranch(slug).catch(() => null), parentWinsFor(context)));
 
     /** The check names the commit before HEAD had: after a fix is pushed, the new head must
      *  show them again before "nothing pending, nothing red" means anything. */
@@ -191,16 +195,37 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     let rebased = false;
     /** The checks as they stand: `judge`'s own parameter shadows the variable a rebase refreshes. */
     const current = (): Check[] => checks;
+    /**
+     * A rebase that stopped on conflicts is answered with the merge round Deliver and the ship watch use (`mergeRound`): the base is merged on a
+     * fresh clone, the addressing pack resolves the files, the project's checks prove it and it is pushed. The base is the parent's branch for a
+     * stacked card, else GitHub's default branch. "merged" when it landed, its reason when it did not, null when it cannot run (no round wired, no PR, no tip).
+     */
+    const mergeInstead = async (): Promise<"merged" | { failed: string } | null> => {
+      if (!deps.resolveConflicts) return null;
+      const pr = await deps.github.findPr(slug, branch).catch(() => null);
+      const baseName = (await stackOf(task.worktreePath!)).branch ?? (await deps.github.defaultBranch(slug).catch(() => null));
+      if (!pr || !baseName || !isBranchName(baseName)) return null;
+      const tip = (await run("git", [...HOST_GIT, ...at(task.worktreePath!), "rev-parse", "--verify", `refs/remotes/origin/${baseName}^{commit}`])).stdout.trim();
+      if (!/^[0-9a-f]{40,64}$/.test(tip)) return null;
+      const merged = await deps.resolveConflicts(context, { slug, number: pr.number, base: { sha: tip, name: baseName }, label: "ci", pack: null });
+      return merged.ok ? "merged" : { failed: String(merged.result.detail?.reason ?? merged.result.detail?.error ?? "the merge did not land") };
+    };
     /** Rebases the branch onto the default branch, pushes it back and watches the checks again: null when it went well, else the result to return. */
     const rebaseAndWatch = async (): Promise<StageResult | null> => {
       const repoPath = task.repoPath ?? task.worktreePath!;
       // The head the branch was pushed at: the lease for the forced push, and where the branch goes back to if that push fails.
       const before = await headSha(run, task.worktreePath!);
       const result = await rebase(run, task.worktreePath!, repoPath);
+      let landed = false;
       if (!result.ok) {
-        return stuck(result.conflicts.length > 0 ? `the default branch moved and the rebase stops on: ${result.conflicts.join(", ")}` : `the branch conflicts with the default branch and could not be rebased: ${result.error}`);
+        const said = result.conflicts.length > 0 ? `the default branch moved and the rebase stops on: ${result.conflicts.join(", ")}` : `the branch conflicts with the default branch and could not be rebased: ${result.error}`;
+        const merged = result.conflicts.length > 0 ? await mergeInstead() : null;
+        if (!merged) return stuck(said);
+        if (merged !== "merged") return stuck(`${said}; merging instead did not resolve it: ${merged.failed}`);
+        landed = true;
       }
-      const pushError = await pushBranch(run, branch, task.worktreePath!, { force: true, ...(before ? { lease: before } : {}) });
+      // A merge the round landed is already pushed (never forced) and descends from the PR's head.
+      const pushError = landed ? null : await pushBranch(run, branch, task.worktreePath!, { force: true, ...(before ? { lease: before } : {}) });
       if (pushError) {
         // Left rewritten, the branch would be refused as a non-fast-forward by every later push.
         if (before) await restoreHead(run, task.worktreePath!, before);

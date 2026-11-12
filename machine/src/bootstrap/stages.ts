@@ -480,6 +480,8 @@ export async function buildRealStages(
     ci_watch: ciWatchRunner({
       github,
       runPack: (context, ci) => runAgent(deps, context, "ci_watch", { ci }),
+      // A conflict the rebase cannot settle goes to the same merge round Deliver uses (declared below, called later).
+      resolveConflicts: (context, input) => resolveConflicts!(context, input),
       // What kind of red it is is a typed decision (ci_failure_class), bound late like the other decisions; the investigator is asked for the fix only for a real failure.
       get decide() {
         return verifyDecisions?.decide ?? null;

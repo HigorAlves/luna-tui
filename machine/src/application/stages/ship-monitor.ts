@@ -663,7 +663,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       if (!local || local !== head) return { result: escalated("the worktree is not at the PR's head; the branch is not rebased", "head_moved") };
       cursor.rebases++;
       await saveCursor(deps.stateDir, task.id, cursor);
-      const rebase = deps.loop?.rebase ?? ((r, w, repo) => rebaseOntoDefault(r, w, repo));
+      // The default branch is GitHub's answer for the slug, never the branch the user's checkout is on.
+      const rebase = deps.loop?.rebase ?? ((r, w, repo) => rebaseOntoDefault(r, w, repo, () => deps.github.defaultBranch(slug).catch(() => null)));
       const result = await rebase(run, wt, task.repoPath ?? wt);
       if (!result.ok && result.conflicts.length > 0) {
         const base = (await deps.github.prFacts(slug, number).catch(() => null))?.baseRefName ?? null;
