@@ -441,6 +441,9 @@ describe("PR tasks", () => {
   it("a stage input may carry a review or a threads context", () => {
     const review = { pr: { repo: "a/b", number: 1, url: "u", title: "t", body: null, author: "x", baseRef: "main", headRef: "f" }, diff: "", files: [], existingComments: [] };
     expect(ReviewContext.safeParse(review).success).toBe(true);
+    const ticket = { key: "DISC-1", url: "https://a.atlassian.net/browse/DISC-1", type: "Bug", status: "To Do", summary: "s", description: "d", acceptanceCriteria: null };
+    expect(ReviewContext.safeParse({ ...review, tickets: [ticket] }).success).toBe(true);
+    expect(ReviewContext.safeParse({ ...review, tickets: [{ key: "DISC-1" }] }).success).toBe(false);
     expect(ThreadsContext.safeParse({ pr: review.pr, threads: [{ id: "T", path: "a.ts", line: 1, comments: [{ author: "r", body: "b", at: "2026-10-27T00:00:00Z" }] }] }).success).toBe(true);
     expect(StageInput.safeParse({ ...stageInputExample, pack: "reviewing", context: { projectContext: null, review } }).success).toBe(true);
   });

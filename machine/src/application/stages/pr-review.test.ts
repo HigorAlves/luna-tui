@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "../../domain/task.ts";
 import { fakeGitHub } from "../../test/github.ts";
+import { fakeJira } from "../../test/jira.ts";
+import type { Jira } from "../jira.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { MAX_INLINE_COMMENTS, capComments, postVerdictRunner, prReviewRunner } from "./pr-review.ts";
 
@@ -23,9 +25,9 @@ const node = {
   commits: { nodes: [] },
 };
 
-function setup(answer: Record<string, unknown> | null, opts: { postFails?: boolean } = {}) {
+function setup(answer: Record<string, unknown> | null, opts: { postFails?: boolean; title?: string; jira?: Jira; projects?: () => Promise<string[]> } = {}) {
   const github = fakeGitHub({
-    prFacts: async () => node as never,
+    prFacts: async () => (opts.title ? { ...node, title: opts.title } : node) as never,
     prDiff: async () => "diff --git a/a.ts b/a.ts\n+export const x = 1;\n",
     prFiles: async () => [{ path: "a.ts", additions: 1, deletions: 0 }],
     prComments: async () => [{ path: "a.ts", line: 1, author: "x", body: "old" }],
@@ -53,7 +55,7 @@ function setup(answer: Record<string, unknown> | null, opts: { postFails?: boole
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run: prReviewRunner({ github, runPack }), context, github, review: () => seen };
+  return { run: prReviewRunner({ github, runPack, ...(opts.jira ? { jira: opts.jira } : {}), ...(opts.projects ? { projects: opts.projects } : {}) }), context, github, review: () => seen };
 }
 
 const posted = (github: ReturnType<typeof fakeGitHub>) => github.postReview.mock.calls;
@@ -97,6 +99,40 @@ describe("reviewing", () => {
     expect(result.detail).toMatchObject({ posted: false, reason: "verdict" });
     const escalated = setup(null);
     expect((await escalated.run(escalated.context)).outcome).toBe("escalated");
+  });
+});
+
+describe("reviewing against the Jira tickets the PR names", () => {
+  const answer = { verdict: "approve", summary: "Fine.", findings: [], comments: [] };
+  const issues = [{ key: "DISC-939", summary: "Stale feedback", issueType: "Bug", status: "In Review", description: "Do it.\n\n## Acceptance criteria\n- removes rows" }];
+
+  it("hands the pack the tickets the title names and puts their keys and summaries in the stage detail", async () => {
+    const { run, context, review } = setup(answer, { title: "Export CSV (DISC-939)", jira: fakeJira({ issues }) });
+    const result = await run(context);
+    expect((review() as { tickets: unknown[] }).tickets).toEqual([
+      expect.objectContaining({ key: "DISC-939", url: "https://acme.atlassian.net/browse/DISC-939", type: "Bug", status: "In Review", summary: "Stale feedback", acceptanceCriteria: "- removes rows" }),
+    ]);
+    expect(result.detail).toMatchObject({ tickets: [{ key: "DISC-939", url: "https://acme.atlassian.net/browse/DISC-939", summary: "Stale feedback" }] });
+  });
+
+  it("skips a ticket Jira fails on without failing the review", async () => {
+    const jira = fakeJira({ issues });
+    const base = jira.issue.bind(jira);
+    const flaky: Jira = { ...jira, issue: async (key) => (key === "DISC-1" ? Promise.reject(new Error("boom")) : base(key)) };
+    const { run, context, review } = setup(answer, { title: "DISC-1 Export", jira: flaky });
+    const first = await run(context);
+    expect(first.outcome).toBe("pass");
+    expect((review() as { tickets: unknown[] }).tickets).toEqual([]);
+    expect(first.detail).not.toHaveProperty("tickets");
+  });
+
+  it("gives no tickets without a Jira port, and none outside the repo's projects", async () => {
+    const bare = setup(answer, { title: "Export CSV (DISC-939)" });
+    await bare.run(bare.context);
+    expect((bare.review() as { tickets?: unknown[] }).tickets ?? []).toEqual([]);
+    const other = setup(answer, { title: "Export CSV (DISC-939)", jira: fakeJira({ issues }), projects: async () => ["PLAT"] });
+    await other.run(other.context);
+    expect((other.review() as { tickets?: unknown[] }).tickets ?? []).toEqual([]);
   });
 });
 

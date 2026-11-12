@@ -23,6 +23,7 @@ import type { StageContext, StageResult, StageRunner } from "../application/port
 import { type PlanDeps, planStage } from "../application/stages/plan.ts";
 import { type TriageSignalDeps, withTriageSignals } from "../application/stages/triage-signals.ts";
 import { prAddressRunner } from "../application/stages/pr-address.ts";
+import type { Jira } from "../application/jira.ts";
 import { prReviewRunner } from "../application/stages/pr-review.ts";
 import { videoPipeline } from "../application/stages/video.ts";
 import { scanImages } from "../application/video-jobs.ts";
@@ -152,6 +153,8 @@ export async function buildRealStages(
   stack?: { baseFor: NonNullable<AgentDeps["baseFor"]>; clearBase: NonNullable<AgentDeps["clearBase"]>; /** The checklist's and the merge rule's view of the parent. */ facts: NonNullable<ShipMonitorDeps["stack"]>["facts"]; defaultBranch: NonNullable<ShipMonitorDeps["stack"]>["defaultBranch"]; /** Whether another open card is stacked on a card (its branch is kept). */ hasChildren?: (id: string) => Promise<boolean> },
   /** The token economy: what each run starts with; absent, a run gets none. */
   economy?: AgentDeps["economy"],
+  /** The Jira port when Jira is configured (the review route reads the tickets a PR names); null or absent gives the reviewer none. */
+  jira?: Jira | null,
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -548,7 +551,20 @@ export async function buildRealStages(
         : null,
     }),
     // The PR tasks' own stages: the host fetches the diff or the threads, the pack answers.
-    reviewing: prReviewRunner({ github, runPack: (context, review) => runAgent(deps, context, "reviewing", { review }) }),
+    reviewing: prReviewRunner({
+      github,
+      runPack: (context, review) => runAgent(deps, context, "reviewing", { review }),
+      ...(jira
+        ? {
+            jira,
+            // The repo's own luna.yaml names its Jira project; a PR's keys of other projects are not read.
+            projects: async (repoPath: string | null) => {
+              const project = repoPath ? (await policies.for(repoPath)).jira?.project : null;
+              return project ? [project] : [];
+            },
+          }
+        : {}),
+    }),
     addressing: prAddressRunner({ github, runPack: (context, threads) => runAgent(deps, context, "addressing", { threads }) }),
     // The watch: the PR is made ready with the pack on it, then watched until a merge is due or a person is needed.
     awaiting_ship: shipWatchRunner({

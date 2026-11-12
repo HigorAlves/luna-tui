@@ -5,12 +5,18 @@
 import { PrReviewAnswer, type RequestedAction, type ReviewContext } from "@hardness/contracts";
 
 import { type GitHub, type ReviewPost, messageOf } from "../github.ts";
+import type { Jira } from "../jira.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import { gatherTickets } from "../review-tickets.ts";
 
 export interface PrReviewDeps {
   github: GitHub;
   /** Runs the reviewing pack with what the host fetched. */
   runPack: (context: StageContext, review: ReviewContext) => Promise<StageResult>;
+  /** The Jira port, only when Jira is configured: the tickets the PR names are read and the reviewer checks the diff against them. */
+  jira?: Jira | null;
+  /** The Jira projects the machine knows for a repo checkout; absent, or none, accepts any project key. */
+  projects?: (repoPath: string | null) => Promise<readonly string[]>;
 }
 
 const EVENT_OF = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
@@ -77,6 +83,11 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
         github.prComments(pr.repo, pr.number),
       ]);
       review = { pr: facts, diff, files, existingComments };
+      if (deps.jira) {
+        // A ticket that cannot be read is skipped inside gatherTickets: Jira never fails a review.
+        const repoPath = context.task.repoPath ?? null;
+        review.tickets = await gatherTickets({ jira: deps.jira, ...(deps.projects ? { projects: () => deps.projects!(repoPath) } : {}) }, facts);
+      }
     } catch (error) {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }
@@ -101,6 +112,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const detail = {
       ...pack.detail,
       summary: answer.summary,
+      // Which tickets the review was checked against, for the board's Result page.
+      ...(review.tickets?.length ? { tickets: review.tickets.map((t) => ({ key: t.key, url: t.url, summary: t.summary })) } : {}),
       verdict,
       ...(answer.verdict !== verdict ? { modelVerdict: answer.verdict } : {}),
       posted: false,

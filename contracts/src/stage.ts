@@ -249,6 +249,20 @@ const PrFacts = z.object({
   headRef: z.string(),
 });
 
+/** A Jira ticket the PR names, as the reviewer checks the change against it (foreign text: rendered as quoted data). */
+export const ReviewTicket = z.object({
+  key: z.string(),
+  url: z.string(),
+  type: z.string(),
+  status: z.string(),
+  summary: z.string(),
+  /** Plain text, capped by the host. */
+  description: z.string(),
+  /** The issue's acceptance criteria when its description has a section for them; null otherwise. */
+  acceptanceCriteria: z.string().nullable(),
+});
+export type ReviewTicket = z.infer<typeof ReviewTicket>;
+
 /** For reviewing (a PR task): what the host fetched about someone's PR. */
 export const ReviewContext = z.object({
   pr: PrFacts,
@@ -258,6 +272,8 @@ export const ReviewContext = z.object({
   existingComments: z.array(
     z.object({ path: z.string().nullable(), line: z.number().int().nullable(), author: z.string(), body: z.string() }),
   ),
+  /** The Jira tickets the PR names (title, head branch, body), when Jira is connected; absent reads as none linked. */
+  tickets: z.array(ReviewTicket).optional(),
 });
 export type ReviewContext = z.infer<typeof ReviewContext>;
 

@@ -299,6 +299,8 @@ const stackDeps = {
     ),
   defaultBranch: githubDefaultBranch,
 };
+/** One Jira client for every call; without the three variables each call says so and nothing syncs. */
+const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };
 const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, agentDeps, shipGateProbe } = await buildRealStages(
@@ -342,6 +344,8 @@ const { stubReason, real, resolveConflicts, verifyPack, checksExec, proofRig, ag
   // A stacked card's workspace: what it is cut from and the base it drops, read from the pipeline's rows when a run first makes it.
   stackDeps,
   economy,
+  // The review route reads the Jira tickets a PR names, only when Jira is configured.
+  config.jira ? jiraApi : null,
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -545,8 +549,6 @@ pipeline = new Pipeline(db, runnerFor, {
   telemetry,
 });
 replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}), slackPort: () => (config.slackInbox.userToken ? slackApi : null) });
-/** One Jira client for every call; without the three variables each call says so and nothing syncs. */
-const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 const jiraExpiry = new TokenExpiry(config.jira?.tokenExpiresAt ?? null);
 jiraSync = new JiraSync({ pipeline, jira: jiraApi, enabled: config.jira !== null, boardUrl: `http://${config.host}:${config.port}` });
 slaClocks = new SlaClocks({ pipeline, defaults: { gate: config.sla.gateSecs, cycle: config.sla.cycleSecs } });
