@@ -186,7 +186,7 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
         }
         const forced = await pushBranch(deps.exec, task.branch, task.worktreePath, { force: true });
         if (forced) return { outcome: "fail", detail: { error: forced } };
-        rebase = { rebased: true, onto: rebased.onto };
+        rebase = { rebased: true, onto: rebased.onto, ...(rebased.merged ? { merged: true } : {}) };
       }
       return {
         outcome: "pass",
