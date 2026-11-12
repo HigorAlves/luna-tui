@@ -14,3 +14,4 @@ import "./page-tickets.js";
 import "./page-slack.js";
 import "./page-economy.js";
 import "./page-jira.js";
+import "./actions.js";
