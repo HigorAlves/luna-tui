@@ -34,6 +34,15 @@ describe("prepareStageCredentials", () => {
     expect(log).toEqual(["prepare claude:opus", "prepare codex:sol", "release claude:opus", "release codex:sol"]);
   });
 
+  it("prepares the helper's credential for the engine's runtime: triage on Codex needs the Codex login, not a Claude token", async () => {
+    const { credentials, log } = recording();
+    await prepareStageCredentials(credentials, PACKS.triage, "codex:sol", "/run");
+    expect(log).toEqual(["prepare codex:sol"]);
+    log.length = 0;
+    await prepareStageCredentials(credentials, PACKS.verifying, "codex:sol", "/run");
+    expect(log).toEqual(["prepare codex:sol", "prepare claude:opus"]);
+  });
+
   it("takes each credential once: a helper on the stage's own credential adds nothing", async () => {
     const { credentials, log } = recording();
     await prepareStageCredentials(credentials, PACKS.reviewing, "claude:opus", "/run");

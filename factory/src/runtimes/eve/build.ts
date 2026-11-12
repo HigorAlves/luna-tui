@@ -2,7 +2,7 @@
 // run's pack), into an eve app and runs `eve build` in each, so a stage starts a ready server; a
 // pack no eve engine may run gets no agent. The runner image runs this at build time
 // (machine/runner/Dockerfile); no model call and no Docker daemon is needed. Usage: node src/runtimes/eve/build.ts [outDir] [pack...]
-import { type AgentPack, type DecisionPack, PACKS, helperPack, resolveEngine } from "@hardness/contracts";
+import { type AgentPack, type DecisionPack, PACKS, helperPack, helpersOn, resolveEngine } from "@hardness/contracts";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,10 +40,20 @@ export function compileAndBuildDecide(options: CompileOptions): string {
 export function evePacks(only: string[] = []): Array<AgentPack | DecisionPack> {
   const agents = Object.values(PACKS).filter((p): p is AgentPack => p.kind === "agent" && p.agent !== null);
   const own = agents.filter((p) => p.engines.allowed.some((id) => resolveEngine(id).runtime === "eve"));
-  const helpers = agents.flatMap((p) => p.helpers.filter((h) => resolveEngine(h.engine).runtime === "eve").map((h) => helperPack(p, h)));
+  // A helper on an eve engine under any runtime the pack may run on, once per app.
+  const helpers = new Map<string, AgentPack>();
+  for (const p of agents) {
+    for (const id of p.engines.allowed) {
+      for (const h of helpersOn(p, resolveEngine(id).runtime)) {
+        if (resolveEngine(h.engine).runtime !== "eve") continue;
+        const run = helperPack(p, h);
+        helpers.set(appName(run), run);
+      }
+    }
+  }
   // One generic decide app serves every decision pack an eve engine may run: its first such pack stands for it.
   const decision = Object.values(PACKS).find((p): p is DecisionPack => p.kind === "decision" && p.engines.allowed.some((id) => resolveEngine(id).runtime === "eve"));
-  return [...own, ...helpers, ...(decision ? [decision] : [])].filter((p) => only.length === 0 || only.includes(appName(p)));
+  return [...own, ...helpers.values(), ...(decision ? [decision] : [])].filter((p) => only.length === 0 || only.includes(appName(p)));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

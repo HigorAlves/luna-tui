@@ -7,7 +7,7 @@
 // helpers, so no tool), children run one at a time, and each gets only what is left of the
 // parent's turns and time. The parent's stream gets a `child` event as each starts and as it ends,
 // and the parent's usage the children's cost (`withChildren`).
-import { type AgentPack, type AgentRole, type EngineId, HELPER_LIMITS, type Helper, type Pack, type RunEvent, type RuntimeId, type StageInput, credentialOwner, helperPack, resolveEngine } from "@hardness/contracts";
+import { type AgentPack, type AgentRole, type EngineId, HELPER_LIMITS, type Helper, type Pack, type RunEvent, type RuntimeId, type StageInput, credentialOwner, helperPack, helpersOn, resolveEngine } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,8 +32,8 @@ const MIN_CHILD_TURNS = 2;
  *  runtime: the rest are the SDK's subagents. Elsewhere all of them: no other runtime maps a
  *  subagent yet. */
 export function delegatedHelpers(pack: Pack, runtime: RuntimeId): Helper[] {
-  if (pack.kind !== "agent") return [];
-  return runtime === "claude" ? pack.helpers.filter((h) => resolveEngine(h.engine).runtime !== "claude") : pack.helpers;
+  const helpers = helpersOn(pack, runtime);
+  return runtime === "claude" ? helpers.filter((h) => resolveEngine(h.engine).runtime !== "claude") : helpers;
 }
 
 /** What the model reads about the tool and the input it gives. */

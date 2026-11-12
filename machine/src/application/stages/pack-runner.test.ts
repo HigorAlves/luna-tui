@@ -1111,12 +1111,12 @@ describe("the engine a stage runs on", () => {
     expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringMatching(/^waited 60 min for the Codex login/) } });
   });
 
-  it("gives a verifying stage the Codex login its second opinion needs beside its own engine's, and releases both", async () => {
+  it("gives a verifying stage on Codex the Claude token its second opinion needs beside its own engine's, and releases both", async () => {
     const { credentials, log } = recordingCredentials();
     await runAgent({ ...deps(fakeSandbox(output(), () => log.push("sandbox"))), credentials }, context("verifying"), "verifying");
-    // The reviewer is on the other family (codex:sol, which is also the second opinion's engine), so one credential serves both.
-    expect(seen!.credential).toEqual({ env: { KEY_FOR_CODEX_SOL: "v" }, mounts: [] });
-    expect(log).toEqual(["prepare codex:sol", "sandbox", "release codex:sol"]);
+    // The verifier is on Codex, so its second opinion is Claude's (D9): both credentials.
+    expect(seen!.credential).toEqual({ env: { KEY_FOR_CODEX_SOL: "v", KEY_FOR_CLAUDE_OPUS: "v" }, mounts: [] });
+    expect(log).toEqual(["prepare codex:sol", "prepare claude:opus", "sandbox", "release codex:sol", "release claude:opus"]);
   });
 
   it("releases the credential when the sandbox throws", async () => {

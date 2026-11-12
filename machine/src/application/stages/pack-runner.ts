@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, credentialOwner, helpersOn, resolveEngine, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -557,7 +557,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   }
   // The run's own list: its engine's owner and each helper's, and for a browser run the hosts of the QA target(s) it may drive.
   const found = PACKS[pack];
-  const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : found.helpers.map((h) => credentialOwner(h.engine)))];
+  const owners = [credentialOwner(choice.engine), ...(found.kind === "decision" ? [] : helpersOn(found, resolveEngine(choice.engine).runtime).map((h) => credentialOwner(h.engine)))];
   const egress = deps.egress
     ? await deps.egress.for({ repoPath: task.repoPath, kind: "agent", owners: [...new Set(owners)], targets: pack === "e2e" || pack === "recording" ? targetHosts(input.context.qaTargets ?? []) : [] })
     : undefined;

@@ -82,7 +82,9 @@ describe("the engines each pack may run on", () => {
 
   it.each(AGENT_PACKS.map((p) => [p.id, p] as const))("%s: helpers run as agent roles, each once, on engines that can serve an agent at the pack's effort", (_id, pack) => {
     expect(new Set(pack.helpers.map((h) => h.role)).size).toBe(pack.helpers.length);
-    const onEach = pack.helpers.flatMap((h) => [h.engine, ...Object.values(h.on ?? {})].map((engine) => ({ role: h.role, engine })));
+    // The runtime the stage runs on when the helper has that engine: the default's for `engine`, the key for an `on` entry.
+    const parentOf = resolveEngine(pack.engines.default).runtime;
+    const onEach = pack.helpers.flatMap((h) => [{ role: h.role, engine: h.engine, parent: parentOf }, ...Object.entries(h.on ?? {}).flatMap(([runtime, engine]) => (engine ? [{ role: h.role, engine, parent: runtime }] : []))]);
     for (const helper of onEach) {
       expect(helper.role, `${pack.id}: a helper is not the pack's own role`).not.toBe(pack.agent);
       const engine = resolveEngine(helper.engine);
@@ -91,8 +93,8 @@ describe("the engines each pack may run on", () => {
       expect(engine.caps, helper.engine).toMatchObject({ tools: true, structured: true });
       expect(engine.caps.effort, `${helper.engine} at ${pack.effort}`).toContain(pack.effort);
       expect(retired(MODELS[ENGINES[helper.engine].model], today), helper.engine).toBe(false);
-      // A helper on Claude beside a Claude default is a subagent: the role needs the Agent tool.
-      if (engine.runtime === "claude" && resolveEngine(pack.engines.default).runtime === "claude") expect(pack.access.agent, `${pack.id} dispatches ${helper.role}`).toBe(true);
+      // A helper on Claude under a stage on Claude is a subagent: the role needs the Agent tool.
+      if (engine.runtime === "claude" && helper.parent === "claude") expect(pack.access.agent, `${pack.id} dispatches ${helper.role}`).toBe(true);
     }
   });
 
