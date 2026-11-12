@@ -57,6 +57,33 @@ describe("the machine's own count of iterations", () => {
   });
 });
 
+describe("a bounce that changed nothing", () => {
+  const impl = (commit: string, outcome = "pass") => row("stage.finished", { stage: "implementing", outcome, detail: { env: { commit } } });
+  const verifyFailed = () => row("stage.finished", { stage: "verifying", outcome: "fail" });
+  const runs = (n: number) => Array.from({ length: n }, (_, i) => run("implementing", i, i));
+
+  it("is not an iteration: an implementing run that passed on the same commit after a verify failure did nothing the budget should charge for", () => {
+    const rows = [impl("c1"), verifyFailed(), impl("c1"), verifyFailed(), impl("c1")];
+    expect(buildBudget(runs(3), rows, limits).iterations).toBe(1);
+  });
+
+  it("still counts a run that moved the commit, one that did not pass, and one that was not entered from a verify failure", () => {
+    expect(buildBudget(runs(2), [impl("c1"), verifyFailed(), impl("c2")], limits).iterations).toBe(2);
+    expect(buildBudget(runs(2), [impl("c1"), verifyFailed(), impl("c1", "fail")], limits).iterations).toBe(2);
+    // A stuck agent that never commits, with nothing failing in Verify between its runs, still spends the card.
+    expect(buildBudget(runs(3), [impl("c1"), impl("c1"), impl("c1")], limits).iterations).toBe(3);
+  });
+
+  it("counts a run whose commit is unknown", () => {
+    expect(buildBudget(runs(2), [row("stage.finished", { stage: "implementing", outcome: "pass" }), verifyFailed(), row("stage.finished", { stage: "implementing", outcome: "pass" })], limits).iterations).toBe(2);
+  });
+
+  it("keeps the tokens and the minutes of the run it does not count", () => {
+    const rows = [impl("c1"), verifyFailed(), row("stage.finished", { stage: "implementing", outcome: "pass", tokens: { input: 10, output: 5 }, detail: { env: { commit: "c1" } } })];
+    expect(buildBudget(runs(2), rows, limits)).toMatchObject({ iterations: 1, tokens: 15 });
+  });
+});
+
 describe("numbers read from rows", () => {
   it("ignores a token count that is not a non-negative integer: a forged negative one cannot hide what was spent", () => {
     const budget = buildBudget([run("implementing", 0, 1)], [finished({ input: -9_000_000, output: 1 }), finished({ input: 1.5, output: 1 }), finished({ input: 1_900_000, output: 100_001 })], limits);

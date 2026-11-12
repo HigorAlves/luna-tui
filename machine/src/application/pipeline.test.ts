@@ -553,6 +553,24 @@ describe("Build's budget", () => {
     expect((await p.events(task.id)).filter((e) => e.kind === "build.budget_reset")).toHaveLength(1);
   });
 
+  it("starts Build with a fresh budget when a person approves a plan made after Build already ran, and logs the first approval of a plan with nothing to reset as no reset", async () => {
+    const ran: string[] = [];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), { outcome: "fail" as const, events: events(16) }) : stubs.runnerFor(stage)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(1);
+    expect((await p.events(task.id)).filter((e) => e.kind === "build.budget_reset")).toHaveLength(0);
+    expect((await p.get(task.id)).state).toBe("escalated");
+    // The person sends the card back to be planned again, then approves the new plan.
+    await p.decide(task.id, "sent_back", "re-plan it");
+    expect((await p.get(task.id)).state).toBe("awaiting_approval");
+    await p.decide(task.id, "approved");
+    // The new plan's Build runs on a budget of its own instead of escalating on the old one at once.
+    expect(ran).toHaveLength(2);
+    expect((await p.events(task.id)).filter((e) => e.kind === "build.budget_reset")).toHaveLength(1);
+  });
+
   it("counts the runtime's tokens from the finish row, and a run that reports none leaves them uncounted", async () => {
     const ran: string[] = [];
     const usage = { turns: 1, costUsd: null, tokens: { input: 1_900_000, output: 100_001 } };

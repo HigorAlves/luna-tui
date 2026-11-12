@@ -1602,6 +1602,11 @@ export class Pipeline {
     // "Build's budget is spent: a person decides": a person who approves has decided the card goes on, so it goes on with a fresh budget.
     // Without one, the next Build reads the same spent budget and escalates again, and approving can never move the card.
     if (escalated && wanted === "approved" && budgetWasSpent(escalated.requested)) await this.log(id, "build.budget_reset", { reason: "a person approved the card past its spent budget" });
+    // A person approving a plan made after Build already ran has decided the card builds that plan: its Build counts from a fresh budget.
+    // Otherwise the runs spent on the old plan (and its bounces) escalate the new one before it starts, and the stronger model's one run is burnt.
+    if (before.state === "awaiting_approval" && wanted === "approved" && !options.auto && (await this.events(id)).some((e) => e.kind === "stage.finished" && e.payload.stage === "implementing")) {
+      await this.log(id, "build.budget_reset", { reason: "a person approved a new plan" });
+    }
     const moved = await this.decideNow(id, wanted, reason, response, options);
     if (escalated) await this.keepEscalationTruth(moved, escalated.id);
     if (escalated) await this.confirmEscalationReason(id, escalated);
