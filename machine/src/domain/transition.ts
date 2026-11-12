@@ -11,6 +11,15 @@ export const IMPLEMENTER_CAP = 6;
 
 export type Loop = "verify" | "e2e" | "ci";
 
+/** One failure of a retry loop: what kind it was (`env`, `checks`, `review`, `unanswered`, or the stage's own name) and one line of why. */
+export interface Failure {
+  kind: string;
+  line: string;
+}
+
+/** The failures of a loop kept for the escalation that names them: the last ones, since the person reads what just happened. */
+const FAILURES_KEPT = 6;
+
 export interface Retries {
   verify: number;
   e2e: number;
@@ -23,6 +32,10 @@ export interface Retries {
   strongerNext?: boolean;
   /** Times a plan found wrong in Build, Verify or review went back to the planner: the second goes to a person. */
   planWrong?: number;
+  /** Verify runs that failed with no answer at all (the run errored, nothing was found): their own count, so one unanswered run is never read as the loop's third failure. */
+  unanswered?: number;
+  /** What each loop's failures were since the card last started afresh, for the escalation's reason. */
+  failures?: Partial<Record<Loop, Failure[]>>;
   /** The set of blocker findings Build was last sent from Verify, and the rounds it has had on it. */
   findingSet?: FindingSetRounds;
 }
@@ -50,7 +63,7 @@ export type PipelineEvent =
   /** The card is a report of another card (or of a backlog item): it closes, with nothing left to run. */
   | { type: "merged" }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; /** Verify itself failed without an answer (the run errored, nothing was found in the code): it runs again, and Build is not asked to fix what nobody found. */ unanswered?: boolean; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For delivering and ci_watch: the card's own PR is already merged, so the card shipped. */ merged?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify itself failed without an answer (the run errored, nothing was found in the code): it runs again, and Build is not asked to fix what nobody found. */ unanswered?: boolean; /** What this failed run was, kept for the escalation that names the loop's failures. */ failure?: Failure; /** For delivering and ci_watch: the card's own PR is already merged, so the card shipped. */ merged?: boolean; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; /** For evidence: the repository keeps the preview gate (`ship.preview: on`). */ preview?: boolean; /** For shipping: the merge did not happen because the PR is not ready; the watch runs again. */ notReady?: boolean; /** For reviewing_memory: the retro has proposals a person is asked about. */ proposals?: boolean; /** For a head_moved escalation: the media are made again from a new browser run. */ refresh?: "media" | "verify"; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
@@ -90,6 +103,8 @@ export interface Step extends Snapshot {
   archiveReason?: ArchiveReason;
   /** The typed reason an escalating stage gave, when it gave one. */
   escalation?: EscalationReason;
+  /** The failures a retry loop's cap was reached on, kind and line each, for the approval to show. */
+  failures?: Failure[];
 }
 
 /** A step before the route is stamped on it: what the graph functions build. */
@@ -139,15 +154,22 @@ function enterImplementing(retries: Retries): Move {
   return run("implementing", { ...retries, total: retries.total + 1 });
 }
 
-function loopFailed(task: Snapshot, loop: Loop, set?: { key: string; buildRounds: number }, cap: number = LOOP_CAP): Move {
-  const retries: Retries = { ...task.retries, [loop]: task.retries[loop] + 1 };
+const withFailure = (retries: Retries, loop: Loop, failure: Failure | undefined): Retries =>
+  failure ? { ...retries, failures: { ...retries.failures, [loop]: [...(retries.failures?.[loop] ?? []), failure].slice(-FAILURES_KEPT) } } : retries;
+
+function loopFailed(task: Snapshot, loop: Loop, set?: { key: string; buildRounds: number }, cap: number = LOOP_CAP, failure?: Failure): Move {
+  const retries: Retries = withFailure({ ...task.retries, [loop]: task.retries[loop] + 1 }, loop, failure);
   if (set) {
     const round = nextRound(task.retries.findingSet, set.key, set.buildRounds);
     retries.findingSet = round.set;
     if (round.escalate) return escalate(`the same findings came back after ${round.set.rounds} round${round.set.rounds === 1 ? "" : "s"} of Build`, "implementing", retries);
   }
   if (retries[loop] >= cap) {
-    return escalate(`${loop} failed ${retries[loop]} times`, "implementing", retries);
+    // The cap's own failures, by kind: "failed 3 times" alone hides whether they were the environment, the checks or the review.
+    // A run that never answered is on the list too, so the list can be longer than the loop's own count; the reason counts what it names.
+    const failures = retries.failures?.[loop] ?? [];
+    const named = failures.length > 0 ? `: ${failures.map((f) => `${f.kind} (${f.line})`).join("; ")}` : "";
+    return { ...escalate(`${loop} failed ${Math.max(retries[loop], failures.length)} times${named}`, "implementing", retries), ...(failures.length > 0 ? { failures } : {}) };
   }
   return enterImplementing(retries);
 }
@@ -322,7 +344,7 @@ function prStageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stag
       break;
     case "ci_watch":
       if (outcome === "pass") return done(retries);
-      if (outcome === "fail") return loopFailed(task, "ci", undefined, event.loopCap);
+      if (outcome === "fail") return loopFailed(task, "ci", undefined, event.loopCap, event.failure);
       break;
     case "implementing":
       if (outcome === "pass") return run("verifying", retries);
@@ -354,7 +376,7 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
     // Build had a round on it. On a PR route there is no plan to redo, and triage and setup have none.
     if (event.escalation === "plan_wrong" && task.route === "feature" && state !== "triage" && state !== "setup" && state !== "test_design" && (retries.planWrong ?? 0) < 1) {
       const { findingSet: _old, ...kept } = retries;
-      return { ...run("test_design", { ...kept, verify: 0, e2e: 0, ci: 0, planWrong: (retries.planWrong ?? 0) + 1 }), reason: event.reason, escalation: "plan_wrong" };
+      return { ...run("test_design", { ...kept, verify: 0, e2e: 0, ci: 0, unanswered: 0, failures: {}, planWrong: (retries.planWrong ?? 0) + 1 }), reason: event.reason, escalation: "plan_wrong" };
     }
     // The PR head moved after the evidence pack was made: Evidence runs again, retries kept; its format is kept too.
     // From the watch or the merge; a fix that changed what a scenario shows asks for a new browser run first, and Evidence re-makes the media from it.
@@ -400,14 +422,16 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
     case "verifying":
       if (outcome === "pass") return run("e2e", retries);
       if (outcome === "fail" && event.unanswered) {
-        const again: Retries = { ...retries, verify: retries.verify + 1 };
-        return again.verify >= LOOP_CAP ? escalate(`verifying could not answer ${again.verify} times`, "verifying", again) : run("verifying", again);
+        // Its own counter: a run that never answered is not one of the loop's failures, and the loop's failures are not unanswered runs.
+        const again: Retries = withFailure({ ...retries, unanswered: (retries.unanswered ?? 0) + 1 }, "verify", event.failure);
+        const times = again.unanswered ?? 0;
+        return times >= LOOP_CAP ? escalate(`verifying could not answer ${times} times${event.failure ? `: ${event.failure.line}` : ""}`, "verifying", again) : run("verifying", again);
       }
-      if (outcome === "fail") return loopFailed(task, "verify", event.findingSet ? { key: event.findingSet, buildRounds: event.buildRounds ?? FACTORY_DEFAULTS.verify.build_rounds } : undefined);
+      if (outcome === "fail") return loopFailed(task, "verify", event.findingSet ? { key: event.findingSet, buildRounds: event.buildRounds ?? FACTORY_DEFAULTS.verify.build_rounds } : undefined, LOOP_CAP, event.failure);
       break;
     case "e2e":
       if (outcome === "pass") return run("delivering", retries);
-      if (outcome === "fail") return loopFailed(task, "e2e", undefined, event.loopCap);
+      if (outcome === "fail") return loopFailed(task, "e2e", undefined, event.loopCap, event.failure);
       break;
     case "delivering":
       if (outcome === "pass") return run("ci_watch", retries);
@@ -415,7 +439,7 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       break;
     case "ci_watch":
       if (outcome === "pass") return run("evidence", retries);
-      if (outcome === "fail") return loopFailed(task, "ci", undefined, event.loopCap);
+      if (outcome === "fail") return loopFailed(task, "ci", undefined, event.loopCap, event.failure);
       break;
     case "evidence":
       // With the preview on a person approves the pack before anything is public, and the watch starts at the approval; otherwise Evidence has published it and the watch starts at once.

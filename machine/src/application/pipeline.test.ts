@@ -2181,6 +2181,21 @@ describe("retries and escalation", () => {
     expect(escalated.retries).toMatchObject({ verify: 2 });
   });
 
+  it("names each failure behind a verify cap, and does not call a mixed set 'could not answer'", async () => {
+    const env = { outcome: "fail" as const, detail: { step: "env", summary: "the sandbox image does not match the repo" } };
+    const review = { outcome: "fail" as const, detail: { step: "review", summary: "review found an unhandled error" } };
+    const unanswered = { outcome: "fail" as const, detail: { runFailed: true, error: "MODEL_CALL_FAILED UND_ERR_SOCKET" } };
+    const checks = { outcome: "fail" as const, detail: { step: "checks", summary: "2 checks failed" } };
+    stubs.plan("verifying", env, review, unanswered, checks);
+    const task = await newTask();
+    const escalated = await startAndApprove(task.id);
+    expect(escalated.state).toBe("escalated");
+    expect(escalated.reason).toBe("verify failed 4 times: env (the sandbox image does not match the repo); review (review found an unhandled error); unanswered (MODEL_CALL_FAILED UND_ERR_SOCKET); checks (2 checks failed)");
+    expect(escalated.retries).toMatchObject({ verify: 3, unanswered: 1 });
+    const gate = (await pipeline.approvals(task.id)).find((a) => a.kind === "escalated" && a.decision === null)!;
+    expect(gate.requested.failures).toEqual([{ kind: "env", line: expect.any(String) }, { kind: "review", line: expect.any(String) }, { kind: "unanswered", line: expect.any(String) }, { kind: "checks", line: expect.any(String) }]);
+  });
+
   it("escalates after three verify failures, then resumes with your guidance", async () => {
     stubs.plan("verifying", fail, fail, fail);
     const task = await newTask();

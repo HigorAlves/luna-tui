@@ -365,6 +365,18 @@ const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "aw
 
 const objectOf = (value: unknown): Record<string, unknown> | undefined => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
 
+/** What a failed run of a retry loop's stage was, for the escalation that names the loop's failures: its kind (the step Verify failed at, `unanswered` for a run
+ *  that gave no answer, else the stage) and one line of why. Nothing when the run said nothing about itself. */
+function failureOf(stage: TaskState, result: StageResult): { failure: { kind: string; line: string } } | Record<string, never> {
+  if (stage !== "verifying" && stage !== "e2e" && stage !== "ci_watch") return {};
+  const detail = result.detail ?? {};
+  const unanswered = stage === "verifying" && detail.runFailed === true && (result.findings ?? []).length === 0;
+  const said = [detail.summary, detail.reason, detail.error, result.findings?.[0]?.title].find((v): v is string => typeof v === "string" && v.trim() !== "");
+  if (!said) return {};
+  const kind = unanswered ? "unanswered" : typeof detail.step === "string" && detail.step !== "" ? detail.step : stage === "ci_watch" ? "ci" : stage === "verifying" ? "verify" : stage;
+  return { failure: { kind, line: said.replace(/\s+/g, " ").trim().slice(0, 120) } };
+}
+
 /** Coverage of a revised list of criteria by the scenarios on the gate: the stored report (the shape the plan stage writes), what is open, and the bar.
  *  Null for a gate with no scenarios. A scenario tied by id to a criterion the edit removed is named: it proves nothing now. */
 function revisedCoverage(criteria: Criterion[], cases: unknown, previous: Record<string, unknown> | undefined, barOf: number | undefined) {
@@ -2783,6 +2795,7 @@ export class Pipeline {
                 ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
                 // Verify's own run failed with no verdict and no finding: it is asked again, Build has nothing to fix.
                 ...(stage === "verifying" && result.outcome === "fail" && result.detail?.runFailed === true && (result.findings ?? []).length === 0 ? { unanswered: true as const } : {}),
+                ...(result.outcome === "fail" ? failureOf(stage, result) : {}),
                 ...(await this.blockerSet(id, stage, result)),
                 ...(await this.loopCap(id, stage, result)),
                 // The merge that did not happen because the PR is not ready; a fix that changed what a scenario shows (media from a new browser run).
@@ -2982,7 +2995,7 @@ export class Pipeline {
         await tx.insertApproval({
           taskId: id,
           kind: step.effect.gate,
-          requested: { ...extra.detail, ...(BEFORE_BUILD.has(step.effect.gate as TaskState) && cardOf(task).ticketChanged ? { ticketChanged: cardOf(task).ticketChanged } : {}), ...(step.reason ? { reason: step.reason } : {}), ...(step.escalation ? { escalation: step.escalation } : {}) },
+          requested: { ...extra.detail, ...(BEFORE_BUILD.has(step.effect.gate as TaskState) && cardOf(task).ticketChanged ? { ticketChanged: cardOf(task).ticketChanged } : {}), ...(step.reason ? { reason: step.reason } : {}), ...(step.escalation ? { escalation: step.escalation } : {}), ...(step.failures ? { failures: step.failures } : {}) },
         });
       }
       return { step, logged };
