@@ -113,8 +113,8 @@ const REPOS_PAGE = 100;
 const BULK_PRS = 50;
 /** GitHub prices a call by the PR slots it asks for (repos x `first`, times the nested lists), not by the PRs it gets: a pass 2 call asks for
  *  `first` close to what its repos hold, and holds at most this many repos and about this many slots, so a call stays at a few points. */
-const PASS2_MAX_REPOS = 10;
-const PASS2_MAX_SLOTS = 250;
+const PASS2_MAX_REPOS = 5;
+const PASS2_MAX_SLOTS = 125;
 /** The `first` a repo with this many open PRs is asked with: the smallest bucket that holds it, and a page of 50 beyond (the rest is paged on its own). */
 const PASS2_BUCKETS = [5, 10, 25, 50];
 /** A repo's PRs are paged up to this many pages (500 PRs); a repo with more is reported as capped. */
@@ -248,19 +248,38 @@ export class OctokitGitHub implements GitHub {
       buckets.set(first, [...(buckets.get(first) ?? []), repo]);
     }
     const read = new Map<string, { prs: PrNode[]; page: PrPage; open: number }>();
-    for (const [first, group] of [...buckets].sort((x, y) => x[0] - y[0])) {
-      for (const chunk of chunkRepos(group, first)) {
-        const data: RepoPrsAnswer = await call(`listing the open PRs of ${chunk.length} repositories`, () =>
-          this.octokit.graphql<RepoPrsAnswer>(repoPrsQuery(first), { ids: chunk.map((r) => r.id) }),
-        );
-        spend(data);
-        for (const node of data.nodes) {
-          // A repo that went away between the passes answers null.
-          if (!node?.pullRequests) continue;
-          const open = chunk.find((r) => r.slug === node.nameWithOwner)?.open ?? node.pullRequests.nodes.length;
-          read.set(node.nameWithOwner, { prs: [...node.pullRequests.nodes], page: node.pullRequests, open });
+    const skipped: NonNullable<OpenPrs["skipped"]> = [];
+    // GitHub refuses a query it finds too heavy ("Resource limits for this query exceeded"), times out on one (502), or now and then answers
+    // nothing: such a call is split in half and asked again, down to one repo, which is then skipped and named. One heavy repo never empties the list.
+    const readChunk = async (chunk: typeof withPrs, first: number): Promise<void> => {
+      let data: RepoPrsAnswer;
+      try {
+        data = await call(`listing the open PRs of ${chunk.length} repositories`, async () => {
+          const answer = await this.octokit.graphql<RepoPrsAnswer | undefined>(repoPrsQuery(first), { ids: chunk.map((r) => r.id) });
+          if (!answer?.nodes) throw new GitHubError("GitHub answered no data");
+          return answer;
+        });
+      } catch (error) {
+        if (chunk.length > 1) {
+          const half = Math.ceil(chunk.length / 2);
+          await readChunk(chunk.slice(0, half), first);
+          await readChunk(chunk.slice(half), first);
+          return;
         }
+        calls++;
+        skipped.push({ repo: chunk[0]!.slug, error: String((error as { message?: string })?.message ?? error).split("\n")[0]!.slice(0, 200) });
+        return;
       }
+      spend(data);
+      for (const node of data.nodes) {
+        // A repo that went away between the passes answers null.
+        if (!node?.pullRequests) continue;
+        const open = chunk.find((r) => r.slug === node.nameWithOwner)?.open ?? node.pullRequests.nodes.length;
+        read.set(node.nameWithOwner, { prs: [...node.pullRequests.nodes], page: node.pullRequests, open });
+      }
+    };
+    for (const [first, group] of [...buckets].sort((x, y) => x[0] - y[0])) {
+      for (const chunk of chunkRepos(group, first)) await readChunk(chunk, first);
     }
 
     // A repo with more than one page of open PRs is paged on its own, a few pages at most.
@@ -287,7 +306,8 @@ export class OctokitGitHub implements GitHub {
       for (const node of read.get(slug)?.prs ?? []) prs.push({ repo: slug, node });
     }
     console.log(`github prs (all): ${prs.length} PRs in ${read.size} repos, ${calls} calls, ${points} points, ${remaining ?? "?"} left`);
-    return { prs, capped, calls };
+    if (skipped.length > 0) console.warn(`github prs (all): skipped ${skipped.length} repos GitHub would not read: ${skipped.map((s) => `${s.repo} (${s.error})`).join("; ")}`);
+    return { prs, capped, calls, ...(skipped.length > 0 ? { skipped } : {}) };
   }
 
   async prFacts(slug: string, number: number): Promise<PrNode | null> {

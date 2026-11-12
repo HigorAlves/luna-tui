@@ -162,6 +162,47 @@ describe("OctokitGitHub", () => {
     const asked = (log: ReturnType<typeof world>["log"]) => log.filter((l) => l.kind === "nodes");
     const firstOf = (query: string) => Number(/pullRequests\(states:OPEN, first:(\d+)/.exec(query)![1]);
 
+    /** The fake, refusing the pass 2 calls `refuse` picks: GitHub's resource limit, a 502, or an empty answer. */
+    function refusing(w: ReturnType<typeof world>, refuse: (ids: string[]) => "limit" | "502" | "empty" | null) {
+      return async (query: string, variables: Record<string, unknown> = {}) => {
+        if (query.includes("nodes(ids")) {
+          const how = refuse(variables.ids as string[]);
+          if (how === "limit") throw new Error("Request failed due to following response errors:\n - Resource limits for this query exceeded.");
+          if (how === "502") throw Object.assign(new Error("<html>502 Bad Gateway</html>"), { status: 502 });
+          if (how === "empty") return undefined;
+        }
+        return w.graphql(query, variables);
+      };
+    }
+    const many = Array.from({ length: 8 }, (_, i) => ({ slug: `o/r${i}`, open: 3 }));
+
+    it("splits a pass 2 call GitHub refuses as too big and still reads every repo", async () => {
+      const w = world(many);
+      const { github } = stub({ graphql: refusing(w, (ids) => (ids.length > 2 ? "limit" : null)) });
+      const listed = await github.listOpenPrs();
+      expect(new Set(listed.prs.map((p) => p.repo))).toEqual(new Set(many.map((r) => r.slug)));
+      expect(listed.prs).toHaveLength(24);
+      expect(listed.skipped ?? []).toEqual([]);
+    });
+
+    it("treats a 502 or an empty answer as a failed call to split, never as a crash", async () => {
+      for (const how of ["502", "empty"] as const) {
+        const w = world(many);
+        const { github } = stub({ graphql: refusing(w, (ids) => (ids.length > 1 ? how : null)) });
+        const listed = await github.listOpenPrs();
+        expect(listed.prs, how).toHaveLength(24);
+      }
+    });
+
+    it("skips one repo GitHub keeps refusing, names it, and lists the rest", async () => {
+      const w = world(many);
+      const { github } = stub({ graphql: refusing(w, (ids) => (ids.includes("id:o/r3") ? "limit" : null)) });
+      const listed = await github.listOpenPrs();
+      expect(listed.prs.some((p) => p.repo === "o/r3")).toBe(false);
+      expect(listed.prs).toHaveLength(21);
+      expect(listed.skipped?.map((s) => s.repo)).toEqual(["o/r3"]);
+    });
+
     it("pass 1 pages the repositories 100 at a time, asking only for each one's open count", async () => {
       const repos = Array.from({ length: 250 }, (_, i) => ({ slug: `o/r${i}`, open: 0 }));
       const w = world(repos);
@@ -199,7 +240,8 @@ describe("OctokitGitHub", () => {
       const { github } = stub({ graphql: w.graphql });
       const listed = await github.listOpenPrs();
       const nodes = asked(w.log);
-      const byFirst = Object.fromEntries(nodes.map((n) => [firstOf(n.query), (n.variables.ids as string[]).map((id) => id.slice(3))]));
+      const byFirst: Record<number, string[]> = {};
+      for (const n of nodes) byFirst[firstOf(n.query)] = [...(byFirst[firstOf(n.query)] ?? []), ...(n.variables.ids as string[]).map((id) => id.slice(3))];
       expect(byFirst).toEqual({
         5: ["o/one", "o/five"],
         10: ["o/six", "o/ten"],
@@ -218,7 +260,8 @@ describe("OctokitGitHub", () => {
       // o/fiftyone holds 51 and is paged by one more call; nothing is capped.
       expect([...counts]).toEqual([["o/big", 30], ["o/one", 1], ["o/five", 5], ["o/six", 6], ["o/ten", 10], ["o/eleven", 11], ["o/fifty", 50], ["o/fiftyone", 51]]);
       expect(listed.capped).toEqual([]);
-      expect(listed.calls).toBe(1 + 4 + 1);
+      // first:50 holds two repos a call (2 x 50 slots within 125), so its three repos take two calls.
+      expect(listed.calls).toBe(1 + 5 + 1);
     });
 
     it("maps the PR fields as before", async () => {
@@ -228,7 +271,7 @@ describe("OctokitGitHub", () => {
       expect(listed.prs.map((p) => [p.repo, p.node.number, p.node.updatedAt])).toEqual([["o/a", 1, "t1"], ["o/a", 2, "t2"]]);
     });
 
-    it("caps the repos of one call at ten, and the PRs it asks for at about 250", async () => {
+    it("caps the repos of one call at five, and the PRs it asks for at about 125", async () => {
       const small = Array.from({ length: 23 }, (_, i) => ({ slug: `o/s${i}`, open: 1 }));
       const large = Array.from({ length: 12 }, (_, i) => ({ slug: `o/l${i}`, open: 40 }));
       const w = world([...small, ...large]);
@@ -237,11 +280,11 @@ describe("OctokitGitHub", () => {
       const nodes = asked(w.log);
       for (const n of nodes) {
         const ids = n.variables.ids as string[];
-        expect(ids.length).toBeLessThanOrEqual(10);
-        expect(ids.length * firstOf(n.query)).toBeLessThanOrEqual(250);
+        expect(ids.length).toBeLessThanOrEqual(5);
+        expect(ids.length * firstOf(n.query)).toBeLessThanOrEqual(125);
       }
-      // 23 small repos at first:5: 10 + 10 + 3 calls; 12 repos at first:50: 5 + 5 + 2 calls.
-      expect(nodes.map((n) => (n.variables.ids as string[]).length)).toEqual([10, 10, 3, 5, 5, 2]);
+      // 23 small repos at first:5: 5 + 5 + 5 + 5 + 3; 12 repos at first:50: two a call.
+      expect(nodes.map((n) => (n.variables.ids as string[]).length)).toEqual([5, 5, 5, 5, 3, 2, 2, 2, 2, 2, 2]);
       expect(listed.prs).toHaveLength(23 + 12 * 40);
     });
 

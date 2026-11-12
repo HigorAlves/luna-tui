@@ -45,6 +45,8 @@ export interface OpenPrs {
   capped: Array<{ repo: string; open: number }>;
   /** How many GraphQL calls the read took, for the poll's log line. */
   calls: number;
+  /** Repos GitHub refused to read even alone (too heavy, a 5xx): left out of the list, named here so the poll says so. */
+  skipped?: Array<{ repo: string; error: string }>;
 }
 
 /** One check on a ref, in the states ci_watch keys on (uppercase, GitHub's own vocabulary). */
