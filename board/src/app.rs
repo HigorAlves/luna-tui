@@ -30,7 +30,7 @@ use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
 use crate::tickets::{TicketEntry, TicketsState};
 use crate::{
-    client::{Incoming, Machine},
+    client::{Incoming, Machine, Refused},
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
@@ -314,6 +314,40 @@ pub struct HeldApproval {
     pub checking: bool,
 }
 
+/// What the coverage picker was opened for: the card, the approval it asked at (the picker sends only while that one is open), the
+/// criteria with no scenario (id, text), which of them are ticked and the row under the cursor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoverageChoice {
+    pub id: String,
+    pub approval: Option<String>,
+    pub gaps: Vec<(String, String)>,
+    pub picked: Vec<bool>,
+    pub cursor: usize,
+}
+
+impl CoverageChoice {
+    fn new(id: &str, approval: Option<String>, gaps: Vec<(String, String)>) -> Self {
+        let picked = vec![false; gaps.len()];
+        CoverageChoice {
+            id: id.to_string(),
+            approval,
+            gaps,
+            picked,
+            cursor: 0,
+        }
+    }
+
+    /// The ids ticked, in the order listed.
+    pub fn chosen(&self) -> Vec<String> {
+        self.gaps
+            .iter()
+            .zip(&self.picked)
+            .filter(|(_, on)| **on)
+            .map(|((id, _), _)| id.clone())
+            .collect()
+    }
+}
+
 /// The gate a card waits at, as an approval names it.
 pub struct Gate {
     pub kind: &'static str,
@@ -441,6 +475,9 @@ pub enum Mode {
     ConfirmApprove(HeldApproval),
     /// `q` on the board while a card needs you or runs.
     ConfirmQuit,
+    /// `u` at a plan gate with open coverage gaps, or a plain approval the machine answered `409 coverage_gaps`: tick the criteria to
+    /// excuse as untestable; enter approves with them.
+    CoveragePicker(CoverageChoice),
     /// `A` in the Inbox: approve every ticket in the split, after one yes.
     /// Each card with the committing kind it had when the box opened.
     ConfirmApproveAll(Vec<(String, &'static str)>),
@@ -2096,7 +2133,13 @@ impl App {
 
     /// Runs a machine command and shows the updated ticket, or the machine's error.
     fn act(&mut self, call: impl FnOnce(&Machine) -> Result<Task, String>, done: &str) {
-        match call(&self.machine) {
+        let result = call(&self.machine);
+        self.settle(result, done);
+    }
+
+    /// Shows what a machine command answered: the updated ticket (and `done`), or the machine's error.
+    fn settle(&mut self, result: Result<Task, String>, done: &str) {
+        match result {
             Ok(task) => {
                 let id = task.id.clone();
                 self.upsert(task);
@@ -2408,6 +2451,7 @@ impl App {
         let approves = match key {
             'a' | 'S' => task.waiting_on_you && self.approval_gate(&task).is_some(),
             'A' => task.state == "reviewing_memory" && task.waiting_on_you,
+            'u' => task.state == "awaiting_approval",
             _ => false,
         };
         if approves && !self.task_is_open(id) {
@@ -2480,6 +2524,7 @@ impl App {
                     };
                 }
             }
+            'u' => self.open_coverage_picker(id),
             'R' => self.open_repo_picker(id),
             'N' => {
                 if crate::keys::rejectable(self, &task) {
@@ -2866,6 +2911,7 @@ impl App {
                 self.handle_confirm(key, &id)
             }
             Mode::ConfirmQuit => self.handle_confirm_quit(key),
+            Mode::CoveragePicker(_) => self.handle_coverage_picker(key),
             Mode::ArchiveReason { .. } => self.handle_archive_reason(key),
             Mode::EscalationReason { .. } => self.handle_escalation_reason(key),
             Mode::RecordEdit { .. } => self.handle_record_edit(key),
@@ -3176,7 +3222,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_INBOX: &[&str] = &[
         "esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r",
-        "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p",
+        "N", "u", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p",
     ];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
@@ -4878,6 +4924,7 @@ impl App {
         "e",
         "r",
         "N",
+        "u",
         "X",
         "w",
         "Z",
@@ -5243,8 +5290,8 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] = &[
         "esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "tab", "space",
-        "1-9", "+", "?", ":", "o", "O", "i", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z",
-        "C", "d", "f", "T", "p", "M", "U", "y", "n",
+        "1-9", "+", "?", ":", "o", "O", "i", "a", "A", "S", "e", "E", "R", "r", "N", "u", "X", "w",
+        "Z", "C", "d", "f", "T", "p", "M", "U", "y", "n",
     ];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
@@ -6389,8 +6436,130 @@ impl App {
                 "kept as one card: recorded, and flagged at every later gate",
             );
         } else {
-            self.act(|m| m.decide(&held.id, true, None), "approved");
+            self.approve_excusing(&held.id, held.approval.clone(), &[]);
         }
+    }
+
+    /// Approves `id`, excusing `untestable` criteria. A plan whose coverage has gaps answers 409: the board opens the picker over
+    /// them (keeping what was already ticked) instead of only showing the error.
+    fn approve_excusing(&mut self, id: &str, approval: Option<String>, untestable: &[String]) {
+        match self.machine.approve_excusing(id, untestable) {
+            Ok(task) => self.settle(Ok(task), "approved"),
+            Err(Refused::CoverageGaps(left)) => {
+                let mut gaps = self.open_gaps(id);
+                for gap in left {
+                    if !gaps.iter().any(|(known, _)| *known == gap) {
+                        gaps.push((gap, String::new()));
+                    }
+                }
+                let mut choice = CoverageChoice::new(id, approval, gaps);
+                for (i, (gap, _)) in choice.gaps.iter().enumerate() {
+                    choice.picked[i] = untestable.contains(gap);
+                }
+                self.mode = Mode::CoveragePicker(choice);
+                self.notify(
+                    "criteria with no scenario block the plan: tick the ones to excuse as untestable, enter approves",
+                    true,
+                );
+            }
+            Err(Refused::Other(message)) => self.settle(Err(message), "approved"),
+        }
+    }
+
+    /// The criteria with no scenario that the open plan gate of `id` still has, as its loaded detail says.
+    fn open_gaps(&self, id: &str) -> Vec<(String, String)> {
+        let (Some(task), Some(detail)) = (
+            self.task(id),
+            self.detail.as_ref().filter(|d| d.task.id == id),
+        ) else {
+            return Vec::new();
+        };
+        detail
+            .open_approval()
+            .map(|a| crate::pages::open_coverage_gaps(a, task))
+            .unwrap_or_default()
+    }
+
+    /// `u`: the criteria picker over the plan gate's open coverage gaps. Says why when there is nothing to pick.
+    fn open_coverage_picker(&mut self, id: &str) {
+        let Some(task) = self.task(id).cloned() else {
+            return;
+        };
+        if matches!(task.state.as_str(), "awaiting_approval") && !self.shows_detail_of(id) {
+            return self.notify("still reading this card; press again in a moment", false);
+        }
+        if self.approval_gate(&task).is_none_or(|g| g.kind != "plan") {
+            return self.notify(
+                "excusing coverage gaps answers a plan gate; this card is not at one",
+                false,
+            );
+        }
+        let gaps = self.open_gaps(id);
+        if gaps.is_empty() {
+            return self.notify("the plan has no open coverage gaps", false);
+        }
+        let approval = self.open_approval_id(id);
+        self.mode = Mode::CoveragePicker(CoverageChoice::new(id, approval, gaps));
+    }
+
+    /// The picker's keys: j/k move, space ticks, `a` ticks all or none, enter approves with the ticked criteria excused, esc cancels.
+    fn handle_coverage_picker(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::CoveragePicker(choice) = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let last = choice.gaps.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => choice.cursor = (choice.cursor + 1).min(last),
+            KeyCode::Char('k') | KeyCode::Up => choice.cursor = choice.cursor.saturating_sub(1),
+            KeyCode::Char(' ') => {
+                if let Some(on) = choice.picked.get_mut(choice.cursor) {
+                    *on = !*on;
+                }
+            }
+            KeyCode::Char('a') => {
+                let all = !choice.picked.iter().all(|on| *on);
+                choice.picked.iter_mut().for_each(|on| *on = all);
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Enter => return self.send_coverage_choice(),
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// Approves with the ticked criteria excused, only while the card still waits at the plan gate the picker was opened for.
+    fn send_coverage_choice(&mut self) -> Outcome {
+        let Mode::CoveragePicker(choice) = &self.mode else {
+            return Outcome::Continue;
+        };
+        let choice = choice.clone();
+        let chosen = choice.chosen();
+        if chosen.is_empty() {
+            self.notify("tick at least one criterion with space; esc cancels", false);
+            return Outcome::Continue;
+        }
+        if self.detail_stale || self.detail_pending.as_deref() == Some(choice.id.as_str()) {
+            if !self.online {
+                self.mode = Mode::Normal;
+                self.notify(CANNOT_CHECK, true);
+            } else {
+                self.ensure_detail();
+                self.notify("reading the card again; press enter once more", false);
+            }
+            return Outcome::Continue;
+        }
+        let at_gate = self.task(&choice.id).is_some_and(|task| {
+            self.approval_gate(task).is_some_and(|g| g.kind == "plan")
+                && self.open_approval_id(&choice.id) == choice.approval
+        });
+        if !at_gate {
+            self.mode = Mode::Normal;
+            self.notify(MOVED_ON, true);
+            return Outcome::Continue;
+        }
+        self.mode = Mode::Normal;
+        self.approve_excusing(&choice.id, choice.approval, &chosen);
+        Outcome::Continue
     }
 
     /// A fresh detail of `id` landed: a box that was waiting for it decides now, unless another refetch is already due.
@@ -6425,8 +6594,11 @@ impl App {
 
     /// Closes an approval box whose card is gone, saying so: no mode may be left that draws nothing.
     fn settle_confirm(&mut self) {
-        let gone =
-            matches!(&self.mode, Mode::ConfirmApprove(held) if self.task(&held.id).is_none());
+        let gone = match &self.mode {
+            Mode::ConfirmApprove(held) => self.task(&held.id).is_none(),
+            Mode::CoveragePicker(choice) => self.task(&choice.id).is_none(),
+            _ => false,
+        };
         if gone {
             self.mode = Mode::Normal;
             self.return_to = None;
@@ -13494,5 +13666,318 @@ mod stale_approval_tests {
         press(&mut app, KeyCode::Char('a'));
         press(&mut app, KeyCode::Char('y'));
         assert_eq!(posts(&seen), vec!["/economy/mask/approve".to_string()]);
+    }
+}
+
+/// The coverage picker: `u` at a plan gate with open gaps, and the same picker when a plain approval is answered `409 coverage_gaps`.
+#[cfg(test)]
+mod coverage_picker_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        sync::{Arc, Mutex},
+    };
+
+    use super::*;
+    use crate::detail::Section;
+    use crate::testkit::{plan_gate_app, real_plan_gate_app, render, running_build_app, task_json};
+
+    type Bodies = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+
+    /// A machine that answers a decision `409 coverage_gaps` (C5) unless the body excuses C5, or with `refuse_all` a `409 same_approver`
+    /// whatever it carries. Every POST's path and JSON body are recorded.
+    fn gap_machine(refuse_all: bool) -> (Machine, Bodies) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen: Bodies = Arc::new(Mutex::new(Vec::new()));
+        let record = seen.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    request.push_str(&line);
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let body: serde_json::Value = serde_json::from_slice(&raw).unwrap_or_default();
+                let mut parts = request.split_whitespace();
+                let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                if method == "POST" {
+                    record
+                        .lock()
+                        .unwrap()
+                        .push((path.to_string(), body.clone()));
+                }
+                let excused = body["untestable"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id == "C5"));
+                let (status, answer) = if refuse_all {
+                    (
+                        "409 Conflict",
+                        r#"{"error":"same_approver","message":"ana already approved this plan"}"#
+                            .to_string(),
+                    )
+                } else if excused {
+                    (
+                        "200 OK",
+                        task_json(
+                            "abababab1111",
+                            "Add CSV export to reports",
+                            "implementing",
+                            "Build",
+                            serde_json::json!({}),
+                        )
+                        .to_string(),
+                    )
+                } else {
+                    (
+                        "409 Conflict",
+                        r#"{"error":"coverage_gaps","message":"C5 has no scenario","gaps":["C5"]}"#
+                            .to_string(),
+                    )
+                };
+                let _ = reader.into_inner().write_all(
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{answer}",
+                        answer.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), seen)
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast
+            .as_ref()
+            .map(|t| t.text.clone())
+            .unwrap_or_default()
+    }
+
+    fn bodies(seen: &Bodies) -> Vec<(String, serde_json::Value)> {
+        seen.lock().unwrap().clone()
+    }
+
+    /// The real plan gate (C4 excused, C5 open) with a machine that wants C5 excused.
+    fn at_the_gate(refuse_all: bool) -> (App, Bodies) {
+        let (machine, seen) = gap_machine(refuse_all);
+        let mut app = real_plan_gate_app();
+        app.machine = machine;
+        (app, seen)
+    }
+
+    #[test]
+    fn the_plan_page_lists_the_open_gaps_with_their_text_and_the_key_for_them() {
+        let mut app = real_plan_gate_app();
+        app.detail_section = Section::Plan;
+        let screen = render(&mut app, 180, 60);
+        let lines: Vec<&str> = screen.lines().collect();
+        let at = lines
+            .iter()
+            .position(|l| l.contains("Open coverage gaps"))
+            .unwrap_or_else(|| panic!("no gaps block:\n{screen}"));
+        let block: String = lines[at..at + 4].join("\n");
+        assert!(
+            block.contains("C5  a person without access gets a 403"),
+            "{block}"
+        );
+        assert!(
+            !block.contains("C4  rejects"),
+            "the excused C4 is not a gap: {block}"
+        );
+        assert!(block.contains("u picks the ones to excuse"), "{block}");
+    }
+
+    #[test]
+    fn a_plan_with_no_gap_and_a_plan_past_the_gate_show_no_gaps_block() {
+        let mut app = plan_gate_app();
+        app.detail_section = Section::Plan;
+        assert!(!render(&mut app, 180, 60).contains("Open coverage gaps"));
+        let mut app = real_plan_gate_app();
+        for approval in &mut app.detail.as_mut().unwrap().approvals {
+            approval.decision = Some("approved".into());
+        }
+        app.detail_section = Section::Plan;
+        assert!(!render(&mut app, 180, 60).contains("Open coverage gaps"));
+    }
+
+    #[test]
+    fn u_opens_the_picker_over_the_open_gaps_only_with_nothing_ticked() {
+        let (mut app, seen) = at_the_gate(false);
+        press(&mut app, KeyCode::Char('u'));
+        let Mode::CoveragePicker(choice) = &app.mode else {
+            panic!("no picker: {:?}", toast(&app))
+        };
+        assert_eq!(
+            choice.gaps,
+            vec![(
+                "C5".to_string(),
+                "a person without access gets a 403".to_string()
+            )]
+        );
+        assert_eq!(choice.picked, vec![false]);
+        let screen = render(&mut app, 120, 40);
+        assert!(
+            screen.contains("[ ] C5  a person without access gets a 403"),
+            "{screen}"
+        );
+        assert!(bodies(&seen).is_empty(), "opening the picker sends nothing");
+    }
+
+    #[test]
+    fn space_ticks_enter_approves_with_the_ticked_ids_as_untestable_and_the_task_view_returns() {
+        let (mut app, seen) = at_the_gate(false);
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char('u'));
+        press(&mut app, KeyCode::Char(' '));
+        assert!(
+            render(&mut app, 120, 40).contains("[x] C5"),
+            "the tick shows"
+        );
+        press(&mut app, KeyCode::Enter);
+        let sent = bodies(&seen);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0].0, format!("/tasks/{id}/decision"));
+        assert_eq!(sent[0].1["decision"], "approved");
+        assert_eq!(sent[0].1["untestable"], serde_json::json!(["C5"]));
+        assert_eq!(toast(&app), "approved");
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id));
+        assert_eq!(app.tasks[0].state, "implementing");
+    }
+
+    #[test]
+    fn enter_with_nothing_ticked_sends_nothing_and_esc_cancels_back_to_the_task_view() {
+        let (mut app, seen) = at_the_gate(false);
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char('u'));
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::CoveragePicker(_)), "stays open");
+        assert!(toast(&app).contains("tick at least one"), "{}", toast(&app));
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id));
+        assert!(bodies(&seen).is_empty());
+    }
+
+    #[test]
+    fn u_says_why_when_there_is_nothing_to_pick() {
+        let mut app = plan_gate_app();
+        press(&mut app, KeyCode::Char('u'));
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        assert_eq!(toast(&app), "the plan has no open coverage gaps");
+        let mut app = running_build_app();
+        press(&mut app, KeyCode::Char('u'));
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        assert!(toast(&app).contains("not at one"), "{}", toast(&app));
+    }
+
+    #[test]
+    fn u_on_the_board_opens_the_task_first_and_sends_nothing() {
+        let (mut app, seen) = at_the_gate(false);
+        let id = app.tasks[0].id.clone();
+        app.mode = Mode::Normal;
+        app.select(&id, true);
+        press(&mut app, KeyCode::Char('u'));
+        assert!(
+            matches!(&app.mode, Mode::Detail(open) if *open == id),
+            "{:?}",
+            toast(&app)
+        );
+        assert!(bodies(&seen).is_empty());
+    }
+
+    #[test]
+    fn the_picker_sends_nothing_when_the_card_moved_on() {
+        let (mut app, seen) = at_the_gate(false);
+        press(&mut app, KeyCode::Char('u'));
+        press(&mut app, KeyCode::Char(' '));
+        app.tasks[0].state = "implementing".into();
+        press(&mut app, KeyCode::Enter);
+        assert!(bodies(&seen).is_empty());
+        assert_eq!(toast(&app), MOVED_ON);
+        assert!(!matches!(app.mode, Mode::CoveragePicker(_)));
+    }
+
+    #[test]
+    fn a_plain_approval_answered_409_coverage_gaps_opens_the_picker_and_the_picked_ones_go_through()
+    {
+        let (mut app, seen) = at_the_gate(false);
+        let id = app.tasks[0].id.clone();
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('y'));
+        let first = bodies(&seen);
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert!(first[0].1.get("untestable").is_none(), "{first:?}");
+        let Mode::CoveragePicker(choice) = &app.mode else {
+            panic!(
+                "the 409 opens the picker, not only an error: {:?}",
+                toast(&app)
+            )
+        };
+        assert_eq!(choice.gaps[0].0, "C5");
+        assert_eq!(
+            choice.gaps[0].1, "a person without access gets a 403",
+            "the text comes from the plan, the machine sends ids only"
+        );
+        assert!(
+            toast(&app).contains("tick the ones to excuse"),
+            "{}",
+            toast(&app)
+        );
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Enter);
+        let sent = bodies(&seen);
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert_eq!(sent[1].1["untestable"], serde_json::json!(["C5"]));
+        assert!(matches!(&app.mode, Mode::Detail(open) if *open == id));
+        assert_eq!(toast(&app), "approved");
+    }
+
+    #[test]
+    fn a_refusal_that_is_not_coverage_stays_a_plain_error_with_no_picker() {
+        let (mut app, _) = at_the_gate(true);
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('y'));
+        assert!(matches!(app.mode, Mode::Detail(_)), "no picker");
+        assert_eq!(toast(&app), "ana already approved this plan");
+    }
+
+    #[test]
+    fn the_picker_keeps_what_was_ticked_when_the_machine_still_finds_a_gap() {
+        // The machine wants C5 excused: ticking C4 (the first row) is refused again, and the picker stays with that pick.
+        let (mut app, seen) = at_the_gate(false);
+        app.detail.as_mut().unwrap().approvals[0].requested["coverageReport"]["gaps"] =
+            serde_json::json!(["C4", "C5", "C3"]);
+        app.detail.as_mut().unwrap().approvals[0].requested["coverageReport"]["untestable"] =
+            serde_json::json!([]);
+        press(&mut app, KeyCode::Char('u'));
+        let Mode::CoveragePicker(choice) = &app.mode else {
+            panic!("{:?}", toast(&app))
+        };
+        assert_eq!(choice.gaps.len(), 3);
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Enter);
+        let sent = bodies(&seen);
+        assert_eq!(sent[0].1["untestable"], serde_json::json!(["C4"]));
+        let Mode::CoveragePicker(choice) = &app.mode else {
+            panic!("refused again: {:?}", toast(&app))
+        };
+        assert_eq!(choice.chosen(), vec!["C4".to_string()]);
+        assert_eq!(choice.gaps.len(), 3);
     }
 }

@@ -154,8 +154,18 @@ impl Machine {
 
     /// `json`, keeping the machine's error code (`stage_started`) beside its message.
     fn coded(reply: Reply) -> Result<Value, (String, String)> {
-        let mut response =
-            reply.map_err(|e| (String::new(), format!("machine unreachable: {e}")))?;
+        Self::coded_body(reply).map_err(|(code, message, _)| (code, message))
+    }
+
+    /// `coded`, and the whole error body with it, for the refusals that carry more than a message (`gaps`).
+    fn coded_body(reply: Reply) -> Result<Value, (String, String, Value)> {
+        let mut response = reply.map_err(|e| {
+            (
+                String::new(),
+                format!("machine unreachable: {e}"),
+                Value::Null,
+            )
+        })?;
         let status = response.status().as_u16();
         if status == 204 {
             return Ok(Value::Null);
@@ -164,21 +174,20 @@ impl Machine {
             (
                 String::new(),
                 format!("unexpected reply from the machine: {e}"),
+                Value::Null,
             )
         })?;
         if status >= 400 {
             let code = body["error"].as_str().unwrap_or_default().to_string();
             // A 409 `not_schedulable` names what the item waits for: the message carries it.
             if body["blockedBy"].is_array() {
-                return Err((code, crate::backlog::refusal_text(&body)));
+                return Err((code, crate::backlog::refusal_text(&body), body));
             }
-            return Err((
-                code,
-                body["message"]
-                    .as_str()
-                    .unwrap_or("request failed")
-                    .to_string(),
-            ));
+            let message = body["message"]
+                .as_str()
+                .unwrap_or("request failed")
+                .to_string();
+            return Err((code, message, body));
         }
         Ok(body)
     }
@@ -391,6 +400,18 @@ impl Machine {
             &format!("/tasks/{id}/decision"),
             decision_body(approve, reason, approver().as_deref()),
         )
+    }
+
+    /// Approves as `decide` does, excusing `untestable` criteria at a plan gate whose coverage report has gaps. A plan with a gap
+    /// left answers `409 coverage_gaps`: that comes back as `Refused::CoverageGaps`, so the board can offer the picker.
+    pub fn approve_excusing(&self, id: &str, untestable: &[String]) -> Result<Task, Refused> {
+        let reply = self
+            .agent
+            .post(self.url(&format!("/tasks/{id}/decision")))
+            .send_json(approval_body(untestable, approver().as_deref()));
+        let body = Self::coded_body(reply)
+            .map_err(|(code, message, body)| refusal_of(code, message, &body))?;
+        serde_json::from_value(body).map_err(|e| Refused::Other(format!("unexpected reply: {e}")))
     }
 
     /// Keeps a split card as one card: the split gate approved with `keepWhole`, recorded with the approver's name. Only a split gate takes it.
@@ -995,6 +1016,36 @@ fn decision_body(approve: bool, reason: Option<&str>, approver: Option<&str>) ->
     body
 }
 
+/// The body of an approval that may excuse criteria as untestable (`untestable` rides along only when there are some).
+fn approval_body(untestable: &[String], approver: Option<&str>) -> Value {
+    let mut body = decision_body(true, None, approver);
+    if !untestable.is_empty() {
+        body["untestable"] = json!(untestable);
+    }
+    body
+}
+
+/// Why the machine refused a decision: the criteria with no scenario that nobody excused, or just its message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Refused {
+    CoverageGaps(Vec<String>),
+    Other(String),
+}
+
+fn refusal_of(code: String, message: String, body: &Value) -> Refused {
+    let gaps: Vec<String> = body["gaps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|g| g.as_str().map(str::to_string))
+        .collect();
+    if code == "coverage_gaps" && !gaps.is_empty() {
+        Refused::CoverageGaps(gaps)
+    } else {
+        Refused::Other(message)
+    }
+}
+
 /// The body of an Evidence feedback: the fixed value, and the note only when there is one (trimmed, at most 500 characters, as the machine allows).
 /// One path segment, percent-encoded: a finding id is the machine's, but a typed one is not trusted to keep a `/` or a `?` out of the URL.
 fn path_segment(text: &str) -> String {
@@ -1058,6 +1109,45 @@ mod tests {
         assert_eq!(
             decision_body(false, Some("split it"), Some("ana")),
             json!({ "decision": "sent_back", "reason": "split it", "approver": "ana" })
+        );
+    }
+
+    #[test]
+    fn an_approval_excusing_criteria_carries_them_with_the_approver_and_none_when_there_are_none() {
+        assert_eq!(
+            approval_body(&[], None),
+            json!({ "decision": "approved", "reason": null }),
+            "a plain approval is the body it always was"
+        );
+        assert_eq!(
+            approval_body(&["C4".into(), "C5".into()], Some("ana")),
+            json!({ "decision": "approved", "reason": null, "approver": "ana", "untestable": ["C4", "C5"] })
+        );
+    }
+
+    #[test]
+    fn a_refusal_names_the_coverage_gaps_when_the_machine_says_409_coverage_gaps() {
+        let gaps = json!({ "error": "coverage_gaps", "message": "C2 has no scenario", "gaps": ["C2", "C5"] });
+        assert_eq!(
+            refusal_of("coverage_gaps".into(), "C2 has no scenario".into(), &gaps),
+            Refused::CoverageGaps(vec!["C2".into(), "C5".into()])
+        );
+        // Any other refusal, or one with no ids, is only its message.
+        assert_eq!(
+            refusal_of(
+                "same_approver".into(),
+                "ana already approved".into(),
+                &json!({})
+            ),
+            Refused::Other("ana already approved".into())
+        );
+        assert_eq!(
+            refusal_of(
+                "coverage_gaps".into(),
+                "no ids".into(),
+                &json!({ "gaps": [] })
+            ),
+            Refused::Other("no ids".into())
         );
     }
 
@@ -1438,5 +1528,99 @@ mod refusal_tests {
                 .unwrap_err(),
             "unknown repo"
         );
+    }
+}
+
+#[cfg(test)]
+mod coverage_refusal_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+    };
+
+    use super::*;
+
+    /// A machine that refuses a decision with `409 coverage_gaps` unless the body excuses C5, and says yes when it does. It sends each
+    /// request's path and body down the channel.
+    fn gap_machine() -> (Machine, mpsc::Receiver<(String, Value)>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    request.push_str(&line);
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let body: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+                let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
+                let excused = body["untestable"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id == "C5"));
+                let _ = tx.send((path, body));
+                let (status, answer) = if excused {
+                    (
+                        "200 OK",
+                        crate::testkit::task_json(
+                            "aaaaaaaa1111",
+                            "t",
+                            "implementing",
+                            "Build",
+                            json!({}),
+                        )
+                        .to_string(),
+                    )
+                } else {
+                    (
+                        "409 Conflict",
+                        r#"{"error":"coverage_gaps","message":"C5 has no scenario","gaps":["C5"]}"#
+                            .to_string(),
+                    )
+                };
+                let _ = reader.into_inner().write_all(
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{answer}",
+                        answer.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), rx)
+    }
+
+    #[test]
+    fn a_plain_approval_answered_409_coverage_gaps_comes_back_as_the_gaps() {
+        let (machine, seen) = gap_machine();
+        assert_eq!(
+            machine.approve_excusing("aaaaaaaa1111", &[]).unwrap_err(),
+            Refused::CoverageGaps(vec!["C5".into()])
+        );
+        let (path, body) = seen.recv().unwrap();
+        assert_eq!(path, "/tasks/aaaaaaaa1111/decision");
+        assert_eq!(body["decision"], "approved");
+        assert!(body.get("untestable").is_none(), "{body}");
+    }
+
+    #[test]
+    fn an_approval_excusing_the_gap_is_sent_with_untestable_and_goes_through() {
+        let (machine, seen) = gap_machine();
+        let task = machine
+            .approve_excusing("aaaaaaaa1111", &["C5".to_string()])
+            .unwrap();
+        assert_eq!(task.state, "implementing");
+        assert_eq!(seen.recv().unwrap().1["untestable"], json!(["C5"]));
     }
 }

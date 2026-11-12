@@ -453,6 +453,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 render_approve(frame, &held.question, task);
             }
         }
+        Mode::CoveragePicker(choice) => {
+            if let Some(task) = app.task(&choice.id) {
+                render_coverage_picker(frame, task, choice);
+            }
+        }
         Mode::ConfirmQuit => render_confirm_box(
             frame,
             &app.quit_question(),
@@ -910,6 +915,13 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
         | Mode::ConfirmWorktree(_)
         | Mode::ConfirmQuit => hint(&[("y", "yes"), ("n", "no")]),
         Mode::ConfirmApprove(_) => hint(&[("y/enter", "approve"), ("n/esc", "cancel")]),
+        Mode::CoveragePicker(_) => hint(&[
+            ("space", "tick"),
+            ("j/k", "move"),
+            ("a", "all"),
+            ("enter", "approve, excusing the ticked"),
+            ("esc", "cancel"),
+        ]),
         Mode::Actions { .. } | Mode::PrActions { .. } | Mode::SlackActions { .. } => {
             hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")])
         }
@@ -4591,6 +4603,83 @@ fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String
             ));
         }
     }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `u`'s picker: the plan's criteria with no scenario, one row each with a tick, the cursor's row in the accent colour. The box says
+/// what the approval does, since it records the excuse on the gate.
+fn render_coverage_picker(frame: &mut Frame, task: &Task, choice: &crate::app::CoverageChoice) {
+    const VISIBLE_ROWS: usize = 10;
+    let width = 90.min(frame.area().width.saturating_sub(2));
+    let room = usize::from(width).saturating_sub(12).max(8);
+    let rows = choice.gaps.len().min(VISIBLE_ROWS) as u16;
+    let area = centered(frame.area(), width, rows + 7);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(
+            Line::from(format!(
+                " untestable? #{} {} ",
+                task.short_id(),
+                crate::model::plain(&task.title, 400)
+            ))
+            .bold(),
+        );
+    let mut lines = vec![
+        Line::from(
+            Span::from(text::ellipsis(
+                "No scenario names these. Tick the ones to excuse as untestable.",
+                room + 8,
+            ))
+            .fg(c(SUBTEXT0)),
+        ),
+        Line::default(),
+    ];
+    let start = choice
+        .cursor
+        .saturating_sub(VISIBLE_ROWS / 2)
+        .min(choice.gaps.len().saturating_sub(VISIBLE_ROWS));
+    for (i, (id, text)) in choice
+        .gaps
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(VISIBLE_ROWS)
+    {
+        let selected = i == choice.cursor;
+        let style = if selected {
+            Style::new().fg(c(ACCENT)).bold()
+        } else {
+            Style::new()
+        };
+        let tick = if choice.picked[i] { "[x]" } else { "[ ]" };
+        let label = format!("{id:<4}{}", crate::model::plain(text, 400));
+        lines.push(Line::from(vec![
+            Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+            Span::from(format!("{tick} ")).style(style),
+            Span::from(text::ellipsis(&label, room)).style(style),
+        ]));
+    }
+    if choice.gaps.len() > VISIBLE_ROWS {
+        lines.push(Line::from(
+            Span::from(format!(
+                "  … {} of {} criteria",
+                choice.cursor + 1,
+                choice.gaps.len()
+            ))
+            .fg(c(SUBTEXT0)),
+        ));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(
+        Span::from(format!(
+            "{} ticked · enter approves and flags them as excused",
+            choice.picked.iter().filter(|on| **on).count()
+        ))
+        .fg(c(SUBTEXT0)),
+    ));
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 

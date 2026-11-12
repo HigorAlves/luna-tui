@@ -342,6 +342,30 @@ pub(crate) fn criteria(approval: &Approval, task: &Task) -> Vec<(String, String)
         .collect()
 }
 
+/// The criteria of a plan gate that still waits for you, with no scenario naming them and nobody excusing them (id, text): the ones the
+/// machine would refuse an approval over (`409 coverage_gaps`). Empty at a decided gate, at a gate triage opened (reply, archive, split)
+/// and when the report has no gaps.
+pub(crate) fn open_coverage_gaps(approval: &Approval, task: &Task) -> Vec<(String, String)> {
+    if approval.decision.is_some() || approval.outcome().is_some() {
+        return Vec::new();
+    }
+    let report = &approval.requested["coverageReport"];
+    let excused = strings(&report["untestable"]);
+    let rows = criteria(approval, task);
+    strings(&report["gaps"])
+        .into_iter()
+        .filter(|id| !excused.contains(id))
+        .map(|id| {
+            let text = rows
+                .iter()
+                .find(|(i, _)| *i == id)
+                .map(|(_, t)| t.clone())
+                .unwrap_or_default();
+            (id, text)
+        })
+        .collect()
+}
+
 /// The plan's steps: number, description, and what it touches. Falls back to the gate's slices.
 fn steps(approval: &Approval, width: usize) -> Vec<Line<'static>> {
     let r = &approval.requested;

@@ -1986,6 +1986,7 @@ pub(crate) fn plan_page(
         lines.push(Line::default());
         lines.extend(facts);
     }
+    lines.extend(coverage_gap_lines(task, approval, width));
     if let Some(reply) = approval.reply() {
         lines.extend([
             Line::default(),
@@ -2037,6 +2038,36 @@ pub(crate) fn plan_page(
         main: lines,
         groups: groups.into_iter().flatten().collect(),
     }
+}
+
+/// The criteria no scenario names and nobody excused, at a plan gate that waits for you: the machine refuses an approval over them,
+/// so the page says so and where the way out is (`u`). Nothing at any other gate, or when there is no gap.
+fn coverage_gap_lines(task: &Task, approval: &Approval, width: usize) -> Vec<Line<'static>> {
+    let gaps = crate::pages::open_coverage_gaps(approval, task);
+    if gaps.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![
+        Line::default(),
+        proposal_heading("Open coverage gaps (no scenario names them)"),
+    ];
+    for (id, text) in &gaps {
+        lines.extend(crate::pages::hanging(
+            vec![
+                Span::raw("  "),
+                Span::styled(format!("{id:<4}"), theme::label()),
+            ],
+            text,
+            width,
+        ));
+    }
+    let hint = "a is refused while these are open · u picks the ones to excuse as untestable and approves · r sends the plan back";
+    lines.extend(
+        crate::text::wrap(hint, width.saturating_sub(2).max(20), 0)
+            .into_iter()
+            .map(|part| muted(format!("  {}", part.trim_start()))),
+    );
+    lines
 }
 
 /// The gate's outcome, its risk with the three scores, what raised or overrode it, as reference. None for a gate that says none of it.

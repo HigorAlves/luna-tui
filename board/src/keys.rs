@@ -449,6 +449,28 @@ fn plan_gate(app: &App, outcome: Option<&str>) -> Avail {
     }
 }
 
+/// `u` at the plan gate: `On` while the gate has criteria no scenario names (the ones the machine refuses an approval over), else off
+/// with the reason. Hidden where there is no plan gate to answer.
+fn coverage_key(app: &App) -> Avail {
+    if plan_gate(app, None) != Avail::On {
+        return Avail::Hidden;
+    }
+    let Some(task) = task_of(app) else {
+        return Avail::Hidden;
+    };
+    let gaps = app
+        .detail
+        .as_ref()
+        .filter(|d| d.task.id == task.id)
+        .and_then(|d| d.open_approval())
+        .map(|a| crate::pages::open_coverage_gaps(a, task));
+    match gaps {
+        None => Avail::Off("the card is still being read"),
+        Some(gaps) if gaps.is_empty() => Avail::Off("the plan has no open coverage gaps"),
+        Some(_) => Avail::On,
+    }
+}
+
 /// The states one of the `a` entries names.
 const GATE_STATES: &[&str] = &[
     "draft",
@@ -752,6 +774,17 @@ const SHARED: &[Binding] = &[
         |app| ship_gate(app, true),
         80,
     ),
+    Binding {
+        on_board: Some("open to excuse untestable criteria"),
+        ..b(
+            "u",
+            "approve, excusing untestable criteria",
+            Group::Gate,
+            Scope::Board,
+            coverage_key,
+            75,
+        )
+    },
     b(
         "r",
         "send back with a reason",
@@ -3641,6 +3674,22 @@ mod tests {
             names.contains(&"N reject the plan, with a comment".to_string()),
             "{names:?}"
         );
+    }
+
+    #[test]
+    fn u_is_on_at_a_plan_gate_with_open_coverage_gaps_dim_without_and_hidden_elsewhere() {
+        let find = |app: &App| {
+            bindings_for(app, Scope::Detail)
+                .into_iter()
+                .find(|(b, _)| b.keys == "u")
+                .map(|(_, a)| a)
+        };
+        assert_eq!(find(&crate::testkit::real_plan_gate_app()), Some(Avail::On));
+        assert_eq!(
+            find(&crate::testkit::plan_gate_app()),
+            Some(Avail::Off("the plan has no open coverage gaps"))
+        );
+        assert_eq!(find(&crate::testkit::running_build_app()), None);
     }
 
     #[test]

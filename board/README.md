@@ -25,6 +25,8 @@ the two needs no restart. `HARDNESS_MACHINE_URL` pins one address instead. `LUNA
 
 From the board, the `x` menu, the Inbox or `:start`, `a` (and `A` at the retro) at any gate opens the task so you read what you approve; inside the task it asks once, naming the gate (`y` or `enter` approves, `n` or `esc` cancels), and sends nothing if the card moved to another gate meanwhile. `a` over marked cards at a plan, split, ship or release gate asks once, with the count and the kinds; the other gates are approved inside their card. `q` asks before quitting while a card needs you or is running, and `Q` quits at once. `tab` on the board jumps to the next card that needs you. Columns collapse by width: empty ones first, then Done, and the header says where the rest are.
 
+The machine refuses to approve a plan while a criterion has no scenario that names it, unless you excuse it as untestable. The Plan page lists those criteria under `Open coverage gaps`. `u` opens a picker over them: `space` ticks one, `a` ticks all or none, `enter` approves with the ticked criteria excused (recorded on the gate and flagged at every later gate, under your `LUNA_APPROVER` name like any approval), `esc` cancels. A plain `a` that the machine answers with `409 coverage_gaps` opens the same picker instead of only showing the error. A criterion you leave unticked keeps the refusal.
+
 ## Install as a herdr plugin (local link)
 
 ```sh
@@ -96,6 +98,7 @@ generates the tables below. A test fails when they drift from the registry.
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `u` | open to excuse untestable criteria |
 | `r` | send back with a reason |
 | `x` then `S` | ship: approve and open the PR |
 
@@ -238,7 +241,7 @@ about the ticket, whether or not someone decided a gate. The approved plan stays
 | Section | Shows | Keys inside |
 |---|---|---|
 | Overview | the status. One row per acceptance criterion: its state in the plan, how many cases prove it, what verifying found. Repo, branch, issue, the Jira link, the SLA clocks, why, spend. The ticket's description and criteria. A setup gate's `luna.yaml` and proof, triage's questions, the memory review's rules | `e` edits the ticket's text, `J` links or unlinks the Jira issue |
-| Plan | triage's latest plan, read like the Review page (brief, each criterion with its id, steps with size and files, rollback) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate |
+| Plan | triage's latest plan, read like the Review page (brief, each criterion with its id, steps with size and files, rollback) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate; `u` excuses open coverage gaps and approves |
 | Tests | test_design's scenarios under the criterion each proves (id, type, layer, title), with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
 | Runs | every stage run with how long it took, its cost and turns. The selected run's error, per-case verdicts and files. It opens on the latest run | `j`/`k` pick a run, `J`/`K` scroll |
 | Diff | the branch against its base: files with +/−, the selected file's patch. The machine sends at most 512 KB of it. The pane says when it cut | `j`/`k` pick a file, `J`/`K` scroll the patch, `o` opens the file from the worktree |
@@ -260,6 +263,7 @@ These are the popup's keys. `?` inside it lists them with the ticket's state.
 | `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `u` | approve, excusing untestable criteria |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 
@@ -650,6 +654,7 @@ What the ticket shows:
 | `T` | correct the triage record |
 | `p` | post these questions at the source |
 | `N` | reject the plan, with a comment; reject the split, with a comment; reject the release, archive the card |
+| `u` | approve, excusing untestable criteria |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 
