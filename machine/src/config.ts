@@ -317,7 +317,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `MACHINE_GITHUB_PRS_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_PRS_INTERVAL}"`,
     );
   }
-  const prsAllSeconds = env.MACHINE_GITHUB_PRS_ALL_INTERVAL === undefined ? 600 : Number(env.MACHINE_GITHUB_PRS_ALL_INTERVAL);
+  const prsAllSeconds = env.MACHINE_GITHUB_PRS_ALL_INTERVAL === undefined ? 900 : Number(env.MACHINE_GITHUB_PRS_ALL_INTERVAL);
   if (!Number.isInteger(prsAllSeconds) || prsAllSeconds < 1) {
     throw new Error(
       `MACHINE_GITHUB_PRS_ALL_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_PRS_ALL_INTERVAL}"`,

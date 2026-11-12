@@ -107,19 +107,30 @@ const SEARCH_MAX_PAGES = 10;
 const AFFILIATIONS = "[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]";
 /** The nested lists the bulk read keeps short: it reads hundreds of PRs a call, and GitHub prices a call by the nodes it could return. */
 const BULK_LIMITS = { requests: 50, threads: 50, contexts: 50 };
-/** Repositories per call, and PRs per repo per page: 10 x 50 x (3 lists of 50) stays far under GitHub's 500,000-node limit. */
-const BULK_REPOS = 10;
+/** Pass 1 pages the repositories this many at a time; it asks for a count and no PR, so a page is cheap. */
+const REPOS_PAGE = 100;
+/** The most PRs one repo gives per page. */
 const BULK_PRS = 50;
+/** GitHub prices a call by the PR slots it asks for (repos x `first`, times the nested lists), not by the PRs it gets: a pass 2 call asks for
+ *  `first` close to what its repos hold, and holds at most this many repos and about this many slots, so a call stays at a few points. */
+const PASS2_MAX_REPOS = 10;
+const PASS2_MAX_SLOTS = 250;
+/** The `first` a repo with this many open PRs is asked with: the smallest bucket that holds it, and a page of 50 beyond (the rest is paged on its own). */
+const PASS2_BUCKETS = [5, 10, 25, 50];
 /** A repo's PRs are paged up to this many pages (500 PRs); a repo with more is reported as capped. */
 const BULK_MAX_PR_PAGES = 10;
 
 const BULK_PR_FIELDS = prFields(BULK_LIMITS);
-/** Every repo you own, collaborate on or reach through an organisation, with its newest open PRs and the fields the inbox reads of each. Archived repos take no PRs, so they are not asked for. */
-const REACHABLE_PRS_QUERY = `query($after:String){ viewer{ repositories(affiliations:${AFFILIATIONS}, ownerAffiliations:${AFFILIATIONS}, isArchived:false, first:${BULK_REPOS}, after:$after){
+const RATE_LIMIT = "rateLimit{cost remaining}";
+/** Pass 1: every repo you own, collaborate on or reach through an organisation, with how many PRs it has open and nothing else. Archived repos take no PRs, so they are not asked for. */
+const REACHABLE_REPOS_QUERY = `query($after:String){ ${RATE_LIMIT} viewer{ repositories(affiliations:${AFFILIATIONS}, ownerAffiliations:${AFFILIATIONS}, isArchived:false, first:${REPOS_PAGE}, after:$after){
   pageInfo{hasNextPage endCursor}
-  nodes{ nameWithOwner isArchived pullRequests(states:OPEN, first:${BULK_PRS}, orderBy:{field:UPDATED_AT, direction:DESC}){ totalCount pageInfo{hasNextPage endCursor} nodes{ ${BULK_PR_FIELDS} } } } } } }`;
+  nodes{ id nameWithOwner isArchived pullRequests(states:OPEN){ totalCount } } } } }`;
+/** Pass 2: the newest open PRs of some repos by id, `first` of each and the fields the inbox reads of each. */
+const repoPrsQuery = (first: number) => `query($ids:[ID!]!){ ${RATE_LIMIT} nodes(ids:$ids){ ... on Repository { nameWithOwner
+  pullRequests(states:OPEN, first:${first}, orderBy:{field:UPDATED_AT, direction:DESC}){ pageInfo{hasNextPage endCursor} nodes{ ${BULK_PR_FIELDS} } } } } }`;
 /** The next page of one repo's open PRs. */
-const REPO_PRS_QUERY = `query($owner:String!,$name:String!,$after:String){ repository(owner:$owner,name:$name){
+const REPO_PRS_QUERY = `query($owner:String!,$name:String!,$after:String){ ${RATE_LIMIT} repository(owner:$owner,name:$name){
   pullRequests(states:OPEN, first:${BULK_PRS}, after:$after, orderBy:{field:UPDATED_AT, direction:DESC}){ pageInfo{hasNextPage endCursor} nodes{ ${BULK_PR_FIELDS} } } } }`;
 
 interface PrPage {
@@ -127,13 +138,33 @@ interface PrPage {
   nodes: PrNode[];
 }
 
-interface ReachableReposAnswer {
+/** What GitHub says a call cost, on every query of the poll. */
+interface RateLimited {
+  rateLimit?: { cost: number; remaining: number } | null;
+}
+
+interface ReachableReposAnswer extends RateLimited {
   viewer: {
     repositories: {
       pageInfo: { hasNextPage: boolean; endCursor: string | null };
-      nodes: Array<{ nameWithOwner: string; isArchived: boolean; pullRequests: PrPage & { totalCount: number } }>;
+      nodes: Array<{ id: string; nameWithOwner: string; isArchived?: boolean; pullRequests: { totalCount: number } }>;
     };
   };
+}
+
+interface RepoPrsAnswer extends RateLimited {
+  nodes: Array<{ nameWithOwner: string; pullRequests: PrPage } | null>;
+}
+
+/** The `first` that pass 2 asks of a repo holding `open` PRs. */
+const bucketOf = (open: number): number => PASS2_BUCKETS.find((b) => open <= b) ?? BULK_PRS;
+
+/** Splits the repos of one bucket into calls of at most PASS2_MAX_REPOS repos and about PASS2_MAX_SLOTS requested PRs. */
+function chunkRepos<T>(items: T[], first: number): T[][] {
+  const size = Math.max(1, Math.min(PASS2_MAX_REPOS, Math.floor(PASS2_MAX_SLOTS / first)));
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
 }
 
 /** `owner/name` from the search API's `repository_url` (`https://api.github.com/repos/owner/name`). */
@@ -180,39 +211,82 @@ export class OctokitGitHub implements GitHub {
     return hits;
   }
 
+  /** Two passes, because GitHub prices a call by the PR slots it asks for and most repos hold no open PR. Pass 1 pages every reachable repo for its open count alone;
+   *  pass 2 reads the PRs of the repos with some, by id, a few repos a call with `first` close to what they hold. A repo with more than a page is paged on its own. */
   async listOpenPrs(): Promise<OpenPrs> {
-    const prs: OpenPrs["prs"] = [];
-    const capped: OpenPrs["capped"] = [];
     let calls = 0;
+    let points = 0;
+    let remaining: number | null = null;
+    const spend = (answer: RateLimited): void => {
+      calls++;
+      if (answer.rateLimit) {
+        points += answer.rateLimit.cost;
+        remaining = answer.rateLimit.remaining;
+      }
+    };
+
+    // Pass 1: the repos, and how many open PRs each has.
+    const withPrs: Array<{ id: string; slug: string; open: number }> = [];
     let after: string | null = null;
     do {
       const data: ReachableReposAnswer = await call("listing the open PRs of your repositories", () =>
-        this.octokit.graphql<ReachableReposAnswer>(REACHABLE_PRS_QUERY, { after }),
+        this.octokit.graphql<ReachableReposAnswer>(REACHABLE_REPOS_QUERY, { after }),
       );
-      calls++;
+      spend(data);
       const repositories = data.viewer.repositories;
       for (const repo of repositories.nodes) {
-        if (repo.isArchived) continue;
-        const slug = repo.nameWithOwner;
-        for (const node of repo.pullRequests.nodes) prs.push({ repo: slug, node });
-        // A repo with more than one page of open PRs is paged on its own, a few pages at most.
-        let page: PrPage = repo.pullRequests;
-        let pages = 1;
-        while (page.pageInfo.hasNextPage && pages < BULK_MAX_PR_PAGES) {
-          const { owner, repo: name } = repoRef(slug);
-          const cursor: string | null = page.pageInfo.endCursor;
-          const more: { repository: { pullRequests: PrPage } | null } = await call(`listing the open PRs of ${slug}`, () =>
-            this.octokit.graphql<{ repository: { pullRequests: PrPage } | null }>(REPO_PRS_QUERY, { owner, name, after: cursor }),
-          );
-          calls++;
-          pages++;
-          page = more.repository?.pullRequests ?? { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
-          for (const node of page.nodes) prs.push({ repo: slug, node });
-        }
-        if (page.pageInfo.hasNextPage) capped.push({ repo: slug, open: repo.pullRequests.totalCount });
+        if (repo.isArchived || repo.pullRequests.totalCount < 1) continue;
+        withPrs.push({ id: repo.id, slug: repo.nameWithOwner, open: repo.pullRequests.totalCount });
       }
       after = repositories.pageInfo.hasNextPage ? repositories.pageInfo.endCursor : null;
     } while (after !== null);
+
+    // Pass 2: the PRs of the repos that have some, grouped by bucket so no call asks for far more than its repos hold.
+    const buckets = new Map<number, typeof withPrs>();
+    for (const repo of withPrs) {
+      const first = bucketOf(repo.open);
+      buckets.set(first, [...(buckets.get(first) ?? []), repo]);
+    }
+    const read = new Map<string, { prs: PrNode[]; page: PrPage; open: number }>();
+    for (const [first, group] of [...buckets].sort((x, y) => x[0] - y[0])) {
+      for (const chunk of chunkRepos(group, first)) {
+        const data: RepoPrsAnswer = await call(`listing the open PRs of ${chunk.length} repositories`, () =>
+          this.octokit.graphql<RepoPrsAnswer>(repoPrsQuery(first), { ids: chunk.map((r) => r.id) }),
+        );
+        spend(data);
+        for (const node of data.nodes) {
+          // A repo that went away between the passes answers null.
+          if (!node?.pullRequests) continue;
+          const open = chunk.find((r) => r.slug === node.nameWithOwner)?.open ?? node.pullRequests.nodes.length;
+          read.set(node.nameWithOwner, { prs: [...node.pullRequests.nodes], page: node.pullRequests, open });
+        }
+      }
+    }
+
+    // A repo with more than one page of open PRs is paged on its own, a few pages at most.
+    const capped: OpenPrs["capped"] = [];
+    for (const [slug, entry] of read) {
+      let pages = 1;
+      while (entry.page.pageInfo.hasNextPage && pages < BULK_MAX_PR_PAGES) {
+        const { owner, repo: name } = repoRef(slug);
+        const cursor: string | null = entry.page.pageInfo.endCursor;
+        const more: { repository: { pullRequests: PrPage } | null } & RateLimited = await call(`listing the open PRs of ${slug}`, () =>
+          this.octokit.graphql<{ repository: { pullRequests: PrPage } | null } & RateLimited>(REPO_PRS_QUERY, { owner, name, after: cursor }),
+        );
+        spend(more);
+        pages++;
+        entry.page = more.repository?.pullRequests ?? { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+        entry.prs.push(...entry.page.nodes);
+      }
+      if (entry.page.pageInfo.hasNextPage) capped.push({ repo: slug, open: entry.open });
+    }
+
+    // Out in the order pass 1 listed the repos, newest first within a repo.
+    const prs: OpenPrs["prs"] = [];
+    for (const { slug } of withPrs) {
+      for (const node of read.get(slug)?.prs ?? []) prs.push({ repo: slug, node });
+    }
+    console.log(`github prs (all): ${prs.length} PRs in ${read.size} repos, ${calls} calls, ${points} points, ${remaining ?? "?"} left`);
     return { prs, capped, calls };
   }
 
