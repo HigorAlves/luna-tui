@@ -455,8 +455,10 @@ export type Pack = AgentPack | DecisionPack;
 
 // Every agent pack carries skills: an explicit tool list hides them otherwise, and the role's skills
 // (`luna-factory:<name>`) are only reachable through them. It also carries the luna `step`: every
-// role reports progress with it, and the runner serves the luna tools to every agent pack.
-const READ_ONLY: Partial<Access> = { read: true, skills: true, luna: ["step"], commands: ["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse", "graphify query", "graphify explain", "graphify path", "graphify affected", "graphify god-nodes"] };
+// role reports progress with it, and the runner serves the luna tools to every agent pack. Every pack may read
+// the repo's history (status, show, log, diff, ls-files): they only read, the guard refuses `--output`, and a
+// helper's read-only access keeps them, so a second opinion can compare against the base.
+const READ_ONLY: Partial<Access> = { read: true, skills: true, luna: ["step"], commands: ["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse", "git status", "git show", "git log", "git diff", "git ls-files", "graphify query", "graphify explain", "graphify path", "graphify affected", "graphify god-nodes"] };
 const CHECK_COMMANDS = ["npm", "pnpm", "yarn", "npx", "go", "cargo", "pip", "pytest", "make"];
 const LEDGER_TOOLS: LunaTool[] = ["slice_init", "slice_set", "slice_list", "decision_get"];
 

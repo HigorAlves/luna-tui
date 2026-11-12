@@ -24,6 +24,15 @@ describe("access", () => {
     }
   });
 
+  it("lets every read-only agent pack read the repo's history, and its helpers keep that reading", () => {
+    const reads = ["git status", "git show", "git log", "git diff", "git ls-files"];
+    for (const id of ["triage", "plan", "implementing", "reviewing", "addressing", "setup", "verifying", "code_map"]) {
+      const pack = AGENT_PACKS.find((p) => p.id === id)!;
+      expect(pack.access.commands, id).toEqual(expect.arrayContaining(reads));
+    }
+    expect(readOnly(PACKS.verifying.access).commands).toEqual(expect.arrayContaining(reads));
+  });
+
   it("lets the implementer move and delete files, because a change that renames or removes one has no other way to", () => {
     expect(PACKS.implementing.access.commands).toEqual(expect.arrayContaining(["git mv", "git rm", "mv", "rm"]));
   });
