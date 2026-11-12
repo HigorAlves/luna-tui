@@ -1,4 +1,4 @@
-import { PACKS, helperPack } from "@hardness/contracts";
+import { PACKS, helperPack, readOnly } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -100,7 +100,10 @@ describe("agentFiles", () => {
     expect(files[`${dir}/instructions.md`]).toContain(readFileSync(join(FACTORY_ROOT, "roles", "reply-drafter", "role.md"), "utf8").split("---\n")[2]!.slice(0, 60));
     expect(files[`${dir}/sandbox.ts`]).toBe('import { defineParentSandbox } from "eve/sandbox";\n\nexport default defineParentSandbox();\n');
     expect(Object.keys(files).filter((f) => f.startsWith(`${dir}/tools/`)).sort()).toEqual(["bash", "glob", "grep", "read_file", "web_fetch"].map((t) => `${dir}/tools/${t}.ts`));
-    expect(files[`${dir}/tools/read_file.ts`]).toBe('export { read_file as default } from "../../../../../../src/runtimes/eve/agent/tools.ts";\n');
+    // The guarded tools approve against the child run's read-only policy, not the stage's: its own commands, nothing to write.
+    const commands = JSON.stringify(readOnly(PACKS.triage.access).commands);
+    expect(files[`${dir}/tools/read_file.ts`]).toBe(`import { readOnlyTools } from "../../../../../../src/runtimes/eve/agent/tools.ts";\n\nexport default readOnlyTools(${commands}).read_file;\n`);
+    expect(files[`${dir}/tools/bash.ts`]).toContain(`readOnlyTools(${commands}).bash`);
     expect(agentFiles(PACKS.triage, options({ model: "scripted" }))[`${dir}/agent.ts`]).toContain('model: scriptedModel("reply-drafter")');
   });
 

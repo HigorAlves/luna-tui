@@ -28,6 +28,8 @@ const CANCEL_GRACE_MS = 5_000;
 /** A child's session as the parent's handle gives it: read-only, with the id the cancel needs. */
 export interface ChildStream {
   readonly id: string;
+  /** The agent the child runs: a native subagent's role. */
+  readonly name: string;
   stream(options?: { signal?: AbortSignal }): AsyncIterable<SessionEvent>;
 }
 
@@ -131,13 +133,16 @@ export class SubagentChildren {
     return { prompt: prepared.prompt };
   }
 
-  /** A parent stream event; on child.opened, follows the child that was just started until it ends. */
+  /** A parent stream event; on child.opened for the helper that was just started, follows it until it
+   *  ends. Any other child the parent's session opens is never taken for it. */
   take(event: SessionEvent, session: ParentSession): void {
     if (event.type !== "child.opened") return;
     const child = this.current;
     if (!child || child.session) return;
+    const stream = session.agent(event);
+    if (stream.name !== child.helper.role) return;
     child.session = session;
-    void this.follow(child, session.agent(event), session);
+    void this.follow(child, stream, session);
   }
 
   /** Children still running when the parent ends: cancelled, their folders written. */

@@ -11,7 +11,7 @@ import { type ChildStream, type ParentSession, SubagentChildren } from "./childr
 import type { SessionEvent } from "./follower.ts";
 
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const OPENED: SessionEvent = { type: "child.opened", data: {} };
+const OPENED: SessionEvent = { type: "child.opened", data: { name: "reply-drafter" } };
 
 const input = (limits = { maxTurns: 40, timeoutMs: 20 * 60_000 }) =>
   StageInput.parse({
@@ -82,10 +82,10 @@ function setup(over: { limits?: { maxTurns: number; timeoutMs: number }; turnsUs
   const streams: Array<ReturnType<typeof channel>> = [];
   const cancelled: string[] = [];
   const session: ParentSession = {
-    agent: () => {
+    agent: (opened) => {
       const stream = channel();
       streams.push(stream);
-      const handle: ChildStream = { id: `child-session-${streams.length}`, stream: (options) => stream.iterable(options?.signal) };
+      const handle: ChildStream = { id: `child-session-${streams.length}`, name: String((opened.data as { name?: unknown } | undefined)?.name ?? ""), stream: (options) => stream.iterable(options?.signal) };
       return handle;
     },
     // eve ends a cancelled turn with a settled event.
@@ -111,6 +111,18 @@ const START = { helper: "reply-drafter", message: "Draft the answer" };
 const folder = (n: number) => join(root, "out", "children", String(n));
 
 describe("SubagentChildren", () => {
+  it("follows only the child its helper opened, never another agent the parent's session opens", async () => {
+    const { children, session, events, streams, ends, until, cancelled } = setup();
+    await children.start(START);
+    children.take({ type: "child.opened", data: { name: "agent" } }, session);
+    children.take(OPENED, session);
+    streams[1]!.push(modelCall(1), ...answer({ answer: "Use the export button." }));
+    await until(() => ends().length === 1);
+    expect(ends()[0]).toMatchObject({ payload: { ok: true } });
+    expect(cancelled).toEqual([]);
+    expect(events.filter((e) => e.kind === "child")).toHaveLength(2);
+  });
+
   it("starts a child with the helper's prompt, follows it to its answer and writes its folder", async () => {
     const { children, session, events, streams, ends, until } = setup();
     const started = await children.start(START);
@@ -160,7 +172,8 @@ describe("SubagentChildren", () => {
   });
 
   it("refuses a child whose credential is missing: nothing starts and no folder is written", async () => {
-    const { children, events } = setup({ env: {} });
+    // An empty Codex home: what this machine's own login is never decides the test.
+    const { children, events } = setup({ env: { CODEX_HOME: mkdtempSync(join(tmpdir(), "no-codex-")) } });
     expect(await children.start(START)).toEqual({ error: expect.stringMatching(/gave no answer: no Codex login in this stage/) });
     expect(events).toEqual([]);
     expect(existsSync(join(root, "out"))).toBe(false);
