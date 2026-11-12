@@ -40,6 +40,9 @@ It reads these through your login shell. The token is never shown.
 | Floor | The factory's numbers over 7 and 30 days, per repository, per engine (with the month's spend against its cap) and per stage. The stage pool with **Drain / Carry on**, one more or fewer slot, and **resume every paused ticket**, each asking first. **Approve** a base image that waits for your yes. |
 | Backlog | Candidates that are not tickets yet, ranked by the machine (score, size, demand, stale, sources, what each waits for). **Promote** makes a ticket, **Bump** counts one more report, **Decline** asks first. |
 | Tickets | The ticket machine's tickets with status, scores and the drafts waiting on you. **Approve** (or approve the split), **Post my text**, **Ignore**, **Make a card**, **To the backlog**, offered where the TUI offers them. |
+| Slack | The inbox the machine builds from your conversations, in six splits (Needs reply, Waiting on them, Decide, FYI, Snoozed, Done) with counts. Each thread shows who, where, the text, triage's verdict and why, the SLA, and the PR or ticket it relates to. **Actions:** reply (the draft is editable; it posts as you only when you press Post, and says so when the machine has no Slack user token), make a ticket, done (a waiting draft asks why), snooze, open in Slack, nudge, priority up or down, set the kind, link to the work it is about, poll now. The sidebar badge counts what needs a reply and turns red while any is overdue. **Watches:** the handles, usergroups, channels and keywords the inbox treats as addressed to you: add, switch on or off, set the priority floor, delete (built-ins only switch off). With Slack not set up it says what the machine says and points to `make integrations`. |
+| Economy | One repository's token spend: the facts the machine learned (drop a wrong one), the tool mask per pack (approve a proposal, restore a tool), the loop guard's latest events and the cost split. Dropping, approving and importing past runs ask first. Says so when the machine runs with the economy off. |
+| Jira | Whether the machine reaches Jira (site, token expiry, errors) and a search over its issues. Each result opens in the browser and links to the ticket selected on the board; that ticket can also be unlinked, or get an issue created from it. When Jira is not configured it says how (`make integrations`). |
 | New task | Title, repository (the system folder picker, or one the board knows), description, criteria, and whether to start now. |
 | Alerts | A Herdr notification when a card starts waiting on you. |
 
@@ -83,6 +86,7 @@ Herdr mods are JavaScript that describe native GPUI elements. There is no DOM, n
 | `luna/wire.js` | the HTTP head, chunked framing and SSE parsing. Herdr's `fetch` answers whole bodies only, so `/events` is read off a `net` socket. |
 | `luna/api.js` | the machine client |
 | `luna/board.js`, `inspector.js`, `prs.js`, `dialogs.js`, `ui.js` | the drawing |
+| `luna/page-slack.js`, `page-economy.js`, `page-jira.js` | the Slack (with its watches), Economy and Jira pages, each registered in `features.js`; `page-kit.js` holds what they share and `integrations-model.js` their pure rules |
 | `luna/icons/` | line icons, tinted with the text color |
 
 A dialog is the same mod opened as a Herdr overlay with `props().dialog`. It makes its call to the machine and closes. The board sees the result on the stream. A task to select, or a repo to filter by, comes back through Herdr's shared state.

@@ -11,3 +11,6 @@ import "./page-digest.js";
 import "./page-floor.js";
 import "./page-backlog.js";
 import "./page-tickets.js";
+import "./page-slack.js";
+import "./page-economy.js";
+import "./page-jira.js";
