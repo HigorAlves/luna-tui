@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "match.choice",
+      "value": "slot2"
+    }
+  ],
+  "rubric": "Two tickets with the same shape; only the second is about checkout.",
+  "label": {
+    "match": {
+      "choice": "slot2"
+    }
+  },
+  "kind": "labelled",
+  "reading": {
+    "criteria": {
+      "match": "the PR implements or fixes slot 2"
+    },
+    "why": "The PR fixes checkout with an empty cart, which is DISC-62. DISC-61 has the same shape on another page.",
+    "second": {
+      "label": {
+        "match": {
+          "choice": "slot2"
+        }
+      },
+      "agrees": true
+    }
+  }
+}
