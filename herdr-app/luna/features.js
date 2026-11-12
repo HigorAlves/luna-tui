@@ -6,3 +6,8 @@ import "./tabs-detail.js";
 import "./diffview.js";
 import "./tabs-evidence.js";
 import "./tabs-engines.js";
+import "./page-inbox.js";
+import "./page-digest.js";
+import "./page-floor.js";
+import "./page-backlog.js";
+import "./page-tickets.js";
