@@ -15,6 +15,14 @@ export interface PrReviewDeps {
 
 const EVENT_OF = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
 
+/** The review event from the set of severities, as orc's review-contract defines it: no finding approves; a bug, a
+ *  security, an api-surface or a test finding requests changes; anything else (suggestion, question, nit) comments. */
+export function verdictOf(findings: ReadonlyArray<{ severity: string }>): "approve" | "request_changes" | "comment" {
+  if (findings.length === 0) return "approve";
+  const blocking = new Set(["bug", "security", "api-surface", "test"]);
+  return findings.some((f) => blocking.has(f.severity)) ? "request_changes" : "comment";
+}
+
 /** inline-review's cap: more than this erodes signal, so the lowest severities stay in findings only. */
 export const MAX_INLINE_COMMENTS = 15;
 const SEVERITY_RANK: Record<string, number> = { security: 0, bug: 1, "api-surface": 2, test: 3, suggestion: 4, question: 5, nit: 6 };
@@ -80,6 +88,8 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       return { ...pack, outcome: "fail", detail: { ...pack.detail, error: `the review answer does not parse: ${parsed.error.message}` } };
     }
     const answer = parsed.data;
+    // The verdict is the findings', never the model's (orc review-contract): any finding keeps a review from approving.
+    const verdict = verdictOf(answer.findings);
 
     // Nothing is posted here: the review goes out under the person's name, so every verdict, its body and its line
     // comments wait at "post the verdict?" until the person says yes (or edits or drops it).
@@ -88,9 +98,17 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
       answer.findings,
     );
     const base = { ...pack, findings: answer.findings };
-    const detail = { ...pack.detail, summary: answer.summary, verdict: answer.verdict, posted: false, comments: comments.length, reason: "verdict" };
+    const detail = {
+      ...pack.detail,
+      summary: answer.summary,
+      verdict,
+      ...(answer.verdict !== verdict ? { modelVerdict: answer.verdict } : {}),
+      posted: false,
+      comments: comments.length,
+      reason: "verdict",
+    };
     const requested: RequestedAction[] = [
-      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[answer.verdict], body: answer.summary, comments } },
+      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[verdict], body: answer.summary, comments } },
     ];
     return { ...base, detail, requested };
   };

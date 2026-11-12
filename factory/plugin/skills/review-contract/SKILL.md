@@ -8,9 +8,10 @@ when_to_use: Use when producing, merging, or posting structured review findings,
 
 One schema, one severity vocabulary, one event rule — defined here and only
 here. Reviewer agents preload this skill; any new reviewer agent references it
-instead of restating it. In factory mode nothing is posted: the stage answers with
-its JSON result, and its `verdict` is computed by the stage prompt's mechanical
-rule from the same findings and confidences.
+instead of restating it. In factory mode nothing is posted by the stage: it answers
+with its JSON result, the machine computes the event from the severities below
+(the stage's own `verdict` is a proposal it recomputes), and the person posts the
+review from the board.
 
 ## Finding schema
 

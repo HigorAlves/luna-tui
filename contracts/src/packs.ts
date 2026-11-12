@@ -298,13 +298,13 @@ export const ReviewingMemoryAnswer = z.object({
   factPromotions: z.array(z.object({ id: z.string().max(40), section: ProjectContextSection })).max(10).optional(),
 });
 
-/** reviewing (PR task): a comment review the host posts at once; approve / request_changes wait for you. */
+/** reviewing (PR task): the whole review waits for you; the machine computes its event from the findings' severities and posts it when you say so. */
 export const PrReviewAnswer = z.object({
   kind: z.enum(["done", "escalated"]).optional(),
   verdict: z.enum(["approve", "request_changes", "comment"]),
   summary: z.string(),
   findings: z.array(Finding),
-  /** Line-anchored comments the host posts as one COMMENT review. */
+  /** Line-anchored comments, posted with the review once you approve it. */
   comments: z.array(
     z.object({ path: z.string(), line: z.number().int(), side: z.enum(["RIGHT", "LEFT"]).default("RIGHT"), body: z.string() }),
   ),

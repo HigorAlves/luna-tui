@@ -63,7 +63,7 @@ describe("reviewing", () => {
     const { run, context, github, review } = setup({
       verdict: "comment",
       summary: "Two nits.",
-      findings: [],
+      findings: [{ path: "a.ts", line: 1, severity: "nit", title: "nit", body: "nit", confidence: 0.9 }],
       comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "nit" }],
     });
     const result = await run(context);
@@ -81,7 +81,7 @@ describe("reviewing", () => {
   });
 
   it("waits for you with the verdict and its comments when it is approve or request changes", async () => {
-    const { run, context, github } = setup({ verdict: "request_changes", summary: "Blocking.", findings: [], comments: [{ path: "a.ts", line: 1, body: "bug" }] });
+    const { run, context, github } = setup({ verdict: "request_changes", summary: "Blocking.", findings: [{ path: "a.ts", line: 1, severity: "bug", title: "bug", body: "bug", confidence: 0.9 }], comments: [{ path: "a.ts", line: 1, body: "bug" }] });
     const result = await run(context);
     expect(posted(github)).toHaveLength(0);
     expect(result).toMatchObject({ outcome: "pass", detail: { reason: "verdict", verdict: "request_changes", posted: false } });
@@ -97,6 +97,30 @@ describe("reviewing", () => {
     expect(result.detail).toMatchObject({ posted: false, reason: "verdict" });
     const escalated = setup(null);
     expect((await escalated.run(escalated.context)).outcome).toBe("escalated");
+  });
+});
+
+describe("the verdict, computed from the findings (orc review-contract)", () => {
+  const finding = (severity: string) => ({ path: "a.ts", line: 1, severity, title: severity, body: "b", confidence: 0.9 });
+  it.each([
+    [[], "approve", "APPROVE"],
+    [["suggestion"], "comment", "COMMENT"],
+    [["question", "nit"], "comment", "COMMENT"],
+    [["test"], "request_changes", "REQUEST_CHANGES"],
+    [["api-surface"], "request_changes", "REQUEST_CHANGES"],
+    [["bug", "suggestion"], "request_changes", "REQUEST_CHANGES"],
+    [["security"], "request_changes", "REQUEST_CHANGES"],
+  ])("%j gives %s whatever the model said", async (severities, verdict, event) => {
+    const { run, context } = setup({ verdict: "approve", summary: "Looks good.", findings: (severities as string[]).map(finding), comments: [] });
+    const result = await run(context);
+    expect(result.detail).toMatchObject({ verdict });
+    expect((result.requested?.[0]?.payload as { event: string }).event).toBe(event);
+  });
+
+  it("records when the model's own verdict contradicted the findings", async () => {
+    const { run, context } = setup({ verdict: "approve", summary: "LGTM.", findings: [finding("bug")], comments: [] });
+    const result = await run(context);
+    expect(result.detail).toMatchObject({ verdict: "request_changes", modelVerdict: "approve" });
   });
 });
 
