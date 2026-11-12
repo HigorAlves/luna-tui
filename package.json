@@ -19,6 +19,8 @@
     "board:link": "pnpm board:build && herdr plugin link ./board",
     "board:test": "cargo test --manifest-path board/Cargo.toml",
     "board:keys": "cargo run --manifest-path board/Cargo.toml -- --keys-md board/README.md",
+    "app:link": "mkdir -p \"${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods\" && ln -sfn \"$PWD/herdr-app/luna\" \"${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/luna\" && (herdr-app check \"${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/luna\" || true)",
+    "app:test": "node --import ./herdr-app/test/host/register.js --test herdr-app/test/*.test.js",
     "golden": "pnpm --filter @hardness/machine golden",
     "eval": "node evals/cli.ts",
     "site:dev": "pnpm --filter site dev",
