@@ -1,7 +1,7 @@
 // The delivering stage: push the task's branch and open a draft PR on the host, so CI starts
 // early. The push is git with your own credentials; the PR is the GitHub port.
 import { at } from "../../adapters/git/machine-repo.ts";
-import { HOST_GIT, type RebaseResult, branchBase, defaultBranchFile, isBranchName, originSlugOf, rebaseOntoBase, stackOf, unstack as hostUnstack } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, type RebaseResult, branchBase, defaultBranchFile, isBranchName, leaveStack, originSlugOf, rebaseOntoBase, stackOf, unstack as hostUnstack } from "../../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../../adapters/process/exec.ts";
 import { PR_TEMPLATE_PATHS, type PrExtra, buildPr, mergePrSection } from "../../domain/prbody.ts";
 import { approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
@@ -154,20 +154,48 @@ export function deliverRunner(deps: DeliverDeps): StageRunner {
       }
       const stopped = (rebased: RebaseResult, what: string): StageResult | null =>
         rebased.ok ? null : { outcome: "fail", detail: { error: rebased.conflicts.length > 0 ? `${what} stopped on: ${rebased.conflicts.join(", ")}` : `${what} could not be done: ${rebased.error}`, conflicts: rebased.conflicts, escalation: "other" } };
+      /**
+       * A move that stopped on conflicts goes to the merge round, as the CONFLICTING path below does, with the base the move was to land on (the parent's
+       * branch, or the default branch once the parent merged): its tip was fetched by the move. "merged" when the round landed it (it pushed the
+       * merge itself); a stop to return when the round did not land it; null when it cannot run (no resolver, no PR yet, no usable tip) and the first stop stands.
+       */
+      const mergeInstead = async (done: RebaseResult, what: string, baseName: string | null): Promise<"merged" | StageResult | null> => {
+        if (done.ok || done.conflicts.length === 0 || !deps.resolveConflicts || !baseName || !isBranchName(baseName)) return null;
+        const existing = await deps.github.findPr(stackSlug, task.branch!).catch(() => null);
+        if (!existing) return null;
+        const tip = (await deps.exec("git", [...HOST_GIT, ...at(task.worktreePath!), "rev-parse", "--verify", `refs/remotes/origin/${baseName}^{commit}`])).stdout.trim();
+        if (!/^[0-9a-f]{40,64}$/.test(tip)) return null;
+        const merged = await deps.resolveConflicts(context, { slug: stackSlug, number: existing.number, base: { sha: tip, name: baseName }, label: "deliver-stack", pack: null });
+        if (merged.ok) return "merged";
+        const first = stopped(done, what)!;
+        return { ...first, detail: { ...first.detail, error: `${String(first.detail?.error)}; merging instead did not resolve it: ${String(merged.result.detail?.reason ?? merged.result.detail?.error ?? "the merge did not land")}` } };
+      };
       if (parent?.parent.state === "merged") {
+        const what = "moving this card onto the default branch after its parent merged";
         const done = await (deps.stacked.unstack ?? hostUnstack)(deps.exec, task.worktreePath, task.repoPath, defaultOf);
-        const failed = stopped(done, "moving this card onto the default branch after its parent merged");
-        if (failed) return failed;
+        const instead = await mergeInstead(done, what, await defaultOf(task.repoPath));
+        if (instead === "merged") await leaveStack(deps.exec, task.worktreePath);
+        else if (instead) return instead;
+        else {
+          const failed = stopped(done, what);
+          if (failed) return failed;
+        }
         await deps.stacked.clearBase(task.id);
         restacked = true;
       } else if (parent?.parent.head) {
         const recorded = await (deps.stacked.baseSha ?? (async (path: string) => (await stackOf(path)).sha))(task.worktreePath);
         if (recorded !== parent.parent.head) {
+          const what = "the rebase onto the parent's new tip";
           const done = await (deps.stacked.rebase ?? rebaseOntoBase)(deps.exec, task.worktreePath, task.repoPath, defaultOf, parentWinsFor(context));
-          const failed = stopped(done, "the rebase onto the parent's new tip");
+          const instead = await mergeInstead(done, what, parent.parent.branch);
           if (done.ok && done.resolved?.length) await context.note?.(`rebased onto the parent's new tip; the parent's version kept for ${done.resolved.join(", ")} (not this card's to change)`).catch(() => {});
-          if (failed) return failed;
-          restacked = true;
+          if (instead && instead !== "merged") return instead;
+          // A rebase is pushed forced; a merge the round landed is already on the PR and descends from it.
+          if (!instead) {
+            const failed = stopped(done, what);
+            if (failed) return failed;
+            restacked = true;
+          }
         }
       }
     }

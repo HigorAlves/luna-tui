@@ -360,6 +360,97 @@ describe("a rebase whose replay stops on a conflict the branch's final result do
   });
 });
 
+describe("a stacked card's replay that stops on a conflict", () => {
+  it("merges the parent's tip instead when the card's final result has no conflict, and moves the recorded base there", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace, { branch: PARENT });
+    // An early commit changes p3.txt and a later one puts it back: only the replay sees a conflict once the parent changes p3.txt.
+    writeFileSync(join(workspace.path, "p3.txt"), "mine\n");
+    await commitAll(workspace.path, "feat: first pass");
+    writeFileSync(join(workspace.path, "p3.txt"), "p3\n");
+    writeFileSync(join(workspace.path, "c.txt"), "c\n");
+    await commitAll(workspace.path, "feat: restore p3, add c");
+    const moved = parentMoves(s, "p3.txt", "theirs\n");
+    const result = await unsigned(() => rebaseOntoBase(exec, workspace.path, s.repo));
+    expect(result).toEqual({ ok: true, onto: `origin/${PARENT}`, merged: true });
+    expect(wgit(workspace.path, "show", "HEAD:p3.txt")).toBe("theirs");
+    expect(wgit(workspace.path, "show", "HEAD:c.txt")).toBe("c");
+    expect(wgit(workspace.path, "rev-parse", "refs/luna/base")).toBe(moved);
+    expect(wgit(workspace.path, "status", "--porcelain")).toBe("");
+    expect(existsSync(join(machineGitDir(workspace.path), "rebase-merge"))).toBe(false);
+  });
+
+  it("still stops, with the files named and nothing recorded changed, when the final result conflicts too", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace, { branch: PARENT });
+    writeFileSync(join(workspace.path, "p4.txt"), "mine\n");
+    await commitAll(workspace.path, "feat: mine");
+    const before = wgit(workspace.path, "rev-parse", "HEAD");
+    parentMoves(s, "p4.txt", "theirs\n");
+    expect(await unsigned(() => rebaseOntoBase(exec, workspace.path, s.repo))).toMatchObject({ ok: false, conflicts: ["p4.txt"] });
+    expect(wgit(workspace.path, "rev-parse", "HEAD")).toBe(before);
+    expect(wgit(workspace.path, "rev-parse", "refs/luna/base")).toBe(s.tip);
+    expect(existsSync(join(machineGitDir(workspace.path), "MERGE_HEAD"))).toBe(false);
+  });
+
+  it("merges rather than replays once the branch holds a merge since its base: a replay drops the merge and brings the resolved conflict back", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace, { branch: PARENT });
+    writeFileSync(join(workspace.path, "p3.txt"), "mine\n");
+    await commitAll(workspace.path, "feat: mine");
+    parentMoves(s, "p3.txt", "theirs\n");
+    expect(await unsigned(() => rebaseOntoBase(exec, workspace.path, s.repo))).toMatchObject({ ok: false, conflicts: ["p3.txt"] });
+    // What a merge round leaves: the parent's tip merged with the conflict resolved, the recorded base at that tip.
+    const tip = wgit(workspace.path, "rev-parse", `refs/remotes/origin/${PARENT}`);
+    try {
+      wgit(workspace.path, "merge", "--no-ff", "--no-commit", tip);
+    } catch {
+      // the conflict is what is being resolved
+    }
+    writeFileSync(join(workspace.path, "p3.txt"), "resolved\n");
+    wgit(workspace.path, "add", "-A");
+    wgit(workspace.path, "commit", "-q", "-m", "merge the parent, resolved");
+    wgit(workspace.path, "update-ref", "refs/luna/base", tip);
+    // The parent moves again, in an unrelated file.
+    const moved = parentMoves(s, "p5.txt", "p5\n");
+    const result = await unsigned(() => rebaseOntoBase(exec, workspace.path, s.repo));
+    expect(result).toEqual({ ok: true, onto: `origin/${PARENT}`, merged: true });
+    expect(wgit(workspace.path, "show", "HEAD:p3.txt")).toBe("resolved");
+    expect(wgit(workspace.path, "show", "HEAD:p5.txt")).toBe("p5");
+    expect(wgit(workspace.path, "rev-parse", "refs/luna/base")).toBe(moved);
+  });
+
+  it("unstacks by merging the default branch when the replay stops on a conflict the final result does not have, and forgets the parent's branch", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace, { branch: PARENT });
+    writeFileSync(join(workspace.path, "a.txt"), "mine\n");
+    await commitAll(workspace.path, "feat: first pass");
+    writeFileSync(join(workspace.path, "a.txt"), "a\n");
+    writeFileSync(join(workspace.path, "c.txt"), "c\n");
+    await commitAll(workspace.path, "feat: restore a, add c");
+    // The parent squash-merges into main, which then changes a.txt too.
+    const other = join(s.root, "other");
+    execFileSync("git", ["clone", "-q", s.remote, other]);
+    for (const n of [1, 2, 3]) writeFileSync(join(other, `p${n}.txt`), `p${n}\n`);
+    git(other, "add", "-A");
+    git(other, "commit", "-q", "-m", "parent (squashed)");
+    writeFileSync(join(other, "a.txt"), "theirs\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-q", "-m", "main changes a");
+    git(other, "push", "-q", "origin", "main");
+    const main = git(other, "rev-parse", "HEAD");
+    const result = await unsigned(() => unstack(exec, workspace.path, s.repo));
+    expect(result).toEqual({ ok: true, onto: "origin/main", merged: true });
+    expect(wgit(workspace.path, "show", "HEAD:a.txt")).toBe("theirs");
+    expect(wgit(workspace.path, "show", "HEAD:c.txt")).toBe("c");
+    expect(await stackOf(workspace.path)).toEqual({ sha: main, branch: null });
+  });
+});
+
 describe("what of a card's change the default branch already holds", () => {
   it("splits the files the card changed into those identical on the default branch and those that still differ, and reads nothing it cannot", async () => {
     const s = stacked();

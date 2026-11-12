@@ -83,7 +83,8 @@ export interface RebaseOptions {
   parentWins?: (path: string) => boolean;
   /** A rebase replays the card's commits one by one, so a file an early commit changed and a later one put back conflicts with a base that
    *  changed it, though the card's final result never touched it. When a replay stops, the base is merged into the branch instead: the merge compares
-   *  final results, so only a conflict the card really has stops it, and a merge that conflicts is aborted. On by default (default branch only); `false` is the rebase alone. */
+   *  final results, so only a conflict the card really has stops it, and a merge that conflicts is aborted. On by default, for a stacked card's move
+   *  onto its parent or the default branch too (which also merges at once when the branch holds a merge since its base); `false` is the rebase alone. */
   mergeFallback?: boolean;
 }
 
@@ -174,11 +175,24 @@ async function mergeBaseInstead(run: GitExec, worktreePath: string, ref: string,
   return { ok: false, conflicts };
 }
 
+/**
+ * The card's own commits onto `onto`: replayed after `refs/luna/base`, and when the replay stops on a conflict, or the branch already holds a
+ * merge since its base, `onto` is merged into the branch instead (`mergeFallback`, on by default). A replay drops a merge commit, so one that
+ * resolved a conflict (a merge round) would bring that conflict back on every later move; a merge keeps it.
+ */
 async function replayOwn(run: GitExec, worktreePath: string, onto: string, label: string, options: RebaseOptions = {}): Promise<RebaseResult> {
-  const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), "-c", "commit.gpgsign=false", "rebase", "--empty=drop", "--onto", onto, BASE_REF]);
-  const settled = await settleRebase(run, worktreePath, rebased, options);
-  if (!settled.ok) return settled;
-  return { ok: true, onto: label, ...(settled.resolved.length ? { resolved: settled.resolved } : {}) };
+  const useMerge = options.mergeFallback !== false;
+  const merges = useMerge ? await run("git", [...HOST_GIT, ...at(worktreePath), "rev-list", "--merges", "--max-count=1", `${BASE_REF}..HEAD`]) : null;
+  if (!merges || merges.code !== 0 || merges.stdout.trim() === "") {
+    const rebased = await run("git", [...HOST_GIT, ...at(worktreePath), "-c", "commit.gpgsign=false", "rebase", "--empty=drop", "--onto", onto, BASE_REF]);
+    const settled = await settleRebase(run, worktreePath, rebased, options);
+    if (settled.ok) return { ok: true, onto: label, ...(settled.resolved.length ? { resolved: settled.resolved } : {}) };
+    // Only the files the replay named can be a conflict the card does not really have: a merge compares final results and says.
+    if (!useMerge || settled.conflicts.length === 0) return settled;
+  }
+  const instead = await mergeBaseInstead(run, worktreePath, onto, label);
+  if (instead.ok) return { ok: true, onto: label, merged: true };
+  return { ok: false, error: `merging ${label} into the branch stopped on a conflict`, conflicts: instead.conflicts };
 }
 
 /** The refusal a nested repository in the folder gets: a failed result, never a thrown error. */
