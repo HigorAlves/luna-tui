@@ -1582,8 +1582,26 @@ export const PACK_LIMITS: Record<PackId, { maxTurns: number; timeoutMs: number; 
   Object.values(PACKS).map((pack) => [pack.id, { maxTurns: pack.maxTurns, timeoutMs: pack.timeoutMs, writable: pack.writable }]),
 ) as Record<PackId, { maxTurns: number; timeoutMs: number; writable: boolean }>;
 
+/**
+ * The Claude CLI checks `--json-schema` in strict mode, which does not know `prefixItems`, the keyword zod writes for a
+ * tuple. A tuple becomes an array of the union of its members with the same length bounds; the position is still
+ * checked by zod when the answer comes back.
+ */
+function withoutTuples(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(withoutTuples);
+  if (node === null || typeof node !== "object") return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) out[key] = withoutTuples(value);
+  const prefix = out.prefixItems;
+  if (Array.isArray(prefix)) {
+    delete out.prefixItems;
+    out.items = prefix.length === 1 ? prefix[0] : { anyOf: prefix };
+  }
+  return out;
+}
+
 /** The JSON schema the SDK's structured output takes for a pack's answer. */
 export function answerJsonSchema(pack: Pack): Record<string, unknown> {
   const { $schema: _schema, ...schema } = z.toJSONSchema(pack.answer, { target: "draft-2020-12" }) as Record<string, unknown>;
-  return schema;
+  return withoutTuples(schema) as Record<string, unknown>;
 }
