@@ -55,6 +55,10 @@ describe("sandboxArgs", () => {
     expect(sandboxArgs(run(), "/in", "/out")).toContain("CLAUDE_CONFIG_DIR=/tmp/claude");
   });
 
+  it("tells Claude Code to send no telemetry or error reports, which the egress list would refuse and log as noise", () => {
+    expect(sandboxArgs(run(), "/i", "/o")).toEqual(expect.arrayContaining(["-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"]));
+  });
+
   it("caps memory, cpu and process count, so a runaway stage cannot take the machine down", () => {
     const args = sandboxArgs(run(), "/i", "/o").join(" ");
     expect(args).toContain("--memory 4g");

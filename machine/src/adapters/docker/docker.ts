@@ -185,6 +185,8 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     // Temp files live on the tmpfs; the SDK's sessions too, unless a host dir is mounted below.
     "-e", "TMPDIR=/tmp",
     "-e", `CLAUDE_CONFIG_DIR=${run.sessionMount ? "/session" : "/tmp/claude"}`,
+    // Claude Code's telemetry and error reports go to a host the egress list does not allow: every Claude stage would log a refusal that buries a real one.
+    "-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
     // The credential is passed by name; its value is only in docker's environment.
     ...Object.keys(run.credential.env).flatMap((name) => ["-e", name]),
     // A scoped secret the same way: by name here, the value only in docker's environment.
