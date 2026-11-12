@@ -1070,6 +1070,28 @@ fn review_to_post(a: &Approval, width: usize) -> Vec<Line<'static>> {
             ),
         ]),
     ];
+    // The Jira tickets the reviewer checked the change against, when the PR named any and Jira was connected.
+    let tickets: Vec<&Value> = r["tickets"]
+        .as_array()
+        .map(|t| t.iter().filter(|t| t["key"].is_string()).collect())
+        .unwrap_or_default();
+    if !tickets.is_empty() {
+        out.push(Line::default());
+        out.push(Line::from(Span::styled(
+            "  Reviewed against",
+            theme::label(),
+        )));
+        for t in tickets {
+            out.extend(hanging(
+                vec![Span::styled(
+                    format!("    {}  ", plain(t["key"].as_str().unwrap_or("?"))),
+                    theme::code(),
+                )],
+                t["summary"].as_str().unwrap_or(""),
+                width,
+            ));
+        }
+    }
     // The body is the one the machine will send: the review action's own payload when it is there, else the summary.
     let body = r["actions"]
         .as_array()
@@ -1487,6 +1509,32 @@ mod tests {
         ] {
             assert!(main.contains(needle), "no {needle:?} in\n{main}");
         }
+    }
+
+    #[test]
+    fn a_review_waiting_to_post_says_which_jira_tickets_it_was_checked_against() {
+        let mut app = review_verdict_app("comment");
+        if let Some(d) = app.detail.as_mut() {
+            d.approvals[0].requested["tickets"] = serde_json::json!([
+                {"key": "DISC-939", "url": "https://a.atlassian.net/browse/DISC-939", "summary": "Stale removed raters' feedback"},
+                {"key": "DISC-12", "url": "https://a.atlassian.net/browse/DISC-12", "summary": "Audit copy"}
+            ]);
+        }
+        let screen = render(&mut app, 180, 60);
+        let main = main_pane(&screen);
+        for needle in [
+            "Reviewed against",
+            "DISC-939",
+            "Stale removed raters' feedback",
+            "DISC-12",
+            "Audit copy",
+        ] {
+            assert!(main.contains(needle), "no {needle:?} in\n{main}");
+        }
+        // A review with no ticket linked has no such line.
+        let mut bare = review_verdict_app("comment");
+        let screen = render(&mut bare, 180, 60);
+        assert!(!main_pane(&screen).contains("Reviewed against"));
     }
 
     #[test]
