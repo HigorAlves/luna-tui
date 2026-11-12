@@ -1,7 +1,7 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
-import { hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
+import { hostBaselineWorkspace, hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
 import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
@@ -365,6 +365,8 @@ const realVerifyRunner = verifyRunner({
   runPack: verifyPack,
   // Verify runs on a fresh clone at the head commit, never in the folder Build used.
   fresh: keptFresh,
+  // A failing check is asked again on the base, in a throwaway clone: a failure that is there too is the environment's, not the card's.
+  baseline: hostBaselineWorkspace,
   // The environment Build recorded, and the one Verify's fresh clone has.
   buildEnv: async (taskId) => {
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;

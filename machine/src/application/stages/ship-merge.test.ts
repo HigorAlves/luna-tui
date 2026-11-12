@@ -126,6 +126,17 @@ describe("mergeRound: a branch that no longer merges", () => {
     expect(String(out.result.detail?.reason)).toMatch(/nothing was committed/);
   });
 
+  it("asks the checks about the base's own tip, and says the base is red when they fail there too (env_broken, not `other`)", async () => {
+    const w = await world("conflict");
+    const red: StageResult = { outcome: "escalated", detail: { escalation: "env_broken", red_on_base: true, reason: "machine tests fails on the base commit abc1234 too, so this change did not cause it (src/clone.test.ts)" } };
+    const { d, context } = deps(w, (path: string) => writeFileSync(join(path, "doc.md"), "one\nresolved\nthree\n"), red);
+    const out = await mergeRound(d, context, input(w));
+    expect(out.ok).toBe(false);
+    expect(out.result.detail).toMatchObject({ escalation: "env_broken", reason: expect.stringContaining("main is red without this card: machine tests fails on the base commit abc1234 too") });
+    expect(d.loop.checks).toHaveBeenCalledWith(expect.anything(), w.before, input(w).base.sha);
+    expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(w.before);
+  });
+
   it("pushes nothing when markers are left, when the pack touched another file, or when the checks fail", async () => {
     for (const [name, resolve, checks, said] of [
       ["markers", (path: string) => writeFileSync(join(path, "doc.md"), readFileSync(join(path, "doc.md"), "utf8").replace("three", "3")), { outcome: "pass" }, "conflict markers are left in doc.md"],

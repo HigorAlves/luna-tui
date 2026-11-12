@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { bringBack, copiedSettings, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, moveToClone, publishBranch, removeClone, unpushedCommits } from "./clone.ts";
+import { bringBack, copiedSettings, hostBaselineWorkspace, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, moveToClone, publishBranch, removeClone, unpushedCommits } from "./clone.ts";
 import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, nestedLockfilesAt, removeWorktree, scopeStartOf, workspaceFor } from "./worktree.ts";
 
@@ -257,6 +257,18 @@ describe("a fresh workspace for Verify and fixes", () => {
     expect(readFileSync(join(machineGitDir(path), "objects", "info", "alternates"), "utf8").trim()).toBe(join(machineGitDir(workspace.path), "objects"));
     expect(existsSync(join(path, "later.txt"))).toBe(false);
     expect(existsSync(join(path, ".git"))).toBe(false);
+  });
+
+  it("makes a throwaway workspace at the base beside the card's, without the card's change, and removes it with its repository", async () => {
+    const { workspace, sha } = await card();
+    const base = wgit(workspace.path, "rev-parse", `${sha}~1`);
+    const made = await hostBaselineWorkspace.clone(workspace.path, workspace.branch, "run-1-base", base);
+    expect(made.path).toBe(`${workspace.path}.base-run1base`);
+    expect(wgit(made.path, "rev-parse", "HEAD")).toBe(base);
+    expect(existsSync(join(made.path, "b.txt"))).toBe(false);
+    await hostBaselineWorkspace.remove(made.path);
+    expect(existsSync(made.path)).toBe(false);
+    expect(existsSync(machineGitDir(made.path))).toBe(false);
   });
 
   it("refuses a revision that is not a full commit id", async () => {

@@ -60,7 +60,7 @@ import { buildEgress } from "./egress.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
-import { hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
+import { hostBaselineWorkspace, hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
 import { HOST_GIT, changedPaths, changedSince, diffNameStatus, originSlugOf, dirtyFiles, gitIdentity, blobsAtRepo, branchBase, commitAll, currentBranch, headCommit, lockfilesAt, nestedLockfilesAt, restoreFiles, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
@@ -331,12 +331,13 @@ export async function buildRealStages(
   const saveEvidence = (taskId: string, pack: EvidencePack) => evidenceDeps.save(taskId, { evidence: pack });
   const evidenceStore = new EvidenceStore(config.stateDir);
   /** The project's checks over what changed since `since` (a commit the machine read): luna.yaml's list, no review pack. */
-  const deltaChecks = (context: StageContext, since: string) =>
+  const deltaChecks = (context: StageContext, since: string, base?: string) =>
     verifyRunner({
       exec: checksExec,
       runPack: null,
       stateDir: config.stateDir,
-      policy: async (repoPath) => {
+      // A red check is asked again on the base: a merge round names the base's own tip, a fix the commit the branch left.
+      baseline: { ...hostBaselineWorkspace, ...(base ? { base: async () => base } : {}) },      policy: async (repoPath) => {
         const { checks, services, decisions, factory } = await policies.for(repoPath);
         return { checks, services, decisions, verify: factory.verify };
       },

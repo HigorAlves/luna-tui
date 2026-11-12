@@ -274,6 +274,22 @@ export const hostFreshWorkspace = {
 };
 
 /**
+ * Where a failing check is asked again on the base: a throwaway workspace at `sha` (the commit the card's change is measured from), beside the
+ * card's folder as `<card>.base-<run>`. Made like Verify's fresh one, from the card's own repository, so nothing is shared with it.
+ */
+export const hostBaselineWorkspace = {
+  async clone(cardPath: string, branch: string, runId: string, sha: string): Promise<{ path: string }> {
+    const path = `${cardPath}.base-${runId.replace(/[^A-Za-z0-9]/g, "").slice(0, 48)}`;
+    removeClone(path);
+    await freshClone(cardPath, sha, branch, path);
+    return { path };
+  },
+  async remove(path: string): Promise<void> {
+    removeClone(path);
+  },
+};
+
+/**
  * What a crash can leave and nothing else removes, cleared at boot: the scratch folders beside the work folders (`<folder>.scratch`, where an
  * agent's repository is made) and the copies of bundles the host was reading (`<state>/repos/in`). Answers what it removed.
  */

@@ -127,8 +127,12 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
   await git("reset", "--hard", "--quiet", final);
 
   // The project's checks run on exactly what will be pushed.
-  const checked = deps.loop.checks ? await deps.loop.checks(subContext(ctxWork, `merge-checks-${input.label}`), before) : null;
+  // A red check is asked again on the base's own tip: the same failure there means the base is red without this card, not that the merge broke it.
+  const checked = deps.loop.checks ? await deps.loop.checks(subContext(ctxWork, `merge-checks-${input.label}`), before, input.base.sha) : null;
   if (!checked) return stop(escalated("no checks runner is wired to prove the merge"));
+  if (checked.outcome === "escalated" && checked.detail?.red_on_base === true) {
+    return stop(escalated(`${input.base.name} is red without this card: ${postable(String(checked.detail.reason ?? "its checks fail"), 300)}`, "env_broken", { red_on_base: true, base: input.base.sha, tests: checked.detail.tests ?? [] }));
+  }
   if (checked.outcome !== "pass") return stop(escalated(`the checks failed after merging ${input.base.name}: ${failureGist(String(checked.detail?.error ?? checked.detail?.summary ?? checked.outcome), 300)}`, "other", { findings: checked.detail?.findings ?? checked.findings ?? [] }));
 
   const remoteNow = await deps.github.prHeadSha(input.slug, input.number).catch(() => null);

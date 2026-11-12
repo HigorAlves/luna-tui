@@ -13,7 +13,9 @@ import { InstallFailedError } from "../install.ts";
 import { SecretsMissingError } from "../../adapters/docker/docker.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
+import { failingTestFiles, narrowedArgv } from "../../domain/base-rerun.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
+import { failureGist } from "../../domain/failure-gist.ts";
 import { addedLineNumbers, coverageFinding, mutationFinding, parseLcov, parseMutationScore, patchCoverage } from "../../domain/coverage.ts";
 import { type EnvRecord, compareEnv } from "../../domain/env-hash.ts";
 import { verifySteps } from "../../domain/verify-order.ts";
@@ -66,6 +68,17 @@ export interface VerifyDeps {
   diffSince?: (worktreePath: string, repoPath: string) => Promise<string | null>;
   /** The counted diff of the card's own change (lines added and removed against where its branch forked); null when unknown. Absent, the size is not counted. */
   diffStat?: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
+  /** Where a failing check is asked again, on the commit the card's change is measured from, so that a failure the environment causes is not blamed on the change.
+   *  Absent, a red check is the card's. */
+  baseline?: {
+    /** The commit the change is measured from; null when unknown. Default: where the branch left the repository's HEAD (or its parent's branch, for a stacked card). */
+    base?: (worktreePath: string, repoPath: string) => Promise<string | null>;
+    /** A throwaway clone of the card's repository at `sha`, on `branch`: made like the fresh clone Verify runs in, never the card's own folder. */
+    clone: (cardPath: string, branch: string, runId: string, sha: string) => Promise<{ path: string }>;
+    remove: (path: string) => Promise<void>;
+    /** What was asked, by (base, image, check, files); one for the process by default, so a second card on the same base asks nothing. */
+    cache?: Map<string, BaseAnswer>;
+  };
   /** Runs finding_classify on a check context; null (or absent) leaves the review's severities unclassified. Read at call time. */
   decide?: Decide | null;
 }
@@ -80,6 +93,24 @@ interface CheckReport {
   /** A luna.yaml check the change did not call for. */
   skipped?: string;
 }
+
+/** Whether a check fails on the base too, and when that was asked. */
+export interface BaseAnswer {
+  red: boolean;
+  at: number;
+}
+const SHA = /^[0-9a-f]{40,64}$/;
+const BASE_CACHE_CAP = 500;
+const BASE_CHECK_TIMEOUT_MS = 15 * MINUTE;
+/** A green answer holds for a while (a base commit does not change). A red one is short-lived: the environment it names (a service that was down) is fixed without the image or the commit changing, and the retry must ask again. */
+const GREEN_TTL_MS = 30 * MINUTE;
+const RED_TTL_MS = 2 * MINUTE;
+const baseCache = new Map<string, BaseAnswer>();
+const remember = (cache: Map<string, BaseAnswer>, key: string, answer: BaseAnswer): void => {
+  if (cache.size >= BASE_CACHE_CAP) cache.delete(cache.keys().next().value!);
+  cache.set(key, answer);
+};
+const stillFresh = (answer: BaseAnswer | undefined): answer is BaseAnswer => !!answer && Date.now() - answer.at < (answer.red ? RED_TTL_MS : GREEN_TTL_MS);
 
 /** How many findings finding_classify sees, the most severe first, and how much code it gets around each. */
 const CLASSIFY_MAX = 20;
@@ -300,6 +331,8 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     }
 
     const log: string[] = [];
+    /** What each check ran and printed, for asking the base about the ones that fail. */
+    const attempts = new Map<string, { argv: string[]; secrets: string[]; text: string; timedOut: boolean }>();
     const deadline = Date.now() + CHECKS_TIMEOUT_MS;
     // The repo's services start once for every check, not once per check, and come down however the loop ends.
     let pass: Awaited<ReturnType<typeof openChecksSession<typeof checkExec>>>;
@@ -355,6 +388,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         const tail = tailOf(timedOut ? `${text}\ntimed out: the 30 minute checks budget ran out` : text);
         log.push(`$ ${cmd}\n(exit ${result.code})\n${text}\n`);
         reports.push({ name, cmd, ok: result.code === 0, tail });
+        attempts.set(name, { argv, secrets: declaredSecrets ?? [], text, timedOut });
       }
     } finally {
       await pass.close();
@@ -368,7 +402,85 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     const transcriptPath = join(runDir, "checks.log");
     await writeFile(transcriptPath, log.join("\n") || "no checks detected\n");
 
-    const failed = reports.filter((r) => r.ok === false);
+    let failed = reports.filter((r) => r.ok === false);
+    // A failing check is asked again on the base. What fails there too is not the change's: it is the environment's (a service the container
+    // lacks, the user it runs as) or the base's own. Only what passes on the base and fails here goes back to Build.
+    const redOnBase: Array<{ name: string; tests: string[] }> = [];
+    const baseline = deps.baseline;
+    let baseSha: string | null = null;
+    if (failed.length > 0 && baseline && task.repoPath && task.branch) {
+      const base = await (baseline.base ?? branchBase)(cwd, task.repoPath).catch(() => null);
+      if (base && SHA.test(base)) {
+        baseSha = base;
+        const cache = baseline.cache ?? baseCache;
+        let clone: { path: string } | null = null;
+        try {
+          for (const r of failed) {
+            const attempt = attempts.get(r.name ?? "");
+            if (!attempt || attempt.timedOut) continue;
+            const files = failingTestFiles(attempt.text);
+            const narrowed = narrowedArgv(attempt.argv, files);
+            const key = [base, state.image ?? "", r.name, narrowed ? "files" : "whole", files.join(",")].join("\0");
+            let answer = cache.get(key);
+            if (!stillFresh(answer)) {
+              answer = undefined;
+              const started = Date.now();
+              let ran: ExecResult;
+              try {
+                clone ??= await baseline.clone(cwd, task.branch, `${context.runId}-base`, base);
+                const argv = narrowed ?? attempt.argv;
+                ran = await checkExec(argv[0]!, argv.slice(1), {
+                  cwd: clone.path,
+                  signal,
+                  timeoutMs: BASE_CHECK_TIMEOUT_MS,
+                  env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
+                  services,
+                  repoPath: task.repoPath,
+                  ...(attempt.secrets.length > 0 ? { secrets: attempt.secrets } : {}),
+                  ...(state.image ? { image: state.image } : {}),
+                });
+              } catch {
+                // The base could not be asked (no clone, no sandbox): the answer is unknown, so the check stays the change's.
+                if (signal.aborted) return aborted();
+                continue;
+              }
+              if (signal.aborted) return aborted();
+              // A run that timed out or could not start says nothing. A run that fails must name every file the change failed on: a file the card added is not on the base.
+              if (ran.code === 127 || (ran.code !== 0 && Date.now() - started >= BASE_CHECK_TIMEOUT_MS)) continue;
+              const named = failingTestFiles(`${ran.stdout}\n${ran.stderr}`);
+              answer = { red: ran.code !== 0 && files.every((f) => named.includes(f)), at: Date.now() };
+              remember(cache, key, answer);
+            }
+            if (answer.red) redOnBase.push({ name: r.name ?? "", tests: files });
+          }
+        } finally {
+          if (clone) await baseline.remove(clone.path).catch(() => {});
+        }
+        failed = failed.filter((r) => !redOnBase.some((red) => red.name === r.name));
+      }
+    }
+    if (redOnBase.length > 0 && failed.length === 0) {
+      const names = redOnBase.map((r) => r.name).join(", ");
+      const tests = [...new Set(redOnBase.flatMap((r) => r.tests))];
+      const gist = failureGist(attempts.get(redOnBase[0]!.name)?.text ?? "", 200);
+      const one = redOnBase.length === 1;
+      return {
+        outcome: "escalated",
+        detail: {
+          escalation: "env_broken",
+          envBroken: true,
+          step: "checks",
+          red_on_base: true,
+          base: baseSha,
+          tests,
+          reason: `${names} ${one ? "fails" : "fail"} on the base commit ${baseSha!.slice(0, 7)} too, so this change did not cause ${one ? "it" : "them"} (${tests.slice(0, 5).join(", ") || gist})`,
+          failed: redOnBase,
+          checks: reports,
+          options: ["fix the environment (a service, a tool, the user the checks run as) or the base, then resume"],
+        },
+        run: { transcriptPath },
+      };
+    }
     if (failed.length > 0) {
       const checkFindings: Finding[] = failed.map((r) => ({
         path: "",
@@ -392,6 +504,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           error: `\`${failed[0]!.cmd}\` failed:\n${(failed[0]!.tail ?? "").slice(-4000)}`,
           findings,
           checks: reports,
+          ...(redOnBase.length > 0 ? { redOnBase, base: baseSha } : {}),
         },
         findings,
         run: { transcriptPath },

@@ -2152,6 +2152,17 @@ describe("retries and escalation", () => {
     expect(resumed.reason).toBeNull();
   });
 
+  it("escalates a check that is red on the base as env_broken at once: Build does not run again and nothing counts against the verify cap", async () => {
+    const red = { outcome: "escalated" as const, detail: { escalation: "env_broken", envBroken: true, red_on_base: true, step: "checks", reason: "machine tests fails on the base commit abc1234 too, so this change did not cause it (src/clone.test.ts)" } };
+    stubs.plan("verifying", red);
+    const task = await newTask();
+    const escalated = await startAndApprove(task.id);
+    expect(escalated).toMatchObject({ state: "escalated", reason: expect.stringContaining("fails on the base commit abc1234 too") });
+    expect(escalated.retries).toMatchObject({ verify: 0, total: 1 });
+    expect((await pipeline.stageRuns(task.id)).filter((r) => r.stage === "implementing")).toHaveLength(1);
+    expect((await pipeline.approvals(task.id)).find((a) => a.kind === "escalated")?.requested).toMatchObject({ escalation: "env_broken" });
+  });
+
   it("escalates with the agent's own reason when it stops on purpose, without verifying", async () => {
     stubs.plan("implementing", { outcome: "escalated", detail: { reason: "the plan needs a new dependency" } });
     const task = await newTask();
