@@ -1878,6 +1878,53 @@ describe("editing the plan before approving", () => {
     });
   });
 
+  describe("approving a plan gate that still has criteria no scenario names", () => {
+    const plan = { goal: "g", steps: [], acceptance_criteria: [{ id: "C1", text: "a" }, { id: "C2", text: "b" }], out_of_scope: [], assumptions: [], rollback: "r", version: 1, next_criterion: 2 };
+    const cases = [{ id: "S1", title: "t1", criterion: "a", criterion_ref: "C1", type: "happy", approach: "x" }];
+    const report = { score: 0.5, bar: 0.85, gaps: ["C2"], thin: [], untestable: [] as string[], open: ["C2 has no scenario: b"], per: [] };
+    const atGate = async (coverageReport: Record<string, unknown> = report) => {
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["a", "b"], assumptions: [], plan, cases, coverageReport, flagged: ["coverage"] } });
+      const task = await newTask();
+      await pipeline.start(task.id);
+      return task.id;
+    };
+    const gate = async (id: string) => (await pipeline.approvals(id)).find((a) => a.kind === "awaiting_approval")!;
+
+    it("refuses the approval and keeps the gate open, because Build would refuse the plan seconds later", async () => {
+      const id = await atGate();
+      await expect(pipeline.decide(id, "approved")).rejects.toMatchObject({ name: "CoverageGapsError", message: expect.stringContaining("C2") });
+      expect((await pipeline.get(id)).state).toBe("awaiting_approval");
+      expect((await gate(id)).decision).toBeNull();
+    });
+
+    it("takes the criteria the person marks untestable into the report, shows them and approves", async () => {
+      const id = await atGate();
+      await pipeline.decide(id, "approved", undefined, { untestable: ["C2"] });
+      // The stub's plan has no files or map, so Build still refuses it for those; what matters is that no criterion is named missing.
+      const entry = (await pipeline.events(id)).find((e) => e.kind === "build.entry_contract");
+      expect(JSON.stringify(entry?.payload.missing)).not.toMatch(/criterion/);
+      const approved = await gate(id);
+      expect(approved.decision).toBe("approved");
+      expect(approved.requested.coverageReport).toMatchObject({ gaps: ["C2"], untestable: ["C2"], open: [] });
+      expect(approved.requested.flagged).toEqual(expect.arrayContaining([expect.stringMatching(/C2 \(b\)/)]));
+    });
+
+    it("refuses when the person names only some of the open criteria, and ignores a name that is not a gap", async () => {
+      const id = await atGate({ ...report, gaps: ["C1", "C2"], open: ["C1 has no scenario: a", "C2 has no scenario: b"] });
+      await expect(pipeline.decide(id, "approved", undefined, { untestable: ["C2", "C9"] })).rejects.toMatchObject({ name: "CoverageGapsError", message: expect.stringContaining("C1") });
+      expect((await gate(id)).requested.coverageReport).toMatchObject({ untestable: [] });
+    });
+
+    it("approves a gate whose gaps the machine already excused, and one with no coverage report", async () => {
+      await pipeline.decide(await atGate({ ...report, untestable: ["C2"], open: [] }), "approved");
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+      const bare = await newTask();
+      await pipeline.start(bare.id);
+      await pipeline.decide(bare.id, "approved");
+      expect((await pipeline.get(bare.id)).state).not.toBe("awaiting_approval");
+    });
+  });
+
   it("edits a gate written before the v2.2 Plan (no `plan` key) as it always did", async () => {
     stubs.plan("test_design", { outcome: "pass", detail: { brief: "old", criteria: ["c1"], assumptions: [] } });
     const task = await newTask();
@@ -1889,7 +1936,7 @@ describe("editing the plan before approving", () => {
   });
 
   it("is what gets adopted once you approve", async () => {
-    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [], cases: [{ id: "S1", title: "t", criterion: "c1", criterion_ref: "C1", type: "happy", approach: "x" }] } });
     const task = await newTask();
     await pipeline.start(task.id);
 

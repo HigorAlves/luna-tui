@@ -221,6 +221,8 @@ export const DecisionInput = z.object({
   applyRules: z.boolean().optional(),
   /** At a split gate: true keeps the card whole, which is a person's recorded answer (it lifts the size guard for this card). Dropped at any other gate. */
   keepWhole: z.boolean().optional(),
+  /** At the plan gate: criterion ids with no scenario that the approver excuses as untestable. An approval with any other open gap is refused (`409 coverage_gaps`). */
+  untestable: z.array(z.string().max(40)).max(100).optional(),
   /** Who is deciding, by name. A plan of High risk needs two distinct names; any decision keeps its own. */
   approver: z
     .string()

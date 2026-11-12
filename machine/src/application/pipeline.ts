@@ -12,7 +12,7 @@ import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../domain/task.ts";
+import { ApproverRequiredError, CoverageGapsError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../domain/task.ts";
 import { type CardFields, type ContextMissing, type DedupContext, contextComplete } from "@hardness/contracts";
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type DedupAnswer, checkDuplicates } from "./intake-dedup.ts";
@@ -63,7 +63,7 @@ import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, ou
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, FindingNotFoundError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
+export { ApproverRequiredError, CoverageGapsError, FindingNotFoundError, NoEvidenceError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, NotReleaseOwnerError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -1660,6 +1660,7 @@ export class Pipeline {
     let answered = response;
     let guard: Extra["guard"];
     if (decision === "approved" && open && outcome === undefined) {
+      await this.settleCoverage(id, response?.untestable);
       const ruleOf = (requested: Record<string, unknown>) => this.planRuleOf(task, requested);
       const prior = await this.store.withTaskLock(id, async (_task, tx) => {
         const fresh = await tx.findOpenApproval(id);
@@ -1739,6 +1740,34 @@ export class Pipeline {
     if (decision === "sent_back" && open && isSplitOutcome(outcome)) await this.archiveSplitLeftovers(id, open);
     if (gate) await this.learnFromGate(id, gate, decision, response);
     return moved;
+  }
+
+  /** A plan gate is approved only when every criterion has a scenario or a person excused it: Build's entry contract refuses the rest, so the approval would
+   *  bounce the card to the planner and ask for a second approval. The criteria the person names on this approval are excused (kept on the gate's coverage report
+   *  and listed in its flags, which Verify and the board read); any other gap refuses the approval. */
+  private async settleCoverage(id: string, excusing: unknown): Promise<void> {
+    const named = Array.isArray(excusing) ? excusing.map(String) : [];
+    await this.store.withTaskLock(id, async (_task, tx) => {
+      const gate = await tx.findOpenApproval(id);
+      if (!gate || gate.kind !== "awaiting_approval" || gate.requested.outcome !== undefined) return;
+      const report = objectOf(gate.requested.coverageReport);
+      if (!report) return;
+      const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : []);
+      const excused = strings(report.untestable);
+      const openGaps = strings(report.gaps).filter((g) => !excused.includes(g));
+      if (openGaps.length === 0) return;
+      const left = openGaps.filter((g) => !named.includes(g));
+      if (left.length > 0) throw new CoverageGapsError(id, left);
+      const text = new Map(criteriaOf(strings(gate.requested.criteria)).map((c) => [c.id, c.text] as const));
+      const planned = Plan.safeParse(gate.requested.plan);
+      if (planned.success) for (const c of planned.data.acceptance_criteria) text.set(c.id, c.text);
+      const now = openGaps.map((g) => `${g} (${text.get(g) ?? g})`);
+      await tx.updateApprovalRequested(gate, {
+        ...gate.requested,
+        coverageReport: { ...report, untestable: [...excused, ...openGaps], open: strings(report.open).filter((o) => !openGaps.some((g) => o.startsWith(`${g} has no scenario`))) },
+        flagged: [...strings(gate.requested.flagged), `coverage: excused as untestable by the approver, not covered: ${now.join(", ")}`],
+      });
+    });
   }
 
   /** What the outside-approver rule reads for a gate: CODEOWNERS' owners for the map's change and test files and the plan's step files. Never a model's owners. */

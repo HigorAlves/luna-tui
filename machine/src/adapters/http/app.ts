@@ -79,7 +79,7 @@ import { TransitionError } from "../../domain/transition.ts";
 import { checkLunaConfigText } from "../../domain/luna-config.ts";
 import { type ConfigProofs, ConfigProofError } from "../../application/config-proofs.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitAutoApprovalError, SplitChangedError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, CoverageGapsError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, UnknownRepositoryError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SplitAutoApprovalError, SplitChangedError, SplitNotValidError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, FindingNotFoundError, NoEvidenceError, NotReleaseOwnerError, WorktreeUnpushedError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -235,6 +235,7 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     if (error instanceof SameApproverError) return fail(c, 409, "same_approver", error.message);
     if (error instanceof NotReleaseOwnerError) return fail(c, 409, "not_release_owner", error.message);
     if (error instanceof OutsideApproverRequiredError) return fail(c, 409, "outside_approver_required", error.message);
+    if (error instanceof CoverageGapsError) return fail(c, 409, "coverage_gaps", error.message, { gaps: error.gaps });
     if (error instanceof PlanApprovedError) return fail(c, 409, "plan_approved", error.message);
     if (error instanceof RejectNotAllowedError) return fail(c, 409, "reject_not_allowed", error.message);
     if (error instanceof SplitChangedError) return fail(c, 409, "split_changed", error.message);
@@ -542,8 +543,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
   app.post("/tasks/:id/decision", async (c) => {
     const id = taskId(c);
-    const { decision, reason, comment, applyRules, approver, keepWhole } = await body(c, DecisionInput);
-    const response = applyRules === undefined && keepWhole === undefined ? undefined : { ...(applyRules === undefined ? {} : { applyRules }), ...(keepWhole === undefined ? {} : { keepWhole }) };
+    const { decision, reason, comment, applyRules, approver, keepWhole, untestable } = await body(c, DecisionInput);
+    const response = applyRules === undefined && keepWhole === undefined && untestable === undefined ? undefined : { ...(applyRules === undefined ? {} : { applyRules }), ...(keepWhole === undefined ? {} : { keepWhole }), ...(untestable === undefined ? {} : { untestable }) };
     return c.json(await serialize(await pipeline.decide(id, decision, reason ?? comment ?? undefined, response, approver ? { approver } : {})));
   });
 

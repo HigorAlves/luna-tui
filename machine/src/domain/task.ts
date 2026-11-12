@@ -257,6 +257,14 @@ export class PlanApprovedError extends Error {
   }
 }
 
+/** An approval of a plan gate whose coverage report still has criteria no scenario names (and nobody excused): Build's entry contract would refuse the plan seconds later and send it back. */
+export class CoverageGapsError extends Error {
+  constructor(id: string, readonly gaps: string[]) {
+    super(`task ${id}: the plan has criteria no scenario names (${gaps.join(", ")}); mark them untestable with the approval (\`untestable\`) or ask for changes`);
+    this.name = "CoverageGapsError";
+  }
+}
+
 /** A rejection anywhere but the plan gate: only a plan is rejected, and only while it waits. */
 export class RejectNotAllowedError extends Error {
   constructor(id: string, state: string) {
