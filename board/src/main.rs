@@ -38,8 +38,8 @@ use ratatui::{
     DefaultTerminal,
     crossterm::{
         event::{
-            self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseButton,
-            MouseEventKind,
+            self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+            EnableMouseCapture, Event, KeyEventKind, MouseButton, MouseEventKind,
         },
         execute,
     },
@@ -66,6 +66,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     Outcome::Continue => {}
                     Outcome::Quit => return Ok(()),
                 },
+                Event::Paste(text) => app.handle_paste(&text),
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollDown => app.scroll(1),
                     MouseEventKind::ScrollUp => app.scroll(-1),
@@ -130,9 +131,9 @@ fn main() -> io::Result<()> {
     herdr::name_tab_and_pane();
     let mut app = App::new(Machine::from_env());
     let mut terminal = ratatui::init();
-    let _ = execute!(io::stdout(), EnableMouseCapture);
+    let _ = execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     let result = run(&mut terminal, &mut app);
-    let _ = execute!(io::stdout(), DisableMouseCapture);
+    let _ = execute!(io::stdout(), DisableBracketedPaste, DisableMouseCapture);
     ratatui::restore();
     // Next time, the Digest and the cards' new dots are measured from now.
     let _ = store::write_last_seen_at(&store::state_path(), model::now_secs());

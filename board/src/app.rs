@@ -2707,6 +2707,51 @@ impl App {
         outcome
     }
 
+    /// A bracketed paste: the whole text lands at once, never as keystrokes (which vim's normal
+    /// mode would run as commands: `dd`, `x`, ... wiped the ticket). Editors insert it at the
+    /// cursor in either vim mode; one-line inputs take it with newlines as spaces; every other
+    /// mode ignores it, so a paste cannot press keys.
+    pub fn handle_paste(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let flat = || {
+            text.split('\n')
+                .map(str::trim_end)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        match &mut self.mode {
+            Mode::EditTicket { area, .. }
+            | Mode::EditCases { area, .. }
+            | Mode::Answer { area, .. }
+            | Mode::SlackReply { area, .. } => {
+                area.insert_str(&text);
+            }
+            Mode::EditPlan {
+                plan_area,
+                ticket_area,
+                focus,
+                ..
+            } => match focus {
+                PlanPane::Plan => {
+                    plan_area.insert_str(&text);
+                }
+                PlanPane::Ticket => {
+                    ticket_area.insert_str(&text);
+                }
+            },
+            Mode::Adding(buf) => buf.push_str(&flat()),
+            Mode::Reason { text: buf, .. }
+            | Mode::Reject { text: buf, .. }
+            | Mode::EvidenceNote { text: buf, .. } => buf.push_str(&flat()),
+            Mode::Command { text: buf, pick } => {
+                buf.push_str(&flat());
+                *pick = None;
+            }
+            Mode::Filter => self.filter.push_str(&flat()),
+            _ => {}
+        }
+    }
+
     fn dispatch_key(&mut self, key: KeyEvent) -> Outcome {
         if self.toast.as_ref().is_some_and(|t| t.error) {
             self.toast = None;
@@ -7740,6 +7785,30 @@ mod tests {
         assert_eq!(
             app.toast.as_ref().map(|t| t.text.as_str()),
             Some("answer every question, keeping the `## Q:` lines")
+        );
+    }
+
+    #[test]
+    fn a_paste_lands_in_the_ticket_editor_and_never_runs_as_vim_keys() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        app.mode = Mode::EditTicket {
+            id: "aaaaaaaa0000".into(),
+            area: TextArea::new(vec!["# Title".into(), "keep me".into()]),
+            vim: Vim::new(),
+        };
+        // Normal mode: `dd`, `x`, `gg` in this text would have eaten the ticket.
+        app.handle_paste("Simular a rede\r\ndd gg xx\n\n- criterio");
+        let Mode::EditTicket { area, .. } = &app.mode else {
+            panic!("still the editor")
+        };
+        let text = area.lines().join("\n");
+        assert!(
+            text.contains("keep me") && text.contains("# Title"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Simular a rede\ndd gg xx\n\n- criterio"),
+            "{text}"
         );
     }
 
