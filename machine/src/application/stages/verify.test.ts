@@ -766,14 +766,20 @@ describe("verify on a fresh clone", () => {
       expect(result.detail).toMatchObject({ envReproduction: "matched" });
     });
 
-    it("fails with a blocker finding, category env, naming both images, before the review runs", async () => {
+    it("does not fail on a rebuilt runner image: it runs the review and the checks in its own image and records the change as a note", async () => {
       const { runner, context, pack } = runnerFor({ image: "sha256:other", lockfiles: { "Cargo.lock": "h2" } });
+      const result = await runner(context);
+      expect(result.outcome).toBe("pass");
+      expect(pack).toHaveBeenCalled();
+      expect(result.detail).toMatchObject({ envReproduction: expect.stringContaining("the runner image differs: Build ran on sha256:build, Verify on sha256:other") });
+    });
+
+    it("fails with a blocker finding, category env, on a lockfile that differs at the same commit, before the review runs", async () => {
+      const { runner, context, pack } = runnerFor({ image: "sha256:other", lockfiles: { "Cargo.lock": "h9" } });
       const result = await runner(context);
       expect(result.outcome).toBe("fail");
       expect(pack).not.toHaveBeenCalled();
-      expect(result.findings).toMatchObject([{ severity: "blocker", category: "env", body: expect.stringContaining("sha256:build") }]);
-      expect(result.findings![0]!.body).toContain("sha256:other");
-      expect(result.detail).toMatchObject({ envReproduction: expect.stringContaining("the runner image differs") });
+      expect(result.findings).toMatchObject([{ severity: "blocker", category: "env", body: expect.stringContaining("Cargo.lock") }]);
     });
 
     it("fails on a lockfile that differs at the same commit", async () => {

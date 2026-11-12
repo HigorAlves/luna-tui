@@ -479,14 +479,15 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     const fresh = deps.fresh && task.worktreePath && task.branch ? await deps.fresh.make(task.worktreePath, task.branch, context.runId) : null;
     // Whatever the stage reads and runs is the fresh clone's; the card's folder is only touched to take a fast-forward back.
     const inFresh: StageContext = fresh ? { ...context, task: { ...task, worktreePath: fresh.path } } : context;
-    // The environment Verify has, against the one Build recorded: a different image, or a lockfile that differs at the same commit, is a blocker.
+    // The environment Verify has, against the one Build recorded: a lockfile that differs at the same commit is a blocker. A different image is a note.
     let envReproduction: string | null = null;
     let envFinding: Finding | null = null;
     if (fresh && deps.buildEnv && deps.envOf) {
       const recorded = await deps.buildEnv(task.id);
       if (recorded) {
         const compared = compareEnv(recorded, await deps.envOf(fresh.path, fresh.commit, task.repoPath ?? undefined, state.image));
-        envReproduction = compared.matched ? "matched" : compared.differences.join("; ");
+        // An image-only difference is a note on the report, not a failure: see compareEnv.
+        envReproduction = compared.matched ? (compared.notes.length > 0 ? compared.notes.join("; ") : "matched") : compared.differences.join("; ");
         if (!compared.matched) {
           envFinding = { path: "", line: 0, start_line: null, severity: "blocker", category: "env", title: "the environment Verify has is not the one Build ran in", body: compared.differences.join("\n"), suggestion_code: null, confidence: 1 };
         }
