@@ -5672,6 +5672,21 @@ mod tests {
         assert_eq!(app.detail_pending.as_deref(), Some(task.id.as_str()));
         app.ensure_detail();
         assert_eq!(app.detail_pending.as_deref(), Some(task.id.as_str()), "one fetch in flight at a time");
+        // The background fetch against the dead machine answers on the same channel, with nothing. Wait for that answer (not for a guessed
+        // time) and take it first: otherwise it can land after the detail below and wipe it, when the machine is slow to refuse.
+        // Other messages (the stream thread's own) may come before it; they are taken as they arrive.
+        loop {
+            let incoming = app.stream.recv_timeout(std::time::Duration::from_secs(10)).expect("the background fetch answers");
+            let is_detail = matches!(&incoming, Incoming::Detail { .. });
+            if is_detail {
+                assert!(matches!(&incoming, Incoming::Detail { detail: None, .. }), "a dead machine answers with no detail");
+            }
+            app.take_incoming(incoming);
+            if is_detail {
+                break;
+            }
+        }
+        assert!(app.detail_pending.is_none(), "the answer clears the fetch in flight");
         let detail: TaskDetail = serde_json::from_str(&format!(
             r#"{{"task":{},"stageRuns":[],"approvals":[],"events":[]}}"#,
             serde_json::to_string(&serde_json::json!({
