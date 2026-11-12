@@ -38,7 +38,18 @@ const ciText = (ci: StageInput["context"]["ci"]): string => {
 const prLine = (pr: NonNullable<StageInput["context"]["review"]>["pr"]): string =>
   `PR #${pr.number} ${pr.title} by @${pr.author}: ${pr.headRef} into ${pr.baseRef} (${pr.url})`;
 
-/** The PR, its files, the comments already on it and the diff, as reviewing reads them. */
+/** The Jira tickets the PR names, each with its status, summary, acceptance criteria and description: the spec the diff is checked against. */
+const ticketsText = (tickets: NonNullable<StageInput["context"]["review"]>["tickets"]): string => {
+  if (!tickets || tickets.length === 0) return "Linked Jira tickets:\n- (none linked)";
+  const one = (t: NonNullable<typeof tickets>[number]): string => {
+    const criteria = t.acceptanceCriteria && t.acceptanceCriteria.trim() !== "" ? `Acceptance criteria:\n${t.acceptanceCriteria.trim()}` : "Acceptance criteria: (none stated)";
+    const description = t.description.trim() !== "" ? t.description.trim() : "(no description)";
+    return `### ${t.key} (${t.type}, ${t.status}): ${t.summary}\n${t.url}\n${criteria}\nDescription:\n${description}`;
+  };
+  return `Linked Jira tickets:\n${tickets.map(one).join("\n\n")}`;
+};
+
+/** The PR, the Jira tickets it names, its files, the comments already on it and the diff, as reviewing reads them. */
 const reviewText = (review: StageInput["context"]["review"]): string => {
   if (!review) return NONE;
   const body = review.pr.body && review.pr.body.trim() !== "" ? review.pr.body.trim() : "(no description)";
@@ -47,7 +58,7 @@ const reviewText = (review: StageInput["context"]["review"]): string => {
     review.existingComments.length > 0
       ? review.existingComments.map((c) => `- ${c.path ?? "(general)"}${c.line !== null ? `:${c.line}` : ""} @${c.author}: ${c.body}`).join("\n")
       : "- (none)";
-  return `${prLine(review.pr)}\n\n${body}\n\nFiles:\n${files}\n\nComments already on the PR:\n${comments}\n\nDiff:\n\`\`\`diff\n${review.diff}\n\`\`\``;
+  return `${prLine(review.pr)}\n\n${body}\n\n${ticketsText(review.tickets)}\n\nFiles:\n${files}\n\nComments already on the PR:\n${comments}\n\nDiff:\n\`\`\`diff\n${review.diff}\n\`\`\``;
 };
 
 /** The unresolved threads, each under its GraphQL id, as addressing reads them. */
