@@ -1039,6 +1039,106 @@ fn evidence_pack(d: &TaskDetail) -> Option<&Value> {
     .find(|pack| pack["diffSummary"].is_object())
 }
 
+/// How a Jira ticket came to be read by the reviewer: the PR named it, a linked card carries it, or the `pr_link` decision picked it.
+fn how_ticket(how: &str) -> &'static str {
+    match how {
+        "key" => "named by the PR",
+        "fact" => "linked through a card",
+        _ => "chosen by the pr_link decision",
+    }
+}
+
+/// How a board card came to be linked: by a recorded fact (its Jira ticket is named by the PR, its branch or its PR is this one), or by the decision.
+fn how_card(card: &Value) -> &'static str {
+    match (card["how"].as_str(), card["fact"].as_str()) {
+        (Some("fact"), Some("jira")) => "its ticket is named by the PR",
+        (Some("fact"), Some("branch")) => "same branch",
+        (Some("fact"), Some("pr")) => "same PR",
+        (Some("fact"), _) => "matched by a recorded fact",
+        _ => "chosen by the pr_link decision",
+    }
+}
+
+/// A card's id as the board shows it: the first eight characters.
+fn short_card(id: &str) -> String {
+    plain(&id.chars().take(8).collect::<String>())
+}
+
+/// "Reviewed against": the Jira tickets and board cards the reviewer checked the change against, each with how it was linked, and a
+/// suggestion ("possibly DISC-123 · summary?") when the `pr_link` decision stayed under its bar. A detail from before links lists its `tickets`.
+fn reviewed_against(r: &Value, width: usize) -> Vec<Line<'static>> {
+    let links = &r["links"];
+    let (jira, cards, suggestion): (Vec<&Value>, Vec<&Value>, Option<&Value>) = if links.is_object()
+    {
+        let list = |k: &str| -> Vec<&Value> {
+            links[k]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter(|v| v["key"].is_string() || v["id"].is_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        (
+            list("jira"),
+            list("cards"),
+            Some(&links["suggestion"]).filter(|s| s["id"].is_string()),
+        )
+    } else {
+        let tickets = r["tickets"]
+            .as_array()
+            .map(|t| t.iter().filter(|t| t["key"].is_string()).collect())
+            .unwrap_or_default();
+        (tickets, Vec::new(), None)
+    };
+    if jira.is_empty() && cards.is_empty() && suggestion.is_none() {
+        return Vec::new();
+    }
+    let mut out = vec![
+        Line::default(),
+        Line::from(Span::styled("  Reviewed against", theme::label())),
+    ];
+    for t in jira {
+        let summary = t["summary"].as_str().unwrap_or("");
+        let text = match t["how"].as_str() {
+            Some(how) => format!("{summary}  · {}", how_ticket(how)),
+            None => summary.to_string(),
+        };
+        out.extend(hanging(
+            vec![Span::styled(
+                format!("    {}  ", plain(t["key"].as_str().unwrap_or("?"))),
+                theme::code(),
+            )],
+            &text,
+            width,
+        ));
+    }
+    for c in cards {
+        out.extend(hanging(
+            vec![Span::styled(
+                format!("    card {}  ", short_card(c["id"].as_str().unwrap_or("?"))),
+                theme::code(),
+            )],
+            &format!("{}  · {}", c["title"].as_str().unwrap_or(""), how_card(c)),
+            width,
+        ));
+    }
+    if let Some(s) = suggestion {
+        let id = s["id"].as_str().unwrap_or("?");
+        let who = if s["kind"].as_str() == Some("card") {
+            format!("card {}", short_card(id))
+        } else {
+            plain(id)
+        };
+        out.push(muted(format!(
+            "    possibly {who} · {}?",
+            plain(s["title"].as_str().unwrap_or(""))
+        )));
+    }
+    out
+}
+
 /// A card at or past shipping: the release question first when there is one, then what changed and why, what review found by
 /// level, the PR, the evidence and the ship checklist.
 /// A review of someone else's PR, waiting for "post the verdict?": what goes to GitHub if you say yes. The verdict, the
@@ -1070,28 +1170,7 @@ fn review_to_post(a: &Approval, width: usize) -> Vec<Line<'static>> {
             ),
         ]),
     ];
-    // The Jira tickets the reviewer checked the change against, when the PR named any and Jira was connected.
-    let tickets: Vec<&Value> = r["tickets"]
-        .as_array()
-        .map(|t| t.iter().filter(|t| t["key"].is_string()).collect())
-        .unwrap_or_default();
-    if !tickets.is_empty() {
-        out.push(Line::default());
-        out.push(Line::from(Span::styled(
-            "  Reviewed against",
-            theme::label(),
-        )));
-        for t in tickets {
-            out.extend(hanging(
-                vec![Span::styled(
-                    format!("    {}  ", plain(t["key"].as_str().unwrap_or("?"))),
-                    theme::code(),
-                )],
-                t["summary"].as_str().unwrap_or(""),
-                width,
-            ));
-        }
-    }
+    out.extend(reviewed_against(r, width));
     // The body is the one the machine will send: the review action's own payload when it is there, else the summary.
     let body = r["actions"]
         .as_array()
@@ -1535,6 +1614,99 @@ mod tests {
         let mut bare = review_verdict_app("comment");
         let screen = render(&mut bare, 180, 60);
         assert!(!main_pane(&screen).contains("Reviewed against"));
+    }
+
+    #[test]
+    fn a_review_lists_the_tickets_and_cards_it_was_linked_to_and_how() {
+        let mut app = review_verdict_app("comment");
+        if let Some(d) = app.detail.as_mut() {
+            d.approvals[0].requested["links"] = serde_json::json!({
+                "at": "2026-11-12T10:00:00.000Z",
+                "jira": [
+                    {"key": "DISC-939", "url": "https://a.atlassian.net/browse/DISC-939", "summary": "Stale removed raters' feedback", "how": "key"},
+                    {"key": "DISC-12", "url": "https://a.atlassian.net/browse/DISC-12", "summary": "Audit copy", "how": "fact"},
+                    {"key": "DISC-7", "url": "https://a.atlassian.net/browse/DISC-7", "summary": "Export rows", "how": "decision"}
+                ],
+                "cards": [
+                    {"id": "7f3c9a1e-0000-4000-8000-000000000001", "title": "Remove a rater", "how": "fact", "fact": "branch"},
+                    {"id": "b21e77c0-0000-4000-8000-000000000002", "title": "Audit trail", "how": "fact", "fact": "pr"},
+                    {"id": "0d4c5b9f-0000-4000-8000-000000000003", "title": "Export", "how": "decision"}
+                ]
+            });
+        }
+        let screen = render(&mut app, 180, 60);
+        let main = main_pane(&screen);
+        for needle in [
+            "Reviewed against",
+            "DISC-939",
+            "Stale removed raters' feedback",
+            "named by the PR",
+            "DISC-12",
+            "Audit copy",
+            "linked through a card",
+            "DISC-7",
+            "chosen by the pr_link decision",
+            "card 7f3c9a1e",
+            "Remove a rater",
+            "same branch",
+            "card b21e77c0",
+            "Audit trail",
+            "same PR",
+            "card 0d4c5b9f",
+            "Export",
+        ] {
+            assert!(main.contains(needle), "no {needle:?} in\n{main}");
+        }
+        assert!(!main.contains("possibly"), "{main}");
+    }
+
+    #[test]
+    fn a_review_whose_decision_stayed_under_the_bar_shows_the_suggestion_and_links_nothing() {
+        let mut app = review_verdict_app("comment");
+        if let Some(d) = app.detail.as_mut() {
+            d.approvals[0].requested["links"] = serde_json::json!({
+                "at": "2026-11-12T10:00:00.000Z",
+                "jira": [],
+                "cards": [],
+                "suggestion": {"kind": "jira", "id": "DISC-123", "title": "Export to CSV", "confidence": 0.55, "url": "https://a.atlassian.net/browse/DISC-123"}
+            });
+        }
+        let screen = render(&mut app, 180, 60);
+        let main = main_pane(&screen);
+        assert!(
+            main.contains("possibly DISC-123 · Export to CSV?"),
+            "no suggestion in\n{main}"
+        );
+        assert!(main.contains("Reviewed against"), "{main}");
+        assert!(!main.contains("named by the PR"), "{main}");
+        // A card suggestion reads the same, by its short id.
+        if let Some(d) = app.detail.as_mut() {
+            d.approvals[0].requested["links"]["suggestion"] = serde_json::json!({"kind": "card", "id": "7f3c9a1e-0000-4000-8000-000000000001", "title": "Pay button", "confidence": 0.5});
+        }
+        let screen = render(&mut app, 180, 60);
+        assert!(
+            main_pane(&screen).contains("possibly card 7f3c9a1e · Pay button?"),
+            "{}",
+            main_pane(&screen)
+        );
+    }
+
+    #[test]
+    fn a_review_with_links_but_no_tickets_key_reads_them_from_links_and_an_old_one_from_tickets() {
+        // The links win over the older `tickets` list of the same detail, so a ticket is not listed twice.
+        let mut app = review_verdict_app("comment");
+        if let Some(d) = app.detail.as_mut() {
+            d.approvals[0].requested["tickets"] =
+                serde_json::json!([{"key": "DISC-1", "url": "u", "summary": "Once"}]);
+            d.approvals[0].requested["links"] = serde_json::json!({"at": "t", "jira": [{"key": "DISC-1", "url": "u", "summary": "Once", "how": "key"}], "cards": []});
+        }
+        let screen = render(&mut app, 180, 60);
+        assert_eq!(
+            main_pane(&screen).matches("DISC-1").count(),
+            1,
+            "{}",
+            main_pane(&screen)
+        );
     }
 
     #[test]
