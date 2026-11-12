@@ -18,6 +18,7 @@ import {
   applyPolicy,
 } from "@hardness/contracts";
 
+import { publishBranch } from "../../adapters/git/clone.ts";
 import { at } from "../../adapters/git/machine-repo.ts";
 import { HOST_GIT, type GitExec, type RebaseResult } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
@@ -153,6 +154,16 @@ export async function guardFix(run: GitExec, work: string, before: string, after
     removed += Number(r) || 0;
   }
   return fixGuard({ scope: input.scope, changed: names.stdout.split("\0").filter(Boolean), prFiles: input.prFiles, added, removed, binary });
+}
+
+/**
+ * Shows the card's branch in the user's repository once a round pushed it. A round that ran on a fresh clone shows nothing from there
+ * (`isFreshWorkspace`): only what came back to the card and was pushed is shown. A refusal is a note on the card, never a failure.
+ */
+export async function showPushed(context: StageContext, repoPath: string | null, cardPath: string, branch: string): Promise<void> {
+  if (!repoPath) return;
+  const shown = await publishBranch(repoPath, cardPath, branch);
+  if (!shown.ok) await context.note?.(shown.note).catch(() => {});
 }
 
 export async function headOfWorktree(run: GitExec, worktreePath: string): Promise<string | null> {
@@ -309,6 +320,7 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   }
   const pushError = await pushBranch(run, branch, wt);
   if (pushError) return stop(escalated(pushError));
+  await showPushed(context, task.repoPath ?? null, wt, branch);
   await finish();
 
   // From here the commit is on the PR: no reset, whatever else goes wrong.

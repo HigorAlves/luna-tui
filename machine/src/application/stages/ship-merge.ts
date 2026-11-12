@@ -14,7 +14,7 @@ import { messageOf } from "../github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { pushBranch } from "./deliver.ts";
 import { failureGist } from "../../domain/failure-gist.ts";
-import { type FixDeps, escalated, headOfWorktree, resetTo, subContext } from "./ship-fixes.ts";
+import { type FixDeps, escalated, headOfWorktree, resetTo, showPushed, subContext } from "./ship-fixes.ts";
 import { gatherPr } from "./pr-review.ts";
 
 const SHA = /^[0-9a-f]{40,64}$/;
@@ -143,6 +143,8 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
   }
   const pushError = await pushBranch(run, branch, wt);
   if (pushError) return stop(escalated(pushError));
+  // The merge shows in the user's repository only now, from the card's own workspace: the pack's temporary commit (the markers) never does.
+  await showPushed(context, task.repoPath ?? null, wt, branch);
   if (fresh) await deps.loop.fresh!.remove(fresh.path);
   // The card's base is the base it merged: its scope and its diffs are measured from there from now on.
   await run("git", [...HOST_GIT, ...at(wt), "update-ref", BASE_REF, input.base.sha]);

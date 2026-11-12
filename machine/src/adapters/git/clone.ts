@@ -10,6 +10,8 @@ import { at, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { BASE_REF, HOST_GIT, type Workspace, repoAddsGitlink, branchExists, clearStaleLock, headCommit, isBranchName, stackOf, startPoint } from "./worktree.ts";
 
 const CLONE_TIMEOUT_MS = 300_000;
+/** Set in the repository of a fresh workspace, which nothing else sets. */
+const FRESH_KEY = "luna.fresh";
 
 /** The settings of a repository's config a push needs, and nothing else.
  *  Git lower-cases a key's section and variable (never its subsection), so a key is matched by its parts. */
@@ -193,15 +195,47 @@ export async function refreshScratch(path: string, branch: string): Promise<void
   rmSync(staging, { recursive: true, force: true });
 }
 
+/** Where the card's repository records the commit it last showed in the user's repository for a branch: a later rewrite may replace that commit and no other. */
+const publishedRef = (branch: string): string => `refs/luna/published/${branch}`;
+
+/** The line of git's refusal that says why, else the first one, else the exit code: `git fetch` prints "From <path>" before it says what it refused. */
+function refusalOf(out: { code: number; stdout: string; stderr: string }): string {
+  const lines = `${out.stderr}\n${out.stdout}`.split("\n").map((l) => l.trim()).filter(Boolean);
+  const why = lines.find((l) => /rejected|refusing|fatal|error/i.test(l)) ?? lines[0];
+  return why || `git refused (exit code ${out.code})`;
+}
+
 /**
  * Shows the card's branch in the user's repository as the same branch name, as a worktree's branch always was, but written by the
  * machine: the user's repository fetches it from the card's. Fast-forward only, so a person's own commits on the same name are
- * never overwritten; whatever git refuses (the branch is checked out there, say) is a note for the caller, never a failure.
+ * never overwritten, with one exception: after the machine rewrote the branch itself (a rebase, a merge round), the update is forced
+ * while the repository's branch is still exactly the commit the machine showed last (`refs/luna/published/<branch>` in the card's
+ * repository), so nobody's work on it is lost. Whatever git refuses (the branch is checked out there, say) is a note for the caller, never a failure.
  */
 export async function publishBranch(repoPath: string, workspacePath: string, branch: string): Promise<{ ok: true } | { ok: false; note: string }> {
   if (!isBranchName(branch)) return { ok: false, note: `not a usable branch name: ${JSON.stringify(branch)}` };
-  const fetched = await exec("git", [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", machineGitDir(workspacePath), `refs/heads/${branch}:refs/heads/${branch}`], { timeoutMs: CLONE_TIMEOUT_MS });
-  return fetched.code === 0 ? { ok: true } : { ok: false, note: `the branch ${branch} was not updated in the repository: ${(fetched.stderr || fetched.stdout).trim().split("\n")[0] ?? "git refused"}` };
+  const fetch = (force: boolean) =>
+    exec("git", [...HOST_GIT, "-C", repoPath, "fetch", "--no-tags", "--no-write-fetch-head", "--end-of-options", machineGitDir(workspacePath), `${force ? "+" : ""}refs/heads/${branch}:refs/heads/${branch}`], { timeoutMs: CLONE_TIMEOUT_MS });
+  let fetched = await fetch(false);
+  if (fetched.code !== 0) {
+    const shown = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`]);
+    const published = await exec("git", [...HOST_GIT, ...at(workspacePath), "rev-parse", "--verify", "--quiet", `${publishedRef(branch)}^{commit}`]);
+    // The branch is where the machine left it: the machine's own rewrite may replace it. Anything else there is a person's.
+    if (shown.code === 0 && published.code === 0 && shown.stdout.trim() === published.stdout.trim()) fetched = await fetch(true);
+  }
+  if (fetched.code !== 0) {
+    const why = refusalOf(fetched);
+    return { ok: false, note: `the branch ${branch} was not updated in the repository: ${/non-fast-forward/.test(why) ? "non-fast-forward, the repository's branch has commits the card's lacks" : why}` };
+  }
+  const tip = await exec("git", [...HOST_GIT, ...at(workspacePath), "rev-parse", "--verify", `refs/heads/${branch}^{commit}`]);
+  if (tip.code === 0) await exec("git", [...HOST_GIT, ...at(workspacePath), "update-ref", publishedRef(branch), tip.stdout.trim()]);
+  return { ok: true };
+}
+
+/** Whether `path` is a fresh workspace (`freshClone`): one a round of Verify or a fix works in, whose commits are the card's only after they are brought back. */
+export async function isFreshWorkspace(path: string): Promise<boolean> {
+  if (!isClone(path)) return false;
+  return (await exec("git", [...HOST_GIT, ...inMachine(path), "config", "--local", "--get", FRESH_KEY])).code === 0;
 }
 
 /** The commits in a workspace's repository that the machine has not pushed (nothing under `refs/luna/pushed/*` holds them), newest first. */
@@ -230,6 +264,7 @@ export async function freshClone(cardPath: string, sha: string, branch: string, 
   const stack = await stackOf(cardPath);
   if (stack.sha) await execOrThrow("git", [...HOST_GIT, ...inMachine(path), "update-ref", BASE_REF, stack.sha]);
   if (stack.branch) await execOrThrow("git", [...HOST_GIT, ...inMachine(path), "config", "luna.baseBranch", stack.branch]);
+  await execOrThrow("git", [...HOST_GIT, ...inMachine(path), "config", "--local", FRESH_KEY, "true"]);
   await checkoutWork(path, branch);
 }
 

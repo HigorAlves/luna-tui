@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { ensureClone } from "../../adapters/git/clone.ts";
+import { ensureClone, hostFreshWorkspace } from "../../adapters/git/clone.ts";
 import { configureMachineRepos, machineGitDir } from "../../adapters/git/machine-repo.ts";
 import { fakeGitHub } from "../../test/github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -151,6 +151,24 @@ describe("mergeRound: a branch that no longer merges", () => {
       expect(git(w.remote, "rev-parse", "refs/heads/card"), name).toBe(w.before);
       expect(wgit(w.workspace.path, "rev-parse", "HEAD"), name).toBe(w.before);
     }
+  });
+
+  it("shows what shipped in the user's repository, and only that: the markers' commit on the fresh clone never reaches it", async () => {
+    const w = await world("conflict");
+    const { d, context } = deps(w, (path) => writeFileSync(join(path, "doc.md"), "one\nTWO, the card's rewrite, and a new fact\nthree\n"));
+    (d.loop as { fresh?: unknown }).fresh = hostFreshWorkspace;
+    const out = await mergeRound(d, context, input(w));
+    expect(out).toMatchObject({ ok: true });
+    const head = wgit(w.workspace.path, "rev-parse", "HEAD");
+    expect(git(w.repo, "rev-parse", "refs/heads/card")).toBe(head);
+    expect(git(w.repo, "log", "--format=%s", "card")).not.toContain("conflicts to resolve");
+  });
+
+  it("shows the merge in the user's repository when it ran in the card's own folder too", async () => {
+    const w = await world("clean");
+    const { d, context } = deps(w, null);
+    expect(await mergeRound(d, context, input(w))).toMatchObject({ ok: true });
+    expect(git(w.repo, "rev-parse", "refs/heads/card")).toBe(wgit(w.workspace.path, "rev-parse", "HEAD"));
   });
 
   it("does not start when someone pushed to the PR", async () => {
