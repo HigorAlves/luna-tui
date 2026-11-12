@@ -66,7 +66,7 @@ An engine outside a pack's `allowed` runs as a candidate, so the pack needs no c
 - Put the scorecard (pass rate, judge score, turns, duration, cost) in the PR description.
 - Keep a laptop awake for the run (`caffeinate -s` on macOS).
 
-Only `triage`, `slack_triage` and `triage_signals` have cases (`evals/<pack>/cases/`). For any other pack the alias touches, add cases first ([evals/README.md](../../evals/README.md), "Add a case"). Or run the golden tickets on a branch. The branch already points the alias at the new entry (step 6). Compare the result with the same run on `main`:
+Only `triage`, `slack_triage` and `triage_signals` have cases (`evals/<pack>/cases/`). For any other pack the alias touches, add cases first ([evals/README.md](../../evals/README.md), "Add a case"). Or run the golden tickets on a branch that already points the alias at the new entry (step 6). Compare the result with the same run on `main`:
 
 ```sh
 pnpm golden --matrix       # needs a running machine from that branch, a credential and docker
@@ -104,7 +104,7 @@ To roll back, revert the alias line. A stage already running keeps its engine. T
 
 From the day after that date, the contract test fails while any pack's engines still reach the entry.
 
-Delete the old entry only when no engine names it and no pack's engines reach it.
+Delete the old entry once no pack's engines reach it.
 
 The evals measure a decision pack's engine default. Nobody assumes it. After the upgrade, do these steps:
 
