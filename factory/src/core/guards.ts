@@ -312,7 +312,27 @@ function guardGit(args: string[], ctx: GuardContext): string | null {
   if (sub === "commit") return guardCommit(rest, ctx);
   // `git rm -r .` empties the worktree as `rm -r .` does: the same refusal.
   if (sub === "rm") return guardRm(rest);
+  if (sub === "restore") return guardRestore(rest);
   return null;
+}
+
+/** `git restore` in a writable stage puts named files back from a revision (`--source=<sha> -- docs/api.md`): the
+ *  one command for undoing an out-of-scope change or taking one side of a conflict. Like `rm -r .` and `reset --hard`,
+ *  it may not take the whole tree: a restore must name files. */
+function guardRestore(rest: string[]): string | null {
+  const refuse = "git restore must name the files to restore (`git restore --source=<sha> -- <path>`): the whole worktree is never restored at once";
+  if (rest.some((a) => longOption(a, ["pathspec-from-file"]) === "pathspec-from-file")) return refuse;
+  const pathspecs: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i] as string;
+    if (arg === "--") {
+      pathspecs.push(...rest.slice(i + 1));
+      break;
+    }
+    if (arg === "-s" || arg === "--source") i++;
+    else if (!arg.startsWith("-")) pathspecs.push(arg);
+  }
+  return pathspecs.length === 0 || pathspecs.some((p) => /^(:\/|(\.\/)*)(\.|\*)?\/?$/.test(p)) ? refuse : null;
 }
 
 /** The long option `arg` names as git reads it, among `names`: git takes any unambiguous prefix

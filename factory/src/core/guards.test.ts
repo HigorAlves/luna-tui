@@ -19,6 +19,16 @@ describe("checkCall", () => {
     expect(checkCall({ tool: "bash", input: { command: "git rm -r --cached ./*" } }, WRITABLE)).toEqual({ allow: false, reason: expect.stringMatching(/would empty the worktree/) });
   });
 
+  it("lets a writable stage restore named files from a revision, and refuses a restore that names no file or the whole tree", () => {
+    const run = (command: string) => checkCall({ tool: "bash", input: { command } }, WRITABLE);
+    expect(run("git restore --source=dc36f03 -- docs/api.md docs/configuration.md")).toEqual({ allow: true });
+    expect(run("git restore -s dc36f03 docs/api.md")).toEqual({ allow: true });
+    expect(run("git restore --staged --worktree docs/")).toEqual({ allow: true });
+    for (const bad of ["git restore", "git restore .", "git restore --source=HEAD~1 -- .", "git restore -s HEAD ./", "git restore --staged", "git restore :/", "git restore --pathspec-from-file=-"]) {
+      expect(run(bad), bad).toEqual({ allow: false, reason: expect.stringMatching(/git restore must name the files/) });
+    }
+  });
+
   it("refuses a shell command with the rule's reason", () => {
     expect(checkCall({ tool: "bash", input: { command: "git push" } }, WRITABLE)).toEqual({ allow: false, reason: expect.stringMatching(/git push is not allowed/) });
   });

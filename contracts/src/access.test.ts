@@ -33,6 +33,11 @@ describe("access", () => {
     expect(readOnly(PACKS.verifying.access).commands).toEqual(expect.arrayContaining(reads));
   });
 
+  it("lets the packs that edit files restore one from a revision, and never lists a bare git checkout", () => {
+    for (const id of ["implementing", "addressing", "build_tests"] as const) expect(PACKS[id].access.commands, id).toContain("git restore");
+    for (const pack of AGENT_PACKS) expect(pack.access.commands, pack.id).not.toContain("git checkout");
+  });
+
   it("lets the implementer move and delete files, because a change that renames or removes one has no other way to", () => {
     expect(PACKS.implementing.access.commands).toEqual(expect.arrayContaining(["git mv", "git rm", "mv", "rm"]));
   });
