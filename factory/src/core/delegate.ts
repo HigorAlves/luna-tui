@@ -28,12 +28,12 @@ export const DELEGATE = "delegate";
 const MIN_CHILD_MS = 30_000;
 const MIN_CHILD_TURNS = 2;
 
-/** The helpers a run on `runtime` reaches through `delegate`. On Claude, the ones on another
- *  runtime: the rest are the SDK's subagents. Elsewhere all of them: no other runtime maps a
- *  subagent yet. */
+/** The helpers a run on `runtime` reaches through the runner's `delegate`: the ones on another
+ *  runtime. The rest are that runtime's own subagents (the SDK's on Claude, eve's native ones on
+ *  eve). Elsewhere all of them: no other runtime maps a subagent. */
 export function delegatedHelpers(pack: Pack, runtime: RuntimeId): Helper[] {
   const helpers = helpersOn(pack, runtime);
-  return runtime === "claude" ? helpers.filter((h) => resolveEngine(h.engine).runtime !== "claude") : helpers;
+  return runtime === "claude" || runtime === "eve" ? helpers.filter((h) => resolveEngine(h.engine).runtime !== runtime) : helpers;
 }
 
 /** What the model reads about the tool and the input it gives. */

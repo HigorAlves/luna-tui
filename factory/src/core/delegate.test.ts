@@ -69,16 +69,19 @@ function delegating(over: { limits?: { maxTurns: number; timeoutMs: number }; tu
 }
 
 describe("delegate", () => {
-  it("serves on Claude only the helpers on another runtime, elsewhere every helper, and nothing for a pack without one", () => {
+  it("serves on Claude or eve only the helpers on another runtime, and nothing for a pack without one", () => {
     const pack = { ...PACKS.reviewing, helpers: [...PACKS.reviewing.helpers, HELPER] };
     expect(delegatedHelpers(pack, "claude")).toEqual([HELPER]);
-    expect(delegatedHelpers(pack, "eve")).toEqual(pack.helpers);
+    // On eve a helper on an eve engine is a native subagent, not `delegate`'s; one on Claude's is.
+    expect(delegatedHelpers(pack, "eve")).toEqual(PACKS.reviewing.helpers);
+    expect(delegatedHelpers({ ...pack, helpers: [HELPER] }, "eve")).toEqual([]);
+    expect(delegatedHelpers(pack, "jev")).toEqual(pack.helpers);
     expect(delegatedHelpers(PACKS.reviewing, "claude")).toEqual([]);
     // A helper's engine follows the runtime: a second opinion on Claude's stage is Codex's, on eve's Claude's.
     expect(delegatedHelpers(PACKS.verifying, "claude")).toEqual([{ role: "second-opinion", engine: "codex:sol" }]);
     expect(delegatedHelpers(PACKS.verifying, "eve")).toEqual([{ role: "second-opinion", engine: "claude:opus" }]);
     expect(delegatedHelpers(PACKS.triage, "claude")).toEqual([]);
-    expect(delegatedHelpers(PACKS.triage, "eve")).toEqual([{ role: "reply-drafter", engine: "codex:luna" }]);
+    expect(delegatedHelpers(PACKS.triage, "eve")).toEqual([]);
     expect(delegatedHelpers(PACKS.triage_signals, "jev")).toEqual([]);
     const options = { input: input(), paths: { factoryRoot: FACTORY_ROOT, work: root, out: root, input: root }, runtimes: {}, emit: () => {}, startedAt: 0, turnsUsed: () => 0 };
     expect(delegationFor("claude", { ...options, pack: PACKS.reviewing })).toBeNull();

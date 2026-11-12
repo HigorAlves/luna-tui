@@ -4,7 +4,7 @@
 // each runtime's fake plays it through its SDK's shapes. The run is settled the way main.ts
 // settles it, and the same checks apply to every runtime. A new runtime, or a major SDK bump, is
 // done when the table passes.
-import { type AgentPack, type AgentRole, type EngineId, type LunaTool, type Pack, PACKS, type RunEvent, StageInput, resolveEngine } from "@hardness/contracts";
+import { type AgentPack, type AgentRole, type EngineId, type LunaTool, type Pack, PACKS, type RunEvent, StageInput, helpersOn, resolveEngine } from "@hardness/contracts";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -62,6 +62,8 @@ export interface ConformanceResult {
   elapsedMs: number;
   /** What each delegated helper's run was given. */
   given: RunContext[];
+  /** The engine the helper runs on under this runtime. */
+  helper: EngineId;
 }
 
 /** How the fake helper's run ends: an answer, a failure, or no run for want of its credential. */
@@ -99,8 +101,8 @@ export interface RuntimeCapabilities {
 }
 
 /** The helper the table's pack may delegate to: on a runtime that is neither of the agent
- *  runtimes' own subagents, so both reach it through `delegate`. */
-export const HELPER = { role: "security-reviewer", engine: "codex:sol" } as const;
+ *  runtimes' own subagents, so both reach it through `delegate`: Codex's under Claude, Claude's under eve. */
+export const HELPER = { role: "security-reviewer", engine: "codex:sol", on: { eve: "claude:opus" } } as const;
 /** The pack an agent runtime runs the table on: it has shell commands, the ledger tools, an answer
  *  schema and a helper it reaches through `delegate`. */
 export const PACK: AgentPack = { ...PACKS.implementing, helpers: [HELPER] };
@@ -203,13 +205,13 @@ export const SCENARIOS: Scenario[] = [
     name: "a delegated helper's answer is the tool's result, its child events in order and its cost counted",
     needs: "delegate",
     script: (t) => [{ call: "delegate", helper: HELPER.role, message: "Review the diff" }, { answer: t.valid, echo: true }],
-    check: ({ run, out, events, transcript }) => {
+    check: ({ run, out, events, transcript, helper }) => {
       expect(run.ok).toBe(true);
       expect(run.structured?.summary).toContain(SECOND_OPINION.answer);
       const children = events.filter((e) => e.kind === "child");
       expect(children).toEqual([
-        { kind: "child", payload: { phase: "start", runId: "child-1", pack: PACK.id, role: HELPER.role, engine: HELPER.engine } },
-        { kind: "child", payload: { phase: "end", runId: "child-1", pack: PACK.id, role: HELPER.role, engine: HELPER.engine, ok: true, costUsd: CHILD_COST } },
+        { kind: "child", payload: { phase: "start", runId: "child-1", pack: PACK.id, role: HELPER.role, engine: helper } },
+        { kind: "child", payload: { phase: "end", runId: "child-1", pack: PACK.id, role: HELPER.role, engine: helper, ok: true, costUsd: CHILD_COST } },
       ]);
       // The child's start and end, then the call's result. The call itself is in the stream too,
       // but on eve it races the bridge that starts the child, so it is checked apart from the order.
@@ -224,21 +226,21 @@ export const SCENARIOS: Scenario[] = [
       expect(child).toMatchObject({ ok: true, answer: SECOND_OPINION, usage: { costUsd: CHILD_COST } });
       expect(readFileSync(join(out, "children", "1", "events.jsonl"), "utf8")).toContain('"kind":"usage"');
       expect(readFileSync(join(out, "children", "1", "prompt.md"), "utf8")).toContain("Review the diff");
-      expect(transcript).toContain(`↳ ${HELPER.role} on ${HELPER.engine} answered · $0.2500`);
+      expect(transcript).toContain(`↳ ${HELPER.role} on ${helper} answered · $0.2500`);
     },
   },
   {
     name: "a delegated helper runs at depth 1, read-only, within the parent's turns",
     needs: "delegate",
     script: (t) => [{ call: "delegate", helper: HELPER.role, message: "Review the diff" }, { answer: t.valid }],
-    check: ({ run, given }) => {
+    check: ({ run, given, helper }) => {
       expect(run.ok).toBe(true);
       expect(given).toHaveLength(1);
       const child = given[0]!;
       // No delegate tool and no helpers: a child cannot delegate again.
       expect(child.delegate ?? null).toBeNull();
       expect(child.pack).toMatchObject({ agent: HELPER.role, helpers: [], writable: false, access: { write: false } });
-      expect(child.engine.id).toBe(HELPER.engine);
+      expect(child.engine.id).toBe(helper);
       expect(child.input.limits.maxTurns).toBeLessThan(8);
     },
   },
@@ -258,9 +260,9 @@ export const SCENARIOS: Scenario[] = [
     needs: "delegate",
     child: "no-credential",
     script: (t) => [{ call: "delegate", helper: HELPER.role, message: "Review the diff" }, { answer: t.valid, echo: true }],
-    check: ({ run, given }) => {
+    check: ({ run, given, helper }) => {
       expect(run.ok).toBe(true);
-      expect(run.structured?.summary).toMatch(/no Codex login in this stage/);
+      expect(run.structured?.summary).toMatch(helper.startsWith("codex") ? /no Codex login in this stage/ : /no Claude credential in this stage/);
       expect(given).toHaveLength(0);
     },
   },
@@ -328,12 +330,12 @@ export async function runScenario(runtime: Runtime, engine: EngineId, root: stri
     runtimes: { eve: helperRuntime, claude: helperRuntime },
     emit,
     print: (line) => transcript.push(line),
-    env: { CODEX_HOME: codexHome },
+    env: { CODEX_HOME: codexHome, ...(child !== "no-credential" && { CLAUDE_CODE_OAUTH_TOKEN: "token" }) },
     startedAt: started,
     turnsUsed: () => events.filter((e) => e.kind === "tool_call").length,
   });
   const run = await runtime.run({ pack: t.pack, engine: resolveEngine(engine), input, prompt: "Do the job.", paths, luna: withDelegate(luna, delegating), dry: false, emit, delegate: delegating?.tool ?? null });
-  return { run: withChildren(settle(run, t.pack), delegating), out, events, transcript, elapsedMs: Date.now() - started, given };
+  return { run: withChildren(settle(run, t.pack), delegating), out, events, transcript, elapsedMs: Date.now() - started, given, helper: helpersOn(t.pack, runtime.id)[0]?.engine ?? engine };
 }
 
 /** Registers the table for one runtime: `runtimeFor` gives the runtime wired to a fake that plays

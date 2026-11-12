@@ -34,17 +34,20 @@ export function compileAndBuildDecide(options: CompileOptions): string {
   return app;
 }
 
-/** The agent packs an eve engine may run, and each helper on an eve engine as its child run's pack
- *  (helperPack), of `only` when given (a pack's id, `<pack>--<role>` for a helper, or `decide`): the ones
- *  the image builds. */
+/** The agent packs an eve engine may run, and each helper on an eve engine of a stage on another
+ *  runtime as its child run's pack (helperPack), of `only` when given (a pack's id, `<pack>--<role>`
+ *  for a helper, or `decide`): the ones the image builds. */
 export function evePacks(only: string[] = []): Array<AgentPack | DecisionPack> {
   const agents = Object.values(PACKS).filter((p): p is AgentPack => p.kind === "agent" && p.agent !== null);
   const own = agents.filter((p) => p.engines.allowed.some((id) => resolveEngine(id).runtime === "eve"));
-  // A helper on an eve engine under any runtime the pack may run on, once per app.
+  // A helper on an eve engine that a stage on another runtime reaches over the bridge, once per app.
+  // An eve stage's own eve helpers are native subagents, compiled into its app.
   const helpers = new Map<string, AgentPack>();
   for (const p of agents) {
     for (const id of p.engines.allowed) {
-      for (const h of helpersOn(p, resolveEngine(id).runtime)) {
+      const runtime = resolveEngine(id).runtime;
+      if (runtime === "eve") continue;
+      for (const h of helpersOn(p, runtime)) {
         if (resolveEngine(h.engine).runtime !== "eve") continue;
         const run = helperPack(p, h);
         helpers.set(appName(run), run);

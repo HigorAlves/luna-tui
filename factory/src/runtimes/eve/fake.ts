@@ -9,12 +9,18 @@ import { readFileSync } from "node:fs";
 
 import type { ScriptStep } from "../conformance/table.ts";
 
-export function scriptedModel() {
+/** The script file the model plays: LUNA_EVE_SCRIPT_<NAME> for a subagent named `name` when that is set (the name upper-cased, each other character an underscore), else LUNA_EVE_SCRIPT. */
+function scriptFile(name?: string): string {
+  const own = name ? process.env[`LUNA_EVE_SCRIPT_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`] : undefined;
+  return own || process.env.LUNA_EVE_SCRIPT || "";
+}
+
+export function scriptedModel(name?: string) {
   return mockModel({
     modelId: "scripted",
     provider: "conformance",
     respond: async ({ toolResults }) => {
-      const script = JSON.parse(readFileSync(process.env.LUNA_EVE_SCRIPT ?? "", "utf8")) as ScriptStep[];
+      const script = JSON.parse(readFileSync(scriptFile(name), "utf8")) as ScriptStep[];
       const results = toolResults.filter((r) => r.name !== "eve__reply");
       const step = script[Math.min(results.length, script.length - 1)]!;
       if ("call" in step) {

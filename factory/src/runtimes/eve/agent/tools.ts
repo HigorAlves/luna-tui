@@ -3,7 +3,7 @@
 // grep and web_fetch, all behind the core guards, and the luna tools, which run in the factory process
 // (core/luna-tools.ts keeps the state finish() reads) and are reached over a loopback call to the
 // runner. A tool here runs inside the eve server, never in the factory.
-import type { AgentRole, LunaTool } from "@hardness/contracts";
+import type { LunaTool } from "@hardness/contracts";
 import { request } from "node:http";
 import { defineTool } from "eve/tools";
 import { glob as eveGlob } from "eve/tools/glob";
@@ -47,7 +47,7 @@ export const web_fetch = defineTool({ ...webFetch, approval: ({ toolInput }) => 
 
 /** One call to the runner's bridge (run.ts) with the run's bearer token. node:http, not fetch:
  *  a delegated helper takes minutes, past fetch's own header and body timeouts. */
-function bridge(name: string, input: unknown): Promise<unknown> {
+export function bridge(name: string, input: unknown): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const req = request(`${process.env.LUNA_EVE_BRIDGE_URL}/${name}`, { method: "POST", headers: { authorization: `Bearer ${secrets().bridgeToken}`, "content-type": "application/json" } }, (res) => {
       let text = "";
@@ -74,18 +74,5 @@ export function lunaTool(name: LunaTool) {
     description: LUNA_TOOLS[name].description,
     inputSchema: z.object(LUNA_TOOLS[name].input),
     execute: (input) => bridge(name, input),
-  });
-}
-
-/** `delegate` (core/delegate.ts), over the bridge: a helper that gave no answer fails the call. */
-export function delegateTool(description: string, roles: [AgentRole, ...AgentRole[]]) {
-  return defineTool({
-    description,
-    inputSchema: z.object({ helper: z.enum(roles).describe("The helper's role"), message: z.string().min(1).describe("Everything the helper needs: what to look at and what to answer") }),
-    async execute(input) {
-      const value = await bridge("delegate", input);
-      if (typeof value === "object" && value !== null && "error" in value) throw new Error(String(value.error));
-      return value;
-    },
   });
 }

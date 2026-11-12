@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { agentFiles, appName, compileAgent, eveTools, tokenBudgetPerTurn } from "./compile.ts";
+import { agentFiles, appName, compileAgent, eveSubagents, eveTools, tokenBudgetPerTurn } from "./compile.ts";
 
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** Triage hands its reply to a helper; these rows are about a pack that has none. */
@@ -24,6 +24,14 @@ describe("eveTools", () => {
     expect(eveTools(PACKS.jira_intake.access)).toEqual(["read_file", "glob", "grep"]);
     expect(eveTools(PACKS.triage.access)).toEqual(["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search"]);
     expect(eveTools(PACKS.implementing.access)).toEqual(["bash", "read_file", "glob", "grep", "write_file", "step", "slice_init", "slice_set", "slice_list", "decision_get", "scope_check"]);
+  });
+});
+
+describe("eveSubagents", () => {
+  it("is the helpers on an eve engine, which the stage's own `delegate` no longer serves", () => {
+    expect(eveSubagents(PACKS.triage)).toEqual([{ role: "reply-drafter", engine: "codex:luna" }]);
+    expect(eveSubagents(PACKS.verifying)).toEqual([]);
+    expect(eveSubagents(PACKS.reviewing)).toEqual([]);
   });
 });
 
@@ -79,15 +87,48 @@ describe("agentFiles", () => {
     expect(agentFiles(PACKS.implementing, options({ model: "scripted" }))["agent/agent.ts"]).toContain("model: scriptedModel()");
   });
 
-  it("gives a pack with helpers a delegate tool over the bridge that names each helper, and a helper's run none", () => {
+  it("compiles a helper on an eve engine as a native subagent of the stage, with the parent's sandbox and its child run's read-only tools", () => {
+    const files = agentFiles(PACKS.triage, options());
+    const dir = "agent/subagents/reply-drafter";
+    const agent = files[`${dir}/agent.ts`]!;
+    expect(agent).toContain('description: "Drafts the reply to a person');
+    expect(agent).toContain('model: engineModel("codex:luna")');
+    expect(agent).toContain('import { engineModel } from "../../../../../src/runtimes/eve/agent/model.ts"');
+    expect(agent).toContain('reasoning: "high"');
+    expect(agent).toMatch(/defaultTools: false,\n {2}tool: false,/);
+    expect(agent).not.toMatch(/gpt-|claude-/);
+    expect(files[`${dir}/instructions.md`]).toContain(readFileSync(join(FACTORY_ROOT, "roles", "reply-drafter", "role.md"), "utf8").split("---\n")[2]!.slice(0, 60));
+    expect(files[`${dir}/sandbox.ts`]).toBe('import { defineParentSandbox } from "eve/sandbox";\n\nexport default defineParentSandbox();\n');
+    expect(Object.keys(files).filter((f) => f.startsWith(`${dir}/tools/`)).sort()).toEqual(["bash", "glob", "grep", "read_file", "web_fetch"].map((t) => `${dir}/tools/${t}.ts`));
+    expect(files[`${dir}/tools/read_file.ts`]).toBe('export { read_file as default } from "../../../../../../src/runtimes/eve/agent/tools.ts";\n');
+    expect(agentFiles(PACKS.triage, options({ model: "scripted" }))[`${dir}/agent.ts`]).toContain('model: scriptedModel("reply-drafter")');
+  });
+
+  it("gives a pack with helpers a delegate workflow tool: a native subagent through ctx.agent, the other helpers over the bridge", () => {
+    const tool = agentFiles(PACKS.triage, options())["agent/tools/delegate.ts"]!;
+    expect(tool).toContain('import { defineWorkflowTool } from "eve/tools";');
+    expect(tool).toContain('from "../../../../src/runtimes/eve/agent/delegate.ts";');
+    expect(tool).toMatch(/async function helperStart\(input: DelegateInput\) \{\n {2}"use step";/);
+    expect(tool).toMatch(/async function viaBridge\(input: DelegateInput\) \{\n {2}"use step";/);
+    expect(tool).toContain('const SUBAGENTS: string[] = ["reply-drafter"];');
+    expect(tool).toContain('inputSchema: delegateInput(["reply-drafter"])');
+    expect(tool).toMatch(/- reply-drafter \(codex:luna\): Drafts the reply/);
+    expect(tool).toContain('"use workflow";');
+    expect(tool).toContain("ctx.agent(input.helper).send(start.prompt, { outputSchema: HELPER_ANSWER, signal: ctx.abortSignal })");
+    // The answer schema is a literal: the workflow bundle cannot import the contracts.
+    expect(tool).not.toContain("@hardness/contracts");
+    expect(JSON.parse(/const HELPER_ANSWER = (.*);/.exec(tool)![1]!)).toMatchObject({ type: "object", required: ["answer"] });
+    // verifying on eve has no native helper: its second opinion is Claude's, over the bridge.
+    const verifying = agentFiles(PACKS.verifying, options());
+    expect(verifying["agent/tools/delegate.ts"]).toContain("const SUBAGENTS: string[] = [];");
+    expect(verifying["agent/tools/delegate.ts"]).toContain('delegateInput(["second-opinion"])');
+    expect(Object.keys(verifying).filter((f) => f.startsWith("agent/subagents/"))).toEqual([]);
+    expect(agentFiles(triage, options())["agent/tools/delegate.ts"]).toBeUndefined();
+  });
+
+  it("runs a helper that a stage on another runtime reaches as an app of its own, with no tool and no subagent", () => {
     const helper = { role: "security-reviewer", engine: "codex:sol" } as const;
     const pack = { ...triage, helpers: [helper] };
-    const tool = agentFiles(pack, options())["agent/tools/delegate.ts"]!;
-    expect(tool).toContain('import { delegateTool } from "../../../../src/runtimes/eve/agent/tools.ts";');
-    expect(tool).toContain('["security-reviewer"]');
-    expect(tool).toMatch(/- security-reviewer \(codex:sol\): Reviews a diff/);
-    expect(agentFiles(triage, options())["agent/tools/delegate.ts"]).toBeUndefined();
-    expect(agentFiles(PACKS.triage, options())["agent/tools/delegate.ts"]).toContain("reply-drafter");
     const child = helperPack(pack, helper);
     expect(appName(pack)).toBe("triage");
     expect(appName(child)).toBe("triage--security-reviewer");

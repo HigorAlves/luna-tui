@@ -8,7 +8,7 @@
 // LUNA_STAGE_DEBUG=1 also writes every session event to /out/raw.jsonl and the server's log to
 // /out/eve-server.log.
 import { eveTokens, sumTokens } from "../../core/usage.ts";
-import { ENGINES, type Pack, answerJsonSchema, lowestBar } from "@hardness/contracts";
+import { ENGINES, type Pack, answerJsonSchema, helpersOn, lowestBar } from "@hardness/contracts";
 import type { SendTurnOptions } from "eve/client";
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -23,7 +23,7 @@ import { CallJoin, type Emit } from "../../core/events.ts";
 import { type GuardContext, branchPrefixFor } from "../../core/guards.ts";
 import { EMPTY_RUN, type RunOutcome, budgetSpent, timeRanOut } from "../../core/output.ts";
 import { type Instructions, NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
-import { DELEGATE, delegatedHelpers } from "../../core/delegate.ts";
+import { DELEGATE } from "../../core/delegate.ts";
 import { GRAPH_ROOT } from "../../core/roots.ts";
 import { GUARDED, appName, eveTools, instructionParts, tokenBudgetPerTurn } from "./compile.ts";
 import type { EveSecrets } from "./agent/secrets.ts";
@@ -110,7 +110,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
       built: existsSync(entry),
       model: `${apiKey ? "openai" : "chatgpt"}(${engine.modelId})`,
       reasoning: pack.kind === "agent" ? pack.effort : "low",
-      tools: pack.kind === "agent" ? [...eveTools(pack.access), ...(delegatedHelpers(pack, "eve").length > 0 ? [DELEGATE] : [])] : [],
+      tools: pack.kind === "agent" ? [...eveTools(pack.access), ...(helpersOn(pack, "eve").length > 0 ? [DELEGATE] : [])] : [],
       skills: pack.kind === "agent" && pack.access.skills ? pack.skills : [],
       maxModelCalls: maxTurns,
       tokenBudget: { input: maxTurns * tokenBudgetPerTurn.input, output: maxTurns * tokenBudgetPerTurn.output },
