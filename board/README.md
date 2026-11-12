@@ -383,7 +383,7 @@ See the [root README](../.github/README.md).
 
 ## Pulls
 
-`P` opens the PR inbox. It shows every open pull request on GitHub where someone requests your review or that you authored. The machine polls GitHub every minute (`:prs` opens the inbox too). The inbox has six splits. Use `h`/`l` or `1`–`6` to move between the splits. Use `j`/`k` to go down the rows, oldest first:
+`P` opens the PR inbox. It shows every open pull request on GitHub where someone requests your review or that you authored. The machine polls GitHub every minute (`:prs` opens the inbox too). The inbox has six splits and a seventh tab, All repos. Use `h`/`l` or `1`–`7` to move between them. Use `j`/`k` to go down the rows, oldest first:
 
 | Split | A PR lands here when |
 |---|---|
@@ -393,8 +393,9 @@ See the [root README](../.github/README.md).
 | CI running | yours, a check still running |
 | Changes requested | yours, changes requested or review threads still open |
 | Mine | everything else you authored, drafts included |
+| All repos | every open PR in the repos you can reach (owner, collaborator, organisation member), newest first. It has its own list, so a PR can be here and in a split. The per-PR keys work on its rows |
 
-Review requested, Ready to merge, CI failed and Changes requested count on the Board tab's badge. They also raise a herdr notice when a PR moves into them.
+Review requested, Ready to merge, CI failed and Changes requested count on the Board tab's badge. They also raise a herdr notice when a PR moves into them. All repos never counts on the badge. A machine without `/github/prs/all` leaves the tab empty and says so in it.
 
 <!-- keys:start pulls -->
 **Pull request**
@@ -411,9 +412,12 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 
 | Key | Does |
 |---|---|
+| `C` | clone the repo to a directory you pick |
 | `j / k` | previous / next PR |
 | `h / l` | previous / next split |
-| `1-6` | jump to that split |
+| `1-7` | jump to that split (7: all repos) |
+| `f` | show one repo (filter as you type) |
+| `F` | show every repo again |
 | `enter` | jump to its task, else open the PR |
 | `o` | open the PR in the browser |
 | `esc / P / q` | close |
@@ -494,7 +498,9 @@ verdict waits at the Ship gate for `a`. `t` dispatches an agent that answers eve
 review thread on your PR. It pushes, posts the replies and resolves the threads it settled. `enter`
 jumps to the PR's task on the board when one is running, else opens the PR.
 
-`R` polls GitHub now. A poll reads every PR, so it runs in the background. The header says `◐ polling GitHub…` until the answer lands. Then a toast says `polled GitHub`. A second `R` meanwhile only says it is already polling. Slack's `R` does the same.
+`f` opens a filter-as-you-type picker of the repos in both lists. `enter` sets the filter, `esc` cancels, and `F` clears it. The filter applies to every tab, the tab counts follow it, and the header shows it. `C` clones the selected PR's repo when the machine has no checkout of it. It opens the same folder picker as a dispatch, and `enter` clones into `<folder>/<name>` and runs nothing afterwards. With a checkout already there, `C` says where it is. (`c` is the CI fix key, so the clone key is the capital.)
+
+`R` polls GitHub now, the inbox and the All repos list together. A poll reads every PR, so it runs in the background. The header says `◐ polling GitHub…` until the answer lands. Then a toast says `polled GitHub`. A second `R` meanwhile only says it is already polling. Slack's `R` does the same.
 
 From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌repo  #n  title  age  tag` in fixed columns. The checks glyph comes first (`✓` green, `✗` red, `◐` running). The repo's colour bar and name come next (the name after the owner's `/`, in the same colour its cards wear). While a task runs for the PR, a spinner and the work follow (`◐ ci fix`, `◐ review`, `◐ threads`, in bold yellow). `⌂` shows when the machine has no clone of the repo. The board only ever cuts the title. The list scrolls to keep the selected row in view. The pane shows the selected PR. It lists the author and branches, every check by name, the review state and unresolved threads. It also lists the task in flight and the keys, with why each is off. Under 100 columns the pane hides, and `x` shows the same detail over the list. A dispatch on such a PR opens the clone prompt. It is the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`. `enter` clones into `<folder>/<name>` and runs the action once the clone lands. `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it). `v` is off on your own PRs. All three are off while a task already runs for the PR.
 
@@ -502,7 +508,7 @@ From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌re
 
 Since wave 17 the machine reads only the conversations you opted in. That is a channel you watch with `W`, or one listed in `conversation.channels` of a repository's `luna.yaml`. Until you opt something in, the view says so. Each thread shows what the machine made of it. It shows the thread's kind and how sure the machine is. It shows the five scores and the total, and the knock-out when one hit. It shows "asks you" when the machine is not sure. It shows the card or backlog item the thread relates to (for a ticket-sourced card, `about a card from <kind> <key>` on its own line). It shows how many secrets the machine cut. It shows the draft that waits, with how long until it expires. `c` sets the kind, and `L` sets the card or backlog item the thread is about (the picker lists only the candidates the machine listed). Both store an answer and teach the machine. Neither posts. The board posts nothing until you tap. `r` sends or edits the draft. `d` ignores a waiting draft and asks why. The answers are `n` (the thread needed no reply), `b` (the draft was bad) and `s` (skip). The answer teaches the machine, and nothing posts. `t` makes the card.
 
-`S` opens the Slack inbox (`:slack` too). It shows everything your Activity tab shows, plus the handles you watch. The machine polls it every minute, and a triage pass sorts it. The inbox has six splits. Use `h`/`l` or `1`–`6` to move between the splits. Use `j`/`k` to go down the rows. Needs reply and Decide go P0 first, then oldest. The other splits go newest first.
+`S` opens the Slack inbox (`:slack` too). It shows everything your Activity tab shows, plus the handles you watch. The machine polls it every minute, and a triage pass sorts it. The inbox has six splits and a seventh tab, All repos. Use `h`/`l` or `1`–`7` to move between them. Use `j`/`k` to go down the rows. Needs reply and Decide go P0 first, then oldest. The other splits go newest first.
 
 | Split | An item lands here when |
 |---|---|

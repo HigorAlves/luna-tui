@@ -1434,7 +1434,8 @@ impl PullRequest {
     }
 }
 
-/// `GET /github/prs` and the `github.prs` stream event.
+/// `GET /github/prs` and the `github.prs` stream event; `GET /github/prs/all` and the
+/// `github.prs.all` event carry the same shape.
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PrSnapshot {
@@ -1968,6 +1969,9 @@ pub enum StreamMessage {
     /// The PR inbox changed; the whole snapshot rides along.
     #[serde(rename = "github.prs")]
     Prs { snapshot: PrSnapshot },
+    /// Every open PR in the repos you can reach changed; the whole snapshot rides along.
+    #[serde(rename = "github.prs.all")]
+    PrsAll { snapshot: PrSnapshot },
     /// The Slack inbox changed; the whole snapshot rides along, watches included.
     #[serde(rename = "slack.items")]
     Slack { snapshot: SlackSnapshot },

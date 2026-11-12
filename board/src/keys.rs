@@ -1940,6 +1940,18 @@ const PULLS: &[Binding] = &[
         60,
     ),
     b(
+        "C",
+        "clone the repo to a directory you pick",
+        Group::Move,
+        Scope::Pulls,
+        |app| match app.pr_under_cursor() {
+            None => Avail::Off("no PR selected"),
+            Some(pr) if pr.local_path.is_some() => Avail::Off("already checked out"),
+            Some(_) => Avail::On,
+        },
+        50,
+    ),
+    b(
         "j / k",
         "previous / next PR",
         Group::Move,
@@ -1956,12 +1968,34 @@ const PULLS: &[Binding] = &[
         29,
     ),
     b(
-        "1-6",
-        "jump to that split",
+        "1-7",
+        "jump to that split (7: all repos)",
         Group::Move,
         Scope::Pulls,
         on,
         10,
+    ),
+    b(
+        "f",
+        "show one repo (filter as you type)",
+        Group::Move,
+        Scope::Pulls,
+        on,
+        55,
+    ),
+    b(
+        "F",
+        "show every repo again",
+        Group::Move,
+        Scope::Pulls,
+        |app| {
+            if app.pulls.as_ref().is_some_and(|s| s.repo.is_some()) {
+                Avail::On
+            } else {
+                Avail::Off("no repo filter is set")
+            }
+        },
+        54,
     ),
     b(
         "enter",

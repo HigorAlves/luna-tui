@@ -222,6 +222,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     | Mode::ConfirmMerge { .. }
                     | Mode::ConfirmClose { .. }
                     | Mode::ClonePrompt { .. }
+                    | Mode::PrRepoFilter { .. }
                     | Mode::PrActions { .. }
                     | Mode::Help { .. }
             )
@@ -259,6 +260,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 cursor,
                 ..
             } => render_clone_prompt(frame, repo, query, all, *cursor),
+            Mode::PrRepoFilter { query, all, cursor } => {
+                render_pr_repo_filter(frame, query, all, *cursor)
+            }
             Mode::PrActions { cursor } => render_pr_actions(frame, app, *cursor),
             Mode::Help { .. } => render_help(frame, app),
             _ => {}
@@ -954,6 +958,12 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
             ("↑/↓", "move"),
             ("enter", "clone here"),
             ("esc", "stay read-only"),
+        ]),
+        Mode::PrRepoFilter { .. } => hint(&[
+            ("type", "filter repos"),
+            ("↑/↓", "move"),
+            ("enter", "set the filter"),
+            ("esc", "cancel"),
         ]),
         Mode::SlackPick { .. } => hint(&[("j/k", "pick"), ("enter", "save"), ("esc", "cancel")]),
         Mode::SlackSnooze { .. } => {
@@ -2660,9 +2670,17 @@ fn render_tickets(frame: &mut Frame, area: Rect, app: &App, state: &crate::ticke
 
 fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     let now = now_secs();
-    let counts = pulls::counts(&app.prs.prs);
+    let counts = pulls::counts(&app.prs.prs, &app.prs_all.prs, state.repo.as_deref());
     let mut head = vec![Span::from(" Pulls ").fg(c(ACCENT)).bold()];
-    if app.prs_polling {
+    // Up front too: a filter that hides rows must never be out of sight.
+    if let Some(repo) = &state.repo {
+        head.push(
+            Span::from(format!("repo: {repo} (F clears) "))
+                .fg(c(YELLOW))
+                .bold(),
+        );
+    }
+    if app.prs_polling || app.prs_all_polling {
         // Up front, where a narrow terminal still shows it.
         head.push(
             Span::from(format!("{} polling GitHub… ", spinner()))
@@ -2681,22 +2699,37 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
             Span::from(label).fg(c(SUBTEXT0))
         });
     }
-    if !app.prs_polling {
+    let mut polled_below = None;
+    if !app.prs_polling && !app.prs_all_polling {
         let polled = match app.prs.polled_at.as_deref().and_then(unix_secs) {
             Some(at) => format!("polled {} ago", age_secs(now.saturating_sub(at))),
             None => "not polled yet".to_string(),
         };
-        head.push(Span::from(format!("  {polled}")).fg(c(SUBTEXT0)));
+        // Seven tabs leave a 120-column header no room for this: it drops to its own line then.
+        let polled = Span::from(format!("  {polled}")).fg(c(SUBTEXT0));
+        let head_line = Line::from(head.clone());
+        if head_line.width() + polled.width() <= area.width as usize {
+            head.push(polled);
+        } else {
+            polled_below = Some(Line::from(polled));
+        }
     }
     let mut top = vec![Line::from(head)];
-    if let Some(error) = &app.prs.error {
+    top.extend(polled_below);
+    let error = if state.split == PrSplit::AllRepos {
+        &app.prs_all.error
+    } else {
+        &app.prs.error
+    };
+    if let Some(error) = error {
         top.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
     }
     let [head_area, body] =
         Layout::vertical([Constraint::Length(top.len() as u16), Constraint::Min(0)]).areas(area);
     frame.render_widget(Paragraph::new(top), head_area);
 
-    let items = pulls::items(&app.prs.prs, state.split);
+    let shown = pulls::source(&app.prs.prs, &app.prs_all.prs, state.split);
+    let items = pulls::items(shown, state.split, state.repo.as_deref());
     let selected = state.cursor.min(items.len().saturating_sub(1));
     let wide = body.width >= PULLS_DETAIL_FROM;
     let [list_area, detail_area] = if wide {
@@ -2711,7 +2744,12 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
         .title(Line::from(format!(" {} {} ", state.split.label(), items.len())).bold());
     let inner = list_block.inner(list_area);
     let mut lines = Vec::new();
-    if items.is_empty() {
+    if items.is_empty() && state.split == PrSplit::AllRepos && app.prs_all_note.is_some() {
+        // An older machine has no every-repo list: say so instead of a cheerful "nothing here".
+        if let Some(note) = &app.prs_all_note {
+            lines.push(Line::from(Span::from(format!("  {note}")).fg(c(YELLOW))));
+        }
+    } else if items.is_empty() {
         if app.slack_snapshot.scope.as_deref() == Some("opted_in")
             && app.slack_snapshot.opted_in == Some(0)
         {
@@ -2727,7 +2765,7 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
         .min(items.len().saturating_sub(visible));
     for (row, &i) in items.iter().enumerate().skip(start).take(visible) {
         lines.push(pr_row(
-            &app.prs.prs[i],
+            &shown[i],
             row == selected,
             inner.width as usize,
             now,
@@ -2736,7 +2774,7 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
 
     if wide {
-        let pr = items.get(selected).map(|&i| &app.prs.prs[i]);
+        let pr = items.get(selected).map(|&i| &shown[i]);
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
             .border_style(Style::new().fg(c(MUTED)))
@@ -2890,6 +2928,46 @@ fn render_clone_prompt(frame: &mut Frame, repo: &str, query: &str, all: &[String
             lines.push(Line::from(vec![
                 Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
                 Span::from(format!("{folder}/{name}")).style(style),
+            ]));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `f` in the PR view: the repos in both lists, filter-as-you-type, in the clone prompt's style.
+fn render_pr_repo_filter(frame: &mut Frame, query: &str, all: &[String], cursor: usize) {
+    const VISIBLE_ROWS: usize = 10;
+    let area = centered(frame.area(), 70, VISIBLE_ROWS as u16 + 6);
+    frame.render_widget(Clear, area);
+    let matches = App::matching_repos(all, query);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(" show one repo ").bold());
+    let mut lines = vec![
+        Line::from(vec![
+            Span::from(" search: ").fg(c(ACCENT)).bold(),
+            Span::from(format!("{query}▏")),
+        ]),
+        Line::default(),
+    ];
+    if matches.is_empty() {
+        lines.push(Line::from(Span::from("  no matches").fg(c(SUBTEXT0))));
+    } else {
+        let start = cursor
+            .saturating_sub(VISIBLE_ROWS / 2)
+            .min(matches.len().saturating_sub(VISIBLE_ROWS));
+        for (i, repo) in matches.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
+            let selected = i == cursor;
+            let style = if selected {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
+            lines.push(Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(repo.to_string()).style(style),
             ]));
         }
     }
@@ -5924,6 +6002,7 @@ mod pr_tests {
         ready.pulls = Some(PullsState {
             split: PrSplit::ReadyToMerge,
             cursor: 0,
+            ..Default::default()
         });
         let third = render(120, 20, &ready)
             .lines()
@@ -5982,6 +6061,7 @@ mod pr_tests {
         app.pulls = Some(PullsState {
             split: PrSplit::ReviewRequested,
             cursor: 30,
+            ..Default::default()
         });
         let text = render(80, 14, &app);
         assert!(
@@ -6039,6 +6119,7 @@ mod pr_tests {
         app.pulls = Some(PullsState {
             split: PrSplit::ReadyToMerge,
             cursor: 0,
+            ..Default::default()
         });
         app.mode = Mode::ConfirmMerge {
             repo: "acme/app".into(),
@@ -6074,7 +6155,7 @@ mod pr_tests {
             query: "proj".into(),
             all: vec!["/r".into(), "/r/projects".into()],
             cursor: 0,
-            then: crate::model::PrAction::Review,
+            then: Some(crate::model::PrAction::Review),
         };
         let text = render(100, 20, &app);
         assert!(
@@ -6114,6 +6195,7 @@ mod pr_tests {
         app.pulls = Some(PullsState {
             split: crate::pulls::PrSplit::ReadyToMerge,
             cursor: 0,
+            ..Default::default()
         });
         for width in [40u16, 60, 80, 100, 140] {
             let line = footer_line(&app, width);

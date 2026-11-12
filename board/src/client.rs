@@ -69,6 +69,8 @@ pub enum Incoming {
     },
     /// The answer to `R` in Pulls, polled off the UI thread.
     PrsPolled(Result<PrSnapshot, String>),
+    /// The same for the All repos tab; an older machine answers with an error, which the tab shows.
+    PrsAllPolled(Result<PrSnapshot, String>),
     /// The answer to `R` in Slack, polled off the UI thread.
     SlackPolled(Result<SlackSnapshot, String>),
 }
@@ -585,6 +587,20 @@ impl Machine {
         )
     }
 
+    /// Every open PR in the repos you can reach, as the machine last polled it.
+    pub fn prs_all(&self) -> Result<PrSnapshot, String> {
+        Self::typed(self.agent.get(self.url("/github/prs/all")).call())
+    }
+
+    /// Polls every reachable repo now and answers the fresh snapshot.
+    pub fn refresh_prs_all(&self) -> Result<PrSnapshot, String> {
+        Self::typed(
+            self.slow
+                .post(self.url("/github/prs/all/refresh"))
+                .send_json(json!({})),
+        )
+    }
+
     /// Dispatches a PR task; answers the task the machine started.
     pub fn pr_action(&self, repo: &str, number: u64, action: PrAction) -> Result<Task, String> {
         self.post(
@@ -914,7 +930,7 @@ fn spawn_stream(
 fn parse_stream_event(event: &str, data: &str) -> Option<StreamMessage> {
     match event {
         "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed"
-        | "budget.alert" | "github.prs" | "slack.items" | "task.shipped" => {
+        | "budget.alert" | "github.prs" | "github.prs.all" | "slack.items" | "task.shipped" => {
             serde_json::from_str(data).ok()
         }
         _ => None,
@@ -1277,6 +1293,23 @@ mod pr_tests {
         assert!(
             matches!(event, Some(StreamMessage::Prs { ref snapshot }) if snapshot.error.as_deref() == Some("x"))
         );
+    }
+
+    #[test]
+    fn the_every_repo_event_is_its_own_message_beside_the_inbox() {
+        let event = parse_stream_event(
+            "github.prs.all",
+            r#"{"type":"github.prs.all","snapshot":{"prs":[],"polledAt":"2026-10-27T10:00:00Z","error":"y"}}"#,
+        );
+        assert!(
+            matches!(event, Some(StreamMessage::PrsAll { ref snapshot }) if snapshot.error.as_deref() == Some("y")),
+            "{event:?}"
+        );
+        let inbox = parse_stream_event(
+            "github.prs",
+            r#"{"type":"github.prs","snapshot":{"prs":[],"polledAt":null,"error":null}}"#,
+        );
+        assert!(matches!(inbox, Some(StreamMessage::Prs { .. })));
     }
 
     #[test]

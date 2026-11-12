@@ -491,12 +491,19 @@ pub enum Mode {
     },
     /// A dispatch on a PR the machine has no checkout of: pick the folder to clone it into
     /// (the same filter-as-you-type list `R` uses, over folders); `then` runs once it lands.
+    /// `C` opens it with no `then`: a clone for its own sake.
     ClonePrompt {
         repo: String,
         query: String,
         all: Vec<String>,
         cursor: usize,
-        then: PrAction,
+        then: Option<PrAction>,
+    },
+    /// `f` in the PR view: pick the repo every tab narrows to, from the repos in both lists.
+    PrRepoFilter {
+        query: String,
+        all: Vec<String>,
+        cursor: usize,
     },
     /// `x` in the PR view: the keys for the selected PR, each with why it is off when it is.
     PrActions {
@@ -675,6 +682,12 @@ pub struct App {
     pub prs: PrSnapshot,
     /// `R` asked GitHub for a fresh poll and the answer has not come back yet.
     pub prs_polling: bool,
+    /// Every open PR in the repos you can reach, the All repos tab's list; empty until the machine sends it.
+    pub prs_all: PrSnapshot,
+    /// The same poll for the All repos tab.
+    pub prs_all_polling: bool,
+    /// Why the All repos tab is empty when the machine could not give it (an older machine has no `/github/prs/all`).
+    pub prs_all_note: Option<String>,
     /// The same for Slack.
     pub slack_polling: bool,
     /// The PR view, open while this is `Some`.
@@ -774,6 +787,12 @@ pub struct App {
     scan_rx: Receiver<(String, herdr::Stage)>,
 }
 
+/// What the empty All repos tab says when the machine did not give a list: a machine older than
+/// `/github/prs/all` answers 404, and the reason is worth a line, not a toast on every start.
+fn prs_all_note(error: &str) -> String {
+    format!("no every-repo list: an older machine lacks /github/prs/all ({error})")
+}
+
 impl App {
     pub fn new(machine: Machine) -> Self {
         let (tx, rx) = mpsc::channel();
@@ -804,6 +823,9 @@ impl App {
             inbox: None,
             prs: PrSnapshot::default(),
             prs_polling: false,
+            prs_all: PrSnapshot::default(),
+            prs_all_polling: false,
+            prs_all_note: None,
             slack_polling: false,
             pulls: None,
             backlog: None,
@@ -965,6 +987,7 @@ impl App {
                     // below refills `stages` with what is running now.
                     self.stages.clear();
                     self.reload();
+                    self.load_prs_all();
                     self.catch_up_watch_tabs();
                 }
                 Incoming::Offline(reason) => self.went_offline(reason),
@@ -1020,6 +1043,13 @@ impl App {
                             self.notify("polled GitHub", false);
                         }
                         Err(error) => self.notify(error, true),
+                    }
+                }
+                Incoming::PrsAllPolled(result) => {
+                    self.prs_all_polling = false;
+                    match result {
+                        Ok(snapshot) => self.take_prs_all(snapshot),
+                        Err(error) => self.prs_all_note = Some(prs_all_note(&error)),
                     }
                 }
                 Incoming::SlackPolled(result) => {
@@ -1124,6 +1154,9 @@ impl App {
                     self.notify(line, false);
                 }
                 Incoming::Message(StreamMessage::Prs { snapshot }) => self.take_prs(snapshot),
+                Incoming::Message(StreamMessage::PrsAll { snapshot }) => {
+                    self.take_prs_all(snapshot)
+                }
                 Incoming::Message(StreamMessage::Slack { snapshot }) => self.take_slack(snapshot),
                 Incoming::SlackCatalog { groups, channels } => {
                     self.slack_catalog = Some((groups, channels));
@@ -1254,6 +1287,57 @@ impl App {
         thread::spawn(move || {
             let _ = tx.send(Incoming::PrsPolled(machine.refresh_prs()));
         });
+        // The All repos tab is polled beside the inbox, on its own thread: it reads far more repos.
+        if !self.prs_all_polling {
+            self.prs_all_polling = true;
+            let (machine, tx) = (self.machine.clone(), self.tx.clone());
+            thread::spawn(move || {
+                let _ = tx.send(Incoming::PrsAllPolled(machine.refresh_prs_all()));
+            });
+        }
+    }
+
+    /// Fetches the All repos list the machine already holds, at start and after a reconnect. An
+    /// older machine has no such route: the tab stays empty and says why, nothing else breaks.
+    fn load_prs_all(&mut self) {
+        match self.machine.prs_all() {
+            Ok(snapshot) => self.take_prs_all(snapshot),
+            Err(error) => self.prs_all_note = Some(prs_all_note(&error)),
+        }
+    }
+
+    /// A fresh every-repo snapshot: the tab's list, its cursor kept inside, and any dispatch a
+    /// clone was holding for a PR only this list knows.
+    fn take_prs_all(&mut self, snapshot: PrSnapshot) {
+        self.prs_all = snapshot;
+        self.prs_all_note = None;
+        self.clamp_pulls_cursor();
+        self.run_pending_dispatch();
+    }
+
+    /// Keeps the PR view's cursor inside its tab after a list changed.
+    fn clamp_pulls_cursor(&mut self) {
+        if let Some(state) = self.pulls.as_mut() {
+            let list = pulls::source(&self.prs.prs, &self.prs_all.prs, state.split);
+            let len = pulls::items(list, state.split, state.repo.as_deref()).len();
+            state.cursor = state.cursor.min(len.saturating_sub(1));
+        }
+    }
+
+    /// Runs the dispatch a clone was holding once either list shows the PR with a checkout.
+    fn run_pending_dispatch(&mut self) {
+        if let Some((key, action)) = self.pending_dispatch.clone()
+            && let Some(pr) = self
+                .prs
+                .prs
+                .iter()
+                .chain(&self.prs_all.prs)
+                .find(|p| p.key() == key && p.local_path.is_some())
+                .cloned()
+        {
+            self.pending_dispatch = None;
+            self.dispatch_pr(&pr, action);
+        }
     }
 
     /// `R` in Slack, the same way.
@@ -1282,33 +1366,18 @@ impl App {
             }
         }
         self.prs = snapshot;
-        if let Some(state) = self.pulls.as_mut() {
-            state.cursor = state.cursor.min(
-                pulls::items(&self.prs.prs, state.split)
-                    .len()
-                    .saturating_sub(1),
-            );
-        }
-        if let Some((key, action)) = self.pending_dispatch.clone()
-            && let Some(pr) = self
-                .prs
-                .prs
-                .iter()
-                .find(|p| p.key() == key && p.local_path.is_some())
-                .cloned()
-        {
-            self.pending_dispatch = None;
-            self.dispatch_pr(&pr, action);
-        }
+        self.clamp_pulls_cursor();
+        self.run_pending_dispatch();
     }
 
-    /// The PR under the cursor of the open PR view.
+    /// The PR under the cursor of the open PR view, on whichever list the tab reads.
     pub fn pr_under_cursor(&self) -> Option<PullRequest> {
         let state = self.pulls.as_ref()?;
-        let items = pulls::items(&self.prs.prs, state.split);
+        let list = pulls::source(&self.prs.prs, &self.prs_all.prs, state.split);
+        let items = pulls::items(list, state.split, state.repo.as_deref());
         items
             .get(state.cursor.min(items.len().saturating_sub(1)))
-            .map(|&i| self.prs.prs[i].clone())
+            .map(|&i| list[i].clone())
     }
 
     /// Opens the workspace popup on `id`, on the section its open gate concerns.
@@ -2808,6 +2877,7 @@ impl App {
             Mode::ConfirmMerge { .. } => self.handle_confirm_merge(key),
             Mode::ConfirmClose { .. } => self.handle_confirm_close(key),
             Mode::ClonePrompt { .. } => self.handle_clone_prompt(key),
+            Mode::PrRepoFilter { .. } => self.handle_pr_repo_filter(key),
             Mode::PrActions { .. } => self.handle_pr_actions(key),
             Mode::SlackSnooze { .. } => self.handle_slack_snooze(key),
             Mode::SlackDismiss { .. } => self.handle_slack_dismiss(key),
@@ -3188,6 +3258,9 @@ impl App {
         {
             self.take_prs(snapshot);
         }
+        if self.prs_all.polled_at.is_none() {
+            self.load_prs_all();
+        }
         self.close_views();
         self.pulls = Some(PullsState::default());
     }
@@ -3195,16 +3268,18 @@ impl App {
     /// The keys `handle_pulls` matches, `PrKey::ALL` included.
     #[cfg(test)]
     pub(crate) const HANDLED_PULLS: &[&str] = &[
-        "esc", "P", "q", "?", "j", "k", "l", "h", "1-6", "R", "o", "enter", "x", "m", "c", "v",
-        "t", "X",
+        "esc", "P", "q", "?", "j", "k", "l", "h", "1-7", "R", "o", "enter", "x", "m", "c", "v",
+        "t", "X", "f", "F", "C",
     ];
 
-    /// The PR view's keys: move, switch split, open, merge, dispatch an agent, refresh.
+    /// The PR view's keys: move, switch tab, filter by repo, open, merge, dispatch an agent,
+    /// clone, refresh.
     fn handle_pulls(&mut self, key: KeyEvent) -> Outcome {
         let Some(state) = self.pulls.clone() else {
             return Outcome::Continue;
         };
-        let count = pulls::items(&self.prs.prs, state.split).len();
+        let list = pulls::source(&self.prs.prs, &self.prs_all.prs, state.split);
+        let count = pulls::items(list, state.split, state.repo.as_deref()).len();
         let under = self.pr_under_cursor();
         let mut next = state.clone();
         match key.code {
@@ -3228,12 +3303,30 @@ impl App {
                 next.split = state.split.prev();
                 next.cursor = 0;
             }
-            KeyCode::Char(d @ '1'..='6') => {
+            KeyCode::Char(d @ '1'..='7') => {
                 next.split = PrSplit::ALL[(d as usize) - ('1' as usize)];
                 next.cursor = 0;
             }
             KeyCode::Char('R') => {
                 self.poll_prs();
+                return Outcome::Continue;
+            }
+            KeyCode::Char('f') => {
+                self.mode = Mode::PrRepoFilter {
+                    query: String::new(),
+                    all: pulls::repos(&self.prs.prs, &self.prs_all.prs),
+                    cursor: 0,
+                };
+                return Outcome::Continue;
+            }
+            KeyCode::Char('F') => {
+                next.repo = None;
+                next.cursor = 0;
+            }
+            KeyCode::Char('C') => {
+                if let Some(pr) = under {
+                    self.clone_key(&pr);
+                }
                 return Outcome::Continue;
             }
             KeyCode::Char('o') => {
@@ -3790,7 +3883,7 @@ impl App {
     fn pr_key(&mut self, key: PrKey, pr: &PullRequest) {
         if key.action().is_some() && pr.local_path.is_none() && pr.task.is_none() {
             if let Some(action) = key.action() {
-                self.open_clone_prompt(pr, action);
+                self.open_clone_prompt(pr, Some(action));
             }
             return;
         }
@@ -3834,7 +3927,19 @@ impl App {
         }
     }
 
-    fn open_clone_prompt(&mut self, pr: &PullRequest, then: PrAction) {
+    /// `C` on a PR: pick a folder and clone its repo, dispatching nothing; with a checkout
+    /// already there it says where. (`c` is the CI fix key, so the clone key is `C`.)
+    fn clone_key(&mut self, pr: &PullRequest) {
+        match &pr.local_path {
+            Some(path) => self.notify(
+                format!("{} is already checked out at {path}", pr.repo),
+                false,
+            ),
+            None => self.open_clone_prompt(pr, None),
+        }
+    }
+
+    fn open_clone_prompt(&mut self, pr: &PullRequest, then: Option<PrAction>) {
         let all = repos_root()
             .map(|root| discover_folders(&root))
             .unwrap_or_default();
@@ -3935,17 +4040,58 @@ impl App {
                 let dest = format!("{}/{name}", folder.trim_end_matches('/'));
                 self.mode = Mode::Normal;
                 match self.machine.clone_repo(&repo, &dest) {
-                    Ok(()) => {
-                        self.pending_dispatch = Some((repo.clone(), then));
-                        self.notify(
-                            format!(
-                                "cloning {repo} into {dest}; {} runs when it lands",
-                                then.wire()
-                            ),
-                            false,
-                        );
-                    }
+                    Ok(()) => match then {
+                        Some(action) => {
+                            self.pending_dispatch = Some((repo.clone(), action));
+                            self.notify(
+                                format!(
+                                    "cloning {repo} into {dest}; {} runs when it lands",
+                                    action.wire()
+                                ),
+                                false,
+                            );
+                        }
+                        None => self.notify(format!("cloning {repo} into {dest}"), false),
+                    },
                     Err(error) => self.notify(error, true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The repo filter picker: type to narrow the list, enter sets the filter, esc leaves it as it was.
+    fn handle_pr_repo_filter(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::PrRepoFilter { query, all, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => {
+                query.push(c);
+                *cursor = 0;
+            }
+            KeyCode::Backspace => {
+                query.pop();
+                *cursor = 0;
+            }
+            KeyCode::Down => {
+                let len = Self::matching_repos(all, query).len();
+                if len > 0 {
+                    *cursor = (*cursor + 1).min(len - 1);
+                }
+            }
+            KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let matches = Self::matching_repos(all, query);
+                let Some(repo) = matches.get(*cursor).map(|r| r.to_string()) else {
+                    return Outcome::Continue;
+                };
+                self.mode = Mode::Normal;
+                if let Some(state) = self.pulls.as_mut() {
+                    state.repo = Some(repo);
+                    state.cursor = 0;
                 }
             }
             _ => {}
@@ -8486,7 +8632,7 @@ mod pr_tests {
             )
         };
         assert_eq!(repo, "acme/app");
-        assert_eq!(*then, PrAction::Review);
+        assert_eq!(*then, Some(PrAction::Review));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         assert!(
             matches!(app.mode, Mode::Normal),
@@ -8512,6 +8658,284 @@ mod pr_tests {
         );
         app.handle_key(KeyEvent::from(KeyCode::Char('x')));
         assert!(matches!(app.mode, Mode::PrActions { .. }));
+    }
+
+    fn in_repo(repo: &str, number: u64, split: &str, local: bool) -> PullRequest {
+        PullRequest {
+            repo: repo.to_string(),
+            ..pr(number, split, false, local)
+        }
+    }
+
+    fn send_all(app: &mut App, prs: Vec<PullRequest>) {
+        app.tx
+            .send(Incoming::Message(StreamMessage::PrsAll {
+                snapshot: PrSnapshot {
+                    prs,
+                    polled_at: Some("2026-10-27T10:00:00Z".to_string()),
+                    error: None,
+                },
+            }))
+            .unwrap();
+        app.pump();
+    }
+
+    fn press(app: &mut App, c: char) {
+        app.handle_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+
+    #[test]
+    fn the_all_repos_tab_lists_the_every_repo_snapshot_and_its_keys_work_on_a_row() {
+        let mut app = app_with(vec![pr(1, "mine", true, true)]);
+        send_all(
+            &mut app,
+            vec![
+                in_repo("acme/app", 1, "mine", true),
+                in_repo("acme/api", 2, "review_requested", false),
+                in_repo("acme/web", 3, "ready_to_merge", true),
+            ],
+        );
+        assert_eq!(app.prs_all.prs.len(), 3);
+        assert_eq!(app.prs.prs.len(), 1, "the inbox is its own list");
+        press(&mut app, 'P');
+        press(&mut app, '7');
+        assert_eq!(app.pulls.as_ref().unwrap().split, PrSplit::AllRepos);
+        assert_eq!(
+            app.pr_under_cursor().map(|p| p.number),
+            Some(3),
+            "newest first"
+        );
+        press(&mut app, 'j');
+        assert_eq!(
+            app.pr_under_cursor().map(|p| p.repo),
+            Some("acme/api".into())
+        );
+        press(&mut app, 'j');
+        assert_eq!(app.pr_under_cursor().map(|p| p.number), Some(1));
+        press(&mut app, 'j');
+        assert_eq!(
+            app.pulls.as_ref().unwrap().cursor,
+            2,
+            "stops at the last row"
+        );
+        // The per-PR keys act on the row: merge asks about a ready PR that only this tab lists.
+        press(&mut app, 'k');
+        press(&mut app, 'k');
+        press(&mut app, 'm');
+        assert!(
+            matches!(&app.mode, Mode::ConfirmMerge { repo, number } if repo == "acme/web" && *number == 3),
+            "{:?}",
+            app.toast.as_ref().map(|t| t.text.clone())
+        );
+        press(&mut app, 'n');
+        // A tab cycle from Mine reaches All repos, and from there wraps to the first split.
+        press(&mut app, '6');
+        press(&mut app, 'l');
+        assert_eq!(app.pulls.as_ref().unwrap().split, PrSplit::AllRepos);
+        press(&mut app, 'l');
+        assert_eq!(app.pulls.as_ref().unwrap().split, PrSplit::ReviewRequested);
+        assert_eq!(
+            app.needs_you_count(),
+            0,
+            "the tab never counts on the badge"
+        );
+    }
+
+    #[test]
+    fn an_older_machine_without_the_every_repo_list_leaves_the_tab_empty_with_a_note() {
+        let mut app = app_with(vec![pr(1, "mine", true, true)]);
+        app.tx
+            .send(Incoming::PrsAllPolled(Err("machine unreachable".into())))
+            .unwrap();
+        app.pump();
+        assert!(
+            app.prs_all_note
+                .as_deref()
+                .is_some_and(|n| n.contains("/github/prs/all")),
+            "{:?}",
+            app.prs_all_note
+        );
+        assert!(app.toast.is_none(), "a note, not a toast on every start");
+        press(&mut app, 'P');
+        press(&mut app, '7');
+        assert!(app.pr_under_cursor().is_none());
+        press(&mut app, 'o');
+        press(&mut app, 'C');
+        let screen = crate::testkit::render(&mut app, 140, 20);
+        assert!(
+            screen.contains("All repos 0") && screen.contains("older machine"),
+            "{screen}"
+        );
+        send_all(&mut app, vec![in_repo("acme/app", 1, "mine", true)]);
+        assert!(app.prs_all_note.is_none(), "a good list clears the note");
+    }
+
+    #[test]
+    fn r_polls_the_every_repo_list_beside_the_inbox() {
+        let mut app = app_with(vec![]);
+        press(&mut app, 'P');
+        press(&mut app, 'R');
+        assert!(app.prs_polling && app.prs_all_polling);
+        // The dead machine fails both polls: the inbox says so in a toast, the tab in its note.
+        std::thread::sleep(Duration::from_millis(300));
+        app.pump();
+        assert!(!app.prs_polling && !app.prs_all_polling);
+        assert!(app.prs_all_note.is_some());
+    }
+
+    #[test]
+    fn f_picks_a_repo_from_both_lists_and_every_tab_and_count_follow_until_f_clears_it() {
+        let mut app = app_with(vec![
+            in_repo("acme/app", 1, "mine", true),
+            in_repo("acme/api", 2, "mine", true),
+        ]);
+        send_all(
+            &mut app,
+            vec![
+                in_repo("acme/app", 1, "mine", true),
+                in_repo("acme/web", 3, "mine", true),
+            ],
+        );
+        press(&mut app, 'P');
+        press(&mut app, '6');
+        press(&mut app, 'f');
+        let Mode::PrRepoFilter { all, .. } = &app.mode else {
+            panic!("f opens the repo picker")
+        };
+        assert_eq!(
+            all,
+            &["acme/api", "acme/app", "acme/web"],
+            "the repos in both lists, once each"
+        );
+        for c in "WEB".chars() {
+            press(&mut app, c);
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Normal));
+        let state = app.pulls.clone().unwrap();
+        assert_eq!(state.repo.as_deref(), Some("acme/web"));
+        assert!(
+            app.pr_under_cursor().is_none(),
+            "Mine holds nothing of acme/web"
+        );
+        press(&mut app, '7');
+        assert_eq!(app.pr_under_cursor().map(|p| p.number), Some(3));
+        let screen = crate::testkit::render(&mut app, 140, 20);
+        assert!(
+            screen.contains("repo: acme/web")
+                && screen.contains("Mine 0")
+                && screen.contains("All repos 1"),
+            "the header shows the filter and the counts follow it:\n{screen}"
+        );
+        press(&mut app, 'F');
+        assert_eq!(app.pulls.as_ref().unwrap().repo, None);
+        assert_eq!(app.pulls.as_ref().unwrap().split, PrSplit::AllRepos);
+        press(&mut app, 'j');
+        assert_eq!(app.pulls.as_ref().unwrap().cursor, 1, "all rows are back");
+    }
+
+    #[test]
+    fn esc_leaves_the_repo_filter_as_it_was_and_a_picker_with_no_match_sets_nothing() {
+        let mut app = app_with(vec![in_repo("acme/app", 1, "mine", true)]);
+        press(&mut app, 'P');
+        press(&mut app, 'f');
+        press(&mut app, 'z');
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(
+            matches!(app.mode, Mode::PrRepoFilter { .. })
+                && app.pulls.as_ref().unwrap().repo.is_none(),
+            "no match: enter does nothing"
+        );
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.pulls.as_ref().is_some_and(|s| s.repo.is_none()));
+    }
+
+    #[test]
+    fn the_clone_key_opens_the_folder_picker_without_a_follow_up_and_says_where_a_checkout_is() {
+        let mut app = app_with(vec![
+            in_repo("acme/app", 1, "review_requested", false),
+            in_repo("acme/api", 2, "ci_failed", true),
+        ]);
+        press(&mut app, 'P');
+        press(&mut app, 'C');
+        match &app.mode {
+            Mode::ClonePrompt { repo, then, .. } => {
+                assert_eq!(repo, "acme/app");
+                assert_eq!(*then, None, "a clone for its own sake dispatches nothing");
+            }
+            // No folder under the repos root (HARDNESS_REPOS_DIR, else ~/Developer): the same refusal `v` gives.
+            _ => assert!(
+                app.toast
+                    .as_ref()
+                    .is_some_and(|t| t.error && t.text.contains("no checkout of acme/app")),
+                "{:?}",
+                app.toast.as_ref().map(|t| t.text.clone())
+            ),
+        }
+        app.mode = Mode::Normal;
+        app.toast = None;
+        press(&mut app, '3');
+        press(&mut app, 'C');
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "a checkout needs no clone"
+        );
+        assert_eq!(
+            app.toast.as_ref().map(|t| t.text.as_str()),
+            Some("acme/api is already checked out at /r/app")
+        );
+    }
+
+    #[test]
+    fn enter_in_the_clone_prompt_clones_and_a_clone_key_dispatches_nothing_afterwards() {
+        let (machine, posts) = super::confirm_tests::recording_machine();
+        let mut app = App::new(machine);
+        app.tasks.clear();
+        app.tx
+            .send(Incoming::Message(StreamMessage::Prs {
+                snapshot: PrSnapshot {
+                    prs: vec![in_repo("acme/app", 1, "review_requested", false)],
+                    polled_at: None,
+                    error: None,
+                },
+            }))
+            .unwrap();
+        app.pump();
+        press(&mut app, 'P');
+        app.mode = Mode::ClonePrompt {
+            repo: "acme/app".into(),
+            query: String::new(),
+            all: vec!["/code/".into()],
+            cursor: 0,
+            then: None,
+        };
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(
+            app.toast.as_ref().map(|t| t.text.as_str()),
+            Some("cloning acme/app into /code/app")
+        );
+        assert!(app.pending_dispatch.is_none());
+        let seen = super::confirm_tests::posts(&posts);
+        assert!(seen.contains(&"/github/clone".to_string()), "{seen:?}");
+        assert!(
+            !seen.iter().any(|p| p.ends_with("/actions")),
+            "nothing is dispatched: {seen:?}"
+        );
+        // The dispatch path keeps its follow-up.
+        app.mode = Mode::ClonePrompt {
+            repo: "acme/app".into(),
+            query: String::new(),
+            all: vec!["/code".into()],
+            cursor: 0,
+            then: Some(PrAction::Review),
+        };
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(
+            app.pending_dispatch.as_ref().map(|(_, a)| *a),
+            Some(PrAction::Review)
+        );
     }
 
     #[test]
@@ -11161,6 +11585,7 @@ mod view_stack_tests {
                 app.pulls = Some(PullsState {
                     split: crate::pulls::PrSplit::ReadyToMerge,
                     cursor: 1,
+                    ..Default::default()
                 });
             }
             "slack" => {
