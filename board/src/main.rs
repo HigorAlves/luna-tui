@@ -51,6 +51,7 @@ use client::Machine;
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     let quiet = notify::quiet(std::env::var("HARDNESS_BOARD_QUIET").ok().as_deref());
     let mut badge = (usize::MAX, usize::MAX);
+    let mut shown = String::new();
     loop {
         app.pump();
         tell(app, quiet, &mut badge);
@@ -58,6 +59,13 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         app.ensure_diff();
         app.ensure_jira_search();
         app.tick();
+        // A full repaint when the screen changes or ctrl-l asks for it: the terminal can drift from the last frame (a
+        // pane resize, a glyph it draws wider than counted), and an incremental draw never overwrites what it thinks is blank.
+        let screen = app.screen_key();
+        if app.take_redraw() || screen != shown {
+            terminal.clear()?;
+            shown = screen;
+        }
         terminal.draw(|frame| ui::draw(frame, app))?;
 
         if event::poll(Duration::from_millis(200))? {
@@ -67,6 +75,8 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     Outcome::Quit => return Ok(()),
                 },
                 Event::Paste(text) => app.handle_paste(&text),
+                // A resized pane: start the next frame from a clean screen.
+                Event::Resize(..) => terminal.clear()?,
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollDown => app.scroll(1),
                     MouseEventKind::ScrollUp => app.scroll(-1),

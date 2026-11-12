@@ -742,6 +742,8 @@ pub struct App {
     pub ticket_items: Vec<TicketEntry>,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
     pending_dispatch: Option<(String, PrAction)>,
+    /// A full repaint is due (`ctrl-l`): the terminal may show cells the last frame did not draw.
+    redraw: bool,
     /// Clones seen running, and clones already told of (a toast each), by `dest|startedAt`: a snapshot repeats a finished clone for ten minutes.
     clones_running: BTreeSet<String>,
     clones_told: BTreeSet<String>,
@@ -885,6 +887,7 @@ impl App {
             tickets: None,
             ticket_items: Vec::new(),
             pending_dispatch: None,
+            redraw: false,
             clones_running: BTreeSet::new(),
             clones_told: BTreeSet::new(),
             slack_snapshot: SlackSnapshot::default(),
@@ -2879,6 +2882,11 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Outcome {
+        // `ctrl-l` repaints the whole screen, in every mode, as in a shell: it is never a key of a view.
+        if key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.redraw = true;
+            return Outcome::Continue;
+        }
         let from = match &self.mode {
             Mode::Detail(id) => Some(id.clone()),
             _ => None,
@@ -2886,6 +2894,21 @@ impl App {
         let outcome = self.dispatch_key(key);
         self.settle_return(from);
         outcome
+    }
+
+    /// Whether a full repaint is due, once: the main loop clears the terminal before the next frame.
+    pub fn take_redraw(&mut self) -> bool {
+        std::mem::take(&mut self.redraw)
+    }
+
+    /// What is on screen, coarsely: the mode and the open card. When it changes, the main loop repaints the whole
+    /// screen, so a popup that opens or closes never leaves the terminal's own stale cells behind.
+    pub fn screen_key(&self) -> String {
+        let card = match &self.mode {
+            Mode::Detail(id) => id.as_str(),
+            _ => "",
+        };
+        format!("{:?}|{card}", std::mem::discriminant(&self.mode))
     }
 
     /// A bracketed paste: the whole text lands at once, never as keystrokes (which vim's normal
@@ -7660,6 +7683,28 @@ mod tests {
         press(&mut app, KeyCode::Char('g'));
         press(&mut app, KeyCode::Char('s'));
         assert_eq!(app.group, GroupBy::Stage);
+    }
+
+    #[test]
+    fn ctrl_l_asks_for_a_full_repaint_and_any_key_still_works_after() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        assert!(!app.take_redraw());
+        app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert!(app.take_redraw(), "ctrl-l asks for a repaint");
+        assert!(!app.take_redraw(), "once");
+    }
+
+    #[test]
+    fn the_screen_key_changes_when_a_card_opens_and_closes() {
+        let mut app = App::new(crate::testkit::dead_machine());
+        let board = app.screen_key();
+        app.tasks
+            .push(ticket("aaaaaaaa0000", "draft", false, false));
+        app.open_detail("aaaaaaaa0000".into());
+        let card = app.screen_key();
+        assert_ne!(board, card);
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.screen_key(), board);
     }
 
     #[test]

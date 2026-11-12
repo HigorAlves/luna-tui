@@ -88,6 +88,8 @@ as given when the path starts with `/`, `~` or `.`. `:filter` covers filtering b
 `pnpm board:keys` (`hardness-board --keys-md board/README.md`)
 generates the tables below. A test fails when they drift from the registry.
 
+`ctrl+l` repaints the whole screen, in any view, when the terminal shows stray characters. The board also repaints in full when a card or popup opens or closes, and when the pane resizes.
+
 <!-- keys:start board -->
 **Gate**
 
