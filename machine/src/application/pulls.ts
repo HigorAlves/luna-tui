@@ -21,6 +21,8 @@ export interface PullsPort {
   readonly all: PrSnapshot;
   pollOnce(): Promise<PrSnapshot>;
   pollAllOnce(): Promise<PrSnapshot>;
+  /** Starts a poll of the all-list in the background (none if one is running) and answers the list as it stands: the result arrives through `publishAll`. */
+  refreshAll(): PrSnapshot;
   merge(repo: string, number: number): Promise<void>;
   close(repo: string, number: number): Promise<void>;
   clone(repo: string, dest: string): Promise<void>;
@@ -117,7 +119,7 @@ export class GitHubPulls implements PullsPort {
   private warnedAuth = false;
   private warnedCapped = "";
   private me: { login: string; teams: string[] } | null = null;
-  /** The last GraphQL node of each PR, read at `updatedAt`; both lists read and fill it. */
+  /** The last GraphQL node of each PR, read at `updatedAt`; the inbox reads and fills it (the all-list reads in bulk and does not). */
   private readonly facts = new Map<string, { node: PrNode; updatedAt: string; at: number }>();
   /** The clones asked for, by destination: running ones, and finished ones for ten minutes. */
   private readonly clones = new Map<string, CloneStatus>();
@@ -142,10 +144,9 @@ export class GitHubPulls implements PullsPort {
         });
     };
     tick();
-    // The all-list waits for the inbox's first poll, so the PRs both lists share are read once.
+    // The all-list is read in bulk, so it no longer waits for the inbox's first poll.
     const tickAll = () => {
-      void (this.polling ?? Promise.resolve())
-        .then(() => this.pollAllOnce())
+      void this.pollAllOnce()
         .catch((error: unknown) => console.warn("github prs: poll of all failed", error))
         .finally(() => {
           if (this.stopped) return;
@@ -182,6 +183,12 @@ export class GitHubPulls implements PullsPort {
       });
     }
     return this.pollingAll;
+  }
+
+  /** A refresh from the board: the poll reads every repo and takes a while, so it runs in the background and the list as it stands is the answer. */
+  refreshAll(): PrSnapshot {
+    this.pollAllOnce().catch((error: unknown) => console.warn("github prs: refresh of all failed", error));
+    return this.all;
   }
 
   private async whoAmI(): Promise<{ login: string; teams: string[] }> {
@@ -249,16 +256,6 @@ export class GitHubPulls implements PullsPort {
     return next;
   }
 
-  /** The PRs to list: yours (the search), or every one in the repos you reach. */
-  private async hitsOf(feed: Feed): Promise<PrSearchHit[]> {
-    if (feed === "inbox") return this.options.github.searchMyPrs();
-    const { hits, capped } = await this.options.github.listOpenPrs();
-    // One query reads a repo's newest 100 open PRs; say which repos have more instead of dropping them quietly.
-    const note = capped.map((c) => `${c.repo} has ${c.open} open PRs, only the newest 100 are listed`).join("; ");
-    if (note && note !== this.warnedCapped) console.warn(`github prs (all): ${note}`);
-    this.warnedCapped = note;
-    return hits;
-  }
 
   /** The PR's node: the cached one while `updatedAt` stands, else read from GitHub (and kept when it has settled). */
   private async nodeOf(hit: PrSearchHit): Promise<PrNode | null> {
@@ -276,9 +273,32 @@ export class GitHubPulls implements PullsPort {
     return node;
   }
 
-  private async fetchAll(feed: Feed): Promise<PullRequest[]> {
+  /** The PR the board shows for a node: its facts, split, checkout and task. */
+  private async build(node: PrNode, repo: string, me: { login: string; teams: string[] }): Promise<PullRequest> {
+    const facts = fromGraphQl(node, repo, me.login, me.teams);
+    const [localPath, task] = await Promise.all([
+      this.options.resolveRepo(repo).catch(() => null),
+      this.options.findTask(repo, node.number).catch(() => null),
+    ]);
+    return { ...facts, split: splitOf(facts), localPath, task };
+  }
+
+  /** The all-list: every open PR in the repos you reach, read in bulk (a call covers many PRs), so no PR costs a call of its own. */
+  private async fetchEvery(): Promise<PullRequest[]> {
     const me = await this.whoAmI();
-    const hits = await this.hitsOf(feed);
+    const { prs, capped, calls } = await this.options.github.listOpenPrs();
+    // A repo with more open PRs than the adapter pages through lists the newest ones; say which, instead of dropping the rest quietly.
+    const note = capped.map((c) => `${c.repo} has ${c.open} open PRs, only the newest are listed`).join("; ");
+    if (note && note !== this.warnedCapped) console.warn(`github prs (all): ${note}`);
+    this.warnedCapped = note;
+    console.log(`github prs (all): ${prs.length} PRs in ${calls} GraphQL calls`);
+    return Promise.all(prs.map(({ repo, node }) => this.build(node, repo, me)));
+  }
+
+  private async fetchAll(feed: Feed): Promise<PullRequest[]> {
+    if (feed === "all") return this.fetchEvery();
+    const me = await this.whoAmI();
+    const hits = await this.options.github.searchMyPrs();
     // One GraphQL call per PR, a few at a time: a long list otherwise takes half a minute.
     let limited: string | null = null;
     const found = await mapLimit(hits, FETCH_AT_ONCE, async (hit): Promise<PullRequest | null> => {
@@ -292,13 +312,7 @@ export class GitHubPulls implements PullsPort {
         else console.warn(`github prs: ${hit.repo}#${hit.number}: ${said}`);
         return null;
       }
-      if (!node) return null;
-      const facts = fromGraphQl(node, hit.repo, me.login, me.teams);
-      const [localPath, task] = await Promise.all([
-        this.options.resolveRepo(hit.repo).catch(() => null),
-        this.options.findTask(hit.repo, hit.number).catch(() => null),
-      ]);
-      return { ...facts, split: splitOf(facts), localPath, task };
+      return node ? this.build(node, hit.repo, me) : null;
     });
     this.dropStaleFacts();
     // The poll fails as a whole: the last list stays, the snapshot says why, and the next poll waits (`poll`), so the budget gets the quiet it needs.

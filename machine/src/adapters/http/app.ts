@@ -666,7 +666,8 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
     app.post("/github/prs/refresh", async (c) => c.json(await pulls.pollOnce()));
     // Every open PR in the repos you can reach, polled on its own slower cadence. These two sit before the `:owner/:name` routes so "all" is never read as an owner.
     app.get("/github/prs/all", (c) => c.json(pulls.all));
-    app.post("/github/prs/all/refresh", async (c) => c.json(await pulls.pollAllOnce()));
+    // The refresh starts a poll in the background (one at a time) and answers 202 with the list as it stands; the fresh list arrives as a `github.prs.all` event.
+    app.post("/github/prs/all/refresh", (c) => c.json(pulls.refreshAll(), 202));
     app.post("/github/prs/:owner/:name/:number/merge", async (c) => {
       const { owner, name, number } = prParams(c);
       await pulls.merge(`${owner}/${name}`, number);

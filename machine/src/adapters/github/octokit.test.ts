@@ -107,41 +107,83 @@ describe("OctokitGitHub", () => {
     expect(calls.filter((c) => (c[1] as { q: string }).q.includes("review-requested"))).toHaveLength(10);
   });
 
-  it("lists every open PR of every repo you can reach, paging the repositories and skipping archived ones", async () => {
-    const pr = (number: number) => ({ number, updatedAt: `t${number}` });
-    const repoNode = (nameWithOwner: string, nodes: Array<{ number: number; updatedAt: string }>, extra: Record<string, unknown> = {}) => ({
+  describe("listOpenPrs (the bulk read of the all-list)", () => {
+    /** A PR node as the bulk query answers it: the fields the per-PR query reads, for `number`. */
+    const prNode = (number: number) => ({ number, title: `PR ${number}`, updatedAt: `t${number}`, reviewThreads: { nodes: [] } });
+    const repoNode = (
+      nameWithOwner: string,
+      nodes: Array<ReturnType<typeof prNode>>,
+      extra: { isArchived?: boolean; hasNextPage?: boolean; endCursor?: string | null; totalCount?: number } = {},
+    ) => ({
       nameWithOwner,
-      isArchived: false,
-      pullRequests: { totalCount: nodes.length, nodes },
-      ...extra,
+      isArchived: extra.isArchived ?? false,
+      pullRequests: { totalCount: extra.totalCount ?? nodes.length, pageInfo: { hasNextPage: extra.hasNextPage ?? false, endCursor: extra.endCursor ?? null }, nodes },
     });
-    const { github, calls } = stub({
-      graphql: (_query: string, variables?: Record<string, unknown>) =>
-        variables?.after == null
-          ? { viewer: { repositories: { pageInfo: { hasNextPage: true, endCursor: "c1" }, nodes: [repoNode("o/a", [pr(1), pr(2)]), repoNode("o/old", [pr(9)], { isArchived: true })] } } }
-          : { viewer: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [repoNode("org/b", [pr(3)]), repoNode("org/quiet", [])] } } },
-    });
-    const listed = await github.listOpenPrs();
-    expect(listed.hits).toEqual([
-      { repo: "o/a", number: 1, updatedAt: "t1" },
-      { repo: "o/a", number: 2, updatedAt: "t2" },
-      { repo: "org/b", number: 3, updatedAt: "t3" },
-    ]);
-    expect(listed.capped).toEqual([]);
-    const query = (calls[0]![1] as { query: string }).query;
-    expect(query).toContain("affiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]");
-    expect(query).toContain("ownerAffiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]");
-    expect(calls.map((c) => (c[1] as { variables: { after: string | null } }).variables.after)).toEqual([null, "c1"]);
-  });
+    const repos = (nodes: unknown[], next: string | null = null) => ({ viewer: { repositories: { pageInfo: { hasNextPage: next !== null, endCursor: next }, nodes } } });
+    const vars = (calls: Array<[string, unknown]>) => calls.map((c) => (c[1] as { variables: Record<string, unknown> }).variables);
 
-  it("says which repos have more open PRs than the 100 it reads", async () => {
-    const nodes = Array.from({ length: 100 }, (_, i) => ({ number: i + 1, updatedAt: "t" }));
-    const { github } = stub({
-      graphql: { viewer: { repositories: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ nameWithOwner: "o/big", isArchived: false, pullRequests: { totalCount: 130, nodes } }] } } },
+    it("reads each open PR with its fields in one query per page of repositories, skipping archived repos", async () => {
+      const { github, calls } = stub({
+        graphql: (_query: string, variables?: Record<string, unknown>) =>
+          variables?.after == null
+            ? repos([repoNode("o/a", [prNode(1), prNode(2)]), repoNode("o/old", [prNode(9)], { isArchived: true })], "c1")
+            : repos([repoNode("org/b", [prNode(3)]), repoNode("org/quiet", [])]),
+      });
+      const listed = await github.listOpenPrs();
+      expect(listed.prs.map((p) => [p.repo, p.node.number, p.node.updatedAt])).toEqual([
+        ["o/a", 1, "t1"],
+        ["o/a", 2, "t2"],
+        ["org/b", 3, "t3"],
+      ]);
+      expect(listed.capped).toEqual([]);
+      expect(listed.calls).toBe(2);
+      expect(calls).toHaveLength(2);
+      expect(vars(calls).map((v) => v.after)).toEqual([null, "c1"]);
+      const query = (calls[0]![1] as { query: string }).query;
+      expect(query).toContain("affiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]");
+      expect(query).toContain("ownerAffiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]");
+      expect(query).toContain("isArchived:false");
+      expect(query).toMatch(/repositories\([^)]*first:10[,)]/);
+      expect(query).toMatch(/pullRequests\(states:OPEN, first:50/);
+      // The fields are the per-PR query's, so `fromGraphQl` reads both alike; only the nested lists are smaller.
+      expect(query).toContain("reviewDecision mergeable mergeStateStatus");
+      expect(query).toContain("statusCheckRollup{state contexts(first:50)");
+      expect(query).toContain("reviewThreads(first:50)");
+      expect(query).toContain("commits(last:1)");
     });
-    const listed = await github.listOpenPrs();
-    expect(listed.hits).toHaveLength(100);
-    expect(listed.capped).toEqual([{ repo: "o/big", open: 130 }]);
+
+    it("pages the PRs of a repo that has more than one page, then goes on with the repositories", async () => {
+      const { github, calls } = stub({
+        graphql: (query: string, variables?: Record<string, unknown>) => {
+          if (query.includes("repositories(")) {
+            return repos([repoNode("o/big", [prNode(1), prNode(2)], { hasNextPage: true, endCursor: "p1", totalCount: 5 }), repoNode("o/small", [prNode(9)])]);
+          }
+          return variables?.after === "p1"
+            ? { repository: { pullRequests: { pageInfo: { hasNextPage: true, endCursor: "p2" }, nodes: [prNode(3), prNode(4)] } } }
+            : { repository: { pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [prNode(5)] } } };
+        },
+      });
+      const listed = await github.listOpenPrs();
+      expect(listed.prs.map((p) => [p.repo, p.node.number])).toEqual([["o/big", 1], ["o/big", 2], ["o/big", 3], ["o/big", 4], ["o/big", 5], ["o/small", 9]]);
+      expect(listed.capped).toEqual([]);
+      expect(listed.calls).toBe(3);
+      expect(vars(calls).slice(1)).toEqual([
+        { owner: "o", name: "big", after: "p1" },
+        { owner: "o", name: "big", after: "p2" },
+      ]);
+    });
+
+    it("stops paging a repo at a ceiling and says how many open PRs it left unread", async () => {
+      const { github } = stub({
+        graphql: (query: string) =>
+          query.includes("repositories(")
+            ? repos([repoNode("o/huge", [prNode(1)], { hasNextPage: true, endCursor: "p", totalCount: 4000 })])
+            : { repository: { pullRequests: { pageInfo: { hasNextPage: true, endCursor: "p" }, nodes: [prNode(2)] } } },
+      });
+      const listed = await github.listOpenPrs();
+      expect(listed.capped).toEqual([{ repo: "o/huge", open: 4000 }]);
+      expect(listed.calls).toBeLessThanOrEqual(12);
+    });
   });
 
   it("speaks gh pr checks' vocabulary for check runs and statuses", async () => {

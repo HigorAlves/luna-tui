@@ -41,6 +41,12 @@ interface World {
   reachable?: Array<{ number: number; repository: { nameWithOwner: string }; updatedAt: string }>;
   capped?: Array<{ repo: string; open: number }>;
   reachableError?: string;
+  /** How many GraphQL calls `listOpenPrs` reports for the bulk read. */
+  bulkCalls?: number;
+  /** When set, `listOpenPrs` waits for this before answering, so a test can hold a poll open. */
+  hold?: Promise<void>;
+  /** How many times `listOpenPrs` ran. */
+  listed?: { count: number };
   mergeError?: string;
   cloneError?: string;
   /** When set, every `prFacts` call takes a few ms and this records how many ran at once. */
@@ -56,8 +62,14 @@ function setup(world: World, over: Partial<ConstructorParameters<typeof GitHubPu
       return world.hits.map((h) => ({ repo: h.repository.nameWithOwner, number: h.number, updatedAt: h.updatedAt }));
     },
     listOpenPrs: async () => {
+      if (world.listed) world.listed.count++;
+      if (world.hold) await world.hold;
       if (world.reachableError) throw new Error(world.reachableError);
-      return { hits: (world.reachable ?? []).map((h) => ({ repo: h.repository.nameWithOwner, number: h.number, updatedAt: h.updatedAt })), capped: world.capped ?? [] };
+      const prs = (world.reachable ?? []).flatMap((h) => {
+        const found = world.nodes[h.number];
+        return found ? [{ repo: h.repository.nameWithOwner, node: { ...found, updatedAt: h.updatedAt } as never }] : [];
+      });
+      return { prs, capped: world.capped ?? [], calls: world.bulkCalls ?? 1 };
     },
     prFacts: async (repo, number) => {
       calls.push(["facts", repo, String(number)]);
@@ -214,27 +226,95 @@ describe("GitHubPulls.pollAllOnce", () => {
     expect(calls.some((c) => c[0] === "merge" && c[1] === "o/a")).toBe(true);
   });
 
-  it("does not fetch a PR again while its updatedAt is the same, and shares what the inbox fetched", async () => {
+  it("reads the whole list in bulk: no call per PR, and the inbox's per-PR cache is neither used nor filled", async () => {
     const w = world();
     const { pulls, calls } = setup(w);
+    await pulls.pollAllOnce();
+    await pulls.pollAllOnce();
+    expect(factsCalls(calls)).toEqual([]);
+    // The inbox still reads its own PRs one by one, and the all-list does not borrow what it read.
     await pulls.pollOnce();
     await pulls.pollAllOnce();
-    await pulls.pollAllOnce();
-    await pulls.pollOnce();
-    expect(factsCalls(calls).sort()).toEqual(["o/a#1", "o/a#4", "o/b#5"]);
-    // A PR that moved on is read again, and only that one.
-    w.reachable = w.reachable!.map((h) => (h.number === 4 ? { ...h, updatedAt: "2026-10-28T10:00:00Z" } : h));
-    await pulls.pollAllOnce();
-    expect(factsCalls(calls).sort()).toEqual(["o/a#1", "o/a#4", "o/a#4", "o/b#5"]);
+    expect(factsCalls(calls)).toEqual(["o/a#1"]);
   });
 
-  it("reads a PR again while its checks run or GitHub has not said whether it merges, since neither bumps updatedAt", async () => {
-    const running = { commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "IN_PROGRESS", conclusion: null, detailsUrl: null }] } } } }] } };
-    const w: World = { hits: [hit(1), hit(2)], reachable: [hit(1), hit(2)], nodes: { 1: node(1, running), 2: node(2, { mergeable: "UNKNOWN" }) } };
-    const { pulls, calls } = setup(w);
+  it("builds a PR the same whether the bulk read or the per-PR read brought it", async () => {
+    const w = world();
+    const { pulls } = setup(w);
     await pulls.pollOnce();
     await pulls.pollAllOnce();
+    expect(pulls.all.prs.find((p) => p.number === 1)).toEqual(pulls.snapshot.prs[0]);
+  });
+
+  it("reads an inbox PR again while its checks run or GitHub has not said whether it merges, since neither bumps updatedAt", async () => {
+    const running = { commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "IN_PROGRESS", conclusion: null, detailsUrl: null }] } } } }] } };
+    const w: World = { hits: [hit(1), hit(2)], nodes: { 1: node(1, running), 2: node(2, { mergeable: "UNKNOWN" }) } };
+    const { pulls, calls } = setup(w);
+    await pulls.pollOnce();
+    await pulls.pollOnce();
     expect(factsCalls(calls)).toEqual(["o/a#1", "o/a#2", "o/a#1", "o/a#2"]);
+  });
+
+  it("logs how many GraphQL calls the poll took", async () => {
+    const w = world();
+    w.bulkCalls = 17;
+    const { pulls } = setup(w);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await pulls.pollAllOnce();
+      expect(log.mock.calls.flat().join(" ")).toMatch(/github prs \(all\).*3 PRs.*17 GraphQL calls/);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("answers a refresh at once with the current list, while the poll runs in the background and publishes when it lands", async () => {
+    let release!: () => void;
+    const w = world();
+    w.hold = new Promise<void>((resolve) => (release = resolve));
+    w.listed = { count: 0 };
+    const { pulls, publishedAll } = setup(w);
+    const before = pulls.all;
+    const answered = pulls.refreshAll();
+    expect(answered).toBe(before);
+    expect(answered.prs).toEqual([]);
+    expect(publishedAll).toHaveLength(0);
+    release();
+    await vi.waitFor(() => expect(publishedAll).toHaveLength(1));
+    expect(pulls.all.prs).toHaveLength(3);
+  });
+
+  it("does not start a second poll when a refresh comes while one runs", async () => {
+    let release!: () => void;
+    const w = world();
+    w.hold = new Promise<void>((resolve) => (release = resolve));
+    w.listed = { count: 0 };
+    const { pulls, publishedAll } = setup(w);
+    pulls.refreshAll();
+    pulls.refreshAll();
+    void pulls.pollAllOnce();
+    release();
+    await vi.waitFor(() => expect(publishedAll).toHaveLength(1));
+    expect(w.listed.count).toBe(1);
+    // Once it ended, the next refresh polls again.
+    w.hold = undefined;
+    pulls.refreshAll();
+    await vi.waitFor(() => expect(w.listed!.count).toBe(2));
+  });
+
+  it("a refresh whose poll fails does not throw, and the snapshot says why", async () => {
+    const w = world();
+    const { pulls } = setup(w);
+    await pulls.pollAllOnce();
+    w.reachableError = "listing the open PRs of your repositories failed (403): API rate limit exceeded";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      pulls.refreshAll();
+      await vi.waitFor(() => expect(pulls.all.error).toMatch(/rate limit/i));
+      expect(pulls.all.prs).toHaveLength(3);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("keeps the last list, says why and backs off five minutes when GitHub refuses, then returns to its own interval", async () => {
@@ -251,18 +331,6 @@ describe("GitHubPulls.pollAllOnce", () => {
     w.reachableError = undefined;
     expect((await pulls.pollAllOnce()).error).toBeNull();
     expect(pulls.allNextDelayMs).toBe(600_000);
-  });
-
-  it("backs off when the PRs' facts are rate limited, instead of publishing an empty list", async () => {
-    const w = world();
-    const { pulls } = setup(w);
-    await pulls.pollAllOnce();
-    w.factsErrors = { 4: "API rate limit exceeded (RATE_LIMITED)" };
-    w.reachable = w.reachable!.map((h) => ({ ...h, updatedAt: "2026-10-29T10:00:00Z" }));
-    const snapshot = await pulls.pollAllOnce();
-    expect(snapshot.error).toMatch(/rate limit/i);
-    expect(snapshot.prs).toHaveLength(3);
-    expect(pulls.allNextDelayMs).toBe(5 * 60_000);
   });
 
   it("logs a repo with more open PRs than one query reads instead of capping silently", async () => {

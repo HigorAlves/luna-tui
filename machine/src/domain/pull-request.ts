@@ -2,17 +2,27 @@
 // board's shape and placed in one split. Pure: no I/O, so every rule is unit tested.
 import type { ChecksState, PrCheck, PrSplit, PullRequest } from "@hardness/contracts";
 
+/** How many of each nested list a PR's fields read. A query for one PR can afford a hundred; the bulk one reads hundreds of PRs a call and keeps GitHub's node limit and cost low. */
+export interface PrFieldLimits {
+  requests: number;
+  threads: number;
+  contexts: number;
+}
+
+/** The fields of a PR the inbox needs, shared by the per-PR query and the bulk one so both map through `fromGraphQl` alike. */
+export const prFields = ({ requests, threads, contexts }: PrFieldLimits): string => `id number title body url isDraft updatedAt baseRefName headRefName
+    author{login} headRepository{nameWithOwner}
+    reviewDecision mergeable mergeStateStatus
+    reviewRequests(first:${requests}){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
+    reviewThreads(first:${threads}){nodes{isResolved}}
+    commits(last:1){nodes{commit{oid committedDate statusCheckRollup{state contexts(first:${contexts}){nodes{__typename
+      ... on CheckRun{name status conclusion detailsUrl}
+      ... on StatusContext{context state targetUrl}}}}}}}`;
+
 /** One GraphQL query per PR: everything the inbox needs about it. Variables: owner, name, number. */
 export const PR_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
-    id number title body url isDraft updatedAt baseRefName headRefName
-    author{login} headRepository{nameWithOwner}
-    reviewDecision mergeable mergeStateStatus
-    reviewRequests(first:50){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
-    reviewThreads(first:100){nodes{isResolved}}
-    commits(last:1){nodes{commit{oid committedDate statusCheckRollup{state contexts(first:100){nodes{__typename
-      ... on CheckRun{name status conclusion detailsUrl}
-      ... on StatusContext{context state targetUrl}}}}}}}
+    ${prFields({ requests: 50, threads: 100, contexts: 100 })}
   } } }`;
 
 export interface CheckRunNode {

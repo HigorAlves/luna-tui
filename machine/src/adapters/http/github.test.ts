@@ -72,6 +72,10 @@ function fakePulls(prs: PullRequest[], everyPr: PullRequest[] = prs): PullsPort 
       did.push("poll all");
       return all;
     },
+    refreshAll() {
+      did.push("refresh all");
+      return all;
+    },
     async merge(repo, number) {
       const found = prs.find((p) => p.repo === repo && p.number === number);
       if (!found || found.split !== "ready_to_merge") throw new NotReadyError(repo, number);
@@ -112,10 +116,11 @@ describe("the PR inbox over HTTP", () => {
     const got = await app.request("/github/prs/all");
     expect(got.status).toBe(200);
     expect(await got.json()).toMatchObject({ prs: [{ number: 1 }, { number: 7, repo: "org/b" }], polledAt: "2026-10-27T10:05:00Z", error: null });
+    // The poll reads every repo and takes a while: the refresh starts it and answers 202 with the list as it stands.
     const refreshed = await app.request("/github/prs/all/refresh", { method: "POST" });
-    expect(refreshed.status).toBe(200);
+    expect(refreshed.status).toBe(202);
     expect(((await refreshed.json()) as PrSnapshot).prs).toHaveLength(2);
-    expect(pulls.did).toEqual(["poll all"]);
+    expect(pulls.did).toEqual(["refresh all"]);
   });
 
   it("merges only a ready PR", async () => {
