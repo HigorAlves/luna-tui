@@ -1030,6 +1030,73 @@ describe("the open release question is probed once per poll interval", () => {
   });
 });
 
+describe("an approving review on GitHub is the release approval", () => {
+  const pack = (risk: "low" | "high") => ({ summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk, rollback: "revert", howToVerify: "run it", commitSha: "9c1f0e2a7b3d", media: [], at: "2026-11-04T00:00:00.000Z" });
+  const one = { for: async () => ({ ...PREVIEW_ON, factory: { ...PREVIEW_ON.factory, plan: { ...PREVIEW_ON.factory.plan, approvers: { ...PREVIEW_ON.factory.plan.approvers, high: 1 } } } }) };
+  /** A card whose plan Ana approved and whose release question is open; the probe says who approved the PR on GitHub. */
+  const at = async (approvedBy: string[], options: { risk?: "low" | "high"; owners?: string[]; policies?: typeof previewOn; head?: string } = {}) => {
+    const risk = options.risk ?? "high";
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, policies: options.policies ?? previewOn, hasConfig: () => true, shipGateProbe: (async () => ({ approvedBy, head: options.head ?? "h1" })) as never, shipProbeMs: 0 });
+    stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "h1", risk, question: "safe to release now?", ...(options.owners ? { releaseOwners: options.owners } : {}) } });
+    const task = await p.createTask({ title: "Billing", criteria: ["c"], evidence: pack(risk) });
+    await p.start(task.id);
+    await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await p.decide(task.id, "approved");
+    expect((await p.approvals(task.id)).find((a) => a.decision === null)?.requested.gate).toBe("ship_approval");
+    return { p, id: task.id };
+  };
+  const stillOpen = async (p: Pipeline, id: string) => {
+    expect((await p.get(id)).state).toBe("awaiting_ship");
+    expect((await p.approvals(id)).find((a) => a.decision === null)?.requested.gate).toBe("ship_approval");
+    expect((await p.events(id)).some((e) => e.kind === "release.approved_on_github")).toBe(false);
+  };
+
+  it("approves the release in the reviewer's name, with the head, logs it, and ships", async () => {
+    const { p, id } = await at(["cy"]);
+    await p.tick();
+    const gate = (await p.approvals(id)).filter((a) => a.requested.gate === "ship_approval").at(-1)!;
+    expect(gate).toMatchObject({ decision: "approved", response: { approver: "cy", head: "h1" } });
+    expect((await p.events(id)).find((e) => e.kind === "release.approved_on_github")?.payload).toMatchObject({ approver: "cy", head: "h1" });
+    expect((await stagesRun(id)).slice(-2)).toEqual(["shipping", "reviewing_memory"]);
+  });
+
+  it("when the repo asks two people, the plan's approver's review is not the release approval, another reviewer's is", async () => {
+    const same = await at(["Ana "]);
+    await same.p.tick();
+    await stillOpen(same.p, same.id);
+    const both = await at(["ana", "cy"]);
+    await both.p.tick();
+    expect((await both.p.approvals(both.id)).filter((a) => a.requested.gate === "ship_approval").at(-1)).toMatchObject({ decision: "approved", response: { approver: "cy" } });
+  });
+
+  it("by default (one approver) the plan's approver's own review releases a High-risk card", async () => {
+    const { p, id } = await at(["ana"], { policies: one });
+    await p.tick();
+    expect((await p.get(id)).state).toBe("closed");
+  });
+
+  it("when the gate names release owners, only a review by one of them counts", async () => {
+    const stranger = await at(["cy"], { owners: ["bo"] });
+    await stranger.p.tick();
+    await stillOpen(stranger.p, stranger.id);
+    const owner = await at(["cy", "@Bo"], { owners: ["@bo"] });
+    await owner.p.tick();
+    expect((await owner.p.approvals(owner.id)).filter((a) => a.requested.gate === "ship_approval").at(-1)).toMatchObject({ decision: "approved", response: { approver: "@Bo" } });
+  });
+
+  it("a review on another head than the one asked about does not count", async () => {
+    const { p, id } = await at(["cy"], { head: "h0" });
+    await p.tick();
+    await stillOpen(p, id);
+  });
+
+  it("applies to a low-risk release question too", async () => {
+    const { p, id } = await at(["cy"], { risk: "low" });
+    await p.tick();
+    expect((await p.get(id)).state).toBe("closed");
+  });
+});
+
 describe("decision truth at the plan gate", () => {
   const ids = { coverage_check: "rc", plan_check: "rp", risk_score: "rr" };
   const answers: Record<string, Record<string, unknown>> = {

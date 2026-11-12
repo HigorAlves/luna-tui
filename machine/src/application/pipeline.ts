@@ -9,6 +9,7 @@ import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAl
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
+import type { ShipGateProbe } from "./ship-gate-probe.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
@@ -206,8 +207,8 @@ export interface PipelineOptions {
     knows(task: TaskRow): Promise<{ tool: string; key: string } | null>;
     create(task: TaskRow, children: SplitChild[], gateId: string, floor: "low" | "medium" | "high"): Promise<{ keys: string[] }>;
   };
-  /** Looks at an open release question (the ship approval) against GitHub: `merged` closes it as an automatic approval, `withdraw` takes it back so the watch asks again, `keep` leaves it. Nothing polls while a person is asked, so `tick` calls it at most once per `shipProbeMs`. */
-  shipGateProbe?: (task: TaskRow, gate: ApprovalRow) => Promise<"merged" | "closed" | "withdraw" | "keep">;
+  /** Looks at an open release question (the ship approval) against GitHub: `merged` closes it as an automatic approval, `{ approvedBy, head }` names the reviewers whose approving review of the PR counts (the first the approver rules allow approves the release), `withdraw` takes it back so the watch asks again, `keep` leaves it. Nothing polls while a person is asked, so `tick` calls it at most once per `shipProbeMs`. */
+  shipGateProbe?: ShipGateProbe;
   /** The shortest time between two probes of one card's release question (the repository's poll interval); 0 probes on every tick. */
   shipProbeMs?: number | null;
   /** Ends a card's kept sandbox (its extra folders) when the card is resumed or closed. Never throws into the pipeline. */
@@ -1709,21 +1710,7 @@ export class Pipeline {
     const release = task.state === "awaiting_ship" && task.route !== "review" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_ship" && a.decision === null && a.requested.gate === "ship_approval") : undefined;
     if (release && decision === "sent_back") throw new TransitionError(task, { type: "sent_back" });
     if (release && decision === "approved") {
-      if (release.requested.risk === "high" || task.evidence?.risk === "high") {
-        // Someone other than the plan's approvers is asked only where the repo asks for two people on a High-risk plan (`plan.approvers.high` above 1):
-        // with one operator (the default) the person who approved the plan approves the release.
-        const separate = (await this.policyFor(task.repoPath)).factory.plan.approvers.high > 1;
-        const owners = Array.isArray(release.requested.releaseOwners) ? release.requested.releaseOwners.map(String) : [];
-        if (separate || owners.length > 0) {
-          if (!approver) throw new ApproverRequiredError(id, "ship", separate ? 2 : 1);
-          if (separate) {
-            const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
-            const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
-            if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
-          }
-          if (owners.length > 0 && !owners.some((o) => sameName(o, approver))) throw new NotReleaseOwnerError(id, approver);
-        }
-      }
+      await this.checkReleaseApprover(task, release, approver);
       if (typeof release.requested.head === "string") answered = { ...answered, head: release.requested.head };
     }
     if (approver) answered = { ...answered, approver };
@@ -2268,6 +2255,42 @@ export class Pipeline {
     await this.fillSlots();
   }
 
+  /** Who may answer a High-risk release question, from the board or from GitHub: someone other than the plan's approvers where the repo asks two people of a High-risk
+   *  plan (`plan.approvers.high` above 1), and one of the release owners the gate names. With one operator (the default) the person who approved the plan approves the release.
+   *  Throws when `approver` may not. Team handles cannot be checked here: the name is an attestation. */
+  private async checkReleaseApprover(task: TaskRow, release: ApprovalRow, approver: string | undefined): Promise<void> {
+    if (release.requested.risk !== "high" && task.evidence?.risk !== "high") return;
+    const id = task.id;
+    const separate = (await this.policyFor(task.repoPath)).factory.plan.approvers.high > 1;
+    const owners = Array.isArray(release.requested.releaseOwners) ? release.requested.releaseOwners.map(String) : [];
+    if (!separate && owners.length === 0) return;
+    if (!approver) throw new ApproverRequiredError(id, "ship", separate ? 2 : 1);
+    if (separate) {
+      const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
+      const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
+      if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
+    }
+    // CODEOWNERS names come with an `@`, a GitHub login and a typed name without one.
+    if (owners.length > 0 && !owners.some((o) => sameName(o.replace(/^@/, ""), approver.replace(/^@/, "")))) throw new NotReleaseOwnerError(id, approver);
+  }
+
+  /** The probe saw approving reviews of the PR at the head the question was asked about. The first reviewer the approver rules allow approves the release (a GitHub
+   *  review is an attestation, like a name typed on the board, so it is logged); none allowed leaves the question for the board. */
+  private async approveOnGitHub(task: TaskRow, gate: ApprovalRow, seen: { approvedBy: string[]; head: string }): Promise<void> {
+    if (typeof gate.requested.head === "string" && gate.requested.head !== seen.head) return;
+    for (const login of seen.approvedBy) {
+      try {
+        await this.checkReleaseApprover(task, gate, login);
+      } catch (error) {
+        if (error instanceof ApproverRequiredError || error instanceof SameApproverError || error instanceof NotReleaseOwnerError) continue;
+        throw error;
+      }
+      await this.dispatch(task.id, { type: "approved", gate: "ship_approval" }, { decision: { decision: "approved", reason: `approved on GitHub by ${login}`, response: { approver: login, head: seen.head, github: true } }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+      await this.log(task.id, "release.approved_on_github", { approver: login, head: seen.head });
+      return;
+    }
+  }
+
   private readonly shipProbedAt = new Map<string, number>();
 
   /** An open release question is looked at against GitHub, at most once per interval: a PR merged on GitHub closes it as an automatic approval (no name
@@ -2291,6 +2314,7 @@ export class Pipeline {
         const seen = await probe(task, gate);
         if (seen === "merged") await this.dispatch(task.id, { type: "approved", gate: "ship_approval" }, { decision: { decision: "approved", reason: "merged on GitHub", response: { auto: true } }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
         else if (seen === "closed") await this.archive(task.id, "pr_closed", { onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
+        else if (typeof seen === "object") await this.approveOnGitHub(task, gate, seen);
         else if (seen === "withdraw") await this.dispatch(task.id, { type: "sent_back", from: "plan", gate: "ship_approval" }, { decision: { decision: "sent_back", reason: "the PR changed: asked again when it is ready" }, onlyFrom: new Set<TaskState>(["awaiting_ship"]) });
       } catch (error) {
         console.error(`could not probe the release question of task ${task.id}`, error);

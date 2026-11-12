@@ -31,12 +31,17 @@ export interface ReviewOf {
   association?: string | null;
 }
 
-/** An approval counts only when it is its author's latest verdict, given on the head commit, by an owner, member or collaborator who is not the token's own login. */
-export function approvedOnHead(reviews: ReviewOf[], head: string | null, me: string | null): boolean {
-  if (head === null || me === null) return false;
+/** The logins whose approval counts: each one's latest verdict is APPROVED, given on the head commit, by an owner, member or collaborator who is not the token's own login. Oldest first. */
+export function approversOnHead(reviews: ReviewOf[], head: string | null, me: string | null): string[] {
+  if (head === null || me === null) return [];
   const latest = new Map<string, ReviewOf>();
   for (const r of reviews) if (r.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED")) latest.set(r.author.toLowerCase(), r);
-  return [...latest.values()].some((r) => r.state === "APPROVED" && r.commitId === head && TRUSTED.has(r.association ?? "") && r.author!.toLowerCase() !== me.toLowerCase());
+  return [...latest.values()].filter((r) => r.state === "APPROVED" && r.commitId === head && TRUSTED.has(r.association ?? "") && r.author!.toLowerCase() !== me.toLowerCase()).map((r) => r.author!);
+}
+
+/** An approval counts only when it is its author's latest verdict, given on the head commit, by an owner, member or collaborator who is not the token's own login. */
+export function approvedOnHead(reviews: ReviewOf[], head: string | null, me: string | null): boolean {
+  return approversOnHead(reviews, head, me).length > 0;
 }
 
 /** The login of an owner, member or collaborator (not the token's own login) whose latest verdict on the PR is "changes requested"; null when there is none. */

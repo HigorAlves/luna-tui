@@ -53,8 +53,27 @@ describe("shipGateProbe", () => {
   it("withdraws an open ship approval when a collaborator's objection lands, whatever GitHub's review decision says", async () => {
     const ana = { author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" };
     const bob = { author: "bob", state: "CHANGES_REQUESTED", commitId: HEAD, at: "t2", association: "COLLABORATOR" };
-    expect(await (await probeWith({ prReviews: async () => [ana] }))(task, gate())).toBe("keep");
     expect(await (await probeWith({ prReviews: async () => [ana, bob] }))(task, gate())).toBe("withdraw");
+  });
+  const review = (author: string, state: string, commitId = HEAD, association = "COLLABORATOR") => ({ author, state, commitId, at: "t", association });
+  it("reports who approved the PR on the head: a collaborator's approval is the release approval", async () => {
+    expect(await (await probeWith({ prReviews: async () => [review("ana", "APPROVED")] }))(task, gate())).toEqual({ approvedBy: ["ana"], head: HEAD });
+    expect(await (await probeWith({ prReviews: async () => [review("ana", "APPROVED"), review("Cy", "APPROVED", HEAD, "OWNER")] }))(task, gate())).toEqual({ approvedBy: ["ana", "Cy"], head: HEAD });
+  });
+  it("does not count an approval on an older head, from a stranger, from the machine's own login, or one the same person took back", async () => {
+    for (const reviews of [
+      [review("ana", "APPROVED", MOVED)],
+      [review("ana", "APPROVED", HEAD, "NONE")],
+      [review("ana", "APPROVED", HEAD, "CONTRIBUTOR")],
+      [review("me", "APPROVED")],
+      [review("ana", "COMMENTED")],
+    ]) expect(await (await probeWith({ prReviews: async () => reviews }))(task, gate())).toBe("keep");
+    expect(await (await probeWith({ prReviews: async () => [review("ana", "APPROVED"), review("ana", "CHANGES_REQUESTED")] }))(task, gate())).toBe("withdraw");
+    expect(await (await probeWith({ prReviews: async () => [review("ana", "APPROVED"), review("ana", "DISMISSED")] }))(task, gate())).toBe("keep");
+  });
+  it("a merged PR is merged, whatever the reviews say", async () => {
+    const merged = { ...open, merged: true, state: "closed" as const, mergedSha: "m" };
+    expect(await (await probeWith({ prMerged: async () => merged, prReviews: async () => [review("ana", "APPROVED")] }))(task, gate())).toBe("merged");
   });
   it("keeps when there is no cursor or GitHub shows no PR: nothing is withdrawn on a guess", async () => {
     expect(await (await probeWith({}, false))(task, gate())).toBe("keep");

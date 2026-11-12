@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseCodeowners } from "./codeowners.ts";
-import { approvedOnHead, reviewRequirement } from "./review-rule.ts";
+import { approvedOnHead, approversOnHead, reviewRequirement } from "./review-rule.ts";
 
 const owners = (text: string | null) => (text === null ? null : parseCodeowners(text));
 
@@ -64,5 +64,17 @@ describe("approvedOnHead", () => {
   it("fails closed without a head or without knowing the token's login", () => {
     expect(approvedOnHead([review("ana", "APPROVED", HEAD)], null, "me")).toBe(false);
     expect(approvedOnHead([review("ana", "APPROVED", HEAD)], HEAD, null)).toBe(false);
+  });
+});
+
+describe("approversOnHead", () => {
+  const HEAD = "a".repeat(40);
+  const OLD = "b".repeat(40);
+  const review = (author: string, state: string, commitId: string | null, association: string | null = "COLLABORATOR") => ({ author, state, commitId, association });
+  it("lists the trusted logins whose latest verdict on the head is an approval, never the machine's own", () => {
+    const reviews = [review("ana", "APPROVED", HEAD), review("bo", "APPROVED", HEAD), review("bo", "CHANGES_REQUESTED", HEAD), review("me", "APPROVED", HEAD), review("eve", "APPROVED", HEAD, "NONE"), review("cy", "APPROVED", OLD)];
+    expect(approversOnHead(reviews, HEAD, "me")).toEqual(["ana"]);
+    expect(approversOnHead(reviews, null, "me")).toEqual([]);
+    expect(approversOnHead(reviews, HEAD, null)).toEqual([]);
   });
 });
