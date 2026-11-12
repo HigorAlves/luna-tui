@@ -59,7 +59,7 @@ function setup(answer: Record<string, unknown> | null, opts: { postFails?: boole
 const posted = (github: ReturnType<typeof fakeGitHub>) => github.postReview.mock.calls;
 
 describe("reviewing", () => {
-  it("hands the pack the diff, files and existing comments, then posts one COMMENT review and closes", async () => {
+  it("hands the pack the diff, files and existing comments, posts nothing, and waits for you with the whole review", async () => {
     const { run, context, github, review } = setup({
       verdict: "comment",
       summary: "Two nits.",
@@ -73,36 +73,30 @@ describe("reviewing", () => {
       existingComments: [{ path: "a.ts", line: 1, author: "x", body: "old" }],
     });
     expect(String((review() as { diff: string }).diff)).toContain("+export const x = 1;");
-    expect(posted(github)).toHaveLength(1);
-    expect(github.postReview).toHaveBeenCalledWith("o/a", 12, { event: "COMMENT", body: "Two nits.", comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "nit" }] });
-    expect(result).toMatchObject({ outcome: "pass", detail: { verdict: "comment", posted: true } });
-    expect(result.detail?.reason).toBeUndefined();
-  });
-
-  it("posts the comments right away and waits for you when the verdict is approve or request changes", async () => {
-    const { run, context, github } = setup({ verdict: "request_changes", summary: "Blocking.", findings: [], comments: [{ path: "a.ts", line: 1, body: "bug" }] });
-    const result = await run(context);
-    expect(posted(github)).toHaveLength(1);
-    expect(result).toMatchObject({ outcome: "pass", detail: { reason: "verdict", verdict: "request_changes" } });
+    expect(posted(github)).toHaveLength(0);
+    expect(result).toMatchObject({ outcome: "pass", detail: { verdict: "comment", posted: false, reason: "verdict", comments: 1 } });
     expect(result.requested).toEqual([
-      { kind: "pr_review_post", target: node.url, payload: { event: "REQUEST_CHANGES", body: "Blocking." } },
+      { kind: "pr_review_post", target: node.url, payload: { event: "COMMENT", body: "Two nits.", comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "nit" }] } },
     ]);
   });
 
-  it("posts nothing when there are no comments and no verdict, and passes an escalation through", async () => {
-    const quiet = setup({ verdict: "comment", summary: "Looks fine.", findings: [], comments: [] });
-    const result = await quiet.run(quiet.context);
-    expect(posted(quiet.github)).toHaveLength(0);
-    expect(result.detail).toMatchObject({ posted: false });
-    const escalated = setup(null);
-    expect((await escalated.run(escalated.context)).outcome).toBe("escalated");
+  it("waits for you with the verdict and its comments when it is approve or request changes", async () => {
+    const { run, context, github } = setup({ verdict: "request_changes", summary: "Blocking.", findings: [], comments: [{ path: "a.ts", line: 1, body: "bug" }] });
+    const result = await run(context);
+    expect(posted(github)).toHaveLength(0);
+    expect(result).toMatchObject({ outcome: "pass", detail: { reason: "verdict", verdict: "request_changes", posted: false } });
+    expect(result.requested).toEqual([
+      { kind: "pr_review_post", target: node.url, payload: { event: "REQUEST_CHANGES", body: "Blocking.", comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "bug" }] } },
+    ]);
   });
 
-  it("fails with gh's words when the post is refused", async () => {
-    const { run, context } = setup({ verdict: "comment", summary: "s", findings: [], comments: [{ path: "a.ts", line: 1, body: "nit" }] }, { postFails: true });
-    const result = await run(context);
-    expect(result.outcome).toBe("fail");
-    expect(String(result.detail?.error)).toMatch(/422/);
+  it("waits for you even with no comment, and passes an escalation through", async () => {
+    const quiet = setup({ verdict: "approve", summary: "Looks fine.", findings: [], comments: [] });
+    const result = await quiet.run(quiet.context);
+    expect(posted(quiet.github)).toHaveLength(0);
+    expect(result.detail).toMatchObject({ posted: false, reason: "verdict" });
+    const escalated = setup(null);
+    expect((await escalated.run(escalated.context)).outcome).toBe("escalated");
   });
 });
 
@@ -110,13 +104,33 @@ describe("posting the verdict", () => {
   const approval = (actions: unknown[], decision: ApprovalRow["decision"] = "approved"): ApprovalRow =>
     ({ id: "a1", taskId: "t1", kind: "awaiting_ship", requested: { actions }, decision, reason: null, response: null, createdAt: new Date(), decidedAt: new Date() }) as ApprovalRow;
 
-  it("posts the review the gate carried, as its event", async () => {
+  it("posts the review the gate carried, as its event, with its line comments", async () => {
     const github = fakeGitHub({ postReview: async () => {} });
     const run = postVerdictRunner({ github });
     const { context } = setup(null);
-    const result = await run({ ...context, stage: "shipping", approvals: [approval([{ kind: "pr_review_post", target: node.url, payload: { event: "APPROVE", body: "LGTM" } }])] });
-    expect(result.outcome).toBe("pass");
+    const comments = [{ path: "a.ts", line: 1, side: "RIGHT", body: "nit" }];
+    for (const event of ["APPROVE", "REQUEST_CHANGES", "COMMENT"]) {
+      const result = await run({ ...context, stage: "shipping", approvals: [approval([{ kind: "pr_review_post", target: node.url, payload: { event, body: "LGTM", comments } }])] });
+      expect(result.outcome, event).toBe("pass");
+      expect(github.postReview).toHaveBeenLastCalledWith("o/a", 12, { event, body: "LGTM", comments });
+    }
+  });
+
+  it("posts a gate stored before the comments rode on it with no comments", async () => {
+    const github = fakeGitHub({ postReview: async () => {} });
+    const run = postVerdictRunner({ github });
+    const { context } = setup(null);
+    await run({ ...context, stage: "shipping", approvals: [approval([{ kind: "pr_review_post", target: node.url, payload: { event: "APPROVE", body: "LGTM" } }])] });
     expect(github.postReview).toHaveBeenCalledWith("o/a", 12, { event: "APPROVE", body: "LGTM", comments: [] });
+  });
+
+  it("fails with gh's words when the post is refused", async () => {
+    const github = fakeGitHub({ postReview: async () => { throw new Error("posting a review failed (422): Unprocessable"); } });
+    const run = postVerdictRunner({ github });
+    const { context } = setup(null);
+    const result = await run({ ...context, stage: "shipping", approvals: [approval([{ kind: "pr_review_post", target: node.url, payload: { event: "COMMENT", body: "s", comments: [] } }])] });
+    expect(result.outcome).toBe("fail");
+    expect(String(result.detail?.error)).toMatch(/422/);
   });
 
   it("fails when the gate carried no review to post", async () => {

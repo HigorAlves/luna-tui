@@ -4,7 +4,7 @@
 // An approve / request-changes verdict waits at the gate; `postVerdictRunner` posts it on `a`.
 import { PrReviewAnswer, type RequestedAction, type ReviewContext } from "@hardness/contracts";
 
-import { type GitHub, messageOf } from "../github.ts";
+import { type GitHub, type ReviewPost, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 export interface PrReviewDeps {
@@ -81,30 +81,22 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     }
     const answer = parsed.data;
 
-    // The comment review goes out now; only a verdict waits for you.
+    // Nothing is posted here: the review goes out under the person's name, so every verdict, its body and its line
+    // comments wait at "post the verdict?" until the person says yes (or edits or drops it).
     const comments = capComments(
       answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
       answer.findings,
     );
-    const posted = comments.length > 0;
-    if (posted) {
-      try {
-        await github.postReview(pr.repo, pr.number, { event: "COMMENT", body: answer.summary, comments });
-      } catch (error) {
-        return { ...pack, outcome: "fail", detail: { ...pack.detail, error: messageOf(error) } };
-      }
-    }
     const base = { ...pack, findings: answer.findings };
-    const detail = { ...pack.detail, summary: answer.summary, verdict: answer.verdict, posted, comments: comments.length };
-    if (answer.verdict === "comment") return { ...base, detail };
+    const detail = { ...pack.detail, summary: answer.summary, verdict: answer.verdict, posted: false, comments: comments.length, reason: "verdict" };
     const requested: RequestedAction[] = [
-      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[answer.verdict], body: answer.summary } },
+      { kind: "pr_review_post", target: pr.url, payload: { event: EVENT_OF[answer.verdict], body: answer.summary, comments } },
     ];
-    return { ...base, detail: { ...detail, reason: "verdict" }, requested };
+    return { ...base, detail, requested };
   };
 }
 
-/** The review route's `shipping`: posts the APPROVE / REQUEST_CHANGES review the gate carried. */
+/** The review route's `shipping`: posts the review the gate carried (APPROVE, REQUEST_CHANGES or COMMENT) with its line comments. */
 export function postVerdictRunner(deps: { github: GitHub }): StageRunner {
   return async (context) => {
     const pr = prOf(context);
@@ -113,12 +105,14 @@ export function postVerdictRunner(deps: { github: GitHub }): StageRunner {
     const actions = (gate?.requested as { actions?: RequestedAction[] } | undefined)?.actions ?? [];
     const post = actions.find((a) => a.kind === "pr_review_post");
     const event = post?.payload.event;
-    if (!post || (event !== "APPROVE" && event !== "REQUEST_CHANGES")) {
+    if (!post || (event !== "APPROVE" && event !== "REQUEST_CHANGES" && event !== "COMMENT")) {
       return { outcome: "fail", detail: { error: "the gate carried no verdict to post" } };
     }
     const body = typeof post.payload.body === "string" ? post.payload.body : "";
+    // The line comments ride on the gate since every review waits for the person; a gate stored before that has none.
+    const comments = Array.isArray(post.payload.comments) ? (post.payload.comments as ReviewPost["comments"]) : [];
     try {
-      await deps.github.postReview(pr.repo, pr.number, { event, body, comments: [] });
+      await deps.github.postReview(pr.repo, pr.number, { event, body, comments });
     } catch (error) {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }
