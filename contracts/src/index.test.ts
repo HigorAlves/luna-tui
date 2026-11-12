@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { DecisionInput, EditCasesInput, EditPlanInput } from "./api.ts";
 import { readFileSync } from "node:fs";
-import { COLUMNS, COLUMN_OF, RUNNING, RUN_OR_GATE, TERMINAL, TaskState, WAITING_ON_USER, isTerminal, waitsOnPerson } from "./index.ts";
+import { COLUMNS, COLUMN_OF, RUNNING, RUN_OR_GATE, TERMINAL, TaskState, WAITING_ON_USER, columnOf, isTerminal, waitsOnPerson } from "./index.ts";
 
 describe("task states", () => {
   it("ends in closed or archived, both in Done", () => {
@@ -177,5 +177,23 @@ describe("states that hold a stage or a gate", () => {
     expect(waitsOnPerson("reviewing_memory", true)).toBe(true);
     expect(waitsOnPerson("awaiting_approval", false)).toBe(true);
     expect(waitsOnPerson("implementing", true)).toBe(false);
+  });
+});
+
+describe("columnOf: where a card is shown", () => {
+  it("keeps an escalated or paused card in the column of the stage it will resume at, not in Build", () => {
+    expect(columnOf("escalated", "delivering")).toBe("Verify");
+    expect(columnOf("escalated", "verifying")).toBe("Verify");
+    expect(columnOf("escalated", "awaiting_ship")).toBe("Ship");
+    expect(columnOf("escalated", "evidence")).toBe("Evidence");
+    expect(columnOf("escalated", "test_design")).toBe("Plan");
+    expect(columnOf("paused_rate_limit", "verifying")).toBe("Verify");
+  });
+
+  it("falls back to the state's own column when no resume stage is recorded, and ignores resumeTo for every other state", () => {
+    expect(columnOf("escalated", null)).toBe("Build");
+    expect(columnOf("escalated", "escalated")).toBe("Build");
+    expect(columnOf("implementing", "delivering")).toBe("Build");
+    expect(columnOf("awaiting_ship", null)).toBe("Ship");
   });
 });

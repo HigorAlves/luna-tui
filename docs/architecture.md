@@ -98,7 +98,7 @@ This is panel 0 of the v2.2 diagram. The rule is that nothing leaves the machine
 | Intake | `draft`, `setup`, `awaiting_setup` |
 | Triage | `triage`, `awaiting_answers` |
 | Plan | `test_design`, `awaiting_test_check`, `awaiting_approval` |
-| Build | `implementing`, `paused_rate_limit`, `escalated` |
+| Build | `implementing`, and `paused_rate_limit` or `escalated` when the card resumes at Build or at no recorded stage |
 | Verify | `verifying`, `e2e`, `delivering`, `ci_watch` |
 | Evidence | `evidence` |
 | Ship | `awaiting_ship`, `shipping`, `reviewing_memory` |
@@ -108,7 +108,7 @@ The Plan stage runs in `test_design`. So a task shows in Plan while it plans. It
 
 A task on a repo with no `luna.yaml` runs the `setup` stage first. The setup pack reads the checkout read-only and proposes the file. The machine proves every proposed check once, with the proposed services and egress list. The proof runs in a throwaway clone, made as the workspace of a card is. It never runs in the checkout, because the install of a check would fill it with Linux binaries. Then the machine starts the app from `verify.e2e.start` as the browser run does, and waits for its ready path. The `awaiting_setup` gate shows you the file, the proof, the app start and every host that the sandbox refused. Approving writes `luna.yaml` into the checkout, and the task goes on to triage. A `:setup <repo>` task (route `setup`) closes instead. Sending it back with a note re-runs setup with the note as guidance. See [configuration](configuration.md).
 
-The card states that the board already shows come from the same data. A waiting gate is "needs you". A running stage is "working". `escalated` and an aborted run are "lost". The source of truth is `COLUMNS` and `COLUMN_OF` in `contracts/src/index.ts`.
+The card states that the board already shows come from the same data. A waiting gate is "needs you". A running stage is "working". `escalated` and an aborted run are "lost". An escalated or paused card stays in the column of the stage that it resumes at (`columnOf`), so a failed delivery shows under Verify and a conflict at the ship watch shows under Ship. The source of truth is `COLUMNS`, `COLUMN_OF` and `columnOf` in `contracts/src/index.ts`.
 
 ## PR tasks
 
@@ -231,7 +231,7 @@ stateDiagram-v2
   awaiting_ship: awaiting_ship · Ship · the watch, or you at a gate
   shipping: shipping · Ship · PR ready for review
   reviewing_memory: reviewing_memory · Ship · the retro, or you apply or skip
-  escalated: escalated · Build · you resume or send back
+  escalated: escalated · the column of the stage it resumes at · you resume or send back
   closed: closed · Done
   archived: archived · Done · from any state, with a reason
 

@@ -12,6 +12,12 @@ const row = (): TaskRow => ({
 });
 
 describe("toTask", () => {
+  it("shows an escalated card in the column of the stage it resumes at, and in Build when none is recorded", () => {
+    expect(toTask({ ...row(), state: "escalated", resumeTo: "delivering" }).column).toBe("Verify");
+    expect(toTask({ ...row(), state: "escalated", resumeTo: "awaiting_ship" }).column).toBe("Ship");
+    expect(toTask({ ...row(), state: "escalated", resumeTo: null }).column).toBe("Build");
+  });
+
   it("carries spend and worked time when the caller knows them, null otherwise", () => {
     expect(toTask(row())).toMatchObject({ spentUsd: null, workedMs: null, diff: null, tests: null });
     expect(toTask(row(), { spentUsd: 0.5, workedMs: 180_000 })).toMatchObject({ spentUsd: 0.5, workedMs: 180_000 });
