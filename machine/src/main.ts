@@ -559,6 +559,7 @@ const repoMap = new RepoMap({ map: config.repoMap, reposDir: config.reposDir, fi
 const pulls = new GitHubPulls({
   github,
   intervalMs: config.githubPrs.intervalMs,
+  allIntervalMs: config.githubPrs.allIntervalMs,
   resolveRepo: (repo) => repoMap.resolve(repo),
   rememberRepo: (repo, path) => repoMap.remember(repo, path),
   findTask: async (repo, number) => {
@@ -567,6 +568,7 @@ const pulls = new GitHubPulls({
     return task && route?.success && !isTerminal(task.state) ? { id: task.id, state: task.state, route: route.data } : null;
   },
   publish: (snapshot) => bus.publish({ type: "github.prs", snapshot }),
+  publishAll: (snapshot) => bus.publish({ type: "github.prs.all", snapshot }),
 });
 const prTasks = {
   dispatch: (pr: PullRequest, action: PrAction) => createPrTask({ worktreesDir: config.worktreesDir, pipeline }, pr, action),
@@ -845,7 +847,7 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 });
 
 if (config.githubPrs.enabled) {
-  console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s`);
+  console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s, every open PR in your repos every ${config.githubPrs.allIntervalMs / 1000}s`);
   pulls.start();
 }
 

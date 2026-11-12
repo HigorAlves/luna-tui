@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { PrSnapshot } from "@hardness/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { fakeGitHub } from "../test/github.ts";
 import { PrBusyError } from "./pr-tasks.ts";
@@ -37,6 +37,10 @@ interface World {
   searchError?: string;
   /** A PR whose `prFacts` call rejects with this message, by number. */
   factsErrors?: Record<number, string>;
+  /** Every open PR in the repos the token reaches (the all-list), as `listOpenPrs` answers. */
+  reachable?: Array<{ number: number; repository: { nameWithOwner: string }; updatedAt: string }>;
+  capped?: Array<{ repo: string; open: number }>;
+  reachableError?: string;
   mergeError?: string;
   cloneError?: string;
   /** When set, every `prFacts` call takes a few ms and this records how many ran at once. */
@@ -51,7 +55,12 @@ function setup(world: World, over: Partial<ConstructorParameters<typeof GitHubPu
       if (world.searchError) throw new Error(world.searchError);
       return world.hits.map((h) => ({ repo: h.repository.nameWithOwner, number: h.number, updatedAt: h.updatedAt }));
     },
-    prFacts: async (_repo, number) => {
+    listOpenPrs: async () => {
+      if (world.reachableError) throw new Error(world.reachableError);
+      return { hits: (world.reachable ?? []).map((h) => ({ repo: h.repository.nameWithOwner, number: h.number, updatedAt: h.updatedAt })), capped: world.capped ?? [] };
+    },
+    prFacts: async (repo, number) => {
+      calls.push(["facts", repo, String(number)]);
       if (world.flight) {
         world.flight.max = Math.max(world.flight.max, ++world.flight.now);
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -72,18 +81,21 @@ function setup(world: World, over: Partial<ConstructorParameters<typeof GitHubPu
     return world.cloneError ? { code: 1, stdout: "", stderr: world.cloneError } : { code: 0, stdout: "", stderr: "" };
   };
   const published: PrSnapshot[] = [];
+  const publishedAll: PrSnapshot[] = [];
   const remembered: Array<[string, string]> = [];
   const pulls = new GitHubPulls({
     github,
     exec,
     intervalMs: 60_000,
+    allIntervalMs: 600_000,
     resolveRepo: async (repo) => (repo === "o/a" ? "/r/a" : null),
     rememberRepo: (repo, path) => void remembered.push([repo, path]),
     findTask: async (_repo, number) => (number === 2 ? { id: "t2", state: "ci_watch", route: "ci_fix" } : null),
     publish: (snapshot) => void published.push(snapshot),
+    publishAll: (snapshot) => void publishedAll.push(snapshot),
     ...over,
   });
-  return { pulls, calls, published, remembered };
+  return { pulls, calls, published, publishedAll, remembered };
 }
 
 const hit = (number: number, repo = "o/a") => ({ number, repository: { nameWithOwner: repo }, updatedAt: "2026-10-27T10:00:00Z" });
@@ -137,6 +149,8 @@ describe("GitHubPulls.pollOnce", () => {
     const { pulls } = setup(world);
     await pulls.pollOnce();
     world.factsErrors = { 1: "API rate limit exceeded (RATE_LIMITED)", 2: "API rate limit exceeded (RATE_LIMITED)" };
+    // Both PRs moved on, so their cached facts no longer stand and GitHub is asked again.
+    world.hits = world.hits.map((h) => ({ ...h, updatedAt: "2026-10-28T10:00:00Z" }));
     const snapshot = await pulls.pollOnce();
     expect(snapshot.error).toMatch(/rate limit/i);
     expect(snapshot.prs.map((p) => p.number)).toEqual([1, 2]);
@@ -159,6 +173,114 @@ describe("GitHubPulls.pollOnce", () => {
     world.searchError = undefined;
     await pulls.pollOnce();
     expect(pulls.nextDelayMs).toBe(60_000);
+  });
+});
+
+const factsCalls = (calls: string[][]) => calls.filter((c) => c[0] === "facts").map((c) => `${c[1]}#${c[2]}`);
+
+describe("GitHubPulls.pollAllOnce", () => {
+  const world = (): World => ({
+    hits: [hit(1)],
+    reachable: [hit(1), hit(4, "o/a"), hit(5, "o/b")],
+    nodes: { 1: node(1), 4: node(4, { author: { login: "them" }, reviewDecision: "REVIEW_REQUIRED" }), 5: node(5, { author: { login: "them" }, headRepository: { nameWithOwner: "o/b" } }) },
+  });
+
+  it("builds a second snapshot of every open PR in your repos with the inbox's split, checkout and task, and publishes it on its own", async () => {
+    const { pulls, published, publishedAll } = setup(world());
+    const snapshot = await pulls.pollAllOnce();
+    expect(snapshot.error).toBeNull();
+    expect(snapshot.polledAt).not.toBeNull();
+    expect(snapshot.prs.map((p) => [p.repo, p.number, p.mine, p.split, p.localPath])).toEqual([
+      ["o/a", 1, true, "ready_to_merge", "/r/a"],
+      ["o/a", 4, false, "mine", "/r/a"],
+      ["o/b", 5, false, "mine", null],
+    ]);
+    expect(pulls.all).toBe(snapshot);
+    expect(pulls.snapshot.prs).toEqual([]);
+    expect(publishedAll).toHaveLength(1);
+    expect(published).toHaveLength(0);
+    await pulls.pollAllOnce();
+    expect(publishedAll).toHaveLength(1);
+  });
+
+  it("does not fetch a PR again while its updatedAt is the same, and shares what the inbox fetched", async () => {
+    const w = world();
+    const { pulls, calls } = setup(w);
+    await pulls.pollOnce();
+    await pulls.pollAllOnce();
+    await pulls.pollAllOnce();
+    await pulls.pollOnce();
+    expect(factsCalls(calls).sort()).toEqual(["o/a#1", "o/a#4", "o/b#5"]);
+    // A PR that moved on is read again, and only that one.
+    w.reachable = w.reachable!.map((h) => (h.number === 4 ? { ...h, updatedAt: "2026-10-28T10:00:00Z" } : h));
+    await pulls.pollAllOnce();
+    expect(factsCalls(calls).sort()).toEqual(["o/a#1", "o/a#4", "o/a#4", "o/b#5"]);
+  });
+
+  it("reads a PR again while its checks run or GitHub has not said whether it merges, since neither bumps updatedAt", async () => {
+    const running = { commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "IN_PROGRESS", conclusion: null, detailsUrl: null }] } } } }] } };
+    const w: World = { hits: [hit(1), hit(2)], reachable: [hit(1), hit(2)], nodes: { 1: node(1, running), 2: node(2, { mergeable: "UNKNOWN" }) } };
+    const { pulls, calls } = setup(w);
+    await pulls.pollOnce();
+    await pulls.pollAllOnce();
+    expect(factsCalls(calls)).toEqual(["o/a#1", "o/a#2", "o/a#1", "o/a#2"]);
+  });
+
+  it("keeps the last list, says why and backs off five minutes when GitHub refuses, then returns to its own interval", async () => {
+    const w = world();
+    const { pulls, publishedAll } = setup(w);
+    await pulls.pollAllOnce();
+    expect(pulls.allNextDelayMs).toBe(600_000);
+    w.reachableError = "listing the open PRs of your repositories failed (403): API rate limit exceeded";
+    const snapshot = await pulls.pollAllOnce();
+    expect(snapshot.error).toMatch(/rate limit/i);
+    expect(snapshot.prs).toHaveLength(3);
+    expect(pulls.allNextDelayMs).toBe(5 * 60_000);
+    expect(publishedAll).toHaveLength(2);
+    w.reachableError = undefined;
+    expect((await pulls.pollAllOnce()).error).toBeNull();
+    expect(pulls.allNextDelayMs).toBe(600_000);
+  });
+
+  it("backs off when the PRs' facts are rate limited, instead of publishing an empty list", async () => {
+    const w = world();
+    const { pulls } = setup(w);
+    await pulls.pollAllOnce();
+    w.factsErrors = { 4: "API rate limit exceeded (RATE_LIMITED)" };
+    w.reachable = w.reachable!.map((h) => ({ ...h, updatedAt: "2026-10-29T10:00:00Z" }));
+    const snapshot = await pulls.pollAllOnce();
+    expect(snapshot.error).toMatch(/rate limit/i);
+    expect(snapshot.prs).toHaveLength(3);
+    expect(pulls.allNextDelayMs).toBe(5 * 60_000);
+  });
+
+  it("logs a repo with more open PRs than one query reads instead of capping silently", async () => {
+    const w = world();
+    w.capped = [{ repo: "o/big", open: 130 }];
+    const { pulls } = setup(w);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await pulls.pollAllOnce();
+      expect(warn.mock.calls.flat().join(" ")).toMatch(/o\/big.*130/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("resolves a repo cloned later in both lists without asking GitHub again", async () => {
+    const dest = join(mkdtempSync(join(tmpdir(), "pulls-all-clone-")), "b");
+    const w: World = { hits: [hit(5, "o/b")], reachable: [hit(5, "o/b")], nodes: { 5: node(5, { headRepository: { nameWithOwner: "o/b" } }) } };
+    const resolved = new Map<string, string>();
+    const { pulls, calls } = setup(w, { resolveRepo: async (repo) => resolved.get(repo) ?? null, rememberRepo: (repo, path) => void resolved.set(repo, path) });
+    await pulls.pollOnce();
+    await pulls.pollAllOnce();
+    expect(pulls.snapshot.prs[0]?.localPath).toBeNull();
+    expect(pulls.all.prs[0]?.localPath).toBeNull();
+    await pulls.clone("o/b", dest);
+    await pulls.cloning;
+    expect(pulls.snapshot.prs[0]?.localPath).toBe(dest);
+    expect(pulls.all.prs[0]?.localPath).toBe(dest);
+    expect(factsCalls(calls)).toEqual(["o/b#5"]);
   });
 });
 

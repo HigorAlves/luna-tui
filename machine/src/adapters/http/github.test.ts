@@ -52,17 +52,25 @@ const pr = (number: number, split: PullRequest["split"]): PullRequest => ({
 });
 
 /** A fake poller: a fixed snapshot, and a log of what the routes asked it to do. */
-function fakePulls(prs: PullRequest[]): PullsPort & { did: string[] } {
+function fakePulls(prs: PullRequest[], everyPr: PullRequest[] = prs): PullsPort & { did: string[] } {
   const snapshot: PrSnapshot = { prs, polledAt: "2026-10-27T10:00:00Z", error: null };
+  const all: PrSnapshot = { prs: everyPr, polledAt: "2026-10-27T10:05:00Z", error: null };
   const did: string[] = [];
   return {
     did,
     get snapshot() {
       return snapshot;
     },
+    get all() {
+      return all;
+    },
     async pollOnce() {
       did.push("poll");
       return snapshot;
+    },
+    async pollAllOnce() {
+      did.push("poll all");
+      return all;
     },
     async merge(repo, number) {
       const found = prs.find((p) => p.repo === repo && p.number === number);
@@ -94,6 +102,20 @@ describe("the PR inbox over HTTP", () => {
     const refreshed = await app.request("/github/prs/refresh", { method: "POST" });
     expect(refreshed.status).toBe(200);
     expect(pulls.did).toEqual(["poll"]);
+  });
+
+  it("serves every open PR in your repos beside the inbox, and polls it on demand", async () => {
+    const pulls = fakePulls([pr(1, "ready_to_merge")], [pr(1, "ready_to_merge"), { ...pr(7, "mine"), repo: "org/b", author: "them", mine: false }]);
+    const app = createApp({ db, pipeline, bus: new Bus(), pulls });
+    const inbox = await app.request("/github/prs");
+    expect(((await inbox.json()) as PrSnapshot).prs).toHaveLength(1);
+    const got = await app.request("/github/prs/all");
+    expect(got.status).toBe(200);
+    expect(await got.json()).toMatchObject({ prs: [{ number: 1 }, { number: 7, repo: "org/b" }], polledAt: "2026-10-27T10:05:00Z", error: null });
+    const refreshed = await app.request("/github/prs/all/refresh", { method: "POST" });
+    expect(refreshed.status).toBe(200);
+    expect(((await refreshed.json()) as PrSnapshot).prs).toHaveLength(2);
+    expect(pulls.did).toEqual(["poll all"]);
   });
 
   it("merges only a ready PR", async () => {
@@ -135,5 +157,6 @@ describe("the PR inbox over HTTP", () => {
   it("answers 404 for the inbox when the poller is off", async () => {
     const app = createApp({ db, pipeline, bus: new Bus() });
     expect((await app.request("/github/prs")).status).toBe(404);
+    expect((await app.request("/github/prs/all")).status).toBe(404);
   });
 });
