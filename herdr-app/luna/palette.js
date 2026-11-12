@@ -62,17 +62,7 @@ COMMANDS.start = (app, _arg, cx) => {
   cx.notify();
 };
 
-COMMANDS.slots = (app, arg, cx) => {
-  const n = Number.parseInt(String(arg ?? ""), 10);
-  if (!(n >= 1)) {
-    app.say("slots takes a number, e.g. :slots 3", "error");
-    return cx.notify();
-  }
-  app.run(cx, "pool", `${n} slot${n === 1 ? "" : "s"}`, () => app.machine.patch("/slots", { max: n }));
-};
-
-COMMANDS.drain = (app, _arg, cx) => app.run(cx, "pool", "Taking no new work: running stages finish", () => app.machine.post("/drain"));
-COMMANDS.resume = (app, _arg, cx) => app.run(cx, "pool", "Carrying on: the queue is picked up again", () => app.machine.post("/resume"));
+// `slots`, `drain` and `resume` are the Floor's (page-floor.js): they ask first.
 
 COMMANDS.help = (app) => app.keysSheet();
 COMMANDS.keys = (app) => app.keysSheet();
