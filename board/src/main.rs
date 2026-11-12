@@ -7,12 +7,11 @@
 
 mod app;
 mod backlog;
-mod tickets;
 mod client;
 mod detail;
 mod digest;
-mod economy;
 mod discover;
+mod economy;
 mod herdr;
 mod inbox;
 mod intake;
@@ -25,10 +24,11 @@ mod pulls;
 mod reference;
 mod slack;
 mod store;
-mod text;
-mod theme;
 #[cfg(test)]
 mod testkit;
+mod text;
+mod theme;
+mod tickets;
 mod ui;
 mod vim;
 

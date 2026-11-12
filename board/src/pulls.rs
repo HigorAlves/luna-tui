@@ -69,7 +69,12 @@ impl PrSplit {
 
 /// Indices into `prs` for `split`, oldest first: the one waiting longest is on top.
 pub fn items(prs: &[PullRequest], split: PrSplit) -> Vec<usize> {
-    let mut found: Vec<usize> = prs.iter().enumerate().filter(|(_, p)| p.split_enum() == Some(split)).map(|(i, _)| i).collect();
+    let mut found: Vec<usize> = prs
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.split_enum() == Some(split))
+        .map(|(i, _)| i)
+        .collect();
     found.sort_by_key(|&i| unix_secs(&prs[i].updated_at).unwrap_or(u64::MAX));
     found
 }
@@ -78,7 +83,10 @@ pub fn items(prs: &[PullRequest], split: PrSplit) -> Vec<usize> {
 pub fn counts(prs: &[PullRequest]) -> [usize; 6] {
     let mut out = [0; 6];
     for pr in prs {
-        if let Some(i) = pr.split_enum().and_then(|s| PrSplit::ALL.iter().position(|x| *x == s)) {
+        if let Some(i) = pr
+            .split_enum()
+            .and_then(|s| PrSplit::ALL.iter().position(|x| *x == s))
+        {
             out[i] += 1;
         }
     }
@@ -96,7 +104,13 @@ pub enum PrKey {
 }
 
 impl PrKey {
-    pub const ALL: [PrKey; 5] = [PrKey::Merge, PrKey::CiFix, PrKey::Review, PrKey::Address, PrKey::Close];
+    pub const ALL: [PrKey; 5] = [
+        PrKey::Merge,
+        PrKey::CiFix,
+        PrKey::Review,
+        PrKey::Address,
+        PrKey::Close,
+    ];
 
     pub fn key(self) -> char {
         match self {
@@ -148,7 +162,10 @@ pub fn blocker(pr: &PullRequest, key: PrKey) -> Option<&'static str> {
     match key {
         PrKey::Merge => (pr.split_enum() != Some(PrSplit::ReadyToMerge)).then(|| merge_blocker(pr)),
         PrKey::Close if !pr.mine => Some("closing is for your own PRs"),
-        PrKey::Close => pr.task.is_some().then_some("a task is already running for it"),
+        PrKey::Close => pr
+            .task
+            .is_some()
+            .then_some("a task is already running for it"),
         PrKey::CiFix | PrKey::Review | PrKey::Address => {
             if pr.task.is_some() {
                 return Some("a task is already running for it");
@@ -158,7 +175,9 @@ pub fn blocker(pr: &PullRequest, key: PrKey) -> Option<&'static str> {
             }
             match key {
                 PrKey::Review if pr.mine => Some("review is for other people's PRs"),
-                PrKey::CiFix | PrKey::Address if pr.from_fork => Some("the head is in a fork; nothing can push to it"),
+                PrKey::CiFix | PrKey::Address if pr.from_fork => {
+                    Some("the head is in a fork; nothing can push to it")
+                }
                 PrKey::Address if !pr.mine => Some("threads are answered on your own PRs"),
                 _ => None,
             }
@@ -199,27 +218,88 @@ mod tests {
         let numbers = |ix: Vec<usize>| ix.iter().map(|&i| prs[i].number).collect::<Vec<_>>();
         assert_eq!(numbers(items(&prs, PrSplit::ReadyToMerge)), vec![2, 1]);
         assert_eq!(numbers(items(&prs, PrSplit::CiFailed)), vec![3]);
-        assert_eq!(numbers(items(&prs, PrSplit::ReviewRequested)), Vec::<u64>::new());
+        assert_eq!(
+            numbers(items(&prs, PrSplit::ReviewRequested)),
+            Vec::<u64>::new()
+        );
         assert_eq!(counts(&prs), [0, 2, 1, 0, 0, 1]);
         assert_eq!(PrSplit::ReviewRequested.next(), PrSplit::ReadyToMerge);
         assert_eq!(PrSplit::Mine.next(), PrSplit::ReviewRequested);
         assert_eq!(PrSplit::ReviewRequested.prev(), PrSplit::Mine);
-        assert_eq!(PrSplit::from_wire("changes_requested"), Some(PrSplit::ChangesRequested));
-        assert!(PrSplit::CiFailed.needs_me() && !PrSplit::CiRunning.needs_me() && !PrSplit::Mine.needs_me());
+        assert_eq!(
+            PrSplit::from_wire("changes_requested"),
+            Some(PrSplit::ChangesRequested)
+        );
+        assert!(
+            PrSplit::CiFailed.needs_me()
+                && !PrSplit::CiRunning.needs_me()
+                && !PrSplit::Mine.needs_me()
+        );
     }
 
     #[test]
     fn the_keys_that_work_follow_the_machine_s_own_refusals() {
-        let keys = |p: &PullRequest| PrKey::ALL.iter().filter(|k| blocker(p, **k).is_none()).map(|k| k.key()).collect::<String>();
-        assert_eq!(keys(&pr(1, "ready_to_merge", "t")), "mctX", "mine, ready: merge, CI fix, threads, close; no self-review");
-        let theirs = PullRequest { mine: false, author: "them".into(), ..pr(2, "review_requested", "t") };
-        assert_eq!(keys(&theirs), "cv", "a teammate's PR: CI fix and review, no threads");
-        assert_eq!(keys(&PullRequest { local_path: None, ..theirs.clone() }), "", "no checkout, nothing to dispatch");
-        assert_eq!(blocker(&PullRequest { local_path: None, ..theirs.clone() }, PrKey::Review), Some("no checkout"));
-        assert_eq!(keys(&PullRequest { from_fork: true, ..theirs.clone() }), "v", "a fork: review only");
-        let busy = PullRequest { task: Some(crate::model::PrTask { id: "t1".into(), state: "ci_watch".into(), route: "ci_fix".into() }), ..pr(3, "ci_failed", "t") };
+        let keys = |p: &PullRequest| {
+            PrKey::ALL
+                .iter()
+                .filter(|k| blocker(p, **k).is_none())
+                .map(|k| k.key())
+                .collect::<String>()
+        };
+        assert_eq!(
+            keys(&pr(1, "ready_to_merge", "t")),
+            "mctX",
+            "mine, ready: merge, CI fix, threads, close; no self-review"
+        );
+        let theirs = PullRequest {
+            mine: false,
+            author: "them".into(),
+            ..pr(2, "review_requested", "t")
+        };
+        assert_eq!(
+            keys(&theirs),
+            "cv",
+            "a teammate's PR: CI fix and review, no threads"
+        );
+        assert_eq!(
+            keys(&PullRequest {
+                local_path: None,
+                ..theirs.clone()
+            }),
+            "",
+            "no checkout, nothing to dispatch"
+        );
+        assert_eq!(
+            blocker(
+                &PullRequest {
+                    local_path: None,
+                    ..theirs.clone()
+                },
+                PrKey::Review
+            ),
+            Some("no checkout")
+        );
+        assert_eq!(
+            keys(&PullRequest {
+                from_fork: true,
+                ..theirs.clone()
+            }),
+            "v",
+            "a fork: review only"
+        );
+        let busy = PullRequest {
+            task: Some(crate::model::PrTask {
+                id: "t1".into(),
+                state: "ci_watch".into(),
+                route: "ci_fix".into(),
+            }),
+            ..pr(3, "ci_failed", "t")
+        };
         assert_eq!(keys(&busy), "", "a running task blocks every dispatch");
-        assert_eq!(blocker(&pr(4, "mine", "t"), PrKey::Merge), Some("not ready to merge"));
+        assert_eq!(
+            blocker(&pr(4, "mine", "t"), PrKey::Merge),
+            Some("not ready to merge")
+        );
         assert_eq!(PrKey::CiFix.action(), Some(PrAction::CiFix));
         assert_eq!(PrKey::Merge.action(), None);
         assert_eq!(PrKey::Close.action(), None);
@@ -227,14 +307,43 @@ mod tests {
 
     #[test]
     fn merge_says_what_github_says_and_close_is_for_your_own_idle_prs() {
-        let with = |state: &str| PullRequest { merge_state: state.into(), ..pr(5, "mine", "t") };
-        assert_eq!(blocker(&with("BLOCKED"), PrKey::Merge), Some("GitHub: blocked, a required review or check is still missing"));
-        assert_eq!(blocker(&with("BEHIND"), PrKey::Merge), Some("GitHub: the branch is behind its base; update it first"));
-        assert_eq!(blocker(&with("DIRTY"), PrKey::Merge), Some("GitHub: the branch has conflicts with its base"));
-        let theirs = PullRequest { mine: false, author: "them".into(), ..pr(6, "review_requested", "t") };
-        assert_eq!(blocker(&theirs, PrKey::Close), Some("closing is for your own PRs"));
-        let busy = PullRequest { task: Some(crate::model::PrTask { id: "t1".into(), state: "ci_watch".into(), route: "ci_fix".into() }), ..pr(7, "ci_failed", "t") };
-        assert_eq!(blocker(&busy, PrKey::Close), Some("a task is already running for it"));
+        let with = |state: &str| PullRequest {
+            merge_state: state.into(),
+            ..pr(5, "mine", "t")
+        };
+        assert_eq!(
+            blocker(&with("BLOCKED"), PrKey::Merge),
+            Some("GitHub: blocked, a required review or check is still missing")
+        );
+        assert_eq!(
+            blocker(&with("BEHIND"), PrKey::Merge),
+            Some("GitHub: the branch is behind its base; update it first")
+        );
+        assert_eq!(
+            blocker(&with("DIRTY"), PrKey::Merge),
+            Some("GitHub: the branch has conflicts with its base")
+        );
+        let theirs = PullRequest {
+            mine: false,
+            author: "them".into(),
+            ..pr(6, "review_requested", "t")
+        };
+        assert_eq!(
+            blocker(&theirs, PrKey::Close),
+            Some("closing is for your own PRs")
+        );
+        let busy = PullRequest {
+            task: Some(crate::model::PrTask {
+                id: "t1".into(),
+                state: "ci_watch".into(),
+                route: "ci_fix".into(),
+            }),
+            ..pr(7, "ci_failed", "t")
+        };
+        assert_eq!(
+            blocker(&busy, PrKey::Close),
+            Some("a task is already running for it")
+        );
         assert_eq!(blocker(&pr(8, "mine", "t"), PrKey::Close), None);
     }
 }

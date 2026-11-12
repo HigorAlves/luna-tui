@@ -16,22 +16,26 @@ use serde_json::Value;
 use tui_textarea::TextArea;
 
 use crate::detail::{self, DetailView};
-use crate::text::{self, cells};
-use crate::theme;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::keys::{self, Avail, HelpRow, Scope};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState};
+use crate::text::{self, cells};
+use crate::theme;
 use crate::{
     app::{App, Density, FloorState, GroupBy, Mode, View},
     model::{
-        COLUMNS, EngineInfo, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
-        fmt_usd, repo_colour_slot, sla_targets, spend_p90, now_secs, unix_secs,
+        COLUMNS, EngineInfo, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS,
+        SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
+        fmt_usd, now_secs, repo_colour_slot, sla_targets, spend_p90, unix_secs,
     },
 };
 
-pub(crate) use crate::theme::{ACCENT, BASE, BLUE, GREEN, LAVENDER, MUTED, PEACH, RED, SELECTED_BG, SUBTEXT0, SURFACE0, SURFACE1, YELLOW, c};
+pub(crate) use crate::theme::{
+    ACCENT, BASE, BLUE, GREEN, LAVENDER, MUTED, PEACH, RED, SELECTED_BG, SUBTEXT0, SURFACE0,
+    SURFACE1, YELLOW, c,
+};
 
 /// Narrowest a full column may get; below it the board collapses and then drops columns.
 const MIN_COLUMN_WIDTH: u16 = 20;
@@ -98,19 +102,35 @@ pub fn draw(frame: &mut Frame, app: &App) {
     .areas(frame.area());
 
     frame.render_widget(header_line(app), header);
-    if let Some(floor) = app.floor.as_ref().filter(|_| app.active_view() == Some(View::Floor)) {
+    if let Some(floor) = app
+        .floor
+        .as_ref()
+        .filter(|_| app.active_view() == Some(View::Floor))
+    {
         render_floor(frame, body, floor);
         frame.render_widget(footer_line(app, footer.width), footer);
         if let Mode::ConfirmBase { repo, base } = &app.mode {
             let repo = crate::model::plain(repo, 200);
-            render_confirm_details(frame, " Approve base image ", &format!("approve the base image of {repo}?"), &[format!("image {}", crate::model::plain(base, 200)), "It runs with the stage's credential.".to_string()], PEACH);
+            render_confirm_details(
+                frame,
+                " Approve base image ",
+                &format!("approve the base image of {repo}?"),
+                &[
+                    format!("image {}", crate::model::plain(base, 200)),
+                    "It runs with the stage's credential.".to_string(),
+                ],
+                PEACH,
+            );
         }
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
         return;
     }
-    if let Some(digest) = app.digest.as_ref().filter(|_| app.active_view() == Some(View::Digest) && matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+    if let Some(digest) = app.digest.as_ref().filter(|_| {
+        app.active_view() == Some(View::Digest)
+            && matches!(app.mode, Mode::Normal | Mode::Help { .. })
+    }) {
         render_digest(frame, body, app, digest);
         frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
@@ -118,18 +138,37 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(inbox) = app.inbox.as_ref().filter(|_| app.active_view() == Some(View::Inbox) && matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::Help { .. })) {
+    if let Some(inbox) = app.inbox.as_ref().filter(|_| {
+        app.active_view() == Some(View::Inbox)
+            && matches!(
+                app.mode,
+                Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::Help { .. }
+            )
+    }) {
         render_inbox(frame, body, app, inbox);
         frame.render_widget(footer_line(app, footer.width), footer);
         if let Mode::ConfirmApproveAll(ids) = &app.mode {
-            render_note(frame, " Approve them all? ", &format!("{} ticket(s) in Approve get a yes, each with no guidance.  y / n", ids.len()));
+            render_note(
+                frame,
+                " Approve them all? ",
+                &format!(
+                    "{} ticket(s) in Approve get a yes, each with no guidance.  y / n",
+                    ids.len()
+                ),
+            );
         }
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
         return;
     }
-    if let Some(state) = app.tickets.as_ref().filter(|_| app.active_view() == Some(View::Tickets) && matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::Command { .. })) {
+    if let Some(state) = app.tickets.as_ref().filter(|_| {
+        app.active_view() == Some(View::Tickets)
+            && matches!(
+                app.mode,
+                Mode::Normal | Mode::Help { .. } | Mode::Command { .. }
+            )
+    }) {
         render_tickets(frame, body, app, state);
         frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
@@ -137,19 +176,37 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.economy.as_ref().filter(|_| app.active_view() == Some(View::Economy) && matches!(app.mode, Mode::Normal | Mode::Help { .. } | Mode::ConfirmMask { .. })) {
+    if let Some(state) = app.economy.as_ref().filter(|_| {
+        app.active_view() == Some(View::Economy)
+            && matches!(
+                app.mode,
+                Mode::Normal | Mode::Help { .. } | Mode::ConfirmMask { .. }
+            )
+    }) {
         render_economy(frame, body, app, state);
         frame.render_widget(footer_line(app, footer.width), footer);
         if let Mode::ConfirmMask { pack, units, .. } = &app.mode {
             let units: Vec<String> = units.iter().map(|u| crate::model::plain(u, 80)).collect();
-            render_confirm_details(frame, " Approve tool mask ", &format!("mask these tools for {}?", crate::model::plain(pack, 80)), &[units.join(", "), "The pack will not be offered them again.".to_string()], PEACH);
+            render_confirm_details(
+                frame,
+                " Approve tool mask ",
+                &format!("mask these tools for {}?", crate::model::plain(pack, 80)),
+                &[
+                    units.join(", "),
+                    "The pack will not be offered them again.".to_string(),
+                ],
+                PEACH,
+            );
         }
         if matches!(app.mode, Mode::Help { .. }) {
             render_help(frame, app);
         }
         return;
     }
-    if let Some(state) = app.backlog.as_ref().filter(|_| app.active_view() == Some(View::Backlog) && matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+    if let Some(state) = app.backlog.as_ref().filter(|_| {
+        app.active_view() == Some(View::Backlog)
+            && matches!(app.mode, Mode::Normal | Mode::Help { .. })
+    }) {
         render_backlog(frame, body, app, state);
         frame.render_widget(footer_line(app, footer.width), footer);
         if matches!(app.mode, Mode::Help { .. }) {
@@ -157,38 +214,72 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.pulls.as_ref().filter(|_| app.active_view() == Some(View::Pulls) && {
-        matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ConfirmClose { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help { .. })
+    if let Some(state) = app.pulls.as_ref().filter(|_| {
+        app.active_view() == Some(View::Pulls) && {
+            matches!(
+                app.mode,
+                Mode::Normal
+                    | Mode::ConfirmMerge { .. }
+                    | Mode::ConfirmClose { .. }
+                    | Mode::ClonePrompt { .. }
+                    | Mode::PrActions { .. }
+                    | Mode::Help { .. }
+            )
+        }
     }) {
         render_pulls(frame, body, app, state);
         frame.render_widget(footer_line(app, footer.width), footer);
         match &app.mode {
             Mode::ConfirmMerge { repo, number } => {
-                render_confirm_pr(frame, app, repo, *number, " Merge? ", "Merged the way the repo allows, and its branch is deleted.", GREEN);
+                render_confirm_pr(
+                    frame,
+                    app,
+                    repo,
+                    *number,
+                    " Merge? ",
+                    "Merged the way the repo allows, and its branch is deleted.",
+                    GREEN,
+                );
             }
             Mode::ConfirmClose { repo, number } => {
-                render_confirm_pr(frame, app, repo, *number, " Close PR? ", "Closed without merging. Its branch stays.", RED);
+                render_confirm_pr(
+                    frame,
+                    app,
+                    repo,
+                    *number,
+                    " Close PR? ",
+                    "Closed without merging. Its branch stays.",
+                    RED,
+                );
             }
-            Mode::ClonePrompt { repo, query, all, cursor, .. } => render_clone_prompt(frame, repo, query, all, *cursor),
+            Mode::ClonePrompt {
+                repo,
+                query,
+                all,
+                cursor,
+                ..
+            } => render_clone_prompt(frame, repo, query, all, *cursor),
             Mode::PrActions { cursor } => render_pr_actions(frame, app, *cursor),
             Mode::Help { .. } => render_help(frame, app),
             _ => {}
         }
         return;
     }
-    if let Some(state) = app.slack.as_ref().filter(|_| app.active_view() == Some(View::Slack) && {
-        matches!(
-            app.mode,
-            Mode::Normal
-                | Mode::SlackSnooze { .. }
-                | Mode::SlackDismiss { .. }
-                | Mode::SlackPick { .. }
-                | Mode::SlackReply { .. }
-                | Mode::SlackTask { .. }
-                | Mode::SlackWatchAdd { .. }
-                | Mode::SlackActions { .. }
-                | Mode::Help { .. }
-        )
+    if let Some(state) = app.slack.as_ref().filter(|_| {
+        app.active_view() == Some(View::Slack) && {
+            matches!(
+                app.mode,
+                Mode::Normal
+                    | Mode::SlackSnooze { .. }
+                    | Mode::SlackDismiss { .. }
+                    | Mode::SlackPick { .. }
+                    | Mode::SlackReply { .. }
+                    | Mode::SlackTask { .. }
+                    | Mode::SlackWatchAdd { .. }
+                    | Mode::SlackActions { .. }
+                    | Mode::Help { .. }
+            )
+        }
     }) {
         render_slack(frame, body, app, state);
         frame.render_widget(footer_line(app, footer.width), footer);
@@ -198,10 +289,24 @@ pub fn draw(frame: &mut Frame, app: &App) {
         match &app.mode {
             Mode::SlackSnooze { cursor, .. } => render_slack_snooze(frame, *cursor),
             Mode::SlackDismiss { .. } => render_slack_dismiss(frame),
-            Mode::SlackPick { id, relation, cursor } => render_slack_pick(frame, app, id, *relation, *cursor),
-            Mode::SlackReply { id, area, vim, nudge, .. } => render_slack_reply(frame, app, id, area, vim, *nudge),
-            Mode::SlackTask { id, title, repo } => render_slack_task(frame, app, id, title, repo.as_deref()),
-            Mode::SlackWatchAdd { query, cursor } => render_slack_watch_add(frame, app, query, *cursor),
+            Mode::SlackPick {
+                id,
+                relation,
+                cursor,
+            } => render_slack_pick(frame, app, id, *relation, *cursor),
+            Mode::SlackReply {
+                id,
+                area,
+                vim,
+                nudge,
+                ..
+            } => render_slack_reply(frame, app, id, area, vim, *nudge),
+            Mode::SlackTask { id, title, repo } => {
+                render_slack_task(frame, app, id, title, repo.as_deref())
+            }
+            Mode::SlackWatchAdd { query, cursor } => {
+                render_slack_watch_add(frame, app, query, *cursor)
+            }
             Mode::SlackActions { cursor } => render_slack_actions(frame, app, *cursor),
             Mode::Help { .. } => render_help(frame, app),
             _ => {}
@@ -214,11 +319,25 @@ pub fn draw(frame: &mut Frame, app: &App) {
     {
         // Right-aligned on the header; the indicator has priority, so the left side is cut with `…` where the two meet.
         let w = (note.width() as u16 + 1).min(header.width);
-        let left = Rect { width: header.width - w, ..header };
+        let left = Rect {
+            width: header.width - w,
+            ..header
+        };
         frame.render_widget(Clear, header);
         frame.render_widget(header_fit(app, left.width as usize), left);
-        let rect = Rect { x: header.right() - w, width: w, ..header };
-        frame.render_widget(note, Rect { x: rect.x + 1, width: w - 1, ..rect });
+        let rect = Rect {
+            x: header.right() - w,
+            width: w,
+            ..header
+        };
+        frame.render_widget(
+            note,
+            Rect {
+                x: rect.x + 1,
+                width: w - 1,
+                ..rect
+            },
+        );
     }
     frame.render_widget(footer_line(app, footer.width), footer);
 
@@ -247,7 +366,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
             refs: &app.detail_refs,
             hits: &app.evidence_hits,
         };
-        detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
+        detail::render(
+            frame,
+            detail::popup_area(frame.area(), app.detail_full),
+            &view,
+        );
     }
     match &app.mode {
         Mode::EnginePicker { pack, cursor, .. } => {
@@ -258,23 +381,67 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::Reason { id, approve, text } => {
-            let short = app.task(id).map(|t| t.short_id().to_string()).unwrap_or_default();
-            let (title, border) = if *approve { (format!("guidance for the retry of #{short} (optional)"), ACCENT) } else { (format!("send back #{short} — why?"), ACCENT) };
-            let placeholder = if text.is_empty() && !*approve { app.task(id).and_then(|t| reason_placeholder(&t.state)) } else { None };
+            let short = app
+                .task(id)
+                .map(|t| t.short_id().to_string())
+                .unwrap_or_default();
+            let (title, border) = if *approve {
+                (
+                    format!("guidance for the retry of #{short} (optional)"),
+                    ACCENT,
+                )
+            } else {
+                (format!("send back #{short} — why?"), ACCENT)
+            };
+            let placeholder = if text.is_empty() && !*approve {
+                app.task(id).and_then(|t| reason_placeholder(&t.state))
+            } else {
+                None
+            };
             if app.over_task().is_some() {
-                render_prompt(frame, app, &title, text, placeholder.unwrap_or_default(), "enter send · esc cancel", border);
+                render_prompt(
+                    frame,
+                    app,
+                    &title,
+                    text,
+                    placeholder.unwrap_or_default(),
+                    "enter send · esc cancel",
+                    border,
+                );
             }
         }
         Mode::Reject { id, text } => {
-            let short = app.task(id).map(|t| t.short_id().to_string()).unwrap_or_default();
+            let short = app
+                .task(id)
+                .map(|t| t.short_id().to_string())
+                .unwrap_or_default();
             if app.over_task().is_some() {
-                render_prompt(frame, app, &format!("reject #{short} — why? (the card ends)"), text, "", "enter reject · esc cancel", RED);
+                render_prompt(
+                    frame,
+                    app,
+                    &format!("reject #{short} — why? (the card ends)"),
+                    text,
+                    "",
+                    "enter reject · esc cancel",
+                    RED,
+                );
             }
         }
         Mode::EvidenceNote { id, text } => {
-            let short = app.task(id).map(|t| t.short_id().to_string()).unwrap_or_default();
+            let short = app
+                .task(id)
+                .map(|t| t.short_id().to_string())
+                .unwrap_or_default();
             if app.over_task().is_some() {
-                render_prompt(frame, app, &format!("#{short} — why was the pack not useful?"), text, "", "enter send · esc cancel", PEACH);
+                render_prompt(
+                    frame,
+                    app,
+                    &format!("#{short} — why was the pack not useful?"),
+                    text,
+                    "",
+                    "enter send · esc cancel",
+                    PEACH,
+                );
             }
         }
         Mode::ConfirmApprove(held) => {
@@ -282,7 +449,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 render_approve(frame, &held.question, task);
             }
         }
-        Mode::ConfirmQuit => render_confirm_box(frame, &app.quit_question(), " Quit? ", "The machine keeps working; only the board closes.", PEACH),
+        Mode::ConfirmQuit => render_confirm_box(
+            frame,
+            &app.quit_question(),
+            " Quit? ",
+            "The machine keeps working; only the board closes.",
+            PEACH,
+        ),
         Mode::ConfirmDelete(id) => {
             if let Some(task) = app.task(id) {
                 render_confirm(
@@ -333,8 +506,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 );
             }
         }
-        Mode::EditTicket { id, area, vim } | Mode::Answer { id, area, vim } | Mode::EditCases { id, area, vim } => {
-            let rect = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
+        Mode::EditTicket { id, area, vim }
+        | Mode::Answer { id, area, vim }
+        | Mode::EditCases { id, area, vim } => {
+            let rect = centered(
+                frame.area(),
+                frame.area().width * 9 / 10,
+                frame.area().height * 8 / 10,
+            );
             frame.render_widget(Clear, rect);
             let (label, mode_color) = match vim.mode() {
                 crate::vim::Mode::Normal => (" NORMAL ", ACCENT),
@@ -363,13 +542,28 @@ pub fn draw(frame: &mut Frame, app: &App) {
             area.set_cursor_style(Style::new().bg(c(mode_color)).fg(c(BASE)));
             frame.render_widget(&area, rect);
         }
-        Mode::EditPlan { id, plan_area, ticket_area, focus, plan_vim, ticket_vim } => {
-            let outer = centered(frame.area(), frame.area().width * 95 / 100, frame.area().height * 9 / 10);
+        Mode::EditPlan {
+            id,
+            plan_area,
+            ticket_area,
+            focus,
+            plan_vim,
+            ticket_vim,
+        } => {
+            let outer = centered(
+                frame.area(),
+                frame.area().width * 95 / 100,
+                frame.area().height * 9 / 10,
+            );
             frame.render_widget(Clear, outer);
             let [plan_rect, ticket_rect] =
-                Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)]).areas(outer);
+                Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)])
+                    .areas(outer);
 
-            let paint = |area: &mut TextArea<'static>, vim: &crate::vim::Vim, pane: crate::app::PlanPane, title: String| {
+            let paint = |area: &mut TextArea<'static>,
+                         vim: &crate::vim::Vim,
+                         pane: crate::app::PlanPane,
+                         title: String| {
                 let focused = *focus == pane;
                 let (label, mode_color) = match vim.mode() {
                     crate::vim::Mode::Normal => (" NORMAL ", ACCENT),
@@ -384,8 +578,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         .title(title);
                     if focused {
                         block = block
-                            .title(Line::from(format!("· {} ", keys::editor_line(app))).fg(c(SUBTEXT0)))
-                            .title_bottom(Line::from(label).bold().fg(c(mode_color)).left_aligned());
+                            .title(
+                                Line::from(format!("· {} ", keys::editor_line(app)))
+                                    .fg(c(SUBTEXT0)),
+                            )
+                            .title_bottom(
+                                Line::from(label).bold().fg(c(mode_color)).left_aligned(),
+                            );
                     }
                     area.set_block(block);
                 }
@@ -400,24 +599,53 @@ pub fn draw(frame: &mut Frame, app: &App) {
             };
 
             let mut plan_area = plan_area.clone();
-            paint(&mut plan_area, plan_vim, crate::app::PlanPane::Plan, " plan ".to_string());
+            paint(
+                &mut plan_area,
+                plan_vim,
+                crate::app::PlanPane::Plan,
+                " plan ".to_string(),
+            );
             frame.render_widget(&plan_area, plan_rect);
 
             let mut ticket_area = ticket_area.clone();
-            let ticket_title = app.task(id).map(|t| format!(" ticket #{} ", t.short_id())).unwrap_or_else(|| " ticket ".to_string());
-            paint(&mut ticket_area, ticket_vim, crate::app::PlanPane::Ticket, ticket_title);
+            let ticket_title = app
+                .task(id)
+                .map(|t| format!(" ticket #{} ", t.short_id()))
+                .unwrap_or_else(|| " ticket ".to_string());
+            paint(
+                &mut ticket_area,
+                ticket_vim,
+                crate::app::PlanPane::Ticket,
+                ticket_title,
+            );
             frame.render_widget(&ticket_area, ticket_rect);
         }
         Mode::Actions { cursor } => render_actions(frame, app, *cursor),
-        Mode::RepoPicker { id, query, all, cursor } => {
+        Mode::RepoPicker {
+            id,
+            query,
+            all,
+            cursor,
+        } => {
             if let Some(task) = app.task(id) {
                 render_repo_picker(frame, task, query, all, *cursor);
             }
         }
-        Mode::ConfirmMany { action, ids } => render_note(frame, " Marked tickets ", &format!("{}  y / n", action.question(ids.len()))),
-        Mode::ConfirmApproveMany { ids, question, .. } => render_approve_many(frame, app, ids, question),
+        Mode::ConfirmMany { action, ids } => render_note(
+            frame,
+            " Marked tickets ",
+            &format!("{}  y / n", action.question(ids.len())),
+        ),
+        Mode::ConfirmApproveMany { ids, question, .. } => {
+            render_approve_many(frame, app, ids, question)
+        }
         Mode::ConfirmBase { .. } | Mode::ConfirmMask { .. } => {}
-        Mode::JiraLink { id, query, hits, cursor } => {
+        Mode::JiraLink {
+            id,
+            query,
+            hits,
+            cursor,
+        } => {
             if let Some(task) = app.task(id) {
                 render_jira_link(frame, task, query, hits, *cursor);
             }
@@ -425,7 +653,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Mode::ConfirmJiraUnlink(id) => {
             if let Some(task) = app.task(id) {
                 let key = task.jira_key().unwrap_or("the issue");
-                render_confirm(frame, task, &format!(" unlink {key}? "), "The ticket forgets the issue; nothing changes in Jira.");
+                render_confirm(
+                    frame,
+                    task,
+                    &format!(" unlink {key}? "),
+                    "The ticket forgets the issue; nothing changes in Jira.",
+                );
             }
         }
         Mode::Help { .. } => render_help(frame, app),
@@ -450,7 +683,10 @@ fn clip_line(line: Line<'static>, max: usize) -> Line<'static> {
         }
         let rest = max - used;
         if rest > 0 {
-            spans.push(Span::styled(text::ellipsis(&span.content, rest), span.style));
+            spans.push(Span::styled(
+                text::ellipsis(&span.content, rest),
+                span.style,
+            ));
         }
         break;
     }
@@ -465,7 +701,9 @@ fn header_fit(app: &App, width: usize) -> Line<'static> {
         return full;
     }
     let waiting = app.tasks.iter().filter(|t| t.look().needs_person()).count();
-    let need = Span::from(format!("  {waiting} need you")).fg(c(if waiting > 0 { PEACH } else { SUBTEXT0 })).bold();
+    let need = Span::from(format!("  {waiting} need you"))
+        .fg(c(if waiting > 0 { PEACH } else { SUBTEXT0 }))
+        .bold();
     let mut spans = full.spans;
     if app.online {
         spans[1] = need.clone();
@@ -484,19 +722,25 @@ fn header_line(app: &App) -> Line<'static> {
         let total = app.tasks.len();
         let running = app.tasks.iter().filter(|t| t.running).count();
         let queued = app.tasks.iter().filter(|t| t.queued).count();
-        let waiting = app
-            .tasks
-            .iter()
-            .filter(|t| t.look().needs_person())
-            .count();
-        let queued_part = if queued > 0 { format!(" · {queued} queued") } else { String::new() };
+        let waiting = app.tasks.iter().filter(|t| t.look().needs_person()).count();
+        let queued_part = if queued > 0 {
+            format!(" · {queued} queued")
+        } else {
+            String::new()
+        };
         spans.push(
             Span::from(format!(
                 "  {total} tickets · {running}{} running{queued_part} · {waiting} need you{}",
-                app.slots.as_ref().map_or(String::new(), |s| format!("/{}", s.max)),
-                if app.marked.is_empty() { String::new() } else { format!(" · {} marked", app.marked.len()) }
+                app.slots
+                    .as_ref()
+                    .map_or(String::new(), |s| format!("/{}", s.max)),
+                if app.marked.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {} marked", app.marked.len())
+                }
             ))
-                .fg(c(SUBTEXT0)),
+            .fg(c(SUBTEXT0)),
         );
     } else {
         spans.push(
@@ -511,7 +755,11 @@ fn header_line(app: &App) -> Line<'static> {
     }
     let overdue = app.overdue_count();
     if app.online && overdue > 0 {
-        spans.push(Span::from(format!("  ‼ {overdue} overdue")).fg(c(RED)).bold());
+        spans.push(
+            Span::from(format!("  ‼ {overdue} overdue"))
+                .fg(c(RED))
+                .bold(),
+        );
     }
     if app.slots.as_ref().is_some_and(|s| s.draining) {
         spans.push(Span::from("  [DRAINING]").fg(c(PEACH)).bold());
@@ -523,7 +771,11 @@ fn header_line(app: &App) -> Line<'static> {
         spans.push(Span::from("  [this repo only]").fg(c(PEACH)).bold());
     }
     if !app.filter.trim().is_empty() {
-        spans.push(Span::from(format!("  [filter: {}]", app.filter)).fg(c(ACCENT)).bold());
+        spans.push(
+            Span::from(format!("  [filter: {}]", app.filter))
+                .fg(c(ACCENT))
+                .bold(),
+        );
     }
     let tag = match app.active_view() {
         Some(View::Floor) => Some("  [floor]"),
@@ -558,26 +810,48 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
             Span::from(format!("{buf}▏")),
             Span::from("   enter create and edit · esc cancel").fg(c(SUBTEXT0)),
         ]),
-        Mode::EditTicket { vim, .. } | Mode::Answer { vim, .. } | Mode::EditCases { vim, .. } | Mode::SlackReply { vim, .. } => {
+        Mode::EditTicket { vim, .. }
+        | Mode::Answer { vim, .. }
+        | Mode::EditCases { vim, .. }
+        | Mode::SlackReply { vim, .. } => {
             let save = match app.mode {
                 Mode::Answer { .. } => "send answers",
                 Mode::SlackReply { .. } => "send",
                 _ => "save",
             };
             match vim.mode() {
-                crate::vim::Mode::Normal => hint(&[("i/a/o", "insert"), ("hjkl", "move"), ("dd/x", "delete"), ("ctrl+s", save), ("esc", "cancel")]),
+                crate::vim::Mode::Normal => hint(&[
+                    ("i/a/o", "insert"),
+                    ("hjkl", "move"),
+                    ("dd/x", "delete"),
+                    ("ctrl+s", save),
+                    ("esc", "cancel"),
+                ]),
                 crate::vim::Mode::Insert => hint(&[("esc", "normal mode"), ("ctrl+s", save)]),
             }
         }
-        Mode::EditPlan { focus, plan_vim, ticket_vim, .. } => {
+        Mode::EditPlan {
+            focus,
+            plan_vim,
+            ticket_vim,
+            ..
+        } => {
             let (vim, pane) = match focus {
                 crate::app::PlanPane::Plan => (plan_vim, "plan"),
                 crate::app::PlanPane::Ticket => (ticket_vim, "ticket"),
             };
             match vim.mode() {
-                crate::vim::Mode::Normal => hint(&[("tab", "switch pane"), ("i/a/o", "insert"), ("hjkl", "move"), ("ctrl+s", "save both"), ("esc", "cancel")]),
+                crate::vim::Mode::Normal => hint(&[
+                    ("tab", "switch pane"),
+                    ("i/a/o", "insert"),
+                    ("hjkl", "move"),
+                    ("ctrl+s", "save both"),
+                    ("esc", "cancel"),
+                ]),
                 crate::vim::Mode::Insert => Line::from(vec![
-                    Span::from(format!(" editing the {pane} ")).fg(c(ACCENT)).bold(),
+                    Span::from(format!(" editing the {pane} "))
+                        .fg(c(ACCENT))
+                        .bold(),
                     Span::from("   esc normal mode · ctrl+s save both").fg(c(SUBTEXT0)),
                 ]),
             }
@@ -588,9 +862,20 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
             Span::from("   enter keep · esc clear").fg(c(SUBTEXT0)),
         ]),
         // Over the task view the prompt is a box on the card; the footer keeps the two keys.
-        Mode::Reason { .. } | Mode::Reject { .. } | Mode::EvidenceNote { .. } if app.over_task().is_some() => hint(&[("enter", "send"), ("esc", "cancel")]),
+        Mode::Reason { .. } | Mode::Reject { .. } | Mode::EvidenceNote { .. }
+            if app.over_task().is_some() =>
+        {
+            hint(&[("enter", "send"), ("esc", "cancel")])
+        }
         Mode::Reason { approve, text, .. } => {
-            let placeholder = if text.is_empty() && !*approve { app.tasks.iter().find(|t| matches!(&app.mode, Mode::Reason { id, .. } if *id == t.id)).and_then(|t| reason_placeholder(&t.state)) } else { None };
+            let placeholder = if text.is_empty() && !*approve {
+                app.tasks
+                    .iter()
+                    .find(|t| matches!(&app.mode, Mode::Reason { id, .. } if *id == t.id))
+                    .and_then(|t| reason_placeholder(&t.state))
+            } else {
+                None
+            };
             let prompt = if *approve {
                 " guidance for the retry (optional): "
             } else {
@@ -599,12 +884,15 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
             Line::from(vec![
                 Span::from(prompt).fg(c(ACCENT)).bold(),
                 Span::from(format!("{text}▏")),
-                Span::from(placeholder.map(|p| format!(" {p}")).unwrap_or_default()).fg(c(SUBTEXT0)),
+                Span::from(placeholder.map(|p| format!(" {p}")).unwrap_or_default())
+                    .fg(c(SUBTEXT0)),
                 Span::from("   enter send · esc cancel").fg(c(SUBTEXT0)),
             ])
         }
         Mode::EvidenceNote { text, .. } => Line::from(vec![
-            Span::from(" why was the pack not useful: ").fg(c(PEACH)).bold(),
+            Span::from(" why was the pack not useful: ")
+                .fg(c(PEACH))
+                .bold(),
             Span::from(format!("{text}▏")),
             Span::from("   enter send · esc cancel").fg(c(SUBTEXT0)),
         ]),
@@ -613,27 +901,77 @@ fn footer_line(app: &App, width: u16) -> Line<'static> {
             Span::from(format!("{text}▏")),
             Span::from("   enter reject (the card ends) · esc cancel").fg(c(SUBTEXT0)),
         ]),
-        Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) | Mode::ConfirmWorktree(_) | Mode::ConfirmQuit => {
-            hint(&[("y", "yes"), ("n", "no")])
-        }
+        Mode::ConfirmDelete(_)
+        | Mode::ConfirmAbort(_)
+        | Mode::ConfirmWorktree(_)
+        | Mode::ConfirmQuit => hint(&[("y", "yes"), ("n", "no")]),
         Mode::ConfirmApprove(_) => hint(&[("y/enter", "approve"), ("n/esc", "cancel")]),
-        Mode::Actions { .. } | Mode::PrActions { .. } | Mode::SlackActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
-        Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
+        Mode::Actions { .. } | Mode::PrActions { .. } | Mode::SlackActions { .. } => {
+            hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")])
+        }
+        Mode::RepoPicker { .. } => hint(&[
+            ("type", "filter"),
+            ("↑/↓", "move"),
+            ("enter", "set"),
+            ("esc", "cancel"),
+        ]),
         Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
         Mode::ConfirmClose { .. } => hint(&[("y", "close the PR"), ("n", "cancel")]),
-        Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
-        Mode::RecordEdit { .. } => hint(&[("j/k", "field"), ("h/l", "value"), ("enter", "send what changed"), ("esc", "cancel")]),
-        Mode::ArchiveReason { .. } => hint(&[(&format!("j/k 1-{}", crate::model::ARCHIVE_REASONS.len()), "pick"), ("enter", "archive"), ("esc", "cancel")]),
+        Mode::JiraLink { .. } => hint(&[
+            ("type", "search from 3 chars"),
+            ("↑/↓", "move"),
+            ("enter", "link (row 0 creates)"),
+            ("ctrl+n", "create"),
+            ("esc", "cancel"),
+        ]),
+        Mode::RecordEdit { .. } => hint(&[
+            ("j/k", "field"),
+            ("h/l", "value"),
+            ("enter", "send what changed"),
+            ("esc", "cancel"),
+        ]),
+        Mode::ArchiveReason { .. } => hint(&[
+            (
+                &format!("j/k 1-{}", crate::model::ARCHIVE_REASONS.len()),
+                "pick",
+            ),
+            ("enter", "archive"),
+            ("esc", "cancel"),
+        ]),
         Mode::EditChoice(_) => hint(&[("p/c/t", "pick"), ("esc", "back to the task")]),
-        Mode::EscalationReason { .. } => hint(&[(&format!("j/k 1-{}", crate::model::ESCALATION_REASONS.len()), "pick"), ("enter", "correct the reason"), ("esc", "cancel")]),
+        Mode::EscalationReason { .. } => hint(&[
+            (
+                &format!("j/k 1-{}", crate::model::ESCALATION_REASONS.len()),
+                "pick",
+            ),
+            ("enter", "correct the reason"),
+            ("esc", "cancel"),
+        ]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::EnginePicker { .. } => hint(&[("j/k", "move"), ("enter", "set"), ("esc", "back")]),
-        Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
+        Mode::ClonePrompt { .. } => hint(&[
+            ("type", "filter folders"),
+            ("↑/↓", "move"),
+            ("enter", "clone here"),
+            ("esc", "stay read-only"),
+        ]),
         Mode::SlackPick { .. } => hint(&[("j/k", "pick"), ("enter", "save"), ("esc", "cancel")]),
-        Mode::SlackSnooze { .. } => hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")]),
-        Mode::SlackDismiss { .. } => hint(&[("n", "no reply needed"), ("b", "bad draft"), ("s", "skip"), ("esc", "cancel")]),
+        Mode::SlackSnooze { .. } => {
+            hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")])
+        }
+        Mode::SlackDismiss { .. } => hint(&[
+            ("n", "no reply needed"),
+            ("b", "bad draft"),
+            ("s", "skip"),
+            ("esc", "cancel"),
+        ]),
         Mode::SlackTask { .. } => hint(&[("y", "create the ticket"), ("n", "cancel")]),
-        Mode::SlackWatchAdd { .. } => hint(&[("type", "@handle, #channel or a word"), ("↑/↓", "pick"), ("enter", "watch"), ("esc", "cancel")]),
+        Mode::SlackWatchAdd { .. } => hint(&[
+            ("type", "@handle, #channel or a word"),
+            ("↑/↓", "pick"),
+            ("enter", "watch"),
+            ("esc", "cancel"),
+        ]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
         Mode::ConfirmApproveMany { .. } => hint(&[("y", "approve them"), ("n", "cancel")]),
@@ -663,13 +1001,22 @@ fn view_footer(app: &App, width: u16) -> Line<'static> {
 /// repeated here, so a key the bar had no room for is still on screen; nothing else is listed that
 /// does not work (an edit on a running card, a send back at no gate).
 fn detail_footer(app: &App, width: u16) -> Line<'static> {
-    fitted_footer(&keys::detail_footer(app), &[("?", "all keys"), ("esc", "back")], width)
+    fitted_footer(
+        &keys::detail_footer(app),
+        &[("?", "all keys"), ("esc", "back")],
+        width,
+    )
 }
 
 /// A footer fitted to `width`: `keys` in priority order while they fit beside `tail`, whole hints only,
 /// then `tail`. On a terminal too narrow for the tail, its first hint alone.
 fn fitted_footer(keys: &[(String, String)], tail: &[(&str, &str)], width: u16) -> Line<'static> {
-    let seg = |key: &str, desc: &str| vec![Span::from(format!(" {key} ")).fg(c(BASE)).bg(c(ACCENT)), Span::from(format!(" {desc}  ")).fg(c(SUBTEXT0))];
+    let seg = |key: &str, desc: &str| {
+        vec![
+            Span::from(format!(" {key} ")).fg(c(BASE)).bg(c(ACCENT)),
+            Span::from(format!(" {desc}  ")).fg(c(SUBTEXT0)),
+        ]
+    };
     let tail_spans: Vec<Span<'static>> = tail.iter().flat_map(|(k, d)| seg(k, d)).collect();
     let room = (width as usize).saturating_sub(1);
     let mut spans = vec![Span::raw(" ")];
@@ -698,13 +1045,21 @@ const FOOTER_KEYS: usize = 8;
 
 /// The footer of a scope: its `On` bindings by weight, `?` first.
 fn scope_footer(app: &App, scope: Scope) -> Line<'static> {
-    let keys: Vec<(String, String)> = keys::footer_keys(app, scope, FOOTER_KEYS).into_iter().map(|b| (b.short_keys(), b.label.to_string())).collect();
+    let keys: Vec<(String, String)> = keys::footer_keys(app, scope, FOOTER_KEYS)
+        .into_iter()
+        .map(|b| (b.short_keys(), b.label.to_string()))
+        .collect();
     hint_owned(&keys)
 }
 
 /// The which-key strip: ` g ▸  g first ticket   s order by stage …   esc `.
 fn which_key_line(prefix: char, seconds: &[(char, &str)]) -> Line<'static> {
-    let mut spans = vec![Span::from(format!(" {prefix} ▸ ")).fg(c(BASE)).bg(c(ACCENT)).bold()];
+    let mut spans = vec![
+        Span::from(format!(" {prefix} ▸ "))
+            .fg(c(BASE))
+            .bg(c(ACCENT))
+            .bold(),
+    ];
     for (key, label) in seconds {
         spans.push(Span::from(format!("  {key} ")).fg(c(ACCENT)).bold());
         spans.push(Span::from((*label).to_string()).fg(c(SUBTEXT0)));
@@ -747,7 +1102,9 @@ pub(crate) struct BoardLayout {
 
 impl BoardLayout {
     pub fn hidden(&self) -> Vec<usize> {
-        (0..COLUMNS.len()).filter(|c| !self.slots.iter().any(|s| s.column == *c)).collect()
+        (0..COLUMNS.len())
+            .filter(|c| !self.slots.iter().any(|s| s.column == *c))
+            .collect()
     }
 }
 
@@ -760,12 +1117,27 @@ impl BoardLayout {
 pub(crate) fn board_layout(app: &App, width: u16) -> BoardLayout {
     let n = COLUMNS.len();
     let focus = app.focus.min(n - 1);
-    let needs: Vec<bool> = (0..n).map(|c| app.indices(c).iter().any(|&i| app.tasks[i].look().needs_person())).collect();
+    let needs: Vec<bool> = (0..n)
+        .map(|c| {
+            app.indices(c)
+                .iter()
+                .any(|&i| app.tasks[i].look().needs_person())
+        })
+        .collect();
     let empty: Vec<bool> = (0..n).map(|c| app.indices(c).is_empty()).collect();
     let mut full: Vec<bool> = (0..n).map(|c| !app.folded.contains(&c)).collect();
     let mut shown = vec![true; n];
     let fits = |full: &[bool], shown: &[bool]| -> bool {
-        let used: u32 = (0..n).filter(|&c| shown[c]).map(|c| u32::from(if full[c] { MIN_COLUMN_WIDTH } else { FOLD_WIDTH })).sum();
+        let used: u32 = (0..n)
+            .filter(|&c| shown[c])
+            .map(|c| {
+                u32::from(if full[c] {
+                    MIN_COLUMN_WIDTH
+                } else {
+                    FOLD_WIDTH
+                })
+            })
+            .sum();
         used <= u32::from(width)
     };
 
@@ -797,16 +1169,31 @@ pub(crate) fn board_layout(app: &App, width: u16) -> BoardLayout {
     let room = width.saturating_sub(narrow);
     let even = room.checked_div(wide).unwrap_or(0);
     // Past the cap the rest is margin; under it, an uneven width goes one cell at a time to the first columns.
-    let (share, extra) = (even.min(MAX_COLUMN_WIDTH), if even < MAX_COLUMN_WIDTH { room.checked_rem(wide).unwrap_or(0) } else { 0 });
+    let (share, extra) = (
+        even.min(MAX_COLUMN_WIDTH),
+        if even < MAX_COLUMN_WIDTH {
+            room.checked_rem(wide).unwrap_or(0)
+        } else {
+            0
+        },
+    );
     let mut given = 0;
     let slots = shown
         .into_iter()
         .map(|column| {
             if full[column] {
                 given += 1;
-                Slot { column, width: share + u16::from(given <= extra), full: true }
+                Slot {
+                    column,
+                    width: share + u16::from(given <= extra),
+                    full: true,
+                }
             } else {
-                Slot { column, width: FOLD_WIDTH, full: false }
+                Slot {
+                    column,
+                    width: FOLD_WIDTH,
+                    full: false,
+                }
             }
         })
         .collect();
@@ -824,7 +1211,10 @@ pub(crate) fn board_note(app: &App, width: u16) -> Option<Line<'static>> {
     if aside.is_empty() {
         return None;
     }
-    let arrow = match (aside.iter().any(|&c| c < app.focus), aside.iter().any(|&c| c > app.focus)) {
+    let arrow = match (
+        aside.iter().any(|&c| c < app.focus),
+        aside.iter().any(|&c| c > app.focus),
+    ) {
         (true, true) => "↔",
         (true, false) => "←",
         _ => "→",
@@ -832,9 +1222,22 @@ pub(crate) fn board_note(app: &App, width: u16) -> Option<Line<'static>> {
     let mut spans = vec![Span::styled(format!("{arrow} "), theme::label())];
     for (i, column) in aside.into_iter().enumerate() {
         let indices = app.indices(column);
-        let need = indices.iter().filter(|&&j| app.tasks[j].look().needs_person()).count();
-        spans.push(Span::styled(format!("{}{} ", if i == 0 { "" } else { "· " }, COLUMNS[column]), theme::label()));
-        spans.push(if need > 0 { Span::styled(format!("{need} {}", look_glyph(Look::NeedsYou)), theme::needs_you().bold()) } else { Span::styled(indices.len().to_string(), theme::label()) });
+        let need = indices
+            .iter()
+            .filter(|&&j| app.tasks[j].look().needs_person())
+            .count();
+        spans.push(Span::styled(
+            format!("{}{} ", if i == 0 { "" } else { "· " }, COLUMNS[column]),
+            theme::label(),
+        ));
+        spans.push(if need > 0 {
+            Span::styled(
+                format!("{need} {}", look_glyph(Look::NeedsYou)),
+                theme::needs_you().bold(),
+            )
+        } else {
+            Span::styled(indices.len().to_string(), theme::label())
+        });
         spans.push(Span::raw(" "));
     }
     spans.pop();
@@ -852,7 +1255,8 @@ fn render_board(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
     let layout = board_layout(app, area.width);
-    let rects = Layout::horizontal(layout.slots.iter().map(|s| Constraint::Length(s.width))).split(area);
+    let rects =
+        Layout::horizontal(layout.slots.iter().map(|s| Constraint::Length(s.width))).split(area);
 
     app.column_rects.borrow_mut().clear();
     for (slot, rect) in layout.slots.iter().zip(rects.iter()) {
@@ -893,8 +1297,20 @@ pub(crate) fn card_at_row(app: &App, column: usize, area_width: u16, row: usize)
 }
 
 /// A card's lines as the board draws them, for the renderer and for hit-testing alike.
-fn board_card_lines(app: &App, task: &Task, spend_p90: Option<f64>, width: usize) -> Vec<Line<'static>> {
-    card_lines(task, spend_p90, app.marked.contains(&task.id), app.is_new(task), app.density, width)
+fn board_card_lines(
+    app: &App,
+    task: &Task,
+    spend_p90: Option<f64>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    card_lines(
+        task,
+        spend_p90,
+        app.marked.contains(&task.id),
+        app.is_new(task),
+        app.density,
+        width,
+    )
 }
 
 /// Every column at once: the focused one expanded, the rest collapsed to their header bar.
@@ -928,17 +1344,33 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
         Span::from(format!("{} ", indices.len())).fg(c(SUBTEXT0)),
     ];
     if expanded {
-        for look in [Look::Escalated, Look::NeedsYou, Look::Working, Look::Queued, Look::Paused] {
-            let count = indices.iter().filter(|&&i| app.tasks[i].look() == look).count();
+        for look in [
+            Look::Escalated,
+            Look::NeedsYou,
+            Look::Working,
+            Look::Queued,
+            Look::Paused,
+        ] {
+            let count = indices
+                .iter()
+                .filter(|&&i| app.tasks[i].look() == look)
+                .count();
             if count > 0 {
-                title.push(Span::from(format!("{}{count} ", look_glyph(look))).fg(look_color(look)));
+                title
+                    .push(Span::from(format!("{}{count} ", look_glyph(look))).fg(look_color(look)));
             }
         }
     } else {
         // Collapsed: the count, and what needs you, so a card waiting on the person is never only a number.
-        let need = indices.iter().filter(|&&i| app.tasks[i].look().needs_person()).count();
+        let need = indices
+            .iter()
+            .filter(|&&i| app.tasks[i].look().needs_person())
+            .count();
         if need > 0 {
-            title.push(Span::styled(format!("{}{need} ", look_glyph(Look::NeedsYou)), theme::needs_you()));
+            title.push(Span::styled(
+                format!("{}{need} ", look_glyph(Look::NeedsYou)),
+                theme::needs_you(),
+            ));
         }
     }
 
@@ -965,7 +1397,10 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
     for &i in &indices {
         let task = &app.tasks[i];
         if by_repo && last_repo != Some(task.repo_name()) {
-            let count = indices.iter().filter(|&&j| app.tasks[j].repo_name() == task.repo_name()).count();
+            let count = indices
+                .iter()
+                .filter(|&&j| app.tasks[j].repo_name() == task.repo_name())
+                .count();
             items.push(repo_separator(task.repo_name(), count, width));
             last_repo = Some(task.repo_name());
         }
@@ -979,7 +1414,12 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
 
     let mut state = ListState::default();
     if focused && !indices.is_empty() {
-        state.select(positions.get(app.selection[column]).copied().or(positions.last().copied()));
+        state.select(
+            positions
+                .get(app.selection[column])
+                .copied()
+                .or(positions.last().copied()),
+        );
     }
     frame.render_stateful_widget(list, area, &mut state);
     let mut offsets = app.list_offsets.borrow_mut();
@@ -996,7 +1436,9 @@ fn repo_separator(repo: Option<&str>, count: usize, width: usize) -> ListItem<'s
     let colour = repo.map_or(SUBTEXT0, |r| REPO_COLOURS[repo_colour_slot(r)]);
     let head = format!("── {name} {count} ");
     let rule = "─".repeat(width.saturating_sub(head.chars().count()));
-    ListItem::new(Line::from(Span::from(format!("{head}{rule}")).fg(c(colour))))
+    ListItem::new(Line::from(
+        Span::from(format!("{head}{rule}")).fg(c(colour)),
+    ))
 }
 
 /// A board card. One colour per repo, so a column scans by repo: the bar and the name share it.
@@ -1031,11 +1473,16 @@ fn card_prefix(task: &Task, marked: bool, is_new: bool) -> Vec<Span<'static>> {
 fn title_lines(title: &str, first: usize, rest: usize) -> Vec<String> {
     let first = first.max(4);
     let rest = rest.max(4);
-    let head = text::wrap(title, first, 0).into_iter().next().unwrap_or_default();
+    let head = text::wrap(title, first, 0)
+        .into_iter()
+        .next()
+        .unwrap_or_default();
     let taken = head.split_whitespace().count();
     let words: Vec<&str> = title.split_whitespace().collect();
     // A single word wider than the line wraps mid-word: cut it with an ellipsis instead.
-    if head.split_whitespace().collect::<Vec<_>>() != words[..taken.min(words.len())] || cells(&head) > first {
+    if head.split_whitespace().collect::<Vec<_>>() != words[..taken.min(words.len())]
+        || cells(&head) > first
+    {
         return vec![text::ellipsis(title, first)];
     }
     let remainder = words[taken..].join(" ");
@@ -1061,7 +1508,10 @@ fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
             continue;
         }
         let room = width.saturating_sub(used);
-        out.push(Span::styled(text::ellipsis(&span.content, room), span.style));
+        out.push(Span::styled(
+            text::ellipsis(&span.content, room),
+            span.style,
+        ));
         break;
     }
     Line::from(out)
@@ -1071,7 +1521,14 @@ fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
 /// needs more); `#id · repo`; the status with its age and badges; and, when comfortable, the worked /
 /// diff / tests line. Every line fits `width`, cut with `…`. Compact is the title alone with the
 /// status glyph and the age.
-fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> Vec<Line<'static>> {
+fn card_lines(
+    task: &Task,
+    spend_p90: Option<f64>,
+    marked: bool,
+    is_new: bool,
+    density: Density,
+    width: usize,
+) -> Vec<Line<'static>> {
     let look = task.look();
     let age = age(&task.updated_at, now_secs());
     // Red once a clock is past; yellow while the running stage is past 80% of its target.
@@ -1097,7 +1554,11 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
         spans.push(Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)));
         let used: usize = spans.iter().map(Span::width).sum::<usize>() + cells(&age) + 1;
         let title = Span::from(text::ellipsis(&title, width.saturating_sub(used).max(4))).bold();
-        spans.push(if task.overdue() { title.fg(c(RED)) } else { title });
+        spans.push(if task.overdue() {
+            title.fg(c(RED))
+        } else {
+            title
+        });
         spans.push(Span::from(format!(" {age}")).fg(c(age_colour)));
         return vec![Line::from(spans)];
     }
@@ -1105,10 +1566,19 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     let mut lines = Vec::new();
     let mut head = card_prefix(task, marked, is_new);
     let prefix: usize = head.iter().map(Span::width).sum();
-    let mut parts = title_lines(&title, width.saturating_sub(prefix), width.saturating_sub(1)).into_iter();
+    let mut parts = title_lines(
+        &title,
+        width.saturating_sub(prefix),
+        width.saturating_sub(1),
+    )
+    .into_iter();
     let bold = |text: String| {
         let span = Span::from(text).bold();
-        if task.overdue() { span.fg(c(RED)) } else { span }
+        if task.overdue() {
+            span.fg(c(RED))
+        } else {
+            span
+        }
     };
     head.push(bold(parts.next().unwrap_or_default()));
     lines.push(fit_spans(head, width));
@@ -1129,7 +1599,9 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     if let Some(part) = &task.split_part {
         ids.push_str(&format!(" · part {}/{}", part.n, part.of));
     }
-    lines.push(Line::from(Span::from(text::ellipsis(&ids, width)).fg(c(SUBTEXT0))));
+    lines.push(Line::from(
+        Span::from(text::ellipsis(&ids, width)).fg(c(SUBTEXT0)),
+    ));
 
     let mut badges: Vec<Span<'static>> = Vec::new();
     if task.worktree_path.is_some() {
@@ -1142,16 +1614,28 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
         badges.push(Span::from(" no repo").fg(c(SUBTEXT0)));
     }
     // A dim `$` on the tickets above the p90 of spend: the expensive ones at a glance.
-    if task.spent_usd.zip(spend_p90).is_some_and(|(spent, p90)| spent > p90) {
+    if task
+        .spent_usd
+        .zip(spend_p90)
+        .is_some_and(|(spent, p90)| spent > p90)
+    {
         badges.push(Span::from(" $").fg(c(SUBTEXT0)));
     }
     // The status and its age come first: a status too long for the card ends in `…`, and a badge that does not fit is left out.
     let age_part = format!(" · {age}");
     let label = format!("{} {}", look_glyph(look), task.status_label());
     let room = width.saturating_sub(2 + text::cells(&age_part));
-    let status = if room >= 8 { text::ellipsis(&label, room) } else { label };
+    let status = if room >= 8 {
+        text::ellipsis(&label, room)
+    } else {
+        label
+    };
     let mut used = 2 + text::cells(&status) + text::cells(&age_part);
-    let mut meta = vec![Span::raw("  "), Span::from(status).fg(look_color(look)).bold(), Span::from(age_part).fg(c(age_colour))];
+    let mut meta = vec![
+        Span::raw("  "),
+        Span::from(status).fg(look_color(look)).bold(),
+        Span::from(age_part).fg(c(age_colour)),
+    ];
     for badge in badges {
         if used + badge.width() <= width {
             used += badge.width();
@@ -1160,19 +1644,29 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     }
     lines.push(fit_spans(meta, width));
     if density == Density::Comfortable {
-        lines.push(task.triad().map_or_else(Line::default, |t| Line::from(Span::from(text::ellipsis(&format!("  {t}"), width)).fg(c(SUBTEXT0)))));
+        lines.push(task.triad().map_or_else(Line::default, |t| {
+            Line::from(Span::from(text::ellipsis(&format!("  {t}"), width)).fg(c(SUBTEXT0)))
+        }));
     }
     lines
 }
 
 pub(crate) fn bullets(items: &[String]) -> Vec<Line<'static>> {
-    items.iter().map(|item| Line::from(format!("  • {}", detail::plain(item)))).collect()
+    items
+        .iter()
+        .map(|item| Line::from(format!("  • {}", detail::plain(item))))
+        .collect()
 }
 
 pub(crate) fn json_list(value: &Value) -> Vec<String> {
     value
         .as_array()
-        .map(|items| items.iter().filter_map(|i| i.as_str().map(detail::plain)).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|i| i.as_str().map(detail::plain))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1200,7 +1694,9 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
 /// three lines, the verdict and artifact count and up to three paths as before, a line per scenario,
 /// up to six media, and for a video the critic's verdict, mean score and first two defects.
 pub(crate) fn evidence_lines(value: &Value) -> Vec<String> {
-    let Some(verdict) = value["verdict"].as_str() else { return Vec::new() };
+    let Some(verdict) = value["verdict"].as_str() else {
+        return Vec::new();
+    };
     let count = value["artifactCount"].as_u64().unwrap_or(0);
     let mut lines = Vec::new();
     if let Some(format) = value["format"].as_str() {
@@ -1213,10 +1709,15 @@ pub(crate) fn evidence_lines(value: &Value) -> Vec<String> {
         lines.extend(wrap_words(summary, 76).into_iter().take(3));
     }
     lines.push(format!("verdict: {verdict}"));
-    lines.push(format!("{count} artifact{}", if count == 1 { "" } else { "s" }));
+    lines.push(format!(
+        "{count} artifact{}",
+        if count == 1 { "" } else { "s" }
+    ));
     lines.extend(json_list(&value["thumbnails"]).into_iter().take(3));
     for row in value["scenarios"].as_array().into_iter().flatten() {
-        let Some(text) = row["text"].as_str() else { continue };
+        let Some(text) = row["text"].as_str() else {
+            continue;
+        };
         let mark = match row["result"].as_str() {
             Some("pass") => "✓",
             Some("fail") => "✗",
@@ -1232,13 +1733,35 @@ pub(crate) fn evidence_lines(value: &Value) -> Vec<String> {
     }
     let video = &value["video"];
     if let Some(critic) = video["verdict"].as_str() {
-        let scores: Vec<f64> = video["scores"].as_object().map(|m| m.values().filter_map(Value::as_f64).collect()).unwrap_or_default();
+        let scores: Vec<f64> = video["scores"]
+            .as_object()
+            .map(|m| m.values().filter_map(Value::as_f64).collect())
+            .unwrap_or_default();
         let defects = video["defects"].as_array().cloned().unwrap_or_default();
-        let mean = if scores.is_empty() { String::new() } else { format!(" · {:.1}/10", scores.iter().sum::<f64>() / scores.len() as f64) };
-        lines.push(format!("critic: {critic}{mean} · {} defect{}", defects.len(), if defects.len() == 1 { "" } else { "s" }));
+        let mean = if scores.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " · {:.1}/10",
+                scores.iter().sum::<f64>() / scores.len() as f64
+            )
+        };
+        lines.push(format!(
+            "critic: {critic}{mean} · {} defect{}",
+            defects.len(),
+            if defects.len() == 1 { "" } else { "s" }
+        ));
         for d in defects.iter().take(2) {
-            let scene = d["scene"].as_str().map(|s| format!(" {s}")).unwrap_or_default();
-            lines.push(format!("{} @{:.1}{scene}: {}", d["priority"].as_str().unwrap_or("P?"), d["t"].as_f64().unwrap_or(0.0), d["symptom"].as_str().unwrap_or("")));
+            let scene = d["scene"]
+                .as_str()
+                .map(|s| format!(" {s}"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "{} @{:.1}{scene}: {}",
+                d["priority"].as_str().unwrap_or("P?"),
+                d["t"].as_f64().unwrap_or(0.0),
+                d["symptom"].as_str().unwrap_or("")
+            ));
         }
     }
     lines
@@ -1264,10 +1787,17 @@ pub(crate) fn pack_lines(value: &Value) -> Vec<String> {
             (Some(p), Some(t)) => format!("{p}/{t}"),
             _ => "none".to_string(),
         };
-        lines.push(format!("results: unit {} · integration {} · e2e {}", layer(&results["unit"]), layer(&results["integration"]), layer(&results["e2e"])));
+        lines.push(format!(
+            "results: unit {} · integration {} · e2e {}",
+            layer(&results["unit"]),
+            layer(&results["integration"]),
+            layer(&results["e2e"])
+        ));
     }
     for row in value["scenarios"].as_array().into_iter().flatten() {
-        let Some(text) = row["text"].as_str() else { continue };
+        let Some(text) = row["text"].as_str() else {
+            continue;
+        };
         let mark = match row["result"].as_str() {
             Some("pass") => "✓",
             Some("fail") => "✗",
@@ -1277,20 +1807,43 @@ pub(crate) fn pack_lines(value: &Value) -> Vec<String> {
         lines.push(format!("{mark} {}", plain(text)));
     }
     // The publish result the machine stamped on the pack; a pack from before that field is read from its links.
-    let published = value["published"].as_bool().unwrap_or_else(|| value["media"].as_array().into_iter().flatten().any(|m| m["url"].as_str().unwrap_or("").starts_with("https://")));
+    let published = value["published"].as_bool().unwrap_or_else(|| {
+        value["media"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|m| m["url"].as_str().unwrap_or("").starts_with("https://"))
+    });
     for media in value["media"].as_array().into_iter().flatten().take(6) {
-        let Some(label) = media["label"].as_str() else { continue };
+        let Some(label) = media["label"].as_str() else {
+            continue;
+        };
         match media["url"].as_str() {
-            Some(url) if url.starts_with("https://") => lines.push(format!("media: {}  {}", plain(label), plain(url))),
+            Some(url) if url.starts_with("https://") => {
+                lines.push(format!("media: {}  {}", plain(label), plain(url)))
+            }
             _ => lines.push(format!("media: {} (local copy)", plain(label))),
         }
     }
     if let Some(critic) = value["video"]["verdict"].as_str() {
-        let scores: Vec<f64> = value["video"]["scores"].as_object().map(|m| m.values().filter_map(Value::as_f64).collect()).unwrap_or_default();
-        let mean = if scores.is_empty() { String::new() } else { format!(" · {:.1}/10", scores.iter().sum::<f64>() / scores.len() as f64) };
+        let scores: Vec<f64> = value["video"]["scores"]
+            .as_object()
+            .map(|m| m.values().filter_map(Value::as_f64).collect())
+            .unwrap_or_default();
+        let mean = if scores.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " · {:.1}/10",
+                scores.iter().sum::<f64>() / scores.len() as f64
+            )
+        };
         lines.push(format!("critic: {}{mean}", plain(critic)));
     }
-    lines.push(format!("published: {}", if published { "yes" } else { "no" }));
+    lines.push(format!(
+        "published: {}",
+        if published { "yes" } else { "no" }
+    ));
     lines
 }
 
@@ -1303,7 +1856,18 @@ pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     let updates = value["promptUpdates"].as_array().map_or(0, Vec::len);
     let promotions: Vec<String> = value["factPromotions"]
         .as_array()
-        .map(|a| a.iter().map(|p| format!("promote to {}: {}", crate::detail::plain(p["section"].as_str().unwrap_or("")).replace('\n', " "), crate::detail::plain(p["text"].as_str().unwrap_or("")).replace('\n', " "))).collect())
+        .map(|a| {
+            a.iter()
+                .map(|p| {
+                    format!(
+                        "promote to {}: {}",
+                        crate::detail::plain(p["section"].as_str().unwrap_or(""))
+                            .replace('\n', " "),
+                        crate::detail::plain(p["text"].as_str().unwrap_or("")).replace('\n', " ")
+                    )
+                })
+                .collect()
+        })
         .unwrap_or_default();
     if markdown.trim().is_empty() && recalibration == 0 && updates == 0 && promotions.is_empty() {
         return Vec::new();
@@ -1320,10 +1884,20 @@ pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     let text: Vec<&str> = markdown.lines().filter(|l| !l.trim().is_empty()).collect();
     let mut lines = vec![counts];
     if recalibration > 0 || updates > 0 {
-        lines.push(format!("recalibration: {recalibration} · prompt updates: {updates}"));
+        lines.push(format!(
+            "recalibration: {recalibration} · prompt updates: {updates}"
+        ));
     }
-    lines.extend(promotions.iter().map(|l| l.chars().take(width).collect::<String>()));
-    lines.extend(text.iter().take(MAX).map(|l| l.chars().take(width).collect::<String>()));
+    lines.extend(
+        promotions
+            .iter()
+            .map(|l| l.chars().take(width).collect::<String>()),
+    );
+    lines.extend(
+        text.iter()
+            .take(MAX)
+            .map(|l| l.chars().take(width).collect::<String>()),
+    );
     if text.len() > MAX {
         lines.push(format!("… +{} more", text.len() - MAX));
     }
@@ -1334,7 +1908,9 @@ pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
 /// last lines of its output.
 pub(crate) fn proof_lines(value: &Value) -> Vec<(bool, String)> {
     const TAIL: usize = 3;
-    let Some(items) = value.as_array() else { return Vec::new() };
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
     let mut lines = Vec::new();
     for item in items {
         let ok = item["ok"].as_bool().unwrap_or(false);
@@ -1382,15 +1958,32 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
         "loop.crashed" => format!("stage loop stopped: {}", s("error")),
         "jira.transitioned" => format!("jira → {}", s("to")),
         "jira.blocked" => {
-            let why = p["why"].as_str().map(|w| format!(" — {w}")).unwrap_or_default();
-            format!("jira blocked: no transition to \"{}\" from \"{}\"{why}", s("wanted"), s("current"))
+            let why = p["why"]
+                .as_str()
+                .map(|w| format!(" — {w}"))
+                .unwrap_or_default();
+            format!(
+                "jira blocked: no transition to \"{}\" from \"{}\"{why}",
+                s("wanted"),
+                s("current")
+            )
         }
         "jira.moved" => format!("jira moved to {}", s("status")),
         "sandbox.egress_blocked" => match p["more"].as_u64() {
             Some(more) => format!("blocked: {more} more ({})", detail::plain(&s("step"))),
             None => {
-                let count = p["count"].as_u64().filter(|c| *c > 1).map(|c| format!(" x{c}")).unwrap_or_default();
-                format!("blocked: {}:{} ({}, {}){count}", detail::plain(&s("host")), p["port"], detail::plain(&s("step")), detail::plain(&s("via")))
+                let count = p["count"]
+                    .as_u64()
+                    .filter(|c| *c > 1)
+                    .map(|c| format!(" x{c}"))
+                    .unwrap_or_default();
+                format!(
+                    "blocked: {}:{} ({}, {}){count}",
+                    detail::plain(&s("host")),
+                    p["port"],
+                    detail::plain(&s("step")),
+                    detail::plain(&s("via"))
+                )
             }
         },
         other => other.to_string(),
@@ -1403,19 +1996,37 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
 
 /// Popup asking to confirm a delete or an abort.
 fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
-    render_confirm_box(frame, &format!("#{} {}", task.short_id(), crate::model::plain(&task.title, 400)), title, note, RED);
+    render_confirm_box(
+        frame,
+        &format!(
+            "#{} {}",
+            task.short_id(),
+            crate::model::plain(&task.title, 400)
+        ),
+        title,
+        note,
+        RED,
+    );
 }
 
 /// A confirmation that spells out what it is about: the heading, then each detail wrapped to the box (an image
 /// reference or a list of tools is read whole, never cut), then the yes / no chips.
-fn render_confirm_details(frame: &mut Frame, title: &str, heading: &str, details: &[String], accent: Color) {
+fn render_confirm_details(
+    frame: &mut Frame,
+    title: &str,
+    heading: &str,
+    details: &[String],
+    accent: Color,
+) {
     let width = frame.area().width.saturating_sub(4).clamp(20, 68);
     let room = usize::from(width).saturating_sub(6).max(8);
     let mut lines = vec![Line::from(Span::from(truncate(heading, room)).bold())];
     for detail in details {
         let chars: Vec<char> = detail.chars().collect();
         for chunk in chars.chunks(room) {
-            lines.push(Line::from(Span::from(chunk.iter().collect::<String>()).fg(c(SUBTEXT0))));
+            lines.push(Line::from(
+                Span::from(chunk.iter().collect::<String>()).fg(c(SUBTEXT0)),
+            ));
         }
     }
     lines.push(Line::default());
@@ -1425,30 +2036,59 @@ fn render_confirm_details(frame: &mut Frame, title: &str, heading: &str, details
         Span::from(" n ").fg(c(BASE)).bg(c(ACCENT)),
         Span::from(" no").fg(c(SUBTEXT0)),
     ]));
-    let area = centered(frame.area(), width, (lines.len() as u16 + 2).min(frame.area().height));
+    let area = centered(
+        frame.area(),
+        width,
+        (lines.len() as u16 + 2).min(frame.area().height),
+    );
     frame.render_widget(Clear, area);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(accent))).padding(Padding::horizontal(2)).title(Line::from(title).fg(c(accent)).bold());
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(accent)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(title).fg(c(accent)).bold());
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// Popup asking to confirm an approval: what is approved and the card, in the delete box's shape.
 fn render_approve(frame: &mut Frame, question: &str, task: &Task) {
-    render_confirm_box(frame, question, " Approve ", &crate::model::plain(&task.title, 400), GREEN);
+    render_confirm_box(
+        frame,
+        question,
+        " Approve ",
+        &crate::model::plain(&task.title, 400),
+        GREEN,
+    );
 }
 
 /// The box over marked cards at gates: `approve 3 cards? 2 plans · 1 ship`, up to five of them by short id and
 /// title (machine text, so plain), then the yes / no chips.
-fn render_approve_many(frame: &mut Frame, app: &App, ids: &[(String, &'static str)], question: &str) {
+fn render_approve_many(
+    frame: &mut Frame,
+    app: &App,
+    ids: &[(String, &'static str)],
+    question: &str,
+) {
     const LISTED: usize = 5;
     let width = frame.area().width.saturating_sub(4).clamp(20, 68);
     let room = (width as usize).saturating_sub(6);
-    let mut lines = vec![Line::from(Span::from(text::ellipsis(question, room)).bold())];
+    let mut lines = vec![Line::from(
+        Span::from(text::ellipsis(question, room)).bold(),
+    )];
     for task in ids.iter().filter_map(|(id, _)| app.task(id)).take(LISTED) {
-        let label = format!("#{}  {}", task.short_id(), crate::model::plain(&task.title, 400));
-        lines.push(Line::from(Span::from(text::ellipsis(&label, room)).fg(c(SUBTEXT0))));
+        let label = format!(
+            "#{}  {}",
+            task.short_id(),
+            crate::model::plain(&task.title, 400)
+        );
+        lines.push(Line::from(
+            Span::from(text::ellipsis(&label, room)).fg(c(SUBTEXT0)),
+        ));
     }
     if ids.len() > LISTED {
-        lines.push(Line::from(Span::from(format!("… and {} more", ids.len() - LISTED)).fg(c(SUBTEXT0))));
+        lines.push(Line::from(
+            Span::from(format!("… and {} more", ids.len() - LISTED)).fg(c(SUBTEXT0)),
+        ));
     }
     lines.push(Line::default());
     lines.push(Line::from(vec![
@@ -1459,36 +2099,99 @@ fn render_approve_many(frame: &mut Frame, app: &App, ids: &[(String, &'static st
     ]));
     let area = centered(frame.area(), width, lines.len() as u16 + 2);
     frame.render_widget(Clear, area);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(GREEN))).padding(Padding::horizontal(2)).title(Line::from(" Approve ").fg(c(GREEN)).bold());
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(GREEN)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(" Approve ").fg(c(GREEN)).bold());
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// Popup asking to confirm a PR merge or close, in the same box as a ticket delete: the
 /// item's name in bold, what happens in muted text, then the yes / no chips.
-fn render_confirm_pr(frame: &mut Frame, app: &App, repo: &str, number: u64, title: &str, note: &str, accent: Color) {
-    let name = app.prs.prs.iter().find(|p| p.repo == repo && p.number == number).map_or(String::new(), |p| format!("  {}", crate::model::plain(&p.title, 400)));
-    render_confirm_box(frame, &format!("{repo}#{number}{name}"), title, note, accent);
+fn render_confirm_pr(
+    frame: &mut Frame,
+    app: &App,
+    repo: &str,
+    number: u64,
+    title: &str,
+    note: &str,
+    accent: Color,
+) {
+    let name = app
+        .prs
+        .prs
+        .iter()
+        .find(|p| p.repo == repo && p.number == number)
+        .map_or(String::new(), |p| {
+            format!("  {}", crate::model::plain(&p.title, 400))
+        });
+    render_confirm_box(
+        frame,
+        &format!("{repo}#{number}{name}"),
+        title,
+        note,
+        accent,
+    );
 }
 
 /// A one-line prompt over the task view: 3 rows, bordered, titled with what it asks, near the bottom of
 /// the popup so the card stays visible above it. The tail of a long text shows, with the caret.
-fn render_prompt(frame: &mut Frame, app: &App, title: &str, text: &str, placeholder: &str, keys_hint: &str, accent: Color) {
+fn render_prompt(
+    frame: &mut Frame,
+    app: &App,
+    title: &str,
+    text: &str,
+    placeholder: &str,
+    keys_hint: &str,
+    accent: Color,
+) {
     let popup = detail::popup_area(frame.area(), app.detail_full);
     let width = popup.width.saturating_sub(4).clamp(1, 72);
-    let area = Rect::new(popup.x + popup.width.saturating_sub(width) / 2, popup.bottom().saturating_sub(5), width, 3).intersection(frame.area());
+    let area = Rect::new(
+        popup.x + popup.width.saturating_sub(width) / 2,
+        popup.bottom().saturating_sub(5),
+        width,
+        3,
+    )
+    .intersection(frame.area());
     frame.render_widget(Clear, area);
     let room = (width as usize).saturating_sub(4);
-    let typed: String = text.chars().rev().take(room.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
+    let typed: String = text
+        .chars()
+        .rev()
+        .take(room.saturating_sub(1))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     let mut spans = vec![Span::from(format!("{typed}▏"))];
     if text.is_empty() && !placeholder.is_empty() {
-        spans.push(Span::from(format!(" {}", truncate(placeholder, room.saturating_sub(2)))).fg(c(SUBTEXT0)));
+        spans.push(
+            Span::from(format!(
+                " {}",
+                truncate(placeholder, room.saturating_sub(2))
+            ))
+            .fg(c(SUBTEXT0)),
+        );
     }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(accent)))
         .padding(Padding::horizontal(1))
-        .title(Line::from(format!(" {} ", truncate(title, (width as usize).saturating_sub(4)))).fg(c(accent)).bold())
-        .title_bottom(Line::from(format!(" {keys_hint} ")).fg(c(SUBTEXT0)).right_aligned());
+        .title(
+            Line::from(format!(
+                " {} ",
+                truncate(title, (width as usize).saturating_sub(4))
+            ))
+            .fg(c(accent))
+            .bold(),
+        )
+        .title_bottom(
+            Line::from(format!(" {keys_hint} "))
+                .fg(c(SUBTEXT0))
+                .right_aligned(),
+        );
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
 }
 
@@ -1513,7 +2216,9 @@ fn render_confirm_box(frame: &mut Frame, heading: &str, title: &str, note: &str,
         ]),
     ];
     frame.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: false }),
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
         area,
     );
 }
@@ -1547,25 +2252,60 @@ fn floor_rows(floor: &FloorState) -> Vec<(String, String, String)> {
     add("  open now", both(floor, |m| m.tasks.open.to_string()));
     add(
         "Needs you / running / queued",
-        both(floor, |m| format!("{} / {} / {}", m.tasks.waiting_on_you, m.tasks.running, m.tasks.queued)),
+        both(floor, |m| {
+            format!(
+                "{} / {} / {}",
+                m.tasks.waiting_on_you, m.tasks.running, m.tasks.queued
+            )
+        }),
     );
     add(
         "Cycle time median / p90",
-        both(floor, |m| median_p90(m.cycle_time_ms.task.median, m.cycle_time_ms.task.p90, fmt_ms)),
+        both(floor, |m| {
+            median_p90(
+                m.cycle_time_ms.task.median,
+                m.cycle_time_ms.task.p90,
+                fmt_ms,
+            )
+        }),
     );
-    add("Gates answered · within SLA", both(floor, |m| format!("{} · {}", m.gates.answered, fmt_pct(m.gates.within_sla))));
-    let mut gate_states: Vec<String> = [&floor.d7, &floor.d30].iter().filter_map(|m| m.as_ref()).flat_map(|m| m.gates.wait_ms.keys().cloned()).collect();
+    add(
+        "Gates answered · within SLA",
+        both(floor, |m| {
+            format!("{} · {}", m.gates.answered, fmt_pct(m.gates.within_sla))
+        }),
+    );
+    let mut gate_states: Vec<String> = [&floor.d7, &floor.d30]
+        .iter()
+        .filter_map(|m| m.as_ref())
+        .flat_map(|m| m.gates.wait_ms.keys().cloned())
+        .collect();
     gate_states.sort();
     gate_states.dedup();
     for state in gate_states {
-        let label = format!("  wait {} median", state.trim_start_matches("awaiting_").replace('_', " "));
+        let label = format!(
+            "  wait {} median",
+            state.trim_start_matches("awaiting_").replace('_', " ")
+        );
         let wait = |m: &Metrics| fmt_ms(m.gates.wait_ms.get(&state).and_then(|s| s.median));
         add(&label, both(floor, wait));
     }
-    add("First-pass verifying", both(floor, |m| fmt_pct(m.first_pass_rate.verifying)));
-    add("  ci_watch", both(floor, |m| fmt_pct(m.first_pass_rate.ci_watch)));
-    add("  implementing", both(floor, |m| fmt_pct(m.first_pass_rate.implementing)));
-    add("Escalation rate", both(floor, |m| fmt_pct(m.escalations.rate)));
+    add(
+        "First-pass verifying",
+        both(floor, |m| fmt_pct(m.first_pass_rate.verifying)),
+    );
+    add(
+        "  ci_watch",
+        both(floor, |m| fmt_pct(m.first_pass_rate.ci_watch)),
+    );
+    add(
+        "  implementing",
+        both(floor, |m| fmt_pct(m.first_pass_rate.implementing)),
+    );
+    add(
+        "Escalation rate",
+        both(floor, |m| fmt_pct(m.escalations.rate)),
+    );
     let reasons = [&floor.d7, &floor.d30]
         .iter()
         .filter_map(|m| m.as_ref().map(|m| m.escalations.top_reasons.len().min(3)))
@@ -1578,20 +2318,39 @@ fn floor_rows(floor: &FloorState) -> Vec<(String, String, String)> {
                 .get(i)
                 .map_or(String::new(), |r| format!("{}× {}", r.count, r.reason))
         };
-        add(if i == 0 { "  top reasons" } else { "" }, both(floor, reason));
+        add(
+            if i == 0 { "  top reasons" } else { "" },
+            both(floor, reason),
+        );
     }
     add(
         "Retries/task median / p90",
-        both(floor, |m| median_p90(m.retries.per_task.median, m.retries.per_task.p90, |v| {
-            v.map_or(fmt_ms(None), |n| format!("{n:.1}").trim_end_matches(".0").to_string())
-        })),
+        both(floor, |m| {
+            median_p90(m.retries.per_task.median, m.retries.per_task.p90, |v| {
+                v.map_or(fmt_ms(None), |n| {
+                    format!("{n:.1}").trim_end_matches(".0").to_string()
+                })
+            })
+        }),
     );
-    add("Cost total", both(floor, |m| fmt_usd(Some(m.cost.total_usd))));
-    add("  per task median", both(floor, |m| fmt_usd(m.cost.per_task_usd.median)));
+    add(
+        "Cost total",
+        both(floor, |m| fmt_usd(Some(m.cost.total_usd))),
+    );
+    add(
+        "  per task median",
+        both(floor, |m| fmt_usd(m.cost.per_task_usd.median)),
+    );
     add(
         "Queue depth · slots · util",
         both(floor, |m| {
-            format!("{} · {}/{} · {}", m.queue.depth, m.queue.slots.active, m.queue.slots.max, fmt_pct(m.queue.utilisation))
+            format!(
+                "{} · {}/{} · {}",
+                m.queue.depth,
+                m.queue.slots.active,
+                m.queue.slots.max,
+                fmt_pct(m.queue.utilisation)
+            )
         }),
     );
     rows
@@ -1599,7 +2358,12 @@ fn floor_rows(floor: &FloorState) -> Vec<(String, String, String)> {
 
 /// (stage, runs, median, p90, cost) for every stage that appears in either map, by name.
 fn stage_rows(m: &Metrics) -> Vec<[String; 5]> {
-    let mut names: Vec<&String> = m.cycle_time_ms.per_stage.keys().chain(m.cost.by_stage.keys()).collect();
+    let mut names: Vec<&String> = m
+        .cycle_time_ms
+        .per_stage
+        .keys()
+        .chain(m.cost.by_stage.keys())
+        .collect();
     names.sort();
     names.dedup();
     names
@@ -1643,7 +2407,10 @@ fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
         let selected = row == inbox.cursor.min(items.len().saturating_sub(1));
         let bar = if selected { "▌ " } else { "  " };
         let what = task.reason.clone().unwrap_or_else(|| task.status_label());
-        let repo = task.repo_name().map(|r| format!("{} · ", crate::model::plain(r, 60))).unwrap_or_default();
+        let repo = task
+            .repo_name()
+            .map(|r| format!("{} · ", crate::model::plain(r, 60)))
+            .unwrap_or_default();
         let mut line = vec![
             Span::from(bar).fg(c(ACCENT)),
             Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)),
@@ -1669,37 +2436,85 @@ fn render_backlog(frame: &mut Frame, area: Rect, app: &App, state: &crate::backl
     let now = now_secs();
     let items = &app.backlog_items;
     let selected = state.cursor.min(items.len().saturating_sub(1));
-    let [list_area, detail_area] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).title(Line::from(format!(" Backlog {} ", items.len())).bold());
+    let [list_area, detail_area] =
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .title(Line::from(format!(" Backlog {} ", items.len())).bold());
     let inner = block.inner(list_area);
     let mut lines = Vec::new();
     if items.is_empty() {
         lines.push(Line::from(Span::from("  ✓ nothing waiting").fg(c(GREEN))));
     }
     let visible = (inner.height as usize).max(1);
-    let start = selected.saturating_sub(visible / 2).min(items.len().saturating_sub(visible));
+    let start = selected
+        .saturating_sub(visible / 2)
+        .min(items.len().saturating_sub(visible));
     for (row, item) in items.iter().enumerate().skip(start).take(visible) {
         let text = truncate(&item.row(now), inner.width.saturating_sub(2) as usize);
-        lines.push(if row == selected { Line::from(Span::from(format!("▸ {text}")).fg(c(BASE)).bg(c(ACCENT)).bold()) } else { Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0))) });
+        lines.push(if row == selected {
+            Line::from(
+                Span::from(format!("▸ {text}"))
+                    .fg(c(BASE))
+                    .bg(c(ACCENT))
+                    .bold(),
+            )
+        } else {
+            Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0)))
+        });
     }
     frame.render_widget(Paragraph::new(lines).block(block), list_area);
-    let side = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(MUTED))).padding(Padding::horizontal(1)).title(Line::from(" Item ").bold());
+    let side = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(MUTED)))
+        .padding(Padding::horizontal(1))
+        .title(Line::from(" Item ").bold());
     let lines = match items.get(selected) {
         Some(item) => {
-            let mut lines = vec![Line::from(Span::from(crate::detail::plain(&item.title).replace('\n', " ")).bold())];
-            lines.push(Line::from(Span::from(format!("size {} · demand {} · score {:.2}{}", crate::detail::plain(&item.size), item.demand, item.score, if item.stale { " · stale" } else { "" })).fg(c(SUBTEXT0))));
+            let mut lines = vec![Line::from(
+                Span::from(crate::detail::plain(&item.title).replace('\n', " ")).bold(),
+            )];
+            lines.push(Line::from(
+                Span::from(format!(
+                    "size {} · demand {} · score {:.2}{}",
+                    crate::detail::plain(&item.size),
+                    item.demand,
+                    item.score,
+                    if item.stale { " · stale" } else { "" }
+                ))
+                .fg(c(SUBTEXT0)),
+            ));
             if let Some(repo) = &item.repo {
-                lines.push(Line::from(Span::from(format!("repo {}", crate::detail::plain(repo))).fg(c(SUBTEXT0))));
+                lines.push(Line::from(
+                    Span::from(format!("repo {}", crate::detail::plain(repo))).fg(c(SUBTEXT0)),
+                ));
             }
-            lines.extend(item.source_lines().into_iter().map(|s| Line::from(Span::from(format!("from {s}")).fg(c(SUBTEXT0)))));
-            lines.extend(item.blocked_lines().into_iter().map(|s| Line::from(Span::from(format!("⛔ {s}")).fg(c(RED)))));
+            lines.extend(
+                item.source_lines()
+                    .into_iter()
+                    .map(|s| Line::from(Span::from(format!("from {s}")).fg(c(SUBTEXT0)))),
+            );
+            lines.extend(
+                item.blocked_lines()
+                    .into_iter()
+                    .map(|s| Line::from(Span::from(format!("⛔ {s}")).fg(c(RED)))),
+            );
             lines.push(Line::default());
-            lines.extend(crate::detail::plain(&item.text).lines().take(12).map(|l| Line::from(l.to_string())));
+            lines.extend(
+                crate::detail::plain(&item.text)
+                    .lines()
+                    .take(12)
+                    .map(|l| Line::from(l.to_string())),
+            );
             lines
         }
         None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
     };
-    frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
+    frame.render_widget(
+        Paragraph::new(lines).block(side).wrap(Wrap { trim: false }),
+        detail_area,
+    );
 }
 
 /// The Economy view: facts, tools and the loop guard as one list under headings; the row's detail, the cost and the envelopes beside it.
@@ -1707,9 +2522,24 @@ fn render_economy(frame: &mut Frame, area: Rect, app: &App, state: &crate::econo
     let data = &app.economy_data;
     let rows = data.rows();
     let selected = state.cursor.min(rows.len().saturating_sub(1));
-    let [list_area, detail_area] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
-    let name = state.repo.trim_end_matches('/').rsplit('/').next().unwrap_or_default();
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).title(Line::from(format!(" Economy {} ", crate::detail::plain(name).replace('\n', " "))).bold());
+    let [list_area, detail_area] =
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let name = state
+        .repo
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .title(
+            Line::from(format!(
+                " Economy {} ",
+                crate::detail::plain(name).replace('\n', " ")
+            ))
+            .bold(),
+        );
     let inner = block.inner(list_area);
     let width = inner.width.saturating_sub(2) as usize;
     // One display line per row, a heading line where the section changes; the cursor's line decides what scrolls into view.
@@ -1725,50 +2555,107 @@ fn render_economy(frame: &mut Frame, area: Rect, app: &App, state: &crate::econo
             at = display.len();
         }
         let text = truncate(&row.text, width);
-        display.push(if i == selected { Line::from(Span::from(format!("▸ {text}")).fg(c(BASE)).bg(c(ACCENT)).bold()) } else { Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0))) });
+        display.push(if i == selected {
+            Line::from(
+                Span::from(format!("▸ {text}"))
+                    .fg(c(BASE))
+                    .bg(c(ACCENT))
+                    .bold(),
+            )
+        } else {
+            Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0)))
+        });
     }
     if display.is_empty() {
-        display.push(Line::from(Span::from("  nothing learned yet").fg(c(SUBTEXT0))));
+        display.push(Line::from(
+            Span::from("  nothing learned yet").fg(c(SUBTEXT0)),
+        ));
     }
     let visible = (inner.height as usize).max(1);
-    let start = at.saturating_sub(visible / 2).min(display.len().saturating_sub(visible));
+    let start = at
+        .saturating_sub(visible / 2)
+        .min(display.len().saturating_sub(visible));
     let shown: Vec<Line> = display.into_iter().skip(start).take(visible).collect();
     frame.render_widget(Paragraph::new(shown).block(block), list_area);
-    let side = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(MUTED))).padding(Padding::horizontal(1)).title(Line::from(" Detail ").bold());
+    let side = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(MUTED)))
+        .padding(Padding::horizontal(1))
+        .title(Line::from(" Detail ").bold());
     let mut lines: Vec<Line> = match rows.get(selected) {
-        Some(row) => data.detail_lines(row).into_iter().enumerate().map(|(i, l)| if i == 0 { Line::from(Span::from(l).bold()) } else { Line::from(Span::from(l).fg(c(SUBTEXT0))) }).collect(),
+        Some(row) => data
+            .detail_lines(row)
+            .into_iter()
+            .enumerate()
+            .map(|(i, l)| {
+                if i == 0 {
+                    Line::from(Span::from(l).bold())
+                } else {
+                    Line::from(Span::from(l).fg(c(SUBTEXT0)))
+                }
+            })
+            .collect(),
         None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
     };
     lines.push(Line::default());
     lines.push(Line::from(Span::from("Cost").fg(c(BLUE)).bold()));
-    lines.extend(data.cost_lines().into_iter().map(|l| Line::from(Span::from(l).fg(c(SUBTEXT0)))));
-    frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
+    lines.extend(
+        data.cost_lines()
+            .into_iter()
+            .map(|l| Line::from(Span::from(l).fg(c(SUBTEXT0)))),
+    );
+    frame.render_widget(
+        Paragraph::new(lines).block(side).wrap(Wrap { trim: false }),
+        detail_area,
+    );
 }
 
 /// The Tickets view: one row per ticket in scope, the selected one's scores, links and waiting draft beside it.
 fn render_tickets(frame: &mut Frame, area: Rect, app: &App, state: &crate::tickets::TicketsState) {
     let items = &app.ticket_items;
     let selected = state.cursor.min(items.len().saturating_sub(1));
-    let [list_area, detail_area] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).title(Line::from(format!(" Tickets {} ", items.len())).bold());
+    let [list_area, detail_area] =
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .title(Line::from(format!(" Tickets {} ", items.len())).bold());
     let inner = block.inner(list_area);
     let mut lines = Vec::new();
     if items.is_empty() {
         lines.push(Line::from(Span::from("  ✓ nothing held").fg(c(GREEN))));
     }
     let visible = (inner.height as usize).max(1);
-    let start = selected.saturating_sub(visible / 2).min(items.len().saturating_sub(visible));
+    let start = selected
+        .saturating_sub(visible / 2)
+        .min(items.len().saturating_sub(visible));
     for (row, item) in items.iter().enumerate().skip(start).take(visible) {
         let text = truncate(&item.row(), inner.width.saturating_sub(2) as usize);
-        lines.push(if row == selected { Line::from(Span::from(format!("▸ {text}")).fg(c(BASE)).bg(c(ACCENT)).bold()) } else { Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0))) });
+        lines.push(if row == selected {
+            Line::from(
+                Span::from(format!("▸ {text}"))
+                    .fg(c(BASE))
+                    .bg(c(ACCENT))
+                    .bold(),
+            )
+        } else {
+            Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0)))
+        });
     }
     frame.render_widget(Paragraph::new(lines).block(block), list_area);
-    let side = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(MUTED))).padding(Padding::horizontal(1)).title(Line::from(" Ticket ").bold());
+    let side = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(MUTED)))
+        .padding(Padding::horizontal(1))
+        .title(Line::from(" Ticket ").bold());
     let lines = match items.get(selected) {
         Some(item) => item.detail_lines().into_iter().map(Line::from).collect(),
         None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
     };
-    frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
+    frame.render_widget(
+        Paragraph::new(lines).block(side).wrap(Wrap { trim: false }),
+        detail_area,
+    );
 }
 
 fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
@@ -1777,7 +2664,11 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     let mut head = vec![Span::from(" Pulls ").fg(c(ACCENT)).bold()];
     if app.prs_polling {
         // Up front, where a narrow terminal still shows it.
-        head.push(Span::from(format!("{} polling GitHub… ", spinner())).fg(c(YELLOW)).bold());
+        head.push(
+            Span::from(format!("{} polling GitHub… ", spinner()))
+                .fg(c(YELLOW))
+                .bold(),
+        );
     }
     for (i, split) in PrSplit::ALL.iter().enumerate() {
         if i > 0 {
@@ -1801,7 +2692,8 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     if let Some(error) = &app.prs.error {
         top.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
     }
-    let [head_area, body] = Layout::vertical([Constraint::Length(top.len() as u16), Constraint::Min(0)]).areas(area);
+    let [head_area, body] =
+        Layout::vertical([Constraint::Length(top.len() as u16), Constraint::Min(0)]).areas(area);
     frame.render_widget(Paragraph::new(top), head_area);
 
     let items = pulls::items(&app.prs.prs, state.split);
@@ -1820,7 +2712,9 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     let inner = list_block.inner(list_area);
     let mut lines = Vec::new();
     if items.is_empty() {
-        if app.slack_snapshot.scope.as_deref() == Some("opted_in") && app.slack_snapshot.opted_in == Some(0) {
+        if app.slack_snapshot.scope.as_deref() == Some("opted_in")
+            && app.slack_snapshot.opted_in == Some(0)
+        {
             lines.push(Line::from(Span::from("  nothing is opted in: watch a channel with W, or list it in conversation.channels of a repository's luna.yaml").fg(c(SUBTEXT0))));
         } else {
             lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
@@ -1828,9 +2722,16 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     }
     // A window of rows around the cursor, so a long split never hides the selected PR.
     let visible = (inner.height as usize).max(1);
-    let start = selected.saturating_sub(visible / 2).min(items.len().saturating_sub(visible));
+    let start = selected
+        .saturating_sub(visible / 2)
+        .min(items.len().saturating_sub(visible));
     for (row, &i) in items.iter().enumerate().skip(start).take(visible) {
-        lines.push(pr_row(&app.prs.prs[i], row == selected, inner.width as usize, now));
+        lines.push(pr_row(
+            &app.prs.prs[i],
+            row == selected,
+            inner.width as usize,
+            now,
+        ));
     }
     frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
 
@@ -1840,12 +2741,19 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
             .border_type(BorderType::Rounded)
             .border_style(Style::new().fg(c(MUTED)))
             .padding(Padding::horizontal(1))
-            .title(Line::from(pr.map_or(" PR ".to_string(), |pr| format!(" {} ", pr.key()))).bold());
+            .title(
+                Line::from(pr.map_or(" PR ".to_string(), |pr| format!(" {} ", pr.key()))).bold(),
+            );
         let lines = match pr {
             Some(pr) => pr_detail_lines(pr, now),
             None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
         };
-        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), detail_area);
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            detail_area,
+        );
     }
 }
 
@@ -1882,7 +2790,10 @@ fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'sta
     // A task at work reads as a spinner and what it is doing, bold yellow, so a row that is busy
     // stands out from the list; ⌂ marks a repo with no clone.
     let (tag, tag_color) = match (&pr.task, pr.local_path.is_some()) {
-        (Some(task), _) => (format!("{} {}", spinner(), pr_work_label(&task.route)), YELLOW),
+        (Some(task), _) => (
+            format!("{} {}", spinner(), pr_work_label(&task.route)),
+            YELLOW,
+        ),
         (None, false) => ("⌂".to_string(), SUBTEXT0),
         _ => (String::new(), SUBTEXT0),
     };
@@ -1897,9 +2808,15 @@ fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'sta
         Span::from("▌").fg(c(repo_colour)),
         Span::from(format!("{:<10} ", truncate(repo_name, 10))).fg(c(repo_colour)),
         Span::from(format!("{number:>5} ")).fg(c(SUBTEXT0)),
-        Span::from(format!("{:<room$}", truncate(&crate::model::plain(&pr.title, 400), room))).bold(),
+        Span::from(format!(
+            "{:<room$}",
+            truncate(&crate::model::plain(&pr.title, 400), room)
+        ))
+        .bold(),
         Span::from(format!("  {age:>3}  ")).fg(c(SUBTEXT0)),
-        Span::from(format!("{tag:<PR_TAG_WIDTH$}")).fg(c(tag_color)).bold(),
+        Span::from(format!("{tag:<PR_TAG_WIDTH$}"))
+            .fg(c(tag_color))
+            .bold(),
     ];
     if selected {
         spans = spans.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
@@ -1912,15 +2829,26 @@ fn pr_detail_lines(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
     let mut lines = detail::pr_widget(pr, now);
     lines.push(Line::default());
     for key in PrKey::ALL {
-        let label = key.label().split(':').next().unwrap_or(key.label()).split(" (").next().unwrap_or("");
+        let label = key
+            .label()
+            .split(':')
+            .next()
+            .unwrap_or(key.label())
+            .split(" (")
+            .next()
+            .unwrap_or("");
         match pulls::blocker(pr, key) {
             None => lines.push(Line::from(vec![
-                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(ACCENT)),
+                Span::from(format!("{} ", key.key()))
+                    .fg(c(BASE))
+                    .bg(c(ACCENT)),
                 Span::from(format!(" {label:<8}")).bold(),
                 Span::from("  ready").fg(c(GREEN)),
             ])),
             Some(why) => lines.push(Line::from(vec![
-                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(MUTED)),
+                Span::from(format!("{} ", key.key()))
+                    .fg(c(BASE))
+                    .bg(c(MUTED)),
                 Span::from(format!(" {label:<8}")).fg(c(SUBTEXT0)),
                 Span::from(format!("  off: {why}")).fg(c(SUBTEXT0)),
             ])),
@@ -1949,10 +2877,16 @@ fn render_clone_prompt(frame: &mut Frame, repo: &str, query: &str, all: &[String
     if matches.is_empty() {
         lines.push(Line::from(Span::from("  no matches").fg(c(SUBTEXT0))));
     } else {
-        let start = cursor.saturating_sub(VISIBLE_ROWS / 2).min(matches.len().saturating_sub(VISIBLE_ROWS));
+        let start = cursor
+            .saturating_sub(VISIBLE_ROWS / 2)
+            .min(matches.len().saturating_sub(VISIBLE_ROWS));
         for (i, folder) in matches.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
             let selected = i == cursor;
-            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            let style = if selected {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
             lines.push(Line::from(vec![
                 Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
                 Span::from(format!("{folder}/{name}")).style(style),
@@ -1966,15 +2900,34 @@ fn render_clone_prompt(frame: &mut Frame, repo: &str, query: &str, all: &[String
 /// key says why under it. On a terminal too narrow for the detail pane this is where the
 /// detail shows.
 fn render_pr_actions(frame: &mut Frame, app: &App, cursor: usize) {
-    let Some(pr) = app.pr_under_cursor() else { return };
+    let Some(pr) = app.pr_under_cursor() else {
+        return;
+    };
     let widget = detail::pr_widget(&pr, now_secs());
-    render_menu(frame, format!(" {} ", pr.key()), widget, &keys::menu(app, Scope::Pulls), cursor, 0);
+    render_menu(
+        frame,
+        format!(" {} ", pr.key()),
+        widget,
+        &keys::menu(app, Scope::Pulls),
+        cursor,
+        0,
+    );
 }
 
 /// An `x` menu: the item's widget (when the view gives one), then the registry's rows for it,
 /// the dim ones with why they are off. The cursor's row is bright; a dim row keeps its grey.
-fn render_menu(frame: &mut Frame, title: String, widget: Vec<Line<'static>>, rows: &[(&keys::Binding, Avail)], cursor: usize, min_width: u16) {
-    let reasons = rows.iter().filter(|(_, a)| matches!(a, Avail::Off(_))).count();
+fn render_menu(
+    frame: &mut Frame,
+    title: String,
+    widget: Vec<Line<'static>>,
+    rows: &[(&keys::Binding, Avail)],
+    cursor: usize,
+    min_width: u16,
+) {
+    let reasons = rows
+        .iter()
+        .filter(|(_, a)| matches!(a, Avail::Off(_)))
+        .count();
     let longest = rows
         .iter()
         .map(|(b, a)| match a {
@@ -1986,8 +2939,14 @@ fn render_menu(frame: &mut Frame, title: String, widget: Vec<Line<'static>>, row
         .unwrap_or(40);
     let gap = usize::from(!widget.is_empty());
     let height = widget.len() + gap + rows.len() + reasons;
-    let width = (longest as u16 + 12).max(min_width).min(frame.area().width.saturating_sub(2));
-    let area = centered(frame.area(), width, (height as u16 + 4).min(frame.area().height));
+    let width = (longest as u16 + 12)
+        .max(min_width)
+        .min(frame.area().width.saturating_sub(2));
+    let area = centered(
+        frame.area(),
+        width,
+        (height as u16 + 4).min(frame.area().height),
+    );
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -2011,10 +2970,17 @@ fn render_menu(frame: &mut Frame, title: String, widget: Vec<Line<'static>>, row
             Span::from(binding.label).style(style),
         ]));
         if let Avail::Off(why) = avail {
-            lines.push(Line::from(Span::from(format!("      ↳ {why}")).fg(c(MUTED))));
+            lines.push(Line::from(
+                Span::from(format!("      ↳ {why}")).fg(c(MUTED)),
+            ));
         }
     }
-    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 /// The Slack view: a header strip of splits with their counts, when Slack was last polled and
@@ -2027,13 +2993,21 @@ fn render_slack(frame: &mut Frame, area: Rect, app: &App, state: &SlackState) {
     let narrow = area.width < SLACK_DETAIL_FROM;
     let mut head = vec![Span::from(" Slack ").fg(c(ACCENT)).bold()];
     if app.slack_polling {
-        head.push(Span::from(format!("{} polling Slack… ", spinner())).fg(c(YELLOW)).bold());
+        head.push(
+            Span::from(format!("{} polling Slack… ", spinner()))
+                .fg(c(YELLOW))
+                .bold(),
+        );
     }
     for (i, split) in SlackSplit::ALL.iter().enumerate() {
         if i > 0 {
             head.push(Span::from("│").fg(c(MUTED)));
         }
-        let name = if narrow { split.label_narrow() } else { split.label() };
+        let name = if narrow {
+            split.label_narrow()
+        } else {
+            split.label()
+        };
         let label = format!(" {name} {} ", counts[i]);
         head.push(if *split == state.split {
             Span::from(label).fg(c(BASE)).bg(c(ACCENT)).bold()
@@ -2055,13 +3029,18 @@ fn render_slack(frame: &mut Frame, area: Rect, app: &App, state: &SlackState) {
     }
     let overdue = slack::overdue_count(&snapshot.items);
     if overdue > 0 {
-        head.push(Span::from(format!("  ‼ {overdue} overdue")).fg(c(RED)).bold());
+        head.push(
+            Span::from(format!("  ‼ {overdue} overdue"))
+                .fg(c(RED))
+                .bold(),
+        );
     }
     let mut top = vec![Line::from(head)];
     if let Some(error) = &snapshot.error {
         top.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
     }
-    let [head_area, body] = Layout::vertical([Constraint::Length(top.len() as u16), Constraint::Min(0)]).areas(area);
+    let [head_area, body] =
+        Layout::vertical([Constraint::Length(top.len() as u16), Constraint::Min(0)]).areas(area);
     frame.render_widget(Paragraph::new(top), head_area);
 
     let items = slack::items(&snapshot.items, state.split);
@@ -2083,7 +3062,12 @@ fn render_slack(frame: &mut Frame, area: Rect, app: &App, state: &SlackState) {
         lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
     }
     for (row, &i) in items.iter().enumerate() {
-        lines.push(slack_row(&snapshot.items[i], row == selected, inner.width as usize, now));
+        lines.push(slack_row(
+            &snapshot.items[i],
+            row == selected,
+            inner.width as usize,
+            now,
+        ));
     }
     frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
 
@@ -2093,12 +3077,22 @@ fn render_slack(frame: &mut Frame, area: Rect, app: &App, state: &SlackState) {
             .border_type(BorderType::Rounded)
             .border_style(Style::new().fg(c(MUTED)))
             .padding(Padding::horizontal(1))
-            .title(Line::from(item.map_or(" message ".to_string(), |i| format!(" {} ", i.channel_label()))).bold());
+            .title(
+                Line::from(item.map_or(" message ".to_string(), |i| {
+                    format!(" {} ", i.channel_label())
+                }))
+                .bold(),
+            );
         let lines = match item {
             Some(item) => slack_detail_lines(item, snapshot.sla_for(item.priority()), now),
             None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
         };
-        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), detail_area);
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            detail_area,
+        );
     }
 }
 
@@ -2121,7 +3115,12 @@ fn priority_style(priority: Option<&str>) -> Style {
 fn slack_tag(item: &SlackItem) -> String {
     let mut tag = String::new();
     let room = if item.overdue { 3 } else { 2 };
-    for (on, glyph) in [(item.overdue, '‼'), (item.reopened_at.is_some(), '↺'), (item.task_id().is_some(), '⚙'), (item.thread_ts.is_some(), '⎇')] {
+    for (on, glyph) in [
+        (item.overdue, '‼'),
+        (item.reopened_at.is_some(), '↺'),
+        (item.task_id().is_some(), '⚙'),
+        (item.thread_ts.is_some(), '⎇'),
+    ] {
         if on && tag.chars().count() < room {
             tag.push(glyph);
         }
@@ -2154,7 +3153,10 @@ fn slack_row(item: &SlackItem, selected: bool, width: usize, now: u64) -> Line<'
         SUBTEXT0
     };
     let (summary_style, age_style) = if item.overdue {
-        (Style::new().fg(c(RED)).bold(), Style::new().fg(c(RED)).bold())
+        (
+            Style::new().fg(c(RED)).bold(),
+            Style::new().fg(c(RED)).bold(),
+        )
     } else if item.due_soon(now) {
         (Style::new().bold(), Style::new().fg(c(YELLOW)))
     } else {
@@ -2165,7 +3167,8 @@ fn slack_row(item: &SlackItem, selected: bool, width: usize, now: u64) -> Line<'
     let room = width.saturating_sub(fixed).max(4);
     let mut spans = vec![
         Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
-        Span::from(format!("{:<3}", item.priority().unwrap_or("·"))).style(priority_style(item.priority())),
+        Span::from(format!("{:<3}", item.priority().unwrap_or("·")))
+            .style(priority_style(item.priority())),
         Span::from("▌").fg(c(channel_colour)),
         Span::from(format!("{:<16} ", truncate(&channel, 16))).fg(c(channel_colour)),
         Span::from(format!("{:<9} ", truncate(&author, 9))).fg(c(SUBTEXT0)),
@@ -2185,9 +3188,17 @@ fn slack_row(item: &SlackItem, selected: bool, width: usize, now: u64) -> Line<'
 fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
     let muted = |text: String| Line::from(Span::from(text).fg(c(SUBTEXT0)));
     let field = |name: &str, text: String| {
-        Line::from(vec![Span::from(format!("{name:<9}")).fg(c(SUBTEXT0)), Span::from(text)])
+        Line::from(vec![
+            Span::from(format!("{name:<9}")).fg(c(SUBTEXT0)),
+            Span::from(text),
+        ])
     };
-    let mut head = format!("{} · @{} · {} ago", item.channel_label(), item.author.name, item.age(now));
+    let mut head = format!(
+        "{} · @{} · {} ago",
+        item.channel_label(),
+        item.author.name,
+        item.age(now)
+    );
     if item.thread_ts.is_some() {
         head.push_str(&format!(" · thread ({} replies)", item.replies));
     }
@@ -2201,16 +3212,35 @@ fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
             (Some(p), secs) => format!(" ({p} · {} SLA)", age_secs(secs)),
             (None, _) => String::new(),
         };
-        let style = if item.overdue { Style::new().fg(c(RED)).bold() } else { Style::new() };
-        lines.push(Line::from(vec![Span::from(format!("{:<9}", "due")).fg(c(SUBTEXT0)), Span::from(format!("{due}{target}")).style(style)]));
+        let style = if item.overdue {
+            Style::new().fg(c(RED)).bold()
+        } else {
+            Style::new()
+        };
+        lines.push(Line::from(vec![
+            Span::from(format!("{:<9}", "due")).fg(c(SUBTEXT0)),
+            Span::from(format!("{due}{target}")).style(style),
+        ]));
     }
     if item.reopened_at.is_some() {
-        lines.push(Line::from(Span::from("new since you cleared it").fg(c(YELLOW)).bold()));
+        lines.push(Line::from(
+            Span::from("new since you cleared it").fg(c(YELLOW)).bold(),
+        ));
     }
     lines.push(Line::default());
-    for (name, text) in slack::conversation_lines(item, now).into_iter().filter(|(n, _)| *n != "waiting") {
-        let style = if name == "asks you" || name == "knock-out" { Style::new().fg(c(YELLOW)) } else { Style::new() };
-        lines.push(Line::from(vec![Span::from(format!("{name:<9}")).fg(c(SUBTEXT0)), Span::from(text).style(style)]));
+    for (name, text) in slack::conversation_lines(item, now)
+        .into_iter()
+        .filter(|(n, _)| *n != "waiting")
+    {
+        let style = if name == "asks you" || name == "knock-out" {
+            Style::new().fg(c(YELLOW))
+        } else {
+            Style::new()
+        };
+        lines.push(Line::from(vec![
+            Span::from(format!("{name:<9}")).fg(c(SUBTEXT0)),
+            Span::from(text).style(style),
+        ]));
     }
     for message in &item.context {
         lines.push(muted(format!("@{}  {}", message.user.name, message.text)));
@@ -2219,8 +3249,16 @@ fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
     lines.push(Line::default());
     match &item.triage {
         Some(triage) => {
-            let expects = if triage.expects_reply { " · reply expected" } else { "" };
-            let by = if triage.by == "rules" { " · by rule" } else { "" };
+            let expects = if triage.expects_reply {
+                " · reply expected"
+            } else {
+                ""
+            };
+            let by = if triage.by == "rules" {
+                " · by rule"
+            } else {
+                ""
+            };
             let hand = if triage.overridden { " · yours" } else { "" };
             lines.push(Line::from(vec![
                 Span::from(format!("{:<9}", "triage")).fg(c(SUBTEXT0)),
@@ -2232,7 +3270,12 @@ fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
             }
             let mut links: Vec<String> = Vec::new();
             if let Some(pr) = &item.linked.pr {
-                links.push(format!("{}#{} ({})", pr.repo, pr.number, pr.split.replace('_', " ")));
+                links.push(format!(
+                    "{}#{} ({})",
+                    pr.repo,
+                    pr.number,
+                    pr.split.replace('_', " ")
+                ));
             }
             for r in &triage.refs {
                 if !links.iter().any(|l| l.starts_with(&r.reference)) {
@@ -2245,11 +3288,18 @@ fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
             if let Some(deadline) = &triage.deadline {
                 lines.push(field("deadline", deadline.clone()));
             }
-            if let Some((_, waiting)) = slack::conversation_lines(item, now).into_iter().find(|(n, _)| *n == "waiting") {
+            if let Some((_, waiting)) = slack::conversation_lines(item, now)
+                .into_iter()
+                .find(|(n, _)| *n == "waiting")
+            {
                 lines.push(field("waiting", waiting));
             }
             // The waiting draft's own text first (the one a reply sends), else the classifier's reply.
-            let waiting = item.draft.as_ref().map(|d| d.text.as_str()).filter(|d| !d.is_empty());
+            let waiting = item
+                .draft
+                .as_ref()
+                .map(|d| d.text.as_str())
+                .filter(|d| !d.is_empty());
             if let Some(draft) = waiting.or(triage.draft.as_deref().filter(|d| !d.is_empty())) {
                 lines.push(Line::default());
                 lines.push(field("draft", crate::detail::plain(draft)));
@@ -2258,7 +3308,10 @@ fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
         None => lines.push(field("triage", "not yet".to_string())),
     }
     if let Some(task) = item.task_id() {
-        lines.push(field("ticket", format!("#{}", crate::model::short_id(task))));
+        lines.push(field(
+            "ticket",
+            format!("#{}", crate::model::short_id(task)),
+        ));
     }
     lines
 }
@@ -2271,12 +3324,16 @@ fn slack_detail_lines(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>
         let label = key.short();
         match slack::blocker(item, key) {
             None => lines.push(Line::from(vec![
-                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(ACCENT)),
+                Span::from(format!("{} ", key.key()))
+                    .fg(c(BASE))
+                    .bg(c(ACCENT)),
                 Span::from(format!(" {label:<8}")).bold(),
                 Span::from("  ready").fg(c(GREEN)),
             ])),
             Some(why) => lines.push(Line::from(vec![
-                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(MUTED)),
+                Span::from(format!("{} ", key.key()))
+                    .fg(c(BASE))
+                    .bg(c(MUTED)),
                 Span::from(format!(" {label:<8}")).fg(c(SUBTEXT0)),
                 Span::from(format!("  off: {why}")).fg(c(SUBTEXT0)),
             ])),
@@ -2288,15 +3345,39 @@ fn slack_detail_lines(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>
 /// `x` in the Slack view: the item drawn by the widget, then its keys; an off key says why
 /// under it. On a terminal too narrow for the pane this is where the detail shows.
 fn render_slack_actions(frame: &mut Frame, app: &App, cursor: usize) {
-    let Some(item) = app.slack_under_cursor() else { return };
-    let widget = slack_widget(item, app.slack_snapshot.sla_for(item.priority()), now_secs());
-    render_menu(frame, format!(" {} · @{} ", item.channel_label(), item.author.name), widget, &keys::menu(app, Scope::Slack), cursor, 0);
+    let Some(item) = app.slack_under_cursor() else {
+        return;
+    };
+    let widget = slack_widget(
+        item,
+        app.slack_snapshot.sla_for(item.priority()),
+        now_secs(),
+    );
+    render_menu(
+        frame,
+        format!(" {} · @{} ", item.channel_label(), item.author.name),
+        widget,
+        &keys::menu(app, Scope::Slack),
+        cursor,
+        0,
+    );
 }
 
 /// The reply editor: the text on top, the thread's last messages under a `context` rule, so
 /// what you answer stays in view. ctrl+s posts it as you.
-fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'static>, vim: &crate::vim::Vim, nudge: bool) {
-    let rect = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
+fn render_slack_reply(
+    frame: &mut Frame,
+    app: &App,
+    id: &str,
+    area: &TextArea<'static>,
+    vim: &crate::vim::Vim,
+    nudge: bool,
+) {
+    let rect = centered(
+        frame.area(),
+        frame.area().width * 9 / 10,
+        frame.area().height * 8 / 10,
+    );
     frame.render_widget(Clear, rect);
     let item = app.slack_item(id);
     let (label, mode_color) = match vim.mode() {
@@ -2305,9 +3386,21 @@ fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'s
     };
     let verb = if nudge { "nudge" } else { "reply" };
     let title = match item {
-        Some(item) if nudge => format!(" nudge · {} · opens with @{} ", item.channel_label(), item.author.name),
-        Some(item) if item.thread_ts.is_some() => format!(" reply · {} · thread with @{} ", item.channel_label(), item.author.name),
-        Some(item) => format!(" reply · {} · to @{} ", item.channel_label(), item.author.name),
+        Some(item) if nudge => format!(
+            " nudge · {} · opens with @{} ",
+            item.channel_label(),
+            item.author.name
+        ),
+        Some(item) if item.thread_ts.is_some() => format!(
+            " reply · {} · thread with @{} ",
+            item.channel_label(),
+            item.author.name
+        ),
+        Some(item) => format!(
+            " reply · {} · to @{} ",
+            item.channel_label(),
+            item.author.name
+        ),
         None => format!(" {verb} "),
     };
     let block = Block::bordered()
@@ -2316,14 +3409,25 @@ fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'s
         .padding(Padding::horizontal(1))
         .title(Line::from(title).bold())
         .title(Line::from(format!("· {} ", keys::editor_line(app))).fg(c(SUBTEXT0)))
-        .title_top(Line::from(" ctrl+s send  esc back ").fg(c(SUBTEXT0)).right_aligned())
+        .title_top(
+            Line::from(" ctrl+s send  esc back ")
+                .fg(c(SUBTEXT0))
+                .right_aligned(),
+        )
         .title_bottom(Line::from(label).bold().fg(c(mode_color)).left_aligned());
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
-    let context: Vec<&crate::model::SlackMessage> = item.map(|i| i.context.iter().rev().take(3).rev().collect()).unwrap_or_default();
-    let context_rows = if context.is_empty() { 0 } else { (context.len() as u16 + 1).min(inner.height / 2) };
-    let [text_area, context_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(context_rows)]).areas(inner);
+    let context: Vec<&crate::model::SlackMessage> = item
+        .map(|i| i.context.iter().rev().take(3).rev().collect())
+        .unwrap_or_default();
+    let context_rows = if context.is_empty() {
+        0
+    } else {
+        (context.len() as u16 + 1).min(inner.height / 2)
+    };
+    let [text_area, context_area] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(context_rows)]).areas(inner);
 
     let mut area = area.clone();
     area.set_block(Block::default());
@@ -2333,19 +3437,31 @@ fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'s
     frame.render_widget(&area, text_area);
 
     if context_rows > 0 {
-        let rule = format!("─ context {}", "─".repeat((context_area.width as usize).saturating_sub(10)));
+        let rule = format!(
+            "─ context {}",
+            "─".repeat((context_area.width as usize).saturating_sub(10))
+        );
         let mut lines = vec![Line::from(Span::from(rule).fg(c(MUTED)))];
         for message in context {
-            lines.push(Line::from(Span::from(format!("@{:<7} {}", message.user.name, message.text)).fg(c(SUBTEXT0))));
+            lines.push(Line::from(
+                Span::from(format!("@{:<7} {}", message.user.name, message.text)).fg(c(SUBTEXT0)),
+            ));
         }
-        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), context_area);
+        frame.render_widget(
+            Paragraph::new(lines).wrap(Wrap { trim: false }),
+            context_area,
+        );
     }
 }
 
 /// `W`: the handles, broadcasts, keywords and channels the inbox treats as addressed to you.
 fn render_slack_watches(frame: &mut Frame, app: &App, state: &SlackState) {
     let watches = &app.slack_snapshot.watches;
-    let cursor = state.watches.as_ref().map_or(0, |w| w.cursor).min(watches.len().saturating_sub(1));
+    let cursor = state
+        .watches
+        .as_ref()
+        .map_or(0, |w| w.cursor)
+        .min(watches.len().saturating_sub(1));
     let width = 96.min(frame.area().width.saturating_sub(2));
     let height = (watches.len().max(1) as u16 + 6).min(frame.area().height.saturating_sub(2));
     let area = centered(frame.area(), width, height);
@@ -2355,14 +3471,24 @@ fn render_slack_watches(frame: &mut Frame, app: &App, state: &SlackState) {
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(1))
         .title(Line::from(" Watches ").bold())
-        .title_bottom(Line::from(" n add  e floor  d delete  space on/off  esc ").fg(c(SUBTEXT0)).right_aligned());
+        .title_bottom(
+            Line::from(" n add  e floor  d delete  space on/off  esc ")
+                .fg(c(SUBTEXT0))
+                .right_aligned(),
+        );
     let mut lines = Vec::new();
     if watches.is_empty() {
-        lines.push(Line::from(Span::from("  nothing watched yet").fg(c(SUBTEXT0))));
+        lines.push(Line::from(
+            Span::from("  nothing watched yet").fg(c(SUBTEXT0)),
+        ));
     }
     for (i, watch) in watches.iter().enumerate() {
         let selected = i == cursor;
-        let (state_label, state_colour) = if watch.enabled { ("on ", GREEN) } else { ("off", SUBTEXT0) };
+        let (state_label, state_colour) = if watch.enabled {
+            ("on ", GREEN)
+        } else {
+            ("off", SUBTEXT0)
+        };
         let label_style = match (selected, watch.enabled) {
             (true, _) => Style::new().fg(c(ACCENT)).bold(),
             (false, true) => Style::new(),
@@ -2380,7 +3506,10 @@ fn render_slack_watches(frame: &mut Frame, app: &App, state: &SlackState) {
     }
     lines.push(Line::default());
     lines.push(Line::from(
-        Span::from("n: type @handle, #channel or a word · usergroups and channels autocomplete from Slack").fg(c(SUBTEXT0)),
+        Span::from(
+            "n: type @handle, #channel or a word · usergroups and channels autocomplete from Slack",
+        )
+        .fg(c(SUBTEXT0)),
     ));
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -2388,7 +3517,11 @@ fn render_slack_watches(frame: &mut Frame, app: &App, state: &SlackState) {
 /// `n` in Watches: the query, what kind of watch it makes, and the completions it matches.
 fn render_slack_watch_add(frame: &mut Frame, app: &App, query: &str, cursor: usize) {
     const VISIBLE_ROWS: usize = 8;
-    let area = centered(frame.area(), 70.min(frame.area().width.saturating_sub(2)), VISIBLE_ROWS as u16 + 6);
+    let area = centered(
+        frame.area(),
+        70.min(frame.area().width.saturating_sub(2)),
+        VISIBLE_ROWS as u16 + 6,
+    );
     frame.render_widget(Clear, area);
     let (kind, text) = slack::watch_kind_of(query);
     let matches = app.slack_watch_matches(query);
@@ -2405,21 +3538,40 @@ fn render_slack_watch_add(frame: &mut Frame, app: &App, query: &str, cursor: usi
         _ => "a keyword, matched case-insensitively everywhere",
     };
     let mut lines = vec![
-        Line::from(vec![Span::from(" watch: ").fg(c(ACCENT)).bold(), Span::from(format!("{query}▏"))]),
+        Line::from(vec![
+            Span::from(" watch: ").fg(c(ACCENT)).bold(),
+            Span::from(format!("{query}▏")),
+        ]),
         Line::from(Span::from(format!(" {what}")).fg(c(SUBTEXT0))),
         Line::default(),
     ];
     if kind == "keyword" {
         if !text.is_empty() {
-            lines.push(Line::from(vec![Span::from("▌ ").fg(c(ACCENT)), Span::from(text.to_string()).fg(c(ACCENT)).bold()]));
+            lines.push(Line::from(vec![
+                Span::from("▌ ").fg(c(ACCENT)),
+                Span::from(text.to_string()).fg(c(ACCENT)).bold(),
+            ]));
         }
     } else if matches.is_empty() {
-        lines.push(Line::from(Span::from(if app.slack_catalog_loading() { "  loading…" } else { "  no matches" }).fg(c(SUBTEXT0))));
+        lines.push(Line::from(
+            Span::from(if app.slack_catalog_loading() {
+                "  loading…"
+            } else {
+                "  no matches"
+            })
+            .fg(c(SUBTEXT0)),
+        ));
     } else {
-        let start = cursor.saturating_sub(VISIBLE_ROWS / 2).min(matches.len().saturating_sub(VISIBLE_ROWS));
+        let start = cursor
+            .saturating_sub(VISIBLE_ROWS / 2)
+            .min(matches.len().saturating_sub(VISIBLE_ROWS));
         for (i, option) in matches.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
             let selected = i == cursor;
-            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            let style = if selected {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
             lines.push(Line::from(vec![
                 Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
                 Span::from(format!("{:<28}", option.label)).style(style),
@@ -2432,7 +3584,11 @@ fn render_slack_watch_add(frame: &mut Frame, app: &App, query: &str, cursor: usi
 
 /// `Z`: why the ticket is archived. The reasons the machine knows, one per line.
 fn render_archive_reason(frame: &mut Frame, task: &Task, cursor: usize) {
-    let area = centered(frame.area(), 52, crate::model::ARCHIVE_REASONS.len() as u16 + 4);
+    let area = centered(
+        frame.area(),
+        52,
+        crate::model::ARCHIVE_REASONS.len() as u16 + 4,
+    );
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -2444,7 +3600,11 @@ fn render_archive_reason(frame: &mut Frame, task: &Task, cursor: usize) {
         .enumerate()
         .map(|(i, (name, means))| {
             let selected = i == cursor;
-            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            let style = if selected {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
             Line::from(vec![
                 Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
                 Span::from(format!("{}  ", i + 1)).fg(c(SUBTEXT0)),
@@ -2465,18 +3625,34 @@ fn render_edit_choice(frame: &mut Frame, task: &Task, detail: Option<&crate::mod
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
         .title(Line::from(format!(" edit #{} ", task.short_id())).bold());
-    let plan = detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some());
+    let plan = detail
+        .is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some());
     let row = |key: &'static str, what: &'static str, on: bool| {
-        let style = if on { Style::new() } else { Style::new().fg(c(SUBTEXT0)) };
-        Line::from(vec![Span::from(format!("{key}  ")).fg(c(ACCENT)).bold(), Span::from(what).style(style)])
+        let style = if on {
+            Style::new()
+        } else {
+            Style::new().fg(c(SUBTEXT0))
+        };
+        Line::from(vec![
+            Span::from(format!("{key}  ")).fg(c(ACCENT)).bold(),
+            Span::from(what).style(style),
+        ])
     };
-    let lines = vec![row("p", "the plan", plan), row("c", "the cases", true), row("t", "the ticket", true)];
+    let lines = vec![
+        row("p", "the plan", plan),
+        row("c", "the cases", true),
+        row("t", "the ticket", true),
+    ];
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// `E`: the reason the escalation really had, one of the six, one per line.
 fn render_escalation_reason(frame: &mut Frame, task: &Task, cursor: usize) {
-    let area = centered(frame.area(), 64, crate::model::ESCALATION_REASONS.len() as u16 + 4);
+    let area = centered(
+        frame.area(),
+        64,
+        crate::model::ESCALATION_REASONS.len() as u16 + 4,
+    );
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -2488,7 +3664,11 @@ fn render_escalation_reason(frame: &mut Frame, task: &Task, cursor: usize) {
         .enumerate()
         .map(|(i, (name, means))| {
             let selected = i == cursor;
-            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            let style = if selected {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
             Line::from(vec![
                 Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
                 Span::from(format!("{}  ", i + 1)).fg(c(SUBTEXT0)),
@@ -2502,7 +3682,11 @@ fn render_escalation_reason(frame: &mut Frame, task: &Task, cursor: usize) {
 
 /// `T`: the Triage Record's five correctable fields, each with the value the picker is on; a value off the record's own is marked.
 fn render_record_edit(frame: &mut Frame, task: &Task, field: usize, picks: &[usize; 5]) {
-    let area = centered(frame.area(), 52, crate::model::RECORD_FIELDS.len() as u16 + 4);
+    let area = centered(
+        frame.area(),
+        52,
+        crate::model::RECORD_FIELDS.len() as u16 + 4,
+    );
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -2514,9 +3698,16 @@ fn render_record_edit(frame: &mut Frame, task: &Task, field: usize, picks: &[usi
         .enumerate()
         .map(|(i, (key, label, values))| {
             let selected = i == field;
-            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            let style = if selected {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
             let value = values[picks[i]];
-            let changed = task.record.as_ref().is_some_and(|r| r.value_of(key) != Some(value));
+            let changed = task
+                .record
+                .as_ref()
+                .is_some_and(|r| r.value_of(key) != Some(value));
             Line::from(vec![
                 Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
                 Span::from(format!("{label:<14}")).fg(c(SUBTEXT0)),
@@ -2530,22 +3721,44 @@ fn render_record_edit(frame: &mut Frame, task: &Task, field: usize, picks: &[usi
 
 /// `c` and `L`: the machine's own list, one line each; nothing here posts.
 fn render_slack_pick(frame: &mut Frame, app: &App, id: &str, relation: bool, cursor: usize) {
-    let Some(item) = app.slack_item(id) else { return };
+    let Some(item) = app.slack_item(id) else {
+        return;
+    };
     let (title, rows): (&str, Vec<String>) = if relation {
-        (" about which work? ", slack::relation_choices(item).into_iter().map(|c| c.label).collect())
+        (
+            " about which work? ",
+            slack::relation_choices(item)
+                .into_iter()
+                .map(|c| c.label)
+                .collect(),
+        )
     } else {
-        (" what kind of thread? ", slack::KINDS.iter().map(|k| k.to_string()).collect())
+        (
+            " what kind of thread? ",
+            slack::KINDS.iter().map(|k| k.to_string()).collect(),
+        )
     };
     let area = centered(frame.area(), 64, rows.len() as u16 + 4);
     frame.render_widget(Clear, area);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).padding(Padding::horizontal(2)).title(Line::from(title).bold());
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(title).bold());
     let lines: Vec<Line> = rows
         .iter()
         .enumerate()
         .map(|(i, row)| {
             let selected = i == cursor;
-            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
-            Line::from(vec![Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)), Span::from(row.clone()).style(style)])
+            let style = if selected {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
+            Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(row.clone()).style(style),
+            ])
         })
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -2554,11 +3767,24 @@ fn render_slack_pick(frame: &mut Frame, app: &App, id: &str, relation: bool, cur
 fn render_slack_dismiss(frame: &mut Frame) {
     let area = centered(frame.area(), 40, 7);
     frame.render_widget(Clear, area);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).padding(Padding::horizontal(2)).title(Line::from(" why dismiss the draft? ").bold());
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(" why dismiss the draft? ").bold());
     let lines = vec![
-        Line::from(vec![Span::from("n  ").fg(c(SUBTEXT0)), Span::from("no reply needed")]),
-        Line::from(vec![Span::from("b  ").fg(c(SUBTEXT0)), Span::from("a reply was needed, not this one")]),
-        Line::from(vec![Span::from("s  ").fg(c(SUBTEXT0)), Span::from("skip: no reason")]),
+        Line::from(vec![
+            Span::from("n  ").fg(c(SUBTEXT0)),
+            Span::from("no reply needed"),
+        ]),
+        Line::from(vec![
+            Span::from("b  ").fg(c(SUBTEXT0)),
+            Span::from("a reply was needed, not this one"),
+        ]),
+        Line::from(vec![
+            Span::from("s  ").fg(c(SUBTEXT0)),
+            Span::from("skip: no reason"),
+        ]),
     ];
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -2576,7 +3802,11 @@ fn render_slack_snooze(frame: &mut Frame, cursor: usize) {
         .enumerate()
         .map(|(i, option)| {
             let selected = i == cursor;
-            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            let style = if selected {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
             Line::from(vec![
                 Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
                 Span::from(format!("{}  ", i + 1)).fg(c(SUBTEXT0)),
@@ -2589,7 +3819,12 @@ fn render_slack_snooze(frame: &mut Frame, cursor: usize) {
 
 /// `E` in the Engines section: the default, then each engine the stage may run on; one this
 /// machine has no credential for is dim with what is missing, and the cursor skips it.
-fn render_engine_picker(frame: &mut Frame, pack: &crate::model::PackInfo, choices: &[crate::model::EngineChoice], cursor: usize) {
+fn render_engine_picker(
+    frame: &mut Frame,
+    pack: &crate::model::PackInfo,
+    choices: &[crate::model::EngineChoice],
+    cursor: usize,
+) {
     let width = 72.min(frame.area().width.saturating_sub(2));
     let area = centered(frame.area(), width, choices.len() as u16 + 4);
     frame.render_widget(Clear, area);
@@ -2605,8 +3840,13 @@ fn render_engine_picker(frame: &mut Frame, pack: &crate::model::PackInfo, choice
             let selected = i == cursor;
             let mut spans = vec![Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT))];
             match &choice.off {
-                Some(why) => spans.extend([Span::from(choice.label.clone()).fg(c(MUTED)), Span::from(format!("  {why}")).fg(c(MUTED))]),
-                None if selected => spans.push(Span::from(choice.label.clone()).fg(c(ACCENT)).bold()),
+                Some(why) => spans.extend([
+                    Span::from(choice.label.clone()).fg(c(MUTED)),
+                    Span::from(format!("  {why}")).fg(c(MUTED)),
+                ]),
+                None if selected => {
+                    spans.push(Span::from(choice.label.clone()).fg(c(ACCENT)).bold())
+                }
                 None => spans.push(Span::from(choice.label.clone())),
             }
             Line::from(spans)
@@ -2620,17 +3860,34 @@ fn render_slack_task(frame: &mut Frame, app: &App, id: &str, title: &str, repo: 
     let width = 80.min(frame.area().width.saturating_sub(2));
     let area = centered(frame.area(), width, 8);
     frame.render_widget(Clear, area);
-    let channel = app.slack_item(id).map(SlackItem::channel_label).unwrap_or_default();
+    let channel = app
+        .slack_item(id)
+        .map(SlackItem::channel_label)
+        .unwrap_or_default();
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
         .title(Line::from(format!(" ticket from {channel}? ")).bold());
-    let field = |name: &str, text: String| Line::from(vec![Span::from(format!("{name:<7}")).fg(c(SUBTEXT0)), Span::from(text)]);
+    let field = |name: &str, text: String| {
+        Line::from(vec![
+            Span::from(format!("{name:<7}")).fg(c(SUBTEXT0)),
+            Span::from(text),
+        ])
+    };
     let lines = vec![
         field("title", title.to_string()),
-        field("repo", repo.map_or("none guessed; you pick one right after".to_string(), str::to_string)),
-        Line::from(Span::from("the message and its thread become the description; the ticket links back").fg(c(SUBTEXT0))),
+        field(
+            "repo",
+            repo.map_or(
+                "none guessed; you pick one right after".to_string(),
+                str::to_string,
+            ),
+        ),
+        Line::from(
+            Span::from("the message and its thread become the description; the ticket links back")
+                .fg(c(SUBTEXT0)),
+        ),
         Line::default(),
         Line::from(vec![
             Span::from(" y ").fg(c(BASE)).bg(c(ACCENT)),
@@ -2639,17 +3896,31 @@ fn render_slack_task(frame: &mut Frame, app: &App, id: &str, title: &str, repo: 
             Span::from(" cancel").fg(c(SUBTEXT0)),
         ]),
     ];
-    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 /// The Floor's Slack block: items and replies by priority over 7d / 30d, how many of the 7d
 /// replies came inside their SLA (count and share), how long a reply took (7d), the share
 /// answered within an hour, and the SLA targets in force.
-fn slack_metric_lines(d7: &SlackMetrics, d30: &SlackMetrics, head_style: Style, label_style: Style) -> Vec<Line<'static>> {
+fn slack_metric_lines(
+    d7: &SlackMetrics,
+    d30: &SlackMetrics,
+    head_style: Style,
+    label_style: Style,
+) -> Vec<Line<'static>> {
     let pair = |a: u64, b: u64| format!("{a} / {b}");
     let seconds = |v: Option<f64>| fmt_ms(v.map(|s| s * 1000.0));
     let mut out = vec![Line::from(
-        Span::from(format!(" {:<14}{:>8}{:>8}{:>12}{:>16}", "Slack · 7d / 30d", "items", "replied", "within SLA", "median / p90")).style(head_style),
+        Span::from(format!(
+            " {:<14}{:>8}{:>8}{:>12}{:>16}",
+            "Slack · 7d / 30d", "items", "replied", "within SLA", "median / p90"
+        ))
+        .style(head_style),
     )];
     for p in SLACK_PRIORITIES {
         let stats = d7.time_to_reply.get(p);
@@ -2658,17 +3929,35 @@ fn slack_metric_lines(d7: &SlackMetrics, d30: &SlackMetrics, head_style: Style, 
             Span::from(format!(" {p:<14}")).style(priority_style(Some(p))),
             Span::from(format!(
                 "{:>8}{:>8}{:>12}{:>16}",
-                pair(d7.items.get(p).copied().unwrap_or(0), d30.items.get(p).copied().unwrap_or(0)),
-                pair(d7.replied.get(p).copied().unwrap_or(0), d30.replied.get(p).copied().unwrap_or(0)),
+                pair(
+                    d7.items.get(p).copied().unwrap_or(0),
+                    d30.items.get(p).copied().unwrap_or(0)
+                ),
+                pair(
+                    d7.replied.get(p).copied().unwrap_or(0),
+                    d30.replied.get(p).copied().unwrap_or(0)
+                ),
                 format!("{within} · {}", fmt_pct(share)),
-                format!("{} / {}", seconds(stats.and_then(|s| s.median)), seconds(stats.and_then(|s| s.p90))),
+                format!(
+                    "{} / {}",
+                    seconds(stats.and_then(|s| s.median)),
+                    seconds(stats.and_then(|s| s.p90))
+                ),
             )),
         ]));
     }
     out.push(Line::from(vec![
         Span::from(format!(" {:<14}", "within 1h")).style(label_style),
-        Span::from(format!("{:>8}{:>8}", fmt_pct(d7.within_hour_rate()), fmt_pct(d30.within_hour_rate()))),
-        Span::from(format!("{:>28}", format!("{} / {} items", d7.total_items(), d30.total_items()))).style(label_style),
+        Span::from(format!(
+            "{:>8}{:>8}",
+            fmt_pct(d7.within_hour_rate()),
+            fmt_pct(d30.within_hour_rate())
+        )),
+        Span::from(format!(
+            "{:>28}",
+            format!("{} / {} items", d7.total_items(), d30.total_items())
+        ))
+        .style(label_style),
     ]));
     out.push(Line::from(vec![
         Span::from(format!(" {:<14}", "SLA targets")).style(label_style),
@@ -2680,9 +3969,18 @@ fn slack_metric_lines(d7: &SlackMetrics, d30: &SlackMetrics, head_style: Style, 
 /// The Digest: what changed since the board was last open, by group, newest first.
 fn render_digest(frame: &mut Frame, area: Rect, app: &App, digest: &DigestState) {
     let now = now_secs();
-    let since = app.last_seen_secs.map_or("ever".to_string(), |s| format!("{} ago", age_secs(now.saturating_sub(s))));
+    let since = app.last_seen_secs.map_or("ever".to_string(), |s| {
+        format!("{} ago", age_secs(now.saturating_sub(s)))
+    });
     let entries = digest::entries(&app.tasks, app.last_seen_secs);
-    let mut lines = vec![Line::from(Span::from(format!(" Digest · since {since} · {} change(s)", entries.len())).fg(c(ACCENT)).bold())];
+    let mut lines = vec![Line::from(
+        Span::from(format!(
+            " Digest · since {since} · {} change(s)",
+            entries.len()
+        ))
+        .fg(c(ACCENT))
+        .bold(),
+    )];
     if entries.is_empty() {
         lines.push(Line::default());
         lines.push(Line::from(Span::from("  ✓ nothing new").fg(c(GREEN))));
@@ -2692,14 +3990,21 @@ fn render_digest(frame: &mut Frame, area: Rect, app: &App, digest: &DigestState)
     for (row, (group, i)) in entries.iter().enumerate() {
         if last_group != Some(*group) {
             lines.push(Line::default());
-            lines.push(Line::from(Span::from(format!(" {}", group.label())).fg(c(SUBTEXT0)).bold()));
+            lines.push(Line::from(
+                Span::from(format!(" {}", group.label()))
+                    .fg(c(SUBTEXT0))
+                    .bold(),
+            ));
             last_group = Some(*group);
         }
         let task = &app.tasks[*i];
         let look = task.look_at(now);
         let selected = row == cursor;
         let what = task.reason.clone().unwrap_or_else(|| task.status_label());
-        let repo = task.repo_name().map(|r| format!("{r} · ")).unwrap_or_default();
+        let repo = task
+            .repo_name()
+            .map(|r| format!("{r} · "))
+            .unwrap_or_default();
         let mut line = vec![
             Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
             Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)),
@@ -2719,45 +4024,81 @@ fn render_digest(frame: &mut Frame, area: Rect, app: &App, digest: &DigestState)
 
 /// A small centered box with one line of text, for a yes/no that has no single ticket.
 fn render_note(frame: &mut Frame, title: &str, note: &str) {
-    let width = (note.len() as u16 + 6).min(frame.area().width.saturating_sub(4)).max(20);
+    let width = (note.len() as u16 + 6)
+        .min(frame.area().width.saturating_sub(4))
+        .max(20);
     let area = centered(frame.area(), width, 5);
     frame.render_widget(Clear, area);
-    let block = Block::bordered().border_type(BorderType::Rounded).title(title).padding(Padding::horizontal(1));
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(title)
+        .padding(Padding::horizontal(1));
     frame.render_widget(Paragraph::new(note).block(block), area);
 }
 
 fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
     let label_style = Style::new().fg(c(SUBTEXT0));
     let head_style = Style::new().fg(c(ACCENT)).bold();
-    let since = |m: &Option<Metrics>| m.as_ref().map_or("…".to_string(), |m| m.since.chars().take(10).collect());
-    let scope = floor.focused_name().map_or(String::new(), |name| format!(" {name} ·"));
+    let since = |m: &Option<Metrics>| {
+        m.as_ref()
+            .map_or("…".to_string(), |m| m.since.chars().take(10).collect())
+    };
+    let scope = floor
+        .focused_name()
+        .map_or(String::new(), |name| format!(" {name} ·"));
     let mut lines = vec![Line::from(
-        Span::from(format!(" Floor ·{scope} since {} (7d) · {} (30d)", since(&floor.d7), since(&floor.d30))).style(head_style),
+        Span::from(format!(
+            " Floor ·{scope} since {} (7d) · {} (30d)",
+            since(&floor.d7),
+            since(&floor.d30)
+        ))
+        .style(head_style),
     )];
     if floor.d7.is_none() && floor.d30.is_none() {
-        lines.push(Line::from(Span::from(" no numbers yet; R to retry").style(label_style)));
+        lines.push(Line::from(
+            Span::from(" no numbers yet; R to retry").style(label_style),
+        ));
     }
 
     // The per-repo table takes the bottom when there is more than one repo to compare, the
     // per-engine one sits above it once there are numbers.
     // A repository with no task numbers yet still has a health panel (and a row to focus), so the table is sized by either.
-    let repo_height = if floor.repos.is_empty() && floor.health.is_empty() { 0 } else { (floor.focusable() as u16 + 3 + floor.health.len() as u16 * 3).min(area.height / 2) };
+    let repo_height = if floor.repos.is_empty() && floor.health.is_empty() {
+        0
+    } else {
+        (floor.focusable() as u16 + 3 + floor.health.len() as u16 * 3).min(area.height / 2)
+    };
     let engine_rows = floor_engine_rows(floor);
     let engine_height = match (&floor.d7, &floor.by_engine) {
         (None, _) => 0,
         (Some(_), None) => 2,
         (Some(_), Some(_)) => (engine_rows.len() as u16 + 2).min(area.height / 3),
     };
-    let [top, engine_area, repo_area] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(engine_height), Constraint::Length(repo_height)]).areas(area);
+    let [top, engine_area, repo_area] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(engine_height),
+        Constraint::Length(repo_height),
+    ])
+    .areas(area);
     if engine_height > 0 {
-        render_floor_engines(frame, engine_area, floor.by_engine.is_some(), &engine_rows, head_style, label_style);
+        render_floor_engines(
+            frame,
+            engine_area,
+            floor.by_engine.is_some(),
+            &engine_rows,
+            head_style,
+            label_style,
+        );
     }
     let wide = top.width >= 110;
     let [table_area, stage_area] = if wide {
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(top)
     } else {
-        Layout::vertical([Constraint::Length(lines.len() as u16 + floor_rows(floor).len() as u16 + 1), Constraint::Min(0)]).areas(top)
+        Layout::vertical([
+            Constraint::Length(lines.len() as u16 + floor_rows(floor).len() as u16 + 1),
+            Constraint::Min(0),
+        ])
+        .areas(top)
     };
     if repo_height > 0 {
         render_floor_repos(frame, repo_area, floor, head_style, label_style);
@@ -2767,8 +4108,18 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
     let col_w = (table_area.width as usize).saturating_sub(label_w + 1) / 2;
     let line_of = |label: &str, a: &str, b: &str, style: Style| {
         Line::from(vec![
-            Span::from(format!(" {:<w$}", truncate(label, label_w - 1), w = label_w - 1)).style(label_style),
-            Span::from(format!("{:<w$}", truncate(a, col_w.saturating_sub(1)), w = col_w)).style(style),
+            Span::from(format!(
+                " {:<w$}",
+                truncate(label, label_w - 1),
+                w = label_w - 1
+            ))
+            .style(label_style),
+            Span::from(format!(
+                "{:<w$}",
+                truncate(a, col_w.saturating_sub(1)),
+                w = col_w
+            ))
+            .style(style),
             Span::from(truncate(b, col_w.saturating_sub(1))).style(style),
         ])
     };
@@ -2784,23 +4135,40 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
     let which = if floor.d7.is_some() { "7d" } else { "30d" };
     let stages = stage_rows(window);
     // The Slack block takes the bottom of the stage area when there is one and it fits.
-    let slack_lines = floor.slack.as_ref().map(|(d7, d30)| slack_metric_lines(d7, d30, head_style, label_style)).unwrap_or_default();
+    let slack_lines = floor
+        .slack
+        .as_ref()
+        .map(|(d7, d30)| slack_metric_lines(d7, d30, head_style, label_style))
+        .unwrap_or_default();
     let slack_height = slack_lines.len() as u16 + 1;
-    let [stage_area, slack_area] = if !slack_lines.is_empty() && stage_area.height >= slack_height + 4 {
+    let [stage_area, slack_area] = if !slack_lines.is_empty()
+        && stage_area.height >= slack_height + 4
+    {
         Layout::vertical([Constraint::Min(0), Constraint::Length(slack_height)]).areas(stage_area)
     } else {
         Layout::vertical([Constraint::Min(0), Constraint::Length(0)]).areas(stage_area)
     };
     if slack_area.height > 0 {
-        let [_, slack_body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(slack_area);
+        let [_, slack_body] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(slack_area);
         frame.render_widget(Paragraph::new(slack_lines), slack_body);
     }
     let room = (stage_area.height as usize).saturating_sub(1);
     let mut out = vec![Line::from(
-        Span::from(format!(" {:<14}{:>5}{:>8}{:>8}{:>9}", format!("stage · {which}"), "runs", "median", "p90", "cost"))
-            .style(head_style),
+        Span::from(format!(
+            " {:<14}{:>5}{:>8}{:>8}{:>9}",
+            format!("stage · {which}"),
+            "runs",
+            "median",
+            "p90",
+            "cost"
+        ))
+        .style(head_style),
     )];
-    for row in stages.iter().take(room.saturating_sub(usize::from(stages.len() > room))) {
+    for row in stages
+        .iter()
+        .take(room.saturating_sub(usize::from(stages.len() > room)))
+    {
         out.push(Line::from(format!(
             " {:<14}{:>5}{:>8}{:>8}{:>9}",
             truncate(&row[0], 13),
@@ -2812,7 +4180,9 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
     }
     if stages.len() > room {
         let hidden = stages.len() - room.saturating_sub(1);
-        out.push(Line::from(Span::from(format!(" … +{hidden} more")).style(label_style)));
+        out.push(Line::from(
+            Span::from(format!(" … +{hidden} more")).style(label_style),
+        ));
     }
     frame.render_widget(Paragraph::new(out), stage_area);
 }
@@ -2823,7 +4193,10 @@ fn floor_engine_rows(floor: &FloorState) -> Vec<(String, bool)> {
     let row = |name: &str, cells: [String; 6], info: Option<&EngineInfo>| {
         let [runs, first, esc, limited, turns, cost] = cells;
         let month = info.and_then(EngineInfo::month_line).unwrap_or_default();
-        let text = format!("  {:<16}{runs:>6}{first:>12}{esc:>5}{limited:>9}{turns:>7}{cost:>9}   {month}", truncate(name, 15));
+        let text = format!(
+            "  {:<16}{runs:>6}{first:>12}{esc:>5}{limited:>9}{turns:>7}{cost:>9}   {month}",
+            truncate(name, 15)
+        );
         (text, info.is_some_and(EngineInfo::at_cap))
     };
     let info = |id: &str| floor.engines.iter().find(|e| e.id == id);
@@ -2832,41 +4205,106 @@ fn floor_engine_rows(floor: &FloorState) -> Vec<(String, bool)> {
         .iter()
         .map(|r| {
             let turns = r.mean_turns.map_or("–".to_string(), |t| format!("{t:.1}"));
-            let cells = [r.stage_runs.to_string(), fmt_pct(r.first_pass_rate), r.escalations.to_string(), r.rate_limited.to_string(), turns, fmt_usd(Some(r.cost_usd))];
+            let cells = [
+                r.stage_runs.to_string(),
+                fmt_pct(r.first_pass_rate),
+                r.escalations.to_string(),
+                r.rate_limited.to_string(),
+                turns,
+                fmt_usd(Some(r.cost_usd)),
+            ];
             row(r.name(), cells, r.engine.as_deref().and_then(info))
         })
         .collect();
-    let idle = floor.engines.iter().filter(|e| !ran.iter().any(|r| r.engine.as_deref() == Some(e.id.as_str())));
-    for e in idle.filter(|e| e.budget_usd.is_some() || e.spent_this_month_usd.is_some_and(|s| s > 0.0)) {
-        rows.push(row(&e.id, std::array::from_fn(|_| "–".to_string()), Some(e)));
+    let idle = floor.engines.iter().filter(|e| {
+        !ran.iter()
+            .any(|r| r.engine.as_deref() == Some(e.id.as_str()))
+    });
+    for e in
+        idle.filter(|e| e.budget_usd.is_some() || e.spent_this_month_usd.is_some_and(|s| s > 0.0))
+    {
+        rows.push(row(
+            &e.id,
+            std::array::from_fn(|_| "–".to_string()),
+            Some(e),
+        ));
     }
     rows
 }
 
 /// Cost per engine over 7d and each engine's month against its cap; an engine at its cap reads
 /// red. A machine from before engines gets one line saying so.
-fn render_floor_engines(frame: &mut Frame, area: Rect, reported: bool, rows: &[(String, bool)], head_style: Style, label_style: Style) {
+fn render_floor_engines(
+    frame: &mut Frame,
+    area: Rect,
+    reported: bool,
+    rows: &[(String, bool)],
+    head_style: Style,
+    label_style: Style,
+) {
     if !reported {
         let note = " engines · the machine does not report engines";
-        frame.render_widget(Paragraph::new(Line::from(Span::from(note).style(label_style))), area);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::from(note).style(label_style))),
+            area,
+        );
         return;
     }
-    let head = format!("  {:<16}{:>6}{:>12}{:>5}{:>9}{:>7}{:>9}   {}", "engine · 7d", "runs", "first-pass", "esc", "limited", "turns", "cost", "month / cap");
+    let head = format!(
+        "  {:<16}{:>6}{:>12}{:>5}{:>9}{:>7}{:>9}   {}",
+        "engine · 7d", "runs", "first-pass", "esc", "limited", "turns", "cost", "month / cap"
+    );
     let mut out = vec![Line::from(Span::from(head).style(head_style))];
     for (text, at_cap) in rows.iter().take((area.height as usize).saturating_sub(1)) {
-        out.push(Line::from(Span::from(text.clone()).style(if *at_cap { Style::new().fg(c(RED)).bold() } else { Style::new() })));
+        out.push(Line::from(Span::from(text.clone()).style(if *at_cap {
+            Style::new().fg(c(RED)).bold()
+        } else {
+            Style::new()
+        })));
     }
     frame.render_widget(Paragraph::new(out), area);
 }
 
 /// One row per repo over 7d, `all` first; `▌` marks the focus `tab` moves.
-fn render_floor_repos(frame: &mut Frame, area: Rect, floor: &FloorState, head_style: Style, label_style: Style) {
-    let row = |mark: &str, name: &str, closed: &str, open: &str, needs: &str, esc: &str, first: &str, cost: &str| {
-        format!("{mark}{:<16}{:>7}{:>6}{:>10}{:>7}{:>11}{:>9}", truncate(name, 15), closed, open, needs, esc, first, cost)
+fn render_floor_repos(
+    frame: &mut Frame,
+    area: Rect,
+    floor: &FloorState,
+    head_style: Style,
+    label_style: Style,
+) {
+    let row = |mark: &str,
+               name: &str,
+               closed: &str,
+               open: &str,
+               needs: &str,
+               esc: &str,
+               first: &str,
+               cost: &str| {
+        format!(
+            "{mark}{:<16}{:>7}{:>6}{:>10}{:>7}{:>11}{:>9}",
+            truncate(name, 15),
+            closed,
+            open,
+            needs,
+            esc,
+            first,
+            cost
+        )
     };
-    let mut out = vec![
-        Line::from(Span::from(row("  ", "repo · 7d", "closed", "open", "needs you", "esc", "first-pass", "cost")).style(head_style)),
-    ];
+    let mut out = vec![Line::from(
+        Span::from(row(
+            "  ",
+            "repo · 7d",
+            "closed",
+            "open",
+            "needs you",
+            "esc",
+            "first-pass",
+            "cost",
+        ))
+        .style(head_style),
+    )];
     let room = (area.height as usize).saturating_sub(1);
     let all = floor.d7.as_ref().filter(|_| floor.cursor == 0);
     let all_row = row(
@@ -2879,7 +4317,13 @@ fn render_floor_repos(frame: &mut Frame, area: Rect, floor: &FloorState, head_st
         &all.map_or("–".to_string(), |m| fmt_pct(m.first_pass_rate.verifying)),
         &all.map_or("–".to_string(), |m| fmt_usd(Some(m.cost.total_usd))),
     );
-    out.push(Line::from(Span::from(all_row).style(if floor.cursor == 0 { Style::new().fg(c(ACCENT)).bold() } else { label_style })));
+    out.push(Line::from(Span::from(all_row).style(
+        if floor.cursor == 0 {
+            Style::new().fg(c(ACCENT)).bold()
+        } else {
+            label_style
+        },
+    )));
     for (i, r) in floor.repos.iter().enumerate().take(room.saturating_sub(1)) {
         let focused = floor.cursor == i + 1;
         let text = row(
@@ -2892,35 +4336,77 @@ fn render_floor_repos(frame: &mut Frame, area: Rect, floor: &FloorState, head_st
             &fmt_pct(r.first_pass_verifying),
             &fmt_usd(Some(r.cost_usd)),
         );
-        out.push(Line::from(Span::from(text).style(if focused { Style::new().fg(c(ACCENT)).bold() } else { Style::new() })));
+        out.push(Line::from(Span::from(text).style(if focused {
+            Style::new().fg(c(ACCENT)).bold()
+        } else {
+            Style::new()
+        })));
     }
     // Repositories the machine knows that have no task numbers yet: a row each, so tab reaches them.
     let only = floor.health_only();
-    for (i, h) in only.iter().enumerate().take(room.saturating_sub(1 + floor.repos.len())) {
+    for (i, h) in only
+        .iter()
+        .enumerate()
+        .take(room.saturating_sub(1 + floor.repos.len()))
+    {
         let focused = floor.cursor == floor.repos.len() + i + 1;
-        let text = row(if focused { "▌ " } else { "  " }, &crate::model::plain(h.name(), 15), "–", "–", "–", "–", "–", "–");
-        out.push(Line::from(Span::from(text).style(if focused { Style::new().fg(c(ACCENT)).bold() } else { Style::new() })));
+        let text = row(
+            if focused { "▌ " } else { "  " },
+            &crate::model::plain(h.name(), 15),
+            "–",
+            "–",
+            "–",
+            "–",
+            "–",
+            "–",
+        );
+        out.push(Line::from(Span::from(text).style(if focused {
+            Style::new().fg(c(ACCENT)).bold()
+        } else {
+            Style::new()
+        })));
     }
     // Under the table: each repository's image and graph, and what failed.
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     for h in &floor.health {
         if out.len() + 3 > area.height as usize {
             break;
         }
-        out.push(Line::from(Span::from(format!("  {:<16}{}", truncate(h.name(), 15), h.image_line(now))).style(label_style)));
-        out.push(Line::from(Span::from(format!("  {:<16}{}", "", h.graph_line(now))).style(label_style)));
+        out.push(Line::from(
+            Span::from(format!(
+                "  {:<16}{}",
+                truncate(h.name(), 15),
+                h.image_line(now)
+            ))
+            .style(label_style),
+        ));
+        out.push(Line::from(
+            Span::from(format!("  {:<16}{}", "", h.graph_line(now))).style(label_style),
+        ));
         if let Some(pending) = h.pending_line() {
-            out.push(Line::from(Span::from(format!("  {:<16}{}", "", pending)).style(Style::new().fg(c(ACCENT)).bold())));
+            out.push(Line::from(
+                Span::from(format!("  {:<16}{}", "", pending))
+                    .style(Style::new().fg(c(ACCENT)).bold()),
+            ));
         }
     }
     frame.render_widget(Paragraph::new(out), area);
 }
 
 fn render_actions(frame: &mut Frame, app: &App, cursor: usize) {
-    let title = app
-        .selected_task()
-        .map_or(" Actions ".to_string(), |t| format!(" #{} {} ", t.short_id(), t.title));
-    render_menu(frame, title, Vec::new(), &keys::menu(app, Scope::Board), cursor, 56);
+    let title = app.selected_task().map_or(" Actions ".to_string(), |t| {
+        format!(" #{} {} ", t.short_id(), t.title)
+    });
+    render_menu(
+        frame,
+        title,
+        Vec::new(),
+        &keys::menu(app, Scope::Board),
+        cursor,
+        56,
+    );
 }
 
 /// The `:` prompt's completions, over the footer: up to six commands the text is a prefix of,
@@ -2932,20 +4418,38 @@ fn render_completions(frame: &mut Frame, text: &str, pick: Option<usize>) {
         return;
     }
     let shown: Vec<&(&str, &keys::Binding)> = matches.iter().take(SHOWN).collect();
-    let name_width = shown.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0) + 2;
-    let longest = shown.iter().map(|(_, b)| name_width + b.label.chars().count()).max().unwrap_or(20);
+    let name_width = shown
+        .iter()
+        .map(|(n, _)| n.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+    let longest = shown
+        .iter()
+        .map(|(_, b)| name_width + b.label.chars().count())
+        .max()
+        .unwrap_or(20);
     let more = matches.len() > SHOWN;
     let height = shown.len() as u16 + u16::from(more);
     let frame_area = frame.area();
     let width = (longest as u16 + 6).min(frame_area.width);
-    let area = Rect::new(frame_area.x, frame_area.bottom().saturating_sub(1 + height), width, height.min(frame_area.height.saturating_sub(1)));
+    let area = Rect::new(
+        frame_area.x,
+        frame_area.bottom().saturating_sub(1 + height),
+        width,
+        height.min(frame_area.height.saturating_sub(1)),
+    );
     frame.render_widget(Clear, area);
     let mut lines: Vec<Line> = shown
         .iter()
         .enumerate()
         .map(|(i, (name, b))| {
             let picked = pick == Some(i);
-            let style = if picked { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            let style = if picked {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
             Line::from(vec![
                 Span::from(if picked { " ▌ :" } else { "   :" }).fg(c(ACCENT)),
                 Span::from(format!("{name:<name_width$}")).style(style),
@@ -2954,9 +4458,14 @@ fn render_completions(frame: &mut Frame, text: &str, pick: Option<usize>) {
         })
         .collect();
     if more {
-        lines.push(Line::from(Span::from(format!("    … {} more", matches.len() - SHOWN)).fg(c(SUBTEXT0))));
+        lines.push(Line::from(
+            Span::from(format!("    … {} more", matches.len() - SHOWN)).fg(c(SUBTEXT0)),
+        ));
     }
-    frame.render_widget(Paragraph::new(lines).style(Style::new().bg(c(SURFACE0))), area);
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::new().bg(c(SURFACE0))),
+        area,
+    );
 }
 
 fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String], cursor: usize) {
@@ -2982,17 +4491,26 @@ fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String
         lines.push(Line::from(Span::from("  no matches").fg(c(SUBTEXT0))));
     } else {
         // A window of rows around the cursor, so a long list still shows the selection.
-        let start = cursor.saturating_sub(VISIBLE_ROWS / 2).min(matches.len().saturating_sub(VISIBLE_ROWS));
+        let start = cursor
+            .saturating_sub(VISIBLE_ROWS / 2)
+            .min(matches.len().saturating_sub(VISIBLE_ROWS));
         for (i, repo) in matches.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
             let selected = i == cursor;
-            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            let style = if selected {
+                Style::new().fg(c(ACCENT)).bold()
+            } else {
+                Style::new()
+            };
             lines.push(Line::from(vec![
                 Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
                 Span::from(*repo).style(style),
             ]));
         }
         if matches.len() > VISIBLE_ROWS {
-            lines.push(Line::from(Span::from(format!("  … {} of {} repos", cursor + 1, matches.len())).fg(c(SUBTEXT0))));
+            lines.push(Line::from(
+                Span::from(format!("  … {} of {} repos", cursor + 1, matches.len()))
+                    .fg(c(SUBTEXT0)),
+            ));
         }
     }
     frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -3000,7 +4518,13 @@ fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String
 
 /// `J`'s prompt: the query, then `+ create an issue from this ticket` and one row per hit as
 /// `PLAT-123  In Progress  summary`, the cursor's row in the accent colour.
-fn render_jira_link(frame: &mut Frame, task: &Task, query: &str, hits: &[JiraIssueHit], cursor: usize) {
+fn render_jira_link(
+    frame: &mut Frame,
+    task: &Task,
+    query: &str,
+    hits: &[JiraIssueHit],
+    cursor: usize,
+) {
     const VISIBLE_ROWS: usize = 10;
     let width = 90.min(frame.area().width.saturating_sub(2));
     let area = centered(frame.area(), width, VISIBLE_ROWS as u16 + 7);
@@ -3010,10 +4534,26 @@ fn render_jira_link(frame: &mut Frame, task: &Task, query: &str, hits: &[JiraIss
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
-        .title(Line::from(format!(" Jira issue for #{} {} ", task.short_id(), task.title)).bold());
-    let row_style = |selected: bool| if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+        .title(
+            Line::from(format!(
+                " Jira issue for #{} {} ",
+                task.short_id(),
+                task.title
+            ))
+            .bold(),
+        );
+    let row_style = |selected: bool| {
+        if selected {
+            Style::new().fg(c(ACCENT)).bold()
+        } else {
+            Style::new()
+        }
+    };
     let mut lines = vec![
-        Line::from(vec![Span::from(" search: ").fg(c(ACCENT)).bold(), Span::from(format!("{query}▏"))]),
+        Line::from(vec![
+            Span::from(" search: ").fg(c(ACCENT)).bold(),
+            Span::from(format!("{query}▏")),
+        ]),
         Line::default(),
         Line::from(vec![
             Span::from(if cursor == 0 { "▌ " } else { "  " }).fg(c(ACCENT)),
@@ -3021,22 +4561,36 @@ fn render_jira_link(frame: &mut Frame, task: &Task, query: &str, hits: &[JiraIss
         ]),
     ];
     if hits.is_empty() {
-        let hint = if query.trim().chars().count() < 3 { "type a key or three letters to search" } else { "no matches" };
+        let hint = if query.trim().chars().count() < 3 {
+            "type a key or three letters to search"
+        } else {
+            "no matches"
+        };
         lines.push(Line::from(Span::from(format!("  {hint}")).fg(c(SUBTEXT0))));
     }
-    let room = usize::from(width).saturating_sub(6 + 11 + 2 + 14 + 2).max(8);
-    let start = cursor.saturating_sub(VISIBLE_ROWS / 2).min(hits.len().saturating_sub(VISIBLE_ROWS));
+    let room = usize::from(width)
+        .saturating_sub(6 + 11 + 2 + 14 + 2)
+        .max(8);
+    let start = cursor
+        .saturating_sub(VISIBLE_ROWS / 2)
+        .min(hits.len().saturating_sub(VISIBLE_ROWS));
     for (i, hit) in hits.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
         let selected = i + 1 == cursor;
         lines.push(Line::from(vec![
             Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
             Span::from(format!("{:<11}", truncate(&hit.key, 11))).style(row_style(selected)),
-            Span::from(format!("{:<14}", truncate(hit.status.as_deref().unwrap_or("–"), 14))).fg(c(SUBTEXT0)),
+            Span::from(format!(
+                "{:<14}",
+                truncate(hit.status.as_deref().unwrap_or("–"), 14)
+            ))
+            .fg(c(SUBTEXT0)),
             Span::from(truncate(&hit.summary, room)).style(row_style(selected)),
         ]));
     }
     if hits.len() > VISIBLE_ROWS {
-        lines.push(Line::from(Span::from(format!("  … {} of {} issues", cursor.max(1), hits.len())).fg(c(SUBTEXT0))));
+        lines.push(Line::from(
+            Span::from(format!("  … {} of {} issues", cursor.max(1), hits.len())).fg(c(SUBTEXT0)),
+        ));
     }
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -3056,7 +4610,15 @@ struct HelpLine {
 /// from `HELP_WIDE_FROM`. The layer under a popup folds to one line at the bottom. Scrolls to
 /// keep the cursor's row in view and records how far it can scroll.
 fn render_help(frame: &mut Frame, app: &App) {
-    let Mode::Help { scope, long, query, cursor } = &app.mode else { return };
+    let Mode::Help {
+        scope,
+        long,
+        query,
+        cursor,
+    } = &app.mode
+    else {
+        return;
+    };
     let (scope, long, cursor) = (*scope, *long, *cursor);
     let frame_area = frame.area();
     let wide = frame_area.width >= HELP_WIDE_FROM && query.is_none();
@@ -3066,20 +4628,55 @@ fn render_help(frame: &mut Frame, app: &App) {
     let sections = keys::help_sections(app, scope, long, query.as_deref());
     let mut lines = help_layout(&sections, inner_width, wide);
     if let Some(query) = query {
-        lines.insert(0, HelpLine { spans: vec![Span::from(" / ").fg(c(BASE)).bg(c(ACCENT)).bold(), Span::from(format!(" {query}▏"))], row: None });
-        lines.insert(1, HelpLine { spans: Vec::new(), row: None });
+        lines.insert(
+            0,
+            HelpLine {
+                spans: vec![
+                    Span::from(" / ").fg(c(BASE)).bg(c(ACCENT)).bold(),
+                    Span::from(format!(" {query}▏")),
+                ],
+                row: None,
+            },
+        );
+        lines.insert(
+            1,
+            HelpLine {
+                spans: Vec::new(),
+                row: None,
+            },
+        );
     } else {
-        lines.insert(0, HelpLine { spans: vec![Span::from("/ search").fg(c(SUBTEXT0))], row: None });
-        lines.insert(1, HelpLine { spans: Vec::new(), row: None });
+        lines.insert(
+            0,
+            HelpLine {
+                spans: vec![Span::from("/ search").fg(c(SUBTEXT0))],
+                row: None,
+            },
+        );
+        lines.insert(
+            1,
+            HelpLine {
+                spans: Vec::new(),
+                row: None,
+            },
+        );
     }
     if let Some(under) = keys::help_under_line(app, scope) {
-        lines.push(HelpLine { spans: Vec::new(), row: None });
-        lines.push(HelpLine { spans: vec![Span::from(truncate(&under, inner_width)).fg(c(SUBTEXT0))], row: None });
+        lines.push(HelpLine {
+            spans: Vec::new(),
+            row: None,
+        });
+        lines.push(HelpLine {
+            spans: vec![Span::from(truncate(&under, inner_width)).fg(c(SUBTEXT0))],
+            row: None,
+        });
     }
     let total = lines.len();
     let runnable = lines.iter().filter(|l| l.row.is_some()).count();
 
-    let height = u16::try_from(total + 2).unwrap_or(u16::MAX).min(frame_area.height);
+    let height = u16::try_from(total + 2)
+        .unwrap_or(u16::MAX)
+        .min(frame_area.height);
     let area = centered(frame_area, box_width, height);
     frame.render_widget(Clear, area);
 
@@ -3096,12 +4693,17 @@ fn render_help(frame: &mut Frame, app: &App) {
             start = at + 1 - viewport;
         }
     }
-    app.help_scroll.set(u16::try_from(start).unwrap_or(u16::MAX));
+    app.help_scroll
+        .set(u16::try_from(start).unwrap_or(u16::MAX));
     app.help_max.set(u16::try_from(max).unwrap_or(u16::MAX));
-    app.help_viewport.set(u16::try_from(viewport).unwrap_or(u16::MAX));
+    app.help_viewport
+        .set(u16::try_from(viewport).unwrap_or(u16::MAX));
 
     let seen = (start + viewport).min(total);
-    let bottom = format!(" enter runs · esc closes · ? {} · {seen}/{total} ", if long { "short form" } else { "long form" });
+    let bottom = format!(
+        " enter runs · esc closes · ? {} · {seen}/{total} ",
+        if long { "short form" } else { "long form" }
+    );
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
@@ -3114,7 +4716,11 @@ fn render_help(frame: &mut Frame, app: &App) {
         .take(viewport)
         .map(|l| {
             let line = Line::from(l.spans);
-            if l.row == Some(cursor) && runnable > 0 { line.style(selection_style()) } else { line }
+            if l.row == Some(cursor) && runnable > 0 {
+                line.style(selection_style())
+            } else {
+                line
+            }
         })
         .collect();
     frame.render_widget(Paragraph::new(visible).block(block), area);
@@ -3124,13 +4730,23 @@ fn render_help(frame: &mut Frame, app: &App) {
 fn help_layout(sections: &[Vec<HelpRow>], inner_width: usize, two_columns: bool) -> Vec<HelpLine> {
     let mut row = 0;
     if !two_columns || sections.len() < 2 {
-        let rendered: Vec<Vec<HelpLine>> = sections.iter().map(|s| help_section_lines(s, inner_width, &mut row)).collect();
+        let rendered: Vec<Vec<HelpLine>> = sections
+            .iter()
+            .map(|s| help_section_lines(s, inner_width, &mut row))
+            .collect();
         return join_help_sections(rendered);
     }
     let col = inner_width.saturating_sub(HELP_COLUMN_GAP) / 2;
-    let rendered: Vec<Vec<HelpLine>> = sections.iter().map(|s| help_section_lines(s, col, &mut row)).collect();
-    let height = |part: &[Vec<HelpLine>]| part.iter().map(Vec::len).sum::<usize>() + part.len().saturating_sub(1);
-    let split = (1..rendered.len()).min_by_key(|k| height(&rendered[..*k]).max(height(&rendered[*k..]))).unwrap_or(1);
+    let rendered: Vec<Vec<HelpLine>> = sections
+        .iter()
+        .map(|s| help_section_lines(s, col, &mut row))
+        .collect();
+    let height = |part: &[Vec<HelpLine>]| {
+        part.iter().map(Vec::len).sum::<usize>() + part.len().saturating_sub(1)
+    };
+    let split = (1..rendered.len())
+        .min_by_key(|k| height(&rendered[..*k]).max(height(&rendered[*k..])))
+        .unwrap_or(1);
     let mut rendered = rendered.into_iter();
     let left: Vec<Vec<HelpLine>> = rendered.by_ref().take(split).collect();
     let right: Vec<Vec<HelpLine>> = rendered.collect();
@@ -3153,7 +4769,9 @@ fn help_layout(sections: &[Vec<HelpRow>], inner_width: usize, two_columns: bool)
             row = l.row;
         }
         if let Some(r) = r {
-            spans.push(Span::raw(" ".repeat(col.saturating_sub(used) + HELP_COLUMN_GAP)));
+            spans.push(Span::raw(
+                " ".repeat(col.saturating_sub(used) + HELP_COLUMN_GAP),
+            ));
             spans.extend(r.spans);
             // A line holding two key rows answers to the left one; the right one is reached
             // through its own line in the cursor order (left column first).
@@ -3168,7 +4786,10 @@ fn join_help_sections(sections: Vec<Vec<HelpLine>>) -> Vec<HelpLine> {
     let mut out = Vec::new();
     for (i, lines) in sections.into_iter().enumerate() {
         if i > 0 {
-            out.push(HelpLine { spans: Vec::new(), row: None });
+            out.push(HelpLine {
+                spans: Vec::new(),
+                row: None,
+            });
         }
         out.extend(lines);
     }
@@ -3190,22 +4811,41 @@ fn help_section_lines(section: &[HelpRow], width: usize, row: &mut usize) -> Vec
     let mut lines = Vec::new();
     for item in section {
         match item {
-            HelpRow::Heading(heading) => lines.push(HelpLine { spans: vec![Span::from(*heading).fg(c(SUBTEXT0)).bold()], row: None }),
-            HelpRow::Strip(strip) => lines.push(HelpLine { spans: vec![Span::from(truncate(strip, width)).fg(c(ACCENT)).bold()], row: None }),
-            HelpRow::Key { binding, avail, foreign } => {
+            HelpRow::Heading(heading) => lines.push(HelpLine {
+                spans: vec![Span::from(*heading).fg(c(SUBTEXT0)).bold()],
+                row: None,
+            }),
+            HelpRow::Strip(strip) => lines.push(HelpLine {
+                spans: vec![Span::from(truncate(strip, width)).fg(c(ACCENT)).bold()],
+                row: None,
+            }),
+            HelpRow::Key {
+                binding,
+                avail,
+                foreign,
+            } => {
                 let room = width.saturating_sub(key_width).max(1);
                 let (key, text) = match avail {
                     Avail::Off(why) => (
                         Span::from(format!("{:<key_width$}", binding.keys)).fg(c(MUTED)),
                         Span::from(truncate(&format!("({why})"), room)).fg(c(MUTED)),
                     ),
-                    _ => (Span::from(format!("{:<key_width$}", binding.keys)).fg(c(ACCENT)).bold(), Span::from(truncate(binding.label, room))),
+                    _ => (
+                        Span::from(format!("{:<key_width$}", binding.keys))
+                            .fg(c(ACCENT))
+                            .bold(),
+                        Span::from(truncate(binding.label, room)),
+                    ),
                 };
                 let mut spans = vec![key, text];
                 if *foreign {
-                    spans.push(Span::from(format!("  in {}", binding.scope.name())).fg(c(SUBTEXT0)));
+                    spans
+                        .push(Span::from(format!("  in {}", binding.scope.name())).fg(c(SUBTEXT0)));
                 }
-                lines.push(HelpLine { spans, row: Some(*row) });
+                lines.push(HelpLine {
+                    spans,
+                    row: Some(*row),
+                });
                 *row += 1;
             }
         }
@@ -3237,7 +4877,9 @@ mod tests {
     use super::*;
 
     fn find(text: &str, needle: &str) -> Option<(usize, usize)> {
-        text.lines().enumerate().find_map(|(row, line)| line.find(needle).map(|col| (row, col)))
+        text.lines()
+            .enumerate()
+            .find_map(|(row, line)| line.find(needle).map(|col| (row, col)))
     }
 
     pub(super) fn floor() -> FloorState {
@@ -3253,7 +4895,11 @@ mod tests {
           "queue":{"depth":2,"slots":{"max":4,"active":1},"utilisation":null},
           "gates":{"withinSla":0.75,"answered":8,"waitMs":{"awaiting_approval":{"median":1800000,"p90":5400000},"awaiting_ship":{"median":null,"p90":null}}}}"#;
         let m: Metrics = serde_json::from_str(json).unwrap();
-        FloorState { d7: Some(m.clone()), d30: Some(m), ..FloorState::default() }
+        FloorState {
+            d7: Some(m.clone()),
+            d30: Some(m),
+            ..FloorState::default()
+        }
     }
 
     fn repos() -> Vec<crate::model::RepoMetrics> {
@@ -3280,10 +4926,24 @@ mod tests {
         )
         .unwrap();
         let text = render(160, 40, &state);
-        assert!(text.contains("image: own on python:3.13-slim (hardness-runner-alpha:1)"), "{text}");
-        assert!(text.contains("graph: abcdef0 · 7 behind · graphify 0.9.34 · building · failed: exit code 1"), "{text}");
-        assert!(text.contains("image: machine's") && text.contains("graph: off"), "{text}");
-        assert!(text.contains("build failed: step 3 [31m failed really"), "{text}");
+        assert!(
+            text.contains("image: own on python:3.13-slim (hardness-runner-alpha:1)"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "graph: abcdef0 · 7 behind · graphify 0.9.34 · building · failed: exit code 1"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("image: machine's") && text.contains("graph: off"),
+            "{text}"
+        );
+        assert!(
+            text.contains("build failed: step 3 [31m failed really"),
+            "{text}"
+        );
         assert!(!text.contains('\u{1b}'), "{text}");
     }
 
@@ -3297,7 +4957,12 @@ mod tests {
         )
         .unwrap();
         let text = render(160, 40, &state);
-        assert!(text.lines().any(|l| l.contains("base waiting for you: attacker/x:1") && l.contains("A approves")), "{text}");
+        assert!(
+            text.lines()
+                .any(|l| l.contains("base waiting for you: attacker/x:1")
+                    && l.contains("A approves")),
+            "{text}"
+        );
     }
 
     #[test]
@@ -3310,11 +4975,20 @@ mod tests {
         .unwrap();
         assert!(state.repos.is_empty());
         let text = render(160, 40, &state);
-        assert!(text.lines().any(|l| l.contains("fresh") && l.contains("–")), "{text}");
-        assert!(text.contains("base waiting for you: python:3.13-slim"), "{text}");
+        assert!(
+            text.lines().any(|l| l.contains("fresh") && l.contains("–")),
+            "{text}"
+        );
+        assert!(
+            text.contains("base waiting for you: python:3.13-slim"),
+            "{text}"
+        );
         state.cursor = 1;
         let text = render(160, 40, &state);
-        assert!(text.contains("▌ fresh") && text.contains("Floor · fresh ·"), "{text}");
+        assert!(
+            text.contains("▌ fresh") && text.contains("Floor · fresh ·"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -3323,8 +4997,18 @@ mod tests {
         state.repos = repos();
         let text = render(140, 36, &state);
         assert!(text.contains("repo"), "{text}");
-        let alpha = text.lines().find(|l| l.contains("alpha")).unwrap_or_default().to_string();
-        assert!(alpha.contains("3") && alpha.contains("60%") && alpha.contains("50%") && alpha.contains("$9.50"), "{alpha}");
+        let alpha = text
+            .lines()
+            .find(|l| l.contains("alpha"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            alpha.contains("3")
+                && alpha.contains("60%")
+                && alpha.contains("50%")
+                && alpha.contains("$9.50"),
+            "{alpha}"
+        );
         assert!(text.lines().any(|l| l.contains("(none)")), "{text}");
         assert!(text.contains("▌ all"), "{text}");
 
@@ -3335,10 +5019,14 @@ mod tests {
     }
 
     #[test]
-    fn floor_tables_cost_per_engine_with_the_month_against_its_cap_or_says_the_machine_does_not_report_engines() {
+    fn floor_tables_cost_per_engine_with_the_month_against_its_cap_or_says_the_machine_does_not_report_engines()
+     {
         let mut state = floor();
         let text = render(140, 40, &state);
-        assert!(text.contains("the machine does not report engines"), "{text}");
+        assert!(
+            text.contains("the machine does not report engines"),
+            "{text}"
+        );
 
         state.by_engine = serde_json::from_str(
             r#"[{"engine":"claude:opus","stageRuns":12,"firstPassRate":0.75,"escalations":1,"rateLimited":2,"meanTurns":14.5,"meanDurationMs":90000,"costUsd":4.2},
@@ -3353,21 +5041,54 @@ mod tests {
         .unwrap();
         let text = render(140, 40, &state);
         assert!(!text.contains("does not report engines"), "{text}");
-        let opus = text.lines().find(|l| l.contains("claude:opus")).unwrap_or_default().to_string();
+        let opus = text
+            .lines()
+            .find(|l| l.contains("claude:opus"))
+            .unwrap_or_default()
+            .to_string();
         for cell in ["12", "75%", "14.5", "$4.20", "$6.00 / no cap"] {
             assert!(opus.contains(cell), "{cell}: {opus}");
         }
-        assert!(text.lines().any(|l| l.contains("(none)") && l.contains('3')), "{text}");
-        let sol = text.lines().find(|l| l.contains("openai:sol")).unwrap_or_default().to_string();
-        assert!(sol.contains("$20.00 / $20.00"), "an engine with spend but no runs this week still shows its month: {sol}");
-        assert!(!text.contains("claude:haiku"), "nothing spent, no cap, no runs: left out");
+        assert!(
+            text.lines()
+                .any(|l| l.contains("(none)") && l.contains('3')),
+            "{text}"
+        );
+        let sol = text
+            .lines()
+            .find(|l| l.contains("openai:sol"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            sol.contains("$20.00 / $20.00"),
+            "an engine with spend but no runs this week still shows its month: {sol}"
+        );
+        assert!(
+            !text.contains("claude:haiku"),
+            "nothing spent, no cap, no runs: left out"
+        );
 
         let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
-        terminal.draw(|f| render_floor(f, f.area(), &state)).unwrap();
+        terminal
+            .draw(|f| render_floor(f, f.area(), &state))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let row = (0..40).find(|&y| (0..140).map(|x| buffer[(x, y)].symbol()).collect::<String>().contains("openai:sol")).unwrap();
-        let col = (0..140).find(|&x| buffer[(x, row)].symbol() == "o").unwrap();
-        assert_eq!(buffer[(col, row)].fg, c(RED), "at its cap: the row reads red");
+        let row = (0..40)
+            .find(|&y| {
+                (0..140)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("openai:sol")
+            })
+            .unwrap();
+        let col = (0..140)
+            .find(|&x| buffer[(x, row)].symbol() == "o")
+            .unwrap();
+        assert_eq!(
+            buffer[(col, row)].fg,
+            c(RED),
+            "at its cap: the row reads red"
+        );
     }
 
     fn render(width: u16, height: u16, floor: &FloorState) -> String {
@@ -3375,7 +5096,11 @@ mod tests {
         terminal.draw(|f| render_floor(f, f.area(), floor)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -3386,7 +5111,10 @@ mod tests {
             continues_line("escalated", "implementing"),
             "Continues at: implementing · a retries it (add guidance if you like)"
         );
-        assert_eq!(continues_line("paused_rate_limit", "verifying"), "Continues at: verifying");
+        assert_eq!(
+            continues_line("paused_rate_limit", "verifying"),
+            "Continues at: verifying"
+        );
     }
 
     #[test]
@@ -3398,18 +5126,40 @@ mod tests {
             at: "2026-11-03T10:11:12.000Z".into(),
             names: vec![],
         };
-        assert_eq!(describe(&event), "10:11:12  triage: waiting for the Codex login");
+        assert_eq!(
+            describe(&event),
+            "10:11:12  triage: waiting for the Codex login"
+        );
     }
 
     #[test]
-    fn a_refused_connection_reads_as_host_port_step_and_how_it_was_asked_with_its_count_and_no_control_characters() {
+    fn a_refused_connection_reads_as_host_port_step_and_how_it_was_asked_with_its_count_and_no_control_characters()
+     {
         let at = "2026-11-03T10:11:12.000Z".to_string();
-        let one = TaskEvent { task_id: "t1".into(), kind: "sandbox.egress_blocked".into(), payload: serde_json::json!({"step": "check", "host": "evil.example.com", "port": 443, "via": "connect", "reason": "not_listed", "count": 1}), at: at.clone(), names: vec![] };
-        assert_eq!(describe(&one), "10:11:12  blocked: evil.example.com:443 (check, connect)");
-        let many = TaskEvent { payload: serde_json::json!({"step": "stage", "host": "a.b\u{1b}[31m.example", "port": 53, "via": "dns", "reason": "not_listed", "count": 12}), ..one.clone() };
+        let one = TaskEvent {
+            task_id: "t1".into(),
+            kind: "sandbox.egress_blocked".into(),
+            payload: serde_json::json!({"step": "check", "host": "evil.example.com", "port": 443, "via": "connect", "reason": "not_listed", "count": 1}),
+            at: at.clone(),
+            names: vec![],
+        };
+        assert_eq!(
+            describe(&one),
+            "10:11:12  blocked: evil.example.com:443 (check, connect)"
+        );
+        let many = TaskEvent {
+            payload: serde_json::json!({"step": "stage", "host": "a.b\u{1b}[31m.example", "port": 53, "via": "dns", "reason": "not_listed", "count": 12}),
+            ..one.clone()
+        };
         let text = describe(&many);
-        assert_eq!(text, "10:11:12  blocked: a.b [31m.example:53 (stage, dns) x12");
-        let more = TaskEvent { payload: serde_json::json!({"step": "stage", "more": 5}), ..one };
+        assert_eq!(
+            text,
+            "10:11:12  blocked: a.b [31m.example:53 (stage, dns) x12"
+        );
+        let more = TaskEvent {
+            payload: serde_json::json!({"step": "stage", "more": 5}),
+            ..one
+        };
         assert_eq!(describe(&more), "10:11:12  blocked: 5 more (stage)");
     }
 
@@ -3434,7 +5184,9 @@ mod tests {
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let mut app = App::new(crate::testkit::dead_machine());
         for (i, spent) in [0.1, 0.2, 0.3, 5.0].into_iter().enumerate() {
-            let mut task: Task = serde_json::from_str(&CARD_TASK.replace("Login page", &format!("Ticket {i}"))).unwrap();
+            let mut task: Task =
+                serde_json::from_str(&CARD_TASK.replace("Login page", &format!("Ticket {i}")))
+                    .unwrap();
             task.spent_usd = Some(spent);
             app.tasks.push(task);
         }
@@ -3442,14 +5194,24 @@ mod tests {
         terminal.draw(|f| render_board(f, f.area(), &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let text: String = (0..30)
-            .map(|y| (0..240).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .map(|y| {
+                (0..240)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let (row3, _) = find(&text, "Ticket 3").expect("the expensive ticket");
         let (row0, _) = find(&text, "Ticket 0").expect("a cheap ticket");
         let status_line = |row: usize| text.lines().nth(row + 2).unwrap_or("").to_string();
-        assert!(status_line(row3).contains('$'), "the expensive card is marked: {text}");
-        assert!(!status_line(row0).contains('$'), "a cheap card is not: {text}");
+        assert!(
+            status_line(row3).contains('$'),
+            "the expensive card is marked: {text}"
+        );
+        assert!(
+            !status_line(row0).contains('$'),
+            "a cheap card is not: {text}"
+        );
     }
 
     #[test]
@@ -3460,22 +5222,41 @@ mod tests {
             "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
-        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Cozy, 40).iter().map(|l| l.to_string()).collect();
-        assert_eq!(lines[0], "▌Login page", "a repo bar, then the title, nothing else in the way");
+        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Cozy, 40)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert_eq!(
+            lines[0], "▌Login page",
+            "a repo bar, then the title, nothing else in the way"
+        );
         assert_eq!(lines[1], "  #abcdef12 · luna-tui");
         assert!(lines[2].contains("○ intake · "), "{}", lines[2]);
         assert_eq!(lines.len(), 3);
         let mut bare = task.clone();
         bare.repo_path = None;
-        let lines: Vec<String> = card_lines(&bare, None, false, false, Density::Cozy, 40).iter().map(|l| l.to_string()).collect();
+        let lines: Vec<String> = card_lines(&bare, None, false, false, Density::Cozy, 40)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
         assert_eq!(lines[0], "Login page");
         assert_eq!(lines[1], "  #abcdef12");
         assert!(lines[2].contains("no repo"), "{}", lines[2]);
-        let compact: Vec<String> = card_lines(&task, None, true, false, Density::Compact, 24).iter().map(|l| l.to_string()).collect();
+        let compact: Vec<String> = card_lines(&task, None, true, false, Density::Compact, 24)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
         assert_eq!(compact.len(), 1);
         assert!(compact[0].starts_with("◆ ○ Login page "), "{}", compact[0]);
-        let long: Vec<String> = card_lines(&task, None, false, false, Density::Compact, 12).iter().map(|l| l.to_string()).collect();
-        assert!(long[0].contains('…') && long[0].chars().count() <= 12, "the title is cut to the width: {}", long[0]);
+        let long: Vec<String> = card_lines(&task, None, false, false, Density::Compact, 12)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert!(
+            long[0].contains('…') && long[0].chars().count() <= 12,
+            "the title is cut to the width: {}",
+            long[0]
+        );
     }
 
     #[test]
@@ -3494,17 +5275,33 @@ mod tests {
             "workedMs":240000,"diff":{"added":142,"removed":18},"tests":{"passed":7,"total":9},
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
-        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Comfortable, 60).iter().map(|l| l.to_string()).collect();
+        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Comfortable, 60)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
         assert_eq!(lines.len(), 4);
-        assert!(lines[3].contains("worked 4m · +142 −18 · tests 7/9"), "{lines:?}");
-        assert!(lines[2].contains("implementing · "), "the status line keeps the stage and age: {lines:?}");
+        assert!(
+            lines[3].contains("worked 4m · +142 −18 · tests 7/9"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[2].contains("implementing · "),
+            "the status line keeps the stage and age: {lines:?}"
+        );
         let mut bare = task.clone();
         bare.worked_ms = None;
         bare.diff = None;
         bare.tests = None;
-        let lines: Vec<String> = card_lines(&bare, None, false, false, Density::Comfortable, 60).iter().map(|l| l.to_string()).collect();
+        let lines: Vec<String> = card_lines(&bare, None, false, false, Density::Comfortable, 60)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
         assert_eq!(lines[3].trim(), "", "no numbers, no line: {lines:?}");
-        assert_eq!(card_lines(&task, None, false, false, Density::Cozy, 60).len(), 3, "cozy drops the triad");
+        assert_eq!(
+            card_lines(&task, None, false, false, Density::Cozy, 60).len(),
+            3,
+            "cozy drops the triad"
+        );
     }
 
     #[test]
@@ -3524,17 +5321,31 @@ mod tests {
         app.group = GroupBy::Repo;
         app.selection[0] = 2;
         let mut terminal = Terminal::new(TestBackend::new(60, 24)).unwrap();
-        terminal.draw(|f| render_column(f, f.area(), &app, 0, true)).unwrap();
+        terminal
+            .draw(|f| render_column(f, f.area(), &app, 0, true))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let rows: Vec<String> = (0..24).map(|y| (0..60).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect();
+        let rows: Vec<String> = (0..24)
+            .map(|y| {
+                (0..60)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
         let text = rows.join("\n");
         assert!(text.contains("── luna-tui 1 ──"), "{text}");
         assert!(text.contains("── notch 2 ──"), "{text}");
         let luna = rows.iter().position(|r| r.contains("── luna-tui")).unwrap();
         let notch = rows.iter().position(|r| r.contains("── notch")).unwrap();
         assert!(luna < notch, "groups in name order: {text}");
-        let selected = rows.iter().find(|r| r.contains("› ")).expect("a highlighted row");
-        assert!(selected.contains("Ticket"), "the highlight sits on a card, not a separator: {selected}");
+        let selected = rows
+            .iter()
+            .find(|r| r.contains("› "))
+            .expect("a highlighted row");
+        assert!(
+            selected.contains("Ticket"),
+            "the highlight sits on a card, not a separator: {selected}"
+        );
     }
 
     #[test]
@@ -3542,9 +5353,18 @@ mod tests {
         let mut app = App::new(crate::testkit::dead_machine());
         let render = |app: &App| {
             let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
-            terminal.draw(|f| render_inbox(f, f.area(), app, app.inbox.as_ref().unwrap())).unwrap();
+            terminal
+                .draw(|f| render_inbox(f, f.area(), app, app.inbox.as_ref().unwrap()))
+                .unwrap();
             let buffer = terminal.backend().buffer().clone();
-            (0..12).map(|y| (0..120).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+            (0..12)
+                .map(|y| {
+                    (0..120)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         app.inbox = Some(InboxState::default());
         assert!(render(&app).contains("caught up"));
@@ -3576,11 +5396,23 @@ mod tests {
         )
         .unwrap();
         app.tasks.push(task.clone());
-        assert!(!card_lines(&task, None, false, false, Density::Cozy, 60)[0].to_string().contains('◆'));
-        assert!(card_lines(&task, None, true, false, Density::Cozy, 60)[0].to_string().contains('◆'));
+        assert!(
+            !card_lines(&task, None, false, false, Density::Cozy, 60)[0]
+                .to_string()
+                .contains('◆')
+        );
+        assert!(
+            card_lines(&task, None, true, false, Density::Cozy, 60)[0]
+                .to_string()
+                .contains('◆')
+        );
         app.marked.insert(task.id.clone());
         app.online = true;
-        let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
+        let text: String = header_line(&app)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert!(text.contains("1 marked"), "{text}");
     }
 
@@ -3588,12 +5420,26 @@ mod tests {
     fn the_header_shows_running_over_slots_and_a_draining_chip() {
         let mut app = App::new(crate::testkit::dead_machine());
         app.online = true;
-        let text = |app: &App| header_line(app).spans.iter().map(|s| s.content.to_string()).collect::<String>();
+        let text = |app: &App| {
+            header_line(app)
+                .spans
+                .iter()
+                .map(|s| s.content.to_string())
+                .collect::<String>()
+        };
         assert!(text(&app).contains("0 running"), "{}", text(&app));
-        app.slots = Some(crate::model::Slots { max: 4, active: 3, draining: false });
+        app.slots = Some(crate::model::Slots {
+            max: 4,
+            active: 3,
+            draining: false,
+        });
         assert!(text(&app).contains("0/4 running"), "{}", text(&app));
         assert!(!text(&app).contains("DRAINING"));
-        app.slots = Some(crate::model::Slots { max: 4, active: 3, draining: true });
+        app.slots = Some(crate::model::Slots {
+            max: 4,
+            active: 3,
+            draining: true,
+        });
         assert!(text(&app).contains("[DRAINING]"), "{}", text(&app));
     }
 
@@ -3607,8 +5453,16 @@ mod tests {
             "createdAt":"2026-10-22T20:00:00.000Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#,
         )
         .unwrap();
-        assert!(card_lines(&task, None, false, true, Density::Cozy, 60)[0].to_string().contains('•'));
-        assert!(!card_lines(&task, None, false, false, Density::Cozy, 60)[0].to_string().contains('•'));
+        assert!(
+            card_lines(&task, None, false, true, Density::Cozy, 60)[0]
+                .to_string()
+                .contains('•')
+        );
+        assert!(
+            !card_lines(&task, None, false, false, Density::Cozy, 60)[0]
+                .to_string()
+                .contains('•')
+        );
     }
 
     #[test]
@@ -3626,9 +5480,18 @@ mod tests {
         app.tasks.push(task);
         app.digest = Some(DigestState::default());
         let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
-        terminal.draw(|f| render_digest(f, f.area(), &app, app.digest.as_ref().unwrap())).unwrap();
+        terminal
+            .draw(|f| render_digest(f, f.area(), &app, app.digest.as_ref().unwrap()))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let text = (0..12).map(|y| (0..120).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        let text = (0..12)
+            .map(|y| {
+                (0..120)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("Escalated"), "{text}");
         assert!(text.contains("luna-tui · Login page"), "{text}");
         assert!(text.contains("deliver failed"), "{text}");
@@ -3638,11 +5501,19 @@ mod tests {
     #[test]
     fn header_names_the_product_luna_tui() {
         let mut app = App::new(crate::testkit::dead_machine());
-        let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
+        let text: String = header_line(&app)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert!(text.contains("Luna TUI"), "{text}");
         assert!(!text.contains("Hardness"), "{text}");
         app.online = true;
-        let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
+        let text: String = header_line(&app)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert!(text.contains("Luna TUI"), "{text}");
     }
 
@@ -3663,36 +5534,73 @@ mod tests {
         let text = render(80, 24, &floor());
         assert!(text.contains("Gates answered · within SLA"), "{text}");
         assert!(text.contains("8 · 75%"), "{text}");
-        assert!(text.contains("wait approval median") && text.contains("30m"), "{text}");
-        assert!(text.contains("wait ship median"), "a gate with no median still has its row: {text}");
+        assert!(
+            text.contains("wait approval median") && text.contains("30m"),
+            "{text}"
+        );
+        assert!(
+            text.contains("wait ship median"),
+            "a gate with no median still has its row: {text}"
+        );
     }
 
     #[test]
-    fn an_overdue_ticket_s_card_leads_with_a_red_bang_names_its_issue_and_a_warning_stage_turns_the_age_yellow() {
+    fn an_overdue_ticket_s_card_leads_with_a_red_bang_names_its_issue_and_a_warning_stage_turns_the_age_yellow()
+     {
         let task: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
         let lines = card_lines(&task, None, false, false, Density::Cozy, 60);
         let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         assert!(text[0].contains("‼ Login page"), "{}", text[0]);
-        let bang = lines[0].spans.iter().find(|s| s.content.contains('‼')).unwrap();
+        let bang = lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content.contains('‼'))
+            .unwrap();
         assert_eq!(bang.style.fg, Some(c(RED)));
         assert!(bang.style.add_modifier.contains(Modifier::BOLD));
-        let title = lines[0].spans.iter().find(|s| s.content == "Login page").unwrap();
+        let title = lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content == "Login page")
+            .unwrap();
         assert_eq!(title.style.fg, Some(c(RED)), "the head line is red");
         assert_eq!(text[1], "  #abcdef12 · PLAT-123");
-        let age = lines[2].spans.iter().find(|s| s.content.starts_with(" · ")).unwrap();
-        assert_eq!(age.style.fg, Some(c(RED)), "an overdue card's age is red too");
+        let age = lines[2]
+            .spans
+            .iter()
+            .find(|s| s.content.starts_with(" · "))
+            .unwrap();
+        assert_eq!(
+            age.style.fg,
+            Some(c(RED)),
+            "an overdue card's age is red too"
+        );
         let compact = card_lines(&task, None, false, false, Density::Compact, 40);
         assert!(compact[0].to_string().starts_with("‼ "), "{}", compact[0]);
 
         let mut warn = task.clone();
         warn.sla.as_mut().unwrap().gate = None;
         let lines = card_lines(&warn, None, false, false, Density::Cozy, 60);
-        assert!(!lines[0].to_string().contains('‼'), "no clock past: no bang");
-        let age = lines[2].spans.iter().find(|s| s.content.starts_with(" · ")).unwrap();
-        assert_eq!(age.style.fg, Some(c(YELLOW)), "the stage past 80% turns the age yellow");
+        assert!(
+            !lines[0].to_string().contains('‼'),
+            "no clock past: no bang"
+        );
+        let age = lines[2]
+            .spans
+            .iter()
+            .find(|s| s.content.starts_with(" · "))
+            .unwrap();
+        assert_eq!(
+            age.style.fg,
+            Some(c(YELLOW)),
+            "the stage past 80% turns the age yellow"
+        );
         let mut unlinked = warn.clone();
         unlinked.jira = None;
-        assert_eq!(card_lines(&unlinked, None, false, false, Density::Cozy, 60)[1].to_string(), "  #abcdef12");
+        assert_eq!(
+            card_lines(&unlinked, None, false, false, Density::Cozy, 60)[1].to_string(),
+            "  #abcdef12"
+        );
     }
 
     #[test]
@@ -3704,9 +5612,21 @@ mod tests {
         let line = header_line(&app);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("‼ 1 overdue"), "{text}");
-        assert_eq!(line.spans.iter().find(|s| s.content.contains('‼')).unwrap().style.fg, Some(c(RED)));
+        assert_eq!(
+            line.spans
+                .iter()
+                .find(|s| s.content.contains('‼'))
+                .unwrap()
+                .style
+                .fg,
+            Some(c(RED))
+        );
         app.tasks[0].sla = None;
-        let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
+        let text: String = header_line(&app)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert!(!text.contains('‼'), "no count at zero: {text}");
     }
 
@@ -3742,7 +5662,10 @@ mod tests {
 
     #[test]
     fn the_note_prompt_at_the_ship_gate_shows_the_note_convention() {
-        assert_eq!(reason_placeholder("awaiting_ship"), Some("what to change (t=12.5 scene=<id> el=<id> …)"));
+        assert_eq!(
+            reason_placeholder("awaiting_ship"),
+            Some("what to change (t=12.5 scene=<id> el=<id> …)")
+        );
         assert_eq!(reason_placeholder("awaiting_approval"), None);
     }
 
@@ -3756,11 +5679,22 @@ mod tests {
                 "defects":[{"priority":"P0","t":12.5,"scene":"cart","symptom":"headline cut off"},{"priority":"P1","t":3.0,"scene":null,"symptom":"voice late"},{"priority":"P2","t":9.0,"scene":"x","symptom":"third"}]}});
         let lines = evidence_lines(&v);
         assert_eq!(lines[0], "format: video");
-        let summary: Vec<&String> = lines.iter().skip(1).take_while(|l| !l.starts_with("verdict:")).collect();
+        let summary: Vec<&String> = lines
+            .iter()
+            .skip(1)
+            .take_while(|l| !l.starts_with("verdict:"))
+            .collect();
         assert_eq!(summary.len(), 3, "{lines:?}");
         assert!(summary[0].starts_with("Show the cart total."));
-        assert!(summary.iter().all(|l| l.chars().count() <= 80), "{summary:?}");
-        let rest: Vec<&str> = lines.iter().skip(1 + summary.len()).map(String::as_str).collect();
+        assert!(
+            summary.iter().all(|l| l.chars().count() <= 80),
+            "{summary:?}"
+        );
+        let rest: Vec<&str> = lines
+            .iter()
+            .skip(1 + summary.len())
+            .map(String::as_str)
+            .collect();
         assert_eq!(
             rest,
             [
@@ -3782,11 +5716,16 @@ mod tests {
 
     #[test]
     fn evidence_lines_render_a_captures_pack_and_say_why_it_degraded() {
-        let media: Vec<Value> = (1..=8).map(|i| serde_json::json!({"label":format!("m{i}"),"url":format!("/u{i}")})).collect();
+        let media: Vec<Value> = (1..=8)
+            .map(|i| serde_json::json!({"label":format!("m{i}"),"url":format!("/u{i}")}))
+            .collect();
         let v: Value = serde_json::json!({"verdict":"pass","artifactCount":2,"format":"captures","note":"the video image is not built",
             "summary":"Short.","media":media});
         let lines = evidence_lines(&v);
-        assert_eq!(lines[0], "format: captures (degraded: the video image is not built)");
+        assert_eq!(
+            lines[0],
+            "format: captures (degraded: the video image is not built)"
+        );
         assert_eq!(lines[1], "Short.");
         assert_eq!(lines.iter().filter(|l| l.starts_with("media: ")).count(), 6);
         assert!(!lines.iter().any(|l| l.starts_with("critic:")));
@@ -3800,7 +5739,9 @@ mod tests {
 
     #[test]
     fn rules_lines_show_counts_bias_and_truncate_to_twelve() {
-        let md: String = (1..=15).map(|i| format!("- rule {i} {}\n", "x".repeat(40))).collect();
+        let md: String = (1..=15)
+            .map(|i| format!("- rule {i} {}\n", "x".repeat(40)))
+            .collect();
         let v: Value = serde_json::json!({"markdown": md, "incidents": 2, "patterns": 1,
             "calibration": {"estLocBias": 1.4}});
         let lines = rules_lines(&v, 20);
@@ -3816,7 +5757,14 @@ mod tests {
     fn rules_lines_list_the_fact_promotions_as_plain_text_even_with_nothing_else() {
         let v: Value = serde_json::json!({"factPromotions": [{"id": "f1", "text": "CI=1\u{1b}[2J\nx", "section": "Commands"}, {"id": "f2", "text": "pnpm test", "section": "Tests"}]});
         let lines = rules_lines(&v, 60);
-        assert_eq!(lines, vec!["0 incident(s) · 0 pattern(s)".to_string(), "promote to Commands: CI=1 [2J x".to_string(), "promote to Tests: pnpm test".to_string()]);
+        assert_eq!(
+            lines,
+            vec![
+                "0 incident(s) · 0 pattern(s)".to_string(),
+                "promote to Commands: CI=1 [2J x".to_string(),
+                "promote to Tests: pnpm test".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -3828,7 +5776,10 @@ mod tests {
         for bad in ['\u{1b}', '\r', '\u{7}', '\u{202e}'] {
             assert!(!all.contains(bad), "{bad:?} reached a rules line: {all:?}");
         }
-        assert!(lines.contains(&"- A [31mB C D E".to_string()) && lines.contains(&"- ok".to_string()), "{lines:?}");
+        assert!(
+            lines.contains(&"- A [31mB C D E".to_string()) && lines.contains(&"- ok".to_string()),
+            "{lines:?}"
+        );
     }
 
     #[test]
@@ -3840,8 +5791,15 @@ mod tests {
         assert_eq!(lines[1], "recalibration: 2 · prompt updates: 1");
         assert_eq!(lines[2], "- one");
         // A retro that proposed no rules text but did recalibrate still shows what it learned.
-        let only: Value = serde_json::json!({"markdown": "", "recalibration": [{"dimension": "size"}]});
-        assert_eq!(rules_lines(&only, 40), vec!["0 incident(s) · 0 pattern(s)".to_string(), "recalibration: 1 · prompt updates: 0".to_string()]);
+        let only: Value =
+            serde_json::json!({"markdown": "", "recalibration": [{"dimension": "size"}]});
+        assert_eq!(
+            rules_lines(&only, 40),
+            vec![
+                "0 incident(s) · 0 pattern(s)".to_string(),
+                "recalibration: 1 · prompt updates: 0".to_string()
+            ]
+        );
     }
 }
 
@@ -3852,10 +5810,25 @@ mod pr_tests {
     use super::*;
     use crate::model::{PrSnapshot, PullRequest};
 
-    fn pr(number: u64, title: &str, split: &str, checks: &str, local: bool, task: bool) -> PullRequest {
+    fn pr(
+        number: u64,
+        title: &str,
+        split: &str,
+        checks: &str,
+        local: bool,
+        task: bool,
+    ) -> PullRequest {
         let local = if local { "\"/r/app\"" } else { "null" };
-        let task = if task { r#"{"id":"t1","state":"ci_watch","route":"ci_fix"}"# } else { "null" };
-        let failed = if checks == "failure" { r#"[{"name":"lint","state":"FAILURE","url":null}]"# } else { "[]" };
+        let task = if task {
+            r#"{"id":"t1","state":"ci_watch","route":"ci_fix"}"#
+        } else {
+            "null"
+        };
+        let failed = if checks == "failure" {
+            r#"[{"name":"lint","state":"FAILURE","url":null}]"#
+        } else {
+            "[]"
+        };
         serde_json::from_str(&format!(
             r#"{{"repo":"acme/app","number":{number},"title":"{title}","url":"u","author":"them","mine":false,"reviewRequested":true,
             "isDraft":false,"headRef":"h","baseRef":"main","fromFork":false,"reviewDecision":"APPROVED","mergeable":"MERGEABLE",
@@ -3868,7 +5841,11 @@ mod pr_tests {
     fn app_with(prs: Vec<PullRequest>) -> App {
         let mut app = App::new(crate::testkit::dead_machine());
         app.tasks.clear();
-        app.prs = PrSnapshot { prs, polled_at: Some("2026-10-27T10:00:00Z".to_string()), error: None };
+        app.prs = PrSnapshot {
+            prs,
+            polled_at: Some("2026-10-27T10:00:00Z".to_string()),
+            error: None,
+        };
         app.pulls = Some(PullsState::default());
         app.online = true;
         app.toast = None;
@@ -3880,7 +5857,11 @@ mod pr_tests {
         terminal.draw(|f| draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -3889,97 +5870,274 @@ mod pr_tests {
     fn the_header_counts_every_split_and_a_row_shows_checks_review_threads_and_its_tag() {
         let app = app_with(vec![
             pr(12, "Export CSV", "review_requested", "failure", true, false),
-            pr(13, "A very long pull request title that will not fit in a narrow terminal at all", "review_requested", "pending", false, false),
+            pr(
+                13,
+                "A very long pull request title that will not fit in a narrow terminal at all",
+                "review_requested",
+                "pending",
+                false,
+                false,
+            ),
             pr(14, "Ready one", "ready_to_merge", "success", true, true),
         ]);
         let text = render(120, 20, &app);
         assert!(text.contains("Review requested 2"), "{text}");
         assert!(text.contains("Ready to merge 1"), "{text}");
         assert!(text.contains("polled"), "{text}");
-        let row = text.lines().find(|l| l.contains("#12") && l.contains("Export CSV")).unwrap_or_default().to_string();
-        assert!(row.starts_with("│▌ ✗ ▌app "), "selected, red checks, the repo bar then the repo's name without its owner: {row}");
-        assert!(!row.contains("@them") && !row.contains("lint"), "author and check names leave the row: {row}");
-        let second = text.lines().find(|l| l.contains("#13")).unwrap_or_default().to_string();
+        let row = text
+            .lines()
+            .find(|l| l.contains("#12") && l.contains("Export CSV"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            row.starts_with("│▌ ✗ ▌app "),
+            "selected, red checks, the repo bar then the repo's name without its owner: {row}"
+        );
+        assert!(
+            !row.contains("@them") && !row.contains("lint"),
+            "author and check names leave the row: {row}"
+        );
+        let second = text
+            .lines()
+            .find(|l| l.contains("#13"))
+            .unwrap_or_default()
+            .to_string();
         let col = |line: &str, needle: &str| line.find(needle).map(|i| line[..i].chars().count());
         assert_eq!(col(&row, "#12"), col(&second, "#13"), "numbers line up");
-        assert_eq!(col(&row, "Export"), col(&second, "A very"), "titles line up");
-        assert!(second.contains("…") && second.contains("⌂"), "a long title is cut, no checkout is a tag: {second}");
-        let mut ready = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, true)]);
-        ready.pulls = Some(PullsState { split: PrSplit::ReadyToMerge, cursor: 0 });
-        let third = render(120, 20, &ready).lines().find(|l| l.contains("#14") && l.contains("Ready one")).unwrap_or_default().to_string();
-        assert!(third.contains("ci fix") && third.contains("✓") && ["◐", "◓", "◑", "◒"].iter().any(|f| third.contains(f)), "a running task is a spinner and what it does: {third}");
+        assert_eq!(
+            col(&row, "Export"),
+            col(&second, "A very"),
+            "titles line up"
+        );
+        assert!(
+            second.contains("…") && second.contains("⌂"),
+            "a long title is cut, no checkout is a tag: {second}"
+        );
+        let mut ready = app_with(vec![pr(
+            14,
+            "Ready one",
+            "ready_to_merge",
+            "success",
+            true,
+            true,
+        )]);
+        ready.pulls = Some(PullsState {
+            split: PrSplit::ReadyToMerge,
+            cursor: 0,
+        });
+        let third = render(120, 20, &ready)
+            .lines()
+            .find(|l| l.contains("#14") && l.contains("Ready one"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            third.contains("ci fix")
+                && third.contains("✓")
+                && ["◐", "◓", "◑", "◒"].iter().any(|f| third.contains(f)),
+            "a running task is a spinner and what it does: {third}"
+        );
         // The detail pane shows the selected PR with the fields the row dropped.
         assert!(text.contains("acme/app#12  Export CSV"), "{text}");
         assert!(text.contains("@them · h → main"), "{text}");
-        assert!(text.contains("✗ lint") && text.contains("✗ 1 of 3 failed"), "{text}");
+        assert!(
+            text.contains("✗ lint") && text.contains("✗ 1 of 3 failed"),
+            "{text}"
+        );
         assert!(text.contains("approved · 2 unresolved threads"), "{text}");
-        assert!(text.contains("m ") && text.contains("off: a check is red"), "{text}");
+        assert!(
+            text.contains("m ") && text.contains("off: a check is red"),
+            "{text}"
+        );
         assert!(text.contains("[pulls]"), "{text}");
 
         let text = render(80, 20, &app);
-        assert!(!text.contains("@them"), "no detail pane under 100 columns: {text}");
-        let row = text.lines().find(|l| l.contains("#12")).unwrap_or_default().to_string();
+        assert!(
+            !text.contains("@them"),
+            "no detail pane under 100 columns: {text}"
+        );
+        let row = text
+            .lines()
+            .find(|l| l.contains("#12"))
+            .unwrap_or_default()
+            .to_string();
         assert!(row.contains("Export CSV") && row.contains("✗"), "{row}");
         assert!(!text.contains("\u{2588}"), "nothing overflows: {text}");
     }
 
     #[test]
     fn the_list_scrolls_to_keep_the_selected_pr_in_view() {
-        let prs: Vec<PullRequest> = (1..=40).map(|n| pr(n, &format!("Pull {n}"), "review_requested", "success", true, false)).collect();
+        let prs: Vec<PullRequest> = (1..=40)
+            .map(|n| {
+                pr(
+                    n,
+                    &format!("Pull {n}"),
+                    "review_requested",
+                    "success",
+                    true,
+                    false,
+                )
+            })
+            .collect();
         let mut app = app_with(prs);
-        app.pulls = Some(PullsState { split: PrSplit::ReviewRequested, cursor: 30 });
+        app.pulls = Some(PullsState {
+            split: PrSplit::ReviewRequested,
+            cursor: 30,
+        });
         let text = render(80, 14, &app);
-        assert!(text.contains("#31") && text.contains("Pull 31"), "the selected row shows: {text}");
-        assert!(!text.contains("#1 ") && !text.contains("#40"), "a window around the cursor, not the top: {text}");
-        let mut owner_less = app_with(vec![pr(7, "Bare", "review_requested", "success", true, false)]);
+        assert!(
+            text.contains("#31") && text.contains("Pull 31"),
+            "the selected row shows: {text}"
+        );
+        assert!(
+            !text.contains("#1 ") && !text.contains("#40"),
+            "a window around the cursor, not the top: {text}"
+        );
+        let mut owner_less = app_with(vec![pr(
+            7,
+            "Bare",
+            "review_requested",
+            "success",
+            true,
+            false,
+        )]);
         owner_less.prs.prs[0].repo = "app".into();
-        assert!(render(80, 14, &owner_less).contains("▌app "), "a repo without an owner prints whole");
+        assert!(
+            render(80, 14, &owner_less).contains("▌app "),
+            "a repo without an owner prints whole"
+        );
     }
 
     #[test]
     fn the_header_says_it_is_polling_while_a_poll_runs() {
-        let mut app = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, false)]);
+        let mut app = app_with(vec![pr(
+            14,
+            "Ready one",
+            "ready_to_merge",
+            "success",
+            true,
+            false,
+        )]);
         assert!(!render(100, 14, &app).contains("polling GitHub"));
         app.prs_polling = true;
         let text = render(100, 14, &app);
-        assert!(text.contains("polling GitHub…") && !text.contains("polled "), "{text}");
+        assert!(
+            text.contains("polling GitHub…") && !text.contains("polled "),
+            "{text}"
+        );
     }
 
     #[test]
     fn the_merge_confirm_the_clone_prompt_and_the_actions_menu_draw_over_the_view() {
-        let mut app = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, false)]);
-        app.pulls = Some(PullsState { split: PrSplit::ReadyToMerge, cursor: 0 });
-        app.mode = Mode::ConfirmMerge { repo: "acme/app".into(), number: 14 };
+        let mut app = app_with(vec![pr(
+            14,
+            "Ready one",
+            "ready_to_merge",
+            "success",
+            true,
+            false,
+        )]);
+        app.pulls = Some(PullsState {
+            split: PrSplit::ReadyToMerge,
+            cursor: 0,
+        });
+        app.mode = Mode::ConfirmMerge {
+            repo: "acme/app".into(),
+            number: 14,
+        };
         let merge = render(100, 14, &app);
-        assert!(merge.contains(" Merge? ") && merge.contains("acme/app#14  Ready one") && merge.contains("Merged the way the repo allows"), "{merge}");
-        assert!(merge.contains(" y ") && merge.contains(" yes ") && merge.contains(" n ") && merge.contains(" no"), "the same yes / no chips as a delete: {merge}");
-        app.mode = Mode::ConfirmClose { repo: "acme/app".into(), number: 14 };
+        assert!(
+            merge.contains(" Merge? ")
+                && merge.contains("acme/app#14  Ready one")
+                && merge.contains("Merged the way the repo allows"),
+            "{merge}"
+        );
+        assert!(
+            merge.contains(" y ")
+                && merge.contains(" yes ")
+                && merge.contains(" n ")
+                && merge.contains(" no"),
+            "the same yes / no chips as a delete: {merge}"
+        );
+        app.mode = Mode::ConfirmClose {
+            repo: "acme/app".into(),
+            number: 14,
+        };
         let text = render(100, 14, &app);
-        assert!(text.contains(" Close PR? ") && text.contains("acme/app#14  Ready one") && text.contains("Closed without merging. Its branch stays."), "{text}");
-        app.mode = Mode::ClonePrompt { repo: "acme/app".into(), query: "proj".into(), all: vec!["/r".into(), "/r/projects".into()], cursor: 0, then: crate::model::PrAction::Review };
+        assert!(
+            text.contains(" Close PR? ")
+                && text.contains("acme/app#14  Ready one")
+                && text.contains("Closed without merging. Its branch stays."),
+            "{text}"
+        );
+        app.mode = Mode::ClonePrompt {
+            repo: "acme/app".into(),
+            query: "proj".into(),
+            all: vec!["/r".into(), "/r/projects".into()],
+            cursor: 0,
+            then: crate::model::PrAction::Review,
+        };
         let text = render(100, 20, &app);
-        assert!(text.contains("clone acme/app into") && text.contains("/r/projects/app") && !text.contains("▌ /r/app"), "{text}");
+        assert!(
+            text.contains("clone acme/app into")
+                && text.contains("/r/projects/app")
+                && !text.contains("▌ /r/app"),
+            "{text}"
+        );
         app.mode = Mode::PrActions { cursor: 0 };
         let text = render(100, 30, &app);
-        assert!(text.contains("merge, delete the branch") && !text.contains("review is for other people's PRs"), "{text}");
-        assert!(text.contains("↳ threads are answered on your own PRs"), "{text}");
-        assert!(text.contains("@them · h → main"), "the menu carries the PR widget: {text}");
+        assert!(
+            text.contains("merge, delete the branch")
+                && !text.contains("review is for other people's PRs"),
+            "{text}"
+        );
+        assert!(
+            text.contains("↳ threads are answered on your own PRs"),
+            "{text}"
+        );
+        assert!(
+            text.contains("@them · h → main"),
+            "the menu carries the PR widget: {text}"
+        );
     }
 
     /// The study measured this footer at 113 cells: at 100 columns it drops its lowest hints whole and ends with the help hint.
     #[test]
     fn the_footer_fits_a_hundred_columns_and_ends_with_the_help_hint() {
-        let mut app = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, false)]);
-        app.pulls = Some(PullsState { split: crate::pulls::PrSplit::ReadyToMerge, cursor: 0 });
+        let mut app = app_with(vec![pr(
+            14,
+            "Ready one",
+            "ready_to_merge",
+            "success",
+            true,
+            false,
+        )]);
+        app.pulls = Some(PullsState {
+            split: crate::pulls::PrSplit::ReadyToMerge,
+            cursor: 0,
+        });
         for width in [40u16, 60, 80, 100, 140] {
             let line = footer_line(&app, width);
             let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
-            assert!(line.width() <= width as usize, "{width}: {} cells: {text}", line.width());
+            assert!(
+                line.width() <= width as usize,
+                "{width}: {} cells: {text}",
+                line.width()
+            );
             assert!(text.trim_end().ends_with("?  all keys"), "{width}: {text}");
         }
-        let text: String = footer_line(&app, 100).spans.iter().map(|s| s.content.to_string()).collect();
-        assert!(text.contains(" m  merge ") && text.contains(" o  open ") && text.contains(" R  poll "), "{text}");
-        assert!(!text.contains("threads"), "the lowest hints went first: {text}");
+        let text: String = footer_line(&app, 100)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(
+            text.contains(" m  merge ") && text.contains(" o  open ") && text.contains(" R  poll "),
+            "{text}"
+        );
+        assert!(
+            !text.contains("threads"),
+            "the lowest hints went first: {text}"
+        );
     }
 }
 
@@ -4006,7 +6164,11 @@ mod slack_render_tests {
         terminal.draw(|f| draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -4017,27 +6179,83 @@ mod slack_render_tests {
         snapshot.items[0].count = 3;
         let app = app_with(snapshot);
         let text = render(120, 40, &app);
-        assert!(text.contains("Needs reply 1") && text.contains("Waiting on them 0") && text.contains("FYI 1") && text.contains("Done 0"), "{text}");
-        assert!(text.contains("polled") && text.contains("⚡") && text.contains("live") && text.contains("[slack]"), "{text}");
-        let row = text.lines().find(|l| l.contains("approve rollback") && l.contains("@marta")).unwrap_or_default().to_string();
-        assert!(row.starts_with("│▌ P0 ▌#payments-oncall"), "selected, the priority, the channel bar then the name: {row}");
-        assert!(row.contains("approve rollback ×3") && row.contains("⎇"), "a collapsed thread says how many, a thread wears its tag: {row}");
-        assert!(!row.contains("checkout is returning"), "the message text stays in the pane: {row}");
-        assert!(text.contains("#payments-oncall · @marta") && text.contains("· thread") && text.contains("(3 replies) · 3 messages"), "{text}");
-        assert!(text.contains("@joão  I can run the rollback"), "the context, muted: {text}");
+        assert!(
+            text.contains("Needs reply 1")
+                && text.contains("Waiting on them 0")
+                && text.contains("FYI 1")
+                && text.contains("Done 0"),
+            "{text}"
+        );
+        assert!(
+            text.contains("polled")
+                && text.contains("⚡")
+                && text.contains("live")
+                && text.contains("[slack]"),
+            "{text}"
+        );
+        let row = text
+            .lines()
+            .find(|l| l.contains("approve rollback") && l.contains("@marta"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            row.starts_with("│▌ P0 ▌#payments-oncall"),
+            "selected, the priority, the channel bar then the name: {row}"
+        );
+        assert!(
+            row.contains("approve rollback ×3") && row.contains("⎇"),
+            "a collapsed thread says how many, a thread wears its tag: {row}"
+        );
+        assert!(
+            !row.contains("checkout is returning"),
+            "the message text stays in the pane: {row}"
+        );
+        assert!(
+            text.contains("#payments-oncall · @marta")
+                && text.contains("· thread")
+                && text.contains("(3 replies) · 3 messages"),
+            "{text}"
+        );
+        assert!(
+            text.contains("@joão  I can run the rollback"),
+            "the context, muted: {text}"
+        );
         assert!(text.contains("P0 · blocker · reply expected"), "{text}");
         assert!(text.contains("why      production incident"), "{text}");
-        assert!(text.contains("acme/app#212 (ci failed) · INC-4411"), "the linked PR's split and the refs: {text}");
+        assert!(
+            text.contains("acme/app#212 (ci failed) · INC-4411"),
+            "the linked PR's split and the refs: {text}"
+        );
         assert!(text.contains("draft    Approve the rollback"), "{text}");
-        assert!(text.contains("r  reply     ready") && text.contains("N  nudge     off: only while waiting on them"), "{text}");
+        assert!(
+            text.contains("r  reply     ready")
+                && text.contains("N  nudge     off: only while waiting on them"),
+            "{text}"
+        );
         assert!(text.contains("off: already P0"), "{text}");
 
         let text = render(80, 30, &app);
-        assert!(text.contains("Reply 1") && text.contains("Wait 0") && text.contains("Snz 0"), "short labels under 100 columns: {text}");
-        assert!(!text.contains("Waiting on them"), "the strip drops the long labels; the list keeps its title: {text}");
-        assert!(!text.contains("· @marta ·"), "no pane under 100 columns: {text}");
-        let row = text.lines().find(|l| l.contains("approve rollback")).unwrap_or_default().to_string();
-        assert!(row.contains("P0") && row.contains("#payments-oncall") && row.contains("@marta"), "{row}");
+        assert!(
+            text.contains("Reply 1") && text.contains("Wait 0") && text.contains("Snz 0"),
+            "short labels under 100 columns: {text}"
+        );
+        assert!(
+            !text.contains("Waiting on them"),
+            "the strip drops the long labels; the list keeps its title: {text}"
+        );
+        assert!(
+            !text.contains("· @marta ·"),
+            "no pane under 100 columns: {text}"
+        );
+        let row = text
+            .lines()
+            .find(|l| l.contains("approve rollback"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            row.contains("P0") && row.contains("#payments-oncall") && row.contains("@marta"),
+            "{row}"
+        );
         assert!(!text.contains("\u{2588}"), "nothing overflows: {text}");
     }
 
@@ -4050,14 +6268,27 @@ mod slack_render_tests {
         broken.error = Some("rate limited".into());
         let app = app_with(broken);
         let text = render(120, 40, &app);
-        assert!(text.contains("⚡") && text.contains("socket down") && text.contains("⚠ rate limited"), "{text}");
+        assert!(
+            text.contains("⚡") && text.contains("socket down") && text.contains("⚠ rate limited"),
+            "{text}"
+        );
         assert!(text.contains("new since you cleared it"), "{text}");
-        let row = text.lines().find(|l| l.contains("approve rollback")).unwrap_or_default().to_string();
+        let row = text
+            .lines()
+            .find(|l| l.contains("approve rollback"))
+            .unwrap_or_default()
+            .to_string();
         assert!(row.contains("↺⚙"), "reopened and already a ticket: {row}");
-        assert!(text.contains("off: already a ticket") && text.contains("ticket   #abcdef12"), "{text}");
+        assert!(
+            text.contains("off: already a ticket") && text.contains("ticket   #abcdef12"),
+            "{text}"
+        );
         let mut off = app_with(snapshot());
         off.slack_snapshot.socket = "off".into();
-        assert!(!render(120, 40, &off).contains("⚡"), "no socket indicator without an app token");
+        assert!(
+            !render(120, 40, &off).contains("⚡"),
+            "no socket indicator without an app token"
+        );
     }
 
     #[test]
@@ -4065,48 +6296,122 @@ mod slack_render_tests {
         let now = unix_secs("2026-10-28T10:00:00Z").unwrap();
         let app = app_with(snapshot());
         let text = render(120, 40, &app);
-        assert!(text.contains("‼ 1 overdue"), "the strip counts the overdue Decide item: {text}");
-        let row = text.lines().find(|l| l.contains("approve rollback")).unwrap_or_default().to_string();
-        assert!(!row.contains('‼'), "the P0 in Needs reply is due, not overdue: {row}");
-        assert!(text.contains("due      in") || text.contains("due      overdue"), "the pane says when the reply is due: {text}");
+        assert!(
+            text.contains("‼ 1 overdue"),
+            "the strip counts the overdue Decide item: {text}"
+        );
+        let row = text
+            .lines()
+            .find(|l| l.contains("approve rollback"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            !row.contains('‼'),
+            "the P0 in Needs reply is due, not overdue: {row}"
+        );
+        assert!(
+            text.contains("due      in") || text.contains("due      overdue"),
+            "the pane says when the reply is due: {text}"
+        );
 
         let mut app = app;
         app.slack.as_mut().unwrap().split = SlackSplit::Decide;
         app.slack.as_mut().unwrap().cursor = 0;
         let text = render(120, 40, &app);
-        let row = text.lines().find(|l| l.contains("approve rollback") && l.contains("@marta")).unwrap_or_default().to_string();
-        assert!(row.contains("‼⎇"), "the overdue tag leads the thread's: {row}");
-        assert!(row.contains("P2 ▌#payments-oncall"), "the priority cell keeps its own text: {row}");
-        assert!(text.contains("due      overdue") && text.contains("(P2 · 1h SLA)"), "{text}");
+        let row = text
+            .lines()
+            .find(|l| l.contains("approve rollback") && l.contains("@marta"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            row.contains("‼⎇"),
+            "the overdue tag leads the thread's: {row}"
+        );
+        assert!(
+            row.contains("P2 ▌#payments-oncall"),
+            "the priority cell keeps its own text: {row}"
+        );
+        assert!(
+            text.contains("due      overdue") && text.contains("(P2 · 1h SLA)"),
+            "{text}"
+        );
 
         let items = &app.slack_snapshot.items;
         let late = slack_row(&items[2], false, 110, now);
-        let red: Vec<&Span> = late.spans.iter().filter(|s| s.style.fg == Some(c(RED))).collect();
-        assert!(red.iter().any(|s| s.content.contains("approve rollback")), "the summary is red: {late:?}");
-        assert!(red.iter().any(|s| s.content.contains("2h")), "the age is red: {late:?}");
-        assert!(red.iter().any(|s| s.content.contains('‼')), "the tag is red: {late:?}");
-        assert!(late.spans.iter().any(|s| s.content.starts_with("P2") && s.style.fg != Some(c(RED))), "the prio cell keeps its colour: {late:?}");
+        let red: Vec<&Span> = late
+            .spans
+            .iter()
+            .filter(|s| s.style.fg == Some(c(RED)))
+            .collect();
+        assert!(
+            red.iter().any(|s| s.content.contains("approve rollback")),
+            "the summary is red: {late:?}"
+        );
+        assert!(
+            red.iter().any(|s| s.content.contains("2h")),
+            "the age is red: {late:?}"
+        );
+        assert!(
+            red.iter().any(|s| s.content.contains('‼')),
+            "the tag is red: {late:?}"
+        );
+        assert!(
+            late.spans
+                .iter()
+                .any(|s| s.content.starts_with("P2") && s.style.fg != Some(c(RED))),
+            "the prio cell keeps its colour: {late:?}"
+        );
         let soon = slack_row(&items[0], false, 110, now - 180);
-        assert!(soon.spans.iter().any(|s| s.content.contains("9m") && s.style.fg == Some(c(YELLOW))), "due in a minute, the age is yellow: {soon:?}");
+        assert!(
+            soon.spans
+                .iter()
+                .any(|s| s.content.contains("9m") && s.style.fg == Some(c(YELLOW))),
+            "due in a minute, the age is yellow: {soon:?}"
+        );
         let calm = slack_row(&items[0], false, 110, now - 600);
-        assert!(calm.spans.iter().any(|s| s.content.contains("2m") && s.style.fg == Some(c(SUBTEXT0))), "eight minutes out it is plain: {calm:?}");
+        assert!(
+            calm.spans
+                .iter()
+                .any(|s| s.content.contains("2m") && s.style.fg == Some(c(SUBTEXT0))),
+            "eight minutes out it is plain: {calm:?}"
+        );
         assert_eq!(slack_tag(&items[0]).chars().count(), 2);
         assert_eq!(slack_tag(&items[2]).chars().count(), 3);
 
         let lines = slack_detail_lines(&items[0], 600, now - 300);
-        let due = lines.iter().find(|l| l.to_string().starts_with("due")).map(|l| l.to_string()).unwrap_or_default();
+        let due = lines
+            .iter()
+            .find(|l| l.to_string().starts_with("due"))
+            .map(|l| l.to_string())
+            .unwrap_or_default();
         assert_eq!(due, "due      due in 3m (P0 · 10m SLA)");
         let lines = slack_detail_lines(&items[2], 3600, now);
-        let due = lines.iter().find(|l| l.to_string().starts_with("due")).map(|l| l.to_string()).unwrap_or_default();
+        let due = lines
+            .iter()
+            .find(|l| l.to_string().starts_with("due"))
+            .map(|l| l.to_string())
+            .unwrap_or_default();
         assert_eq!(due, "due      overdue 1h (P2 · 1h SLA)");
         let lines = slack_detail_lines(&items[2], 0, now);
-        assert!(lines.iter().any(|l| l.to_string() == "due      overdue 1h (P2)"), "no SLA figure when the machine has none");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.to_string() == "due      overdue 1h (P2)"),
+            "no SLA figure when the machine has none"
+        );
         let lines = slack_detail_lines(&items[1], 3600, now);
-        assert!(!lines.iter().any(|l| l.to_string().starts_with("due")), "nothing due, no line");
+        assert!(
+            !lines.iter().any(|l| l.to_string().starts_with("due")),
+            "nothing due, no line"
+        );
 
         let mut none = app_with(snapshot());
         none.slack_snapshot.items[2].overdue = false;
-        let strip = render(120, 40, &none).lines().next().unwrap_or_default().to_string();
+        let strip = render(120, 40, &none)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string();
         assert!(!strip.contains('‼'), "no count at zero: {strip}");
     }
 
@@ -4116,37 +6421,106 @@ mod slack_render_tests {
         app.slack.as_mut().unwrap().watches = Some(WatchesState { cursor: 1 });
         let text = render(120, 40, &app);
         assert!(text.contains(" Watches "), "{text}");
-        assert!(text.contains("@platform-team") && text.contains("usergroup") && text.contains("S04ABCD") && text.contains("as mention"), "{text}");
-        let here = text.lines().find(|l| l.contains("@here")).unwrap_or_default().to_string();
-        assert!(here.contains("› on") && here.contains("broadcast") && here.contains("P2 · built-in"), "{here}");
-        assert!(text.contains("n add  e floor  d delete  space on/off  esc"), "{text}");
+        assert!(
+            text.contains("@platform-team")
+                && text.contains("usergroup")
+                && text.contains("S04ABCD")
+                && text.contains("as mention"),
+            "{text}"
+        );
+        let here = text
+            .lines()
+            .find(|l| l.contains("@here"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            here.contains("› on") && here.contains("broadcast") && here.contains("P2 · built-in"),
+            "{here}"
+        );
+        assert!(
+            text.contains("n add  e floor  d delete  space on/off  esc"),
+            "{text}"
+        );
         app.slack.as_mut().unwrap().watches = None;
 
-        app.mode = Mode::SlackReply { id: "C0123:1730112345.0001".into(), area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]), vim: crate::vim::Vim::new(), nudge: false, draft: None };
+        app.mode = Mode::SlackReply {
+            id: "C0123:1730112345.0001".into(),
+            area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]),
+            vim: crate::vim::Vim::new(),
+            nudge: false,
+            draft: None,
+        };
         let text = render(120, 40, &app);
-        assert!(text.contains(" reply · #payments-oncall · thread with @marta "), "{text}");
-        assert!(text.contains("ctrl+s send  esc back") && text.contains(" NORMAL "), "{text}");
-        assert!(text.contains("─ context ─") && text.contains("@marta   checkout is returning 500s") && text.contains("@joão"), "{text}");
+        assert!(
+            text.contains(" reply · #payments-oncall · thread with @marta "),
+            "{text}"
+        );
+        assert!(
+            text.contains("ctrl+s send  esc back") && text.contains(" NORMAL "),
+            "{text}"
+        );
+        assert!(
+            text.contains("─ context ─")
+                && text.contains("@marta   checkout is returning 500s")
+                && text.contains("@joão"),
+            "{text}"
+        );
         assert!(text.contains("Approve the rollback, I'm on it."), "{text}");
 
-        app.mode = Mode::SlackSnooze { id: "C0123:1730112345.0001".into(), cursor: 2 };
+        app.mode = Mode::SlackSnooze {
+            id: "C0123:1730112345.0001".into(),
+            cursor: 2,
+        };
         let text = render(120, 40, &app);
-        assert!(text.contains(" snooze until ") && text.contains("▌ 3  tomorrow 9:00") && text.contains("next Monday 9:00"), "{text}");
+        assert!(
+            text.contains(" snooze until ")
+                && text.contains("▌ 3  tomorrow 9:00")
+                && text.contains("next Monday 9:00"),
+            "{text}"
+        );
 
-        app.mode = Mode::SlackTask { id: "C0123:1730112345.0001".into(), title: "approve rollback".into(), repo: None };
+        app.mode = Mode::SlackTask {
+            id: "C0123:1730112345.0001".into(),
+            title: "approve rollback".into(),
+            repo: None,
+        };
         let text = render(120, 40, &app);
-        assert!(text.contains(" ticket from #payments-oncall? ") && text.contains("title  approve rollback") && text.contains("none guessed"), "{text}");
+        assert!(
+            text.contains(" ticket from #payments-oncall? ")
+                && text.contains("title  approve rollback")
+                && text.contains("none guessed"),
+            "{text}"
+        );
 
-        app.mode = Mode::SlackWatchAdd { query: "@pl".into(), cursor: 0 };
+        app.mode = Mode::SlackWatchAdd {
+            query: "@pl".into(),
+            cursor: 0,
+        };
         let text = render(120, 40, &app);
-        assert!(text.contains(" add a watch ") && text.contains("@pl▏") && text.contains("a user group") && text.contains("loading…"), "{text}");
-        app.mode = Mode::SlackWatchAdd { query: "luna-tui".into(), cursor: 0 };
+        assert!(
+            text.contains(" add a watch ")
+                && text.contains("@pl▏")
+                && text.contains("a user group")
+                && text.contains("loading…"),
+            "{text}"
+        );
+        app.mode = Mode::SlackWatchAdd {
+            query: "luna-tui".into(),
+            cursor: 0,
+        };
         assert!(render(120, 40, &app).contains("a keyword"));
 
         app.mode = Mode::SlackActions { cursor: 0 };
         let text = render(80, 40, &app);
-        assert!(text.contains("reply: edit the draft, ctrl+s posts") && text.contains("↳ only while waiting on them"), "{text}");
-        assert!(text.contains("checkout is returning 500s since the 14:02"), "the menu carries the item under 100 columns: {text}");
+        assert!(
+            text.contains("reply: edit the draft, ctrl+s posts")
+                && text.contains("↳ only while waiting on them"),
+            "{text}"
+        );
+        assert!(
+            text.contains("checkout is returning 500s since the 14:02"),
+            "the menu carries the item under 100 columns: {text}"
+        );
     }
 
     #[test]
@@ -4160,20 +6534,59 @@ mod slack_render_tests {
         let mut floor = super::tests::floor();
         floor.slack = Some((metrics.clone(), metrics));
         let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
-        terminal.draw(|f| render_floor(f, f.area(), &floor)).unwrap();
+        terminal
+            .draw(|f| render_floor(f, f.area(), &floor))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let text: String = (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
-        assert!(text.contains("Slack · 7d / 30d") && text.contains("within SLA") && text.contains("median / p90"), "{text}");
-        let p1 = text.lines().find(|l| l.trim_start().starts_with("P1")).unwrap_or_default().to_string();
-        assert!(p1.contains("4 / 4") && p1.contains("3 / 3") && p1.contains("2 · 67%") && p1.contains("1h / 2h"), "{p1}");
-        let p3 = text.lines().find(|l| l.trim_start().starts_with("P3")).unwrap_or_default().to_string();
+        let text: String = (0..40)
+            .map(|y| {
+                (0..140)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        assert!(
+            text.contains("Slack · 7d / 30d")
+                && text.contains("within SLA")
+                && text.contains("median / p90"),
+            "{text}"
+        );
+        let p1 = text
+            .lines()
+            .find(|l| l.trim_start().starts_with("P1"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            p1.contains("4 / 4")
+                && p1.contains("3 / 3")
+                && p1.contains("2 · 67%")
+                && p1.contains("1h / 2h"),
+            "{p1}"
+        );
+        let p3 = text
+            .lines()
+            .find(|l| l.trim_start().starts_with("P3"))
+            .unwrap_or_default()
+            .to_string();
         assert!(p3.contains("0 · –"), "nothing replied, no share: {p3}");
         assert!(text.contains("within 1h") && text.contains("50%"), "{text}");
-        assert!(text.contains("SLA targets") && text.contains("10m/30m/1h/1h (P0/P1/P2/P3)"), "{text}");
+        assert!(
+            text.contains("SLA targets") && text.contains("10m/30m/1h/1h (P0/P1/P2/P3)"),
+            "{text}"
+        );
         floor.slack = None;
-        terminal.draw(|f| render_floor(f, f.area(), &floor)).unwrap();
+        terminal
+            .draw(|f| render_floor(f, f.area(), &floor))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let text: String = (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect();
+        let text: String = (0..40)
+            .map(|y| {
+                (0..140)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect();
         assert!(!text.contains("Slack ·"), "nothing without the metrics");
     }
 
@@ -4184,13 +6597,33 @@ mod slack_render_tests {
         for width in [40u16, 60, 80, 100, 140] {
             let line = footer_line(&app, width);
             let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
-            assert!(line.width() <= width as usize, "{width}: {} cells: {text}", line.width());
+            assert!(
+                line.width() <= width as usize,
+                "{width}: {} cells: {text}",
+                line.width()
+            );
             assert!(text.trim_end().ends_with("?  all keys"), "{width}: {text}");
         }
-        let text: String = footer_line(&app, 100).spans.iter().map(|s| s.content.to_string()).collect();
-        assert!(text.contains(" r  reply ") && text.contains(" t  ticket ") && !text.contains("priority down"), "{text}");
-        let wide: String = footer_line(&app, 200).spans.iter().map(|s| s.content.to_string()).collect();
-        assert!(wide.contains(" R  poll ") && wide.contains(" j/k  move "), "{wide}");
+        let text: String = footer_line(&app, 100)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(
+            text.contains(" r  reply ")
+                && text.contains(" t  ticket ")
+                && !text.contains("priority down"),
+            "{text}"
+        );
+        let wide: String = footer_line(&app, 200)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(
+            wide.contains(" R  poll ") && wide.contains(" j/k  move "),
+            "{wide}"
+        );
     }
 }
 
@@ -4231,7 +6664,13 @@ mod help_sheet_tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect()
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect()
     }
 
     fn press(app: &mut App, code: KeyCode) {
@@ -4239,7 +6678,11 @@ mod help_sheet_tests {
     }
 
     fn footer(app: &App) -> String {
-        footer_line(app, 200).spans.iter().map(|s| s.content.to_string()).collect()
+        footer_line(app, 200)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect()
     }
 
     #[test]
@@ -4248,20 +6691,50 @@ mod help_sheet_tests {
         press(&mut app, KeyCode::Char('?'));
         press(&mut app, KeyCode::Char('?'));
         let text = screen(&app, 120, 40).join("\n");
-        assert!(text.contains(" Keys · ticket #a1b2c3d4 Login page · approve plan "), "{text}");
+        assert!(
+            text.contains(" Keys · ticket #a1b2c3d4 Login page · approve plan "),
+            "{text}"
+        );
         assert!(text.contains("/ search"), "{text}");
-        assert!(text.contains("a         open to approve") || text.contains("a    open to approve"), "the gate's a, bright: {text}");
-        assert!(text.contains("(not at the ship gate)"), "x S dim with its reason: {text}");
+        assert!(
+            text.contains("a         open to approve") || text.contains("a    open to approve"),
+            "the gate's a, bright: {text}"
+        );
+        assert!(
+            text.contains("(not at the ship gate)"),
+            "x S dim with its reason: {text}"
+        );
         assert!(text.contains("(no memory review waiting)"), "{text}");
-        assert!(!text.contains("approve the setup") && !text.contains("a    start"), "the other a meanings are hidden: {text}");
-        assert!(text.contains("h l  j k  gg  G  1-8  tab shift+tab  ] [  enter"), "Move folds to a strip: {text}");
-        assert!(text.contains("enter runs · esc closes · ? long form"), "{text}");
-        for heading in ["Gate", "Ticket", "Move", "Filter & order", "Views", "Marks & bulk", "App", "Commands (type after :)"] {
+        assert!(
+            !text.contains("approve the setup") && !text.contains("a    start"),
+            "the other a meanings are hidden: {text}"
+        );
+        assert!(
+            text.contains("h l  j k  gg  G  1-8  tab shift+tab  ] [  enter"),
+            "Move folds to a strip: {text}"
+        );
+        assert!(
+            text.contains("enter runs · esc closes · ? long form"),
+            "{text}"
+        );
+        for heading in [
+            "Gate",
+            "Ticket",
+            "Move",
+            "Filter & order",
+            "Views",
+            "Marks & bulk",
+            "App",
+            "Commands (type after :)",
+        ] {
             assert!(text.contains(heading), "heading {heading}: {text}");
         }
         press(&mut app, KeyCode::Char('?'));
         let long = screen(&app, 120, 50).join("\n");
-        assert!(long.contains("previous / next column") && !long.contains("h l  j k"), "the long form has rows: {long}");
+        assert!(
+            long.contains("previous / next column") && !long.contains("h l  j k"),
+            "the long form has rows: {long}"
+        );
         assert!(long.contains("? short form"), "{long}");
     }
 
@@ -4271,17 +6744,40 @@ mod help_sheet_tests {
         press(&mut app, KeyCode::Char('?'));
         press(&mut app, KeyCode::Char('?'));
         let wide = screen(&app, 120, 50);
-        let col = |rows: &[String], needle: &str| rows.iter().find_map(|r| r.find(needle).map(|i| r[..i].chars().count()));
-        assert!(col(&wide, "Gate").unwrap() + 20 < col(&wide, "Commands (type after :)").unwrap(), "Commands sits in the right column: {}", wide.join("\n"));
+        let col = |rows: &[String], needle: &str| {
+            rows.iter()
+                .find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
+        };
+        assert!(
+            col(&wide, "Gate").unwrap() + 20 < col(&wide, "Commands (type after :)").unwrap(),
+            "Commands sits in the right column: {}",
+            wide.join("\n")
+        );
         let narrow = screen(&app, 90, 60);
-        assert_eq!(col(&narrow, "Gate"), col(&narrow, "Commands (type after :)"), "one column under 100: {}", narrow.join("\n"));
-        assert!(narrow.join("\n").contains(" Keys · ticket #a1b2c3d4 Login page · intake "));
+        assert_eq!(
+            col(&narrow, "Gate"),
+            col(&narrow, "Commands (type after :)"),
+            "one column under 100: {}",
+            narrow.join("\n")
+        );
+        assert!(
+            narrow
+                .join("\n")
+                .contains(" Keys · ticket #a1b2c3d4 Login page · intake ")
+        );
         press(&mut app, KeyCode::Esc);
         app.mode = Mode::Detail("a1b2c3d4e5f6".into());
         press(&mut app, KeyCode::Char('?'));
         let text = screen(&app, 120, 50).join("\n");
-        assert!(text.contains("▸ board keys: "), "the layer under the popup folds to one line: {text}");
-        assert!(text.contains("S         (not at the ship gate)") || text.contains("(not at the ship gate)"), "{text}");
+        assert!(
+            text.contains("▸ board keys: "),
+            "the layer under the popup folds to one line: {text}"
+        );
+        assert!(
+            text.contains("S         (not at the ship gate)")
+                || text.contains("(not at the ship gate)"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -4294,9 +6790,18 @@ mod help_sheet_tests {
         }
         let text = screen(&app, 120, 40).join("\n");
         assert!(text.contains(" poll▏"), "{text}");
-        assert!(text.contains("poll GitHub now") && text.contains("in Pulls"), "{text}");
-        assert!(text.contains("poll Slack now") && text.contains("in Slack"), "{text}");
-        assert!(!text.contains("Commands (type after :)"), "a search is one flat section: {text}");
+        assert!(
+            text.contains("poll GitHub now") && text.contains("in Pulls"),
+            "{text}"
+        );
+        assert!(
+            text.contains("poll Slack now") && text.contains("in Slack"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Commands (type after :)"),
+            "a search is one flat section: {text}"
+        );
     }
 
     #[test]
@@ -4311,16 +6816,33 @@ mod help_sheet_tests {
         }
         let last = screen(&app, 80, 24);
         assert_ne!(last, top);
-        assert!(last.join("\n").contains(":help"), "the last rows show: {}", last.join("\n"));
-        let total = last[23].split('/').next_back().and_then(|t| t.split_whitespace().next()).and_then(|n| n.parse::<usize>().ok()).unwrap();
-        assert!(last[23].contains(&format!("{total}/{total}")), "{}", last[23]);
+        assert!(
+            last.join("\n").contains(":help"),
+            "the last rows show: {}",
+            last.join("\n")
+        );
+        let total = last[23]
+            .split('/')
+            .next_back()
+            .and_then(|t| t.split_whitespace().next())
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap();
+        assert!(
+            last[23].contains(&format!("{total}/{total}")),
+            "{}",
+            last[23]
+        );
         for _ in 0..500 {
             press(&mut app, KeyCode::Char('k'));
         }
         assert_eq!(screen(&app, 80, 24), top, "back at the top");
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(screen(&app, 80, 24)[1..23], top[1..23], "two rows down still fits the first page");
+        assert_eq!(
+            screen(&app, 80, 24)[1..23],
+            top[1..23],
+            "two rows down still fits the first page"
+        );
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
         assert!(matches!(app.mode, Mode::Help { .. }));
     }
@@ -4336,28 +6858,66 @@ mod help_sheet_tests {
         }
         assert_ne!(screen(&app, 80, 24), top, "scrolled at 80x24");
         let wide = screen(&app, 200, 60).join("\n");
-        assert!(wide.contains("Commands (type after :)") && wide.contains("Gate"), "everything fits at 200x60: {wide}");
+        assert!(
+            wide.contains("Commands (type after :)") && wide.contains("Gate"),
+            "everything fits at 200x60: {wide}"
+        );
         for _ in 0..40 {
             press(&mut app, KeyCode::Char('k'));
         }
-        assert_eq!(screen(&app, 80, 24), top, "back at 80x24 the sheet starts at the top again");
+        assert_eq!(
+            screen(&app, 80, 24),
+            top,
+            "back at 80x24 the sheet starts at the top again"
+        );
     }
 
     #[test]
     fn every_view_draws_its_sheet_at_any_size_without_panicking() {
-        for (w, h) in [(1, 1), (6, 3), (10, 4), (20, 6), (80, 24), (120, 40), (200, 50)] {
+        for (w, h) in [
+            (1, 1),
+            (6, 3),
+            (10, 4),
+            (20, 6),
+            (80, 24),
+            (120, 40),
+            (200, 50),
+        ] {
             let mut app = app_with("awaiting_ship", true);
             press(&mut app, KeyCode::Char('?'));
             assert_eq!(screen(&app, w, h).len(), usize::from(h));
             press(&mut app, KeyCode::Esc);
             type Toggle = fn(&mut App);
             let views: [(Toggle, Toggle); 6] = [
-                (|a| a.floor = Some(FloorState::default()), |a| a.floor = None),
-                (|a| a.inbox = Some(InboxState::default()), |a| a.inbox = None),
-                (|a| a.digest = Some(DigestState::default()), |a| a.digest = None),
-                (|a| a.pulls = Some(PullsState::default()), |a| a.pulls = None),
-                (|a| a.slack = Some(SlackState::default()), |a| a.slack = None),
-                (|a| a.slack = Some(SlackState { watches: Some(Default::default()), ..Default::default() }), |a| a.slack = None),
+                (
+                    |a| a.floor = Some(FloorState::default()),
+                    |a| a.floor = None,
+                ),
+                (
+                    |a| a.inbox = Some(InboxState::default()),
+                    |a| a.inbox = None,
+                ),
+                (
+                    |a| a.digest = Some(DigestState::default()),
+                    |a| a.digest = None,
+                ),
+                (
+                    |a| a.pulls = Some(PullsState::default()),
+                    |a| a.pulls = None,
+                ),
+                (
+                    |a| a.slack = Some(SlackState::default()),
+                    |a| a.slack = None,
+                ),
+                (
+                    |a| {
+                        a.slack = Some(SlackState {
+                            watches: Some(Default::default()),
+                            ..Default::default()
+                        })
+                    },
+                    |a| a.slack = None,
+                ),
             ];
             for (open, close) in views {
                 open(&mut app);
@@ -4384,16 +6944,31 @@ mod help_sheet_tests {
         let mut app = App::new(crate::testkit::dead_machine());
         app.floor = Some(FloorState::default());
         press(&mut app, KeyCode::Char('?'));
-        assert!(matches!(app.mode, Mode::Help { scope: Scope::Floor, .. }));
+        assert!(matches!(
+            app.mode,
+            Mode::Help {
+                scope: Scope::Floor,
+                ..
+            }
+        ));
         let text = screen(&app, 120, 40).join("\n");
-        assert!(text.contains(" Keys · Floor ") && text.contains("refresh the numbers"), "a small group reads as rows: {text}");
+        assert!(
+            text.contains(" Keys · Floor ") && text.contains("refresh the numbers"),
+            "a small group reads as rows: {text}"
+        );
         press(&mut app, KeyCode::Esc);
         assert!(app.floor.is_some() && matches!(app.mode, Mode::Normal));
         app.floor = None;
 
         app.digest = Some(DigestState::default());
         press(&mut app, KeyCode::Char('?'));
-        assert!(matches!(app.mode, Mode::Help { scope: Scope::Digest, .. }));
+        assert!(matches!(
+            app.mode,
+            Mode::Help {
+                scope: Scope::Digest,
+                ..
+            }
+        ));
         assert!(screen(&app, 120, 40).join("\n").contains(" Keys · Digest "));
         press(&mut app, KeyCode::Esc);
         assert!(app.digest.is_some() && matches!(app.mode, Mode::Normal));
@@ -4406,42 +6981,80 @@ mod help_sheet_tests {
         assert!(board.trim_end().ends_with("?  all keys"), "{board}");
         let mut quiet = app_with("implementing", false);
         quiet.tasks[0].waiting_on_you = false;
-        assert!(!footer(&quiet).contains("next to do"), "the jump key is offered only while a card needs you");
+        assert!(
+            !footer(&quiet).contains("next to do"),
+            "the jump key is offered only while a card needs you"
+        );
         let mut pulls = App::new(crate::testkit::dead_machine());
         pulls.pulls = Some(PullsState::default());
         pulls.toast = None;
         let line = footer(&pulls);
-        assert!(line.contains(" R  poll ") && !line.contains(" m  merge "), "no PR selected: only the keys that work are offered: {line}");
+        assert!(
+            line.contains(" R  poll ") && !line.contains(" m  merge "),
+            "no PR selected: only the keys that work are offered: {line}"
+        );
         let mut floor = App::new(crate::testkit::dead_machine());
         floor.floor = Some(FloorState::default());
         floor.toast = None;
-        assert!(footer(&floor).contains(" R  refresh ") && !footer(&floor).contains(" r  refresh "), "{}", footer(&floor));
+        assert!(
+            footer(&floor).contains(" R  refresh ") && !footer(&floor).contains(" r  refresh "),
+            "{}",
+            footer(&floor)
+        );
         let mut help = app_with("draft", true);
         press(&mut help, KeyCode::Char('?'));
         let line = footer(&help);
-        assert!(line.contains(" enter  run the row's key ") && line.contains(" /  search every view's keys "), "{line}");
+        assert!(
+            line.contains(" enter  run the row's key ")
+                && line.contains(" /  search every view's keys "),
+            "{line}"
+        );
     }
 
     #[test]
     fn the_reason_pickers_footers_count_their_real_reasons() {
         let mut app = app_with("awaiting_approval", true);
-        app.mode = Mode::ArchiveReason { id: "a1b2c3d4e5f6".into(), cursor: 0 };
+        app.mode = Mode::ArchiveReason {
+            id: "a1b2c3d4e5f6".into(),
+            cursor: 0,
+        };
         assert!(footer(&app).contains(" j/k 1-7  pick "), "{}", footer(&app));
-        app.mode = Mode::EscalationReason { id: "a1b2c3d4e5f6".into(), cursor: 0 };
+        app.mode = Mode::EscalationReason {
+            id: "a1b2c3d4e5f6".into(),
+            cursor: 0,
+        };
         assert!(footer(&app).contains(" j/k 1-6  pick "), "{}", footer(&app));
     }
 
     #[test]
-    fn the_hidden_columns_indicator_keeps_its_place_and_the_offline_message_is_cut_with_an_ellipsis() {
+    fn the_hidden_columns_indicator_keeps_its_place_and_the_offline_message_is_cut_with_an_ellipsis()
+     {
         let mut app = app_with("awaiting_approval", true);
         app.online = false;
         app.offline_reason = "connection refused while reaching the machine".into();
         let row = screen(&app, 110, 24)[0].clone();
-        let note = board_note(&app, 110).expect("110 columns hide some").spans.iter().map(|s| s.content.to_string()).collect::<String>();
-        assert!(row.trim_end().ends_with(note.trim_end()), "the indicator is whole at the right: {row}");
-        assert!(row.contains("…") && row.contains("Luna TUI") && row.contains("1 need you") && row.contains("machine"), "the offline text is what is shortened, the count stays: {row}");
+        let note = board_note(&app, 110)
+            .expect("110 columns hide some")
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect::<String>();
+        assert!(
+            row.trim_end().ends_with(note.trim_end()),
+            "the indicator is whole at the right: {row}"
+        );
+        assert!(
+            row.contains("…")
+                && row.contains("Luna TUI")
+                && row.contains("1 need you")
+                && row.contains("machine"),
+            "the offline text is what is shortened, the count stays: {row}"
+        );
         let before_note = row.trim_end().strip_suffix(note.trim_end()).unwrap();
-        assert!(before_note.trim_end().ends_with('…'), "cut at the edge of the indicator, not clipped under it: {row}");
+        assert!(
+            before_note.trim_end().ends_with('…'),
+            "cut at the edge of the indicator, not clipped under it: {row}"
+        );
     }
 
     #[test]
@@ -4452,11 +7065,20 @@ mod help_sheet_tests {
         app.age_prefix();
         let line = footer(&app);
         assert!(line.starts_with(" g ▸ "), "{line}");
-        assert!(line.contains(" g first ticket in the column") && line.contains(" s order columns by stage") && line.ends_with("esc"), "{line}");
+        assert!(
+            line.contains(" g first ticket in the column")
+                && line.contains(" s order columns by stage")
+                && line.ends_with("esc"),
+            "{line}"
+        );
         press(&mut app, KeyCode::Char('s'));
         press(&mut app, KeyCode::Char('z'));
         app.age_prefix();
-        assert!(footer(&app).contains(" c fold the focused column"), "{}", footer(&app));
+        assert!(
+            footer(&app).contains(" c fold the focused column"),
+            "{}",
+            footer(&app)
+        );
     }
 
     #[test]
@@ -4465,12 +7087,23 @@ mod help_sheet_tests {
         press(&mut app, KeyCode::Char('e'));
         assert!(matches!(app.mode, Mode::EditTicket { .. }));
         let text = screen(&app, 140, 40).join("\n");
-        assert!(text.contains("· normal · i a o insert · dd x delete · u ^r undo · ctrl+s save · esc q cancel"), "{text}");
+        assert!(
+            text.contains(
+                "· normal · i a o insert · dd x delete · u ^r undo · ctrl+s save · esc q cancel"
+            ),
+            "{text}"
+        );
         press(&mut app, KeyCode::Char('i'));
         let text = screen(&app, 140, 40).join("\n");
-        assert!(text.contains("· insert · esc normal · ctrl+s save") && !text.contains("dd x delete"), "{text}");
+        assert!(
+            text.contains("· insert · esc normal · ctrl+s save") && !text.contains("dd x delete"),
+            "{text}"
+        );
         let line = footer(&app);
-        assert!(line.contains(" esc  normal ") && line.contains(" ctrl+s  save "), "{line}");
+        assert!(
+            line.contains(" esc  normal ") && line.contains(" ctrl+s  save "),
+            "{line}"
+        );
     }
 
     #[test]
@@ -4479,8 +7112,14 @@ mod help_sheet_tests {
         press(&mut app, KeyCode::Char(':'));
         press(&mut app, KeyCode::Char('f'));
         let text = screen(&app, 100, 24).join("\n");
-        assert!(text.contains(":filter") && text.contains(":fold") && text.contains(":floor"), "{text}");
-        assert!(text.contains("filter: title, #id or repo (bare clears)"), "{text}");
+        assert!(
+            text.contains(":filter") && text.contains(":fold") && text.contains(":floor"),
+            "{text}"
+        );
+        assert!(
+            text.contains("filter: title, #id or repo (bare clears)"),
+            "{text}"
+        );
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Tab);
         let text = screen(&app, 100, 24).join("\n");
@@ -4489,7 +7128,11 @@ mod help_sheet_tests {
         press(&mut app, KeyCode::Char(':'));
         let text = screen(&app, 100, 24);
         let listed = text.iter().filter(|r| r.contains("   :")).count();
-        assert!(listed <= 7 && text.join("\n").contains("more"), "six at most, then a count: {}", text.join("\n"));
+        assert!(
+            listed <= 7 && text.join("\n").contains("more"),
+            "six at most, then a count: {}",
+            text.join("\n")
+        );
     }
 
     #[test]
@@ -4498,12 +7141,28 @@ mod help_sheet_tests {
         press(&mut app, KeyCode::Char('x'));
         let text = screen(&app, 100, 40).join("\n");
         assert!(text.contains(" #a1b2c3d4 Login page "), "{text}");
-        assert!(text.contains("P   resume every ticket paused on the limit"), "{text}");
-        assert!(text.contains("S   ship: approve and open the PR") && text.contains("↳ not at the ship gate"), "{text}");
-        assert!(text.contains("a   open to approve") && text.contains("R   set the repo"), "{text}");
-        assert!(text.contains("↳ has a repo; x or :repo <name> replaces it"), "{text}");
+        assert!(
+            text.contains("P   resume every ticket paused on the limit"),
+            "{text}"
+        );
+        assert!(
+            text.contains("S   ship: approve and open the PR")
+                && text.contains("↳ not at the ship gate"),
+            "{text}"
+        );
+        assert!(
+            text.contains("a   open to approve") && text.contains("R   set the repo"),
+            "{text}"
+        );
+        assert!(
+            text.contains("↳ has a repo; x or :repo <name> replaces it"),
+            "{text}"
+        );
         press(&mut app, KeyCode::Char('a'));
-        assert!(matches!(app.mode, Mode::Detail(_)), "a at a gate opens the task, as on the board");
+        assert!(
+            matches!(app.mode, Mode::Detail(_)),
+            "a at a gate opens the task, as on the board"
+        );
     }
 
     fn split_task(id: &str, title: &str, extra: &str) -> Task {
@@ -4521,21 +7180,42 @@ mod help_sheet_tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let rows: Vec<String> = (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect();
+        let rows: Vec<String> = (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
         rows.join("\n")
     }
 
     // @scenario:S1
     #[test]
     fn a_split_origin_names_its_children_and_a_child_names_its_origin_by_title() {
-        let origin = split_task("aaaaaaaa", "Export everything", r#""archiveReason":"split","splitInto":["bbbbbbbb-0000-4000-8000-000000000000","cccccccc-0000-4000-8000-000000000000"],"#);
-        let one = split_task("bbbbbbbb", "Export CSV rows", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":1,"of":2},"#);
-        let two = split_task("cccccccc", "Export JSON rows", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":2},"#);
+        let origin = split_task(
+            "aaaaaaaa",
+            "Export everything",
+            r#""archiveReason":"split","splitInto":["bbbbbbbb-0000-4000-8000-000000000000","cccccccc-0000-4000-8000-000000000000"],"#,
+        );
+        let one = split_task(
+            "bbbbbbbb",
+            "Export CSV rows",
+            r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":1,"of":2},"#,
+        );
+        let two = split_task(
+            "cccccccc",
+            "Export JSON rows",
+            r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":2},"#,
+        );
         let mut app = App::new(crate::testkit::dead_machine());
         app.tasks = vec![origin.clone(), one.clone(), two];
         app.mode = Mode::Detail(origin.id.clone());
         let text = drawn(&app, 160, 50);
-        assert!(text.contains("Export CSV rows") && text.contains("Export JSON rows"), "{text}");
+        assert!(
+            text.contains("Export CSV rows") && text.contains("Export JSON rows"),
+            "{text}"
+        );
         app.mode = Mode::Detail(one.id.clone());
         let text = drawn(&app, 160, 50);
         assert!(text.contains("Export everything"), "{text}");
@@ -4544,60 +7224,145 @@ mod help_sheet_tests {
     // @scenario:S2
     #[test]
     fn a_cozy_card_row_says_which_part_it_is() {
-        let task = split_task("abcdef12", "Login page", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#);
-        let text = card_lines(&task, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        let task = split_task(
+            "abcdef12",
+            "Login page",
+            r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#,
+        );
+        let text = card_lines(&task, None, false, false, Density::Cozy, 60)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("part 2/3"), "{text}");
     }
 
     // @scenario:S3
     #[test]
     fn a_comfortable_card_row_says_which_part_it_is() {
-        let task = split_task("abcdef12", "Login page", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#);
-        let text = card_lines(&task, None, false, false, Density::Comfortable, 60).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        let task = split_task(
+            "abcdef12",
+            "Login page",
+            r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#,
+        );
+        let text = card_lines(&task, None, false, false, Density::Comfortable, 60)
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("part 2/3"), "{text}");
     }
 
     // @scenario:S10
     #[test]
     fn a_split_card_keeps_its_title_and_id_rows_and_a_plain_card_has_no_part_marker() {
-        let task = split_task("abcdef12", "Login page", r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#);
-        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect();
-        assert!(lines[0].contains("Login page") && lines.iter().any(|l| l.contains("#abcdef12")), "{lines:?}");
+        let task = split_task(
+            "abcdef12",
+            "Login page",
+            r#""splitFrom":"aaaaaaaa-0000-4000-8000-000000000000","splitPart":{"n":2,"of":3},"#,
+        );
+        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Cozy, 60)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert!(
+            lines[0].contains("Login page") && lines.iter().any(|l| l.contains("#abcdef12")),
+            "{lines:?}"
+        );
         assert!(lines.iter().any(|l| l.contains("part 2/3")), "{lines:?}");
         let plain = split_task("abcdef12", "Login page", "");
-        let lines: Vec<String> = card_lines(&plain, None, false, false, Density::Cozy, 60).iter().map(|l| l.to_string()).collect();
+        let lines: Vec<String> = card_lines(&plain, None, false, false, Density::Cozy, 60)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
         assert!(!lines.iter().any(|l| l.contains("part ")), "{lines:?}");
     }
 
     #[test]
     fn every_view_footer_comes_from_the_registry_fits_and_ends_with_the_help_hint() {
-        use crate::{app::FloorState, backlog::BacklogState, digest::DigestState, economy::EconomyState, inbox::InboxState, tickets::TicketsState};
+        use crate::{
+            app::FloorState, backlog::BacklogState, digest::DigestState, economy::EconomyState,
+            inbox::InboxState, tickets::TicketsState,
+        };
         let board = || app_with("awaiting_approval", true);
         let views: Vec<(&str, App)> = vec![
             ("board", board()),
-            ("floor", { let mut a = board(); a.floor = Some(FloorState::default()); a }),
-            ("inbox", { let mut a = board(); a.inbox = Some(InboxState::default()); a }),
-            ("digest", { let mut a = board(); a.digest = Some(DigestState { cursor: 0 }); a }),
-            ("pulls", { let mut a = board(); a.pulls = Some(PullsState::default()); a }),
-            ("backlog", { let mut a = board(); a.backlog = Some(BacklogState { cursor: 0 }); a }),
-            ("economy", { let mut a = board(); a.economy = Some(EconomyState { repo: "/repo".into(), cursor: 0 }); a }),
-            ("tickets", { let mut a = board(); a.tickets = Some(TicketsState { cursor: 0 }); a }),
-            ("slack", { let mut a = board(); a.slack = Some(crate::slack::SlackState::default()); a }),
+            ("floor", {
+                let mut a = board();
+                a.floor = Some(FloorState::default());
+                a
+            }),
+            ("inbox", {
+                let mut a = board();
+                a.inbox = Some(InboxState::default());
+                a
+            }),
+            ("digest", {
+                let mut a = board();
+                a.digest = Some(DigestState { cursor: 0 });
+                a
+            }),
+            ("pulls", {
+                let mut a = board();
+                a.pulls = Some(PullsState::default());
+                a
+            }),
+            ("backlog", {
+                let mut a = board();
+                a.backlog = Some(BacklogState { cursor: 0 });
+                a
+            }),
+            ("economy", {
+                let mut a = board();
+                a.economy = Some(EconomyState {
+                    repo: "/repo".into(),
+                    cursor: 0,
+                });
+                a
+            }),
+            ("tickets", {
+                let mut a = board();
+                a.tickets = Some(TicketsState { cursor: 0 });
+                a
+            }),
+            ("slack", {
+                let mut a = board();
+                a.slack = Some(crate::slack::SlackState::default());
+                a
+            }),
         ];
         for (name, app) in &views {
             for width in [30u16, 50, 80, 100, 140, 200] {
                 let line = footer_line(app, width);
                 let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
-                assert!(line.width() <= width as usize, "{name} at {width}: {} cells: {text}", line.width());
-                assert!(text.contains("?  all keys") || width < 40, "{name} at {width}: {text}");
+                assert!(
+                    line.width() <= width as usize,
+                    "{name} at {width}: {} cells: {text}",
+                    line.width()
+                );
+                assert!(
+                    text.contains("?  all keys") || width < 40,
+                    "{name} at {width}: {text}"
+                );
             }
             // Only keys that work: the first hint is the heaviest `On` binding of the scope.
             let scope = keys::active_scope(app);
             let first = keys::view_footer(app, scope);
-            assert!(!first.is_empty() && first.iter().all(|(k, _)| k != "?"), "{name}: {first:?}");
+            assert!(
+                !first.is_empty() && first.iter().all(|(k, _)| k != "?"),
+                "{name}: {first:?}"
+            );
         }
-        let text: String = footer_line(&views[0].1, 80).spans.iter().map(|s| s.content.to_string()).collect();
-        assert!(text.starts_with("  a  open to approve   r  send back") && text.trim_end().ends_with("?  all keys"), "{text}");
+        let text: String = footer_line(&views[0].1, 80)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(
+            text.starts_with("  a  open to approve   r  send back")
+                && text.trim_end().ends_with("?  all keys"),
+            "{text}"
+        );
     }
 
     // The task view's footer: the keys that work on this card, cut to the width, ending with the help hint.
@@ -4613,16 +7378,29 @@ mod help_sheet_tests {
 
         fn line(app: &App, width: u16) -> (String, usize) {
             let line = footer_line(app, width);
-            (line.spans.iter().map(|s| s.content.to_string()).collect(), line.width())
+            (
+                line.spans.iter().map(|s| s.content.to_string()).collect(),
+                line.width(),
+            )
         }
 
         #[test]
         fn the_footer_never_exceeds_the_width_and_ends_with_the_help_hint() {
-            for app in [plan_gate_app(), running_build_app(), escalated_app(), ship_stage_app()].map(quiet) {
+            for app in [
+                plan_gate_app(),
+                running_build_app(),
+                escalated_app(),
+                ship_stage_app(),
+            ]
+            .map(quiet)
+            {
                 for width in [80, 100, 120, 200] {
                     let (text, cells) = line(&app, width);
                     assert!(cells <= width as usize, "{cells} cells in {width}: {text}");
-                    assert!(text.trim_end().ends_with("esc  back") && text.contains("?  all keys"), "{width}: {text}");
+                    assert!(
+                        text.trim_end().ends_with("esc  back") && text.contains("?  all keys"),
+                        "{width}: {text}"
+                    );
                 }
             }
         }
@@ -4632,10 +7410,20 @@ mod help_sheet_tests {
             let app = quiet(plan_gate_app());
             let (wide, _) = line(&app, 200);
             let (narrow, _) = line(&app, 60);
-            for want in ["a  approve", "r  send back", "e  edit", "h/l  section", "j/k  scroll", "^d/^u  page"] {
+            for want in [
+                "a  approve",
+                "r  send back",
+                "e  edit",
+                "h/l  section",
+                "j/k  scroll",
+                "^d/^u  page",
+            ] {
                 assert!(wide.contains(want), "{want}: {wide}");
             }
-            assert!(narrow.contains("a  approve") && !narrow.contains("^d/^u"), "{narrow}");
+            assert!(
+                narrow.contains("a  approve") && !narrow.contains("^d/^u"),
+                "{narrow}"
+            );
             assert!(narrow.len() < wide.len());
         }
 
@@ -4648,7 +7436,10 @@ mod help_sheet_tests {
             let app = quiet(plan_gate_app());
             let (footer, _) = line(&app, 200);
             for (key, label) in crate::keys::card_actions(&app) {
-                assert!(footer.contains(&format!(" {key} ")) && footer.contains(&label), "the bar's {key} {label} is in the footer: {footer}");
+                assert!(
+                    footer.contains(&format!(" {key} ")) && footer.contains(&label),
+                    "the bar's {key} {label} is in the footer: {footer}"
+                );
             }
         }
 
@@ -4657,7 +7448,10 @@ mod help_sheet_tests {
             let mut app = quiet(escalated_app());
             app.detail_section = crate::detail::Section::Runs;
             let (text, _) = line(&app, 200);
-            assert!(text.contains("j/k  pick") && text.contains("J/K  scroll"), "{text}");
+            assert!(
+                text.contains("j/k  pick") && text.contains("J/K  scroll"),
+                "{text}"
+            );
         }
     }
 }
@@ -4688,14 +7482,35 @@ mod board_tests {
         let mut app = app_at(0);
         let screen = render(&mut app, 200, 50);
         for name in COLUMNS {
-            assert!(screen.contains(&format!(" {name} ")), "{name} missing in\n{screen}");
+            assert!(
+                screen.contains(&format!(" {name} ")),
+                "{name} missing in\n{screen}"
+            );
         }
-        assert!(!header(&screen).contains('→') && !header(&screen).contains('←'), "{}", header(&screen));
+        assert!(
+            !header(&screen).contains('→') && !header(&screen).contains('←'),
+            "{}",
+            header(&screen)
+        );
         let lines: Vec<&str> = screen.lines().collect();
-        let first = lines.iter().position(|l| l.contains("Add CSV export to")).expect("the plan card's first title line");
-        assert!(lines[first + 1].contains("reports"), "the title wraps to a second line: {}", lines[first + 1]);
-        let long = lines.iter().position(|l| l.contains("Retry failed")).expect("the long title");
-        assert!(lines[long + 1].contains('…'), "a title past two lines ends in an ellipsis: {}", lines[long + 1]);
+        let first = lines
+            .iter()
+            .position(|l| l.contains("Add CSV export to"))
+            .expect("the plan card's first title line");
+        assert!(
+            lines[first + 1].contains("reports"),
+            "the title wraps to a second line: {}",
+            lines[first + 1]
+        );
+        let long = lines
+            .iter()
+            .position(|l| l.contains("Retry failed"))
+            .expect("the long title");
+        assert!(
+            lines[long + 1].contains('…'),
+            "a title past two lines ends in an ellipsis: {}",
+            lines[long + 1]
+        );
     }
 
     #[test]
@@ -4703,10 +7518,22 @@ mod board_tests {
         let app = app_at(0);
         let layout = board_layout(&app, 200);
         assert_eq!(layout.slots.len(), 8);
-        assert!(layout.slots.iter().all(|s| s.full && (MIN_COLUMN_WIDTH..=MAX_COLUMN_WIDTH).contains(&s.width)));
-        assert_eq!(layout.slots.iter().map(|s| s.width).sum::<u16>(), 200, "an uneven width is shared out, not left over");
+        assert!(
+            layout
+                .slots
+                .iter()
+                .all(|s| s.full && (MIN_COLUMN_WIDTH..=MAX_COLUMN_WIDTH).contains(&s.width))
+        );
+        assert_eq!(
+            layout.slots.iter().map(|s| s.width).sum::<u16>(),
+            200,
+            "an uneven width is shared out, not left over"
+        );
         let wide = board_layout(&app, 400);
-        assert!(wide.slots.iter().all(|s| s.width == MAX_COLUMN_WIDTH), "the cap holds on a very wide screen");
+        assert!(
+            wide.slots.iter().all(|s| s.width == MAX_COLUMN_WIDTH),
+            "the cap holds on a very wide screen"
+        );
     }
 
     #[test]
@@ -4715,11 +7542,27 @@ mod board_tests {
         let layout = board_layout(&app, 156);
         let done = COLUMNS.len() - 1;
         assert!(layout.hidden().is_empty(), "{:?}", names(&layout.hidden()));
-        assert_eq!(layout.slots.iter().filter(|s| !s.full).map(|s| s.column).collect::<Vec<_>>(), vec![done], "only Done narrows");
+        assert_eq!(
+            layout
+                .slots
+                .iter()
+                .filter(|s| !s.full)
+                .map(|s| s.column)
+                .collect::<Vec<_>>(),
+            vec![done],
+            "only Done narrows"
+        );
         let mut app = app_at(0);
         let screen = render(&mut app, 156, 40);
-        assert!(screen.contains(" Done 4 "), "Done keeps its header and count: {screen}");
-        assert!(header(&screen).contains("→ Done 4"), "the header names what is collapsed: {}", header(&screen));
+        assert!(
+            screen.contains(" Done 4 "),
+            "Done keeps its header and count: {screen}"
+        );
+        assert!(
+            header(&screen).contains("→ Done 4"),
+            "the header names what is collapsed: {}",
+            header(&screen)
+        );
     }
 
     #[test]
@@ -4730,20 +7573,42 @@ mod board_tests {
         let head = header(&screen);
         for (column, name) in COLUMNS.iter().enumerate() {
             let drawn = layout.slots.iter().any(|s| s.column == column);
-            assert!(drawn || head.contains(name), "{name} is neither drawn nor named: {head}");
+            assert!(
+                drawn || head.contains(name),
+                "{name} is neither drawn nor named: {head}"
+            );
         }
-        assert!(layout.slots.iter().any(|s| COLUMNS[s.column] == "Ship" && s.full), "Ship waits on you, so it stays full");
+        assert!(
+            layout
+                .slots
+                .iter()
+                .any(|s| COLUMNS[s.column] == "Ship" && s.full),
+            "Ship waits on you, so it stays full"
+        );
         assert!(screen.contains("Rate limit"), "{screen}");
-        assert!(head.contains("Evidence 1") && head.contains("Done 4"), "the columns that dropped are counted: {head}");
+        assert!(
+            head.contains("Evidence 1") && head.contains("Done 4"),
+            "the columns that dropped are counted: {head}"
+        );
     }
 
     #[test]
-    fn at_120_columns_with_the_cursor_far_right_the_far_left_columns_without_a_gate_are_what_drop() {
+    fn at_120_columns_with_the_cursor_far_right_the_far_left_columns_without_a_gate_are_what_drop()
+    {
         let app = app_at(7);
         let layout = board_layout(&app, 120);
-        assert!(layout.slots.iter().any(|s| s.column == 7 && s.full), "the focused column is full width");
-        assert_eq!(names(&layout.hidden()), vec!["Intake", "Triage"], "Plan and Build wait on you and stay");
-        let note = board_note(&app, 120).expect("something is hidden").to_string();
+        assert!(
+            layout.slots.iter().any(|s| s.column == 7 && s.full),
+            "the focused column is full width"
+        );
+        assert_eq!(
+            names(&layout.hidden()),
+            vec!["Intake", "Triage"],
+            "Plan and Build wait on you and stay"
+        );
+        let note = board_note(&app, 120)
+            .expect("something is hidden")
+            .to_string();
         assert_eq!(note, "← Intake 2 · Triage 1");
     }
 
@@ -4753,14 +7618,30 @@ mod board_tests {
         let screen = render(&mut app, 80, 24);
         let head = header(&screen);
         assert!(head.contains('↔'), "{head}");
-        assert!(screen.contains(" Build ") && screen.contains("Retry failed"), "the focused column shows its cards: {screen}");
-        assert!(head.contains("Intake 2") && head.contains("Done 4"), "{head}");
+        assert!(
+            screen.contains(" Build ") && screen.contains("Retry failed"),
+            "the focused column shows its cards: {screen}"
+        );
+        assert!(
+            head.contains("Intake 2") && head.contains("Done 4"),
+            "{head}"
+        );
         let layout = board_layout(&app, 80);
-        assert!(layout.slots.iter().filter(|s| matches!(COLUMNS[s.column], "Plan" | "Build" | "Ship")).all(|s| s.full), "the three that wait on you are full");
+        assert!(
+            layout
+                .slots
+                .iter()
+                .filter(|s| matches!(COLUMNS[s.column], "Plan" | "Build" | "Ship"))
+                .all(|s| s.full),
+            "the three that wait on you are full"
+        );
         assert!(layout.slots.iter().map(|s| s.width).sum::<u16>() <= 80);
         let mut app = app_at(0);
         let screen = render(&mut app, 80, 24);
-        assert!(header(&screen).contains("→") && screen.contains(" Intake "), "{screen}");
+        assert!(
+            header(&screen).contains("→") && screen.contains(" Intake "),
+            "{screen}"
+        );
     }
 
     #[test]
@@ -4769,7 +7650,11 @@ mod board_tests {
             for focus in 0..COLUMNS.len() {
                 let app = app_at(focus);
                 let layout = board_layout(&app, width);
-                let slot = layout.slots.iter().find(|s| s.column == focus).unwrap_or_else(|| panic!("focus {focus} is not drawn at {width}"));
+                let slot = layout
+                    .slots
+                    .iter()
+                    .find(|s| s.column == focus)
+                    .unwrap_or_else(|| panic!("focus {focus} is not drawn at {width}"));
                 assert!(slot.full, "focus {focus} at {width} is narrow");
             }
         }
@@ -4778,15 +7663,26 @@ mod board_tests {
     #[test]
     fn empty_columns_collapse_before_any_column_drops() {
         let mut app = app_at(0);
-        app.tasks.retain(|t| !matches!(t.column.as_str(), "Triage" | "Verify" | "Evidence"));
+        app.tasks
+            .retain(|t| !matches!(t.column.as_str(), "Triage" | "Verify" | "Evidence"));
         let layout = board_layout(&app, 140);
         assert!(layout.hidden().is_empty(), "{:?}", names(&layout.hidden()));
-        let narrow: Vec<&str> = layout.slots.iter().filter(|s| !s.full).map(|s| COLUMNS[s.column]).collect();
+        let narrow: Vec<&str> = layout
+            .slots
+            .iter()
+            .filter(|s| !s.full)
+            .map(|s| COLUMNS[s.column])
+            .collect();
         assert_eq!(narrow, vec!["Triage", "Verify", "Evidence", "Done"]);
         let mut app = app_at(0);
-        app.tasks.retain(|t| !matches!(t.column.as_str(), "Triage" | "Verify" | "Evidence"));
+        app.tasks
+            .retain(|t| !matches!(t.column.as_str(), "Triage" | "Verify" | "Evidence"));
         let screen = render(&mut app, 140, 40);
-        assert!(header(&screen).contains("Triage 0") && header(&screen).contains("Evidence 0"), "{}", header(&screen));
+        assert!(
+            header(&screen).contains("Triage 0") && header(&screen).contains("Evidence 0"),
+            "{}",
+            header(&screen)
+        );
     }
 
     #[test]
@@ -4796,7 +7692,12 @@ mod board_tests {
                 let mut app = app_at(focus);
                 let screen = render(&mut app, width, 40);
                 let named = header(&screen).contains("Ship 1 ⏸");
-                assert!(screen.contains(testkit::SHIP_STAGE_TITLE.split(' ').next().unwrap()) && screen.contains("Rate limit") || named, "width {width} focus {focus}:\n{screen}");
+                assert!(
+                    screen.contains(testkit::SHIP_STAGE_TITLE.split(' ').next().unwrap())
+                        && screen.contains("Rate limit")
+                        || named,
+                    "width {width} focus {focus}:\n{screen}"
+                );
             }
         }
     }
@@ -4804,25 +7705,62 @@ mod board_tests {
     #[test]
     fn a_title_that_needs_the_ellipsis_gets_one_and_a_short_one_does_not() {
         let app = full_board_app();
-        let long = app.tasks.iter().find(|t| t.title.starts_with("Retry failed")).unwrap();
-        let lines: Vec<String> = card_lines(long, None, false, false, Density::Cozy, 20).iter().map(|l| l.to_string()).collect();
+        let long = app
+            .tasks
+            .iter()
+            .find(|t| t.title.starts_with("Retry failed"))
+            .unwrap();
+        let lines: Vec<String> = card_lines(long, None, false, false, Density::Cozy, 20)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
         assert_eq!(lines.len(), 4, "two title lines, ids, status: {lines:?}");
-        assert!(lines[1].ends_with('…') && lines[1].chars().count() <= 20, "{lines:?}");
-        assert!(lines.iter().all(|l| cells(l) <= 20), "nothing runs past the column: {lines:?}");
-        let short = app.tasks.iter().find(|t| t.title.starts_with("Paginate")).unwrap();
-        let lines: Vec<String> = card_lines(short, None, false, false, Density::Cozy, 30).iter().map(|l| l.to_string()).collect();
-        assert_eq!(lines.len(), 3, "a title on one line takes no spare line: {lines:?}");
+        assert!(
+            lines[1].ends_with('…') && lines[1].chars().count() <= 20,
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().all(|l| cells(l) <= 20),
+            "nothing runs past the column: {lines:?}"
+        );
+        let short = app
+            .tasks
+            .iter()
+            .find(|t| t.title.starts_with("Paginate"))
+            .unwrap();
+        let lines: Vec<String> = card_lines(short, None, false, false, Density::Cozy, 30)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert_eq!(
+            lines.len(),
+            3,
+            "a title on one line takes no spare line: {lines:?}"
+        );
         assert!(!lines.iter().any(|l| l.contains('…')), "{lines:?}");
-        let compact: Vec<String> = card_lines(long, None, false, false, Density::Compact, 24).iter().map(|l| l.to_string()).collect();
+        let compact: Vec<String> = card_lines(long, None, false, false, Density::Compact, 24)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
         assert_eq!(compact.len(), 1);
-        assert!(compact[0].contains('…') && cells(&compact[0]) <= 24, "{compact:?}");
+        assert!(
+            compact[0].contains('…') && cells(&compact[0]) <= 24,
+            "{compact:?}"
+        );
     }
 
     #[test]
     fn the_status_line_is_cut_with_an_ellipsis_never_mid_word() {
         let app = full_board_app();
-        let task = app.tasks.iter().find(|t| t.state == "awaiting_ship").unwrap();
-        let lines: Vec<String> = card_lines(task, None, false, false, Density::Cozy, 12).iter().map(|l| l.to_string()).collect();
+        let task = app
+            .tasks
+            .iter()
+            .find(|t| t.state == "awaiting_ship")
+            .unwrap();
+        let lines: Vec<String> = card_lines(task, None, false, false, Density::Cozy, 12)
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
         let status = lines.last().unwrap();
         assert!(status.ends_with('…') && cells(status) <= 12, "{status:?}");
         let ids = &lines[lines.len() - 2];
@@ -4835,13 +7773,32 @@ mod board_tests {
         let mut terminal = Terminal::new(TestBackend::new(200, 50)).unwrap();
         terminal.draw(|f| draw(f, &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let row = (0..50).find(|&y| (0..200).any(|x| buffer[(x, y)].symbol() == "›")).expect("a gutter arrow");
-        let x = (0..200).find(|&x| buffer[(x, row)].symbol() == "›").unwrap();
-        assert_eq!(buffer[(x + 2, row)].symbol(), "▌", "the repo bar still follows the gutter");
-        let highlighted = |cell: &ratatui::buffer::Cell| cell.bg == selection_style().bg.unwrap_or(Color::Reset) && cell.bg != Color::Reset || cell.modifier.contains(Modifier::REVERSED);
-        let card_rows = (row..row + 3).filter(|&y| highlighted(&buffer[(x + 4, y)])).count();
+        let row = (0..50)
+            .find(|&y| (0..200).any(|x| buffer[(x, y)].symbol() == "›"))
+            .expect("a gutter arrow");
+        let x = (0..200)
+            .find(|&x| buffer[(x, row)].symbol() == "›")
+            .unwrap();
+        assert_eq!(
+            buffer[(x + 2, row)].symbol(),
+            "▌",
+            "the repo bar still follows the gutter"
+        );
+        let highlighted = |cell: &ratatui::buffer::Cell| {
+            cell.bg == selection_style().bg.unwrap_or(Color::Reset) && cell.bg != Color::Reset
+                || cell.modifier.contains(Modifier::REVERSED)
+        };
+        let card_rows = (row..row + 3)
+            .filter(|&y| highlighted(&buffer[(x + 4, y)]))
+            .count();
         assert_eq!(card_rows, 3, "the selection covers every line of the card");
-        assert_eq!((0..200).filter(|&x| buffer[(x, row)].symbol() == "›").count(), 1, "one selected card on the screen");
+        assert_eq!(
+            (0..200)
+                .filter(|&x| buffer[(x, row)].symbol() == "›")
+                .count(),
+            1,
+            "one selected card on the screen"
+        );
         app.focus = 3;
     }
 
@@ -4850,19 +7807,49 @@ mod board_tests {
         let mut app = app_at(0);
         render(&mut app, 200, 50);
         let rects = app.column_rects.borrow().clone();
-        let (build, rect) = rects.iter().find(|(c, _)| COLUMNS[*c] == "Build").copied().unwrap();
-        let first_height = card_lines(&app.tasks[app.indices(build)[0]], None, false, false, app.density, usize::from(rect.width - 6)).len();
+        let (build, rect) = rects
+            .iter()
+            .find(|(c, _)| COLUMNS[*c] == "Build")
+            .copied()
+            .unwrap();
+        let first_height = card_lines(
+            &app.tasks[app.indices(build)[0]],
+            None,
+            false,
+            false,
+            app.density,
+            usize::from(rect.width - 6),
+        )
+        .len();
         app.click(rect.x + 3, rect.y + 1 + first_height as u16);
         assert_eq!(app.focus, build);
-        assert_eq!(app.selection[build], 1, "the second card, below a first one of {first_height} lines");
+        assert_eq!(
+            app.selection[build], 1,
+            "the second card, below a first one of {first_height} lines"
+        );
     }
 
     /// Five Intake cards whose titles fit a 19-cell card unmarked and wrap once a mark or a dot is in front of them.
     fn intake_of_five() -> App {
         let mut app = app_at(0);
         app.tasks.retain(|t| t.column != "Intake");
-        for (n, title) in ["Rotate signing key", "Rename the backlog", "Retire legacy code", "Rebuild the search", "Reword the readme!"].iter().enumerate() {
-            let json = testkit::task_json(&format!("i{n}aaaaaaaaaa"), title, "draft", "Intake", serde_json::json!({"repoPath": null}));
+        for (n, title) in [
+            "Rotate signing key",
+            "Rename the backlog",
+            "Retire legacy code",
+            "Rebuild the search",
+            "Reword the readme!",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let json = testkit::task_json(
+                &format!("i{n}aaaaaaaaaa"),
+                title,
+                "draft",
+                "Intake",
+                serde_json::json!({"repoPath": null}),
+            );
             app.tasks.push(serde_json::from_value(json).unwrap());
         }
         app.folded.clear();
@@ -4871,18 +7858,31 @@ mod board_tests {
 
     /// Clicks the id row of every Intake card, as drawn, and returns which card each click selected.
     fn click_each_intake_card(app: &mut App) -> Vec<usize> {
-        let intake_rect = |app: &App| app.column_rects.borrow().iter().find(|(c, _)| COLUMNS[*c] == "Intake").copied().unwrap();
+        let intake_rect = |app: &App| {
+            app.column_rects
+                .borrow()
+                .iter()
+                .find(|(c, _)| COLUMNS[*c] == "Intake")
+                .copied()
+                .unwrap()
+        };
         // A terminal on which the Intake column is 25 wide: cards of 19 cells.
         let width = (60..200).find(|&w| {
             render(app, w, 60);
             intake_rect(app).1.width == 25
         });
-        let screen = render(app, width.expect("a width with a 25-wide Intake column"), 60);
+        let screen = render(
+            app,
+            width.expect("a width with a 25-wide Intake column"),
+            60,
+        );
         let (intake, rect) = intake_rect(app);
         let rows: Vec<&str> = screen.lines().collect();
         let mut picked = Vec::new();
         for n in 0..5 {
-            let y = (rect.y..rect.bottom()).find(|&y| rows[usize::from(y)].contains(&format!("#i{n}aaaaaa"))).expect("the card's id row is on the screen");
+            let y = (rect.y..rect.bottom())
+                .find(|&y| rows[usize::from(y)].contains(&format!("#i{n}aaaaaa")))
+                .expect("the card's id row is on the screen");
             app.click(rect.x + 3, y);
             picked.push(app.selection[intake]);
         }
@@ -4903,7 +7903,11 @@ mod board_tests {
         let mut app = intake_of_five();
         app.last_seen_secs = Some(1);
         for task in &mut app.tasks {
-            task.updated_at = if ["i0", "i1", "i2"].iter().any(|p| task.id.starts_with(p)) { "2026-10-22T10:00:00.000Z".into() } else { "1970-01-01T00:00:00.000Z".into() };
+            task.updated_at = if ["i0", "i1", "i2"].iter().any(|p| task.id.starts_with(p)) {
+                "2026-10-22T10:00:00.000Z".into()
+            } else {
+                "1970-01-01T00:00:00.000Z".into()
+            };
         }
         assert_eq!(click_each_intake_card(&mut app), vec![0, 1, 2, 3, 4]);
     }
@@ -4914,12 +7918,31 @@ mod board_tests {
         app.selection[0] = 4;
         let width = (60..200).find(|&w| {
             render(&mut app, w, 12);
-            app.column_rects.borrow().iter().any(|(c, r)| COLUMNS[*c] == "Intake" && r.width == 25)
+            app.column_rects
+                .borrow()
+                .iter()
+                .any(|(c, r)| COLUMNS[*c] == "Intake" && r.width == 25)
         });
         let screen = render(&mut app, width.unwrap(), 12);
-        let rect = app.column_rects.borrow().iter().find(|(c, _)| COLUMNS[*c] == "Intake").map(|(_, r)| *r).unwrap();
-        let y = (rect.y..rect.bottom()).find(|&y| screen.lines().nth(usize::from(y)).is_some_and(|l| l.contains("#i4aaaaaa"))).expect("the last card is in view");
-        assert!(!screen.contains("#i0aaaaaa"), "the first card scrolled out of view");
+        let rect = app
+            .column_rects
+            .borrow()
+            .iter()
+            .find(|(c, _)| COLUMNS[*c] == "Intake")
+            .map(|(_, r)| *r)
+            .unwrap();
+        let y = (rect.y..rect.bottom())
+            .find(|&y| {
+                screen
+                    .lines()
+                    .nth(usize::from(y))
+                    .is_some_and(|l| l.contains("#i4aaaaaa"))
+            })
+            .expect("the last card is in view");
+        assert!(
+            !screen.contains("#i0aaaaaa"),
+            "the first card scrolled out of view"
+        );
         app.selection[0] = 0;
         app.click(rect.x + 3, y);
         assert_eq!(app.selection[0], 4);
@@ -4931,21 +7954,38 @@ mod board_tests {
         let mut app = app_at(0);
         let key = |app: &mut App, code: KeyCode| {
             app.handle_key(KeyEvent::from(code));
-            app.focus_task().map(|t| t.title.clone()).unwrap_or_default()
+            app.focus_task()
+                .map(|t| t.title.clone())
+                .unwrap_or_default()
         };
         assert_eq!(key(&mut app, KeyCode::Tab), testkit::PLAN_GATE_TITLE);
         assert_eq!(key(&mut app, KeyCode::Tab), testkit::ESCALATED_TITLE);
         assert_eq!(key(&mut app, KeyCode::Tab), testkit::SHIP_STAGE_TITLE);
-        assert_eq!(key(&mut app, KeyCode::Tab), testkit::PLAN_GATE_TITLE, "wraps around");
-        assert_eq!(key(&mut app, KeyCode::BackTab), testkit::SHIP_STAGE_TITLE, "shift+tab goes back, wrapping");
+        assert_eq!(
+            key(&mut app, KeyCode::Tab),
+            testkit::PLAN_GATE_TITLE,
+            "wraps around"
+        );
+        assert_eq!(
+            key(&mut app, KeyCode::BackTab),
+            testkit::SHIP_STAGE_TITLE,
+            "shift+tab goes back, wrapping"
+        );
         assert_eq!(key(&mut app, KeyCode::BackTab), testkit::ESCALATED_TITLE);
         let stops = app.tasks.iter().filter(|t| t.look().needs_person()).count();
         app.online = true;
         let screen = render(&mut app, 200, 50);
-        assert!(header(&screen).contains(&format!("{stops} need you")), "{}", header(&screen));
+        assert!(
+            header(&screen).contains(&format!("{stops} need you")),
+            "{}",
+            header(&screen)
+        );
         app.tasks.retain(|t| !t.look().needs_person());
         app.handle_key(KeyEvent::from(KeyCode::Tab));
-        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing needs you"));
+        assert_eq!(
+            app.toast.as_ref().map(|t| t.text.as_str()),
+            Some("nothing needs you")
+        );
     }
 }
 
@@ -4956,9 +7996,24 @@ mod age_tests {
         let mut app = crate::testkit::full_board_app();
         let screen = crate::testkit::render(&mut app, 200, 24);
         for status in ["approve", "implement", "choose", "verifying"] {
-            let line = screen.lines().find(|l| l.contains(status)).unwrap_or_else(|| panic!("{status}\n{screen}"));
-            let cell: String = line.chars().skip(line.find(status).map(|b| line[..b].chars().count()).unwrap() - 2).take(22).collect();
-            assert!(cell.contains(" · ") && !cell.contains("·…"), "{status}: {cell:?}");
+            let line = screen
+                .lines()
+                .find(|l| l.contains(status))
+                .unwrap_or_else(|| panic!("{status}\n{screen}"));
+            let cell: String = line
+                .chars()
+                .skip(
+                    line.find(status)
+                        .map(|b| line[..b].chars().count())
+                        .unwrap()
+                        - 2,
+                )
+                .take(22)
+                .collect();
+            assert!(
+                cell.contains(" · ") && !cell.contains("·…"),
+                "{status}: {cell:?}"
+            );
         }
     }
 }
@@ -4975,10 +8030,16 @@ mod header_tests {
         for width in [80u16, 100, 120] {
             let screen = render(&mut app, width, 24);
             let header = screen.lines().next().unwrap();
-            assert!(header.contains(&format!("{stops} need you")), "{width}: {header}");
+            assert!(
+                header.contains(&format!("{stops} need you")),
+                "{width}: {header}"
+            );
         }
         let wide = render(&mut app, 200, 24);
-        assert!(wide.lines().next().unwrap().contains("tickets"), "with room the totals stay");
+        assert!(
+            wide.lines().next().unwrap().contains("tickets"),
+            "with room the totals stay"
+        );
     }
 
     #[test]
@@ -4986,7 +8047,10 @@ mod header_tests {
         let mut app = full_board_app();
         let stops = app.tasks.iter().filter(|t| t.look().needs_person()).count();
         let header = render(&mut app, 80, 24).lines().next().unwrap().to_string();
-        assert!(header.contains(&format!("{stops} need you")) && header.contains("machine"), "{header}");
+        assert!(
+            header.contains(&format!("{stops} need you")) && header.contains("machine"),
+            "{header}"
+        );
     }
 }
 
@@ -5001,8 +8065,14 @@ mod help_over_task_tests {
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
         let screen = render(&mut app, 180, 50);
         assert!(screen.contains(" Keys"), "{screen}");
-        assert!(screen.contains(PLAN_GATE_TITLE) && screen.contains("approve the plan?"), "the task is behind the sheet:\n{screen}");
+        assert!(
+            screen.contains(PLAN_GATE_TITLE) && screen.contains("approve the plan?"),
+            "the task is behind the sheet:\n{screen}"
+        );
         app.handle_key(KeyEvent::from(KeyCode::Esc));
-        assert!(matches!(&app.mode, crate::app::Mode::Detail(_)), "back in the task");
+        assert!(
+            matches!(&app.mode, crate::app::Mode::Detail(_)),
+            "back in the task"
+        );
     }
 }
