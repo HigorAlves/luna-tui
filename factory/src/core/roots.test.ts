@@ -177,6 +177,19 @@ describe("a symlink whose target does not exist yet", () => {
   });
 });
 
+describe("arguments that only look like absolute paths", () => {
+  it("lets git log -L and git diff -I through: a line range or a regex is not a path", () => {
+    expect(exec("git log -L28,63:docs/configuration.md --oneline")).toEqual({ allow: true });
+    expect(exec('git diff -I"^[|] (GET|POST) [|] .(/packs|/runs)" HEAD')).toEqual({ allow: true });
+  });
+
+  it("still reads a path glued to a short option or after a range's colon", () => {
+    expect(exec("git diff -I/etc/passwd")).toMatchObject(refused);
+    expect(exec("ls -la/etc")).toMatchObject(refused);
+    expect(exec("git log -L1,2:/etc/passwd")).toMatchObject(refused);
+  });
+});
+
 describe("the code graph root", () => {
   it("is readable in the Claude and the eve policies, and writable in neither", async () => {
     const { guardPolicy: claudePolicy } = await import("../runtimes/claude/run.ts");

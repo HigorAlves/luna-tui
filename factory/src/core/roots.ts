@@ -103,8 +103,13 @@ export function pathsIn(token: string, cwd: string): string[] {
   if (eq !== -1) candidates.push(token.slice(eq + 1));
   if (/^-[^-]/.test(token)) {
     candidates.push(token.slice(2));
+    // A value glued to a cluster of letters (`-o/tmp/x`, `-cf/etc/x`) starts at the first slash. Anything else before the
+    // slash (`-L28,63:docs/x.md`, `-I^a|(/b`) is a range or a regex whose own slash is not a path.
     const slash = token.indexOf("/");
-    if (slash > 1 && token[slash - 1] !== ".") candidates.push(token.slice(slash));
+    if (slash > 1 && /^-[A-Za-z]+$/.test(token.slice(0, slash))) candidates.push(token.slice(slash));
+    // `-L1,2:/etc/passwd`: the file after a range's colon.
+    const colon = token.indexOf(":/");
+    if (colon > 1) candidates.push(token.slice(colon + 1));
   }
   const paths: string[] = [];
   for (const raw of candidates) {
