@@ -91,6 +91,12 @@ export default class Luna extends View {
         cx.notify();
       }
       await this.reload(cx);
+      // A page restored from the last session loads its own data, as a visit would.
+      try {
+        this.currentPage()?.enter?.(this, cx);
+      } catch (e) {
+        this.say(e?.message ?? String(e), "error");
+      }
       this.follow(cx);
     });
     // Keys bound in keys.json (`"mod:luna"`) and `pane.go`'s focus arrive here.
