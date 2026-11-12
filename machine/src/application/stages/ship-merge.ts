@@ -90,10 +90,17 @@ export async function mergeRound(deps: FixDeps, context: StageContext, input: Me
     ].join("\n");
     const thread = { id: "merge", path: null, line: null, comments: [{ author: "machine", body: body.slice(0, 6000), at: new Date().toISOString() }] };
     const addressed = await deps.loop.runPack("addressing", subContext(ctxWork, `merge-${input.label}`), { threads: { pr, threads: [thread] } });
-    if (addressed.outcome !== "pass") return stop(escalated(`the conflicts with ${input.base.name} could not be resolved: ${postable(String(addressed.detail?.error ?? addressed.detail?.reason ?? addressed.outcome), 300)}`, "other", { conflicts: conflicted.slice(0, 10) }));
     const answer = PrAddressAnswer.safeParse(addressed.detail?.answer);
-    if (!answer.success) return stop(escalated("the addressing pack gave no usable answer for the conflicts", "other", { conflicts: conflicted.slice(0, 10) }));
-    if (answer.data.kind === "escalated") return stop(escalated(postable(answer.data.reason || answer.data.summary || "the addressing pack asked for a person", 400), answer.data.escalation ?? "other", { conflicts: conflicted.slice(0, 10) }));
+    // A pack whose commit or `git status` was refused answers `env_broken` and leaves the resolution edited in the folder. Only that
+    // escalation, and only with edits left, goes on to the host's commit and the same gates below; a pack that stopped because it could
+    // not decide the resolution never has its partial edits shipped, however the checks come out.
+    const stoppedFor = addressed.outcome === "escalated" ? addressed.detail?.escalation : answer.success && answer.data.kind === "escalated" ? answer.data.escalation : undefined;
+    const leftEdits = stoppedFor === "env_broken" && (await git("status", "--porcelain")).stdout.trim() !== "";
+    if (!leftEdits) {
+      if (addressed.outcome !== "pass") return stop(escalated(`the conflicts with ${input.base.name} could not be resolved: ${postable(String(addressed.detail?.error ?? addressed.detail?.reason ?? addressed.outcome), 300)}`, "other", { conflicts: conflicted.slice(0, 10) }));
+      if (!answer.success) return stop(escalated("the addressing pack gave no usable answer for the conflicts", "other", { conflicts: conflicted.slice(0, 10) }));
+      if (answer.data.kind === "escalated") return stop(escalated(postable(answer.data.reason || answer.data.summary || "the addressing pack asked for a person", 400), answer.data.escalation ?? "other", { conflicts: conflicted.slice(0, 10) }));
+    }
 
     // The pack's own commit can be refused (its tool rules match a plain `git commit`, not `git -C <dir> commit`), leaving the resolution edited and uncommitted.
     // The host commits it: the checks below read the commit like the pack's own, and only its tree ships.

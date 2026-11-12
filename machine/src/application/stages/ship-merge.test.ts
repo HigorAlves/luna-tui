@@ -46,12 +46,14 @@ async function world(theirs: string) {
   return { root, remote, repo, workspace, before, base };
 }
 
-function deps(w: Awaited<ReturnType<typeof world>>, resolve: ((path: string) => void) | null, checks: StageResult = { outcome: "pass" }, packCommits = true) {
+function deps(w: Awaited<ReturnType<typeof world>>, resolve: ((path: string) => void) | null, checks: StageResult = { outcome: "pass" }, packCommits = true, escalates?: string) {
   const runPack = vi.fn(async (_pack: string, context: StageContext, _extra: unknown) => {
     // The pack edits the files in the folder it is given and commits there (its commits come back like this).
     const path = context.task.worktreePath!;
     resolve?.(path);
     if (packCommits) wgit(path, "commit", "-q", "-am", "resolve the conflict");
+    // The pack stops on purpose and says why: its outcome is escalated, with the reason it gave (the shape the pack runner reports).
+    if (escalates) return { outcome: "escalated", detail: { summary: "edits left", reason: "The edits are in the worktree but uncommitted", escalation: escalates, options: [] } } as StageResult;
     return { outcome: "pass", detail: { answer: { kind: "done", summary: "resolved", replies: [] } } } as StageResult;
   });
   const github = fakeGitHub({
@@ -116,6 +118,48 @@ describe("mergeRound: a branch that no longer merges", () => {
       expect(String(out.result.detail?.reason), name).toContain(said);
       expect(git(w.remote, "rev-parse", "refs/heads/card"), name).toBe(w.before);
     }
+  });
+
+  describe("a pack that escalates with the resolution edited and uncommitted", () => {
+    const resolveDoc = (path: string) => writeFileSync(join(path, "doc.md"), "one\nTWO, the card's rewrite, and a new fact\nthree\n");
+
+    it("env_broken (its commit was refused): the host commits the edits and runs the same gates, so the merge ships", async () => {
+      const w = await world("conflict");
+      const { d, context } = deps(w, resolveDoc, { outcome: "pass" }, false, "env_broken");
+      const out = await mergeRound(d, context, input(w));
+      expect(out).toMatchObject({ ok: true, resolved: ["doc.md"] });
+      const head = wgit(w.workspace.path, "rev-parse", "HEAD");
+      expect(wgit(w.workspace.path, "rev-list", "--parents", "-n", "1", head).split(" ").slice(1)).toEqual([w.before, w.base]);
+      expect(git(w.remote, "rev-parse", "refs/heads/card")).toBe(head);
+      expect((d.loop.checks as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+    });
+
+    it("still escalates when a gate fails: a file outside the conflicts, markers left, or failing checks", async () => {
+      for (const [name, resolve, checks, said] of [
+        ["outside", (path: string) => { resolveDoc(path); writeFileSync(join(path, "other.md"), "sneaked\n"); }, { outcome: "pass" }, "changed files that had no conflict (other.md)"],
+        ["markers", (path: string) => writeFileSync(join(path, "doc.md"), readFileSync(join(path, "doc.md"), "utf8").replace("three", "3")), { outcome: "pass" }, "conflict markers are left in doc.md"],
+        ["checks", resolveDoc, { outcome: "fail", detail: { error: "lint failed" } }, "the checks failed after merging main: lint failed"],
+      ] as const) {
+        const w = await world("conflict");
+        const { d, context } = deps(w, resolve, checks as StageResult, false, "env_broken");
+        const out = await mergeRound(d, context, input(w));
+        expect(out.ok, name).toBe(false);
+        expect(String(out.result.detail?.reason), name).toContain(said);
+        expect(git(w.remote, "rev-parse", "refs/heads/card"), name).toBe(w.before);
+      }
+    }, 60_000);
+
+    it("takes no edits from a pack that escalates for another reason, or that left nothing edited", async () => {
+      const decided = await world("conflict");
+      const other = deps(decided, resolveDoc, { outcome: "pass" }, false, "other");
+      const out = await mergeRound(other.d, other.context, input(decided));
+      expect(out).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("uncommitted") } } });
+      expect(git(decided.remote, "rev-parse", "refs/heads/card")).toBe(decided.before);
+      const bare = await world("conflict");
+      const none = deps(bare, null, { outcome: "pass" }, false, "env_broken");
+      expect((await mergeRound(none.d, none.context, input(bare))).ok).toBe(false);
+      expect(git(bare.remote, "rev-parse", "refs/heads/card")).toBe(bare.before);
+    }, 60_000);
   });
 
   it("says nothing was committed when the pack left the markers committed and edited nothing", async () => {
