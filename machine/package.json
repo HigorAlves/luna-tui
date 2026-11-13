@@ -45,7 +45,7 @@
     "@hardness/contracts": "workspace:*",
     "@hono/node-server": "^2.1.5",
     "@lmnr-ai/lmnr": "^0.8.58",
-    "hono": "^4.13.13",
+    "hono": "^4.13.16",
     "octokit": "^5.0.5",
     "pg": "^8.23.1",
     "picomatch": "4.0.7",
