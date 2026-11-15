@@ -7,7 +7,7 @@ import { theme } from "./host/stub.js";
 import "../luna/features.js";
 import { COMMANDS, DIALOGS, PAGES } from "../luna/registry.js";
 import {
-  bulkKind, bulkTargets, bulkWords, digestEntries, digestGroupOf, encodeKey, engineRows, floorRows, inboxCounts, inboxItems, inboxSplitOf,
+  bulkKind, bulkTargets, bulkWords, digestEntries, digestGroupOf, encodeKey, engineRows, floorRows, inboxBadgeCount, inboxCounts, inboxItems, inboxSplitOf,
   isNew, latchedWords, pendingBases, plain, refusalText, scoreLine, sourceLines, span, splitLines, stageRows, ticketActions, ticketDetail, ticketLink, waitingDrafts,
 } from "../luna/views-model.js";
 
@@ -115,7 +115,7 @@ test("the floor's rows read every number, and a missing window or field is a das
   assert.match(by.Cost.d7, /\$31\.07/);
   // A machine from before a field: still a row, never a throw.
   const bare = floorRows({ tasks: { created: 1, closed: 0, open: 1, waitingOnYou: 0, running: 0, queued: 0 } }, {});
-  assert.equal(bare.length, rows.length);
+  assert.equal(bare.length, rows.length - 1, "one wait row per gate state a window reports");
   assert.equal(bare.find((r) => r.label === "Cost").d7, "–");
   assert.equal(span(131388), "2m 11s");
   assert.equal(span(null), "–");
@@ -233,7 +233,7 @@ test("the inbox draws every split, empty, offline and loading", () => {
     a.state("inbox").split = split;
     page("inbox").render(a, t);
   }
-  assert.deepEqual(page("inbox").badge(a), { n: inboxCounts(WORK).all, tone: "blocked" });
+  assert.deepEqual(page("inbox").badge(a), { n: inboxBadgeCount(WORK, Date.now()), tone: "blocked" }, "the board's waiting-on-you count");
   assert.match(texts(page("inbox").render(app(), t)).join(" | "), /Nothing needs you/);
   assert.match(texts(page("inbox").render(app({ loaded: false, link: "offline", error: "no machine" }), t)).join(" | "), /no machine/);
   page("inbox").render(app({ loaded: false }), t);

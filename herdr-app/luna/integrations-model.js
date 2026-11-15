@@ -235,9 +235,16 @@ export function relationChoices(item) {
       target: e.id,
     });
   }
-  out.push({ label: "a new candidate", relation: "new_candidate", target: null });
-  out.push({ label: "none: not about any work", relation: "none", target: null });
+  out.push({ label: "a new candidate", relation: "new_candidate" });
+  out.push({ label: "none: not about any work", relation: "none" });
   return out;
+}
+
+/** The body of POST /slack/items/:id/relation: `target` is sent only when there is one (the machine's schema takes an optional string, never null). */
+export function relationBody(choice) {
+  const body = { relation: choice.relation };
+  if (typeof choice.target === "string" && choice.target) body.target = choice.target;
+  return body;
 }
 
 /** What the machine decided about the conversation, as [name, text] pairs. */

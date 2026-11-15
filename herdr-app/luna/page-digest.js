@@ -11,6 +11,7 @@ import { chip, spinner } from "./ui.js";
 import { DIGEST_GROUPS, digestEntries, isNew, ticketLink } from "./views-model.js";
 import { ticketRow } from "./page-inbox.js";
 import { button, frame, note, section } from "./views-ui.js";
+import { clampCursor, keyName, leavePage, moveCursor } from "./page-kit.js";
 
 const KEY = "luna.lastSeen";
 const TOUCH_EVERY_MS = 60 * 1000;
@@ -56,6 +57,8 @@ function digestPage(app, t) {
   const links = [app.prs?.inbox?.prs, app.prs?.all?.prs].flat().filter(Boolean);
   const when = st.since == null ? "This is the first time: everything with news" : `Since ${ago(new Date(st.since).toISOString())?.replace(" ago", "") ?? "—"} ago`;
   const body = [];
+  st.shown = entries.map((e) => ({ id: e.task.id, link: ticketLink(e.task, links) }));
+  const cursor = clampCursor(st, entries.length);
   if (!app.loaded && !offline) body.push(h_flex().gap(8).p(12).text_color(t.dim).child(spinner(t, 13)).child("Reading the board…"));
   if (app.loaded && entries.length === 0) body.push(note(t, "Nothing changed since you last looked."));
   for (const [id, label] of DIGEST_GROUPS) {
@@ -64,14 +67,14 @@ function digestPage(app, t) {
     body.push(section(t, `${label} · ${group.length}`));
     for (const { task } of group) {
       const link = ticketLink(task, links);
-      body.push(
+      const row =
         ticketRow(app, t, task, {
           actions: false,
           extra: [
             ...(link ? [button(t, `dg-open-${task.id}`, "Open link", "plain", () => app.openUrl(link), { small: true, iconName: "external" })] : []),
           ],
-        }),
-      );
+        });
+      body.push(div().rounded(9).when(entries[cursor]?.task.id === task.id, (el) => el.border_1().border_color(t.accent)).child(row));
     }
   }
   return frame(app, t, {
@@ -97,8 +100,35 @@ function digestPage(app, t) {
   });
 }
 
+function digestKey(app, e, cx) {
+  const st = digestState(app);
+  const name = keyName(e);
+  const shown = st.shown ?? [];
+  const at = clampCursor(st, shown.length);
+  if (moveCursor(st, name, shown.length)) {
+    // moved
+  } else if (name === "enter") {
+    if (!shown[at]) return false;
+    app.go("board", cx);
+    app.select(shown[at].id, cx);
+    return true;
+  } else if (name === "o") {
+    if (!shown[at]) return false;
+    if (shown[at].link) app.openUrl(shown[at].link);
+    else app.say("o: (no PR or issue to open)");
+  } else if (leavePage(app, name, cx)) return true;
+  else return false;
+  cx.notify();
+  return true;
+}
+
 page({
   id: "digest",
+  key: digestKey,
+  keys: [
+    { name: "Ticket", rows: [["o", "open its PR or issue in the browser"]] },
+    { name: "Move", rows: [["j / k", "previous / next entry"], ["enter", "jump to the ticket"], ["esc / q", "back to the board"]] },
+  ],
   label: "Digest",
   icon: "clock",
   group: "inbox",

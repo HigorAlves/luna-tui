@@ -11,8 +11,11 @@ import { area } from "./dialogs.js";
 import { chip, mono, spinner, toneColor } from "./ui.js";
 import { encodeKey, overdueClocks, plain, scoreLine, splitLines, ticketActions, ticketDetail, waitingDrafts } from "./views-model.js";
 import { button, frame, note } from "./views-ui.js";
+import { clampCursor, keyName, leavePage, moveCursor } from "./page-kit.js";
 
 const POLL_MS = 15000;
+/** The machine's cap on "Post my text" (TicketEditInput.text). */
+export const EDIT_MAX = 1500;
 
 export function loadTickets(app, cx, { quiet = false } = {}) {
   const st = app.state("tickets");
@@ -49,7 +52,7 @@ const url = (key, action) => `/tickets/${encodeKey(key)}/${action}`;
 function tap(app, ticket, id, cx) {
   const draft = waitingDrafts(ticket)[0] ?? null;
   const run = (done, action, body) =>
-    app.run(cx, `tk-${ticket.key}`, done, async () => {
+    app.run(cx, `tk-${ticket.key}`, done, async (cx) => {
       const out = await app.machine.post(url(ticket.key, action), body);
       loadTickets(app, cx, { quiet: true });
       return out;
@@ -79,7 +82,7 @@ function tap(app, ticket, id, cx) {
   }
 }
 
-function row(app, t, ticket, st) {
+function row(app, t, ticket, st, on = false) {
   const open = st.selected === ticket.key;
   const score = scoreLine(ticket);
   const waits = waitingDrafts(ticket).length;
@@ -95,7 +98,7 @@ function row(app, t, ticket, st) {
     .rounded(9)
     .bg(t.background)
     .border_1()
-    .border_color(open ? t.accent : t.border)
+    .border_color(open || on ? t.accent : t.border)
     .cursor_pointer()
     .on_click((_e, cx) => {
       st.selected = open ? null : ticket.key;
@@ -149,7 +152,9 @@ function ticketsPage(app, t) {
   if (!all && !st.error) body.push(h_flex().gap(8).p(12).text_color(t.dim).child(spinner(t, 13)).child("Reading the tickets…"));
   if (st.error) body.push(note(t, `tickets: ${st.error}`, "error"));
   if (all && items.length === 0) body.push(note(t, all.length ? "Nothing matches the search." : "The ticket machine holds no ticket."));
-  items.forEach((x) => body.push(row(app, t, x, st)));
+  st.shown = items.map((x) => x.key);
+  const cursor = clampCursor(st, items.length, "cursor");
+  items.forEach((x, i) => body.push(row(app, t, x, st, i === cursor)));
   return frame(app, t, {
     id: "tickets-list",
     title: "Tickets",
@@ -161,8 +166,35 @@ function ticketsPage(app, t) {
   });
 }
 
+const TICKET_KEYS = { a: "approve", e: "edit", x: "ignore", c: "card", s: "backlog" };
+
+function ticketsKey(app, e, cx) {
+  const st = app.state("tickets");
+  const name = keyName(e);
+  const shown = st.shown ?? [];
+  const ticket = (st.items ?? []).find((x) => x.key === shown[clampCursor(st, shown.length)]);
+  if (moveCursor(st, name, shown.length)) {
+    // moved
+  } else if (name === "R") loadTickets(app, cx);
+  else if (TICKET_KEYS[name]) {
+    if (!ticket) app.say("no ticket selected");
+    else tap(app, ticket, TICKET_KEYS[name], cx);
+  } else if (name === "enter") {
+    if (!ticket) return false;
+    st.selected = st.selected === ticket.key ? null : ticket.key;
+  } else if (leavePage(app, name, cx)) return true;
+  else return false;
+  cx.notify();
+  return true;
+}
+
 page({
   id: "tickets",
+  key: ticketsKey,
+  keys: [
+    { name: "Ticket", rows: [["a", "approve: post the waiting draft"], ["e", "edit: post your own text instead"], ["x", "ignore: keep the draft, never post it"], ["c", "card: make a board ticket from it"], ["s", "schedule: to the backlog, by score"]] },
+    { name: "Move", rows: [["j / k", "previous / next ticket"], ["enter", "show or hide its detail"], ["R", "fetch the tickets again"], ["esc / q", "back to the board"]] },
+  ],
   label: "Tickets",
   icon: "intake",
   group: "insight",
@@ -191,6 +223,7 @@ DIALOGS.ticket_edit = {
   submit: (app, cx, d) => {
     const text = app.text.value().trim();
     if (!text) return app.fail(cx, "Write what to post.");
+    if (text.length > EDIT_MAX) return app.fail(cx, `Too long: ${text.length} characters, at most ${EDIT_MAX}.`);
     return app.send(cx, () => app.machine.post(url(d.ticketKey, "edit"), { draft: d.draft, hash: d.hash, text }));
   },
 };

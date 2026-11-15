@@ -7,7 +7,10 @@ import { h_flex, v_flex } from "gpui-base";
 import { actionsFor, ago, cardId, cardLine, plainTitle, projectOf } from "./model.js";
 import { COMMANDS, page } from "./registry.js";
 import { chip, dot, icon, mono, projectColor, spinner } from "./ui.js";
-import { INBOX_SPLITS, bulkTargets, bulkWords, inboxCounts, inboxItems } from "./views-model.js";
+import { INBOX_SPLITS, bulkTargets, bulkWords, inboxBadgeCount, inboxCounts, inboxItems } from "./views-model.js";
+import { atRelease, canCorrectRecord, canEditPlan, canEditTicket, canLinkJira, canRemoveWorktree, canSetRepo, canUnlinkJira, canWatch, detailOf, issueLink } from "./actions-rules.js";
+import { ensureJira } from "./actions.js";
+import { clampCursor, keyName, leavePage, moveCursor } from "./page-kit.js";
 import { button, frame, note } from "./views-ui.js";
 
 /** Actions the row offers: the gate's own, never the destructive ones (those are in the inspector). */
@@ -149,7 +152,7 @@ function inboxPage(app, t) {
     title: "Inbox",
     summary,
     error: offline,
-    actions: [button(t, "inbox-approve-all", bulk ? `Approve all (${bulk})` : "Approve all", "plain", (_e, cx) => approveAll(app, cx), { small: true, iconName: "check", busy: !bulk })],
+    actions: bulk ? [button(t, "inbox-approve-all", `Approve all (${bulk})`, "plain", (_e, cx) => approveAll(app, cx), { small: true, iconName: "check" })] : [],
     below: [h_flex().px(16).child(pills(t, counts, st))],
     body: [
       ...(!app.loaded && !offline ? [h_flex().gap(8).p(12).text_color(t.dim).child(spinner(t, 13)).child("Reading the board…")] : []),
@@ -159,38 +162,99 @@ function inboxPage(app, t) {
   });
 }
 
+const SPLIT_KEYS = ["1", "2", "3", "4", "5"];
+
+/**
+ * What a ticket key does to the ticket under the cursor, with the TUI's conditions (the same ones
+ * the inspector's More menu uses). `{id}` is an action for `app.act`; `{say}` says why the key is off.
+ */
+export function ticketKeyAction(app, name, task) {
+  const list = actionsFor(task);
+  const has = (id) => list.some((a) => a.id === id);
+  const off = (why) => ({ say: why });
+  switch (name) {
+    case "a": {
+      const a = list.find((x) => x.kind === "primary");
+      return a ? { id: a.id } : off("nothing to approve here");
+    }
+    case "S": return task.state === "awaiting_ship" && task.waitingOnYou ? { id: "approve" } : off("(only at the ship gate)");
+    case "r": return has("send_back") ? { id: "send_back" } : off("(only a setup, plan or tests go back)");
+    case "N":
+      if (atRelease(task)) return { id: "reject_release" };
+      return has("reject") ? { id: "reject" } : off("(only a plan, a split or a release is rejected)");
+    case "u": {
+      const r = task.gate?.requested ?? {};
+      const gaps = r.coverageReport?.gaps ?? r.gaps ?? [];
+      if (["awaiting_approval", "awaiting_test_check"].includes(task.state) && task.waitingOnYou && gaps.length) return { dialog: { kind: "excuse", taskId: task.id, gaps } };
+      return off("(no criterion is left without a test)");
+    }
+    case "T": return canCorrectRecord(task) ? { id: "edit_record" } : off("(only before the plan is approved)");
+    case "p": return has("post_questions") ? { id: "post_questions" } : off("(only triage's questions)");
+    case "X": return task.running || task.queued || task.state === "paused_rate_limit" ? { id: "abort" } : off("(nothing is running)");
+    case "w": return canRemoveWorktree(task) ? { id: "remove_worktree" } : off("(no idle worktree)");
+    case "Z": return has("archive") ? { id: "archive" } : off("(already ended)");
+    case "C": return task.state === "escalated" ? { id: "escalation_reason" } : off("(only an escalation)");
+    case "d": return has("delete") ? { id: "delete" } : off("(only an ended or draft ticket is deleted)");
+    case "f": return canWatch(task) ? { id: "watch" } : off("(nothing is running)");
+    case "J": {
+      ensureJira(app);
+      if (canUnlinkJira(task, app)) return { id: "jira_unlink" };
+      return canLinkJira(task, app) ? { id: "jira_link" } : off("(Jira is not set up, or the ticket ended)");
+    }
+    case "R": return canSetRepo(task) ? { id: "set_repo" } : off("(the ticket ended)");
+    case "e":
+      if (canEditPlan(task, detailOf(app, task))) return { id: "edit_plan" };
+      return canEditTicket(task) ? { id: "edit_ticket" } : off("(the ticket ended)");
+    case "o": return issueLink(task) ? { id: "open_issue" } : off("(no linked issue)");
+    default: return null;
+  }
+}
+
 function inboxKey(app, e, cx) {
   const st = app.state("inbox");
+  const name = keyName(e);
   const ids = st.shown ?? [];
-  const at = Math.min(st.cursor ?? 0, Math.max(0, ids.length - 1));
+  const at = clampCursor(st, ids.length);
   const idx = Math.max(0, INBOX_SPLITS.findIndex(([id]) => id === (st.split ?? "approve")));
   const to = (n) => {
     st.split = INBOX_SPLITS[(n + INBOX_SPLITS.length) % INBOX_SPLITS.length][0];
     st.cursor = 0;
   };
-  switch (e.key) {
-    case "j": case "down": st.cursor = Math.min(Math.max(0, ids.length - 1), at + 1); break;
-    case "k": case "up": st.cursor = Math.max(0, at - 1); break;
-    case "l": to(idx + 1); break;
-    case "h": to(idx - 1); break;
-    case "A": approveAll(app, cx); break;
-    case "enter":
-      if (!ids[at]) return false;
-      app.go("board", cx);
-      app.select(ids[at], cx);
-      return true;
-    case "a": {
-      const task = (app.tasks ?? []).find((x) => x.id === ids[at]);
-      const a = task && actionsFor(task).find((x) => x.kind === "primary");
-      if (!a) return false;
-      app.act(task, a.id, cx);
-      break;
+  if (moveCursor(st, name, ids.length)) {
+    // moved
+  } else if (name === "l") to(idx + 1);
+  else if (name === "h") to(idx - 1);
+  else if (SPLIT_KEYS.includes(name)) to(Number(name) - 1);
+  else if (name === "A") approveAll(app, cx);
+  else if (name === "enter") {
+    if (!ids[at]) return false;
+    app.go("board", cx);
+    app.select(ids[at], cx);
+    return true;
+  } else if (leavePage(app, name, cx)) return true;
+  else {
+    const task = (app.tasks ?? []).find((x) => x.id === ids[at]);
+    const known = "aSrNuTpXwZCdfJReo".includes(name) && name.length === 1;
+    if (!known) return false;
+    if (!task) {
+      app.say("nothing selected");
+    } else {
+      const r = ticketKeyAction(app, name, task);
+      if (r?.id) app.act(task, r.id, cx);
+      else if (r?.dialog) app.dialog(r.dialog, Math.min(560, 220 + (r.dialog.gaps?.length ?? 0) * 34));
+      else if (r?.say) app.say(`${name}: ${r.say}`);
     }
-    default: return false;
   }
   cx.notify();
   return true;
 }
+
+const KEYS = [
+  { name: "Gate", rows: [["a", "the gate's main action"], ["r", "send back with a reason"], ["N", "reject (plan, split, release)"], ["u", "approve, excusing untestable criteria"], ["S", "ship: approve and open the PR"], ["T", "correct the triage record"], ["p", "post the questions at the source"]] },
+  { name: "Ticket", rows: [["X", "abort the running stage (asks first)"], ["w", "kill its worktree"], ["Z", "archive, with a reason"], ["C", "correct the escalation reason"], ["d", "delete (asks first)"], ["f", "watch the agent"], ["J", "link or unlink a Jira issue"], ["R", "set the repo"], ["e", "edit the plan or the ticket"], ["o", "open the linked issue"]] },
+  { name: "Move", rows: [["j / k", "previous / next ticket"], ["h / l", "previous / next split"], ["1-5", "jump to that split"], ["enter", "open the ticket"], ["esc / q", "back to the board"]] },
+  { name: "Marks & bulk", rows: [["A", "approve every ticket in Approve (asks first)"]] },
+];
 
 page({
   id: "inbox",
@@ -199,8 +263,9 @@ page({
   group: "inbox",
   render: inboxPage,
   key: inboxKey,
+  keys: KEYS,
   badge: (app) => {
-    const n = inboxCounts(app.tasks ?? []).all;
+    const n = inboxBadgeCount(app.tasks ?? []);
     return n ? { n, tone: "blocked" } : null;
   },
 });

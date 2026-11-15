@@ -8,13 +8,14 @@ import { h_flex, v_flex, Input, InputState } from "gpui-base";
 import { COMMANDS, page, palette } from "./registry.js";
 import { flat, hit, isJiraKey, jiraSummary } from "./integrations-model.js";
 import { button, chip, icon } from "./ui.js";
-import { card, confirmBar, frame, header, notice, scroller } from "./page-kit.js";
+import { card, confirmBar, frame, header, keyName, leavePage, notice, scroller } from "./page-kit.js";
 
 const ID = "jira";
 const enc = encodeURIComponent;
 
 const st = (app) => {
-  const s = app.state(ID);
+  // Not "jira": actions.js keeps whether Jira is configured under that key, with its own loading flags.
+  const s = app.state("jira-page");
   s.hits ??= [];
   s.q ??= "";
   s.seq ??= 0;
@@ -77,6 +78,7 @@ function ensure(app, cx) {
   const s = st(app);
   if (!s.input) {
     s.input = InputState.new({ placeholder: "A Jira key (PLAT-123) or a few words" });
+    app.trackInput?.(s.input);
     s.input.on("change", (_e, cx) => {
       s.q = s.input.value();
       search(app, cx, s.q);
@@ -210,8 +212,24 @@ export function jiraPage(app, t) {
     );
 }
 
+function jiraKey(app, e, cx) {
+  const s = st(app);
+  const name = keyName(e);
+  if (name === "/") {
+    if (!s.input) ensure(app, cx);
+    s.input?.focus?.();
+  } else if (name === "R") loadStatus(app, cx);
+  else if (name === "escape" && s.ask) s.ask = null;
+  else if (leavePage(app, name, cx)) return true;
+  else return false;
+  cx.notify();
+  return true;
+}
+
 page({
   id: ID,
+  key: jiraKey,
+  keys: [{ name: "Jira", rows: [["/", "search Jira"], ["R", "check Jira again"], ["esc / q", "back to the board"]] }],
   label: "Jira",
   icon: "intake",
   group: "inbox",

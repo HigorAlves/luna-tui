@@ -9,7 +9,7 @@ import { h_flex, v_flex } from "gpui-base";
 import { COMMANDS, page, palette } from "./registry.js";
 import { ECONOMY_OFF, canDrop, costLines, economyRepos, economyRows, factLines, flat, proposedUnits, repoName } from "./integrations-model.js";
 import { button, chip, groupLabel } from "./ui.js";
-import { card, confirmBar, frame, header, notice, pill, scroller } from "./page-kit.js";
+import { card, confirmBar, frame, header, keyName, leavePage, notice, pill, scroller } from "./page-kit.js";
 
 const ID = "economy";
 const enc = encodeURIComponent;
@@ -60,6 +60,14 @@ function load(app, cx) {
 
 function enter(app, cx) {
   const s = st(app);
+  // The repository of the card selected on the board, when there is one.
+  const mine = (app.tasks ?? []).find((t) => t.id === app.selected)?.repoPath;
+  if (mine && mine !== s.repo) {
+    s.repo = mine;
+    s.sel = null;
+    s.ask = null;
+    s.data = null;
+  }
   cx.spawn(async (cx) => {
     try {
       s.known = await app.machine.get("/repos");
@@ -114,26 +122,42 @@ function rowCard(app, t, r, on) {
     );
 }
 
-function side(app, t, eco, row) {
+/** What each key or button does for `row`: `{drop, approve, restore}`, each `(cx) => void`, present only where the TUI's key works. */
+export function economyActions(app, eco, row) {
   const s = st(app);
-  const lines = (list) => list.map((l) => div().text_size(11.5).text_color(t.muted).child(l));
   const ask = (cx, spec) => {
     s.ask = spec;
     cx.notify();
   };
-  const actions = [];
-  if (row) {
-    if (canDrop(row)) {
-      actions.push(button(t, "eco-drop", "Drop this fact", "danger", (_e, cx) => ask(cx, { text: "Drop this fact? It is never told again and its key is never learned again.", label: "Drop", danger: true, run: (cx) => post(app, cx, `facts/${enc(row.fact.id)}/drop`, {}, "dropped", "Dropped", "Nothing to drop") }), { small: true }));
-    }
-    if (row.kind === "proposed") {
-      const units = proposedUnits(eco, row.pack);
-      actions.push(button(t, "eco-approve", `Approve ${flat(row.pack)}'s mask`, "primary", (_e, cx) => ask(cx, { text: `${flat(row.pack)} will run without: ${units.map(flat).join(", ")}. Its next run starts without them.`, label: "Approve", run: (cx) => post(app, cx, "mask/approve", { pack: row.pack }, "approved", "Approved", "Nothing to approve") }), { small: true }));
-    }
-    if (row.kind === "proposed" || row.kind === "masked") {
-      actions.push(button(t, "eco-restore", "Restore the tool", "plain", (_e, cx) => post(app, cx, "mask/restore", { pack: row.pack, unit: row.unit }, "restored", "Restored", "Nothing to restore"), { small: true, busy: app.busy.has("economy-mask") }));
-    }
+  const out = {};
+  if (!row) return out;
+  if (canDrop(row)) {
+    out.drop = (cx) => ask(cx, { text: "Drop this fact? It is never told again and its key is never learned again.", label: "Drop", danger: true, run: (cx) => post(app, cx, `facts/${enc(row.fact.id)}/drop`, {}, "dropped", "Dropped", "Nothing to drop") });
   }
+  if (row.kind === "proposed") {
+    const units = proposedUnits(eco, row.pack);
+    out.approve = (cx) => ask(cx, { text: `${flat(row.pack)} will run without: ${units.map(flat).join(", ")}. Its next run starts without them.`, label: "Approve", run: (cx) => post(app, cx, "mask/approve", { pack: row.pack }, "approved", "Approved", "Nothing to approve") });
+  }
+  if (row.kind === "proposed" || row.kind === "masked") {
+    out.restore = (cx) => post(app, cx, "mask/restore", { pack: row.pack, unit: row.unit }, "restored", "Restored", "Nothing to restore");
+  }
+  return out;
+}
+
+function importAsk(app, cx) {
+  const s = st(app);
+  s.ask = { text: "Fold the runs already on disk into this repository's economy, once? A run is never folded twice.", label: "Import", run: (cx) => post(app, cx, "import", {}, "runs", "", "") };
+  cx.notify();
+}
+
+function side(app, t, eco, row) {
+  const s = st(app);
+  const lines = (list) => list.map((l) => div().text_size(11.5).text_color(t.muted).child(l));
+  const acts = economyActions(app, eco, row);
+  const actions = [];
+  if (acts.drop) actions.push(button(t, "eco-drop", "Drop this fact", "danger", (_e, cx) => acts.drop(cx), { small: true }));
+  if (acts.approve) actions.push(button(t, "eco-approve", `Approve ${flat(row.pack)}'s mask`, "primary", (_e, cx) => acts.approve(cx), { small: true }));
+  if (acts.restore) actions.push(button(t, "eco-restore", "Restore the tool", "plain", (_e, cx) => acts.restore(cx), { small: true, busy: app.busy.has("economy-mask") }));
   const g = row?.guard;
   const detail = !row
     ? []
@@ -196,10 +220,7 @@ export function economyPage(app, t) {
         tone: s.error ? "error" : null,
         busy: s.loading,
         right: [
-          button(t, "eco-import", "Import past runs", "plain", (_e, cx) => {
-            s.ask = { text: "Fold the runs already on disk into this repository's economy, once? A run is never folded twice.", label: "Import", run: (cx) => post(app, cx, "import", {}, "runs", "", "") };
-            cx.notify();
-          }, { small: true, busy: app.busy.has("economy-import") || !s.repo || Boolean(s.off) }),
+          button(t, "eco-import", "Import past runs", "plain", (_e, cx) => importAsk(app, cx), { small: true, busy: app.busy.has("economy-import") || !s.repo || Boolean(s.off) }),
           button(t, "eco-refresh", "Refresh", "plain", (_e, cx) => load(app, cx), { small: true, iconName: "refresh", busy: s.loading }),
         ],
       }),
@@ -208,12 +229,45 @@ export function economyPage(app, t) {
     .child(h_flex().flex_1().min_h(0).child(body).when(Boolean(eco) && (app.width ?? 1200) >= 960, (el) => el.child(side(app, t, eco, row))));
 }
 
+function economyKey(app, e, cx) {
+  const s = st(app);
+  const name = keyName(e);
+  const rows = economyRows(s.data);
+  const at = rows.findIndex((r) => r.id === s.sel);
+  const row = at >= 0 ? rows[at] : null;
+  const acts = economyActions(app, s.data, row);
+  if (name === "j" || name === "down" || name === "k" || name === "up") {
+    if (rows.length) {
+      const to = name === "j" || name === "down" ? Math.min(rows.length - 1, at + 1) : Math.max(0, at - 1);
+      s.sel = rows[to].id;
+      s.ask = null;
+    }
+  } else if (name === "d" || name === "a" || name === "r") {
+    const act = { d: acts.drop, a: acts.approve, r: acts.restore }[name];
+    if (act) act(cx);
+    else app.say(`${name}: ${{ d: "(only a candidate or active fact is dropped)", a: "(only a proposed mask)", r: "(only a masked or proposed tool)" }[name]}`);
+  } else if (name === "R") load(app, cx);
+  else if (name === "I") {
+    if (!s.repo || s.off) app.say("I: (no repository, or the economy is off)");
+    else importAsk(app, cx);
+  } else if (name === "escape" && s.ask) s.ask = null;
+  else if (leavePage(app, name, cx)) return true;
+  else return false;
+  cx.notify();
+  return true;
+}
+
 page({
   id: ID,
+  key: economyKey,
+  keys: [
+    { name: "Row", rows: [["d", "drop: the fact under the cursor"], ["a", "approve: the pack's proposed tool mask"], ["r", "restore: a masked or proposed tool"]] },
+    { name: "Move", rows: [["j / k", "previous / next row"], ["R", "fetch the economy again"], ["I", "import past runs"], ["esc / q", "back to the board"]] },
+  ],
   label: "Economy",
   icon: "evidence",
   group: "insight",
-render: economyPage,
+  render: economyPage,
   enter,
   onMessage: (app, _m, cx) => {
     const s = st(app);

@@ -9,12 +9,20 @@ import { h_flex, v_flex } from "gpui-base";
 import { ago } from "./model.js";
 import { COMMANDS, page } from "./registry.js";
 import { chip, mono, spinner, toneColor } from "./ui.js";
-import { engineRows, floorRows, latchedWords, num, pausedTasks, pct, pendingBases, plain, span, stageRows, usd } from "./views-model.js";
+import { engineRows, floorRepos, floorRows, graphLine, imageLine, latchedWords, num, pausedTasks, pct, pendingBases, plain, slackMetricRows, span, stageRows, usd } from "./views-model.js";
+import { keyName, leavePage } from "./page-kit.js";
 import { button, frame, note, section, tile } from "./views-ui.js";
 
 const POOL_POLL_MS = 15000;
 
 const enc = encodeURIComponent;
+
+/** The focused repository's path, or null for every repository (`tab` moves it). */
+export function focusedRepo(st) {
+  const list = floorRepos(st.m7, st.m30, st.repos);
+  const at = st.focus ?? 0;
+  return at > 0 ? list[at - 1]?.repo ?? null : null;
+}
 
 /** Reads everything the Floor shows; a failed read keeps what was there and says why. */
 export function loadFloor(app, cx, { quiet = false } = {}) {
@@ -24,6 +32,8 @@ export function loadFloor(app, cx, { quiet = false } = {}) {
   if (!quiet) st.errors = {};
   cx.notify();
   const m = app.machine;
+  const repo = focusedRepo(st);
+  const scope = repo ? `&repo=${enc(repo)}` : "";
   const read = (key, path, set) =>
     m
       .get(path)
@@ -35,6 +45,12 @@ export function loadFloor(app, cx, { quiet = false } = {}) {
         st.errors ??= {};
         st.errors[key] = e?.message ?? String(e);
       });
+  // A machine without the Slack inbox answers 404: the block is left out, not an error.
+  const slack = (since, set) =>
+    m
+      .get(`/slack/metrics?since=${since}`)
+      .then(set)
+      .catch(() => set(null));
   const calls = [
     m.health().then((v) => {
       st.health = v;
@@ -46,11 +62,14 @@ export function loadFloor(app, cx, { quiet = false } = {}) {
     ...(quiet
       ? []
       : [
-          read("7d", "/metrics?since=7d&groupBy=repo", (v) => (st.m7 = v)),
-          read("30d", "/metrics?since=30d&groupBy=repo", (v) => (st.m30 = v)),
-          read("engines", "/metrics?since=7d&groupBy=engine", (v) => (st.engineMetrics = v)),
+          read("7d", `/metrics?since=7d&groupBy=repo`, (v) => (st.m7 = v)),
+          read("30d", `/metrics?since=30d&groupBy=repo`, (v) => (st.m30 = v)),
+          ...(repo ? [read("focus7", `/metrics?since=7d${scope}`, (v) => (st.f7 = v)), read("focus30", `/metrics?since=30d${scope}`, (v) => (st.f30 = v))] : [Promise.resolve((st.f7 = st.f30 = null))]),
+          read("engines", `/metrics?since=7d&groupBy=engine${scope}`, (v) => (st.engineMetrics = v)),
           read("caps", "/engines", (v) => (st.engines = v)),
           read("repos", "/repos", (v) => (st.repos = v)),
+          slack("7d", (v) => (st.slack7 = v)),
+          slack("30d", (v) => (st.slack30 = v)),
         ]),
   ];
   // /health answers 503 with the pool when the machine has problems: m.health() still gives the pool.
@@ -190,6 +209,10 @@ function floorPage(app, t) {
   const st = app.state("floor");
   const errors = Object.values(st.errors ?? {});
   const hasNumbers = Boolean(st.m7 || st.m30);
+  const focus = focusedRepo(st);
+  const focusName = focus ? floorRepos(st.m7, st.m30, st.repos).find((r) => r.repo === focus)?.name : null;
+  const n7 = focus ? st.f7 ?? null : st.m7;
+  const n30 = focus ? st.f30 ?? null : st.m30;
   const body = [];
   body.push(section(t, "Stage pool"), poolTile(app, t, st));
   const bases = pendingBases(st.repos);
@@ -213,8 +236,8 @@ function floorPage(app, t) {
   }
   if (!hasNumbers) body.push(note(t, st.loading ? "Reading the numbers…" : errors[0] ?? "No numbers yet: Refresh reads them.", errors.length && !st.loading ? "error" : null));
   if (hasNumbers) {
-    body.push(section(t, "Numbers"));
-    body.push(table(t, "floor-numbers", ["", "7 days", "30 days"], floorRows(st.m7, st.m30).map((r) => [r.label, r.d7, r.d30])));
+    body.push(section(t, focusName ? `Numbers: ${focusName}` : "Numbers"));
+    body.push(table(t, "floor-numbers", ["", "7 days", "30 days"], floorRows(n7, n30).map((r) => [r.label, r.d7, r.d30])));
     const repos = new Map();
     for (const r of st.m7?.byRepo ?? []) repos.set(r.repo, { repo: r.repo, d7: r });
     for (const r of st.m30?.byRepo ?? []) repos.set(r.repo, { ...(repos.get(r.repo) ?? { repo: r.repo }), d30: r });
@@ -222,14 +245,26 @@ function floorPage(app, t) {
     if (!repos.size) body.push(note(t, "No repository ran in these windows."));
     else {
       const rows = [...repos.values()].map((r) => [
-        plain(r.repo).split("/").slice(-2).join("/"),
+        `${r.repo === focus ? "▌ " : ""}${plain(r.repo).split("/").slice(-2).join("/")}`,
         r.d7 ? `${r.d7.tasks?.closed ?? 0}/${r.d7.tasks?.created ?? 0}` : "–",
+        r.d7 ? String(r.d7.tasks?.open ?? "–") : "–",
+        r.d7 ? String(r.d7.tasks?.waitingOnYou ?? "–") : "–",
         r.d7 ? pct(r.d7.escalationRate) : "–",
         r.d7 ? pct(r.d7.firstPassVerifying) : "–",
         r.d7 ? usd(r.d7.costUsd) : "–",
         r.d30 ? usd(r.d30.costUsd) : "–",
       ]);
-      body.push(wide(t, "floor-repos", [200, 110, 90, 100, 90, 90], ["Repository", "7d closed/new", "Escalated", "First pass", "7d cost", "30d cost"], rows));
+      body.push(wide(t, "floor-repos", [200, 110, 60, 80, 90, 100, 90, 90], ["Repository", "7d closed/new", "Open", "Needs you", "Escalated", "First pass", "7d cost", "30d cost"], rows));
+    }
+    for (const h of floorRepos(st.m7, st.m30, st.repos)) {
+      const info = (st.repos ?? []).find((r) => r.repo === h.repo);
+      if (!info || (focus && focus !== h.repo)) continue;
+      const lines = [imageLine(info), graphLine(info)];
+      body.push(
+        tile(t, `repo-health-${h.repo}`)
+          .child(div().text_size(12).font_semibold().text_color(t.foreground).child(h.name))
+          .children(lines.map((l) => div().text_size(11).text_color(t.muted).child(l))),
+      );
     }
     body.push(section(t, "Per engine (7 days) and this month"));
     const engines = engineRows(st.engineMetrics, st.engines);
@@ -252,10 +287,17 @@ function floorPage(app, t) {
         wide(t, "floor-stages", [180, 70, 100, 100, 90], ["Stage", "Runs", "Median", "p90", "Cost"], stages.map((s) => [s.stage.replaceAll("_", " "), String(s.runs), span(s.median), span(s.p90), usd(s.cost)])),
       );
   }
+  const slackRows = slackMetricRows(st.slack7, st.slack30);
+  if (slackRows.length) {
+    body.push(
+      section(t, "Slack (7 / 30 days)"),
+      wide(t, "floor-slack", [110, 110, 110, 140, 130], ["Priority", "Items", "Replied", "Within SLA", "Median / p90"], slackRows),
+    );
+  }
   const loadedAt = st.at ? `read ${ago(new Date(st.at).toISOString())}` : "not read yet";
   return frame(app, t, {
     id: "floor-body",
-    title: "Floor",
+    title: focusName ? `Floor · ${focusName}` : "Floor",
     summary: errors.length ? errors[0] : `7 and 30 days · ${loadedAt}`,
     error: errors.length > 0,
     busy: Boolean(st.loading),
@@ -264,8 +306,35 @@ function floorPage(app, t) {
   });
 }
 
+function floorKey(app, e, cx) {
+  const st = app.state("floor");
+  const name = keyName(e);
+  if (name === "tab" || name === "shift-tab") {
+    const n = floorRepos(st.m7, st.m30, st.repos).length + 1;
+    st.focus = ((st.focus ?? 0) + (name === "tab" ? 1 : n - 1)) % n;
+    loadFloor(app, cx);
+  } else if (name === "R") loadFloor(app, cx);
+  else if (name === "A") {
+    const bases = pendingBases(st.repos);
+    const focus = focusedRepo(st);
+    const b = bases.find((x) => x.repo === focus) ?? bases[0];
+    if (b) approveBase(app, b);
+    else app.say("A: (no base image waits for you)");
+  } else if (name === "F" || leavePage(app, name, cx)) {
+    if (name === "F") app.go("board", cx);
+    return true;
+  } else return false;
+  cx.notify();
+  return true;
+}
+
 page({
   id: "floor",
+  key: floorKey,
+  keys: [
+    { name: "Move", rows: [["tab / shift+tab", "focus the next / previous repo"], ["esc / q", "back to the board"]] },
+    { name: "App", rows: [["R", "refresh the numbers"], ["A", "approve a waiting base image (asks first)"]] },
+  ],
   label: "Floor",
   icon: "build",
   group: "insight",

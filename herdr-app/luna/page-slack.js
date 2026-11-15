@@ -9,12 +9,12 @@ import { DIALOGS, COMMANDS, page, palette } from "./registry.js";
 import { field, area, option as optionRow } from "./dialogs.js";
 import {
   DISMISS_REASONS, KINDS, NUDGE_TEXT, SLACK_SPLITS, SNOOZE_OPTIONS, blocker, channelLabel, conversationLines, doneBody, draftRef, draftText, dueLabel, dueSoon, flat,
-  guessRepo, itemPath, localOffset, nextFloor, overdueCount, plain, priorityStep, relationChoices, replyBody, slackBadge, slackCounts, slackItems, slackSetup, slaTargets,
+  guessRepo, itemPath, relationBody, localOffset, nextFloor, overdueCount, plain, priorityStep, relationChoices, replyBody, slackBadge, slackCounts, slackItems, slackSetup, slaTargets,
   snoozeUntil, summaryOf, taskRepos, urgent, age, watchInput, watchMatches, watchScope,
 } from "./integrations-model.js";
 import { button, chip, dot, icon, mono, projectColor, toneColor } from "./ui.js";
 import { ago } from "./model.js";
-import { card, frame, header, notice, pill, scroller, tabBar, tabItem } from "./page-kit.js";
+import { card, frame, header, keyName, notice, pill, scroller, tabBar, tabItem } from "./page-kit.js";
 
 const ID = "slack";
 
@@ -213,7 +213,7 @@ function picker(app, t, item) {
       break;
     default:
       title = "The work it is about";
-      rows = relationChoices(item).map((c, i) => o(`rel-${i}`, c.label, (cx) => choose(cx, "Link saved", () => app.machine.post(itemPath(item.id, "/relation"), { relation: c.relation, target: c.target }))));
+      rows = relationChoices(item).map((c, i) => o(`rel-${i}`, c.label, (cx) => choose(cx, "Link saved", () => app.machine.post(itemPath(item.id, "/relation"), relationBody(c)))));
   }
   return v_flex()
     .gap(2)
@@ -283,11 +283,11 @@ function watchesView(app, t, snap) {
     .child(div().pb(4).text_size(12).text_color(t.dim).child("A watch is anything beyond your own handle that the inbox treats as addressed to you. The broadcasts ship on: you can switch them off, not delete them. Watches live in the machine, so every board shares them."))
     .when(watches.length === 0, (el) => el.child(div().p(12).text_size(12.5).text_color(t.dim).child("No watch yet.")))
     .children(
-      watches.map((w) => {
+      watches.map((w, wi) => {
         const key = `watch-${w.id}`;
         const busy = app.busy.has(key);
         const call = (cx, done, fn) => act(app, cx, key, done, fn);
-        return card(t, `w-${w.id}`)
+        return card(t, `w-${w.id}`, wi === Math.min(st(app).wsel ?? 0, watches.length - 1))
           .child(icon(w.kind === "channel" ? "comment" : "alert", 14, w.enabled ? t.accent : t.dim))
           .child(
             v_flex()
@@ -321,6 +321,7 @@ export function slackPage(app, t) {
   const counts = slackCounts(items);
   const overdue = overdueCount(items);
   const shown = slackItems(items, s.split).filter((i) => !app.query || `${summaryOf(i)} ${i.text} ${i.author?.name} ${i.channel?.name}`.toLowerCase().includes(app.query.toLowerCase()));
+  s.shown = shown.map((i) => i.id);
   const selected = items.find((i) => i.id === s.sel && (s.view === "inbox"));
   const setup = slackSetup(snap, s.error);
   const summary = s.error && !snap
@@ -374,8 +375,94 @@ export function slackPage(app, t) {
     );
 }
 
+// ---- keys ----
+
+const ITEM_KEYS = { r: ["reply", null], t: ["task", "task"], d: ["done", "done"], s: ["snooze", null], o: ["open", null], N: ["nudge", "nudge"], "!": ["up", "up"], "-": ["down", "down"], c: ["kind", "kind"], L: ["relation", "relation"] };
+
+/** The Slack page's key hook: the inbox's keys, the picker's escape, and the Watches' keys. */
+export function slackKey(app, e, cx) {
+  const s = st(app);
+  const name = keyName(e);
+  const snap = s.snap;
+  if (s.pick) {
+    if (name === "escape") s.pick = null;
+    cx.notify();
+    return true;
+  }
+  if (name === "R") {
+    pollNow(app, cx);
+    return true;
+  }
+  if (s.view === "watches") {
+    const watches = snap?.watches ?? [];
+    const at = Math.min(s.wsel ?? 0, Math.max(0, watches.length - 1));
+    const w = watches[at];
+    const call = (done, fn) => act(app, cx, `watch-${w.id}`, done, fn);
+    const path = w && `/slack/watches/${encodeURIComponent(w.id)}`;
+    if (name === "j" || name === "down") s.wsel = Math.min(Math.max(0, watches.length - 1), at + 1);
+    else if (name === "k" || name === "up") s.wsel = Math.max(0, at - 1);
+    else if (name === "n") app.dialog({ kind: "slack_watch" }, 420, 480);
+    else if (name === "W" || name === "escape" || name === "q") s.view = "inbox";
+    else if (name === "d" || name === "space" || name === " " || name === "e") {
+      if (!w) app.say("no watch selected");
+      else if (name === "d") {
+        if (w.builtin) app.say("d: (a built-in watch is switched off, not deleted)");
+        else app.confirm({ title: "Delete the watch?", body: `${flat(w.label || w.value)} is no longer treated as addressed to you.`, label: "Delete", danger: true, call: { method: "DELETE", path } });
+      } else if (name === "e") {
+        const next = nextFloor(w.priority);
+        call(next ? `At least ${next}` : "No priority floor", () => app.machine.patch(path, { priority: next }));
+      } else call(w.enabled ? "Switched off" : "Switched on", () => app.machine.patch(path, { enabled: !w.enabled }));
+    } else return false;
+    cx.notify();
+    return true;
+  }
+  const ids = s.shown ?? [];
+  const at = Math.max(0, ids.indexOf(s.sel));
+  const item = (snap?.items ?? []).find((i) => i.id === s.sel);
+  const split = (n) => {
+    s.split = SLACK_SPLITS[(n + SLACK_SPLITS.length) % SLACK_SPLITS.length][0];
+    s.sel = null;
+  };
+  const idx = Math.max(0, SLACK_SPLITS.findIndex(([id]) => id === s.split));
+  if (name === "j" || name === "down") s.sel = ids[s.sel ? Math.min(ids.length - 1, at + 1) : 0] ?? null;
+  else if (name === "k" || name === "up") s.sel = ids[Math.max(0, at - 1)] ?? null;
+  else if (name === "l") split(idx + 1);
+  else if (name === "h") split(idx - 1);
+  else if (/^[1-6]$/.test(name)) split(Number(name) - 1);
+  else if (name === "W") s.view = "watches";
+  else if (name === "enter") {
+    if (!item) return false;
+    if (item.linked?.taskId && app.tasks?.some((t) => t.id === item.linked.taskId)) openTicket(app, item, cx);
+    else if (item.permalink) app.openUrl(item.permalink);
+    else return false;
+    return true;
+  } else if (name === "escape" || name === "q") {
+    if (s.sel && name === "escape") s.sel = null;
+    else app.go("board", cx);
+  } else if (ITEM_KEYS[name]) {
+    if (!item) app.say("nothing selected");
+    else {
+      const [id, why] = ITEM_KEYS[name];
+      const a = actions(app, item).find((x) => x.id === id);
+      if (a) a.run(cx);
+      else app.say(`${name}: (${(why && blocker(item, why)) || "not available here"})`);
+    }
+  } else return false;
+  cx.notify();
+  return true;
+}
+
+const SLACK_KEYS = [
+  { name: "Message", rows: [["r", "reply: edit the draft, Post sends"], ["t", "ticket: a Backlog task from the thread"], ["d", "done: clear it; a draft asks why"], ["s", "snooze: 1h, 3h, tomorrow or Monday"], ["o", "open the message in Slack"], ["N", "nudge: a one-line reminder"], ["!", "priority up one step"], ["-", "priority down one step"], ["c", "kind: what the thread is"], ["L", "link: the work it is about"]] },
+  { name: "Move", rows: [["j / k", "previous / next message"], ["h / l", "previous / next split"], ["1-6", "jump to that split"], ["enter", "jump to its ticket, else open in Slack"], ["esc / q", "back to the board"]] },
+  { name: "Watches", rows: [["W", "open the Watches (again: back)"], ["n", "add: @handle, #channel or a word"], ["d", "delete the watch (asks first)"], ["space", "switch it on / off"], ["e", "cycle its priority floor"]] },
+  { name: "App", rows: [["R", "poll Slack now"]] },
+];
+
 page({
   id: ID,
+  key: slackKey,
+  keys: SLACK_KEYS,
   label: "Slack",
   icon: "comment",
   group: "inbox",

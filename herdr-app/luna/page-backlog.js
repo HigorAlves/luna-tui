@@ -10,6 +10,7 @@ import { COMMANDS, page } from "./registry.js";
 import { chip, mono, spinner, toneColor } from "./ui.js";
 import { backlogChips, blockedLines, plain, refusalText, sourceLines } from "./views-model.js";
 import { button, frame, note } from "./views-ui.js";
+import { clampCursor, keyName, leavePage, moveCursor } from "./page-kit.js";
 
 const POLL_MS = 10000;
 const enc = encodeURIComponent;
@@ -45,7 +46,7 @@ function enter(app, cx) {
 }
 
 function promote(app, item, cx) {
-  app.run(cx, `bl-${item.id}`, "Made a ticket", async () => {
+  app.run(cx, `bl-${item.id}`, "Made a ticket", async (cx) => {
     try {
       const task = await app.machine.post(`/backlog/${enc(item.id)}/promote`);
       loadBacklog(app, cx, { quiet: true });
@@ -59,7 +60,7 @@ function promote(app, item, cx) {
 }
 
 function bump(app, item, cx) {
-  app.run(cx, `bl-${item.id}`, "Counted one more report", async () => {
+  app.run(cx, `bl-${item.id}`, "Counted one more report", async (cx) => {
     const out = await app.machine.post(`/backlog/${enc(item.id)}/bump`);
     loadBacklog(app, cx, { quiet: true });
     return out;
@@ -76,7 +77,7 @@ function decline(app, item) {
   });
 }
 
-function card(app, t, item, rank) {
+function card(app, t, item, rank, on = false) {
   const busy = Boolean(app.busy?.has(`bl-${item.id}`));
   const sources = sourceLines(item);
   const blocked = blockedLines(item);
@@ -88,7 +89,7 @@ function card(app, t, item, rank) {
     .rounded(9)
     .bg(t.background)
     .border_1()
-    .border_color(t.border)
+    .border_color(on ? t.accent : t.border)
     .child(
       h_flex()
         .gap(10)
@@ -130,7 +131,9 @@ function backlogPage(app, t) {
   if (!all && !st.error) body.push(h_flex().gap(8).p(12).text_color(t.dim).child(spinner(t, 13)).child("Reading the backlog…"));
   if (st.error) body.push(note(t, st.error, "error"));
   if (all && items.length === 0) body.push(note(t, all.length ? "Nothing matches the search." : "The backlog is empty: nothing waits to become a ticket."));
-  items.forEach((item, i) => body.push(card(app, t, item, i + 1)));
+  st.shown = items.map((i) => i.id);
+  const cursor = clampCursor(st, items.length);
+  items.forEach((item, i) => body.push(card(app, t, item, i + 1, i === cursor)));
   const stale = (all ?? []).filter((i) => i.stale).length;
   return frame(app, t, {
     id: "backlog-list",
@@ -143,8 +146,32 @@ function backlogPage(app, t) {
   });
 }
 
+function backlogKey(app, e, cx) {
+  const st = app.state("backlog");
+  const name = keyName(e);
+  const shown = st.shown ?? [];
+  const item = (st.items ?? []).find((i) => i.id === shown[clampCursor(st, shown.length)]);
+  if (moveCursor(st, name, shown.length)) {
+    // moved
+  } else if (name === "R") loadBacklog(app, cx);
+  else if (name === "p" || name === "b" || name === "d") {
+    if (!item) app.say("nothing selected");
+    else if (name === "p") promote(app, item, cx);
+    else if (name === "b") bump(app, item, cx);
+    else decline(app, item);
+  } else if (leavePage(app, name, cx)) return true;
+  else return false;
+  cx.notify();
+  return true;
+}
+
 page({
   id: "backlog",
+  key: backlogKey,
+  keys: [
+    { name: "Item", rows: [["p", "promote: make it a ticket"], ["b", "bump: one more report of it"], ["d", "decline: drop it (asks first)"]] },
+    { name: "Move", rows: [["j / k", "previous / next item"], ["R", "fetch the backlog again"], ["esc / q", "back to the board"]] },
+  ],
   label: "Backlog",
   icon: "plan",
   group: "insight",

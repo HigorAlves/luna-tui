@@ -1,7 +1,7 @@
 // The rules behind the Inbox, Digest, Floor, Backlog and Tickets pages: pure functions with no host
 // calls, so `node --test` checks them. They follow the Rust board (`board/src/inbox.rs`,
 // `digest.rs`, `backlog.rs`, `tickets.rs`). The machine decides; these only read.
-import { ended, look } from "./model.js";
+import { ended, look, needsYou } from "./model.js";
 
 /** A stranger's text on one line: control characters (escape codes, newlines) become spaces. */
 export function plain(value) {
@@ -27,14 +27,15 @@ export const INBOX_SPLITS = [
 /** Which split a ticket belongs to, or null when it needs nothing from you. */
 export function inboxSplitOf(task, now = Date.now()) {
   switch (task.state) {
+    // A gate the machine is only watching (a PR it waits on, a retro nobody asked for) is not yours.
     case "awaiting_setup":
     case "awaiting_approval":
     case "awaiting_test_check":
     case "awaiting_ship":
-      return "approve";
+      return task.waitingOnYou ? "approve" : null;
     case "awaiting_answers":
     case "reviewing_memory":
-      return "review";
+      return task.waitingOnYou ? "review" : null;
     case "escalated":
       return "failed";
     case "paused_rate_limit":
@@ -66,6 +67,9 @@ export function inboxCounts(tasks, now = Date.now()) {
   }
   return out;
 }
+
+/** The Inbox badge: the board's waiting-on-you count (a gate or an escalation), nothing else. */
+export const inboxBadgeCount = (tasks, now = Date.now()) => (tasks ?? []).filter((t) => needsYou(t, now)).length;
 
 /**
  * What approving a ticket together with others commits to (the TUI's `committing_kind`): `plan`,
@@ -195,6 +199,9 @@ export function floorRows(m7, m30) {
     return { label, d7: cell(m7), d30: cell(m30) };
   };
   const top = (m) => (m.escalations?.topReasons ?? []).slice(0, 2).map((r) => `${plain(r.reason).slice(0, 40)} ×${r.count}`).join(", ");
+  // One wait row per gate state either window knows (`wait approval median`), as the TUI lists them.
+  const states = [...new Set([m7, m30].flatMap((m) => Object.keys(m?.gates?.waitMs ?? {})))].sort();
+  const waits = states.map((s) => row(`Wait ${s.replace(/^awaiting_/, "").replaceAll("_", " ")} (median)`, (m) => span(m.gates.waitMs?.[s]?.median)));
   return [
     row("Tasks closed", (m) => String(m.tasks.closed)),
     row("Created", (m) => String(m.tasks.created)),
@@ -203,7 +210,7 @@ export function floorRows(m7, m30) {
     row("Running / queued now", (m) => `${m.tasks.running} / ${m.tasks.queued}`),
     row("Cycle time (median / p90)", (m) => medp90(m.cycleTimeMs?.task)),
     row("Gates answered", (m) => `${m.gates.answered} · ${pct(m.gates.withinSla)} in SLA`),
-    row("Wait for approval (median)", (m) => span(m.gates.waitMs?.awaiting_approval?.median)),
+    ...waits,
     row("First pass", firstPass),
     row("Escalation rate", (m) => `${pct(m.escalations?.rate)}${top(m) ? ` · ${top(m)}` : ""}`),
     row("Retries per task (median)", (m) => num(m.retries?.perTask?.median)),
@@ -240,13 +247,68 @@ export function pendingBases(repos) {
   return (Array.isArray(repos) ? repos : []).filter((r) => r?.image?.pendingBase).map((r) => ({ repo: r.repo, base: plain(r.image.pendingBase) }));
 }
 
+const ago = (iso, now = Date.now()) => {
+  const n = at(iso);
+  return n == null ? "?" : span(Math.max(0, now - n));
+};
+
+/** A repository's image on one line, as the TUI's `image_line`. */
+export function imageLine(h, now = Date.now()) {
+  const i = h?.image ?? {};
+  let line = i.base ? `image: own on ${plain(i.base).slice(0, 40)} (${plain(i.inUse).slice(0, 40)})` : "image: machine's";
+  if (i.builtAt) line += ` · built ${ago(i.builtAt, now)} ago`;
+  if (i.lastFailure) line += ` · build failed: ${plain(i.lastFailure).slice(0, 60)}`;
+  return line;
+}
+
+/** A repository's code graph on one line, as the TUI's `graph_line`. */
+export function graphLine(h, now = Date.now()) {
+  const g = h?.graph ?? {};
+  if (!g.on) return "graph: off";
+  let line = g.commit ? `graph: ${plain(String(g.commit).slice(0, 7))}` : "graph: none yet";
+  if (typeof g.behind === "number") line += ` · ${g.behind} behind`;
+  if (g.graphify) line += ` · graphify ${plain(g.graphify).slice(0, 16)}`;
+  if (g.builtAt) line += ` · built ${ago(g.builtAt, now)} ago`;
+  if (g.building) line += " · building";
+  if (g.lastFailure) line += ` · failed: ${plain(g.lastFailure).slice(0, 60)}`;
+  return line;
+}
+
+/** The repositories tab can focus: those with numbers, then those the machine knows with none yet. `[{repo, name}]`. */
+export function floorRepos(m7, m30, health) {
+  const out = new Map();
+  for (const r of [...(m7?.byRepo ?? []), ...(m30?.byRepo ?? [])]) if (r?.repo && !out.has(r.repo)) out.set(r.repo, r.repo);
+  for (const h of Array.isArray(health) ? health : []) if (h?.repo && !out.has(h.repo)) out.set(h.repo, h.repo);
+  return [...out.keys()].map((repo) => ({ repo, name: plain(repo).replace(/\/+$/, "").split("/").pop() || repo }));
+}
+
+/** The Slack block's rows: `[label, 7d / 30d items, replied, within SLA, median / p90]`, from the two `GET /slack/metrics` windows. */
+export function slackMetricRows(d7, d30) {
+  if (!d7 && !d30) return [];
+  const pair = (f) => `${f(d7)} / ${f(d30)}`;
+  const sum = (o) => Object.values(o ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
+  const secs = (x) => (typeof x === "number" ? span(x * 1000) : "–");
+  const rows = ["P0", "P1", "P2", "P3"].map((p) => {
+    const replied = d7?.replied?.[p] ?? 0;
+    const within = d7?.withinSla?.[p] ?? 0;
+    const t = d7?.timeToReply?.[p];
+    return [p, pair((m) => m?.items?.[p] ?? 0), pair((m) => m?.replied?.[p] ?? 0), `${within} · ${replied ? pct(within / replied) : "–"}`, `${secs(t?.median)} / ${secs(t?.p90)}`];
+  });
+  const hour = (m) => (sum(m?.replied) > 0 ? pct((m.withinHour ?? 0) / sum(m.replied)) : "–");
+  rows.push(["within 1h", pair(hour), "", `${sum(d7?.items)} / ${sum(d30?.items)} items`, ""]);
+  const sla = d7?.sla ?? {};
+  const target = (p) => (typeof sla[p] === "number" ? span(sla[p] * 1000).replace(/ .*/, "") : "–");
+  rows.push(["SLA targets", ["P0", "P1", "P2", "P3"].map(target).join("/"), "", "", ""]);
+  return rows;
+}
+
 /** The tickets paused on a usage limit. */
 export const pausedTasks = (tasks) => (tasks ?? []).filter((t) => t.state === "paused_rate_limit");
 
-/** What a latched credential says: a name, or `name until 14:30` when the machine gave the time. */
+/** What a latched credential says: its owner (`claude`), or `claude until 14:30 UTC` when the machine gave the time (UsageLatch is `{owner, until}`). */
 export function latchedWords(l) {
   if (typeof l === "string") return l;
-  const name = l?.credential ?? l?.name ?? "credential";
+  const name = l?.owner ?? l?.credential ?? l?.name ?? "credential";
   const until = l?.until ?? l?.resetAt ?? null;
   const n = at(until);
   return n ? `${name} until ${new Date(n).toISOString().slice(11, 16)} UTC` : name;

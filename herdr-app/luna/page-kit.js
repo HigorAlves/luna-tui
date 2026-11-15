@@ -124,6 +124,31 @@ export function card(t, id, selected = false) {
     .hover((s) => s.border_color(selected ? t.accent : t.input));
 }
 
+// ---- keys ----
+
+// The key's name as the TUI's keys read it: `A` for Shift+A, `cmd-a` / `ctrl-a` / `alt-a` with those
+// held, so a plain `a` branch never fires for Cmd+A. A page switches on this.
+export { keyName } from "./controls.js";
+
+/** j / k / arrows over a list of `n` rows: moves `st[field]`; true when the key was one of those. */
+export function moveCursor(st, name, n, field = "cursor") {
+  const at = Math.min(st[field] ?? 0, Math.max(0, n - 1));
+  if (name === "j" || name === "down") st[field] = Math.min(Math.max(0, n - 1), at + 1);
+  else if (name === "k" || name === "up") st[field] = Math.max(0, at - 1);
+  else return false;
+  return true;
+}
+
+/** The cursor kept inside a list of `n` rows. */
+export const clampCursor = (st, n, field = "cursor") => Math.min(st[field] ?? 0, Math.max(0, n - 1));
+
+/** esc / q on a page: back to the board, as the TUI's views close. */
+export function leavePage(app, name, cx) {
+  if (name !== "escape" && name !== "q") return false;
+  app.go("board", cx);
+  return true;
+}
+
 /** `fn` once per page-state, guarded by a flag, so a load starts at most once at a time. */
 export function once(st, flag, fn) {
   if (st[flag]) return;
