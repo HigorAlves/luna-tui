@@ -66,124 +66,54 @@ function splitBar(app, t, prs) {
     .when(Boolean(app.prRepo), (el) => el.child(button(t, "repo-clear", "", "quiet", (_e, cx) => { app.prRepo = null; cx.notify(); }, { iconName: "close", small: true })));
 }
 
-/** Every check by name with its state and link, and the threads still open. */
-function checksPanel(app, t, pr) {
-  const rows = checkRows(pr);
-  return v_flex()
-    .px(14)
-    .pb(10)
-    .gap(2)
-    .child(
-      h_flex()
-        .gap(10)
-        .pb(4)
-        .text_size(11)
-        .text_color(t.dim)
-        .child(div().font_family(mono()).text_size(10.5).child(`${pr.headRef ?? "?"} → ${pr.baseRef ?? "?"}`))
-        .child(div().child(`${pr.unresolvedThreads ?? 0} unresolved thread${pr.unresolvedThreads === 1 ? "" : "s"}`))
-        .when(Boolean(pr.reviewDecision), (el) => el.child(div().child(String(pr.reviewDecision).toLowerCase().replaceAll("_", " ")))),
-    )
-    .when(rows.length === 0, (el) => el.child(div().text_size(11.5).text_color(t.dim).child("No checks reported.")))
-    .children(
-      rows.map((c, i) => {
-        const tone = checkTone(c.state);
-        const color = tone ? toneColor(t, tone) : t.dim;
-        return h_flex()
-          .id(`chk-${pr.repo}-${pr.number}-${i}`)
-          .h(24)
-          .px(6)
-          .gap(8)
-          .items_center()
-          .rounded(6)
-          .when(Boolean(c.url), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => {
-            cx.stop_propagation();
-            app.openUrl(c.url);
-          }))
-          .child(dot(color, 7))
-          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(c.name))
-          .child(div().flex_none().text_size(10.5).text_color(color).child(String(c.state ?? "").toLowerCase().replaceAll("_", " ")))
-          .when(Boolean(c.url), (el) => el.child(icon("external", 11, t.dim)));
-      }),
-    );
-}
-
 function row(app, t, pr, cloning) {
   const status = prStatus(pr);
-  const actions = prActions(pr);
   const key = prKey(pr);
-  const open = Boolean(app.prOpen?.has(key));
-  const selected = app.prSel === key;
-  const busy = app.busy.has(key) || Boolean(cloning);
+  const selected = app.prSel === key && app.prPanel;
+  const busy = app.busy.has(key) || Boolean(cloning) || Boolean(app.prPending?.has(key));
   const name = pr.repo.split("/")[1] ?? pr.repo;
-  const toggle = (_e, cx) => {
-    app.prOpen ??= new Set();
-    app.prOpen.has(key) ? app.prOpen.delete(key) : app.prOpen.add(key);
-    cx.notify();
-  };
-  return v_flex()
+  return h_flex()
     .id(`pr-${pr.repo}-${pr.number}`)
+    .px(14)
+    .py(10)
+    .gap(12)
+    .items_center()
     .rounded(9)
+    .cursor_pointer()
     .bg(selected ? alpha(t.accent, 0.08) : t.background)
     .border_1()
     .border_color(selected ? t.accent : t.border)
     .hover((s) => s.border_color(selected ? t.accent : t.input))
+    // A click opens the PR in the panel on the right, as a card opens the ticket inspector.
+    .on_click((_e, cx) => {
+      app.prSel = key;
+      app.prPanel = true;
+      cx.notify();
+    })
+    .child(icon("pr", 15, pr.isDraft ? t.dim : pr.mine ? t.accent : t.done))
     .child(
-      h_flex()
-        .id(`prrow-${pr.repo}-${pr.number}`)
-        .px(14)
-        .py(10)
-        .gap(12)
-        .items_center()
-        .cursor_pointer()
-        .on_click((e, cx) => {
-          app.prSel = key;
-          if (pr.task) return app.prAct(pr, "open_task", cx);
-          return toggle(e, cx);
-        })
-        .child(button(t, `pr-exp-${pr.repo}-${pr.number}`, "", "quiet", (e, cx) => {
-          app.prSel = key;
-          toggle(e, cx);
-        }, { small: true, iconName: open ? "chevron-down" : "chevron-right" }))
-        .child(icon("pr", 15, pr.isDraft ? t.dim : pr.mine ? t.accent : t.done))
-        .child(
-          v_flex()
-            .flex_1()
-            .min_w(0)
-            .gap(3)
-            .child(div().truncate().text_size(12.8).font_medium().text_color(t.foreground).child(pr.title))
-            .child(
-              h_flex()
-                .gap(7)
-                .items_center()
-                .text_size(11)
-                .text_color(t.dim)
-                .child(dot(projectColor(t, name), 6))
-                .child(div().font_family(mono()).text_size(10.5).child(key))
-                .child(div().child(`· ${pr.mine ? "you" : pr.author}`))
-                .child(div().child(`· ${ago(pr.updatedAt) ?? ""}`))
-                .when(pr.unresolvedThreads > 0, (el) => el.child(div().child(`· ${pr.unresolvedThreads} unresolved`)))
-                .when(Boolean(pr.task), (el) => el.child(chip(t, "task running", "working")))
-                .when(!pr.localPath, (el) => el.child(chip(t, cloning ? "cloning…" : "not cloned"))),
-            ),
-        )
-        .child(chip(t, status.text, status.tone, 11))
+      v_flex()
+        .flex_1()
+        .min_w(0)
+        .gap(3)
+        .child(div().truncate().text_size(12.8).font_medium().text_color(t.foreground).child(pr.title))
         .child(
           h_flex()
-            .gap(6)
-            .flex_none()
-            .when(Boolean(cloning), (el) => el.child(spinner(t, 12)))
-            .children(actions.map((a) => button(t, `pra-${pr.repo}-${pr.number}-${a.id}`, a.label, a.kind, (_e, cx) => dispatchPr(app, pr, a.id, cx), { small: true, busy, iconName: a.id === "browser" ? "external" : null })))
-            .child(closeButton(app, t, pr, busy)),
+            .gap(7)
+            .items_center()
+            .text_size(11)
+            .text_color(t.dim)
+            .child(dot(projectColor(t, name), 6))
+            .child(div().font_family(mono()).text_size(10.5).child(key))
+            .child(div().child(`· ${pr.mine ? "you" : pr.author}`))
+            .child(div().child(`· ${ago(pr.updatedAt) ?? ""}`))
+            .when(pr.unresolvedThreads > 0, (el) => el.child(div().child(`· ${pr.unresolvedThreads} unresolved`)))
+            .when(Boolean(pr.task), (el) => el.child(chip(t, "task running", "working")))
+            .when(!pr.localPath, (el) => el.child(chip(t, cloning ? "cloning…" : "not cloned"))),
         ),
     )
-    .when(open, (el) => el.child(checksPanel(app, t, pr)));
-}
-
-/** Close…: only on your own PRs with no task running (the TUI's rule); otherwise it is off and says why. */
-function closeButton(app, t, pr, busy) {
-  const why = prCloseRefusal(pr);
-  const b = button(t, `pra-${pr.repo}-${pr.number}-close`, "Close…", "danger", (_e, cx) => closePr(app, pr, cx), { small: true, busy: busy || Boolean(why) });
-  return why ? b.tooltip(why) : b;
+    .when(busy, (el) => el.child(spinner(t, 12)))
+    .child(chip(t, status.text, status.tone, 11));
 }
 
 /** Asks before closing a PR without merging it; a PR that is not yours, or has a task running, says why instead. */
@@ -306,7 +236,10 @@ export function prsKey(app, e, cx) {
   const at = rows.findIndex((p) => prKey(p) === app.prSel);
   const pr = rows[at] ?? null;
   const go = (i) => {
-    if (rows.length) app.prSel = prKey(rows[Math.max(0, Math.min(rows.length - 1, i))]);
+    if (rows.length) {
+      app.prSel = prKey(rows[Math.max(0, Math.min(rows.length - 1, i))]);
+      app.prPanel = true;
+    }
     cx.notify();
     return true;
   };
@@ -363,19 +296,19 @@ export function prsKey(app, e, cx) {
       return true;
     });
     case "enter": return needsRow((p) => {
-      if (p.task) app.prAct(p, "open_task", cx);
+      // First Enter opens the panel; with it open, the TUI's Enter: the PR's card, else the PR on GitHub.
+      if (!app.prPanel) app.prPanel = true;
+      else if (p.task) app.prAct(p, "open_task", cx);
       else app.openUrl(p.url);
+      cx.notify();
       return true;
     });
     case "space":
     case " ":
-    case "x": return needsRow((p) => {
-      app.prOpen ??= new Set();
-      const k = prKey(p);
-      app.prOpen.has(k) ? app.prOpen.delete(k) : app.prOpen.add(k);
+    case "x":
+      app.prPanel = !app.prPanel;
       cx.notify();
       return true;
-    });
     case "f":
       app.pickRepo([...new Set((app.prAllRepos ?? []))].sort(), cx);
       return true;
@@ -387,6 +320,11 @@ export function prsKey(app, e, cx) {
       app.refreshPrs(cx);
       return true;
     case "escape":
+      if (app.prPanel) {
+        app.prPanel = false;
+        cx.notify();
+      } else app.go("board", cx);
+      return true;
     case "P":
     case "q":
       app.go("board", cx);

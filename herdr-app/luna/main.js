@@ -679,9 +679,11 @@ export default class Luna extends View {
     const narrow = this.width < 900;
     const inspectorWidth = Math.max(340, Math.min(440, Math.round(this.width * 0.34)));
     const open = this.page === "board" && Boolean(this.selected) && this.tasks.some((x) => x.id === this.selected);
-    this.boardWidth = this.width - (!narrow || !open ? 236 : 0) - (open ? inspectorWidth : 0);
+    // The board's side panel is the ticket inspector; another page may bring its own (`side` in registry.js).
+    const pageSide = this.page !== "board" ? this.currentPage()?.side : null;
+    const side = open ? inspector(this, t, inspectorWidth) : pageSide ? pageSide(this, t, inspectorWidth) : null;
+    this.boardWidth = this.width - (!narrow || !side ? 236 : 0) - (side ? inspectorWidth : 0);
     const pane = (this.currentPage()?.render ?? boardPage)(this, t);
-    const side = open ? inspector(this, t, inspectorWidth) : null;
     const waiting = this.pending?.id === this.selected && Date.now() < this.pending.until;
     if (this.selected && this.page === "board" && !this.tasks.find((x) => x.id === this.selected) && this.loaded && !waiting) this.selected = null;
     return h_flex()

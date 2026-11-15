@@ -16,6 +16,7 @@ import {
 import { DIALOGS, COMMANDS } from "../luna/registry.js";
 import { renderDialog } from "../luna/dialogs.js";
 import { dispatchPr, notePrs, prBadge, prsKey, prsPage } from "../luna/prs.js";
+import { prInspector } from "../luna/pr-inspector.js";
 
 const t = theme();
 const now = Date.now();
@@ -137,8 +138,10 @@ test("Close is for your own PRs with no task running; else a reason", () => {
   const pr = (n, over) => ({ repo: "o/s", number: n, title: `PR ${n}`, url: "u", author: "x", mine: true, split: "mine", localPath: "/w", updatedAt: iso(n), checks: { state: "success", all: [] }, ...over });
   const snap = { prs: [pr(1), pr(2, { task: { id: "t" } }), pr(3, { mine: false })], polledAt: iso(1) };
   const a = pane({ page: "prs", prs: { inbox: snap, all: snap } });
-  const words = texts(prsPage(a, t)).join("|");
-  assert.match(words, /Close…/);
+  prsPage(a, t);
+  a.prSel = "o/s#1";
+  a.prPanel = true;
+  assert.match(texts(prInspector(a, t, 420)).join("|"), /Close…/);
   const k = (key) => prsKey(a, { key, modifiers: {} }, cx);
   a.prSel = "o/s#1";
   k("X");

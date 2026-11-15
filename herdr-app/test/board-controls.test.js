@@ -16,6 +16,7 @@ import {
 import { DIALOGS, COMMANDS, PALETTE } from "../luna/registry.js";
 import { renderDialog } from "../luna/dialogs.js";
 import { prsKey, prsPage } from "../luna/prs.js";
+import { prInspector } from "../luna/pr-inspector.js";
 
 const t = theme();
 const now = Date.now();
@@ -448,12 +449,17 @@ const pr = (n, over = {}) => ({
   ...over,
 });
 
-test("the PR page opens a row to every check by name, with its state and the threads", () => {
-  const snap = { prs: [pr(1), pr(2, { task: { id: "t9" }, split: "mine", mine: true })], polledAt: iso(1), error: null };
-  const a = pane({ page: "prs", prs: { inbox: snap, all: snap }, prOpen: new Set(["o/shop#1"]) });
-  const words = texts(prsPage(a, t)).join("|");
-  for (const w of ["lint", "build", "docs", "failure", "success", "feat → main", "2 unresolved threads", "Close…", "task running"]) assert.ok(words.includes(w), w);
-  assert.ok(!texts(prsPage(pane({ page: "prs", prs: { inbox: snap, all: snap } }), t)).includes("build"), "closed rows hide the checks");
+test("a PR opens in the panel with every check by name, its state, the threads and its actions", () => {
+  const snap = { prs: [pr(1), pr(2, { task: { id: "t9", state: "reviewing" }, split: "mine", mine: true })], polledAt: iso(1), error: null };
+  const a = pane({ page: "prs", prs: { inbox: snap, all: snap } });
+  const list = texts(prsPage(a, t)).join("|");
+  assert.ok(list.includes("task running"));
+  assert.equal(prInspector(a, t, 420), null, "no panel until a PR is opened");
+  a.prSel = "o/shop#1";
+  a.prPanel = true;
+  const words = texts(prInspector(a, t, 420)).join("|");
+  for (const w of ["lint", "build", "docs", "failure", "success", "feat → main", "2 open", "Review", "Close…", "Open on GitHub", "off: closing is for your own PRs"]) assert.ok(words.includes(w), w);
+  assert.ok(!list.includes("build"), "the list keeps the checks for the panel");
   assert.equal(a.prRows.length, 2);
   assert.deepEqual(a.prSplitIds, [null, "review_requested", "mine"]);
 });
@@ -483,8 +489,13 @@ test("PR keys: j/k, splits, actions with their refusals, close, enter, filters",
   assert.match(a.flash.text, /closing is for your own PRs/);
   k("o");
   assert.equal(a.opened, "https://github.com/o/shop/pull/1");
+  a.opened = null;
+  a.prPanel = false;
   k("enter");
-  assert.equal(a.opened, "https://github.com/o/shop/pull/1", "no task: opens the PR");
+  assert.equal(a.prPanel, true, "the first Enter opens the panel");
+  assert.equal(a.opened, null);
+  k("enter");
+  assert.equal(a.opened, "https://github.com/o/shop/pull/1", "with the panel open, no task: opens the PR");
   k("j");
   k("enter");
   assert.deepEqual(a.acted, [2, "open_task"], "a PR with a task jumps to it");
@@ -492,9 +503,9 @@ test("PR keys: j/k, splits, actions with their refusals, close, enter, filters",
   k("C");
   assert.deepEqual(a.acted, [3, "clone"]);
   k("space");
-  assert.ok(a.prOpen.has("o/shop#3"));
+  assert.equal(a.prPanel, false, "space folds the panel");
   k("space");
-  assert.ok(!a.prOpen.has("o/shop#3"));
+  assert.equal(a.prPanel, true);
   k("l");
   assert.equal(a.prSplit, "review_requested");
   k("h");
@@ -507,6 +518,8 @@ test("PR keys: j/k, splits, actions with their refusals, close, enter, filters",
   k("F");
   assert.equal(a.prRepo, null);
   assert.equal(k("zz"), false);
+  k("escape");
+  assert.equal(a.prPanel, false, "esc closes the panel first");
   k("escape");
   assert.equal(a.page, "board");
   assert.equal(k("?"), false, "the sheet is the app's key");

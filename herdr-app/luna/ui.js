@@ -50,7 +50,7 @@ export function chip(t, text, tone = null, size = 10.5) {
  * A button. `kind`: `primary` (the accent), `destructive` (filled red), `danger` (red text),
  * `plain` (a raised tile) or `quiet` (text only). `busy` dims it and ignores clicks.
  */
-export function button(t, id, label, kind, onClick, { small = false, iconName = null, busy = false, grow = false } = {}) {
+export function button(t, id, label, kind, onClick, { small = false, iconName = null, busy = false, grow = false, kbd = null } = {}) {
   const h = small ? 22 : 28;
   const primary = kind === "primary" || kind === "destructive";
   const bg = kind === "destructive" ? toneColor(t, "error") : primary ? t.accent : kind === "quiet" || kind === "danger" ? null : t.raised;
@@ -77,7 +77,10 @@ export function button(t, id, label, kind, onClick, { small = false, iconName = 
     onClick(e, cx);
   });
   if (iconName) el = el.child(icon(iconName, small ? 11 : 13));
-  return el.child(label);
+  el = el.child(label);
+  // The key that does the same, as the TUI shows it beside each action.
+  if (kbd) el = el.child(div().text_size(small ? 9.5 : 10).font_family(mono()).opacity(0.6).child(kbd));
+  return el;
 }
 
 /** An uppercase section label in the accent: `PLAN`. */

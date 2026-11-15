@@ -8,6 +8,7 @@ import { actionsFor, ago, cardId, cardLine, duration, ended, escalationWords, ga
 import { COLUMN_ICON } from "./board.js";
 import { alpha, button, chip, dot, fact, icon, mono, projectColor, spinner, toneColor } from "./ui.js";
 import { MORE, TABS, tab as addTab } from "./registry.js";
+import { ACTION_KEYS } from "./controls.js";
 import { planCriteria } from "./detail-model.js";
 import { approvalRuleView, defaultTab, machineFlags, openGaps } from "./detail-sections.js";
 
@@ -166,7 +167,7 @@ function gatePanel(app, t, task) {
           .pt(4)
           .gap(6)
           .flex_wrap()
-          .children(actions.map((a) => button(t, `act-${a.id}`, a.label, a.kind, (_e, cx) => app.act(task, a.id, cx), { busy, small: false })))
+          .children(actions.map((a) => button(t, `act-${a.id}`, a.label, a.kind, (_e, cx) => app.act(task, a.id, cx), { busy, small: false, kbd: ACTION_KEYS[a.id] })))
           .when(extra.length > 0, (row) =>
             row.child(
               button(t, "act-more", app.moreOpen ? "Less" : "More", "quiet", (_e, cx) => {
@@ -183,7 +184,7 @@ function gatePanel(app, t, task) {
           .pt(2)
           .gap(6)
           .flex_wrap()
-          .children(extra.map((m) => button(t, `more-${m.id}`, m.label, m.kind ?? "plain", (_e, cx) => app.act(task, m.id, cx), { busy, small: true }))),
+          .children(extra.map((m) => button(t, `more-${m.id}`, m.label, m.kind ?? "plain", (_e, cx) => app.act(task, m.id, cx), { busy, small: true, kbd: ACTION_KEYS[m.id] }))),
       ),
     );
 }

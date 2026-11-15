@@ -6,6 +6,14 @@ import { planCriteria } from "./detail-model.js";
 import * as model from "./model.js";
 import { COLUMNS, ARCHIVE_REASONS, ended, needsYou, projectOf, sortCards } from "./model.js";
 
+/** The board key that runs each ticket action (boardkeys.js), shown beside the inspector's buttons. */
+export const ACTION_KEYS = {
+  start: "a", approve: "a", resume: "a", answer: "a", keep_whole: ":whole", send_back: "r", reject: "N", reject_release: "N",
+  abort: "X", archive: "Z", delete: "d", remove_worktree: "w", post_questions: "p", memory_skip_rules: "A",
+  edit_plan: "e", edit_ticket: "e", edit_record: "T", escalation_reason: "C", set_repo: "R", jira_link: "J", jira_unlink: "J",
+  watch: "f", open_issue: "o", open_pr: "O", merge_into: "M", unmerge: "U", context: ":context", dedup: ":dedup",
+};
+
 /** What a gate is: model.js's `gateKey`, captured when a dialog opens and checked when it sends. */
 export const gateKey = (task) => model.gateKey(task);
 

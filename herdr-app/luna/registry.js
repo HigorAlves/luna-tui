@@ -5,7 +5,7 @@
 // PAGES    {id, label, icon, hidden?: true (stream-only, not in the sidebar), group?: "work" | "plan" | "sources" | "factory" (the sidebar category; see board.js NAV_GROUPS), render(app, t), enter?(app, cx),
 //           keys?: [{name, rows: [[keys, does]]}] (listed in the keys sheet on that page),
 //           onMessage?(app, {event, data}, cx) -> true when it used it, badge?(app) -> {n, tone} | null,
-//           key?(app, e, cx) -> true when it handled the key}
+//           key?(app, e, cx) -> true when it handled the key, side?(app, t, width) -> a panel on the right, or null}
 // TABS     inspector tabs: {id, label, order, count?(app, task, detail), render(app, t, task, detail), enter?(app, task, cx)}
 // ACTIONS  id -> (app, task, cx): what a button with that id does (the inspector's, the card's, a key's)
 // MORE     the inspector's More menu: {id, label, kind?: "plain" | "danger", when(task, app) -> bool}; ACTIONS[id] runs it
