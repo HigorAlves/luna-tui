@@ -35,8 +35,11 @@ export function initDialog(app, cx) {
     app.error = message;
     cx.notify();
   };
+  app.handBack = handBack;
+  app.trackInput = (state) => state;
   if (DIALOGS[d.kind]) {
     DIALOGS[d.kind].init?.(app, cx, d);
+    takeKeyboard(app, cx);
     return;
   }
   const field = (placeholder, value = "") => InputState.new({ placeholder, value });
@@ -58,26 +61,65 @@ export function initDialog(app, cx) {
     cx.timer.after(400, () => app.title.focus());
   }
   app.picked = d.kind === "excuse" ? new Set((d.gaps ?? []).map((g) => g.id ?? g)) : null;
+  takeKeyboard(app, cx);
+}
+
+/** Whether `v` looks like an InputState or TextareaState. */
+const isInput = (v) => v != null && typeof v === "object" && typeof v.focus === "function" && typeof v.value === "function";
+
+/**
+ * A dialog with no input takes the keyboard itself, so Enter and Escape reach it and not the pane
+ * behind (a Delete dialog and Enter must never start the draft). One with an input leaves the
+ * keyboard to that input, which its own kind focuses.
+ */
+function takeKeyboard(app, cx) {
+  const hasInput = Object.values(app).some((v) => isInput(v) || (Array.isArray(v) && v.some(isInput)));
+  if (hasInput) return;
+  const focus = () => {
+    try {
+      app.handle.focus();
+    } catch {
+      // not drawn yet
+    }
+  };
+  focus();
+  // The overlay may not be drawn yet on the first call: once more when it is.
+  cx.timer.after(150, focus);
+}
+
+/** Hands a value back to the board in the pane behind: it reads it on a timer, outside render, and ignores one older than itself. */
+export function handBack(kind, value = {}) {
+  setShared(`luna.${kind}`, { ...value, at: Date.now() });
 }
 
 function finish(app, select = null) {
-  if (select) setShared("luna.select", { id: select, at: Date.now() });
+  if (select) handBack("select", { id: select });
   closeOverlay(props().overlay);
 }
 
-async function send(app, cx, call) {
-  if (app.sending) return;
+/**
+ * Runs `call(cx2)` in its own task (a click's `cx` is stale after its first await) and closes the
+ * dialog with what it answers (`{select}` hands a card back to the board); a failure is drawn.
+ * Answers when it is done.
+ */
+function send(app, cx, call) {
+  if (app.sending) return Promise.resolve();
   app.sending = true;
   app.error = null;
   cx.notify();
-  try {
-    const out = await call();
-    finish(app, out?.select ?? null);
-  } catch (e) {
-    app.error = e?.message ?? String(e);
-    app.sending = false;
-    cx.notify();
-  }
+  return new Promise((resolve) => {
+    cx.spawn(async (cx) => {
+      try {
+        const out = await call(cx);
+        finish(app, out?.select ?? null);
+      } catch (e) {
+        app.error = e?.message ?? String(e);
+        app.sending = false;
+        cx.notify();
+      }
+      resolve();
+    });
+  });
 }
 
 function submit(app, cx) {
@@ -224,7 +266,7 @@ export function renderDialog(app, t) {
     case "repos":
       (d.repos ?? []).forEach((r) =>
         body.push(option(t, `rp-${r}`, r, d.current === r, () => {
-          setShared("luna.prRepo", { repo: r, at: Date.now() });
+          handBack("prRepo", { repo: r });
           closeOverlay(props().overlay);
         })),
       );

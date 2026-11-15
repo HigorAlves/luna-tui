@@ -6,6 +6,7 @@ import { exec, readTextFile, home } from "herdr";
 import net from "net";
 import { Buffer } from "buffer";
 
+import { gateKey, gateQuestion, stageWords } from "./model.js";
 import { Dechunker, Head, Sse, request } from "./wire.js";
 
 const CANDIDATES = ["http://127.0.0.1:4317", "http://127.0.0.1:4318"];
@@ -32,12 +33,60 @@ async function env(name) {
 
 const enc = encodeURIComponent;
 
+const PROBE_MS = 800;
+const WATCHDOG_MS = 40000;
+const CONNECT_MS = 5000;
+
+/**
+ * `promise`, or a rejection once `ms` passed (the timer is the task's own `cx.timer`: Herdr has no
+ * `setTimeout`). Without a `cx` there is nothing to time with and the promise is returned as is.
+ */
+export function within(cx, ms, promise, what, code = "timeout") {
+  if (!cx?.timer) return promise;
+  return new Promise((resolve, reject) => {
+    let over = false;
+    const timer = cx.timer.after(ms, () => {
+      over = true;
+      reject(new MachineError(`${what} did not answer in ${ms / 1000}s`, { code }));
+    });
+    promise.then(
+      (v) => {
+        if (!over) {
+          timer.cancel();
+          resolve(v);
+        }
+      },
+      (e) => {
+        if (!over) {
+          timer.cancel();
+          reject(e);
+        }
+      },
+    );
+  });
+}
+
 export class Machine {
-  constructor() {
+  /** `cx` (an AsyncContext, valid across awaits) times the probes and the stream; `net` is the socket module. */
+  constructor({ cx = null, net: socketModule = net } = {}) {
+    this.cx = cx;
+    this.net = socketModule;
     this.base = null;
     this.token = null;
     this.approver = null;
     this.ready = null;
+    this.settingsReady = null;
+    this.watchdogMs = WATCHDOG_MS;
+  }
+
+  /** The env and the token, read once for the pane: a retry never runs `printenv` again. */
+  loadSettings() {
+    this.settingsReady ??= (async () => {
+      const [url, token, approver] = await Promise.all([env("HARDNESS_MACHINE_URL"), env("MACHINE_API_TOKEN"), env("LUNA_APPROVER")]);
+      const file = token ? null : await readTextFile(`${home()}/.config/hardness/machine-api-token`).catch(() => null);
+      return { url: url ? url.replace(/\/+$/, "") : null, token: (token ?? file ?? "").replace(/\s+/g, "") || null, approver };
+    })();
+    return this.settingsReady;
   }
 
   /** Reads the settings once and picks the machine that answers; later calls wait for it. */
@@ -46,21 +95,20 @@ export class Machine {
     return this.ready;
   }
 
-  /** Picks again (the machine moved between `pnpm dev` and `pnpm start`). */
+  /** Picks again (the machine moved between `pnpm dev` and `pnpm start`); the settings stay. */
   reconnect() {
     this.ready = this.pick();
     return this.ready;
   }
 
   async pick() {
-    const [url, token, approver] = await Promise.all([env("HARDNESS_MACHINE_URL"), env("MACHINE_API_TOKEN"), env("LUNA_APPROVER")]);
-    const file = token ? null : await readTextFile(`${home()}/.config/hardness/machine-api-token`).catch(() => null);
-    this.token = (token ?? file ?? "").replace(/\s+/g, "") || null;
-    this.approver = approver;
-    const list = url ? [url.replace(/\/+$/, "")] : CANDIDATES;
+    const settings = await this.loadSettings();
+    this.token = settings.token;
+    this.approver = settings.approver;
+    const list = settings.url ? [settings.url] : CANDIDATES;
     for (const base of list) {
       try {
-        const r = await fetch(`${base}/health`, { headers: this.headers() });
+        const r = await within(this.cx, PROBE_MS, fetch(`${base}/health`, { headers: this.headers() }), `${base}/health`);
         // A machine with problems answers 503: it is up, and the one to talk to.
         if (r.ok || r.status === 503) {
           this.base = base;
@@ -70,7 +118,8 @@ export class Machine {
         // not this one
       }
     }
-    this.base = list.at(-1);
+    // None answered: stay on the first, as the TUI does, so the error names where it looked first.
+    this.base = list[0];
     throw new MachineError(`no machine answers at ${list.join(" or ")}: start it with pnpm start`);
   }
 
@@ -117,10 +166,26 @@ export class Machine {
   diff(id, file) { return this.get(`/tasks/${enc(id)}/diff${file ? `?file=${enc(file)}` : ""}`); }
   create(input) { return this.post("/tasks", input); }
   start(id) { return this.post(`/tasks/${enc(id)}/start`); }
-  decide(id, decision, extra = {}) {
+  /** A decision. Connected first, so the approver's name (LUNA_APPROVER) rides on every one, as in the TUI. */
+  async decide(id, decision, extra = {}) {
+    await this.connect().catch(() => null);
     const body = { decision, ...extra };
-    if (this.approver && decision === "approved") body.approver = this.approver;
+    if (this.approver && body.approver == null) body.approver = this.approver;
     return this.post(`/tasks/${enc(id)}/decision`, body);
+  }
+
+  /**
+   * A decision sent only if the card still waits on what the dialog asked about (`expect` is
+   * `gateKey(task)` from when it opened); otherwise a `moved` refusal that says what it waits on now.
+   */
+  async decideIfStill(id, expect, decision, extra = {}) {
+    const now = await this.detail(id);
+    const task = now?.task ?? now;
+    if (gateKey(task) !== expect) {
+      const words = gateQuestion(task) ?? stageWords(task?.state);
+      throw new MachineError(`It moved on: ${words}`, { code: "moved" });
+    }
+    return this.decide(id, decision, extra);
   }
   answer(id, answers) { return this.post(`/tasks/${enc(id)}/answers`, { answers }); }
   postQuestions(id) { return this.post(`/tasks/${enc(id)}/questions/post`); }
@@ -138,25 +203,28 @@ export class Machine {
 
   /**
    * Follows `/events` (from `since` when given) until the connection ends or `alive()` says
-   * stop; each message goes to `onMessage({event, data})`, `data` parsed. Resolves when it ends,
-   * rejects when it cannot connect or the machine refuses.
+   * stop; each message goes to `onMessage({event, data})`, `data` parsed, and `onBytes()` hears
+   * every read. Resolves when it ends, rejects when it cannot connect, the machine refuses, or
+   * nothing (not even the machine's 15s ping) came for `watchdogMs`: a read never hangs the loop.
    */
-  async follow(since, onMessage, alive) {
+  async follow(since, onMessage, alive, { onBytes = null } = {}) {
     await this.connect();
-    const m = /^https?:\/\/([^/:]+)(?::(\d+))?/.exec(this.base ?? "");
+    const m = /^(https?):\/\/([^/:]+)(?::(\d+))?/.exec(this.base ?? "");
     if (!m) throw new MachineError(`not a machine URL: ${this.base}`);
-    const host = m[1];
-    const port = Number(m[2] ?? 80);
-    const socket = await net.connect(host, port);
+    if (m[1] === "https") throw new MachineError("the live stream is not supported over https: the board polls instead", { code: "tls" });
+    const host = m[2];
+    const port = Number(m[3] ?? 80);
+    const socket = await within(this.cx, CONNECT_MS, this.net.connect(host, port), `${host}:${port}`);
     try {
-      await socket.write(request(`/events${since != null ? `?since=${since}` : ""}`, { host: `${host}:${port}`, token: this.token }));
+      await within(this.cx, CONNECT_MS, socket.write(request(`/events${since != null ? `?since=${since}` : ""}`, { host: `${host}:${port}`, token: this.token })), "the stream request");
       const head = new Head();
       const chunks = new Dechunker();
       const sse = new Sse((b) => Buffer.from(b).toString("utf8"));
       let got = null;
       while (alive()) {
-        const bytes = await socket.read(65536);
+        const bytes = await within(this.cx, this.watchdogMs, socket.read(65536), "the event stream", "stalled");
         if (bytes == null) break;
+        onBytes?.();
         let body = bytes;
         if (!got) {
           got = head.push(bytes);
@@ -177,7 +245,11 @@ export class Machine {
         if (chunks.done) break;
       }
     } finally {
-      socket.close();
+      try {
+        socket.close();
+      } catch {
+        // already gone
+      }
     }
   }
 }

@@ -21,11 +21,11 @@ The link is a symlink, so a `git pull` updates the mod. A save reloads its code 
 
 The mod finds the machine the way the TUI does:
 
-- **Where:** `HARDNESS_MACHINE_URL`, else the dev machine on `:4317`, then the Docker one on `:4318`.
+- **Where:** `HARDNESS_MACHINE_URL`, else the dev machine on `:4317`, then the Docker one on `:4318`. Each is probed on `/health` for 800 ms; when none answers it stays on the first, as the TUI does. The live stream needs `http://` (over `https://` the board polls every 30 s and says so).
 - **Token:** `MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`.
-- **Approver:** `LUNA_APPROVER` is sent as the approver, as the TUI sends it.
+- **Approver:** `LUNA_APPROVER` is sent as the approver on every decision, as the TUI sends it.
 
-It reads these through your login shell. The token is never shown.
+It reads these through your login shell, once per pane. The token is never shown. The link says Live only while bytes flow: after 40 s with nothing (the machine pings every 15 s) the stream is closed and retried after 3 s, doubling to 60 s, and the board is read every 30 s while it is not live.
 
 ## What it does
 
@@ -126,7 +126,7 @@ Herdr mods are JavaScript that describe native GPUI elements. There is no DOM, n
 | `luna/page-slack.js`, `page-economy.js`, `page-jira.js` | the Slack (with its watches), Economy and Jira pages, each registered in `features.js`; `page-kit.js` holds what they share and `integrations-model.js` their pure rules |
 | `luna/icons/` | line icons, tinted with the text color |
 
-A dialog is the same mod opened as a Herdr overlay with `props().dialog`. It makes its call to the machine and closes. The board sees the result on the stream. A task to select, or a repo to filter by, comes back through Herdr's shared state.
+A dialog is the same mod opened as a Herdr overlay with `props().dialog`. It makes its call to the machine and closes. The board sees the result on the stream. A task to select, a palette command, a repo to filter by or a bulk result comes back through Herdr's shared state (`app.handBack(kind, value)`); the board reads it on a 250 ms timer, outside render, and ignores a value older than the pane.
 
 ## Tests
 

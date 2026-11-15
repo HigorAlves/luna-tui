@@ -4,7 +4,7 @@
 // the actions.
 import { View } from "gpui-kit";
 import { h_flex, InputState } from "gpui-base";
-import { appHome, exec, nextCommand, notify, openOverlay, pickFolder, props, readTextFile, shared, theme, watchFolder } from "herdr";
+import { appHome, exec, nextCommand, notify, openOverlay, pickFolder, props, readTextFile, setShared, shared, theme, watchFolder } from "herdr";
 import * as fs from "fs/promises";
 
 import { Machine } from "./api.js";
@@ -14,11 +14,14 @@ import { focusColumn, markToggle, openKeys, openPalette, unfoldColumn } from "./
 import { getCtl, keyName } from "./controls.js";
 import { inspector } from "./inspector.js";
 import { actionsFor, applyEvent, gateQuestion, needsYou, plainTitle } from "./model.js";
+import { PENDING_MS, mergeSnapshot } from "./sync.js";
 import { ACTIONS, COMMANDS, DIALOGS, PAGES, TABS } from "./registry.js";
 import "./features.js";
 
 const RECONNECT_MS = 3000;
+const RECONNECT_MAX_MS = 60000;
 const POLL_MS = 30000;
+const SHARED_MS = 250;
 
 const later = (cx, ms) => new Promise((resolve) => cx.timer.after(ms, () => resolve()));
 
@@ -40,7 +43,8 @@ function stored(key, fallback) {
 
 export default class Luna extends View {
   init(_props, cx) {
-    this.machine = new Machine();
+    this.machine = new Machine({ cx });
+    this.startedAt = Date.now();
     if (props()?.dialog) {
       this.isDialog = true;
       initDialog(this, cx);
@@ -69,7 +73,13 @@ export default class Luna extends View {
     this.flash = null;
     this.width = 1200;
     this.seenShared = {};
+    this.focusedInputs = new Set();
+    this.tombstones = new Map();
+    this.detailFlight = {};
+    this.diffFlight = {};
+    this.pending = null;
     this.search = InputState.new({ placeholder: "Find a task or PR" });
+    this.trackInput(this.search);
     this.search.on("change", (_e, cx) => {
       this.query = this.search.value();
       cx.notify();
@@ -110,10 +120,20 @@ export default class Luna extends View {
       }
     });
     this.inbox(cx);
-    // The stream is the source of truth; this only catches up when it is down.
+    // The stream is the source of truth; this only catches up when it is down, or when the first
+    // read of the board never came.
     cx.timer.every(POLL_MS, (cx) => {
-      if (this.link !== "live") this.reload(cx);
+      if (!this.loaded || this.link !== "live") this.reload(cx);
     });
+    // What the dialogs hand back is taken here, never in render.
+    cx.timer.every(SHARED_MS, (cx) => this.takeShared(cx));
+  }
+
+  /** Marks a text input drawn in the main pane: while one has the keyboard the board's keys stay quiet. */
+  trackInput(state) {
+    state.on?.("focus", () => this.focusedInputs.add(state));
+    state.on?.("blur", () => this.focusedInputs.delete(state));
+    return state;
   }
 
   async close() {
@@ -122,13 +142,36 @@ export default class Luna extends View {
 
   // ---- data ----
 
-  async reload(cx, loud = false) {
+  /**
+   * Reads the board again. Runs in its own task, so a handler's `cx` is never used after an await;
+   * answers when it is done. One at a time: a call while another runs gets that one.
+   */
+  reload(cx, loud = false) {
+    cx.notify();
+    if (this.reloading) return this.reloading;
+    this.reloading = new Promise((resolve) => {
+      cx.spawn(async (cx) => {
+        try {
+          await this.readBoard(cx, loud);
+        } finally {
+          this.reloading = null;
+          resolve();
+        }
+      });
+    });
+    return this.reloading;
+  }
+
+  async readBoard(cx, loud) {
+    const since = Date.now();
     try {
       if (loud || this.link === "offline") await this.machine.reconnect().catch(() => null);
       const [tasks, inbox, all] = await Promise.all([this.machine.tasks(), this.machine.prs(false).catch(() => this.prs.inbox), this.machine.prs(true).catch(() => this.prs.all)]);
-      this.tasks = tasks ?? [];
+      // A snapshot never replaces a newer card the stream delivered while it was on its way.
+      this.tasks = mergeSnapshot(this.tasks, tasks ?? [], { tombstones: this.tombstones, since });
+      for (const [id, at] of this.tombstones) if (at < since - 60000) this.tombstones.delete(id);
       this.prs = { inbox, all };
-      this.lastSeq = Math.max(0, ...this.tasks.map((t) => t.seq ?? 0));
+      this.lastSeq = Math.max(this.lastSeq ?? 0, ...this.tasks.map((t) => t.seq ?? 0));
       this.loaded = true;
       this.error = null;
       if (this.link === "offline") this.link = "polling";
@@ -136,43 +179,72 @@ export default class Luna extends View {
       if (this.selected) this.loadDetail(this.selected, cx);
     } catch (e) {
       this.error = e?.message ?? String(e);
-      this.link = "offline";
+      if (this.link !== "live") this.link = "offline";
     }
     cx.notify();
   }
 
-  /** Follows the stream for as long as the pane lives, reconnecting when the machine goes away. */
+  /**
+   * Follows the stream for as long as the pane lives. The link says "Live" only while bytes
+   * flow: when the stream ends, stalls (no byte, not even a ping, for 40s) or fails, it goes
+   * "offline", the board is read again, and the stream is retried after 3s, doubling to 60s.
+   */
   follow(cx) {
     cx.spawn(async (cx) => {
+      let wait = RECONNECT_MS;
       while (!this.closed) {
+        let live = false;
         try {
           if (this.link !== "live") this.link = this.link === "offline" ? "offline" : "connecting";
-          await this.machine.follow(this.lastSeq, (m) => this.onMessage(m, cx), () => !this.closed);
+          await this.machine.follow(
+            this.lastSeq,
+            (m) => {
+              if (m.event === "ready") live = true;
+              this.onMessage(m, cx);
+            },
+            () => !this.closed,
+            { onBytes: () => { this.lastByte = Date.now(); } },
+          );
+          this.streamError = "the machine closed the stream";
         } catch (e) {
           this.streamError = e?.message ?? String(e);
+          if (e?.code === "tls") {
+            // No stream over https: the poll keeps the board true.
+            this.link = "polling";
+            this.say(this.streamError, "error");
+            cx.notify();
+            await this.reload(cx);
+            return;
+          }
         }
         if (this.closed) return;
+        if (live) wait = RECONNECT_MS;
         this.link = "offline";
         cx.notify();
-        await later(cx, RECONNECT_MS);
+        await later(cx, wait);
+        wait = Math.min(wait * 2, RECONNECT_MAX_MS);
         await this.reload(cx);
       }
     });
   }
 
   onMessage({ event, data }, cx) {
+    let changed = true;
     if (event === "ready") {
       this.link = "live";
       this.error = null;
+      if (!this.loaded) this.reload(cx);
     } else if (event === "task.updated" || event === "task.deleted") {
       const before = data?.task ? this.tasks.find((t) => t.id === data.task.id) : null;
       this.tasks = applyEvent(this.tasks, event, data);
+      if (event === "task.deleted" && data?.id) this.tombstones.set(data.id, Date.now());
       if (data?.seq != null) this.lastSeq = Math.max(this.lastSeq ?? 0, data.seq);
       const after = data?.task;
       if (after && !needsYou(before ?? {}) && needsYou(after) && this.loaded) {
         notify({ title: plainTitle(after), body: gateQuestion(after) ?? "Waiting on you", level: "warning", icon: "mods/luna/icons/hand.svg" });
       }
       const id = after?.id ?? data?.id;
+      if (after?.id && this.pending?.id === after.id) this.pending = null;
       if (id && id === this.selected) {
         this.loadDetail(id, cx);
         const task = this.tasks.find((t) => t.id === id);
@@ -186,48 +258,64 @@ export default class Luna extends View {
       this.prs = { ...this.prs, all: data?.snapshot ?? this.prs.all };
       this.prRefreshing = false;
     } else {
-      // Every page sees the rest (slack.items, budget.alert, task.metrics, …).
-      let used = false;
-      for (const p of PAGES) {
-        try {
-          used = Boolean(p.onMessage?.(this, { event, data }, cx)) || used;
-        } catch {
-          // a page's handler never stops the stream
-        }
-      }
-      if (!used) return;
+      changed = false;
     }
-    cx.notify();
+    // Every page sees every message, after the board applied it (slack.items, budget.alert,
+    // task.updated, github.prs, …).
+    let used = false;
+    for (const p of PAGES) {
+      try {
+        used = Boolean(p.onMessage?.(this, { event, data }, cx)) || used;
+      } catch {
+        // a page's handler never stops the stream
+      }
+    }
+    if (changed || used) cx.notify();
   }
 
+  /** Reads a card's detail, one read at a time per card; a call during a read makes it read again. */
   loadDetail(id, cx) {
-    if (this.loadingDetail === id) {
-      this.detailAgain = true;
+    const flight = this.detailFlight[id];
+    if (flight) {
+      flight.again = true;
       return;
     }
-    this.loadingDetail = id;
+    const mine = { again: false };
+    this.detailFlight[id] = mine;
     cx.spawn(async (cx) => {
       try {
         do {
-          this.detailAgain = false;
+          mine.again = false;
           this.details[id] = await this.machine.detail(id);
           cx.notify();
-        } while (this.detailAgain);
+        } while (mine.again);
       } catch {
         // the board still shows what the list knows
       }
-      this.loadingDetail = null;
+      delete this.detailFlight[id];
     });
   }
 
+  /** Reads a card's diff, one read at a time per card, so a slow old answer never lands after a newer one. */
   loadDiff(id, cx) {
+    const flight = this.diffFlight[id];
+    if (flight) {
+      flight.again = true;
+      return;
+    }
+    const mine = { again: false };
+    this.diffFlight[id] = mine;
     cx.spawn(async (cx) => {
-      try {
-        this.diffs[id] = await this.machine.diff(id);
-      } catch (e) {
-        this.diffs[id] = { error: e?.code === "no_worktree" ? "No workspace on disk: nothing to diff." : e?.message ?? String(e) };
-      }
-      cx.notify();
+      do {
+        mine.again = false;
+        try {
+          this.diffs[id] = await this.machine.diff(id);
+        } catch (e) {
+          this.diffs[id] = { error: e?.code === "no_worktree" ? "No workspace on disk: nothing to diff." : e?.message ?? String(e) };
+        }
+        cx.notify();
+      } while (mine.again);
+      delete this.diffFlight[id];
     });
   }
 
@@ -246,6 +334,7 @@ export default class Luna extends View {
   go(page, cx) {
     if (!PAGES.some((p) => p.id === page)) return;
     this.page = page;
+    this.focusedInputs.clear();
     store("page", page);
     try {
       this.currentPage().enter?.(this, cx);
@@ -259,6 +348,8 @@ export default class Luna extends View {
     this.selected = id;
     store("selected", id ?? "");
     this.moreOpen = false;
+    // A card the stream has not delivered yet (a new ticket) stays selected for a while.
+    this.pending = id && !this.tasks.some((t) => t.id === id) ? { id, until: Date.now() + PENDING_MS } : null;
     if (id) {
       this.loadDetail(id, cx);
       const task = this.tasks.find((t) => t.id === id);
@@ -328,7 +419,8 @@ export default class Luna extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        const out = await call();
+        // `call` gets the task's own cx: the handler's is stale after its first await.
+        const out = await call(cx);
         if (out?.id && out?.state) this.tasks = applyEvent(this.tasks, "task.updated", { task: out });
         if (done) this.say(done);
       } catch (e) {
@@ -392,7 +484,7 @@ export default class Luna extends View {
           this.run(cx, key, `Cloning ${pr.repo} into ${dest}`, () => m.clone(pr.repo, dest));
         });
       default:
-        return this.run(cx, key, null, async () => {
+        return this.run(cx, key, null, async (cx) => {
           const task = await m.prAction(pr.repo, pr.number, id);
           if (task?.id) {
             this.go("board", cx);
@@ -422,37 +514,47 @@ export default class Luna extends View {
     });
   }
 
-  /** Shared values the dialogs leave: a task to select, a repo to filter the PRs by. */
+  /**
+   * What a dialog handed back (`app.handBack(kind, value)` there): a task to select, a command
+   * line from the palette, a bulk action's result, a repo to filter the PRs by. Runs on a timer
+   * with the task's own cx, never in render. A value older than this pane is ignored (the last
+   * one shared stays in Herdr's store), and one pane takes each (the claim).
+   */
   takeShared(cx) {
-    const pick = shared("luna.select");
-    if (pick?.at && pick.at !== this.seenShared.select) {
-      this.seenShared.select = pick.at;
+    const take = (kind) => {
+      const v = shared(`luna.${kind}`);
+      if (!v?.at || v.at < this.startedAt || v.at === this.seenShared[kind]) return null;
+      this.seenShared[kind] = v.at;
+      if (shared(`luna.claim.${kind}`) === v.at) return null;
+      setShared(`luna.claim.${kind}`, v.at);
+      return v;
+    };
+    const pick = take("select");
+    if (pick?.id) {
       this.page = "board";
-      this.selected = pick.id;
-      this.loadDetail(pick.id, cx);
+      this.select(pick.id, cx);
     }
-    // What a dialog leaves behind: a command line from the palette, the result of a bulk action.
-    const cmd = shared("luna.command");
-    if (cmd?.at && cmd.at !== this.seenShared.command) {
-      this.seenShared.command = cmd.at;
+    const cmd = take("command");
+    if (cmd) {
       try {
         this.inboxCommand(String(cmd.line ?? ""), cx);
       } catch (e) {
         this.say(e?.message ?? String(e), "error");
+        cx.notify();
       }
     }
-    const bulk = shared("luna.bulk");
-    if (bulk?.at && bulk.at !== this.seenShared.bulk) {
-      this.seenShared.bulk = bulk.at;
+    const bulk = take("bulk");
+    if (bulk) {
       const ctl = getCtl(this);
       for (const id of bulk.done ?? []) ctl.marked.delete(id);
       if (bulk.text) this.say(bulk.text, bulk.failed ? "error" : null);
       if (bulk.refreshPrs) this.refreshPrs(cx);
+      cx.notify();
     }
-    const repo = shared("luna.prRepo");
-    if (repo?.at && repo.at !== this.seenShared.repo) {
-      this.seenShared.repo = repo.at;
+    const repo = take("prRepo");
+    if (repo) {
       this.prRepo = repo.repo;
+      cx.notify();
     }
   }
 
@@ -537,8 +639,10 @@ export default class Luna extends View {
   }
 
   key(e, cx) {
-    if (this.searchFocused) {
+    // Typing in an input of the main pane (the search, a page's own) is not the board's keys.
+    if (this.focusedInputs.size) {
       if (e.key === "escape") {
+        this.focusedInputs.clear();
         this.handle.focus();
         cx.stop_propagation();
       }
@@ -558,6 +662,8 @@ export default class Luna extends View {
       const keys = { j: "next", down: "next", k: "prev", up: "prev", escape: "close", r: "refresh", n: "new", "/": "search", enter: "approve", a: "approve" };
       const c = keys[name];
       if (!c || (c === "close" && !this.selected)) return;
+      // Enter and `a` act on the board's selection; on another page they are that page's or nothing.
+      if (c === "approve" && this.page !== "board") return;
       this.command(c, cx);
     }
     cx.stop_propagation();
@@ -568,7 +674,6 @@ export default class Luna extends View {
   render(cx) {
     const t = theme();
     if (this.isDialog) return renderDialog(this, t);
-    this.takeShared(cx);
     if (this.flash && Date.now() - this.flash.at > 8000) this.flash = null;
     const narrow = this.width < 900;
     const inspectorWidth = Math.max(340, Math.min(440, Math.round(this.width * 0.34)));
@@ -576,7 +681,8 @@ export default class Luna extends View {
     this.boardWidth = this.width - (!narrow || !open ? 236 : 0) - (open ? inspectorWidth : 0);
     const pane = (this.currentPage()?.render ?? boardPage)(this, t);
     const side = open ? inspector(this, t, inspectorWidth) : null;
-    if (this.selected && this.page === "board" && !this.tasks.find((x) => x.id === this.selected) && this.loaded) this.selected = null;
+    const waiting = this.pending?.id === this.selected && Date.now() < this.pending.until;
+    if (this.selected && this.page === "board" && !this.tasks.find((x) => x.id === this.selected) && this.loaded && !waiting) this.selected = null;
     return h_flex()
       .id("luna")
       .track_focus(this.handle)

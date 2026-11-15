@@ -65,7 +65,8 @@ export class View {}
 export const TextView = { markdown: (id, md) => element(`markdown:${md.slice(0, 20)}`), html: () => element("html") };
 export const Input = { new: () => element("input") };
 export const Textarea = { new: () => element("textarea") };
-export const InputState = { new: () => ({ value: () => "", on() {}, focus() {}, set_value() {} }) };
+// `on` keeps its handlers and `emit` fires them, so a test can focus and blur an input.
+export const InputState = { new: () => ({ value: () => "", on(name, fn) { ((this.handlers ??= {})[name] ??= []).push(fn); }, emit(name, ...a) { for (const fn of this.handlers?.[name] ?? []) fn(...a); }, focus() {}, set_value() {} }) };
 export const TextareaState = InputState;
 
 const COLORS = ["background", "surface", "canvas", "chrome", "popover", "raised", "hover", "selected", "border", "input", "foreground", "muted", "dim", "accent", "accent_foreground", "solid", "solid_foreground", "selection", "working", "blocked", "done", "idle", "unknown"];
@@ -76,8 +77,13 @@ export const run = (...a) => calls.push(["run", ...a]);
 export const notify = (...a) => calls.push(["notify", ...a]);
 export const openOverlay = (...a) => calls.push(["openOverlay", ...a]);
 export const closeOverlay = () => null;
-export const setShared = () => null;
-export const shared = () => null;
+// Herdr's shared store, kept in a map a test can read and fill.
+export const sharedStore = {};
+export const setShared = (key, value) => {
+  sharedStore[key] = value;
+  return null;
+};
+export const shared = (key) => sharedStore[key] ?? null;
 export const exec = async () => ({ code: 1, stdout: "", stderr: "" });
 export const readTextFile = async () => null;
 export const home = () => "/home/test";

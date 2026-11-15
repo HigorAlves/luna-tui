@@ -379,3 +379,13 @@ export function applyEvent(tasks, event, message) {
   if (event === "task.deleted" && data?.id) return tasks.filter((t) => t.id !== data.id);
   return tasks;
 }
+
+/**
+ * What a card is waiting on, as one string: a dialog captures it when it opens and a decision is
+ * sent only if it is still the same (`Machine.decideIfStill`), so a question left open never
+ * answers the next one.
+ */
+export function gateKey(task) {
+  const req = task?.gate?.requested ?? {};
+  return [task?.state, task?.waitingOnYou ? 1 : 0, req.gate ?? "", req.outcome ?? "", req.kind ?? ""].join("|");
+}
