@@ -129,7 +129,7 @@ export function gateBody(t, task) {
 function gatePanel(app, t, task) {
   const now = Date.now();
   const l = look(task, now);
-  const line = cardLine(task, now);
+  const line = cardLine(task, now, app.details?.[task.id]);
   const waiting = l === "needs_you" || l === "escalated";
   const color = line.tone ? toneColor(t, line.tone) : t.border;
   const actions = actionsFor(task, now);

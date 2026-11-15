@@ -4,7 +4,7 @@
 // the actions.
 import { View } from "gpui-kit";
 import { h_flex, InputState } from "gpui-base";
-import { appHome, exec, nextCommand, notify, openOverlay, pickFolder, props, readTextFile, setShared, shared, theme, watchFolder } from "herdr";
+import { appHome, exec, nextCommand, openOverlay, pickFolder, props, readTextFile, setShared, shared, theme, watchFolder } from "herdr";
 import * as fs from "fs/promises";
 
 import { Machine } from "./api.js";
@@ -13,7 +13,7 @@ import { initDialog, renderDialog } from "./dialogs.js";
 import { focusColumn, markToggle, openKeys, openPalette, unfoldColumn } from "./boardkeys.js";
 import { getCtl, keyName } from "./controls.js";
 import { inspector } from "./inspector.js";
-import { actionsFor, applyEvent, gateQuestion, needsYou, plainTitle } from "./model.js";
+import { actionsFor, applyEvent, plainTitle } from "./model.js";
 import { PENDING_MS, mergeSnapshot } from "./sync.js";
 import { ACTIONS, COMMANDS, DIALOGS, PAGES, TABS } from "./registry.js";
 import "./features.js";
@@ -235,14 +235,11 @@ export default class Luna extends View {
       this.error = null;
       if (!this.loaded) this.reload(cx);
     } else if (event === "task.updated" || event === "task.deleted") {
-      const before = data?.task ? this.tasks.find((t) => t.id === data.task.id) : null;
       this.tasks = applyEvent(this.tasks, event, data);
       if (event === "task.deleted" && data?.id) this.tombstones.set(data.id, Date.now());
       if (data?.seq != null) this.lastSeq = Math.max(this.lastSeq ?? 0, data.seq);
       const after = data?.task;
-      if (after && !needsYou(before ?? {}) && needsYou(after) && this.loaded) {
-        notify({ title: plainTitle(after), body: gateQuestion(after) ?? "Waiting on you", level: "warning", icon: "mods/luna/icons/hand.svg" });
-      }
+      // Notices (needs you, escalated, overdue, …) are alerts.js's, from the same message.
       const id = after?.id ?? data?.id;
       if (after?.id && this.pending?.id === after.id) this.pending = null;
       if (id && id === this.selected) {

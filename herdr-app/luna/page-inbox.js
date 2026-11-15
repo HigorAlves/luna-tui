@@ -4,7 +4,7 @@
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 
-import { actionsFor, ago, cardId, cardLine, plainTitle, projectOf } from "./model.js";
+import { actionsFor, ago, cardId, cardLine, gateKey, plainTitle, projectOf } from "./model.js";
 import { COMMANDS, page } from "./registry.js";
 import { chip, dot, icon, mono, projectColor, spinner } from "./ui.js";
 import { INBOX_SPLITS, bulkTargets, bulkWords, inboxBadgeCount, inboxCounts, inboxItems } from "./views-model.js";
@@ -124,7 +124,7 @@ function approveAll(app, cx) {
       body: `${bulkWords(targets)} get a yes at once. A release or a ship goes out as soon as it is approved.`,
       label: `Approve ${targets.length}`,
       done: "Approved",
-      calls: targets.map(({ task }) => ({ method: "POST", path: `/tasks/${encodeURIComponent(task.id)}/decision`, body: { decision: "approved", ...(approver ? { approver } : {}) } })),
+      calls: targets.map(({ task }) => ({ taskId: task.id, expect: gateKey(task), method: "POST", path: `/tasks/${encodeURIComponent(task.id)}/decision`, body: { decision: "approved", ...(approver ? { approver } : {}) } })),
     },
     260,
   );
