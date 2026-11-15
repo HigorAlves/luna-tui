@@ -174,7 +174,7 @@ page({
   ],
   label: "Backlog",
   icon: "plan",
-  group: "insight",
+  group: "plan",
   render: backlogPage,
   enter,
   badge: (app) => {

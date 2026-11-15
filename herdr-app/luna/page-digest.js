@@ -131,7 +131,7 @@ page({
   ],
   label: "Digest",
   icon: "clock",
-  group: "inbox",
+  group: "work",
   render: digestPage,
   badge: (app) => {
     const st = digestState(app);

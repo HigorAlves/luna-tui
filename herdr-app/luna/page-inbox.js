@@ -260,7 +260,7 @@ page({
   id: "inbox",
   label: "Inbox",
   icon: "hand",
-  group: "inbox",
+  group: "work",
   render: inboxPage,
   key: inboxKey,
   keys: KEYS,

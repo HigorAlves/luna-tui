@@ -266,7 +266,7 @@ page({
   ],
   label: "Economy",
   icon: "evidence",
-  group: "insight",
+  group: "factory",
   render: economyPage,
   enter,
   onMessage: (app, _m, cx) => {

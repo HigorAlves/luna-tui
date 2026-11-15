@@ -69,7 +69,70 @@ function sideRow(t, id, { label, iconName = null, iconColor = null, count = null
     .when(count != null, (el) => el.child(div().flex_none().text_size(11).text_color(countTone ? toneColor(t, countTone) : t.dim).when(Boolean(countTone), (e) => e.font_semibold()).child(String(count))));
 }
 
-/** The left sidebar: Board | PRs, search, views, projects, the machine's link and New task. */
+/** The sidebar's categories, in order. A page names its own with `group`; one with no known group goes under Other. */
+export const NAV_GROUPS = [
+  { id: "work", label: "Work" },
+  { id: "plan", label: "Planning" },
+  { id: "sources", label: "Sources" },
+  { id: "factory", label: "Factory" },
+];
+
+/** The visible pages under their category: categories in NAV_GROUPS order, pages in the order they were registered, empty categories left out. */
+export function navGroups(pages) {
+  const known = new Set(NAV_GROUPS.map((g) => g.id));
+  const groups = [...NAV_GROUPS, { id: "other", label: "Other" }].map((g) => ({ ...g, pages: [] }));
+  for (const p of pages) {
+    if (p.hidden) continue;
+    groups.find((g) => g.id === (known.has(p.group) ? p.group : "other")).pages.push(p);
+  }
+  return groups.filter((g) => g.pages.length > 0);
+}
+
+const FOLD_KEY = "luna.navFold";
+
+/** The categories folded in this pane, kept across restarts. */
+function folded(app) {
+  if (!app.navFold) {
+    try {
+      app.navFold = new Set(JSON.parse(localStorage.getItem(FOLD_KEY) ?? "[]"));
+    } catch {
+      app.navFold = new Set();
+    }
+  }
+  return app.navFold;
+}
+
+function toggleFold(app, id) {
+  const f = folded(app);
+  f.has(id) ? f.delete(id) : f.add(id);
+  try {
+    localStorage.setItem(FOLD_KEY, JSON.stringify([...f]));
+  } catch {
+    // not kept: it folds for this pane's life
+  }
+}
+
+/** A category's heading: its name and a chevron; folded, the sum of its pages' badges. */
+function navHeading(t, group, isFolded, sum, tone, onClick) {
+  return h_flex()
+    .id(`nav-${group.id}`)
+    .px(10)
+    .pt(10)
+    .pb(3)
+    .gap(5)
+    .items_center()
+    .cursor_pointer()
+    .text_size(11)
+    .font_medium()
+    .text_color(t.dim)
+    .hover((s) => s.text_color(t.muted))
+    .on_click(onClick)
+    .child(div().flex_1().child(group.label))
+    .when(isFolded && sum > 0, (el) => el.child(div().text_color(tone ? toneColor(t, tone) : t.dim).child(String(sum))))
+    .child(icon(isFolded ? "chevron-right" : "chevron-down", 10, t.dim));
+}
+
+/** The left sidebar: search, the pages by category, the board's views and projects, the machine's link and New task. */
 export function sidebar(app, t) {
   const now = Date.now();
   const counts = viewCounts(app.tasks, now);
@@ -80,9 +143,21 @@ export function sidebar(app, t) {
       return null;
     }
   };
-  const nav = PAGES.filter((p) => !p.hidden).map((p) => {
-    const b = badge(p);
-    return sideRow(t, `page-${p.id}`, { label: p.label, iconName: p.icon, count: b?.n ?? null, countTone: b?.tone ?? null, active: app.page === p.id }, (_e, cx) => app.go(p.id, cx));
+  const fold = folded(app);
+  const nav = navGroups(PAGES).flatMap((g) => {
+    const rows = g.pages.map((p) => ({ p, b: badge(p) }));
+    const isFolded = fold.has(g.id);
+    const sum = rows.reduce((n, r) => n + (r.b?.n ?? 0), 0);
+    const tone = rows.find((r) => r.b?.n && r.b?.tone)?.b?.tone ?? null;
+    // Folded, a category still shows the page you are on.
+    const shown = isFolded ? rows.filter((r) => r.p.id === app.page) : rows;
+    return [
+      navHeading(t, g, isFolded, sum, tone, (_e, cx) => {
+        toggleFold(app, g.id);
+        cx.notify();
+      }),
+      ...shown.map(({ p, b }) => sideRow(t, `page-${p.id}`, { label: p.label, iconName: p.icon, count: b?.n ?? null, countTone: b?.tone ?? null, active: app.page === p.id }, (_e, cx) => app.go(p.id, cx))),
+    ];
   });
   return v_flex()
     .w(236)

@@ -337,7 +337,7 @@ page({
   ],
   label: "Floor",
   icon: "build",
-  group: "insight",
+  group: "factory",
   render: floorPage,
   enter,
   onMessage,

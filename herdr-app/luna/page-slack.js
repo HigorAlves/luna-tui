@@ -465,7 +465,7 @@ page({
   keys: SLACK_KEYS,
   label: "Slack",
   icon: "comment",
-  group: "inbox",
+  group: "sources",
   render: slackPage,
   enter: (app, cx) => {
     const s = st(app);

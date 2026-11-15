@@ -197,7 +197,7 @@ page({
   ],
   label: "Tickets",
   icon: "intake",
-  group: "insight",
+  group: "plan",
   render: ticketsPage,
   enter,
   badge: (app) => {

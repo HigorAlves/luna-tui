@@ -2,7 +2,7 @@
 // feature file once, so main.js, the sidebar, the inspector and the dialogs find them without
 // knowing them. A feature keeps its own state in `app.state(<its id>)`.
 //
-// PAGES    {id, label, icon, hidden?: true (stream-only, not in the sidebar), group?: "work" | "inbox" | "insight", render(app, t), enter?(app, cx),
+// PAGES    {id, label, icon, hidden?: true (stream-only, not in the sidebar), group?: "work" | "plan" | "sources" | "factory" (the sidebar category; see board.js NAV_GROUPS), render(app, t), enter?(app, cx),
 //           keys?: [{name, rows: [[keys, does]]}] (listed in the keys sheet on that page),
 //           onMessage?(app, {event, data}, cx) -> true when it used it, badge?(app) -> {n, tone} | null,
 //           key?(app, e, cx) -> true when it handled the key}

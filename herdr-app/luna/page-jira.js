@@ -232,7 +232,7 @@ page({
   keys: [{ name: "Jira", rows: [["/", "search Jira"], ["R", "check Jira again"], ["esc / q", "back to the board"]] }],
   label: "Jira",
   icon: "intake",
-  group: "inbox",
+  group: "sources",
   render: jiraPage,
   enter: (app, cx) => ensure(app, cx),
   onMessage: (app, _m, cx) => {
