@@ -84,29 +84,88 @@ const STAGE_WORDS = {
 
 export const stageWords = (state) => STAGE_WORDS[state] ?? String(state ?? "").replaceAll("_", " ");
 
-/** The question a gate asks, from the task alone (its `gate`): null when nothing waits on you. */
-export function gateQuestion(task) {
+/** The approval nobody has answered yet, in a task detail. */
+const openOf = (detail) => [...(detail?.approvals ?? [])].reverse().find((a) => !a.decision) ?? null;
+
+const NUMBER_WORDS = { 2: "two", 3: "three", 4: "four" };
+const numberWord = (n) => NUMBER_WORDS[n] ?? String(n);
+
+/** How many different names the open gate needs: the repository's rule (`approvalRule.needed`), else two for a plan of high risk. */
+export function namesNeeded(requested = {}) {
+  const needed = Number(requested.approvalRule?.needed);
+  if (Number.isFinite(needed) && needed >= 1) return needed;
+  return requested.risk?.level === "high" ? 2 : 1;
+}
+
+/** The names that already approved the open gate (`requested.approvers`), else the decided one's response. */
+export function approversOf(approval) {
+  const names = (v) => (Array.isArray(v) ? v.filter((n) => typeof n === "string" && n) : []);
+  const open = names(approval?.requested?.approvers);
+  if (open.length) return open;
+  const r = approval?.response;
+  if (Array.isArray(r?.approvers)) return names(r.approvers);
+  return typeof r?.approver === "string" && r.approver ? [r.approver] : [];
+}
+
+/** The split's children the gate proposes. */
+export const splitChildren = (requested = {}) => (Array.isArray(requested.split?.children) ? requested.split.children : []);
+
+/** `{n, noun, text}` of a split: tracker tickets when `via` is "tickets", else cards. */
+export function splitWhat(requested = {}) {
+  const n = splitChildren(requested).length;
+  const noun = requested.split?.via === "tickets" ? "ticket" : "card";
+  return { n, noun, text: `${n} ${noun}${n === 1 ? "" : "s"}` };
+}
+
+/** `first of two approvers; set LUNA_APPROVER`, `next of three approvers`, `last of two approvers`; null for one name. */
+export function approversPhrase(requested, have, approver = null) {
+  const needed = namesNeeded(requested);
+  if (needed < 2) return null;
+  const word = numberWord(needed);
+  if (have === 0) return `first of ${word} approvers${approver ? "" : "; set LUNA_APPROVER"}`;
+  return have + 1 >= needed ? `last of ${word} approvers` : `next of ${word} approvers`;
+}
+
+/** Triage's questions as `{question, recommended}`: the machine sends objects; a bare string is a question with no answer. */
+export function questionsOf(requested = {}) {
+  return (Array.isArray(requested.questions) ? requested.questions : [])
+    .map((q) => (typeof q === "string" ? { question: q, recommended: "" } : { question: String(q?.question ?? q?.text ?? ""), recommended: typeof q?.recommended === "string" ? q.recommended : "" }))
+    .filter((q) => q.question);
+}
+
+/**
+ * The question a gate asks, from the task alone (its `gate`): null when nothing waits on you. With the
+ * task's `detail` and the person's `approver` name it says who is needed, as the TUI's `gate_question`.
+ */
+export function gateQuestion(task, detail = null, approver = null) {
   const requested = task.gate?.requested ?? {};
   switch (task.state) {
-    case "awaiting_approval":
+    case "awaiting_approval": {
       if (requested.outcome === "archive") return "Archive this ticket?";
       if (requested.outcome === "conversation") return "Post the reply and close?";
-      if (requested.outcome === "split") return "Approve the split?";
+      if (requested.outcome === "split") {
+        const { n, text } = splitWhat(requested);
+        const needed = namesNeeded(requested);
+        return `Approve the split${n ? ` (${text})` : ""}?${needed > 1 ? ` · ${numberWord(needed)} different people` : ""}`;
+      }
       if (requested.outcome === "split_failed") return "The split failed: keep it whole?";
-      return "Approve the plan?";
+      const open = openOf(detail);
+      const phrase = approversPhrase(requested, approversOf(open ?? { requested }).length, approver);
+      return `Approve the plan?${phrase ? ` · ${phrase}` : ""}`;
+    }
     case "awaiting_test_check": return "Approve the test cases?";
     case "awaiting_setup":
       if (requested.kind === "context") return "Give it context";
       if (requested.kind === "dedup") return "Is it a duplicate?";
       return "Approve the setup?";
     case "awaiting_answers": {
-      const n = (requested.questions ?? []).length;
+      const n = questionsOf(requested).length;
       return n ? `Answer ${n} question${n === 1 ? "" : "s"}` : "Answer the questions";
     }
     case "awaiting_ship":
       if (!task.waitingOnYou) return null;
       if (task.route === "review") return "Post the review?";
-      if (requested.gate === "ship_approval") return "Safe to release now?";
+      if (requested.gate === "ship_approval") return requested.risk === "high" ? "Safe to release now? · high risk" : "Safe to release now?";
       return "Ship this PR?";
     case "reviewing_memory": return task.waitingOnYou ? "Apply the memory rules?" : null;
     default: return null;
@@ -136,8 +195,21 @@ export function ago(iso, now = Date.now()) {
   return d === "<1m" ? "just now" : `${d} ago`;
 }
 
+/**
+ * What a closed card says. "Shipped" only when the card's own events say a PR merged for it (the
+ * machine records `task.shipped` / `ship.merged`); a posted reply is "Reply posted, closed"; a
+ * duplicate names the card it closed into. Without the events (the task list does not carry them) it is "Closed".
+ */
+export function closedWords(task, detail = null) {
+  if (task.mergedInto) return `Closed as a duplicate of #${String(task.mergedInto).slice(0, 8)}`;
+  const kinds = new Set((detail?.events ?? []).map((e) => e?.kind));
+  if (kinds.has("task.shipped") || kinds.has("ship.merged")) return "Shipped";
+  if (kinds.has("task.reply")) return "Reply posted, closed";
+  return "Closed";
+}
+
 /** The card's one line about now, and its tone (a theme state color name, or null for muted). */
-export function cardLine(task, now = Date.now()) {
+export function cardLine(task, now = Date.now(), detail = null) {
   const l = look(task, now);
   if (l === "escalated") {
     const why = task.reason ? escalationWords(task.reason) : null;
@@ -153,7 +225,7 @@ export function cardLine(task, now = Date.now()) {
   }
   if (l === "draft") return { text: "Draft: start when ready", tone: null };
   if (l === "archived") return { text: `Archived${task.archiveReason ? `: ${task.archiveReason.replaceAll("_", " ")}` : ""}`, tone: null };
-  if (l === "done") return { text: task.route === "feature" ? "Shipped" : "Done", tone: "done" };
+  if (l === "done") return { text: closedWords(task, detail), tone: "done" };
   if (task.state === "awaiting_ship") return { text: "Watching the PR", tone: null };
   return { text: stageWords(task.state), tone: null };
 }
@@ -297,8 +369,16 @@ export function actionsFor(task, now = Date.now()) {
         else { add("approve", "Approve", "primary"); add("send_back", "Send back"); }
         break;
       case "awaiting_ship":
-        add("approve", task.route === "review" ? "Post the review" : requested.gate === "ship_approval" ? "Release" : "Ship", "primary");
-        add("send_back", task.route === "review" ? "Drop it" : "Send back");
+        if (task.route === "review") add("approve", "Post the review", "primary");
+        else if (requested.gate === "ship_approval") {
+          // The release question has two answers: yes, or reject (which archives). The machine refuses a send-back here.
+          add("approve", "Release", "primary");
+          add("reject_release", "Reject the release", "danger");
+        } else { add("approve", "Ship", "primary"); add("send_back", "Send back"); }
+        break;
+      case "reviewing_memory":
+        // The retro takes no send-back; the machine refuses it.
+        add("approve", "Approve", "primary");
         break;
       default:
         add("approve", "Approve", "primary");
@@ -307,12 +387,16 @@ export function actionsFor(task, now = Date.now()) {
   }
   if (l === "escalated") {
     add("approve", "Retry", "primary");
-    add("send_back", "Send back");
+    // An escalated feature card sent back is planned again; the other routes (setup, ci_fix, address) have no plan to return to.
+    if (task.route === "feature") add("send_back", "Send back");
   }
-  if (l === "paused") add("resume", "Resume", "primary");
+  if (l === "paused") {
+    add("resume", "Resume", "primary");
+    add("abort", "Stop", "danger");
+  }
   if (l === "working" || l === "stale" || l === "queued") add("abort", "Stop", "danger");
-  if (!ended(task) && task.state !== "draft") add("archive", "Archive…", "danger");
-  if (ended(task) || task.state === "draft") add("delete", "Delete", "danger");
+  if (!ended(task)) add("archive", "Archive…", "danger");
+  add("delete", "Delete", "danger");
   return out;
 }
 

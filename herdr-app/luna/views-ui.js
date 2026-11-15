@@ -57,7 +57,9 @@ export function tile(t, id) {
 export { button };
 
 // Asks once before several calls: `app.dialog({kind: "luna_many", title, body, label, danger,
-// calls: [{method, path, body}]})`. It sends them in turn and counts the refusals.
+// calls: [{method, path, body, taskId?, expect?}]})`. It sends them in turn and counts the refusals.
+// A decision that names its `taskId` and the `expect` (`gateKey` of the card when the dialog opened)
+// goes through `decideIfStill`: a card that moved to another gate since is skipped and counted as moved.
 DIALOGS.luna_many = {
   title: "Are you sure?",
   height: 240,
@@ -66,17 +68,29 @@ DIALOGS.luna_many = {
   submit: (app, cx, d) =>
     app.send(cx, async () => {
       let done = 0;
+      let moved = 0;
       let last = null;
       for (const c of d.calls ?? []) {
         try {
-          await app.machine.call(c.method ?? "POST", c.path, c.body);
+          if (c.expect != null && c.taskId && c.body?.decision && app.machine.decideIfStill) {
+            const { decision, ...extra } = c.body;
+            await app.machine.decideIfStill(c.taskId, c.expect, decision, extra);
+          } else {
+            await app.machine.call(c.method ?? "POST", c.path, c.body);
+          }
           done += 1;
         } catch (e) {
-          last = e?.message ?? String(e);
+          if (e?.code === "moved") moved += 1;
+          else last = e?.message ?? String(e);
         }
       }
       const total = (d.calls ?? []).length;
-      if (done < total) throw new Error(`${d.done ?? "Done"} ${done} of ${total}; ${total - done} refused${last ? `: ${last}` : ""}`);
+      if (done < total) {
+        const parts = [];
+        if (moved) parts.push(`${moved} moved on and ${moved === 1 ? "was" : "were"} left alone`);
+        if (total - done - moved) parts.push(`${total - done - moved} refused${last ? `: ${last}` : ""}`);
+        throw new Error(`${d.done ?? "Done"} ${done} of ${total}; ${parts.join("; ")}`);
+      }
       return null;
     }),
 };

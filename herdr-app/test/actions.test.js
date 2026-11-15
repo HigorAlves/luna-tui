@@ -48,7 +48,7 @@ test("ask once before approving; an escalated card retries with guidance", () =>
   ACTIONS.approve(app, task({ state: "awaiting_approval", waitingOnYou: true, gate: { requested: {} } }), cx);
   const [spec] = log.dialogs[0];
   assert.equal(spec.kind, "approve_ask");
-  assert.equal(spec.title, "Approve the plan?");
+  assert.equal(spec.title, "Approve the plan of #abcd1234?");
   assert.match(spec.body, /Build starts/);
   ACTIONS.approve(app, task({ state: "escalated" }), cx);
   assert.equal(log.dialogs[1][0].kind, "guidance");
@@ -96,8 +96,8 @@ test("the approve dialog sends the decision, retry sends the note as the reason,
 test("the release and the memory review offer their own buttons", () => {
   const { app } = harness();
   const release = task({ state: "awaiting_ship", waitingOnYou: true, gate: { requested: { gate: "ship_approval" } } });
-  assert.ok(visible(release, app).includes("reject_release"));
-  assert.ok(!visible(task({ state: "awaiting_ship", waitingOnYou: true, gate: { requested: {} } }), app).includes("reject_release"));
+  // Reject the release is a gate button now (actionsFor), not a More item.
+  assert.ok(!visible(release, app).includes("reject_release"));
   assert.ok(visible(task({ state: "reviewing_memory", waitingOnYou: true }), app).includes("memory_skip_rules"));
   assert.ok(!visible(task({ state: "reviewing_memory", waitingOnYou: false }), app).includes("memory_skip_rules"));
   const { app: a2, log } = harness();
@@ -130,7 +130,7 @@ test("edit rules follow the TUI: plan, cases, record, escalation", () => {
 });
 
 test("a plan edit sends only what changed", () => {
-  const before = r.planFields({ brief: "old", criteria: ["a"], assumptions: [], steps: [{ description: "s1", files: ["x.ts"], done_when: ["ok"], est_loc: 40 }], rollback: "revert", risk: { level: "low", reason: "small" } });
+  const before = r.planFields({ brief: "old", criteria: ["a"], assumptions: [], plan: { steps: [{ id: "P1", description: "s1", files: ["x.ts"], done_when: ["ok"], est_loc: 40 }] }, rollback: "revert", risk: { level: "low", reason: "small" } });
   const same = { brief: "old", criteria: ["a"], assumptions: [], steps: ["s1"], rollback: "revert", riskLevel: "low", riskReason: "small" };
   assert.deepEqual(r.planPatch(before, same, true), {});
   assert.deepEqual(r.planPatch(before, { ...same, brief: "new", criteria: ["a", "b"] }, true), { brief: "new", criteria: ["a", "b"] });
@@ -397,7 +397,7 @@ test("every dialog this feature registers draws", () => {
     guidance: { taskId: "x" },
     reject_release: { taskId: "x" },
     edit_ticket: { taskId: "x", ticketTitle: "T", description: "d", criteria: ["a"] },
-    edit_plan: { taskId: "x", full: true, plan: r.planFields({ brief: "b", steps: [{ description: "s" }], risk: { level: "low", reason: "r" } }) },
+    edit_plan: { taskId: "x", full: true, plan: r.planFields({ brief: "b", plan: { steps: [{ description: "s" }] }, risk: { level: "low", reason: "r" } }) },
     edit_cases: { taskId: "x", cases: [{ title: "c", criterion: "C1", approach: "" }] },
     edit_record: { taskId: "x", current: { kind: "bug" } },
     escalation_reason: { taskId: "x", current: "env_broken" },

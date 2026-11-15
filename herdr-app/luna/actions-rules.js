@@ -1,7 +1,7 @@
 // When each ticket action applies, and the bodies it sends: pure functions, no host calls, so
 // `node --test` checks them. The rules are the TUI's (`board/src/keys.rs`, `board/src/app.rs`);
 // the machine still decides, and refuses what does not fit.
-import { ended } from "./model.js";
+import { approversOf, ended, gateKey, gateQuestion, namesNeeded, splitWhat } from "./model.js";
 
 export const detailOf = (app, task) => app.details?.[task.id] ?? null;
 
@@ -20,24 +20,81 @@ export const atMemoryReview = (task) => task.state === "reviewing_memory" && Boo
 
 export const isEscalated = (task) => task.state === "escalated";
 
-/** The `a` key's question, in words: what saying yes does at this gate. */
-export function approveWords(task) {
+export { gateKey, gateQuestion };
+
+/** The ticket's short id as the TUI's confirm texts print it. */
+const hash = (task) => `#${String(task.id ?? "").slice(0, 8)}`;
+
+/**
+ * The `a` key's question, in words: what saying yes does at this gate. The title is the TUI's confirm
+ * text for the gate (`approval_gate`); the body says what happens, from the gate itself.
+ */
+export function approveWords(task, detail = null, approver = null) {
   const r = task.gate?.requested ?? {};
+  const open = openApproval(detail);
+  const have = approversOf(open ?? { requested: r }).length;
+  const needed = namesNeeded(r);
   switch (task.state) {
-    case "awaiting_approval":
-      if (r.outcome === "split") return { title: "Approve the split?", body: "The proposed children become cards of their own." };
-      if (r.outcome === "archive") return { title: "Archive this ticket?", body: "The card ends archived." };
-      if (r.outcome === "conversation") return { title: "Post the reply and close?", body: "The reply goes where the ticket came from and the card closes." };
-      return { title: "Approve the plan?", body: "Build starts on this plan. Approvals count: a plan of high risk needs two names." };
-    case "awaiting_test_check": return { title: "Approve the test cases?", body: "Build starts with these test cases." };
-    case "awaiting_setup": return { title: "Approve the setup?", body: "The proposed luna.yaml is written to the repository and the card closes." };
+    case "awaiting_approval": {
+      if (r.outcome === "split") {
+        const { text, noun } = splitWhat(r);
+        const where = noun === "ticket" ? `Approving creates ${text} in the tracker, linked to this card.` : `The ${text} become cards of their own.`;
+        return { title: `Approve the split of ${hash(task)}?`, body: needed > 1 ? `${where} ${peopleWords(needed, have, approver)}` : where };
+      }
+      if (r.outcome === "archive") return { title: `Archive ${hash(task)}?`, body: "The card ends archived." };
+      if (r.outcome === "conversation") return { title: `Post the reply and close ${hash(task)}?`, body: "The reply goes where the ticket came from and the card closes." };
+      const base = "Build starts on this plan.";
+      return { title: `Approve the plan of ${hash(task)}?`, body: needed > 1 ? `${base} ${peopleWords(needed, have, approver)}` : base };
+    }
+    case "awaiting_test_check": return { title: `Approve the test cases of ${hash(task)}?`, body: "Build starts with these test cases." };
+    case "awaiting_setup":
+      return {
+        title: `Write the proposed luna.yaml for ${hash(task)}?`,
+        body: task.route === "setup" ? "The proposed luna.yaml is written to the repository and the card closes." : "The proposed luna.yaml is written to the repository and the card goes on to triage.",
+      };
     case "awaiting_ship":
-      if (task.route === "review") return { title: "Post the review?", body: "The review goes to GitHub as written, with its line comments." };
-      if (r.gate === "ship_approval") return { title: "Release now?", body: "You answer yes to: safe to release now?" };
-      return { title: "Ship this PR?", body: "The machine publishes and goes on watching the PR." };
-    case "reviewing_memory": return { title: "Approve the memory review?", body: "Its proposed rules are written to project-context.md." };
-    default: return { title: "Approve?", body: "The card goes on from here." };
+      if (task.route === "review") return { title: `Post the review of ${hash(task)}?`, body: "The review goes to GitHub as written, with its line comments." };
+      if (r.gate === "ship_approval") return { title: `Approve the release of ${hash(task)}?`, body: "You answer yes to: safe to release now? The machine merges the PR." };
+      return { title: `Ship ${hash(task)}?`, body: "The machine publishes the PR and goes on watching it. Merging is asked after the checks." };
+    case "reviewing_memory": return { title: `Approve the retro's rules of ${hash(task)}?`, body: "Its proposed rules are written to project-context.md." };
+    default: return { title: `Approve ${hash(task)}?`, body: "The card goes on from here." };
   }
+}
+
+/** `Two different people must approve; yours is the first name.` */
+export function peopleWords(needed, have, approver = null) {
+  const word = { 2: "Two", 3: "Three", 4: "Four" }[needed] ?? String(needed);
+  const place = have === 0 ? "the first" : have + 1 >= needed ? "the last" : "the next";
+  const name = approver ? "" : " Set LUNA_APPROVER so your name is kept.";
+  return `${word} different people must approve; yours is ${place} name.${name}`;
+}
+
+/**
+ * What to say after an approval that left the gate open: who approved and how many more are needed
+ * (the TUI's "1 of 2"). `detail` is the task as read right after the decision; null when the gate closed.
+ */
+export function partialApproval(detail, approver = null) {
+  const task = detail?.task;
+  const open = openApproval(detail);
+  if (!task || !open || !task.waitingOnYou) return null;
+  const needed = namesNeeded(open.requested ?? {});
+  const names = approversOf(open);
+  if (needed < 2 || names.length < 1 || names.length >= needed) return null;
+  const left = needed - names.length;
+  const who = names.join(", ");
+  return `Approved by ${who || approver || "you"}: ${names.length} of ${needed} approvals. ${left === 1 ? "One more name is" : `${left} more names are`} needed.`;
+}
+
+/** The criterion ids the open plan gate has already excused. */
+export function excusedIds(requested = {}) {
+  const u = requested.coverageReport?.untestable ?? requested.untestable ?? [];
+  return (Array.isArray(u) ? u : []).map((x) => (typeof x === "string" ? x : x?.id)).filter(Boolean);
+}
+
+/** The coverage gaps still to decide: the machine's list less the criteria already excused. */
+export function openGaps(gaps, excused = []) {
+  const done = new Set(excused);
+  return (gaps ?? []).filter((g) => !done.has(g?.id ?? g));
 }
 
 /** `e` on the ticket: any card still open. */
@@ -148,6 +205,9 @@ export const SEVERITIES = [
 /** Retry an escalation: the TUI sends `approved` with the guidance as the reason, `null` for none. */
 export const guidanceBody = (note) => ({ reason: String(note ?? "").trim() || null });
 
+/** Send back: the stage reads the reason, so it is required (the TUI: "say why it goes back"). Null when empty. */
+export const sendBackBody = (note) => (String(note ?? "").trim() ? { reason: String(note).trim() } : null);
+
 export const rejectReleaseBody = (comment) => ({ reason: String(comment).trim() });
 
 export const dismissBody = (reason) => (String(reason ?? "").trim() ? { reason: String(reason).trim() } : {});
@@ -247,25 +307,56 @@ export function parseCases(markdown) {
   return cases;
 }
 
+/**
+ * The plan's steps as the editor holds them, from the gate's real shape: `requested.plan.steps`
+ * (v2.2 plan), else the older `requested.slices` (a slice has a title, not a description).
+ */
+export function planSteps(requested = {}) {
+  const raw = Array.isArray(requested.plan?.steps) && requested.plan.steps.length ? requested.plan.steps : Array.isArray(requested.slices) ? requested.slices : [];
+  const strings = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : typeof v === "string" && v ? [v] : []);
+  return raw
+    .map((s) => ({
+      description: typeof s?.description === "string" && s.description ? s.description : typeof s?.title === "string" ? s.title : "",
+      files: strings(s?.files),
+      done_when: strings(s?.done_when ?? s?.acceptance),
+      est_loc: Number.isFinite(s?.est_loc) ? Math.max(0, Math.round(s.est_loc)) : 0,
+    }))
+    .filter((s) => s.description);
+}
+
 /** The fields of the plan the editor starts from, read from the gate's `requested`. */
 export function planFields(requested = {}) {
   const strings = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
   return {
-    brief: typeof requested.brief === "string" ? requested.brief : "",
+    brief: typeof requested.brief === "string" ? requested.brief : typeof requested.plan?.goal === "string" ? requested.plan.goal : "",
     criteria: strings(requested.criteria),
     assumptions: strings(requested.assumptions),
-    steps: (Array.isArray(requested.steps) ? requested.steps : []).filter((s) => s && typeof s.description === "string"),
-    rollback: typeof requested.rollback === "string" ? requested.rollback : "",
-    risk: requested.risk?.level ? { level: requested.risk.level, reason: requested.risk.reason ?? "" } : null,
+    steps: planSteps(requested),
+    rollback: typeof requested.rollback === "string" ? requested.rollback : typeof requested.plan?.rollback === "string" ? requested.plan.rollback : "",
+    risk: requested.risk?.level ? { level: requested.risk.level, reason: requested.risk.reason ?? requested.overrides?.risk?.reason ?? "" } : null,
   };
 }
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+/** Each new step keeps the files, `done_when` and size of the old step with the same words; else of the one at its place if that one is not kept elsewhere. */
+function keepStepData(before, now) {
+  const used = new Set();
+  const words = new Set(now);
+  return now.map((description, i) => {
+    let at = before.findIndex((s, j) => !used.has(j) && s.description === description);
+    if (at < 0 && before[i] && !used.has(i) && !words.has(before[i].description)) at = i;
+    if (at >= 0) used.add(at);
+    const old = at >= 0 ? before[at] : null;
+    return { description, files: old?.files ?? [], done_when: old?.done_when ?? [], est_loc: old?.est_loc ?? 0 };
+  });
+}
+
 /**
  * The PATCH body of a plan edit: only what changed. `now` is what the form holds
  * ({brief, criteria[], assumptions[], steps: string[] (descriptions), rollback, riskLevel, riskReason});
- * a step keeps its files, `done_when` and size from the step at the same place.
+ * a step keeps its files, `done_when` and size from the step it was (same words, else same place).
+ * The risk goes only with a reason: the machine refuses an empty one, so clearing the reason alone sends nothing.
  */
 export function planPatch(before, now, full) {
   const body = {};
@@ -274,12 +365,11 @@ export function planPatch(before, now, full) {
   if (!same(now.assumptions, before.assumptions)) body.assumptions = now.assumptions;
   if (full) {
     const old = before.steps.map((s) => s.description);
-    if (!same(now.steps, old)) {
-      body.steps = now.steps.map((description, i) => ({ description, files: before.steps[i]?.files ?? [], done_when: before.steps[i]?.done_when ?? [], est_loc: before.steps[i]?.est_loc ?? 0 }));
-    }
+    if (!same(now.steps, old)) body.steps = keepStepData(before.steps, now.steps);
     if (now.rollback.trim() !== before.rollback.trim()) body.rollback = now.rollback.trim();
-    if (now.riskLevel && (now.riskLevel !== before.risk?.level || now.riskReason.trim() !== (before.risk?.reason ?? "").trim())) {
-      body.risk = { level: now.riskLevel, reason: now.riskReason.trim() };
+    const reason = now.riskReason.trim();
+    if (now.riskLevel && reason && (now.riskLevel !== before.risk?.level || reason !== (before.risk?.reason ?? "").trim())) {
+      body.risk = { level: now.riskLevel, reason };
     }
   }
   return body;

@@ -75,12 +75,12 @@ test("views and search filter, counts leave ended tasks out", () => {
 
 test("actions: a plan gate approves, sends back and rejects; a split that failed keeps it whole", () => {
   const ids = (t) => actionsFor(t, NOW).map((a) => a.id);
-  assert.deepEqual(ids(task({ state: "awaiting_approval", waitingOnYou: true, column: "Plan" })), ["approve", "send_back", "reject", "archive"]);
-  assert.deepEqual(ids(task({ state: "awaiting_approval", waitingOnYou: true, gate: { requested: { outcome: "split_failed" } } })), ["keep_whole", "send_back", "reject", "archive"]);
-  assert.deepEqual(ids(task({ state: "awaiting_approval", waitingOnYou: true, gate: { requested: { outcome: "archive" } } })), ["approve", "send_back", "archive"]);
-  assert.deepEqual(ids(task()), ["start", "delete"]);
-  assert.deepEqual(ids(task({ state: "implementing", running: true })), ["abort", "archive"]);
-  assert.deepEqual(ids(task({ state: "escalated" })), ["approve", "send_back", "archive"]);
+  assert.deepEqual(ids(task({ state: "awaiting_approval", waitingOnYou: true, column: "Plan" })), ["approve", "send_back", "reject", "archive", "delete"]);
+  assert.deepEqual(ids(task({ state: "awaiting_approval", waitingOnYou: true, gate: { requested: { outcome: "split_failed" } } })), ["keep_whole", "send_back", "reject", "archive", "delete"]);
+  assert.deepEqual(ids(task({ state: "awaiting_approval", waitingOnYou: true, gate: { requested: { outcome: "archive" } } })), ["approve", "send_back", "archive", "delete"]);
+  assert.deepEqual(ids(task()), ["start", "archive", "delete"]);
+  assert.deepEqual(ids(task({ state: "implementing", running: true })), ["abort", "archive", "delete"]);
+  assert.deepEqual(ids(task({ state: "escalated" })), ["approve", "send_back", "archive", "delete"]);
   assert.deepEqual(ids(task({ state: "closed" })), ["delete"]);
 });
 

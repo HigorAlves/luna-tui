@@ -127,34 +127,8 @@ function submit(app, cx) {
   const m = app.machine;
   if (DIALOGS[d.kind]) return DIALOGS[d.kind].submit ? DIALOGS[d.kind].submit(app, cx, d) : finish(app);
   switch (d.kind) {
-    case "send_back":
-      return send(app, cx, () => m.decide(d.taskId, "sent_back", app.reason.value().trim() ? { reason: app.reason.value().trim() } : {}));
-    case "reject": {
-      const comment = app.reason.value().trim();
-      if (!comment) {
-        app.error = "Say why: the reason is kept on the ticket.";
-        return cx.notify();
-      }
-      return send(app, cx, () => m.decide(d.taskId, "rejected", { comment }));
-    }
     case "delete":
       return send(app, cx, () => m.remove(d.taskId));
-    case "answer": {
-      const answers = Object.fromEntries((d.questions ?? []).map((q, i) => [String(q), app.answers[i].value().trim()]).filter(([, a]) => a));
-      if (!Object.keys(answers).length) {
-        app.error = "Answer at least one question.";
-        return cx.notify();
-      }
-      return send(app, cx, () => m.answer(d.taskId, answers));
-    }
-    case "context": {
-      const given = {};
-      if (app.repo.value().trim()) given.repoPath = app.repo.value().trim();
-      if (app.reason.value().trim()) given.text = app.reason.value().trim();
-      return send(app, cx, () => m.context(d.taskId, given));
-    }
-    case "excuse":
-      return send(app, cx, () => m.decide(d.taskId, "approved", { untestable: [...app.picked] }));
     case "merge":
       return send(app, cx, () => m.mergePr(d.repo, d.number));
     case "new_task": {
@@ -212,14 +186,6 @@ export function renderDialog(app, t) {
     primary = registered.primary ? registered.primary(app, d) : { label: "Send", kind: "primary" };
   }
   switch (registered ? null : d.kind) {
-    case "send_back":
-      body.push(label(t, "Reason"), boxed(t, Textarea.new(app.reason).w_full(), 80));
-      primary = { label: "Send back", kind: "primary" };
-      break;
-    case "reject":
-      body.push(label(t, "Reason"), boxed(t, Textarea.new(app.reason).w_full(), 80));
-      primary = { label: "Reject", kind: "danger" };
-      break;
     case "delete":
       body.push(div().pt(8).text_size(12.5).text_color(t.foreground).child("Its runs, approvals and events go with it. This cannot be undone."));
       primary = { label: "Delete", kind: "danger" };
@@ -233,35 +199,9 @@ export function renderDialog(app, t) {
       );
       primary = null;
       break;
-    case "answer":
-      (d.questions ?? []).forEach((q, i) => body.push(label(t, `${i + 1}. ${q}`), boxed(t, Textarea.new(app.answers[i]).w_full(), 52)));
-      primary = { label: "Send answers", kind: "primary" };
-      break;
-    case "context":
-      body.push(label(t, "Repository"), boxed(t, Input.new(app.repo).w_full()), label(t, "Context"), boxed(t, Textarea.new(app.reason).w_full(), 80));
-      break;
-    case "excuse":
-      body.push(div().pt(6).text_size(12.5).text_color(t.foreground).child("No test covers these criteria, so Build would refuse the plan. Tick the ones that cannot be tested: they are kept as untestable."));
-      (d.gaps ?? []).forEach((g) => {
-        const id = g.id ?? g;
-        body.push(option(t, `gap-${id}`, `${id}${g.text ? `: ${g.text}` : ""}`, app.picked.has(id), (_e, cx) => {
-          app.picked.has(id) ? app.picked.delete(id) : app.picked.add(id);
-          cx.notify();
-        }));
-      });
-      primary = { label: "Approve", kind: "primary" };
-      break;
     case "merge":
       body.push(div().pt(8).text_size(12.5).text_color(t.foreground).child(`${d.repo}#${d.number} merges the way the repository allows and its branch is deleted.`));
       primary = { label: "Merge", kind: "primary" };
-      break;
-    case "dedup":
-      (d.candidates ?? []).forEach((c) =>
-        body.push(option(t, `dd-${c.id}`, `Duplicate of: ${c.title}`, false, (_e, cx) => send(app, cx, () => app.machine.dedup(d.taskId, "duplicate", [c.id])))),
-      );
-      body.push(option(t, "dd-related", "Related, keep both", false, (_e, cx) => send(app, cx, () => app.machine.dedup(d.taskId, "related", (d.candidates ?? []).map((c) => c.id)))));
-      body.push(option(t, "dd-neither", "Neither: it is new", false, (_e, cx) => send(app, cx, () => app.machine.dedup(d.taskId, "neither", []))));
-      primary = null;
       break;
     case "repos":
       (d.repos ?? []).forEach((r) =>

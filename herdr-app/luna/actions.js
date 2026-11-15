@@ -8,7 +8,6 @@ import { exec, pickFolder, run } from "herdr";
 
 import {
   atMemoryReview,
-  atRelease,
   approveWords,
   canAddFinding,
   canCorrectRecord,
@@ -30,6 +29,8 @@ import {
   isEscalated,
   issueLink,
   latestApproval,
+  excusedIds,
+  openApproval,
   openFindings,
   planFields,
   prLink,
@@ -39,7 +40,8 @@ import {
   watchTab,
 } from "./actions-rules.js";
 import "./dialogs-edit.js";
-import { actionsFor, ended, plainTitle } from "./model.js";
+import "./dialogs-gates.js";
+import { actionsFor, ended, gateKey, namesNeeded, plainTitle, questionsOf } from "./model.js";
 import { ACTIONS, COMMANDS, more, page, palette } from "./registry.js";
 
 const enc = encodeURIComponent;
@@ -78,16 +80,70 @@ export function ensureJira(app) {
 
 const subtitle = (task) => plainTitle(task);
 
+/** What a gate dialog needs from the card as it is when the dialog opens: `expect` is the check `decideIfStill` compares against. */
+const gateOf = (app, task) => {
+  const detail = detailOf(app, task);
+  const requested = openApproval(detail)?.requested ?? task.gate?.requested ?? {};
+  return { expect: gateKey(task), needed: namesNeeded(requested), excused: excusedIds(requested), detail, subtitle: subtitle(task) };
+};
+
 // Ask once before approving (the TUI's `a`); an escalated card retries with guidance instead.
 ACTIONS.approve = (app, task) => {
   if (app.busy?.has(task.id)) return;
-  if (isEscalated(task)) return app.dialog({ kind: "guidance", taskId: task.id, subtitle: subtitle(task) }, 330);
-  const words = approveWords(task);
+  const g = gateOf(app, task);
+  if (isEscalated(task)) return app.dialog({ kind: "guidance", taskId: task.id, expect: g.expect, subtitle: g.subtitle }, 330);
+  const words = approveWords(task, g.detail, app.machine?.approver);
   const label = actionsFor(task).find((a) => a.id === "approve")?.label ?? "Approve";
-  return app.dialog({ kind: "approve_ask", taskId: task.id, title: words.title, body: words.body, label, subtitle: subtitle(task) }, 250);
+  return app.dialog({ kind: "approve_ask", taskId: task.id, title: words.title, body: words.body, label, expect: g.expect, needed: g.needed, excused: g.excused, subtitle: g.subtitle }, 250);
 };
 
-// Ask before stopping a running stage.
+// Keep a split card whole: asks first (the TUI: "keep #x whole and approve the plan?"), and sends only while it is still at the gate.
+ACTIONS.keep_whole = (app, task) => {
+  const g = gateOf(app, task);
+  return app.dialog({
+    kind: "approve_ask",
+    taskId: task.id,
+    title: `Keep #${shortId(task.id)} whole and approve the plan?`,
+    body: "The split is dropped and the card is planned as one. Your answer is recorded and flagged at every later gate.",
+    label: "Keep it whole",
+    extra: { keepWhole: true },
+    expect: g.expect,
+    needed: g.needed,
+    excused: g.excused,
+    subtitle: g.subtitle,
+  }, 250);
+};
+
+// Post the questions to the card's source: asks first, since the text leaves for GitHub, Slack or Jira.
+ACTIONS.post_questions = (app, task) =>
+  app.confirm({
+    title: "Post the questions?",
+    body: "Triage's questions are posted where the ticket came from, so others can answer. Nothing else is sent.",
+    label: "Post the questions",
+    subtitle: subtitle(task),
+    call: { method: "POST", path: `/tasks/${enc(task.id)}/questions/post`, body: {} },
+  });
+
+// Send back and reject ask for a reason, and send only while the card is still at the gate they were opened for.
+ACTIONS.send_back = (app, task) => {
+  const g = gateOf(app, task);
+  return app.dialog({ kind: "send_back", taskId: task.id, expect: g.expect, shipGate: task.state === "awaiting_ship", subtitle: g.subtitle }, 300);
+};
+ACTIONS.reject = (app, task) => app.dialog({ kind: "reject", taskId: task.id, expect: gateKey(task), subtitle: subtitle(task) }, 300);
+
+// The answers start from triage's recommendations (`requested.questions[].recommended`).
+ACTIONS.answer = (app, task) => {
+  const qs = questionsOf(openApproval(detailOf(app, task))?.requested ?? task.gate?.requested);
+  const questions = qs.map((q) => q.question);
+  return app.dialog({ kind: "answer", taskId: task.id, questions, recommended: qs.map((q) => q.recommended), subtitle: subtitle(task) }, Math.min(660, 220 + questions.length * 100));
+};
+ACTIONS.context = (app, task) => app.dialog({ kind: "context", taskId: task.id, repoPath: task.repoPath ?? "", subtitle: subtitle(task) }, 440);
+ACTIONS.dedup = (app, task) => {
+  const candidates = task.gate?.requested?.candidates ?? [];
+  return app.dialog({ kind: "dedup", taskId: task.id, candidates, subtitle: subtitle(task) }, Math.min(620, 260 + candidates.length * 70));
+};
+
+// Ask before stopping a running stage (or a paused one).
 ACTIONS.abort = (app, task) =>
   app.confirm({
     title: "Stop the running stage?",
@@ -98,16 +154,17 @@ ACTIONS.abort = (app, task) =>
     call: { method: "POST", path: `/tasks/${enc(task.id)}/abort`, body: {} },
   });
 
-ACTIONS.reject_release = (app, task) => app.dialog({ kind: "reject_release", taskId: task.id, subtitle: subtitle(task) }, 340);
+ACTIONS.reject_release = (app, task) => app.dialog({ kind: "reject_release", taskId: task.id, expect: gateKey(task), subtitle: subtitle(task) }, 340);
 
 ACTIONS.memory_skip_rules = (app, task) =>
   app.dialog({
     kind: "approve_ask",
     taskId: task.id,
-    title: "Approve, skipping the rules?",
+    title: `Approve the retro of #${shortId(task.id)} and skip its rules?`,
     body: "The memory review is approved, but its proposed rules are not written to project-context.md.",
     label: "Approve, skip the rules",
     extra: { applyRules: false, reason: "rules skipped" },
+    expect: gateKey(task),
     subtitle: subtitle(task),
   }, 250);
 
@@ -295,7 +352,6 @@ ACTIONS.watch = (app, task, cx) =>
 
 const detail = (task, app) => detailOf(app, task);
 const buttons = [
-  ["reject_release", "Reject the release", "danger", (task) => atRelease(task)],
   ["memory_skip_rules", "Approve, skip the rules", "plain", (task) => atMemoryReview(task)],
   ["watch", "Watch the stage", "plain", (task) => canWatch(task)],
   ["edit_ticket", "Edit the ticket", "plain", (task) => canEditTicket(task)],

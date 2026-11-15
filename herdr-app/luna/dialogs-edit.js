@@ -1,10 +1,10 @@
-// The dialogs of the ticket actions (actions.js): ask before a decision, retry with guidance,
-// reject the release, edit the ticket, the plan, the cases and the triage record, correct the
-// escalation reason, set the repo, Jira, findings, evidence feedback, duplicates and the worktree.
+// The dialogs of the ticket actions (actions.js) apart from the gates (dialogs-gates.js): edit the
+// ticket, the plan, the cases and the triage record, correct the escalation reason, set the repo,
+// Jira, findings, evidence feedback, merging duplicates and the worktree.
 // Each is registered in DIALOGS (registry.js); the call it makes is in `submit`.
 import { div } from "gpui-kit";
 import { h_flex, Input, InputState, Textarea, TextareaState } from "gpui-base";
-import { closeOverlay, openOverlay, pickFolder, props } from "herdr";
+import { pickFolder } from "herdr";
 
 import {
   RECORD_FIELDS,
@@ -14,13 +14,11 @@ import {
   dismissBody,
   feedbackBody,
   findingBody,
-  guidanceBody,
   lines,
   looksLikeJiraKey,
   parseCases,
   planPatch,
   recordValue,
-  rejectReleaseBody,
   segment,
 } from "./actions-rules.js";
 import { area, boxed, field, label, option } from "./dialogs.js";
@@ -44,18 +42,6 @@ const explain = (words) => (call) => async () => {
   }
 };
 
-/** A decision, as the board sends it: connected first, so the approver's name rides along. */
-async function decide(m, taskId, decision, extra = {}) {
-  await m.connect().catch(() => null);
-  return m.decide(taskId, decision, extra);
-}
-
-/** Closes this dialog and opens another in its place. */
-function swap(spec, height, width = 460) {
-  openOverlay({ mod: "luna", kind: "dialog", width, height, props: { dialog: spec } });
-  closeOverlay(props().overlay);
-}
-
 function fail(app, cx, message) {
   if (app.fail) app.fail(cx, message);
   else {
@@ -70,56 +56,6 @@ function filterInput(placeholder) {
   state.on("change", (_e, cx) => cx.notify());
   return state;
 }
-
-// ---- decisions ----
-
-// Ask once before a decision: `{taskId, body, label, extra?}`. A refusal for coverage gaps opens the excuse dialog.
-DIALOGS.approve_ask = {
-  title: "Approve",
-  height: 250,
-  body: (app, t, d) => [note(t, d.body ?? "")],
-  primary: (app, d) => ({ label: d.label ?? "Approve", kind: "primary" }),
-  submit: (app, cx, d) =>
-    app.send(cx, async () => {
-      try {
-        return await decide(app.machine, d.taskId, "approved", d.extra ?? {});
-      } catch (e) {
-        if (e?.code === "coverage_gaps") {
-          const gaps = e.body?.gaps ?? [];
-          swap({ kind: "excuse", taskId: d.taskId, gaps }, Math.min(560, 220 + gaps.length * 34));
-          return null;
-        }
-        throw e;
-      }
-    }),
-};
-
-// Retry an escalated card; the note is the guidance the stage reads (optional).
-DIALOGS.guidance = {
-  title: "Retry with guidance",
-  height: 330,
-  init: (app) => {
-    app.note = textarea("What it should do differently (optional)", 4);
-  },
-  body: (app, t) => [note(t, "The stage runs again and reads your note first."), ...area(t, "Guidance", app.note, 90)],
-  primary: () => ({ label: "Retry", kind: "primary" }),
-  submit: (app, cx, d) => app.send(cx, () => decide(app.machine, d.taskId, "approved", guidanceBody(app.note.value()))),
-};
-
-// Reject the release: the card is archived, and the comment stays on it.
-DIALOGS.reject_release = {
-  title: "Reject the release",
-  height: 340,
-  init: (app) => {
-    app.note = textarea("Why it is not safe to release", 4);
-  },
-  body: (app, t) => [note(t, "The card ends archived. The comment is kept on it."), ...area(t, "Comment", app.note, 90)],
-  primary: () => ({ label: "Reject the release", kind: "danger" }),
-  submit: (app, cx, d) => {
-    if (!app.note.value().trim()) return fail(app, cx, "Say why: the reason is kept on the ticket.");
-    return app.send(cx, () => decide(app.machine, d.taskId, "rejected", rejectReleaseBody(app.note.value())));
-  },
-};
 
 // ---- edits ----
 
@@ -375,7 +311,7 @@ DIALOGS.finding_dismiss = {
   primary: () => ({ label: "Dismiss", kind: "primary" }),
   submit: (app, cx, d) => {
     if (!app.picked) return fail(app, cx, "Pick the finding to dismiss.");
-    return app.send(cx, explain({ finding_unknown: "Verify did not report that finding." })(() => app.machine.post(`/tasks/${enc(d.taskId)}/findings/${segment(app.picked)}/dismiss`, dismissBody(app.reason.value()))));
+    return app.send(cx, explain({ not_found: "Verify did not report that finding." })(() => app.machine.post(`/tasks/${enc(d.taskId)}/findings/${segment(app.picked)}/dismiss`, dismissBody(app.reason.value()))));
   },
 };
 
@@ -431,7 +367,7 @@ DIALOGS.merge_into = {
       note(t, "This ticket closes, merged into the one you pick. Close as a duplicate can be undone with Bring it back."),
       ...field(t, "Search", app.filter),
       label(t, "Duplicate of"),
-      ...(rows.length ? rows.map((c) => option(t, `mi-${c.id}`, `${c.title}  (${c.state})`, false, (_e, cx) => app.send(cx, explain({ merge_invalid: "That ticket cannot take this one." })(() => app.machine.post(`/tasks/${enc(d.taskId)}/merge`, { into: c.id }))))) : [hint(t, "No other ticket matches.")]),
+      ...(rows.length ? rows.map((c) => option(t, `mi-${c.id}`, `${c.title}  (${c.state})`, false, (_e, cx) => app.send(cx, explain({ cannot_merge: "That ticket cannot take this one." })(() => app.machine.post(`/tasks/${enc(d.taskId)}/merge`, { into: c.id }))))) : [hint(t, "No other ticket matches.")]),
     ];
   },
   primary: () => null,
