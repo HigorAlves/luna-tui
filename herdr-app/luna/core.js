@@ -1,6 +1,6 @@
 // The pages every build has: the board and the PRs. Feature files add theirs the same way.
 import { boardPage } from "./board.js";
-import { prsKey, prsPage } from "./prs.js";
+import { prBadge, prsKey, prsMessage, prsPage } from "./prs.js";
 import { boardKey } from "./boardkeys.js";
 import { COMMANDS, page } from "./registry.js";
 
@@ -12,10 +12,9 @@ page({
   group: "work",
   render: prsPage,
   key: prsKey,
-  badge: (app) => {
-    const n = (app.prs.inbox?.prs ?? []).filter((p) => p.split === "review_requested").length;
-    return n ? { n, tone: null } : null;
-  },
+  // The TUI's count (review requested, ready to merge, CI failed, changes requested), and a notice when a split gains a PR.
+  badge: prBadge,
+  onMessage: prsMessage,
 });
 
 COMMANDS.board = (app, _arg, cx) => app.go("board", cx);

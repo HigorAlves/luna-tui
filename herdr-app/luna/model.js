@@ -349,7 +349,9 @@ export function actionsFor(task, now = Date.now()) {
   const add = (id, label, kind = "plain") => out.push({ id, label, kind });
   const requested = task.gate?.requested ?? {};
   const l = look(task, now);
-  if (task.state === "draft") add("start", "Start", "primary");
+  // A draft the machine holds (a split child waiting on its dependency) is started by the machine, not by you.
+  const held = task.state === "draft" && Boolean(task.dependsOn?.length) && task.startWhenReady !== false;
+  if (task.state === "draft" && !held) add("start", "Start", "primary");
   if (l === "needs_you") {
     switch (task.state) {
       case "awaiting_approval":

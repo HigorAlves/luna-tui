@@ -586,7 +586,11 @@ export default class Luna extends View {
       case "new": return this.newTask();
       case "approve": return this.primary(cx);
       case "search": return this.search.focus();
-      default: return null;
+      default:
+        if (COMMANDS[c]) return COMMANDS[c](this, "", cx);
+        if (PAGES.some((p) => p.id === c)) return this.go(c, cx);
+        this.say(`unknown command: ${c}`, "error");
+        return cx.notify();
     }
   }
 

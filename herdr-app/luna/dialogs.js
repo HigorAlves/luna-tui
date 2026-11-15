@@ -44,13 +44,6 @@ export function initDialog(app, cx) {
   }
   const field = (placeholder, value = "") => InputState.new({ placeholder, value });
   const area = (placeholder, rows = 4, value = "") => TextareaState.new({ placeholder, rows, value });
-  if (d.kind === "send_back") app.reason = area("What should change (optional)", 4);
-  if (d.kind === "reject") app.reason = area("Why it is rejected", 4);
-  if (d.kind === "answer") app.answers = (d.questions ?? []).map((q) => area(String(q).slice(0, 80), 2));
-  if (d.kind === "context") {
-    app.repo = field("Absolute path of the repository", d.repoPath ?? "");
-    app.reason = area("What it needs to know", 4);
-  }
   if (d.kind === "new_task") {
     app.title = field("What should be done", d.title ?? "");
     app.repo = field("/path/to/repository", d.repoPath ?? "");
@@ -60,7 +53,6 @@ export function initDialog(app, cx) {
     app.title.focus();
     cx.timer.after(400, () => app.title.focus());
   }
-  app.picked = d.kind === "excuse" ? new Set((d.gaps ?? []).map((g) => g.id ?? g)) : null;
   takeKeyboard(app, cx);
 }
 

@@ -6,15 +6,8 @@ import { planCriteria } from "./detail-model.js";
 import * as model from "./model.js";
 import { COLUMNS, ARCHIVE_REASONS, ended, needsYou, projectOf, sortCards } from "./model.js";
 
-/**
- * What a gate is, as the contract's `gateKey(task)` says it (Lane A adds it to model.js; the local
- * copy is the same text, so a bulk dialog's `expect` means the same on both sides of the merge).
- */
-export const gateKey = (task) => {
-  if (typeof model.gateKey === "function") return model.gateKey(task);
-  const req = task.gate?.requested ?? {};
-  return [task.state, task.waitingOnYou ? 1 : 0, req.gate ?? "", req.outcome ?? "", req.kind ?? ""].join("|");
-};
+/** What a gate is: model.js's `gateKey`, captured when a dialog opens and checked when it sends. */
+export const gateKey = (task) => model.gateKey(task);
 
 // ---- key names ----
 
