@@ -748,7 +748,7 @@ impl Machine {
         let value = Self::json(
             self.agent
                 .post(self.url(&slack_item_path(id, "/relation")))
-                .send_json(json!({ "relation": relation, "target": target })),
+                .send_json(slack_relation_body(relation, target)),
         )?;
         serde_json::from_value(value).map_err(|e| e.to_string())
     }
@@ -857,6 +857,15 @@ fn slack_reply_body(text: &str, nudge: bool, draft: Option<(&str, &str)>) -> Val
     if let Some((id, hash)) = draft {
         body["draftId"] = json!(id);
         body["draftHash"] = json!(hash);
+    }
+    body
+}
+
+/// The body of a relation answer: `target` is left out (not `null`) for a new candidate or none, since the machine's schema takes an optional string.
+fn slack_relation_body(relation: &str, target: Option<&str>) -> Value {
+    let mut body = json!({ "relation": relation });
+    if let Some(target) = target {
+        body["target"] = json!(target);
     }
     body
 }
@@ -1133,6 +1142,18 @@ mod tests {
         assert_eq!(
             slack_reply_body("hi", true, None),
             json!({ "text": "hi", "nudge": true })
+        );
+    }
+
+    #[test]
+    fn a_relation_answer_leaves_the_target_out_when_there_is_none() {
+        assert_eq!(
+            slack_relation_body("new_candidate", None),
+            json!({ "relation": "new_candidate" })
+        );
+        assert_eq!(
+            slack_relation_body("related_to_backlog", Some("b1")),
+            json!({ "relation": "related_to_backlog", "target": "b1" })
         );
     }
 

@@ -100,7 +100,7 @@ Errors use `{ "error", "message" }`: 400 for invalid input, 404 for an unknown t
 
 ## Who may call
 
-The machine's clients are the board, Luna Notch and scripts. None is a web page. Every request passes these checks in order. This applies to every route, including `/events` and `/health`. The checks are in `machine/src/adapters/http/access.ts`:
+The machine's clients are the board, the Herdr app mod (`herdr-app/`), Luna Notch and scripts. None is a web page. Every request passes these checks in order. This applies to every route, including `/events` and `/health`. The checks are in `machine/src/adapters/http/access.ts`:
 
 - **Host**: while `MACHINE_HOST` is a loopback address, a `Host` header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`. Any other host gets 403 `forbidden_host`. This stops a DNS name that rebinds to 127.0.0.1. Beyond loopback, the machine skips the check and requires the token instead.
 - **Origin**: only browsers send one. Any origin but the machine's own gets 403 `forbidden_origin`. The machine's own origins are `http://127.0.0.1:<port>` and `http://localhost:<port>`.

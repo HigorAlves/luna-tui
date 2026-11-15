@@ -23,6 +23,7 @@ It walks a fresh Mac through everything below, one step at a time. Every step is
 | `make integrations` | Jira, the Slack inbox and machine settings (where your repos live, engine budgets) into the root `.env` (0600), each tried against its service; `machine/.env` is linked to it for `pnpm dev` |
 | `make up`, `make down` | `pnpm start`, `pnpm stop` |
 | `make board` | `pnpm board:link` |
+| `make herdr-app` | `pnpm app:link`: links the Luna mod into the [Herdr desktop app](https://github.com/herdrdev/herdr-app) and checks it; open it with `herdr-app do tab.new --mod luna --name Luna` ([herdr-app/README.md](../herdr-app/README.md)) |
 | `make luna-yaml REPO=<path>` | a repo's `luna.yaml`: Jira (the statuses listed from your project when the Jira keys are set), engines, policy, budgets and SLAs; an existing file keeps its comments, the change is shown as a diff, and nothing is written that the machine would refuse. Checks and services come from the board's `:setup <repo>`, which proves them |
 | `make doctor` | what is installed, set and running, and what is missing; never prints a secret |
 
