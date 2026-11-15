@@ -3,10 +3,9 @@
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 
-import { stageWords } from "./model.js";
 import { button, toneColor } from "./ui.js";
 import { DIALOGS, tab } from "./registry.js";
-import { engineChoices, engineRows, taskPacks } from "./detail-model.js";
+import { engineChoices, engineRows, packWords, taskPacks } from "./detail-model.js";
 import { note, ownState } from "./tabs-detail.js";
 
 /** Reads /packs and /engines into `ownState(app, "engines")`; kept after the first read, read again on each visit. */
@@ -33,7 +32,7 @@ function engines(app, t, task, detail) {
   const rows = engineRows(task, detail, st.packs, st.engines);
   if (!rows.length) return note(t, "This machine lists no stage that runs a model.");
   const packs = taskPacks(st.packs);
-  const el = v_flex().gap(2).child(div().pb(6).text_size(11.5).text_color(t.dim).child("What each stage runs on, for this ticket. A stage that already ran keeps its engine."));
+  const el = v_flex().gap(2).child(div().pb(6).text_size(11.5).text_color(t.dim).child(rows.every((r) => r.locked) ? "What each stage ran on. This ticket is over, so its engines can no longer change." : "What each stage runs on, for this ticket. A stage that already ran keeps its engine."));
   rows.forEach((r, i) => {
     const pack = packs.find((p) => p.id === r.pack);
     el.child(
@@ -45,14 +44,16 @@ function engines(app, t, task, detail) {
         .px(6)
         .rounded(6)
         .hover((x) => x.bg(t.hover))
-        .child(div().w(110).flex_none().truncate().text_size(12).font_semibold().text_color(t.foreground).child(stageWords(r.pack)))
+        .child(div().w(110).flex_none().truncate().text_size(12).font_semibold().text_color(t.foreground).child(packWords(r.pack)))
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(r.isDefault ? t.muted : t.blocked).child(r.engine))
         .when(Boolean(r.off), (x) => x.child(div().flex_none().text_size(10.5).text_color(toneColor(t, "error")).child(r.off)))
         .child(div().w(90).flex_none().truncate().text_size(10.5).text_color(t.dim).child(r.ran ? `ran on ${r.ran}` : ""))
-        .child(
-          button(t, `engine-pick-${r.pack}`, "Change", "plain", () =>
-            app.dialog({ kind: "engine", taskId: task.id, pack: r.pack, current: task.stages?.[r.pack] ?? null, choices: engineChoices(pack, st.engines), ran: Boolean(r.ran), subtitle: `${stageWords(r.pack)} runs on ${r.engine}` }, Math.min(520, 190 + (pack?.engines?.allowed?.length ?? 0) * 40)),
-            { small: true }),
+        .when(!r.locked, (x) =>
+          x.child(
+            button(t, `engine-pick-${r.pack}`, "Change", "plain", () =>
+              app.dialog({ kind: "engine", taskId: task.id, pack: r.pack, current: task.stages?.[r.pack] ?? null, choices: engineChoices(pack, st.engines), ran: Boolean(r.ran), subtitle: `${packWords(r.pack)} runs on ${r.engine}` }, Math.min(520, 190 + (pack?.engines?.allowed?.length ?? 0) * 40)),
+              { small: true }),
+          ),
         ),
     );
   });

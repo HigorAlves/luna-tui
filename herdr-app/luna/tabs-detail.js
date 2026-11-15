@@ -7,6 +7,7 @@ import { ago, money, plainTitle, projectOf, stageWords } from "./model.js";
 import { bullet, codeBlock, markdown, sub } from "./inspector.js";
 import { alpha, button, chip, mono, toneColor } from "./ui.js";
 import { tab } from "./registry.js";
+import { approvalRuleView, coverageView, machineFlags, mergedEvent, originRows, planChecks, riskOverrideLine, riskRaisedLine, stackRows } from "./detail-sections.js";
 import { approver, criteriaRows, jiraSummary, latestApproval, planCriteria, planHistory, pickedRun, prFor, prUrlOf, runError, runTook, slaParts, testCases, testGroups } from "./detail-model.js";
 
 const arr = (v) => (Array.isArray(v) ? v : []);
@@ -68,6 +69,8 @@ function overview(app, t, task, detail) {
   if (task.branch) el.child(row(t, "Branch", task.branch));
   const issue = task.source?.issue ?? task.source?.number ?? null;
   if (task.source?.kind || issue) el.child(row(t, "Issue", [task.source.kind, issue ? `#${issue}` : null, task.source.url ?? task.source.ref].filter(Boolean).join(" · ")));
+  originRows(task).forEach(([k, v], i) => el.child(row(t, k, v).id(`origin-${i}`)));
+  stackRows(task, detail, app.tasks).forEach((line, i) => el.child(row(t, "Stack", line).id(`stack-${i}`)));
   el.child(row(t, "Jira", jira ?? "not linked"));
   if (task.jira?.url) el.child(h_flex().pl(80).child(button(t, "open-jira", "Open in Jira", "quiet", () => app.openUrl(task.jira.url), { iconName: "external", small: true })));
   if (task.jira?.blocked) el.child(row(t, "Blocked", s(task.jira.blocked.why ?? task.jira.blocked), "error"));
@@ -144,11 +147,39 @@ function plan(app, t, task, detail) {
     el.child(sub(t, "Out of scope"));
     p.out_of_scope.forEach((x) => el.child(bullet(t, s(x))));
   }
-  const gaps = arr(r.coverageReport?.gaps);
-  if (gaps.length) el.child(div().pt(6).text_size(11.5).text_color(t.blocked).child(`${gaps.length} criteria no test covers: ${gaps.map((g) => s(g.id ?? g)).join(", ")}`));
+  const flags = machineFlags(a, crit);
+  if (flags.length) {
+    el.child(sub(t, "The machine flagged", String(flags.length)));
+    flags.forEach((f, i) => el.child(bullet(t, f, { tone: "blocked", mark: "⚑" }).id(`plan-flag-${i}`)));
+  }
+  const checks = Object.entries(planChecks(a));
+  if (checks.length) {
+    el.child(sub(t, "Checks"));
+    el.child(h_flex().gap(6).flex_wrap().children(checks.map(([n, v]) => chip(t, `${n}: ${v}`, v === "flag" ? "blocked" : v === "ask" ? "error" : v === "proceed" ? "done" : null, 11))));
+  }
+  const cov = coverageView(a);
+  if (cov) {
+    const bits = [cov.total != null ? `${cov.total} criteria` : null, cov.bar != null ? `bar ${Math.round(cov.bar * 100)}%` : null, cov.score != null ? `score ${Math.round(cov.score * 100)}%` : null, cov.thin ? `${cov.thin} thin` : null].filter(Boolean);
+    el.child(sub(t, "Coverage"));
+    el.child(div().text_size(11.5).text_color(t.dim).child(bits.join(" · ") || "no numbers"));
+    el.child(div().text_size(11.5).text_color(cov.open.length ? t.blocked : t.dim).child(cov.open.length ? `${cov.open.length} criteria no test covers: ${cov.open.join(", ")}` : "every criterion has a scenario or an excuse"));
+    if (cov.untestable.length) el.child(div().text_size(11.5).text_color(t.dim).child(`excused as untestable: ${cov.untestable.join(", ")}`));
+  }
+  const raised = riskRaisedLine(a);
+  if (raised) el.child(div().pt(4).text_size(11.5).text_color(t.blocked).child(`Risk raised: ${raised}`));
+  const over = riskOverrideLine(a);
+  if (over) el.child(div().text_size(11.5).text_color(t.dim).child(over));
+  const rule = approvalRuleView(a);
+  if (rule.text || rule.line || (rule.position && !a.decision)) {
+    el.child(sub(t, "Approvers"));
+    if (rule.text) el.child(div().text_size(11.5).text_color(t.dim).child(rule.text));
+    if (rule.position && !a.decision) el.child(div().text_size(11.5).text_color(t.muted).child(rule.position));
+    if (rule.line) el.child(div().text_size(11.5).text_color(t.foreground).child(rule.line));
+  }
   const map = r.map ?? null;
   if (map) {
     el.child(sub(t, "Code map", map.confidence != null ? `${Math.round(map.confidence * 100)}% sure${map.stale ? " · stale" : ""}` : map.stale ? "stale" : null));
+    if (map.stale) el.child(div().text_size(11.5).text_color(t.blocked).child(`The code map's graph is ${typeof map.behind === "number" ? map.behind : "many"} commits behind the default branch.`));
     if (map.note) el.child(div().text_size(11.5).text_color(t.dim).child(String(map.note)));
     arr(map.components).forEach((c) => el.child(bullet(t, s(c))));
     arr(map.files).slice(0, 25).forEach((f) => el.child(h_flex().gap(8).child(div().flex_1().min_w(0).truncate().font_family(mono()).text_size(10.5).text_color(t.foreground).child(s(f.path ?? f))).when(Boolean(f.role), (x) => x.child(div().text_size(10.5).text_color(t.dim).child(String(f.role))))));
@@ -169,9 +200,9 @@ function tests(app, t, task, detail) {
   if (!all.length) return reading(t, detail, "No test cases yet: test design has not run.");
   const judged = all.filter((c) => c.result != null);
   const el = v_flex().gap(3);
-  el.child(div().pb(4).text_size(11.5).text_color(t.dim).child(`${all.length} cases${judged.length ? ` · ${judged.filter((c) => c.result).length} of ${judged.length} judged pass` : " · verifying has not judged them yet"}`));
+  el.child(div().pb(4).text_size(11.5).text_color(t.dim).child(`${all.length} cases${judged.length ? ` · ${judged.filter((c) => c.result).length} of ${judged.length} judged pass` : ` · ${["closed", "done", "archived"].includes(task.state) ? "verifying reported no verdicts" : "verifying has not judged them yet"}`}`));
   testGroups(task, detail).forEach((g, gi) => {
-    el.child(sub(t, `${g.id ? `${g.id}  ` : ""}${g.text}`.slice(0, 160), String(g.cases.length)));
+    el.child(sub(t, `${g.id ? `${g.id}  ` : ""}${g.text}`, String(g.cases.length)));
     if (!g.cases.length) el.child(div().pl(20).text_size(11.5).text_color(t.blocked).child("no test covers it"));
     g.cases.forEach((c, i) =>
       el.child(
@@ -269,9 +300,10 @@ function pr(app, t, task, detail) {
     if (row_.task) el.child(row(t, "In flight", `${plainTitle(row_.task)}${row_.task.state ? ` · ${stageWords(row_.task.state)}` : ""}`));
   }
   if (ship) {
-    el.child(sub(t, "Watching", ship.ready ? "every item passes" : "waiting on the items below"));
+    const merged = mergedEvent(detail);
+    el.child(sub(t, merged ? "Merged" : "Watching", merged ? [merged.by ? `by ${merged.by}` : null, merged.sha, merged.at ? ago(merged.at) : null].filter(Boolean).join(" · ") : ship.ready ? "every item passes" : "waiting on the items below"));
     arr(ship.checklist).forEach((c, i) => el.child(bullet(t, `${s(c.id).replaceAll("_", " ")}${c.detail ? `: ${c.detail}` : ""}`, { tone: c.ok ? "done" : "error", mark: c.ok ? "✓" : "✗" }).id(`ship-${i}`)));
-    if (ship.autoMerge) el.child(row(t, "Merge", ship.autoMerge.allowed ? `the machine will merge: ${s(ship.autoMerge.reason)}` : `a person merges, or the machine waits: ${s(ship.autoMerge.reason)}`, ship.autoMerge.allowed ? "done" : "blocked"));
+    if (ship.autoMerge && !merged) el.child(row(t, "Merge", ship.autoMerge.allowed ? `the machine will merge: ${s(ship.autoMerge.reason)}` : `a person merges, or the machine waits: ${s(ship.autoMerge.reason)}`, ship.autoMerge.allowed ? "done" : "blocked"));
     if (ship.review) el.child(row(t, "Review", ship.review.required === true ? `required${ship.review.by ? ` by ${s(ship.review.by)}` : ""}` : ship.review.required === false ? "not required here: the machine never merges without one" : "unreadable: a person merges"));
     el.child(row(t, "Fix rounds", `${ship.fixRounds ?? 0}${ship.queued ? " · in the merge queue" : ""}`));
     if (ship.lastEvent) el.child(row(t, "Last event", `${s(ship.lastEvent.class).replaceAll("_", " ")}${ship.lastEvent.at ? ` · ${ago(ship.lastEvent.at) ?? ""}` : ""}`));

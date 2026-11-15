@@ -167,7 +167,8 @@ const task = (over = {}) => ({
 });
 
 const app = (over = {}) => {
-  const states = {};
+  // The inspector opens a ticket on the page of its state (Now for a running one); these tests pick the tab themselves.
+  const states = { inspector: { opened: { tid: true } } };
   return {
     machine: { base: "x", approver: null, diff: async () => ({ patch: "" }), get: async () => [], patch: async () => ({}) },
     tasks: [], loaded: true, page: "board", selected: "tid", tab: "details", details: {}, diffs: {}, prs: { inbox: null, all: null }, busy: new Set(), flash: null,

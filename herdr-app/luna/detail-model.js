@@ -214,9 +214,33 @@ export function taskPacks(packs) {
   return arr(packs).filter((p) => p && arr(p.states).length > 0 && p.kind !== "script" && arr(p.engines?.allowed).length > 0);
 }
 
-/** `[{pack, engine, isDefault, ran, off}]`: what each stage is set to and ran on. */
+/** The states each route walks (docs/architecture.md, "Routes"): a pack shows for a ticket when one of its states is here. */
+const ROUTE_STATES = {
+  feature: ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "ci_watch", "reviewing_memory"],
+  setup: ["setup"],
+  ci_fix: ["ci_watch", "implementing", "verifying"],
+  review: ["reviewing"],
+  address: ["addressing", "implementing", "verifying", "ci_watch"],
+};
+
+/** The stages this ticket's route runs, plus any it already has an engine set for or ran on: no pack that cannot run here. */
+export function routePacks(task, detail, packs) {
+  const states = ROUTE_STATES[task?.route] ?? null;
+  const ran = new Set(arr(detail?.stageRuns).map((r) => r?.stage));
+  return taskPacks(packs).filter((p) => !states || arr(p.states).some((x) => states.includes(x)) || task?.stages?.[p.id] || arr(p.states).some((x) => ran.has(x)));
+}
+
+/** Pack ids in the plain words the rest of the inspector uses for stages. */
+const PACK_WORDS = { plan: "Plan", plan_fast: "Plan (fast)", test_design: "Test cases", test_design_fast: "Test cases (fast)", build_tests: "Tests first", implementing: "Build", verifying: "Verify", e2e: "Browser run", ci_watch: "CI watch", reviewing_memory: "Retro", reviewing: "Review", addressing: "Address threads", setup: "Setup", triage: "Triage" };
+export const packWords = (id) => PACK_WORDS[id] ?? str(id).replaceAll("_", " ");
+
+/** Whether a ticket's pipeline is over: no stage will run, so an engine change would do nothing. */
+export const taskEnded = (task) => ["closed", "archived", "done"].includes(task?.state);
+
+/** `[{pack, engine, isDefault, ran, off, locked}]`: what each stage is set to and ran on. */
 export function engineRows(task, detail, packs, engines) {
-  return taskPacks(packs).map((p) => {
+  const locked = taskEnded(task);
+  return routePacks(task, detail, packs).map((p) => {
     const set = task?.stages?.[p.id] ?? null;
     const run = [...arr(detail?.stageRuns)].reverse().find((r) => arr(p.states).includes(r?.stage));
     const info = set ? arr(engines).find((e) => e.id === set) : null;
@@ -226,6 +250,7 @@ export function engineRows(task, detail, packs, engines) {
       isDefault: !set,
       ran: run ? run.engine ?? "–" : null,
       off: info && info.available === false ? "no credential here" : null,
+      locked,
     };
   });
 }

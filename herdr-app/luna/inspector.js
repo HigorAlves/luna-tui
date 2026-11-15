@@ -8,11 +8,20 @@ import { actionsFor, ago, cardId, cardLine, duration, ended, escalationWords, ga
 import { COLUMN_ICON } from "./board.js";
 import { alpha, button, chip, dot, fact, icon, mono, projectColor, spinner, toneColor } from "./ui.js";
 import { MORE, TABS, tab as addTab } from "./registry.js";
+import { planCriteria } from "./detail-model.js";
+import { approvalRuleView, defaultTab, machineFlags, openGaps } from "./detail-sections.js";
 
 const text = (v) => (typeof v === "string" ? v : v?.text ?? v?.question ?? v?.title ?? v?.description ?? (v == null ? "" : JSON.stringify(v)));
 
 export function sub(t, label, extra = null) {
-  return h_flex().pt(10).pb(4).gap(8).items_center().child(div().text_size(12).font_semibold().text_color(t.muted).child(label)).when(extra != null, (el) => el.child(div().text_size(11.5).text_color(t.dim).child(extra)));
+  // The label may be a long criterion: it shrinks and ends in an ellipsis; the count beside it keeps its width.
+  return h_flex()
+    .pt(10)
+    .pb(4)
+    .gap(8)
+    .items_center()
+    .child(div().flex_1().min_w(0).truncate().text_size(12).font_semibold().text_color(t.muted).child(label))
+    .when(extra != null, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child(extra)));
 }
 
 export function bullet(t, body, { tone = null, mark = "•" } = {}) {
@@ -43,6 +52,8 @@ export function gateBody(t, task) {
     return parts;
   }
   if (task.state === "awaiting_approval") {
+    // The gate the task carries has no `revisions` or `response`; the flags read what it does have.
+    const approval = { requested: r, response: null };
     if (r.risk?.level) parts.push(h_flex().gap(6).child(chip(t, `${r.risk.level} risk`, r.risk.level === "high" ? "error" : r.risk.level === "medium" ? "blocked" : null)).child(div().flex_1().text_size(11.5).text_color(t.dim).truncate().child(r.risk.reason ?? "")));
     if (r.brief) parts.push(markdown(`brief-${task.id}`, String(r.brief)));
     const steps = r.steps ?? r.slices ?? [];
@@ -50,8 +61,16 @@ export function gateBody(t, task) {
       parts.push(sub(t, "Steps", String(steps.length)));
       steps.forEach((s, i) => parts.push(bullet(t, `${text(s)}${s.est_loc ? `  ·  ~${s.est_loc} lines` : ""}`, { mark: `${i + 1}` })));
     }
-    const gaps = r.coverageReport?.gaps ?? r.gaps ?? [];
+    const gaps = openGaps(approval);
     if (gaps.length) parts.push(div().text_size(11.5).text_color(t.blocked).child(`${gaps.length} criteria no test covers: approve excusing them, or send it back`));
+    const flags = machineFlags(approval, planCriteria(approval, task));
+    if (flags.length) {
+      parts.push(sub(t, "The machine flagged", String(flags.length)));
+      flags.forEach((f, i) => parts.push(bullet(t, f, { tone: "blocked", mark: "⚑" }).id(`flag-${i}`)));
+    }
+    const rule = approvalRuleView(approval);
+    if (rule.text) parts.push(div().text_size(11.5).text_color(t.dim).child(rule.text));
+    if (rule.position || rule.line) parts.push(div().text_size(11.5).text_color(t.muted).child([rule.position, rule.line].filter(Boolean).join(" · ") + (rule.names.length === 0 ? "; set LUNA_APPROVER" : "")));
     if (r.split?.children?.length) {
       parts.push(sub(t, "Split into", String(r.split.children.length)));
       r.split.children.forEach((c, i) => parts.push(bullet(t, text(c), { mark: `${i + 1}` })));
@@ -260,13 +279,30 @@ function changes(app, t, task) {
     );
 }
 
+const fallbackState = {};
+
 /** The inspector pane for the selected task, or nothing. */
 export function inspector(app, t, width) {
   const task = app.tasks.find((x) => x.id === app.selected);
   if (!task) return null;
   const detail = app.details[task.id];
-  const tab = TABS.some((x) => x.id === app.tab) ? app.tab : TABS[0]?.id;
-  const current = TABS.find((x) => x.id === tab);
+  // A tab shows when it applies (Now, Stopped, Result, Reports have a `when`); the first time a ticket opens, it opens on the page of its state.
+  const shown = TABS.filter((x) => {
+    try {
+      return x.when ? x.when(app, task, detail) : true;
+    } catch {
+      return false;
+    }
+  });
+  const mine = typeof app.state === "function" ? app.state("inspector") : fallbackState;
+  mine.opened ??= {};
+  if (!mine.opened[task.id]) {
+    mine.opened[task.id] = true;
+    const want = defaultTab(task);
+    if (app.tab === "details" && want !== "details" && shown.some((x) => x.id === want)) app.tab = want;
+  }
+  const tab = shown.some((x) => x.id === app.tab) ? app.tab : shown[0]?.id;
+  const current = shown.find((x) => x.id === tab);
   const countOf = (x) => {
     try {
       return x.count?.(app, task, detail) ?? null;
@@ -316,15 +352,14 @@ export function inspector(app, t, width) {
     .child(
       h_flex()
         .px(16)
-        .gap(16)
-        .h(36)
+        .gap_x(14)
         .id("inspector-tabs")
-        .overflow_x_scroll()
+        .flex_wrap()
         .items_end()
         .border_b(1)
         .border_color(t.border)
         .children(
-          TABS.map(({ id, label, ...x }) =>
+          shown.map(({ id, label, ...x }) =>
             h_flex()
               .id(`tab-${id}`)
               .h(34)
