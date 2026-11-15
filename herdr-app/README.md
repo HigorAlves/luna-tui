@@ -58,7 +58,21 @@ Click the pane to give it the keyboard, or move onto it with `pane.go`. The keys
 | `gg` / `G` | first / last ticket in the column |
 | `1`-`8` | jump to that column (`8` opens Done) |
 | `Tab` / `Shift+Tab`, `]` / `[` | next / previous ticket that needs you |
-| `Enter`, `a` | the selected card's main action |
+| `Enter` | open the selected ticket (the inspector) |
+| `a` | the selected card's main action: start, approve (asks first), answer, retry with guidance, resume. A held draft says why it waits instead |
+| `r` | send back with a reason |
+| `N` | reject the plan or split; reject the release |
+| `u` | approve, excusing the plan's untestable criteria |
+| `A` | memory review: approve, skip the rules |
+| `T` / `p` / `C` | correct the triage record / post the questions at the source / correct the escalation reason |
+| `e` | edit the plan, else the ticket |
+| `f` | open or focus the agent's watch tab |
+| `J` | link a Jira issue; unlink it (asks first) |
+| `R` | set the repo |
+| `o` / `O` | open the linked issue / the PR in the browser |
+| `M` / `U` | close as a duplicate of another / bring it back |
+| `x` then `S` / `P` / `D` / `+` / `-` / `x` | ship (approve and open the PR) / resume the paused / drain / one more slot / one fewer / the inspector's More menu |
+| `F` `I` `D` `B` `$` `K` `S` `P` | Floor, Inbox, Digest, Backlog, Economy, Tickets, Slack, Pull requests |
 | `/` | search by title, #id or repo |
 | `!` | only the tickets that need you |
 | `@` | only the selected ticket's repo (again: all repos) |
@@ -67,17 +81,20 @@ Click the pane to give it the keyboard, or move onto it with `pane.go`. The keys
 | `gs` / `gr` / `ga` | order the cards by stage, by repo (then stage) or by age (oldest first) |
 | `=` | card density: 3 lines, 4 lines with chips, 1 line |
 | `v` / `V` | mark the ticket / the whole column (cmd or shift click marks too) |
-| `a` `X` `d` `w` `Z` | with marks: approve or start / stop / delete / remove workspaces / archive. Each asks first, listing the tickets, then runs them one by one and says how many went through. Without marks `X` `d` `w` `Z` act on the selected card |
+| `a` with marks | drafts start and paused cards resume at once; plans, splits, ships and releases wait for one yes that names them (`Approve 3 cards? 2 plans · 1 ship`). Replies, archives, setups, test checks, escalations, review posts and questions are left alone and counted. Each approval is sent only if the card is still at the gate the dialog asked about; cards that moved on are skipped and named |
+| `X` `d` `w` `Z` | with marks (or on the selected card): stop / delete / remove workspaces / archive. Each asks first, listing the tickets, then runs them one by one and says how many went through |
 | `Esc` | clear the search, the filters and the marks, else close the inspector |
 | `:` | command palette |
 | `?` | the keys sheet |
 | `n` | new task |
-| `r` | read the board again |
+| `ctrl+r` | read the board again (`r` is send back, as in the TUI) |
 | `P` | pull requests (`b` goes back to the board from any other page) |
 
-Folds, the order and the density are kept per pane. `g` and `z` wait for a second key; the header lists them.
+Folds, the order and the density are kept per pane. `g`, `z` and `x` wait about a second for a second key (and drop it if the page changes); the header lists them.
 
-The palette (`:`) filters as you type: `Tab` completes and cycles, the arrows pick, `Enter` runs the picked entry, or the only one left, or the text as typed. It runs the TUI's `new <title>`, `filter <text>`, `open <#id>`, `group stage|repo|age`, `fold`, `unfold`, `start`, `slots <n>`, `drain` and `resume`, plus every verb a feature registers.
+A card shows what the TUI's does: `‼` and a red title when any SLA clock is past, a yellow age while the running stage is past 80% of its target, `⎇` for a workspace, `×N` for retries, `part n/of`, the `#42` / `⌁` / Jira key / `notch` prefix, `$` above the p90 of spend, and `no repo` on a draft with none. The header says `‼ N overdue`, and a gate past its SLA leads its column in every order.
+
+The palette (`:`) filters as you type: `Tab` completes and cycles, the arrows pick, `Enter` runs the picked entry, or the only one left, or the text as typed. It runs the TUI's `new <title>`, `filter <text>`, `repo <name>`, `open <#id>`, `group stage|repo|age`, `fold`, `unfold`, `start`, `whole`, `dismiss <finding id> [reason]`, `finding <blocker|should_fix|nit> <title>`, `ticket-edit <text>`, `dedup duplicate <n> | related <ns> | neither`, `dup <id>`, `undup`, `context repo|project|text <value>`, `jira <KEY>`, `slots <n>`, `drain` and `resume`, plus `refresh` and every verb a feature registers. An unknown verb says `unknown command: x`.
 
 On the PR page:
 
@@ -85,10 +102,10 @@ On the PR page:
 |---|---|
 | `j` / `k` | previous / next PR |
 | `h` / `l` | previous / next split |
-| `1`-`7` | jump to that split (`7`: all repos) |
+| `1`-`7` | jump to that split, in the TUI's order: review requested, ready to merge, CI failed, CI running, changes requested, mine; `7` all repos. A split lists the oldest PR first, All repos the newest |
 | `m` | merge (asks first) |
-| `c` / `v` / `t` | fix CI / review / answer the threads; an off key says why |
-| `X` | close the PR without merging (asks first; refused while a task runs for it) |
+| `c` / `v` / `t` | fix CI / review / answer the threads; an off key says why. On a PR that is not cloned they ask for the folder, clone, wait for the clone and then run |
+| `X` | close your own PR without merging (asks first; refused for other people's PRs and while a task runs for it) |
 | `C` | clone the repository |
 | `f` / `F` | show one repo / every repo |
 | `o` | open on GitHub |

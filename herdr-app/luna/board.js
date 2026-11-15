@@ -6,7 +6,7 @@ import { h_flex, v_flex, Input } from "gpui-base";
 import {
   GROUPS, VIEWS, actionsFor, ago, cardId, cardLine, chips, filterTasks, look, plainTitle, projectOf, projects, summary, viewCounts,
 } from "./model.js";
-import { applyToggles, arrange, flatOrder, getCtl, isFolded, needsStops } from "./controls.js";
+import { PREFIX_MS, applyToggles, arrange, cardMarks, flatOrder, getCtl, heldReason, isFolded, needsStops, overdueCount, spendP90 } from "./controls.js";
 import { alpha, button, chip, dot, groupLabel, heading, icon, mono, projectColor, spinner, toneColor } from "./ui.js";
 import { PAGES } from "./registry.js";
 
@@ -174,14 +174,19 @@ export function sidebar(app, t) {
 /** One card, as the design draws it: id row, title, chips, one line about now. Density and marks change it. */
 function card(app, t, task, now, ctl) {
   const l = look(task, now);
-  const line = cardLine(task, now);
+  const marks = cardMarks(task, app.spendP90 ?? null);
+  const heldWhy = heldReason(task, app.details?.[task.id]);
+  const line = heldWhy ? { text: `Held: ${heldWhy}`, tone: null } : cardLine(task, now);
+  const ageColor = marks.overdue ? toneColor(t, "error") : marks.warn ? toneColor(t, "blocked") : t.dim;
+  const titleColor = marks.overdue ? toneColor(t, "error") : l === "archived" ? t.dim : t.foreground;
+  const badges = [marks.worktree ? "⎇" : null, marks.retries ? `×${marks.retries}` : null, marks.part, marks.noRepo ? "no repo" : null, marks.spendy ? "$" : null].filter(Boolean);
   const selected = app.selected === task.id;
   const marked = ctl.marked.has(task.id);
   const waiting = l === "needs_you" || l === "escalated";
   const working = l === "working";
   const one = ctl.density === "one";
   // What goes out to GitHub (a review, a release) is decided in the inspector, where it is shown first.
-  const quick = task.state === "awaiting_ship" ? null : actionsFor(task, now).find((a) => a.kind === "primary" && ["start", "approve", "resume"].includes(a.id));
+  const quick = task.state === "awaiting_ship" || heldWhy ? null : actionsFor(task, now).find((a) => a.kind === "primary" && ["start", "approve", "resume"].includes(a.id));
   const frame = marked ? t.accent : waiting ? t.blocked : working ? t.working : selected ? t.accent : t.border;
   const click = (e, cx) => {
     if (e?.modifiers?.shift || e?.modifiers?.platform) {
@@ -195,9 +200,10 @@ function card(app, t, task, now, ctl) {
     .items_center()
     .when(marked, (el) => el.child(icon("check", 11, t.accent)))
     .child(dot(projectColor(t, projectOf(task)), 6))
-    .child(div().font_family(mono()).text_size(10.5).text_color(t.dim).child(cardId(task)))
-    .when(one, (el) => el.child(div().flex_1().min_w(0).truncate().text_size(12).font_medium().text_color(l === "archived" ? t.dim : t.foreground).child(plainTitle(task))))
-    .when(one, (el) => el.child(div().flex_none().text_size(10.5).text_color(line.tone ? toneColor(t, line.tone) : t.dim).child(ago(task.updatedAt)?.replace(" ago", "") ?? "")))
+    .when(marks.overdue, (el) => el.child(div().flex_none().text_size(11).font_bold().text_color(toneColor(t, "error")).child("‼")))
+    .child(div().font_family(mono()).text_size(10.5).text_color(t.dim).child([cardId(task), marks.prefix && marks.prefix !== cardId(task) ? marks.prefix : null].filter(Boolean).join(" ")))
+    .when(one, (el) => el.child(div().flex_1().min_w(0).truncate().text_size(12).font_medium().text_color(titleColor).child(plainTitle(task))))
+    .when(one, (el) => el.child(div().flex_none().text_size(10.5).text_color(marks.overdue || marks.warn ? ageColor : line.tone ? toneColor(t, line.tone) : t.dim).child(ago(task.updatedAt)?.replace(" ago", "") ?? "")))
     .when(!one, (el) => el.child(div().flex_1()))
     .when(working, (el) => el.child(spinner(t, 11)))
     .when(Boolean(quick) && !working && !one, (el) =>
@@ -216,9 +222,18 @@ function card(app, t, task, now, ctl) {
     .when(!selected, (el) => el.hover((s) => s.border_color(waiting ? t.blocked : t.input)))
     .on_click(click)
     .child(idRow)
-    .when(!one, (el) => el.child(div().text_size(12.5).font_medium().text_color(l === "archived" ? t.dim : t.foreground).child(plainTitle(task))))
+    .when(!one, (el) => el.child(div().text_size(12.5).font_medium().text_color(titleColor).child(plainTitle(task))))
     .when(ctl.density === "four" && chips(task).length > 0, (el) => el.child(h_flex().gap(4).flex_wrap().children(chips(task).map((c) => chip(t, c.text, c.tone)))))
-    .when(!one, (el) => el.child(div().text_size(11).truncate().text_color(line.tone ? toneColor(t, line.tone) : t.dim).child(line.text)));
+    .when(!one, (el) =>
+      el.child(
+        h_flex()
+          .gap(6)
+          .items_center()
+          .child(div().flex_1().min_w(0).text_size(11).truncate().text_color(line.tone ? toneColor(t, line.tone) : t.dim).child(line.text))
+          .when(marks.overdue || marks.warn, (e) => e.child(div().flex_none().text_size(10.5).text_color(ageColor).child(ago(task.updatedAt)?.replace(" ago", "") ?? "")))
+          .when(badges.length > 0, (e) => e.child(div().flex_none().text_size(10.5).text_color(t.dim).child(badges.join(" ")))),
+      ),
+    );
   if (!waiting || one) return body;
   return v_flex()
     .w_full()
@@ -314,7 +329,9 @@ function header(app, t, shown, ctl) {
     app.query?.trim() ? `“${app.query.trim()}”` : null,
     ctl.group !== "stage" ? `by ${ctl.group}` : null,
   ].filter(Boolean);
-  const hint = ctl.prefix ? (ctl.prefix.c === "g" ? "g ▸  g first · s stage · r repo · a age" : "z ▸  c fold · o unfold · z fold the others") : null;
+  const live = ctl.prefix && Date.now() - (ctl.prefix.at ?? 0) <= PREFIX_MS ? ctl.prefix : null;
+  const hint = live ? ({ g: "g ▸  g first · s stage · r repo · a age", z: "z ▸  c fold · o unfold · z fold the others", x: "x ▸  S ship · P resume paused · D drain · + - slots · x more" }[live.c] ?? null) : null;
+  const late = overdueCount(shown);
   return h_flex()
     .h(56)
     .flex_none()
@@ -330,6 +347,7 @@ function header(app, t, shown, ctl) {
         .child(div().text_size(11).text_color(t.dim).truncate().child([summary(shown), ...notes].join(" · "))),
     )
     .when(marks > 0, (el) => el.child(chip(t, `${marks} marked · a X d w Z · esc clears`, "accent", 11)))
+    .when(late > 0, (el) => el.child(chip(t, `‼ ${late} overdue`, "error", 11)))
     .when(Boolean(hint), (el) => el.child(chip(t, hint, null, 11)))
     .child(div().flex_1())
     .when(Boolean(app.flash), (el) => el.child(div().max_w(420).truncate().text_size(11.5).text_color(app.flash.tone ? toneColor(t, app.flash.tone) : t.muted).child(app.flash.text)))
@@ -344,6 +362,7 @@ export function boardPage(app, t) {
   const ctl = getCtl(app);
   const kept = applyToggles(filterTasks(app.tasks, { view: app.view, project: app.project, query: app.query }, now), ctl, now);
   const by = arrange(kept, ctl.group, now);
+  app.spendP90 = spendP90(app.tasks);
   // The focused column follows a card chosen any other way (a click, the inbox folder).
   const sel = app.selected ? app.tasks.find((x) => x.id === app.selected) : null;
   if (sel && ctl.syncedSel !== sel.id) {

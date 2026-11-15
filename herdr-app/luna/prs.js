@@ -4,9 +4,10 @@
 // reads its snapshot and the stream's updates.
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
+import { notify, pickFolder } from "herdr";
 
-import { PR_SPLITS, ago, filterPrs, prActions, prStatus } from "./model.js";
-import { checkRows, checkTone, keyName, prKeyRefusal, stepSplit } from "./controls.js";
+import { ago, prActions, prStatus } from "./model.js";
+import { PR_SPLIT_ORDER, checkRows, checkTone, keyName, orderPrs, prCloseRefusal, prKeyRefusal, prNeedsCount, prNotices, stepSplit } from "./controls.js";
 import { alpha, button, chip, dot, icon, mono, projectColor, spinner, toneColor } from "./ui.js";
 
 const prKey = (pr) => `${pr.repo}#${pr.number}`;
@@ -55,7 +56,7 @@ function splitBar(app, t, prs) {
     .flex_wrap()
     .items_center()
     .child(pill(null, "All", prs.length))
-    .children(PR_SPLITS.map(([id, label]) => [id, label, prs.filter((p) => p.split === id).length]).filter(([, , n]) => n > 0).map(([id, label, n]) => pill(id, label, n)))
+    .children(PR_SPLIT_ORDER.map(([id, label]) => [id, label, prs.filter((p) => p.split === id).length]).filter(([, , n]) => n > 0).map(([id, label, n]) => pill(id, label, n)))
     .child(div().flex_1())
     .when(repos.length > 1, (el) =>
       el.child(
@@ -171,16 +172,131 @@ function row(app, t, pr, cloning) {
             .gap(6)
             .flex_none()
             .when(Boolean(cloning), (el) => el.child(spinner(t, 12)))
-            .children(actions.map((a) => button(t, `pra-${pr.repo}-${pr.number}-${a.id}`, a.label, a.kind, (_e, cx) => app.prAct(pr, a.id, cx), { small: true, busy, iconName: a.id === "browser" ? "external" : null })))
-            .child(button(t, `pra-${pr.repo}-${pr.number}-close`, "Close…", "danger", (_e, cx) => closePr(app, pr, cx), { small: true, busy })),
+            .children(actions.map((a) => button(t, `pra-${pr.repo}-${pr.number}-${a.id}`, a.label, a.kind, (_e, cx) => dispatchPr(app, pr, a.id, cx), { small: true, busy, iconName: a.id === "browser" ? "external" : null })))
+            .child(closeButton(app, t, pr, busy)),
         ),
     )
     .when(open, (el) => el.child(checksPanel(app, t, pr)));
 }
 
-/** Asks before closing a PR without merging it. */
-export function closePr(app, pr) {
+/** Close…: only on your own PRs with no task running (the TUI's rule); otherwise it is off and says why. */
+function closeButton(app, t, pr, busy) {
+  const why = prCloseRefusal(pr);
+  const b = button(t, `pra-${pr.repo}-${pr.number}-close`, "Close…", "danger", (_e, cx) => closePr(app, pr, cx), { small: true, busy: busy || Boolean(why) });
+  return why ? b.tooltip(why) : b;
+}
+
+/** Asks before closing a PR without merging it; a PR that is not yours, or has a task running, says why instead. */
+export function closePr(app, pr, cx) {
+  const why = prCloseRefusal(pr);
+  if (why) {
+    app.say(`close: ${why}`);
+    return cx?.notify?.();
+  }
   app.dialog({ kind: "close_pr", repo: pr.repo, number: pr.number, subtitle: pr.title }, 240);
+}
+
+// ---- a dispatch on an uncloned PR: ask for the folder, clone, wait for it, then run ----
+
+const later = (cx, ms) => new Promise((resolve) => cx.timer.after(ms, () => resolve()));
+const NEEDS_CLONE = ["review", "ci_fix", "address"];
+const CLONE_WAIT_MS = 5 * 60 * 1000;
+
+const snapshotsOf = (app) => [app.prs?.inbox, app.prs?.all].filter(Boolean);
+const cloneOf = (app, repo) => snapshotsOf(app).flatMap((s) => s.clones ?? []).find((c) => c.repo === repo && c.state === "cloning") ?? null;
+const findPr = (snaps, pr) => snaps.flatMap((s) => s.prs ?? []).find((p) => p.repo === pr.repo && p.number === pr.number);
+
+/**
+ * `review`, `ci_fix` and `address` need a checkout. With none, this asks for the folder, clones into
+ * it, waits until the snapshot shows the clone, then runs the action (the TUI's `open_clone_prompt`
+ * and `run_pending_dispatch`). Everything else, and a PR already cloned, goes straight to `app.prAct`.
+ */
+export function dispatchPr(app, pr, id, cx) {
+  if (!NEEDS_CLONE.includes(id) || pr.localPath || pr.task) return app.prAct(pr, id, cx);
+  const key = prKey(pr);
+  const name = pr.repo.split("/")[1] ?? pr.repo;
+  app.prPending ??= new Set();
+  if (app.prPending.has(key)) return app.say(`${id} on ${key} is waiting for the clone`);
+  const wait = async (cx2, cloned) => {
+    const until = Date.now() + CLONE_WAIT_MS;
+    while (Date.now() < until) {
+      const now = findPr(snapshotsOf(app), pr);
+      if (now?.localPath) return now;
+      const failed = snapshotsOf(app).flatMap((s) => s.clones ?? []).find((c) => c.repo === pr.repo && c.state === "failed" && (!cloned || c.dest === cloned));
+      if (failed) throw new Error(`the clone failed: ${failed.error ?? "no reason given"}`);
+      try {
+        const fresh = await app.machine.prs(app.prList === "all");
+        const hit = findPr([fresh], pr);
+        if (hit?.localPath) return hit;
+      } catch {
+        // the stream may still deliver it
+      }
+      await later(cx2, 1500);
+    }
+    throw new Error(`the clone of ${pr.repo} did not land in time`);
+  };
+  cx.spawn(async (cx2) => {
+    app.prPending.add(key);
+    cx2.notify();
+    try {
+      let dest = cloneOf(app, pr.repo)?.dest ?? null;
+      if (dest) app.say(`already cloning into ${dest}; ${id} runs when it lands`);
+      else {
+        const folder = await pickFolder({ prompt: `Clone ${pr.repo} here, then ${id.replace("_", " ")}` });
+        if (!folder) return;
+        dest = `${folder.replace(/\/+$/, "")}/${name}`;
+        await app.machine.clone(pr.repo, dest);
+        app.say(`Cloning ${pr.repo} into ${dest}; ${id} runs when it lands`);
+      }
+      const landed = await wait(cx2, dest);
+      app.prAct({ ...pr, localPath: landed.localPath }, id, cx2);
+    } catch (e) {
+      app.say(e?.message ?? String(e), "error");
+    } finally {
+      app.prPending.delete(key);
+      cx2.notify();
+    }
+  });
+}
+
+// ---- the badge and the notices ----
+
+/**
+ * Remembers each PR's split across polls and raises a Herdr notice for every PR that gains a split
+ * needing you (review requested, ready to merge, CI failed, changes requested), once. The first
+ * snapshot only sets the baseline: starting a pane does not announce what was already waiting.
+ */
+export function notePrs(app, snapshot) {
+  const prs = snapshot?.prs;
+  if (!Array.isArray(prs)) return [];
+  const st = app.state ? app.state("pr-notices") : (app.prNoticeState ??= {});
+  st.seen ??= new Map();
+  const first = !st.ready;
+  st.ready = true;
+  const found = prNotices(prs, st.seen);
+  if (first) return [];
+  for (const n of found) {
+    try {
+      notify({ title: n.title, body: n.body, level: "info" });
+    } catch {
+      // no notice surface: the badge still counts
+    }
+  }
+  return found;
+}
+
+/** The PR page's `onMessage`: every `github.prs` snapshot is looked at for the notices. */
+export function prsMessage(app, { event, data }) {
+  if (event === "github.prs") notePrs(app, data);
+  return false;
+}
+
+/** The PR page's badge: PRs in a split that needs you, not only review requested. (core.js should use this.) */
+export function prBadge(app) {
+  const snap = app.prs?.inbox;
+  notePrs(app, snap);
+  const n = prNeedsCount(snap?.prs ?? []);
+  return n ? { n, tone: null } : null;
 }
 
 /** The PR page's keys, as the TUI's Pulls view: rows, splits, the per-PR actions. */
@@ -205,9 +321,11 @@ export function prsKey(app, e, cx) {
   };
   const dispatch = (id, label) =>
     needsRow((p) => {
-      const why = prKeyRefusal(p, id, prActions(p).map((a) => a.id));
+      // A dispatch on an uncloned PR clones first, so judge it as if cloned.
+      const as = { ...p, localPath: p.localPath ?? "(to clone)" };
+      const why = prKeyRefusal(as, id, prActions(as).map((a) => a.id));
       if (why) app.say(`${label}: ${why}`, "error");
-      else app.prAct(p, id, cx);
+      else dispatchPr(app, p, id, cx);
       cx.notify();
       return true;
     });
@@ -237,7 +355,7 @@ export function prsKey(app, e, cx) {
       return true;
     });
     case "X": return needsRow((p) => {
-      closePr(app, p);
+      closePr(app, p, cx);
       return true;
     });
     case "o": return needsRow((p) => {
@@ -281,7 +399,7 @@ export function prsKey(app, e, cx) {
     if (d === 7) app.showPrList("all", cx);
     else {
       app.showPrList("inbox", cx);
-      app.prSplit = PR_SPLITS[d - 1][0];
+      app.prSplit = PR_SPLIT_ORDER[d - 1][0];
     }
     cx.notify();
     return true;
@@ -293,12 +411,12 @@ export function prsKey(app, e, cx) {
 export function prsPage(app, t) {
   const snap = app.prList === "all" ? app.prs.all : app.prs.inbox;
   const all = snap?.prs ?? [];
-  const shown = filterPrs(all, { split: app.prSplit, repo: app.prRepo, query: app.query });
+  const shown = orderPrs(all, { split: app.prList === "all" ? null : app.prSplit, repo: app.prRepo, query: app.query });
   const clones = new Map((snap?.clones ?? []).filter((c) => c.state === "cloning").map((c) => [c.repo, c]));
   // What the keys use: the rows as drawn, the splits that hold PRs and the repos to filter by.
   const rows = shown.slice(0, 200);
   app.prRows = rows;
-  app.prSplitIds = [null, ...PR_SPLITS.map(([id]) => id).filter((id) => all.some((p) => p.split === id))];
+  app.prSplitIds = [null, ...PR_SPLIT_ORDER.map(([id]) => id).filter((id) => all.some((p) => p.split === id))];
   app.prAllRepos = [...new Set(all.map((p) => p.repo))];
   if (rows.length && !rows.some((p) => prKey(p) === app.prSel)) app.prSel = prKey(rows[0]);
   return v_flex()

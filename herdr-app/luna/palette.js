@@ -5,10 +5,11 @@
 import { div } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { Input, InputState } from "gpui-base";
-import { setShared } from "herdr";
 
+import { dismissBody, findingBody, segment } from "./actions-rules.js";
 import { foldFocused, setGroup } from "./boardkeys.js";
-import { GROUP_BY, keyName, matchEntries, paletteEntries, resolveLine } from "./controls.js";
+import { GROUP_BY, heldReason, keyName, matchEntries, paletteEntries, rejectKind, resolveLine } from "./controls.js";
+import { encodeKey, waitingDrafts } from "./views-model.js";
 import { boxed, finish } from "./dialogs.js";
 import { COMMANDS, DIALOGS, PALETTE } from "./registry.js";
 import { mono } from "./ui.js";
@@ -54,13 +55,156 @@ COMMANDS.group = (app, arg, cx) => {
 COMMANDS.fold = (app, _arg, cx) => foldFocused(app, "c", cx);
 COMMANDS.unfold = (app, _arg, cx) => foldFocused(app, "o", cx);
 
-COMMANDS.start = (app, _arg, cx) => {
-  const task = app.tasks.find((t) => t.id === app.selected);
-  if (!task) app.say("no ticket selected", "error");
-  else if (task.state !== "draft") app.say("only a draft starts", "error");
-  else return app.act(task, "start", cx);
+const enc = encodeURIComponent;
+const fail = (app, text, cx) => {
+  app.say(text, "error");
   cx.notify();
 };
+const selectedTask = (app) => app.tasks.find((t) => t.id === app.selected) ?? null;
+/** The selected ticket, or says there is none. */
+const need = (app, cx) => {
+  const task = selectedTask(app);
+  if (!task) fail(app, "no ticket selected", cx);
+  return task;
+};
+
+/** `:start` is `a`: start, resume, approve (asks), answer, retry; a held draft says why it waits. */
+COMMANDS.start = (app, _arg, cx) => {
+  const task = need(app, cx);
+  if (!task) return;
+  const why = heldReason(task, app.details?.[task.id]);
+  if (why) return fail(app, `held: ${why}`, cx);
+  app.primary(cx);
+};
+
+COMMANDS.refresh = (app, _arg, cx) => app.reload(cx, true);
+COMMANDS.reload = COMMANDS.refresh;
+
+/** `:repo <name>`: the one known repo whose path holds the name; a path as given when it starts with `/`, `~` or `.`; bare opens the search. */
+COMMANDS.repo = (app, arg, cx) => {
+  const task = need(app, cx);
+  if (!task) return;
+  const name = String(arg ?? "").trim();
+  if (!name) return app.act(task, "set_repo", cx);
+  const set = (cx, repoPath) => app.run(cx, task.id, `Repo set to ${repoPath}`, () => app.machine.patch(`/tasks/${enc(task.id)}`, { repoPath }));
+  if (/^[/~.]/.test(name)) return set(cx, name);
+  cx.spawn(async (cx2) => {
+    let known = [];
+    try {
+      known = ((await app.machine.get("/repos")) ?? []).map((r) => r.repo).filter(Boolean);
+    } catch {
+      // the repos already on the board still count
+    }
+    const paths = [...new Set([...known, ...app.tasks.map((t) => t.repoPath).filter(Boolean)])];
+    const hits = paths.filter((p) => p.toLowerCase().includes(name.toLowerCase()));
+    if (!hits.length) return fail(app, `no repo holds "${name}"`, cx2);
+    if (hits.length > 1) return fail(app, `"${name}" holds more than one repo: ${hits.slice(0, 4).join(", ")}`, cx2);
+    set(cx2, hits[0]);
+  });
+};
+
+/** `:whole`: approve and keep the card as one instead of splitting it. */
+COMMANDS.whole = (app, _arg, cx) => {
+  const task = need(app, cx);
+  if (!task) return;
+  if (rejectKind(task, app.details?.[task.id]) !== "plan") return fail(app, "keep whole answers a plan or split gate; this card is not at one", cx);
+  app.act(task, "keep_whole", cx);
+};
+
+/** `:dismiss <finding id> [reason]`. */
+COMMANDS.dismiss = (app, arg, cx) => {
+  const task = need(app, cx);
+  if (!task) return;
+  const [id, ...rest] = String(arg ?? "").trim().split(/\s+/);
+  if (!id) return fail(app, "dismiss takes a finding id, e.g. :dismiss f3 not a bug", cx);
+  const body = dismissBody(rest.join(" ").slice(0, 500));
+  app.run(cx, task.id, "finding dismissed", () => app.machine.post(`/tasks/${enc(task.id)}/findings/${segment(id)}/dismiss`, body));
+};
+
+/** `:finding <blocker|should_fix|nit> <title>`. */
+COMMANDS.finding = (app, arg, cx) => {
+  const task = need(app, cx);
+  if (!task) return;
+  const [severity, ...rest] = String(arg ?? "").trim().split(/\s+/);
+  const title = rest.join(" ").trim();
+  if (!["blocker", "should_fix", "nit"].includes(severity)) return fail(app, "finding takes blocker, should_fix or nit, then a title", cx);
+  if (!title) return fail(app, "finding: give it a title", cx);
+  app.run(cx, task.id, "finding added", () => app.machine.post(`/tasks/${enc(task.id)}/findings`, findingBody({ severity, title })));
+};
+
+/** `:ticket-edit <text>`: your text is posted in place of the selected ticket's waiting draft (the Tickets page's selection). */
+COMMANDS["ticket-edit"] = (app, arg, cx) => {
+  const st = app.state("tickets");
+  const ticket = (st.items ?? []).find((t) => t.key === st.selected);
+  if (!ticket) return fail(app, "open the Tickets view and select a ticket first", cx);
+  const draft = waitingDrafts(ticket)[0];
+  if (!draft) return fail(app, "no draft waiting on it", cx);
+  const text = String(arg ?? "").trim();
+  if (!text) return fail(app, "say what to post: :ticket-edit <text>", cx);
+  if (text.length > 1500) return fail(app, "your text is over 1500 characters", cx);
+  app.run(cx, `tk-${ticket.key}`, "posted your text", () => app.machine.post(`/tickets/${encodeKey(ticket.key)}/edit`, { draft: draft.id, hash: draft.hash, text }));
+};
+
+/** `:dedup duplicate <slot> | related <slots> | neither`: the answer to Intake's duplicate question. */
+COMMANDS.dedup = (app, arg, cx) => {
+  const task = need(app, cx);
+  if (!task) return;
+  const open = [...(app.details?.[task.id]?.approvals ?? [])].reverse().find((a) => !a.decision);
+  const listed = open?.requested?.candidates ?? [];
+  if (!listed.length) return fail(app, "this ticket is not waiting on a duplicate question (open its detail first)", cx);
+  const [choice, ...slots] = String(arg ?? "").trim().split(/\s+/);
+  const ids = [];
+  for (const part of slots.join(" ").split(",").map((x) => x.trim()).filter(Boolean)) {
+    const hit = listed.find((c) => String(c.slot) === part);
+    if (!/^\d+$/.test(part)) return fail(app, `${part} is not a slot number`, cx);
+    if (!hit) return fail(app, `no candidate in slot ${part}`, cx);
+    if (!ids.includes(hit.id)) ids.push(hit.id);
+  }
+  if (choice === "neither") return app.run(cx, task.id, "answered", () => app.machine.dedup(task.id, "neither", []));
+  if (choice === "duplicate") {
+    if (ids.length !== 1) return fail(app, "name exactly one slot: :dedup duplicate 2", cx);
+    return app.run(cx, task.id, "answered", () => app.machine.dedup(task.id, "duplicate", ids));
+  }
+  if (choice === "related") {
+    if (!ids.length) return fail(app, "name the slots: :dedup related 1,3", cx);
+    return app.run(cx, task.id, "answered", () => app.machine.dedup(task.id, "related", ids));
+  }
+  fail(app, "use :dedup duplicate <slot> | related <slots> | neither", cx);
+};
+
+/** `:dup <id prefix>`: the selected ticket is a duplicate of that one (the prefix is at least 4 characters and names one). */
+COMMANDS.dup = (app, arg, cx) => {
+  const task = need(app, cx);
+  if (!task) return;
+  const prefix = String(arg ?? "").trim().replace(/^#/, "");
+  if (prefix.length < 4) return fail(app, "dup takes at least 4 characters of the other ticket's id", cx);
+  const hits = app.tasks.filter((t) => t.id !== task.id && t.id.startsWith(prefix));
+  if (!hits.length) return fail(app, `no ticket starts with ${prefix}`, cx);
+  if (hits.length > 1) return fail(app, `${prefix} starts more than one ticket`, cx);
+  app.run(cx, task.id, "merged: it closes as a duplicate", () => app.machine.post(`/tasks/${enc(task.id)}/merge`, { into: hits[0].id }));
+};
+
+/** `:undup`: the selected, merged ticket comes back as a new card. */
+COMMANDS.undup = (app, _arg, cx) => {
+  const task = need(app, cx);
+  if (!task) return;
+  if (!task.mergedInto) return fail(app, "this ticket was not merged into another", cx);
+  app.run(cx, task.id, "unmerged: it is a new card", () => app.machine.post(`/tasks/${enc(task.id)}/unmerge`, {}));
+};
+
+/** `:context repo|project|text <value>`: what Intake's gate asked for. */
+COMMANDS.context = (app, arg, cx) => {
+  const task = need(app, cx);
+  if (!task) return;
+  const [field, ...rest] = String(arg ?? "").trim().split(/\s+/);
+  const key = { repo: "repoPath", project: "project", text: "text" }[field];
+  if (!key) return fail(app, "use :context repo|project|text <value>", cx);
+  const value = rest.join(" ").trim();
+  if (!value) return fail(app, `${field}: give a value`, cx);
+  app.run(cx, task.id, "Intake checked the ticket again", () => app.machine.context(task.id, { [key]: value }));
+};
+
+// `:jira <KEY>` is the Jira page's (page-jira.js registers COMMANDS.jira); the palette only routes it.
 
 // `slots`, `drain` and `resume` are the Floor's (page-floor.js): they ask first.
 
@@ -76,6 +220,9 @@ COMMANDS.palette = (app, arg, cx) => {
 
 // ---- the dialog ----
 
+/** The verbs the board itself understands beyond COMMANDS (the inbox folder's: `select`, `tab`, `act`, ...). */
+const KNOWN = new Set(["select", "tab", "list", "act", "page", "done", "focus", "next", "prev", "close", "search", "approve"]);
+
 const entriesOf = () => paletteEntries(PALETTE, Object.keys(COMMANDS).filter((v) => v !== "palette" && v !== "page"));
 const matches = (app) => matchEntries(app.base ?? app.line, app.entries);
 
@@ -88,7 +235,14 @@ function run(app, cx) {
     app.pick = null;
     return cx.notify();
   }
-  if (r.action === "run") setShared("luna.command", { line: r.line, at: Date.now() });
+  if (r.action === "run") {
+    const verb = r.line.split(/\s+/)[0];
+    if (!KNOWN.has(verb) && !COMMANDS[verb]) {
+      app.error = `unknown command: ${verb} (try :help)`;
+      return cx.notify();
+    }
+    app.handBack("command", { line: r.line });
+  }
   finish(app);
 }
 

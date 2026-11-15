@@ -144,7 +144,8 @@ test("bulk: each action applies only where it can, and says how many it ran", ()
   const ids = TASKS.map((x) => x.id);
   const approve = bulkTargets(TASKS, ids, "approve", now);
   const steps = Object.fromEntries(approve.map((x) => [x.id, x.step]));
-  assert.deepEqual(steps, { a1: "start", a2: "start", p1: "approve", s1: "approve", z1: "resume" });
+  // Intentional (C1): bulk `a` asks only over the committing gates (plan, split, ship, release); starts and resumes run apart.
+  assert.deepEqual(steps, { p1: "approve", s1: "approve" });
   assert.equal(approveStep(TASKS.find((x) => x.id === "e1"), now), null, "an escalation needs words");
   assert.equal(approveStep(TASKS.find((x) => x.id === "s2"), now), null, "a review is never posted from a key");
   assert.equal(approveStep(task("nr", { state: "draft", repoPath: null }), now), null, "no repo, no start");
@@ -221,7 +222,7 @@ const texts = (el, out = []) => {
   for (const c of el.kids ?? []) texts(c, out);
   return out;
 };
-const cx = { notify() {}, stop_propagation() {}, timer: { after() {} } };
+const cx = { notify() {}, stop_propagation() {}, spawn() {}, timer: { after() {} } };
 
 function pane(over = {}) {
   const a = {
@@ -371,6 +372,7 @@ test("marks: V marks the column and a, X, d, w, Z ask first with the tickets tha
   assert.ok(abort.skipped > 0);
   press(a, "a");
   assert.equal(a.dialogs.at(-1).action, "approve");
+  getCtl(a).marked = new Set(TASKS.map((x) => x.id)); // `a` leaves only the committing cards marked (C1)
   press(a, "d");
   assert.equal(a.dialogs.at(-1).action, "delete");
   press(a, "w");
@@ -388,9 +390,13 @@ test("marks: V marks the column and a, X, d, w, Z ask first with the tickets tha
   // Without marks a, enter run the card's main action; X acts on the selected card.
   const solo = pane({ selected: "b1" });
   boardPage(solo, t);
-  assert.equal(press(solo, "a"), false, "a falls through to the app's approve");
-  press(solo, "enter");
+  // Intentional (C8): `a` is the main action, enter opens the ticket.
+  assert.equal(press(solo, "a"), true);
   assert.equal(solo.primed, true);
+  solo.primed = false;
+  press(solo, "enter");
+  assert.equal(solo.primed, false);
+  assert.equal(solo.selected, "b1");
   press(solo, "X");
   assert.deepEqual(solo.dialogs.at(-1).items.map((x) => x.id), ["b1"]);
 });
@@ -404,7 +410,7 @@ test("the dialogs draw: keys sheet, palette, bulk (each action), close PR", () =
   const keys = texts(dlg({ kind: "keys", page: "board" })).join("|");
   assert.match(keys, /MARKS AND BULK/);
   assert.match(keys, /fold \/ unfold the focused column/);
-  assert.match(texts(dlg({ kind: "keys", page: "prs" })).join("|"), /close the PR, unmerged/);
+  assert.match(texts(dlg({ kind: "keys", page: "prs" })).join("|"), /close your own PR, unmerged/);
   const palette = texts(dlg({ kind: "palette" }, (a) => DIALOGS.palette.init(a, cx))).join("|");
   assert.match(palette, /:group/);
   assert.match(palette, /:slots/);
@@ -473,7 +479,8 @@ test("PR keys: j/k, splits, actions with their refusals, close, enter, filters",
   k("m");
   assert.match(a.flash.text, /merge: it is not ready/);
   k("X");
-  assert.deepEqual(a.dialogs.at(-1), { kind: "close_pr", repo: "o/shop", number: 1, subtitle: "PR 1" });
+  // Intentional (C2): pr 1 is not mine, so it says why instead of asking.
+  assert.match(a.flash.text, /closing is for your own PRs/);
   k("o");
   assert.equal(a.opened, "https://github.com/o/shop/pull/1");
   k("enter");

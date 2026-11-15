@@ -2,9 +2,8 @@
 // (it runs the calls one by one and says how many went through) and closing a PR unmerged.
 // The result goes back to the board through shared state (`luna.bulk`, read by takeShared).
 import { div } from "gpui-kit";
-import { setShared } from "herdr";
 
-import { bulkResult } from "./controls.js";
+import { approveResult, bulkResult } from "./controls.js";
 import { option } from "./dialogs.js";
 import { ARCHIVE_REASONS } from "./model.js";
 import { DIALOGS } from "./registry.js";
@@ -20,23 +19,37 @@ const STEPS = {
   archive: (m, id, reason) => m.archive(id, reason),
 };
 
-/** Runs the calls one by one (a refused one is counted, not fatal) and leaves the result for the board. */
+/**
+ * Runs the calls one by one and leaves the result for the board (`app.handBack("bulk", ...)`). An
+ * approval goes through `decideIfStill` with the `expect` captured when the dialog opened: a card that
+ * moved on is skipped and counted, never approved at its new gate. A refused call is counted, not fatal.
+ */
 export async function runBulk(app, d, reason = null) {
   const done = [];
   let failed = 0;
+  let moved = 0;
+  const movedNames = [];
   let last = null;
   for (const item of d.items ?? []) {
     try {
-      await STEPS[item.step ?? d.action](app.machine, item.id, reason);
+      if ((item.step ?? d.action) === "approve") await app.machine.decideIfStill(item.id, item.expect, "approved");
+      else await STEPS[item.step ?? d.action](app.machine, item.id, reason);
       done.push(item.id);
     } catch (e) {
-      failed++;
-      last = e?.message ?? String(e);
+      if (e?.code === "moved") {
+        moved++;
+        movedNames.push(item.title ?? item.id);
+      } else {
+        failed++;
+        last = e?.message ?? String(e);
+      }
     }
   }
   const total = (d.items ?? []).length;
-  const text = `${bulkResult(d.action, done.length, total, failed)}${last ? `: ${last}` : ""}`;
-  setShared("luna.bulk", { done, text, failed, at: Date.now() });
+  const head = d.action === "approve" ? approveResult(done.length, total, moved, failed) : bulkResult(d.action, done.length, total, failed);
+  const named = movedNames.length ? ` (${movedNames.slice(0, 3).join(", ")}${movedNames.length > 3 ? ", …" : ""})` : "";
+  const text = `${head}${named}${last ? `: ${last}` : ""}`;
+  app.handBack("bulk", { done, text, failed: failed + moved, moved });
   return null;
 }
 
@@ -45,7 +58,7 @@ DIALOGS.bulk = {
   height: 320,
   body: (app, t, d) => {
     const out = [div().pt(8).pb(8).text_size(12.5).text_color(t.foreground).child(d.question ?? "")];
-    for (const item of (d.items ?? []).slice(0, 8)) out.push(div().h(24).truncate().text_size(12).text_color(t.muted).child(`${item.step === "approve" ? "approve" : item.step === "start" ? "start" : item.step === "resume" ? "resume" : "·"}  ${item.title}`));
+    for (const item of (d.items ?? []).slice(0, 8)) out.push(div().h(24).truncate().text_size(12).text_color(t.muted).child(`${item.kind ?? "·"}  ${item.title}`));
     if ((d.items ?? []).length > 8) out.push(div().h(24).text_size(12).text_color(t.dim).child(`and ${d.items.length - 8} more`));
     if (d.skipped > 0) out.push(div().pt(8).text_size(11.5).text_color(t.dim).child(`${d.skipped} marked ticket${d.skipped === 1 ? "" : "s"} cannot take this and ${d.skipped === 1 ? "is" : "are"} left alone.`));
     if (d.action === "archive") {
@@ -53,7 +66,7 @@ DIALOGS.bulk = {
     }
     return out;
   },
-  primary: (app, d) => (d.action === "archive" ? null : { label: d.action === "approve" ? "Go on" : d.action === "abort" ? "Stop them" : d.action === "worktree" ? "Remove" : "Delete", kind: d.action === "approve" ? "primary" : "danger" }),
+  primary: (app, d) => (d.action === "archive" ? null : { label: d.action === "approve" ? "Approve" : d.action === "abort" ? "Stop them" : d.action === "worktree" ? "Remove" : "Delete", kind: d.action === "approve" ? "primary" : "danger" }),
   submit: (app, cx, d) => app.send(cx, () => runBulk(app, d)),
 };
 
@@ -74,7 +87,7 @@ DIALOGS.close_pr = {
         if (e?.code === "no_pull") throw new Error("The machine no longer lists this PR: refresh the list.");
         throw e;
       }
-      setShared("luna.bulk", { done: [], text: `Closed ${d.repo}#${d.number}`, failed: 0, refreshPrs: true, at: Date.now() });
+      app.handBack("bulk", { done: [], text: `Closed ${d.repo}#${d.number}`, failed: 0, refreshPrs: true });
       return null;
     }),
 };
