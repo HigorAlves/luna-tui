@@ -15,7 +15,7 @@ import { hostRedactor, secretRedactor } from "../../domain/redact-secrets.ts";
 import type { SecretStore } from "../../application/secrets.ts";
 import { type BlockedRow, type CardNetwork, findCardNetwork, openCardNetwork } from "./egress.ts";
 import { runtimeChecker } from "./runtimes.ts";
-import { type ServiceHardening, serviceName, startServices } from "./services.ts";
+import { type ServiceHardening, type ServiceHost, hostArgs, serviceName, startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow, OUTPUT_CAP } from "../process/exec.ts";
 import { seccompChecker } from "./seccomp.ts";
 
@@ -196,6 +196,8 @@ export interface SandboxRun {
   /** Join no network at all: for a job that needs none (the graph build parses untrusted code). Ignored when a service network is given. */
   networkNone?: boolean;
   serviceEnv?: Record<string, string>;
+  /** The services' names and addresses (`startServices`): written to the container's /etc/hosts, so gVisor, which has no Docker DNS, still resolves them. */
+  serviceHosts?: ServiceHost[];
   /** The list this run may reach (`egressFor`), and the machine's own image the proxy runs from (never a repository's). `runSandbox` opens a card network with a proxy for it, and removes both when the run ends. */
   egress?: { allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string };
   /** Secret values by name, for this run only: files in `<runDir>/secrets`, mounted read-only at /run/luna-secrets. */
@@ -300,7 +302,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   // On a card network the host is not reachable at all: a trace endpoint there is the proxy's private entry, never an alias in the stage.
   const plainEnv = Object.entries(run.extraEnv ?? {}).filter(([name]) => !SECRET_EXTRA_ENV.has(name));
   if (!run.cardNetwork && plainEnv.some(([, value]) => value.includes("host.docker.internal"))) args.push("--add-host", "host.docker.internal:host-gateway");
-  args.push(...networkArgs(run.network, run.serviceEnv, run.networkNone, run.cardNetwork, run.alsoJoin, [...Object.keys(run.services ?? {}), ...(run.noProxy ?? [])]));
+  args.push(...networkArgs(run.network, run.serviceEnv, run.networkNone, run.cardNetwork, run.alsoJoin, [...Object.keys(run.services ?? {}), ...(run.noProxy ?? [])], run.serviceHosts));
   // The run's own extra env last: docker keeps the last value, so a repo's service exports
   // (luna.yaml) never redirect the trace context the machine set.
   for (const [key, value] of plainEnv) args.push("-e", `${key}=${value}`);
@@ -314,11 +316,12 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
 }
 
 /** The network to join and what the services export, when a run has any. A card network comes after the service env, so an export cannot take the proxy variables; `alsoJoin` adds networks by name. */
-function networkArgs(network: string | null | undefined, serviceEnv: Record<string, string> | undefined, none?: boolean, card?: CardNetwork, alsoJoin?: string[], aliases: string[] = []): string[] {
+function networkArgs(network: string | null | undefined, serviceEnv: Record<string, string> | undefined, none?: boolean, card?: CardNetwork, alsoJoin?: string[], aliases: string[] = [], hosts?: ServiceHost[]): string[] {
   const env = Object.entries(serviceEnv ?? {}).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
-  if (card) return [...env, ...card.containerArgs(aliases), ...(alsoJoin ?? []).flatMap((name) => ["--network", name])];
+  const add = hostArgs(hosts);
+  if (card) return [...env, ...add, ...card.containerArgs(aliases), ...(alsoJoin ?? []).flatMap((name) => ["--network", name])];
   if (!network) return none ? ["--network", "none"] : [];
-  return ["--network", network, ...env];
+  return ["--network", network, ...add, ...env];
 }
 
 export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}): Promise<SandboxResult> {
@@ -337,7 +340,7 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
   try {
     // A re-attached run's services are still up from before; they are torn down with it below.
     const services = run.attach
-      ? { network: null, env: {}, teardown: async () => void (await Promise.all(Object.keys(run.services ?? {}).map((key) => deps.exec("docker", ["rm", "-f", serviceName(run.name, key)])))) }
+      ? { network: null, env: {}, hosts: [], teardown: async () => void (await Promise.all(Object.keys(run.services ?? {}).map((key) => deps.exec("docker", ["rm", "-f", serviceName(run.name, key)])))) }
       : await deps.startServices(run.name, run.services ?? {}, { harden: serviceHardeningOf(run.limits), ...(card ? { network: { name: card.name, dns: card.dns } } : {}) });
     try {
       if (!run.attach) {
@@ -348,7 +351,7 @@ export async function runSandbox(run: SandboxRun, given: Partial<RunDeps> = {}):
         await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
         const secrets = stageSecrets(run);
         if (Object.keys(secrets).length > 0) await writeSecretFiles(secretsPath, secrets);
-        await deps.execOrThrow("docker", sandboxArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }, inDir, outDir));
+        await deps.execOrThrow("docker", sandboxArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env, serviceHosts: services.hosts }, inDir, outDir));
       }
       const known = { ...(run.redactValues ?? {}), ...(run.secrets ?? {}) };
       const redact = secretRedactor(known);
@@ -447,6 +450,7 @@ export interface SandboxExec {
   services?: Record<string, ServiceSpec>;
   network?: string | null;
   serviceEnv?: Record<string, string>;
+  serviceHosts?: ServiceHost[];
   /** The services are already up (the caller started them and owns their teardown): `services` then only names the aliases, and none is started or removed here. */
   servicesUp?: boolean;
   /** Secret values by name for this command only: files in `secretsDir`, mounted read-only at /run/luna-secrets, the command started through luna-env. */
@@ -490,7 +494,7 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
   if (hasSecrets && !run.secretsDir) throw new Error("sandboxExecArgs: secrets need a secretsDir, they are never passed as -e");
   if (hasSecrets) args.push(...secretsMount(run.secretsDir!));
   args.push(...cacheArgs(run.cacheVolume));
-  args.push(...networkArgs(run.network, run.serviceEnv, false, run.cardNetwork, run.alsoJoin, Object.keys(run.services ?? {})));
+  args.push(...networkArgs(run.network, run.serviceEnv, false, run.cardNetwork, run.alsoJoin, Object.keys(run.services ?? {}), run.serviceHosts));
   // Writable: a test runner writes its cache next to the code (node_modules/.vite, go's are on the tmpfs).
   args.push("-v", `${run.worktree}:/work`);
   // Later mounts shadow earlier ones: the pointer file stays the machine's.
@@ -515,11 +519,11 @@ export async function execInSandbox(
   const folder = run.secrets && Object.keys(run.secrets).length > 0 ? await makeSecretFolder(run.secrets).catch(async (error) => { await own?.teardown(); throw error; }) : null;
   try {
     const services = run.servicesUp
-      ? { network: run.network ?? null, env: run.serviceEnv ?? {}, teardown: async () => {} }
+      ? { network: run.network ?? null, env: run.serviceEnv ?? {}, hosts: run.serviceHosts ?? [], teardown: async () => {} }
       : await deps.startServices(run.name, run.services ?? {}, { harden: serviceHardeningOf(run.limits), ...(card ? { network: { name: card.name, dns: card.dns } } : {}) });
     try {
       // What the project's own commands print is theirs to choose: only its tail is kept.
-      const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), ...(folder ? { secretsDir: folder.dir } : {}), network: services.network, serviceEnv: services.env }), { ...options, outputCap: OUTPUT_CAP });
+      const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), ...(folder ? { secretsDir: folder.dir } : {}), network: services.network, serviceEnv: services.env, serviceHosts: services.hosts }), { ...options, outputCap: OUTPUT_CAP });
       await deps.exec("docker", ["rm", "-f", run.name]);
       const redact = secretRedactor(run.secrets ?? {});
       const redactHost = hostRedactor(run.secrets ?? {});
@@ -602,7 +606,7 @@ export function sandboxExecutor(
         gitIdentity,
         services: options.services,
         cacheVolume: cacheVolumeFor(options.repoPath ?? dirname(options.cwd), size?.cacheTrust),
-        ...(shared ? { ...(shared.card ? { cardNetwork: shared.card } : {}), servicesUp: true, network: shared.services.network, serviceEnv: shared.services.env } : {}),
+        ...(shared ? { ...(shared.card ? { cardNetwork: shared.card } : {}), servicesUp: true, network: shared.services.network, serviceEnv: shared.services.env, serviceHosts: shared.services.hosts } : {}),
       },
       { signal: options.signal, timeoutMs: options.timeoutMs },
     );
@@ -661,7 +665,7 @@ export interface SessionOptions {
 /** What a session hands each check: the network and the services it shares. */
 interface SharedRun {
   card: CardNetwork | null;
-  services: { network: string | null; env: Record<string, string> };
+  services: { network: string | null; env: Record<string, string>; hosts: ServiceHost[] };
   fresh: (redactHost: (host: string) => string) => Promise<BlockedRow[]>;
 }
 /** An exec that shares one network and one set of services with the others of its pass; `close` removes them. */

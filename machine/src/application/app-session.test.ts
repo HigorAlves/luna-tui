@@ -32,7 +32,7 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
     secrets: { folder: () => "/secrets/repo", load: async (_r, names) => ({ values: Object.fromEntries(names.filter((n) => !(over.missing ?? []).includes(n)).map((n) => [n, n === "APP_KEY" ? secretA : secretB])), missing: (over.missing ?? []).filter((m) => names.includes(m)).map((name) => ({ name, reason: "there is no such file" })) }) },
     openCardNetwork: async (run) => (events.push(`network ${run}`), card as never),
     openPlainNetwork: async (run) => (events.push(`plain network ${run}`), card as never),
-    startServices: async (run, _s, options) => (events.push(`services on ${options?.network?.name}`), { network: options?.network?.name ?? null, env: { DATABASE_URL: "postgres://db/app" }, teardown: async () => void events.push("teardown services") }),
+    startServices: async (run, _s, options) => (events.push(`services on ${options?.network?.name}`), { network: options?.network?.name ?? null, env: { DATABASE_URL: "postgres://db/app" }, hosts: [{ name: "db", address: "172.30.0.7" }], teardown: async () => void events.push("teardown services") }),
     exec: async (run) => (events.push("seed"), seedRuns.push({ env: run.env, ...(run.secrets ? { secrets: run.secrets } : {}), argv: run.argv, ...(run.servicesUp ? { servicesUp: true } : {}) }), rowsNow.push({ host: "seed.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }), { code: over.seedExit ?? 0, stdout: `seeding ${secretB}\n`, stderr: "" }),
     docker: async (args, options) => {
       dockerCalls.push(args);

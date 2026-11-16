@@ -25,8 +25,33 @@ export interface ServiceSet {
   network: string | null;
   /** What the services export, for the run's container. */
   env: Record<string, string>;
+  /** Every name a container may reach a service by, with its address on the network: written to the container's /etc/hosts (`hostArgs`), because gVisor's netstack does not apply the redirects Docker's embedded DNS needs. */
+  hosts: ServiceHost[];
   /** Removes the services and the network; safe to call twice. */
   teardown(): Promise<void>;
+}
+
+export interface ServiceHost {
+  name: string;
+  address: string;
+}
+
+const HOST_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$/;
+const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
+
+/** Throws on a name that is not a plain host name or an address that is not an IPv4 literal: nothing else reaches `--add-host`. */
+export function checkHost(host: ServiceHost): ServiceHost {
+  if (!HOST_NAME.test(host.name)) throw new ServiceNotReadyError(`service name ${JSON.stringify(host.name)} is not a plain host name (letters, digits, dot, dash, underscore)`);
+  if (!IPV4.test(host.address)) throw new ServiceNotReadyError(`service ${host.name}: address ${JSON.stringify(host.address)} is not an IPv4 literal`);
+  return host;
+}
+
+/** The `--add-host` arguments for a container that joins the services. Pure. */
+export function hostArgs(hosts: readonly ServiceHost[] | undefined): string[] {
+  return (hosts ?? []).flatMap((host) => {
+    const { name, address } = checkHost(host);
+    return ["--add-host", `${name}:${address}`];
+  });
 }
 
 export const networkName = (runName: string): string => `hardness-net-${runName}`;
@@ -75,7 +100,7 @@ export interface StartOptions {
 export async function startServices(runName: string, services: Record<string, ServiceSpec>, options: StartOptions = {}): Promise<ServiceSet> {
   const exec = options.exec ?? hostExec;
   const keys = Object.keys(services);
-  if (keys.length === 0) return { network: null, env: {}, teardown: async () => {} };
+  if (keys.length === 0) return { network: null, env: {}, hosts: [], teardown: async () => {} };
   const given = options.network;
   const network = given?.name ?? networkName(runName);
   let torn = false;
@@ -86,7 +111,9 @@ export async function startServices(runName: string, services: Record<string, Se
     if (!given) await exec("docker", ["network", "rm", network]);
   };
   const env: Record<string, string> = {};
+  const hosts: ServiceHost[] = [];
   try {
+    for (const key of keys) checkHost({ name: key, address: "0.0.0.0" });
     if (!given) {
       const created = await exec("docker", ["network", "create", network]);
       if (created.code !== 0) throw new ServiceNotReadyError(`network ${network}: ${created.stderr.trim() || "docker network create failed"}`);
@@ -98,11 +125,18 @@ export async function startServices(runName: string, services: Record<string, Se
       Object.assign(env, spec.exports ?? {});
     }
     for (const key of keys) await waitReady(runName, key, services[key]!, exec, options);
+    for (const key of keys) {
+      const container = serviceName(runName, key);
+      const found = await exec("docker", ["inspect", "-f", `{{(index .NetworkSettings.Networks ${JSON.stringify(network)}).IPAddress}}`, container]);
+      if (found.code !== 0) throw new ServiceNotReadyError(`service ${key}: could not read its address on ${network}: ${found.stderr.trim() || "docker inspect failed"}`);
+      const address = found.stdout.trim();
+      hosts.push(checkHost({ name: key, address }), checkHost({ name: container, address }));
+    }
   } catch (error) {
     await teardown();
     throw error;
   }
-  return { network, env, teardown };
+  return { network, env, hosts, teardown };
 }
 
 async function waitReady(runName: string, key: string, spec: ServiceSpec, exec: NonNullable<StartOptions["exec"]>, options: StartOptions): Promise<void> {
