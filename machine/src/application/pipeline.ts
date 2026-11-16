@@ -32,6 +32,7 @@ import type { Credentials } from "../adapters/credentials/index.ts";
 import { type RunSpan, type Telemetry, noTelemetry } from "./telemetry.ts";
 import { type DecisionTruth, escalationResumedTruth, findingTruth, planTruth, sizeTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
 import { fallbackCandidates } from "../domain/engine-choice.ts";
+import { type ConfigChange, DECLINE_DAYS, type ProposalInput, choicesOf, renderProposal } from "../domain/config-proposal.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
@@ -44,7 +45,7 @@ import { buildProgressOf, buildReportOf, prFactsOf, verifyReportOf } from "./rep
 import { stageFactRows } from "./stage-facts.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, normalize } from "node:path";
 
 import type { Policy } from "../domain/policy.ts";
@@ -761,6 +762,63 @@ export class Pipeline {
       route: "setup",
     });
     return this.dispatch(task.id, { type: "start", setup: true });
+  }
+
+  /** A config proposal for `repoPath`: a card on the `config` route, made already at the setup gate with the new luna.yaml, the one it replaces
+   *  and the changes. No stage runs. Approving writes the file (as the setup gate does) and closes the card; rejecting archives it, and the
+   *  changes stay on it for `declinedConfigChanges`. A repo has one open proposal: a second replaces what the first asked. A file that would
+   *  not load throws, and nothing is made. */
+  async proposeConfig(repoPath: string, changes: ConfigChange[]): Promise<TaskRow> {
+    const previous = await this.currentConfigText(repoPath);
+    const config = renderProposal(previous, changes);
+    const requested = { config, previous, changes };
+    const title = `Config proposal: ${changes.length} ${changes.length === 1 ? "change" : "changes"}`;
+    const open = (await this.store.listTasks()).find((t) => t.route === "config" && t.state === "awaiting_setup" && t.repoPath === repoPath);
+    if (open) {
+      await this.store.withTaskLock(open.id, async (task, tx) => {
+        const gate = await tx.findOpenApproval(task.id);
+        if (task.state !== "awaiting_setup" || !gate) throw new TaskMovedError(task.id, task.state, ["awaiting_setup"]);
+        await tx.updateApprovalRequested(gate, requested);
+        await tx.updateTask(task.id, { title });
+      });
+      await this.log(open.id, "config.proposal_replaced", { changes: changes.length });
+      return this.get(open.id);
+    }
+    const task = await this.createTask({ title, description: `Change the engines and efforts in ${join(repoPath, CONFIG_FILE)}: ${changes.map((c) => c.pack).join(", ")}.`, repoPath, route: "config" });
+    return this.dispatch(task.id, { type: "needs_context" }, { detail: requested });
+  }
+
+  /** The changes a person rejected for this repo in the 30 days before `now`, one entry per field, for the proposal rule to leave out. */
+  async declinedConfigChanges(repoPath: string, now: Date): Promise<Array<{ pack: PackId; field: "engine" | "effort"; to: string; at: string }>> {
+    const since = now.getTime() - DECLINE_DAYS * DAY_MS;
+    const out: Array<{ pack: PackId; field: "engine" | "effort"; to: string; at: string }> = [];
+    for (const task of await this.store.listTasks()) {
+      if (task.route !== "config" || task.state !== "archived" || task.repoPath !== repoPath) continue;
+      const gate = (await this.approvals(task.id)).find((a) => a.decision === "rejected" && a.decidedAt !== null);
+      if (!gate?.decidedAt || gate.decidedAt.getTime() < since || gate.decidedAt.getTime() > now.getTime()) continue;
+      const changes = Array.isArray(gate.requested.changes) ? (gate.requested.changes as ConfigChange[]) : [];
+      const at = gate.decidedAt.toISOString();
+      for (const change of changes) {
+        if (change.engine) out.push({ pack: change.pack, field: "engine", to: change.engine.to, at });
+        if (change.effort) out.push({ pack: change.pack, field: "effort", to: change.effort.to, at });
+      }
+    }
+    return out;
+  }
+
+  /** The engines and efforts the repo's luna.yaml sets today, for the proposal rule. */
+  async configChoices(repoPath: string): Promise<ProposalInput["current"]> {
+    return choicesOf(await this.currentConfigText(repoPath));
+  }
+
+  /** The repo's luna.yaml as text; an empty string when it has none. */
+  private async currentConfigText(repoPath: string): Promise<string> {
+    try {
+      return await readFile(join(repoPath, CONFIG_FILE), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw error;
+    }
   }
 
   /** Stage slots: how many tasks may drive a stage at once, how many do right now, whether the
@@ -1906,7 +1964,7 @@ export class Pipeline {
 
   /** A rejection: the plan gate's alone (an open plan, not triage's outcome and not a later gate). The card is archived with reason `rejected`, the comment kept. */
   private async reject(task: TaskRow, reason: string | undefined, auto: boolean): Promise<TaskRow> {
-    const gateKind = task.state === "awaiting_approval" || (task.state === "awaiting_ship" && task.route !== "review") ? task.state : null;
+    const gateKind = task.state === "awaiting_approval" || (task.state === "awaiting_ship" && task.route !== "review") || (task.state === "awaiting_setup" && task.route === "config") ? task.state : null;
     const open = gateKind ? (await this.approvals(task.id)).find((a) => a.kind === gateKind && a.decision === null) : undefined;
     // The plan gate, or the watch's release question; the preview gate and every other gate are not rejectable.
     if (!open || auto || (open.requested.outcome !== undefined && !isSplitOutcome(open.requested.outcome)) || (gateKind === "awaiting_ship" && open.requested.gate !== "ship_approval")) throw new RejectNotAllowedError(task.id, task.state);

@@ -2,6 +2,10 @@
 // the repo's own run signals (how often the pack escalated or got stuck here). A fixed rule decides; no model is called, and
 // `why` is built from the numbers, never from model text. Pure: the caller reads the evidence and says what time it is.
 import { type Effort, type EngineId, PACKS, type PackId, type StageEfforts, type StageEngines, effortProblem } from "@hardness/contracts";
+import { parse as parseYaml } from "yaml";
+
+import { PolicyParseError } from "./policy.ts";
+import { renderLunaConfig, validateLunaConfig } from "./luna-config.ts";
 
 /** Fewest scorecard cases a candidate needs to count. */
 export const MIN_CASES = 3;
@@ -146,4 +150,35 @@ function whyOf(pack: PackId, step: Step, signal: RepoSignal, current: Candidate,
     signal.stuck === 0 ? `escalated ${signal.escalations} of ${signal.runs} runs` : signal.escalations === 0 ? `got stuck ${signal.stuck} of ${signal.runs} runs` : `escalated ${signal.escalations} and got stuck ${signal.stuck} of ${signal.runs} runs`;
   const head = `${pack} ${trouble}; ${label(next)} ${verb} ${next.quality.toFixed(2)} vs ${current.quality.toFixed(2)}`;
   return step === "up" ? head : `${head} at ${money(next.costPerCase)} a case vs ${money(current.costPerCase)}`;
+}
+
+/** The new luna.yaml text: the current file read as config, with only `engines` and `effort` changed, rendered again. Throws a
+ *  `PolicyParseError` naming the path when the current file or the result is not a valid luna.yaml, so nothing invalid is proposed. */
+export function renderProposal(currentText: string, changes: ConfigChange[]): string {
+  const config = validateLunaConfig(parseMapping(currentText));
+  const engines: StageEngines = { ...config.engines };
+  const effort: StageEfforts = { ...config.effort };
+  for (const change of changes) {
+    if (change.engine) engines[change.pack] = change.engine.to;
+    if (change.effort) effort[change.pack] = change.effort.to;
+  }
+  const text = renderLunaConfig({ ...config, engines, effort });
+  validateLunaConfig(parseMapping(text));
+  return text;
+}
+
+/** The engines and efforts a luna.yaml text sets today; none for an empty text. Throws a `PolicyParseError` for a file that does not load. */
+export function choicesOf(text: string): ProposalInput["current"] {
+  const config = validateLunaConfig(parseMapping(text));
+  return { engines: config.engines ?? {}, effort: config.effort ?? {} };
+}
+
+function parseMapping(text: string): unknown {
+  let raw: unknown;
+  try {
+    raw = parseYaml(text);
+  } catch (error) {
+    throw new PolicyParseError(`not valid YAML: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return raw ?? {};
 }

@@ -440,8 +440,8 @@ describe("PR tasks", () => {
     expect(() => TaskSource.parse({ kind: "notch", ref: "LUNA-14" })).toThrow();
   });
 
-  it("routes are a closed set: feature is today's pipeline, setup only proposes luna.yaml, the rest are PR actions", () => {
-    expect(TaskRoute.options).toEqual(["feature", "setup", "ci_fix", "review", "address"]);
+  it("routes are a closed set: feature is today's pipeline, setup only proposes luna.yaml, config changes engines and efforts at the setup gate, the rest are PR actions", () => {
+    expect(TaskRoute.options).toEqual(["feature", "setup", "config", "ci_fix", "review", "address"]);
     expect(PrAction.options).toEqual(["ci_fix", "review", "address"]);
   });
 

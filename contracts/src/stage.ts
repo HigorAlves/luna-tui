@@ -37,8 +37,8 @@ export const TaskSource = z.discriminatedUnion("kind", [
 ]);
 export type TaskSource = z.infer<typeof TaskSource>;
 
-/** Which graph a task walks: `feature` is the full pipeline; the others are PR tasks. */
-export const TaskRoute = z.enum(["feature", "setup", "ci_fix", "review", "address"]);
+/** Which graph a task walks: `feature` is the full pipeline; `config` is a luna.yaml change that waits at the setup gate and runs no stage; the others are PR tasks. */
+export const TaskRoute = z.enum(["feature", "setup", "config", "ci_fix", "review", "address"]);
 export type TaskRoute = z.infer<typeof TaskRoute>;
 
 /** A question the stage could not answer alone, with the answer it would pick. */
