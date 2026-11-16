@@ -1,0 +1,75 @@
+{
+  "schema": 3,
+  "stage": "plan",
+  "pack": "plan",
+  "attempt": 1,
+  "task": {
+    "id": "eval-web-item-count",
+    "title": "Show the item count on the cart page",
+    "description": "Shoppers cannot see how many items are in the cart. Show the count next to the total on the cart page. Count quantities, not lines. Keep the rendering code in src/main.ts thin: the counting belongs in src/cart.ts with a test.",
+    "criteria": [
+      "The cart page header shows the number of items in the cart, counting quantities (two lines of qty 2 and 1 show 3)",
+      "The count is a pure function in src/cart.ts with a unit test",
+      "`npm test` passes"
+    ],
+    "repoPath": "fixtures/golden-web",
+    "branch": "task/eval-web-item-count",
+    "source": null,
+    "record": {
+      "source": "eval",
+      "kind": "feature",
+      "goal": "The cart page shows how many items the cart holds.",
+      "size": "small",
+      "urgency": "normal",
+      "risk": "low",
+      "signals": {},
+      "qa": [],
+      "decision": "plan",
+      "reason": "the ticket asks for a change",
+      "at": "2026-11-16T00:00:00.000Z",
+      "model": "eval",
+      "typeOfWork": "frontend"
+    }
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "eval",
+        "kind": "feature",
+        "goal": "The cart page shows how many items the cart holds.",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "low",
+        "signals": {},
+        "qa": [],
+        "decision": "plan",
+        "reason": "the ticket asks for a change",
+        "at": "2026-11-16T00:00:00.000Z",
+        "model": "eval",
+        "typeOfWork": "frontend"
+      },
+      "brief": "",
+      "criteria": [
+        "The cart page header shows the number of items in the cart, counting quantities (two lines of qty 2 and 1 show 3)",
+        "The count is a pure function in src/cart.ts with a unit test",
+        "`npm test` passes"
+      ],
+      "assumptions": [],
+      "slices": [],
+      "risk": {
+        "level": "low"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

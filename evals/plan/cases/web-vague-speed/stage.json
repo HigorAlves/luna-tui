@@ -1,0 +1,71 @@
+{
+  "schema": 3,
+  "stage": "plan",
+  "pack": "plan",
+  "attempt": 1,
+  "task": {
+    "id": "eval-web-vague-speed",
+    "title": "Make the cart faster",
+    "description": "The cart feels slow. Make it faster.",
+    "criteria": [
+      "The cart page is faster"
+    ],
+    "repoPath": "fixtures/golden-web",
+    "branch": "task/eval-web-vague-speed",
+    "source": null,
+    "record": {
+      "source": "eval",
+      "kind": "improvement",
+      "goal": "Make the cart page faster.",
+      "size": "unknown",
+      "urgency": "normal",
+      "risk": "low",
+      "signals": {},
+      "qa": [],
+      "decision": "plan",
+      "reason": "the ticket asks for a change",
+      "at": "2026-11-16T00:00:00.000Z",
+      "model": "eval",
+      "typeOfWork": "frontend"
+    }
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "eval",
+        "kind": "improvement",
+        "goal": "Make the cart page faster.",
+        "size": "unknown",
+        "urgency": "normal",
+        "risk": "low",
+        "signals": {},
+        "qa": [],
+        "decision": "plan",
+        "reason": "the ticket asks for a change",
+        "at": "2026-11-16T00:00:00.000Z",
+        "model": "eval",
+        "typeOfWork": "frontend"
+      },
+      "brief": "",
+      "criteria": [
+        "The cart page is faster"
+      ],
+      "assumptions": [],
+      "slices": [],
+      "risk": {
+        "level": "low"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

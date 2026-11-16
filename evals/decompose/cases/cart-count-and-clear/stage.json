@@ -1,0 +1,84 @@
+{
+  "schema": 3,
+  "stage": "decompose",
+  "pack": "decompose",
+  "attempt": 1,
+  "task": {
+    "id": "eval-cart-count-and-clear",
+    "title": "Item count and a clear button on the cart page",
+    "description": "",
+    "criteria": [],
+    "repoPath": "fixtures/golden-web",
+    "branch": "task/eval-cart-count-and-clear",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "split": {
+      "origin": {
+        "title": "Item count and a clear button on the cart page",
+        "text": "The cart page needs two features. It shows the number of items (counting quantities) next to the total, and it has a clear button that empties the cart. Both change the page in src/main.ts and the logic in src/cart.ts. About 220 lines with tests.",
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "itemCount(items) sums quantities and has a unit test"
+          },
+          {
+            "id": "C2",
+            "text": "The cart page shows the item count next to the total"
+          },
+          {
+            "id": "C3",
+            "text": "clearCart empties the items and has a unit test"
+          },
+          {
+            "id": "C4",
+            "text": "A clear button on the page empties the cart and repaints"
+          },
+          {
+            "id": "C5",
+            "text": "`npm test` passes"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "src/cart.ts",
+          "role": "logic"
+        },
+        {
+          "path": "src/main.ts",
+          "role": "page"
+        },
+        {
+          "path": "index.html",
+          "role": "markup"
+        },
+        {
+          "path": "test/cart.test.ts",
+          "role": "test"
+        }
+      ],
+      "limit": {
+        "target": [
+          100,
+          150
+        ],
+        "hard": 300,
+        "maxChildren": 5
+      },
+      "children": [],
+      "round": 1
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

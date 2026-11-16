@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "children",
+      "min": 2,
+      "max": 4
+    },
+    {
+      "kind": "between",
+      "path": "children[].est_loc",
+      "min": 1,
+      "max": 300
+    },
+    {
+      "kind": "mentions",
+      "path": "children[].covers[]",
+      "words": [
+        "C1",
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "children[].files_hint[]",
+      "words": [
+        "cart.ts",
+        "main.ts"
+      ]
+    },
+    {
+      "kind": "avoids",
+      "words": [
+        ".golden",
+        "patches/"
+      ]
+    }
+  ],
+  "rubric": "The two features touch the same files, so the cut follows behaviour, not files: one child for the item count (C1 and C2: itemCount in src/cart.ts with its test, then the page), one for the clear button (C3 and C4: clearCart with its test, then the button in src/main.ts and index.html). Two or three children; a fourth only for a real reason in notes. C5 (`npm test` passes) may sit in any child or in all of them, but C1 to C4 are each in exactly one child's covers. The second child may depend on the first, as both edit src/main.ts, but only by position and without a cycle; a child that cannot ship alone (a page change with no function behind it) is a real error. Each child fits the target of 100 to 150 lines and none passes the hard limit of 300. No child names a repository, a branch or a base."
+}

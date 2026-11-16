@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "children",
+      "min": 2,
+      "max": 3
+    },
+    {
+      "kind": "between",
+      "path": "children[].est_loc",
+      "min": 1,
+      "max": 400
+    },
+    {
+      "kind": "mentions",
+      "path": "children[].covers[]",
+      "words": [
+        "C1",
+        "C2",
+        "C3"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "children[].files_hint[]",
+      "words": [
+        "cart.js",
+        "cart.test.js"
+      ]
+    },
+    {
+      "kind": "avoids",
+      "words": [
+        ".golden",
+        "patches/"
+      ]
+    }
+  ],
+  "rubric": "The change is small, so the cut is small too: two children, three at most. One child fixes formatPrice (criteria C1 and C2, in src/cart.js with its test), the other pins cartTotal on an empty list (C3, in test/cart.test.js). The children are independent: depends_on is empty or names only an earlier child, never a cycle and never itself. Every criterion id C1 to C3 is in exactly one child's covers. Each est_loc is far under the target size (about 5 to 20 lines): a child sized at the hard limit is a real error. No child names a repository, a branch or a base. A cut into more than three children splits what is already one change."
+}

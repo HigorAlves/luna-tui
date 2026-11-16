@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "kind",
+      "value": "done"
+    },
+    {
+      "kind": "count",
+      "path": "steps",
+      "min": 1,
+      "max": 3
+    },
+    {
+      "kind": "mentions",
+      "path": "steps[].files[]",
+      "words": [
+        "cart.ts",
+        "main.ts",
+        "cart.test.ts"
+      ]
+    },
+    {
+      "kind": "count",
+      "path": "criteria",
+      "min": 3
+    },
+    {
+      "kind": "avoids",
+      "words": [
+        ".golden",
+        "patches/"
+      ]
+    }
+  ],
+  "rubric": "A plan of one to three vertical steps across three files: an itemCount function in src/cart.ts that sums qty (with a case in test/cart.test.ts for two lines of qty 2 and 1 giving 3, and an empty cart giving 0), then the page in src/main.ts (and index.html if it needs a new element) that paints the count next to the total. The test comes with the function, not after the page. criteria keeps all three ticket criteria, each testable. cartTotal is not changed, even though it ignores quantity: a plan that notices this does so in outOfScope or assumptions, never as a silent fix. No questions: sensible defaults exist (the label text, the place)."
+}

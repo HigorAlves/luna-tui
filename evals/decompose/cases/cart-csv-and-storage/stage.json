@@ -1,0 +1,92 @@
+{
+  "schema": 3,
+  "stage": "decompose",
+  "pack": "decompose",
+  "attempt": 1,
+  "task": {
+    "id": "eval-cart-csv-and-storage",
+    "title": "Export, import, saved carts and a currency choice",
+    "description": "",
+    "criteria": [],
+    "repoPath": "fixtures/golden-web",
+    "branch": "task/eval-cart-csv-and-storage",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "split": {
+      "origin": {
+        "title": "Export, import, saved carts and a currency choice",
+        "text": "Four requests in one ticket. Export the cart as CSV. Import a CSV file into the cart, replacing it. Save the cart in localStorage so a reload keeps it. Let the shopper pick EUR or USD for the prices. About 1,100 lines with tests.",
+        "criteria": [
+          {
+            "id": "C1",
+            "text": "exportCsv(items) returns one line per item with name, price and qty, and a header line"
+          },
+          {
+            "id": "C2",
+            "text": "A download button on the page saves the CSV"
+          },
+          {
+            "id": "C3",
+            "text": "importCsv(text) returns the items or names the bad line"
+          },
+          {
+            "id": "C4",
+            "text": "An upload control replaces the cart with the imported file"
+          },
+          {
+            "id": "C5",
+            "text": "The cart is saved in localStorage after each change and loaded at start"
+          },
+          {
+            "id": "C6",
+            "text": "A currency select (EUR, USD) changes how formatPrice prints"
+          },
+          {
+            "id": "C7",
+            "text": "`npm test` passes"
+          }
+        ]
+      },
+      "files": [
+        {
+          "path": "src/cart.ts",
+          "role": "logic"
+        },
+        {
+          "path": "src/main.ts",
+          "role": "page"
+        },
+        {
+          "path": "index.html",
+          "role": "markup"
+        },
+        {
+          "path": "test/cart.test.ts",
+          "role": "test"
+        }
+      ],
+      "limit": {
+        "target": [
+          150,
+          300
+        ],
+        "hard": 500,
+        "maxChildren": 6
+      },
+      "children": [],
+      "round": 1
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

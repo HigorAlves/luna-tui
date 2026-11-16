@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "children",
+      "min": 4,
+      "max": 6
+    },
+    {
+      "kind": "between",
+      "path": "children[].est_loc",
+      "min": 1,
+      "max": 500
+    },
+    {
+      "kind": "mentions",
+      "path": "children[].covers[]",
+      "words": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C6"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "children[].files_hint[]",
+      "words": [
+        "cart.ts",
+        "main.ts"
+      ]
+    },
+    {
+      "kind": "avoids",
+      "words": [
+        ".golden",
+        "patches/"
+      ]
+    }
+  ],
+  "rubric": "The work is about 1,100 lines and the hard limit is 500, so it must split, into four to six children, each under 500 lines and aiming for 150 to 300. A natural cut is by capability: CSV export (C1, C2), CSV import (C3, C4), saved cart (C5) and the currency choice (C6); the export and import functions may share a small first child for the CSV format. Each child ships and tests alone once its depends_on children are merged: the import page (C4) depends on importCsv (C3) only if they are separate children. Dependencies are positions of other children, never a cycle, never itself. `order` follows them. C1 to C6 are each in exactly one child's covers; C7 may sit anywhere. One child that holds everything, or one over 500 lines, is a real error. No child names a repository, a branch or a base."
+}

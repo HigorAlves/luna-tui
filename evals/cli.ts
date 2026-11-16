@@ -55,6 +55,13 @@ const decisionOf = (raw: string | undefined): PackId => {
   return pack;
 };
 
+/** A pack whose cases `cases` lists: a decision pack, or an agent pack. */
+const casePackOf = (raw: string | undefined): PackId => {
+  const pack = PackId.safeParse(raw).data;
+  if (!pack || PACKS[pack].kind === "script") fail("--pack must be a decision or an agent pack");
+  return pack;
+};
+
 /** The state dir's log, read by the machine's own rule for where the state dir is. */
 const log = () => new DecisionLog({ stateDir: machineStateDir() });
 
@@ -138,7 +145,7 @@ if (command === "harvest") {
   console.log(`removed ${out.removed.length} run folder(s) older than ${days} days${out.skipped.length > 0 ? `; left alone (not a stamped folder, or a link): ${out.skipped.join(", ")}` : ""}`);
 } else if (command === "cases") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" } } });
-  for (const pack of values.pack ? [decisionOf(values.pack)] : decisionPackIds()) {
+  for (const pack of values.pack ? [casePackOf(values.pack)] : decisionPackIds()) {
     console.log(`\n${stripUnsafe(pack)}`);
     for (const row of casesTable(EVALS, pack)) console.log(stripUnsafe(`  ${row}`));
   }
