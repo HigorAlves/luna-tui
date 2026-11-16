@@ -321,11 +321,16 @@ pub fn row_text(action: &Action, task: Option<&Task>) -> String {
         "post_questions" => "post the questions".to_string(),
         other => other.to_string(),
     };
+    // The title and the why are other people's and a model's words: clean them as `payload_lines` does.
+    let clean = |text: &str| crate::text::sanitize(text, false);
     let card = match task {
-        Some(t) => format!("#{} {}", t.short_id(), t.title),
-        None => format!("#{}", action.task_id.chars().take(8).collect::<String>()),
+        Some(t) => format!("#{} {}", t.short_id(), clean(&t.title)),
+        None => format!(
+            "#{}",
+            clean(&action.task_id.chars().take(8).collect::<String>())
+        ),
     };
-    format!("{what}  {card}  {}", action.why)
+    format!("{what}  {card}  {}", clean(&action.why))
 }
 
 /// What the person reads under the selected row before `y`: the full payload, sanitised, because model text can steer it.
