@@ -1159,11 +1159,11 @@ console.log(incidentTicker ? `incidents: reading ${incidentSourceNames.join(", "
 
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
 // Alerts are read every six hours, and once soon after boot; with no GitHub token every read refuses and the pass only logs.
-const vulnsTicker = new Ticker(() => void vulns.tick().catch((error: unknown) => console.warn("compliance vulns failed", error)), 6 * 60 * MINUTE_MS);
-const vulnsFirst = setTimeout(() => void vulns.tick().catch((error: unknown) => console.warn("compliance vulns failed", error)), 3 * MINUTE_MS);
-vulnsFirst.unref();
-vulnsTicker.start();
-console.log("compliance: Dependabot and code-scanning alerts become cards with deadlines, checked every 6 hours");
+const vulnsTicker = config.vulnTriage ? new Ticker(() => void vulns.tick().catch((error: unknown) => console.warn("compliance vulns failed", error)), 6 * 60 * MINUTE_MS) : null;
+const vulnsFirst = vulnsTicker ? setTimeout(() => void vulns.tick().catch((error: unknown) => console.warn("compliance vulns failed", error)), 3 * MINUTE_MS) : null;
+vulnsFirst?.unref();
+vulnsTicker?.start();
+console.log(vulnsTicker ? "compliance: Dependabot and code-scanning alerts become cards with deadlines, checked every 6 hours" : "compliance: alert triage off (MACHINE_VULN_TRIAGE=off)");
 const slaTicker = new Ticker(() => {
   void pipeline
     .list()
@@ -1216,8 +1216,8 @@ async function shutdown(): Promise<void> {
   graphTicker?.stop();
   complianceTicker?.stop();
   incidentTicker?.stop();
-  vulnsTicker.stop();
-  clearTimeout(vulnsFirst);
+  vulnsTicker?.stop();
+  if (vulnsFirst) clearTimeout(vulnsFirst);
   if (complianceFirst) clearTimeout(complianceFirst);
   accessTicker?.stop();
   statusTicker?.stop();

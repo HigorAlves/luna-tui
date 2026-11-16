@@ -70,6 +70,8 @@ export interface Config {
   complianceEvidence: boolean;
   /** The quarterly GitHub org access review (RFC 0008). `MACHINE_ACCESS_REVIEW=0` or `off` stops it; it also needs `MACHINE_MANAGER_WIKI_REPO`. */
   accessReview: boolean;
+  /** Dependabot and code-scanning alerts become cards (RFC 0008, wave 6), checked every 6 hours. `MACHINE_VULN_TRIAGE=0` or `off` stops it. */
+  vulnTriage: boolean;
   /** `owner/name` whose wiki holds the org-wide pages (RFC 0008). */
   managerWikiRepo: string | null;
   /** The weekly status report (RFC 0008, wave 7): on by default with a home wiki, `MACHINE_STATUS_REPORT=off` stops it; the channel id its summary goes to and the weekday it is built on. */
@@ -562,6 +564,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     economy: env.MACHINE_ECONOMY !== "off",
     complianceEvidence: env.MACHINE_COMPLIANCE_EVIDENCE !== "off" && env.MACHINE_COMPLIANCE_EVIDENCE !== "0",
     accessReview: env.MACHINE_ACCESS_REVIEW !== "off" && env.MACHINE_ACCESS_REVIEW !== "0",
+    vulnTriage: env.MACHINE_VULN_TRIAGE !== "off" && env.MACHINE_VULN_TRIAGE !== "0",
     managerWikiRepo,
     statusReport: { enabled: managerWikiRepo !== null && env.MACHINE_STATUS_REPORT !== "off" && env.MACHINE_STATUS_REPORT !== "0", slackChannel: statusChannel, day: statusDay },
     incidents: { enabled: env.MACHINE_INCIDENTS !== "off" && env.MACHINE_INCIDENTS !== "0", slackChannel: incidentSlackChannel, jiraJql: env.MACHINE_INCIDENT_JIRA_JQL?.trim() || "issuetype = Incident AND updated >= -1d", jiraProject: incidentJiraProject },
