@@ -2,7 +2,7 @@ import { type IncomingHttpHeaders, type Server, createServer, request } from "no
 import { connect as netConnect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { type EgressProxy, createEgressProxy } from "./proxy.ts";
+import { type EgressProxy, createEgressProxy, parseRelayMeta } from "./proxy.ts";
 
 const REAL = "sk-ant-oat01-REAL-SECRET-VALUE";
 const PLACEHOLDER = "sk-ant-oat01-luna-relay-abc123";
@@ -29,6 +29,7 @@ async function start(
   handler: Parameters<typeof createServer>[1],
   kind: "oauth" | "api-key" = "oauth",
   resolved: string[] = [PUBLIC],
+  denyLocal: string[] = [],
 ): Promise<{ port: number; seen: Seen[]; lines: string[]; connects: Array<{ port: number; address: string }>; lookups: string[] }> {
   const seen: Seen[] = [];
   const lines: string[] = [];
@@ -50,7 +51,7 @@ async function start(
     resolve: async (name) => (lookups.push(name), resolved),
     connect: (port, address) => (connects.push({ port, address }), netConnect(upstreamPort, "127.0.0.1")),
     log: (line) => lines.push(line),
-    relay: { kind, placeholder: PLACEHOLDER, credential: async () => REAL, tls: false },
+    relay: { kind, placeholder: PLACEHOLDER, credential: async () => REAL, tls: false, denyLocal },
   });
   const bound = await proxy.listen(0, null, "127.0.0.1", 0);
   return { port: bound.relayPort!, seen, lines, connects, lookups };
@@ -69,7 +70,7 @@ function send(port: number, options: { path?: string; headers?: Record<string, s
       res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString() }));
     });
     req.on("error", reject);
-    req.end(options.body ?? "{}");
+    req.end((options.method ?? "POST") === "POST" ? (options.body ?? "{}") : undefined);
   });
 }
 
@@ -100,6 +101,29 @@ describe("the engine relay", () => {
     expect(firstAt).toBeGreaterThan(0);
     await new Promise((r) => setTimeout(r, 700));
     expect(upstreamEnded).toBeGreaterThan(firstAt);
+  });
+
+  it("ends the client's response when the upstream dies mid-stream, and logs the request", async () => {
+    const { port, lines } = await start((_req, res) => {
+      const out = res as import("node:http").ServerResponse;
+      out.writeHead(200, { "content-type": "text/event-stream" });
+      out.write("event: first\n\n");
+      setTimeout(() => out.socket?.destroy(), 50);
+    });
+    const outcome = await new Promise<string>((resolve) => {
+      const timer = setTimeout(() => resolve("hung"), 2000);
+      const req = request({ host: "127.0.0.1", port, method: "POST", path: "/v1/messages?beta=true", headers: oauth }, (res) => {
+        res.on("data", () => {});
+        res.on("error", () => (clearTimeout(timer), resolve("errored")));
+        res.on("aborted", () => (clearTimeout(timer), resolve("errored")));
+        res.on("close", () => (clearTimeout(timer), resolve(res.complete ? "complete" : "errored")));
+      });
+      req.on("error", () => (clearTimeout(timer), resolve("errored")));
+      req.end("{}");
+    });
+    expect(outcome).toBe("errored");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(lines.map((l) => JSON.parse(l) as { relay: Record<string, unknown> }).some((l) => l.relay.path === "/v1/messages" && l.relay.aborted === true)).toBe(true);
   });
 
   it("replaces the OAuth placeholder with the real token and keeps the path, the query and the other headers", async () => {
@@ -143,6 +167,31 @@ describe("the engine relay", () => {
     expect(connects).toHaveLength(0);
   });
 
+  it("allows POST /v1/messages and POST /v1/messages/count_tokens (with a query) and nothing else, logging each refused path", async () => {
+    const { port, seen, lines } = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"));
+    expect((await send(port, { path: "/v1/messages", headers: oauth })).status).toBe(200);
+    expect((await send(port, { path: "/v1/messages/count_tokens?beta=true", headers: oauth })).status).toBe(200);
+    expect(seen).toHaveLength(2);
+    const refused: Array<[string, string]> = [
+      ["POST", "/v1/models"],
+      ["POST", "/v1/messages/batches"],
+      ["POST", "/v1/messages/"],
+      ["POST", "/v1/messages/count_tokens/x"],
+      ["GET", "/v1/messages"],
+      ["DELETE", "/v1/messages"],
+      ["POST", "/v1/%2e%2e/admin"],
+      ["POST", "/v1/%2E%2E/admin"],
+      ["POST", "/v1/messages%2Fbatches"],
+      ["POST", "/v1/mess%61ges"],
+    ];
+    for (const [method, path] of refused) expect((await send(port, { method, path, headers: oauth })).status, `${method} ${path}`).toBe(403);
+    expect(seen).toHaveLength(2);
+    const logged = lines.map((l) => JSON.parse(l) as { relay: Record<string, unknown> }).filter((l) => l.relay.refused === "path");
+    expect(logged.map((l) => l.relay.path)).toContain("/v1/models");
+    expect(logged.map((l) => l.relay.path)).toContain("/v1/%2e%2e/admin");
+    expect(logged).toHaveLength(refused.length);
+  });
+
   it("resolves only api.anthropic.com, and refuses when it answers a private address", async () => {
     const ok = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"));
     await send(ok.port, { headers: oauth });
@@ -153,6 +202,25 @@ describe("the engine relay", () => {
     const bad = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"), "oauth", ["10.0.0.5"]);
     expect((await send(bad.port, { headers: oauth })).status).toBe(502);
     expect(bad.seen).toHaveLength(0);
+  });
+
+  it("refuses a request that arrives on the egress bridge's address, and serves one that arrives anywhere else", async () => {
+    // The test's listener is 127.0.0.1: denying 127.0.0.0/8 stands for a request on the bridge side.
+    const denied = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"), "oauth", [PUBLIC], ["127.0.0.0/8"]);
+    expect((await send(denied.port, { headers: oauth })).status).toBe(403);
+    expect(denied.seen).toHaveLength(0);
+    expect(denied.connects).toHaveLength(0);
+    expect(denied.lines.map((l) => JSON.parse(l) as { relay: Record<string, unknown> })[0]!.relay).toMatchObject({ refused: "local", status: 403 });
+    await proxy!.close();
+    await new Promise<void>((resolve) => upstream!.close(() => resolve()));
+    const other = await start((_req, res) => (res as import("node:http").ServerResponse).end("ok"), "oauth", [PUBLIC], ["172.18.0.0/16", "10.9.9.9"]);
+    expect((await send(other.port, { headers: oauth })).status).toBe(200);
+  });
+
+  it("reads the placeholder and the kind from the mounted file's text, and refuses anything else", () => {
+    expect(parseRelayMeta('{"kind":"oauth","placeholder":"sk-ant-oat01-luna-relay-x"}')).toEqual({ kind: "oauth", placeholder: "sk-ant-oat01-luna-relay-x" });
+    expect(parseRelayMeta('{"kind":"api-key","placeholder":"p"}')).toEqual({ kind: "api-key", placeholder: "p" });
+    for (const bad of ["", "nope", '{"kind":"x","placeholder":"p"}', '{"kind":"oauth"}', '{"kind":"oauth","placeholder":""}']) expect(parseRelayMeta(bad), bad).toBeNull();
   });
 
   it("logs one JSON line per request with no header value", async () => {

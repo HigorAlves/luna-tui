@@ -1143,6 +1143,14 @@ describe("the engine a stage runs on", () => {
     expect(result.events?.map((e) => e.kind)).toEqual(["slice_committed"]);
   });
 
+  it("releases the credential when a step between its preparation and the container throws, so the real token is not left on disk", async () => {
+    const { credentials, log } = recordingCredentials();
+    const sandbox = fakeSandbox(output(), () => log.push("sandbox"));
+    const d: AgentDeps = { ...deps(sandbox), credentials, egress: { for: async () => { throw new Error("policy broke"); } } };
+    await expect(runAgent(d, context("triage"), "triage")).rejects.toThrow("policy broke");
+    expect(log).toEqual(["prepare claude:opus", "release claude:opus"]);
+  });
+
   it("never runs an engine the pack does not allow: the task's override is passed over and the reason logged", async () => {
     const { credentials, log } = recordingCredentials();
     const task = { ...context("triage").task, stages: { triage: "openai:sol" } } as TaskRow;

@@ -17,6 +17,8 @@ export const PROXY_PORT = 3128;
 export const RELAY_PORT = 3129;
 /** Where the proxy finds the real credential: the one file, mounted alone and read-only. */
 const RELAY_FILE = "/run/relay/anthropic";
+/** ... and the second file, holding the placeholder and the kind: neither is ever an argument. */
+const RELAY_META_FILE = "/run/relay/meta.json";
 const PROXY_PROGRAM = "/opt/luna/bin/node";
 const PROXY_FILE = "/opt/luna/egress/proxy.ts";
 const LOG_TAIL = 2000;
@@ -58,6 +60,8 @@ export interface ProxyOptions {
   allowPrivate: readonly string[];
   /** The Claude credential's relay: its file is mounted, its placeholder and kind are arguments. The credential itself is never an argument or a variable. */
   relay?: EngineRelay;
+  /** The egress bridge's subnet (CIDR): the relay refuses a request that arrives on it, so only the card network is served. Needed with `relay`. */
+  relayDenyLocal?: string;
 }
 
 /** `docker run` for a run's proxy. Pure: no variable; the list is its command line, and the only mount is the relay's credential file. */
@@ -66,9 +70,9 @@ export function proxyArgs(options: ProxyOptions): string[] {
   args.push("--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", "256m", "--cpus", "0.5", "--user", "65534:65534");
   args.push("--sysctl", "net.ipv4.ip_unprivileged_port_start=0");
   if (options.allowPrivate.some((entry) => entry.startsWith("host.docker.internal:"))) args.push("--add-host", "host.docker.internal:host-gateway");
-  if (options.relay) args.push("-v", `${options.relay.file}:${RELAY_FILE}:ro`);
+  if (options.relay) args.push("-v", `${options.relay.file}:${RELAY_FILE}:ro`, "-v", `${options.relay.metaFile}:${RELAY_META_FILE}:ro`);
   args.push("--entrypoint", PROXY_PROGRAM, options.image, PROXY_FILE, "--listen", String(PROXY_PORT), "--allow", [...options.allow].sort().join(","), "--allow-private", [...options.allowPrivate].sort().join(","));
-  if (options.relay) args.push("--relay", `anthropic=${RELAY_FILE}`, "--relay-kind", options.relay.kind, "--relay-placeholder", options.relay.placeholder, "--relay-listen", String(RELAY_PORT));
+  if (options.relay) args.push("--relay", `anthropic=${RELAY_FILE}`, "--relay-meta", RELAY_META_FILE, "--relay-listen", String(RELAY_PORT), ...(options.relayDenyLocal ? ["--relay-deny-local", options.relayDenyLocal] : []));
   return args;
 }
 
@@ -172,7 +176,14 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
     let address = "127.0.0.1";
     if (hasProxy) {
       await ensureEgressBridge(exec, bridge);
-      const started = await exec("docker", proxyArgs({ run: runName, image: options.proxyImage, bridge, allow: spec.allow, allowPrivate: spec.allowPrivate, ...(spec.relay ? { relay: spec.relay } : {}) }));
+      // The relay is served on the card network only: the bridge's subnet, which a host can route to, is refused by the proxy (known before it starts, unlike its address).
+      let relayDenyLocal: string | undefined;
+      if (spec.relay) {
+        const subnets = await exec("docker", ["network", "inspect", "--format", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", bridge]);
+        relayDenyLocal = subnets.stdout.trim().split(/\s+/).filter((s) => /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(s)).join(",");
+        if (subnets.code !== 0 || !relayDenyLocal) throw new Error(`the egress bridge ${bridge} has no IPv4 subnet to refuse the relay on`);
+      }
+      const started = await exec("docker", proxyArgs({ run: runName, image: options.proxyImage, bridge, allow: spec.allow, allowPrivate: spec.allowPrivate, ...(spec.relay ? { relay: spec.relay, ...(relayDenyLocal ? { relayDenyLocal } : {}) } : {}) }));
       if (started.code !== 0) throw new Error(`egress proxy ${proxy} did not start: ${started.stderr.trim()}`);
       const joined = await exec("docker", ["network", "connect", network, proxy]);
       if (joined.code !== 0) throw new Error(`egress proxy ${proxy} could not join ${network}: ${joined.stderr.trim()}`);

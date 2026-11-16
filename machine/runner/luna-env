@@ -1,8 +1,8 @@
 #!/bin/sh
 # Exports each file of /run/luna-secrets as the environment variable of its name, then runs the command: `luna-env <command> [args...]`.
-# The machine hands a container its secrets as files (0600, in a 0700 folder, mounted read-only) so none is in `docker inspect`;
+# The machine hands a container its secrets as files (0644, in a 0755 folder inside a 0700 one only the machine's user enters, mounted read-only) so none is in `docker inspect`;
 # this is what puts them back in the environment of the process that reads `process.env.X`, before it starts.
-# A missing folder is no secrets. A file whose name is not a variable name refuses the whole start: its name is said, never a value.
+# A missing folder is no secrets; a folder that cannot be listed, or a file that cannot be read, refuses the start (exit 66). A file whose name is not a variable name refuses the whole start: its name is said, never a value.
 # Shell builtins only, like luna-stage: the base image's own tools are never called by name. One trailing newline of a file is dropped.
 dir="${LUNA_SECRETS_DIR:-/run/luna-secrets}"
 if [ "$#" -eq 0 ]; then
@@ -10,9 +10,18 @@ if [ "$#" -eq 0 ]; then
   exit 64
 fi
 if [ -d "$dir" ]; then
+  # A folder that is there but cannot be listed is a failure, never "no secrets": the stage would start with no credential and say so misleadingly.
+  if [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
+    echo "luna-env: cannot read the secrets folder $dir: this user has no permission to list it" >&2
+    exit 66
+  fi
   for file in "$dir"/*; do
     [ -f "$file" ] || continue
     name="${file##*/}"
+    if [ ! -r "$file" ]; then
+      echo "luna-env: cannot read the secret file \"$name\": this user has no permission to read it" >&2
+      exit 66
+    fi
     case "$name" in
       '' | [0-9]* | *[!A-Za-z0-9_]*)
         echo "luna-env: refusing the secret file \"$name\": its name is not an environment variable name" >&2

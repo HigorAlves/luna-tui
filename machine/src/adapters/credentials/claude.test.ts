@@ -31,7 +31,10 @@ describe("claudeCredentials", () => {
     const placeholder = credential.env.CLAUDE_CODE_OAUTH_TOKEN!;
     expect(placeholder).toMatch(/^sk-ant-oat01-luna-relay-[0-9a-f]{32}$/);
     expect(JSON.stringify(credential)).not.toContain("sk-ant-oat01-real");
-    expect(credential.relay).toEqual({ kind: "oauth", placeholder, file: join(runDir, "relay", "anthropic") });
+    expect(credential.relay).toEqual({ kind: "oauth", placeholder, file: join(runDir, "relay", "anthropic"), metaFile: join(runDir, "relay", "meta.json") });
+    // The proxy reads the placeholder and the kind from this mounted file, never from its command line.
+    expect(JSON.parse(await readFile(credential.relay!.metaFile, "utf8"))).toEqual({ kind: "oauth", placeholder });
+    expect((await stat(credential.relay!.metaFile)).mode & 0o777).toBe(0o444);
     expect(await readFile(credential.relay!.file, "utf8")).toBe("sk-ant-oat01-real");
     expect((await stat(credential.relay!.file)).mode & 0o777).toBe(0o444);
     expect((await stat(join(runDir, "relay"))).mode & 0o777).toBe(0o700);

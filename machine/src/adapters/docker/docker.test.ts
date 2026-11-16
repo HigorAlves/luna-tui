@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
@@ -531,7 +531,7 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
   it("hands the credential's relay to the proxy and puts only the placeholder in the container's secret files", async () => {
     const seen: unknown[] = [];
     const { deps, calls } = fakes({ open: async (name: string, spec: unknown) => (seen.push(spec), { name: `net-${name}`, dns: "172.30.0.2", containerArgs: () => ["--network", "n"], blocked: async () => [], teardown: async () => {} } as never) });
-    const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-ph", file: "/state/r/relay/anthropic" };
+    const relay = { kind: "oauth" as const, placeholder: "sk-ant-oat01-luna-relay-ph", file: "/state/r/relay/anthropic", metaFile: "/state/r/relay/meta.json" };
     const base = run({ runDir: tmp(), egress: { allow: [], allowPrivate: [], proxyImage: "machine:dev" } });
     await runSandbox({ ...base, credential: { env: { CLAUDE_CODE_OAUTH_TOKEN: relay.placeholder }, mounts: [], relay } }, deps);
     expect(seen).toEqual([{ allow: [], allowPrivate: [], proxyImage: "machine:dev", relay }]);
@@ -703,23 +703,23 @@ describe("secrets reach a container as files, never in its configuration", () =>
     expect(() => sandboxExecArgs({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } })).toThrow(/secretsDir/);
   });
 
-  it("a stage's files are written 0600 in a 0700 folder under the run folder, and removed once the run ends; the docker client's environment has no value", async () => {
+  it("a stage's files are written 0644 in a 0755 folder under a 0700 run folder (the container's user reads them whatever its uid), and removed once the run ends; the docker client's environment has no value", async () => {
     const dir = mkdtempSync(join(tmpdir(), "docker-secret-"));
     const seen: Array<NodeJS.ProcessEnv | undefined> = [];
-    const onDisk: Array<{ dirMode: number; fileMode: number; value: string }> = [];
+    const onDisk: Array<{ parentMode: number; dirMode: number; fileMode: number; value: string }> = [];
     const deps = {
       exec: async (_c: string, args: string[]) => (args[0] === "wait" ? { code: 0, stdout: "0", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
       execOrThrow: async (_c: string, _args: string[], options?: { env?: NodeJS.ProcessEnv }) => {
         seen.push(options?.env);
         const folder = join(dir, "secrets");
-        onDisk.push({ dirMode: statSync(folder).mode & 0o777, fileMode: statSync(join(folder, "QA_PASSWORD")).mode & 0o777, value: readFileSync(join(folder, "QA_PASSWORD"), "utf8") });
+        onDisk.push({ parentMode: statSync(dir).mode & 0o777, dirMode: statSync(folder).mode & 0o777, fileMode: statSync(join(folder, "QA_PASSWORD")).mode & 0o777, value: readFileSync(join(folder, "QA_PASSWORD"), "utf8") });
         expect(readFileSync(join(folder, "ANTHROPIC_API_KEY"), "utf8")).toBe("sk-secret-value");
         return "";
       },
       startServices: async () => ({ network: null, env: {}, teardown: async () => {} }),
     } as unknown as Partial<RunDeps>;
     await runSandbox(run({ runDir: dir, secrets: { QA_PASSWORD: secret } }), { ...deps, checkSeccomp: async () => {} });
-    expect(onDisk).toEqual([{ dirMode: 0o700, fileMode: 0o600, value: secret }]);
+    expect(onDisk).toEqual([{ parentMode: 0o700, dirMode: 0o755, fileMode: 0o644, value: secret }]);
     expect(seen[0]?.QA_PASSWORD).toBeUndefined();
     expect(seen[0]?.ANTHROPIC_API_KEY).toBeUndefined();
     expect(existsSync(join(dir, "secrets"))).toBe(false);
@@ -734,7 +734,7 @@ describe("secrets reach a container as files, never in its configuration", () =>
         if (args[0] === "run") {
           folder = args[args.indexOf("-v") + 1]!.split(":")[0]!;
           for (let i = 0; i < args.length; i++) if (args[i] === "-v" && args[i + 1]!.endsWith(":/run/luna-secrets:ro")) folder = args[i + 1]!.split(":")[0]!;
-          modes.push(statSync(folder).mode & 0o777, statSync(join(folder, "DB_URL")).mode & 0o777);
+          modes.push(statSync(dirname(folder)).mode & 0o777, statSync(folder).mode & 0o777, statSync(join(folder, "DB_URL")).mode & 0o777);
           expect(readFileSync(join(folder, "DB_URL"), "utf8")).toBe(secret);
           expect(options?.env?.DB_URL).toBeUndefined();
         }
@@ -744,7 +744,7 @@ describe("secrets reach a container as files, never in its configuration", () =>
       checkSeccomp: async () => {},
     } as unknown as Partial<RunDeps>;
     await execInSandbox({ name: "c", image: "img", worktree: "/wt", argv: ["true"], secrets: { DB_URL: secret } }, {}, deps);
-    expect(modes).toEqual([0o700, 0o600]);
+    expect(modes).toEqual([0o700, 0o755, 0o644]);
     expect(existsSync(folder)).toBe(false);
   });
 
@@ -828,6 +828,18 @@ describe("secret names", () => {
   it("refuses a name that would change how a process loads or where its traffic goes, and keeps an ordinary one", () => {
     for (const bad of ["NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_ANYTHING", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "ENV", "PATH", "HOME", "HTTPS_PROXY", "http_proxy", "NO_PROXY", "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "LUNA_EFFORT", "HARDNESS_TASK", "my-secret"]) expect(secretNameProblem(bad), bad).not.toBeNull();
     for (const ok of ["DB_URL", "API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_HOME", "LMNR_PROJECT_API_KEY"]) expect(secretNameProblem(ok), ok).toBeNull();
+  });
+
+  it("makes the folder around the secrets private again when it was left open, and refuses a symlinked one", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "secret-parent-"));
+    chmodSync(parent, 0o755);
+    await writeSecretFiles(join(parent, "s"), { DB_URL: "x" });
+    expect(statSync(parent).mode & 0o777).toBe(0o700);
+    expect(statSync(join(parent, "s")).mode & 0o777).toBe(0o755);
+    expect(statSync(join(parent, "s", "DB_URL")).mode & 0o777).toBe(0o644);
+    const link = join(mkdtempSync(join(tmpdir(), "secret-link-")), "l");
+    symlinkSync(parent, link);
+    await expect(writeSecretFiles(join(link, "s"), { DB_URL: "x" })).rejects.toThrow(/not a private folder/);
   });
 
   it("writes no file when one name is reserved", async () => {

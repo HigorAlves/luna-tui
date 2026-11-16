@@ -37,7 +37,11 @@ async function relayed(credential: Credential, runDir: string): Promise<RunCrede
   await mkdir(dir, { recursive: true, mode: 0o700 });
   await writeFile(file, credential.value, { mode: 0o444 });
   await chmod(file, 0o444);
-  const relay: EngineRelay = { kind: oauth ? "oauth" : "api-key", placeholder, file };
+  const kind = oauth ? "oauth" : "api-key";
+  const metaFile = join(dir, "meta.json");
+  await writeFile(metaFile, JSON.stringify({ kind, placeholder }), { mode: 0o444 });
+  await chmod(metaFile, 0o444);
+  const relay: EngineRelay = { kind, placeholder, file, metaFile };
   return { env: { [credential.name]: placeholder }, mounts: [], relay, release: () => rm(dir, { recursive: true, force: true }) };
 }
 

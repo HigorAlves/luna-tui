@@ -19,6 +19,8 @@ export interface EngineRelay {
   placeholder: string;
   /** The host path of the real credential (0444, in a 0700 folder under the run folder); the proxy mounts that file alone, read-only. */
   file: string;
+  /** The host path of a second 0444 file holding `{"kind","placeholder"}`, mounted into the proxy beside the credential: the placeholder never goes on the proxy's command line, where `/proc/<pid>/cmdline` shows it. */
+  metaFile: string;
 }
 
 /** What one run gets. */
