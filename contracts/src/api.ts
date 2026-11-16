@@ -618,7 +618,7 @@ export interface RepoHealth {
   image: {
     /** The image its stages run in: the machine's, or its own. */
     inUse: string;
-    /** The base `sandbox.image.base` names; null when the repository runs on the machine's image. */
+    /** The base `sandbox.image.base` names, else the devcontainer's `image`; null when the repository runs on the machine's image. */
     base: string | null;
     /** When its own image was built by this machine; null when unknown or not its own. */
     builtAt: string | null;
@@ -628,6 +628,8 @@ export interface RepoHealth {
   };
   /** What the machine's sandbox policy dropped or refused from this repository's luna.yaml (egress hosts, the base image), one sentence each; absent when nothing was. */
   bounds?: string[];
+  /** What the repository's devcontainer.json asks that the machine does not apply ("... not applied: <why>"), and image warnings (a toolchain the image lacks); absent when none. Never blocks a run. */
+  notes?: string[];
   graph: {
     /** `policy.graph` is on. */
     on: boolean;

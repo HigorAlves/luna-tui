@@ -814,9 +814,10 @@ const approveBase = async (repo: string, base: string): Promise<{ ok: true } | {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
   if (!(await knownRepos()).includes(repo)) return { ok: false, reason: "the machine does not know that repository" };
   const bounded = await policies.for(repo);
-  const refusal = baseRefusal(bounded);
+  const source = await agentDeps.imageSource.for(repo);
+  const refusal = baseRefusal(bounded) ?? source.bounds[0] ?? null;
   if (refusal) return { ok: false, reason: refusal };
-  const spec = imageSpecOf(bounded.factory.sandbox.image);
+  const spec = imageSpecOf({ base: source.base });
   if (spec.kind !== "repo" || spec.base !== base) return { ok: false, reason: "that is not the base in the repository's luna.yaml now" };
   await agentDeps.approvals.approve(repo, base);
   agentDeps.repoImages.approved(repo);
@@ -834,6 +835,7 @@ const app = createApp({
       repos: [],
       knownRepos,
       policy: (repoPath) => policies.for(repoPath),
+      ...(agentDeps ? { source: agentDeps.imageSource } : {}),
       machineImage: config.runnerImage,
       images: { status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null },
       graph,

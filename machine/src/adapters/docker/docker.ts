@@ -445,6 +445,8 @@ export function sandboxExecutor(
     egress?: (repoPath: string | undefined) => Promise<{ allow: readonly string[]; allowPrivate: readonly string[]; proxyImage: string }>;
     /** The repository's own `sandbox.cpu` and `sandbox.memory_gb`; absent, the defaults. */
     limitsOf?: (repoPath: string | undefined) => Promise<SandboxSize>;
+    /** The non-secret env the repository's devcontainer names (`containerEnv`), for its own commands; HARDNESS_ variables the caller passes win. */
+    containerEnvOf?: (repoPath: string) => Promise<Record<string, string>>;
     /** The owner's store of this repository's scoped secrets; a check gets only the names it declares. */
     secrets?: SecretStore;
   },
@@ -461,7 +463,7 @@ export function sandboxExecutor(
     // The image is the repository's, named by the caller: never guessed from the folder. No repository, the machine's image.
     // A caller that already chose the image for its whole stage hands it in (`image`): it is not resolved a second time.
     const image = options.image ?? (options.repoPath ? await images.imageOf(options.repoPath) : images.machine);
-    const env: Record<string, string> = {};
+    const env: Record<string, string> = options.repoPath && images.containerEnvOf ? { ...(await images.containerEnvOf(options.repoPath)) } : {};
     const identity: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env ?? {})) {
       if (typeof value !== "string") continue;

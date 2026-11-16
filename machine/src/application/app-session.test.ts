@@ -13,7 +13,7 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
   const events: string[] = [];
   const dockerCalls: string[][] = [];
   const dockerEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
-  const seedRuns: Array<{ secrets?: Record<string, string>; argv: string[]; servicesUp?: boolean }> = [];
+  const seedRuns: Array<{ secrets?: Record<string, string>; argv: string[]; servicesUp?: boolean; env?: Record<string, string> }> = [];
   const blocked: Array<[string, unknown]> = [];
   const probes = [...(over.probes ?? [0])];
   const rowsNow: Array<{ host: string; port: number; via: "connect" | "http" | "dns"; reason: string; count: number }> = [];
@@ -22,13 +22,14 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
   const deps: AppDeps = {
     policies: { for: async () => parseLunaConfig(over.text ?? yaml()) },
     imageFor: async () => "repo-image:1",
+    containerEnvOf: async () => ({ CI: "1" }),
     install: async () => (events.push("install"), over.installOk === false ? { ok: false, detail: { escalation: "env_broken", step: "install" }, blocked: [] } : { ok: true, ran: [], notes: [], blocked: [] }),
     egress: { for: async (r) => (events.push(`egress ${r.kind}`), { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" }) },
     secrets: { folder: () => "/secrets/repo", load: async (_r, names) => ({ values: Object.fromEntries(names.filter((n) => !(over.missing ?? []).includes(n)).map((n) => [n, n === "APP_KEY" ? secretA : secretB])), missing: (over.missing ?? []).filter((m) => names.includes(m)).map((name) => ({ name, reason: "there is no such file" })) }) },
     openCardNetwork: async (run) => (events.push(`network ${run}`), card as never),
     openPlainNetwork: async (run) => (events.push(`plain network ${run}`), card as never),
     startServices: async (run, _s, options) => (events.push(`services on ${options?.network?.name}`), { network: options?.network?.name ?? null, env: { DATABASE_URL: "postgres://db/app" }, teardown: async () => void events.push("teardown services") }),
-    exec: async (run) => (events.push("seed"), seedRuns.push({ ...(run.secrets ? { secrets: run.secrets } : {}), argv: run.argv, ...(run.servicesUp ? { servicesUp: true } : {}) }), rowsNow.push({ host: "seed.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }), { code: over.seedExit ?? 0, stdout: `seeding ${secretB}\n`, stderr: "" }),
+    exec: async (run) => (events.push("seed"), seedRuns.push({ env: run.env, ...(run.secrets ? { secrets: run.secrets } : {}), argv: run.argv, ...(run.servicesUp ? { servicesUp: true } : {}) }), rowsNow.push({ host: "seed.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }), { code: over.seedExit ?? 0, stdout: `seeding ${secretB}\n`, stderr: "" }),
     docker: async (args, options) => {
       dockerCalls.push(args);
       dockerEnvs.push(options?.env);
@@ -96,6 +97,13 @@ describe("openApp", () => {
     expect(s.dockerCalls[run]!.join(" ")).not.toContain("SEED_KEY");
     for (const a of s.dockerCalls.flat()) for (const v of [secretA, secretB]) expect(a).not.toContain(v);
     expect(s.dockerEnvs[run]!.APP_KEY).toBe(secretA);
+  });
+
+  it("gives the seed and the app the repository's container env", async () => {
+    const s = setup();
+    await openApp(s.deps, { ...input, onBlocked: s.onBlocked });
+    expect(s.seedRuns[0]!.env).toMatchObject({ CI: "1", DATABASE_URL: "postgres://db/app" });
+    expect(s.dockerCalls.find((c) => c[0] === "run")!.join(" ")).toContain("-e CI=1");
   });
 
   it("probes from inside the container every second until the configured path answers, and gives up after ready_timeout_s", async () => {

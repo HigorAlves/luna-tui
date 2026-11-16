@@ -4,12 +4,15 @@ import type { RepoHealth } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
 import type { GraphStamp } from "./graph.ts";
+import type { RepoImageSource } from "./repo-image-source.ts";
 
 export interface RepoHealthDeps {
   repos: string[];
   /** The repositories the machine knows now; read on each call, added to `repos`. */
   knownRepos?: () => Promise<string[]>;
   policy: (repoPath: string) => Promise<{ graph?: boolean; factory?: { sandbox?: { image?: { base?: string | null } } }; bounds?: { egress: string[]; image: string[] } }>;
+  /** Where the base comes from (luna.yaml, else the devcontainer) and what the devcontainer asked that is not applied. */
+  source?: Pick<RepoImageSource, "for">;
   machineImage: string;
   images: { pending(repoPath: string): Promise<string | null>; status(repoPath: string): { image: string; builtAt: string | null; lastFailure: string | null } | null };
   graph: { stampOf(repoPath: string): Promise<GraphStamp | null>; health?(repoPath: string): { building: boolean; lastFailure: string | null }; behind?(repoPath: string, commit: string): Promise<number | null> };
@@ -30,11 +33,14 @@ export async function repoHealthOf(deps: RepoHealthDeps): Promise<RepoHealth[]> 
       const watch = deps.watch.health(repo);
       const built = deps.graph.health?.(repo);
       const health = built ? { building: built.building || watch.building, lastFailure: built.lastFailure } : watch;
-      const bounds = [...(policy.bounds?.image ?? []), ...(policy.bounds?.egress ?? [])].map((line) => safe(line).slice(0, 400));
+      const source = await deps.source?.for(repo).catch(() => null);
+      const bounds = [...(policy.bounds?.image ?? []), ...(source?.bounds ?? []), ...(policy.bounds?.egress ?? [])].map((line) => safe(line).slice(0, 400));
+      const notes = (source?.notes ?? []).map((line) => safe(line).slice(0, 400));
       return {
         repo,
-        image: { inUse: own?.image ?? deps.machineImage, base, builtAt: own?.builtAt ?? null, lastFailure: own?.lastFailure ?? null, pendingBase: pending === null ? null : safe(pending).slice(0, 255) },
+        image: { inUse: own?.image ?? deps.machineImage, base: source ? source.base : base, builtAt: own?.builtAt ?? null, lastFailure: own?.lastFailure ?? null, pendingBase: pending === null ? null : safe(pending).slice(0, 255) },
         ...(bounds.length > 0 ? { bounds } : {}),
+        ...(notes.length > 0 ? { notes } : {}),
         graph: { on: policy.graph !== false, commit: stamp?.commit ?? null, behind, graphify: stamp?.graphify ?? null, builtAt: stamp?.builtAt ?? null, building: health.building, lastFailure: health.lastFailure },
       };
     }),
