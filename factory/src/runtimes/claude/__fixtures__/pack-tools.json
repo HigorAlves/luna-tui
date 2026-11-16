@@ -801,6 +801,10 @@
       "Agent"
     ]
   },
+  "access_review": {
+    "allowedTools": [],
+    "tools": []
+  },
   "code_map": {
     "allowedTools": [
       "Read",

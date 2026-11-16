@@ -18,7 +18,9 @@ import {
   type OpenPrs,
   type PrSearchHit,
   type ReviewPost,
+  type RepoPermission,
   type RuleBypass,
+  type RulesetBypassActor,
   repoRef,
 } from "../../application/github.ts";
 
@@ -102,6 +104,10 @@ async function call<T>(what: string, run: () => Promise<T>): Promise<T> {
     throw new GitHubError(`${what} failed${status ? ` (${status})` : ""}: ${message}`);
   }
 }
+
+const ORG_ID_QUERY = `query($org:String!){ organization(login:$org){ id } }`;
+/** Members asked about per GraphQL call, one alias each. */
+const ACTIVITY_BATCH = 10;
 
 /** The merged PRs of a window: the search page, with each PR's first page of reviews (the rest is read by node id). */
 const MERGED_PR_FIELDS = `id number title url body author{login} mergedBy{login} mergedAt mergeCommit{oid} baseRefName headRefName
@@ -748,6 +754,97 @@ export class OctokitGitHub implements GitHub {
     return rows
       .filter((r) => r.pushed_at !== undefined && Date.parse(r.pushed_at) >= from && Date.parse(r.pushed_at) <= to)
       .map((r) => ({ ref: r.ref ?? "", actor: r.actor_name ?? null, at: r.pushed_at ?? "", afterSha: r.after_sha ?? null, ruleSuiteId: r.id }));
+  }
+
+  async orgMembers(org: string): Promise<Array<{ login: string; role: "admin" | "member" }>> {
+    const out: Array<{ login: string; role: "admin" | "member" }> = [];
+    for (const role of ["admin", "member"] as const) {
+      const rows = await call(`listing the ${role} members of ${org}`, () => this.octokit.paginate<{ login: string }>("GET /orgs/{org}/members", { org, role, per_page: 100 }));
+      out.push(...rows.map((m) => ({ login: m.login, role })));
+    }
+    return out;
+  }
+
+  async outsideCollaborators(org: string): Promise<Array<{ login: string }>> {
+    const rows = await call(`listing the outside collaborators of ${org}`, () => this.octokit.paginate<{ login: string }>("GET /orgs/{org}/outside_collaborators", { org, per_page: 100 }));
+    return rows.map((m) => ({ login: m.login }));
+  }
+
+  async orgInvitations(org: string): Promise<Array<{ login: string | null; email: string | null; role: string; createdAt: string; inviter: string | null }>> {
+    type Row = { login?: string | null; email?: string | null; role: string; created_at: string; inviter?: { login: string } | null };
+    const rows = await call(`listing the invitations of ${org}`, () => this.octokit.paginate<Row>("GET /orgs/{org}/invitations", { org, per_page: 100 }));
+    return rows.map((r) => ({ login: r.login ?? null, email: r.email ?? null, role: r.role, createdAt: r.created_at, inviter: r.inviter?.login ?? null }));
+  }
+
+  async repoCollaborators(slug: string): Promise<Array<{ login: string; permission: RepoPermission; direct: boolean }>> {
+    const { owner, repo } = repoRef(slug);
+    type Row = { login: string; role_name?: string; permissions?: { admin?: boolean; maintain?: boolean; push?: boolean; triage?: boolean } };
+    const list = (affiliation: "all" | "direct") =>
+      call(`listing the ${affiliation} collaborators of ${slug}`, () => this.octokit.paginate<Row>("GET /repos/{owner}/{repo}/collaborators", { owner, repo, affiliation, per_page: 100 }));
+    const all = await list("all");
+    const direct = new Set((await list("direct")).map((r) => r.login));
+    const levels: RepoPermission[] = ["admin", "maintain", "write", "triage", "read"];
+    // A custom role has no name in the five; its strongest base permission stands for it.
+    const permissionOf = (r: Row): RepoPermission => {
+      const named = levels.find((l) => l === r.role_name);
+      if (named) return named;
+      const p = r.permissions ?? {};
+      return p.admin ? "admin" : p.maintain ? "maintain" : p.push ? "write" : p.triage ? "triage" : "read";
+    };
+    return all.map((r) => ({ login: r.login, permission: permissionOf(r), direct: direct.has(r.login) }));
+  }
+
+  async rulesetBypassActors(slug: string): Promise<RulesetBypassActor[] | "unknown"> {
+    const { owner, repo } = repoRef(slug);
+    type Detail = { name: string; bypass_actors?: Array<{ actor_id?: number | null; actor_type: string; bypass_mode?: string }> };
+    try {
+      const list = await this.octokit.paginate<{ id: number }>("GET /repos/{owner}/{repo}/rulesets", { owner, repo, per_page: 100 });
+      const out: RulesetBypassActor[] = [];
+      for (const { id } of list) {
+        const { data } = await this.octokit.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", { owner, repo, ruleset_id: id });
+        const ruleset = data as Detail;
+        for (const a of ruleset.bypass_actors ?? []) out.push({ ruleset: ruleset.name, actorType: a.actor_type, actorId: a.actor_id ?? null, actorName: null, mode: a.bypass_mode ?? "always" });
+      }
+      return out;
+    } catch (error) {
+      const { status, message } = error as { status?: number; message?: string };
+      // A token without the right to read rulesets is a fact to report, not a failure.
+      if (status === 403 || status === 404) return "unknown";
+      throw new GitHubError(`reading the rulesets of ${slug} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
+    }
+  }
+
+  async adminsEnforced(slug: string, branch: string): Promise<boolean | "unknown"> {
+    const { owner, repo } = repoRef(slug);
+    try {
+      const { data } = await this.octokit.request("GET /repos/{owner}/{repo}/branches/{branch}/protection", { owner, repo, branch });
+      return (data as { enforce_admins?: { enabled?: boolean } } | null)?.enforce_admins?.enabled === true;
+    } catch (error) {
+      const { status, message } = error as { status?: number; message?: string };
+      // GitHub answers 404 "Branch not protected" for a branch with no protection: admins are not held to anything.
+      if (status === 404 && /not protected/i.test(message ?? "")) return false;
+      if (status === 403 || status === 404) return "unknown";
+      throw new GitHubError(`reading the protection of ${slug}@${branch} failed${status ? ` (${status})` : ""}: ${message ?? String(error)}`);
+    }
+  }
+
+  async memberActivity(org: string, logins: string[], since: string): Promise<Map<string, boolean>> {
+    const seen = new Map<string, boolean>();
+    if (logins.length === 0) return seen;
+    const { organization } = await call(`reading the id of ${org}`, () => this.octokit.graphql<{ organization: { id: string } | null }>(ORG_ID_QUERY, { org }));
+    if (!organization) throw new GitHubError(`reading the id of ${org} failed: GitHub does not show the organization`);
+    for (let i = 0; i < logins.length; i += ACTIVITY_BATCH) {
+      const batch = logins.slice(i, i + ACTIVITY_BATCH);
+      const params = batch.map((_, n) => `$l${n}:String!`).join(",");
+      const aliases = batch.map((_, n) => `a${n}:user(login:$l${n}){contributionsCollection(organizationID:$org,from:$since){hasAnyContributions}}`).join(" ");
+      const variables: Record<string, unknown> = { org: organization.id, since };
+      batch.forEach((login, n) => (variables[`l${n}`] = login));
+      const data = await call(`reading the activity of ${batch.length} members of ${org}`, () =>
+        this.octokit.graphql<Record<string, { contributionsCollection: { hasAnyContributions: boolean } } | null>>(`query($org:ID!,$since:DateTime!,${params}){ ${aliases} }`, variables),
+      );
+      batch.forEach((login, n) => seen.set(login, data[`a${n}`]?.contributionsCollection.hasAnyContributions === true));
+    }
+    return seen;
   }
 
   async prChecks(slug: string, ref: string): Promise<Check[]> {

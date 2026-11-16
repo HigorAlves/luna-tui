@@ -56,7 +56,11 @@ const mk = (wired = true) => {
   };
   const github = { mergedPrs: vi.fn(async () => []), ruleBypasses: vi.fn(async () => []), prChecks: vi.fn(async () => []) } as unknown as GitHub;
   const evidence = new ChangeEvidence({ github, drafts, explain: async () => ({ explanations: [] }), repos: async () => ["acme/web"], stateDir });
-  const compliance = wired ? { drafts, publisher: publisher({ drafts, wiki }), evidence, repos: async () => ["acme/web"] } : undefined;
+  const access = {
+    orgs: async () => ["acme"],
+    buildQuarter: vi.fn(async (org: string) => drafts.open(fields({ id: `access_review:${org}:2026-Q4`, kind: "access_review", title: `Access review, ${org}, 2026-Q4`, period: "2026-Q4", targets: [{ kind: "access_slices", org, period: "2026-Q4" }] }))),
+  };
+  const compliance = wired ? { drafts, publisher: publisher({ drafts, wiki }), evidence, repos: async () => ["acme/web"], access } : undefined;
   const app = createApp({ db, pipeline: new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true }), bus: new Bus(), ...(compliance ? { compliance } : {}), access: { host: "127.0.0.1", port: 1, token: "tok" } });
   return { app, drafts };
 };
@@ -119,6 +123,17 @@ describe("the compliance routes", () => {
     const d = await drafts.open(fields());
     expect((await post(app, ID, "ignore", { hash: "0123456789abcdef" })).status).toBe(409);
     expect(await (await post(app, ID, "ignore", { hash: d.hash })).json()).toMatchObject({ status: "ignored" });
+  });
+
+  it("rebuild the current quarter's access review on demand for a known org only", async () => {
+    const { app } = mk();
+    const run = (body: unknown) => app.request("/compliance/access/run", { method: "POST", headers: auth, body: JSON.stringify(body) });
+    const res = await run({ org: "acme" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id: "access_review:acme:2026-Q4", kind: "access_review", status: "waiting" });
+    expect((await run({ org: "other" })).status).toBe(400);
+    expect((await run({})).status).toBe(400);
+    expect((await mk(false).app.request("/compliance/access/run", { method: "POST", headers: auth, body: JSON.stringify({ org: "acme" }) })).status).toBe(503);
   });
 
   it("rebuild a past month on demand for a known repo only", async () => {

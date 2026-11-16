@@ -76,6 +76,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   change_exceptions: [],
   // The compliance lead, run by the PR review and by Verify as a sub-run when the repo declares a regime; never a stage of its own.
   compliance_review: [],
+  // The quarterly access review, run on demand by the access review job.
+  access_review: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

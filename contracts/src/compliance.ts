@@ -103,3 +103,16 @@ export const ChangeExceptionsAnswer = z.object({
   ),
 });
 export type ChangeExceptionsAnswer = z.infer<typeof ChangeExceptionsAnswer>;
+
+/** access_review: one suggestion per flag of a quarter's access review. The person decides; nothing here removes access. */
+export const AccessReviewAnswer = z.object({
+  recommendations: z.array(
+    z.object({
+      flagId: z.string().min(1).max(300),
+      action: z.enum(["keep", "remove", "reduce", "investigate"]),
+      reason: z.string().min(1).max(300),
+    }),
+  ),
+  summary: z.string().max(600),
+});
+export type AccessReviewAnswer = z.infer<typeof AccessReviewAnswer>;

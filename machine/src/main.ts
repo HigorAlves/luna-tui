@@ -73,6 +73,7 @@ import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { ChangeEvidence } from "./application/change-evidence.ts";
+import { AccessReview, accessSlicesWriter } from "./application/access-review.ts";
 import { ComplianceDrafts, publisher as compliancePublisher } from "./application/compliance-drafts.ts";
 import { sharedWiki } from "./adapters/git/wiki.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
@@ -842,7 +843,19 @@ const changeEvidence = new ChangeEvidence({
   repos: complianceRepos,
   stateDir: config.stateDir,
 });
-const compliance = { drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki: sharedWiki(config.stateDir) }), evidence: changeEvidence, repos: complianceRepos };
+const accessReview = new AccessReview({
+  github,
+  drafts: complianceDrafts,
+  suggest: async (access) => {
+    if (!packRuns) throw new Error("agents are off: no model to suggest the access decisions");
+    return (await ownCalls(packRuns).run({ pack: "access_review", context: { access } }, INTAKE_CLIENT)).answer;
+  },
+  repos: complianceRepos,
+  managerWikiRepo: config.managerWikiRepo,
+  stateDir: config.stateDir,
+});
+const wiki = sharedWiki(config.stateDir);
+const compliance = { drafts: complianceDrafts, publisher: compliancePublisher({ drafts: complianceDrafts, wiki, handlers: { access_slices: accessSlicesWriter({ wiki, stateDir: config.stateDir }) } }), evidence: changeEvidence, access: accessReview, repos: complianceRepos };
 /** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now, or the exact key of the Dockerfile its devcontainer builds now; any other is refused. */
 const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
   if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
@@ -1003,6 +1016,11 @@ const complianceFirst = complianceTicker ? setTimeout(() => void changeEvidence.
 complianceFirst?.unref();
 complianceTicker?.start();
 console.log(complianceTicker ? "compliance: change-management evidence for each repo's previous month, checked daily; drafts wait in the Compliance view" : "compliance: monthly evidence off (MACHINE_COMPLIANCE_EVIDENCE=off); drafts still listed");
+/** The quarterly access review: its own daily tick, since the cursor says which orgs are done with the quarter; it needs MACHINE_MANAGER_WIKI_REPO and says so once without it. */
+const accessTicker = config.complianceEvidence ? new Ticker(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 24 * 60 * MINUTE_MS) : null;
+const accessFirst = accessTicker ? setTimeout(() => void accessReview.tick().catch((error: unknown) => console.warn("compliance access review failed", error)), 3 * MINUTE_MS) : null;
+accessFirst?.unref();
+accessTicker?.start();
 
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
 const slaTicker = new Ticker(() => {
@@ -1057,6 +1075,8 @@ async function shutdown(): Promise<void> {
   graphTicker?.stop();
   complianceTicker?.stop();
   if (complianceFirst) clearTimeout(complianceFirst);
+  accessTicker?.stop();
+  if (accessFirst) clearTimeout(accessFirst);
   pulls.stop();
   slackInbox.stop();
   socket?.stop();

@@ -141,6 +141,19 @@ export interface RuleBypass {
   ruleSuiteId: number;
 }
 
+export type RepoPermission = "admin" | "maintain" | "write" | "triage" | "read";
+
+/** One bypass entry of a repository's ruleset (its own or one inherited from the org). */
+export interface RulesetBypassActor {
+  ruleset: string;
+  /** GitHub's `actor_type`: `Team`, `Integration`, `RepositoryRole`, `OrganizationAdmin`, `DeployKey`. */
+  actorType: string;
+  actorId: number | null;
+  actorName: string | null;
+  /** `always` or `pull_request` (GitHub's `bypass_mode`). */
+  mode: string;
+}
+
 export interface GitHub {
   /** Who the token belongs to, and the slugs of their teams (empty when the token cannot read them). */
   viewer(): Promise<{ login: string; teams: string[] }>;
@@ -203,6 +216,19 @@ export interface GitHub {
   mergedPrs(slug: string, since: string, until: string): Promise<MergedPr[]>;
   /** The ruleset evaluations of `slug` that ended in a bypass in the window; "unknown" when the token cannot read rule suites (403 or 404). */
   ruleBypasses(slug: string, since: string, until: string): Promise<RuleBypass[] | "unknown">;
+  /** The org's members with their role, owners and members, every page. */
+  orgMembers(org: string): Promise<Array<{ login: string; role: "admin" | "member" }>>;
+  outsideCollaborators(org: string): Promise<Array<{ login: string }>>;
+  /** The org's pending invitations (an invitee is a login or an email). */
+  orgInvitations(org: string): Promise<Array<{ login: string | null; email: string | null; role: string; createdAt: string; inviter: string | null }>>;
+  /** Everyone with access to the repository and their permission; `direct` is false for access that comes through an org role or a team. */
+  repoCollaborators(slug: string): Promise<Array<{ login: string; permission: RepoPermission; direct: boolean }>>;
+  /** Who may bypass the repository's rulesets; "unknown" when the token cannot read them (403 or 404). */
+  rulesetBypassActors(slug: string): Promise<RulesetBypassActor[] | "unknown">;
+  /** Whether branch protection on `branch` applies to admins too; "unknown" when the token cannot read it. */
+  adminsEnforced(slug: string, branch: string): Promise<boolean | "unknown">;
+  /** Whether each login made any contribution to the org's repos since `since` (ISO); a login GitHub does not know is false. */
+  memberActivity(org: string, logins: string[], since: string): Promise<Map<string, boolean>>;
   /** Every check run and commit status on `ref`. */
   prChecks(slug: string, ref: string): Promise<Check[]>;
   /** The failed jobs' logs of a workflow run, joined. */
@@ -262,6 +288,13 @@ export function noTokenGitHub(): GitHub {
     markPrReady: refuse,
     mergedPrs: refuse,
     ruleBypasses: refuse,
+    orgMembers: refuse,
+    outsideCollaborators: refuse,
+    orgInvitations: refuse,
+    repoCollaborators: refuse,
+    rulesetBypassActors: refuse,
+    adminsEnforced: refuse,
+    memberActivity: refuse,
     prChecks: refuse,
     failedRunLog: refuse,
     rerunFailedJobs: refuse,

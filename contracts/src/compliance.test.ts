@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
+import { AccessReviewAnswer, AccessReviewContext, ChangeExceptionKind, ChangeExceptionsAnswer, ChangeExceptionsContext, NO_ACCESS, PACKS, ComplianceActInput, ComplianceDraft, ComplianceDraftKind, ComplianceDraftsResponse, ComplianceEditInput, ComplianceTarget } from "./index.ts";
 
 const draft = {
   id: "change_evidence:acme/api:2026-10",
@@ -75,6 +75,26 @@ describe("compliance drafts", () => {
     expect(PACKS.change_exceptions).toMatchObject({ kind: "agent", agent: "exception-explainer", writable: false, maxTurns: 1, effort: "low", template: "change_exceptions.md", helpers: [], skills: [] });
     expect(PACKS.change_exceptions.engines).toMatchObject({ default: "claude:haiku", allowed: ["claude:haiku", "claude:sonnet"] });
     expect(PACKS.change_exceptions.access).toEqual(NO_ACCESS);
+  });
+
+  it("gives the access reviewer a context of flags and an answer of one suggestion per flag", () => {
+    const flag = { id: "org_owner:ann:-", kind: "org_owner", subject: "ann", repo: null, detail: "organization owner", change: "new" };
+    const context = { org: "acme", period: "2026-Q4", flags: [flag], removedSinceSigned: ["gone"] };
+    expect(AccessReviewContext.parse(context)).toEqual(context);
+    expect(() => AccessReviewContext.parse({ ...context, period: "2026-Q5" })).toThrow();
+    expect(() => AccessReviewContext.parse({ ...context, flags: [{ ...flag, kind: "vibes" }] })).toThrow();
+    expect(() => AccessReviewContext.parse({ ...context, flags: Array(301).fill(flag) })).toThrow();
+    const answer = { recommendations: [{ flagId: flag.id, action: "keep", reason: "The founder." }], summary: "One owner." };
+    expect(AccessReviewAnswer.parse(answer)).toEqual(answer);
+    expect(() => AccessReviewAnswer.parse({ ...answer, recommendations: [{ ...answer.recommendations[0], action: "delete" }] })).toThrow();
+    expect(() => AccessReviewAnswer.parse({ ...answer, recommendations: [{ ...answer.recommendations[0], reason: "x".repeat(301) }] })).toThrow();
+    expect(() => AccessReviewAnswer.parse({ ...answer, summary: "x".repeat(601) })).toThrow();
+  });
+
+  it("runs the access reviewer as a text-only agent on sonnet or haiku, with no hands", () => {
+    expect(PACKS.access_review).toMatchObject({ kind: "agent", agent: "access-reviewer", writable: false, maxTurns: 1, effort: "low", template: "access_review.md", helpers: [], skills: [] });
+    expect(PACKS.access_review.engines).toMatchObject({ default: "claude:sonnet", allowed: ["claude:sonnet", "claude:haiku"] });
+    expect(PACKS.access_review.access).toEqual(NO_ACCESS);
   });
 
   it("names every manager draft the waves add", () => {

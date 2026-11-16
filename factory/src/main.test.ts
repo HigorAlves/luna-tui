@@ -70,7 +70,7 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
 }
 
 // slack_triage, chat_triage, foreman and eval_judge have no worktree and read no project context; their dry runs are below. council_second defaults to an eve engine: its dry run is below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "foreman" && p.id !== "change_exceptions" && p.id !== "access_review" && p.id !== "eval_judge" && p.id !== "council_second").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -196,6 +196,22 @@ describe("factory main (dry run)", () => {
     expect(options.agents).toEqual(["compliance-lead", "soc2-reviewer", "hipaa-reviewer", "gdpr-reviewer", "lgpd-reviewer", "us-privacy-reviewer"]);
     expect(options).toMatchObject({ agent: "compliance-lead", model: "claude-sonnet-5-5", effort: "medium" });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
+  });
+
+  it("access_review: runs over an empty /work with no tools, renders the flags as data and leaves a valid result", () => {
+    const task = { id: "access-review", title: "Access review of acme, 2026-Q4", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const flag = { id: "org_owner:ann:-", kind: "org_owner", subject: "ann", repo: null, detail: "organization owner", change: "new" };
+    const access = { org: "acme", period: "2026-Q4", flags: [flag], removedSinceSigned: [] };
+    const { code, stdout, out, result } = run(stageInput("access_review", { task, plan: null, context: { projectContext: null, access } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`access-reviewer` role running the `access_review` stage");
+    expect(prompt).toContain("| org_owner:ann:- · org_owner · new · ann · organization owner");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "access-reviewer", agents: ["access-reviewer"], model: "claude-sonnet-5-5", effort: "low", tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
   it("jira_intake: runs over the repo checkout read-only with Read, Glob and Grep, renders the issue and leaves a valid result", () => {

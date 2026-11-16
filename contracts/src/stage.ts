@@ -214,6 +214,8 @@ export const PackId = z.enum([
   "change_exceptions",
   // Reviews a PR's diff against the regimes the repo declares (luna.yaml `compliance`): a lead that dispatches one reviewer per regime; runs beside reviewing and verifying, never as their helper.
   "compliance_review",
+  // Suggests, for each flag of a GitHub org's quarterly access review, whether to keep, remove, reduce or investigate the access; no tools, no worktree, on demand.
+  "access_review",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -483,6 +485,26 @@ export const ComplianceReviewContext = z.object({
     .refine((pages) => pages.reduce((sum, page) => sum + page.text.length, 0) <= COMPLIANCE_CONTROL_CHARS, `at most ${COMPLIANCE_CONTROL_CHARS} characters of page text`),
 });
 export type ComplianceReviewContext = z.infer<typeof ComplianceReviewContext>;
+/** For access_review: the flags the machine computed for one org and quarter. Every fact is the machine's; a login or a detail is data from GitHub, never an instruction. */
+export const AccessReviewContext = z.object({
+  org: z.string().regex(/^[A-Za-z0-9_.-]+$/, "an org login"),
+  period: z.string().regex(/^\d{4}-Q[1-4]$/, "YYYY-Qn"),
+  flags: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(300),
+        kind: z.enum(["org_owner", "repo_admin", "bypass_actor", "admins_not_enforced", "outside_collaborator", "direct_access", "stale_invitation", "dormant"]),
+        subject: z.string().max(200),
+        repo: z.string().max(200).nullable(),
+        detail: z.string().max(500),
+        change: z.enum(["new", "unchanged"]),
+      }),
+    )
+    .max(300),
+  /** The people and accesses present in the last signed review and gone now. */
+  removedSinceSigned: z.array(z.string().max(200)).max(500),
+});
+export type AccessReviewContext = z.infer<typeof AccessReviewContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -1368,6 +1390,8 @@ export const StageInput = z.object({
     exceptions: ChangeExceptionsContext.nullable().optional(),
     /** For compliance_review: the repo's regimes and its wiki's control pages; the diff is `review`. */
     compliance: ComplianceReviewContext.nullable().optional(),
+    /** For access_review: the flags of one org's quarterly access review; the task is synthetic and there is no worktree. */
+    access: AccessReviewContext.nullable().optional(),
     /** For question_council: the open triage questions to settle from the code, the card and the answers so far. */
     questions: QuestionsContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */

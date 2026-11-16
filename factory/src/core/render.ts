@@ -197,6 +197,18 @@ const complianceText = (compliance: StageInput["context"]["compliance"]) => {
   };
 };
 
+/** The flags, as access_review reads them: one line per flag, the id and kind and change as the machine wrote them, then the subject, repo and detail from GitHub. The whole block is quoted data. */
+const accessText = (access: StageInput["context"]["access"]) => {
+  if (!access) return { org: NONE, period: NONE, flags: NONE, removed: NONE };
+  const flags = access.flags.map((f) => [f.id, f.kind, f.change, f.subject, ...(f.repo ? [f.repo] : []), f.detail].join(" · "));
+  return {
+    org: access.org,
+    period: access.period,
+    flags: flags.length > 0 ? flags.join("\n") : NONE,
+    removed: access.removedSinceSigned.length > 0 ? access.removedSinceSigned.join("\n") : NONE,
+  };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
@@ -525,6 +537,7 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
   const foreman = foremanText(input.context.foreman);
   const exceptions = exceptionsText(input.context.exceptions);
   const compliance = complianceText(input.context.compliance);
+  const access = accessText(input.context.access);
   const questions = questionsText(input.context.questions);
   const video = videoText(input.context.video);
   const subs: Record<string, string> = {
@@ -645,6 +658,10 @@ export function renderPromptReport({ pack, input, template, projectContext }: Re
     "{{context.compliance.repo}}": compliance.repo,
     "{{context.compliance.regimes}}": compliance.regimes,
     "{{context.compliance.controls}}": compliance.controls,
+    "{{context.access.org}}": access.org,
+    "{{context.access.period}}": access.period,
+    "{{context.access.flags}}": access.flags,
+    "{{context.access.removed}}": access.removed,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

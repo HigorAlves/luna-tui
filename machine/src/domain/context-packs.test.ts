@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "pr_link", "red_check", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "worth_learning"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["access_review", "change_exceptions", "chat_triage", "ci_failure_class", "comment_intent", "conversation_assess", "conversation_relation", "conversation_reply", "coverage_check", "decompose", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "fact_propose", "finding_classify", "fix_scope", "foreman", "frame_privacy", "intake_dedup", "jira_intake", "loop_judge", "loop_redirect", "plan_check", "pr_link", "red_check", "risk_score", "scope_check", "size_estimate", "slack_triage", "split_check", "ticket_assess", "ticket_recommend", "ticket_reply", "ticket_validity", "triage_signals", "worth_learning"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -80,6 +80,17 @@ describe("buildContextPackInput", () => {
     const input = buildContextPackInput("change_exceptions", { exceptions });
     expect(StageInput.parse(input)).toEqual(input);
     expect(input).toMatchObject({ pack: "change_exceptions", stage: "change_exceptions", task: { id: "change-exceptions", title: "Change exceptions of acme/api, 2026-10", repoPath: "" }, context: { projectContext: null, exceptions }, limits: { maxTurns: 1, timeoutMs: 120_000 } });
+  });
+
+  it("builds access_review's input around a synthetic task with the flags under context.access", () => {
+    const access = { org: "acme", period: "2026-Q4", flags: [], removedSinceSigned: [] };
+    expect(isContextPack("access_review")).toBe(true);
+    expect(packStates("access_review")).toEqual([]);
+    expect(contextSchema("access_review").safeParse({ access }).success).toBe(true);
+    expect(contextSchema("access_review").safeParse({ chat }).success).toBe(false);
+    const input = buildContextPackInput("access_review", { access });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input).toMatchObject({ pack: "access_review", stage: "access_review", task: { id: "access-review", title: "Access review of acme, 2026-Q4", repoPath: "" }, context: { projectContext: null, access }, limits: { maxTurns: 1, timeoutMs: 120_000 } });
   });
 
   it("builds the plan checks' input around a synthetic task named for the brief, the plan under context.plan", () => {

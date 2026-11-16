@@ -66,6 +66,7 @@ import type { Economy } from "../../application/economy.ts";
 import { economyMetrics } from "../../domain/economy/metrics.ts";
 import { type Backlog, BacklogItemNotFoundError, NotSchedulableError } from "../../application/backlog.ts";
 import type { ChangeEvidence } from "../../application/change-evidence.ts";
+import type { AccessReview } from "../../application/access-review.ts";
 import { type ComplianceDrafts, type CompliancePublisher, DraftNotFoundError, DraftRefusedError, DraftStatusError, StaleDraftError } from "../../application/compliance-drafts.ts";
 import { type TicketMachine, TicketNotFound, TicketRefusal } from "../../application/ticket-machine.ts";
 import { streamSSE } from "hono/streaming";
@@ -133,7 +134,7 @@ export interface AppDeps {
   /** The Ticket Machine; without it the `/tickets` routes are absent. */
   tickets?: TicketMachine;
   /** The manager's drafts (RFC 0008): the store, the publisher an approve goes through, the monthly evidence job and the `owner/name` of every repo the machine knows. Without it the `/compliance` routes answer 503. */
-  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]> };
+  compliance?: { drafts: ComplianceDrafts; publisher: CompliancePublisher; evidence: Pick<ChangeEvidence, "buildMonth">; repos: () => Promise<string[]>; access?: Pick<AccessReview, "orgs" | "buildQuarter"> };
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
@@ -182,6 +183,7 @@ const ForemanInput = z.object({ question: ForemanContext.shape.question, history
 class BadRequest extends Error {}
 
 const EvidenceRunInput = z.object({ repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name"), period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "YYYY-MM") });
+const AccessRunInput = z.object({ org: z.string().regex(/^[A-Za-z0-9-]+$/, "a GitHub org") });
 
 /** The window of a repo's own runs that a config proposal reads. */
 const SIGNAL_DAYS = 30;
@@ -717,6 +719,13 @@ export function createApp({ repoHealth, approveBase, economy, db, pipeline, bus,
       const { repo, period } = await body(c, EvidenceRunInput);
       if (!(await compliance.repos()).includes(repo)) return fail(c, 400, "unknown_repository", "the machine does not know that repository");
       return c.json(await compliance.evidence.buildMonth(repo, period));
+    });
+    // An on-demand rebuild of the current quarter's access review: the same draft the quarterly job opens.
+    app.post("/compliance/access/run", async (c) => {
+      if (!compliance?.access) return off(c);
+      const { org } = await body(c, AccessRunInput);
+      if (!(await compliance.access.orgs()).includes(org)) return fail(c, 400, "unknown_org", "the machine has no compliance repository in that organization");
+      return c.json(await compliance.access.buildQuarter(org));
     });
   }
 

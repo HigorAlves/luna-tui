@@ -14,7 +14,7 @@ import { AnswerScenario, AnswerStep } from "./plan.ts";
 import { DiffSummaryAnswer } from "./reports.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
-import { ChangeExceptionsAnswer } from "./compliance.ts";
+import { AccessReviewAnswer, ChangeExceptionsAnswer } from "./compliance.ts";
 import { ComplianceReviewAnswer } from "./compliance-review.ts";
 import { ForemanAnswer } from "./foreman.ts";
 import { FactProposal, ProjectContextSection } from "./economy.ts";
@@ -77,6 +77,8 @@ export const AgentRole = z.enum([
   "gdpr-reviewer",
   "lgpd-reviewer",
   "us-privacy-reviewer",
+  // Suggests whether to keep, remove, reduce or investigate each access an org's quarterly review flags; text only, no tools.
+  "access-reviewer",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -1597,6 +1599,23 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: ChangeExceptionsAnswer,
     template: "change_exceptions.md",
+  },
+  access_review: {
+    id: "access_review",
+    kind: "agent",
+    // Suggests, for each flag of an org's quarterly access review, whether to keep, remove, reduce or investigate the access, from the machine's facts.
+    // No tools at all: logins and details come from GitHub, so they can reach nothing, and the person decides; Luna removes no access.
+    agent: "access-reviewer",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 1,
+    timeoutMs: 2 * MINUTE,
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:haiku"] },
+    effort: "low",
+    answer: AccessReviewAnswer,
+    template: "access_review.md",
   },
   triage_signals: {
     id: "triage_signals",
