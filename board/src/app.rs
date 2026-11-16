@@ -499,7 +499,10 @@ pub enum Mode {
     /// `A` on the Floor: approve a repository's base image, which runs with the stage's credential. Holds what was shown.
     ConfirmBase {
         repo: String,
+        /// What `POST /repos/base/approve` takes: an image reference, or a `dockerfile=sha256:…` key.
         base: String,
+        /// For a Dockerfile: the line shown (`Dockerfile <path> sha256:<12>`); its build runs with network access.
+        dockerfile: Option<String>,
     },
     /// `a` on a proposed tool mask in the Economy: the pack and the units its proposal names.
     ConfirmMask {
@@ -3160,33 +3163,47 @@ impl App {
             );
             return;
         };
-        let Some(base) = floor
+        let image = floor
             .health
             .iter()
             .find(|h| h.repo == repo)
-            .and_then(|h| h.image.pending_base.clone())
-        else {
+            .map(|h| &h.image);
+        let ask = match image {
+            Some(i) => match (&i.pending_base, &i.pending_dockerfile) {
+                (Some(base), _) => Some((base.clone(), None)),
+                (None, Some(d)) => Some((d.key.clone(), Some(d.label()))),
+                (None, None) => None,
+            },
+            None => None,
+        };
+        let Some((base, dockerfile)) = ask else {
             self.notify("that repository has no base waiting".to_string(), false);
             return;
         };
-        self.mode = Mode::ConfirmBase { repo, base };
+        self.mode = Mode::ConfirmBase {
+            repo,
+            base,
+            dockerfile,
+        };
     }
 
     /// `y` in the base box: the machine checks the reference is the one in the repository's luna.yaml.
     fn handle_confirm_base(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Char('y') => {
-                let Mode::ConfirmBase { repo, base } =
-                    std::mem::replace(&mut self.mode, Mode::Normal)
+                let Mode::ConfirmBase {
+                    repo,
+                    base,
+                    dockerfile,
+                } = std::mem::replace(&mut self.mode, Mode::Normal)
                 else {
                     return Outcome::Continue;
                 };
                 match self.machine.approve_base(&repo, &base) {
                     Ok(()) => {
-                        self.notify(
-                            format!("approved base {}", crate::model::plain(&base, 60)),
-                            false,
-                        );
+                        let what = dockerfile
+                            .unwrap_or_else(|| format!("base {}", crate::model::plain(&base, 60)));
+                        self.notify(format!("approved {what}"), false);
                         self.refresh_floor();
                     }
                     Err(e) => self.notify(format!("approve base: {e}"), true),
@@ -12435,6 +12452,43 @@ mod confirm_tests {
         seen.lock().unwrap().clone()
     }
 
+    pub(super) type PostBodies = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+
+    /// Like `recording_machine`, and keeps each POST's JSON body too.
+    pub(super) fn body_recording_machine() -> (Machine, PostBodies) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = seen.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    request.push_str(&line);
+                }
+                let mut raw = vec![0; length];
+                let _ = reader.read_exact(&mut raw);
+                let body: serde_json::Value = serde_json::from_slice(&raw).unwrap_or_default();
+                let mut parts = request.split_whitespace();
+                if let (Some("POST"), Some(path)) = (parts.next(), parts.next()) {
+                    record.lock().unwrap().push((path.to_string(), body));
+                }
+                let mut stream = reader.into_inner();
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+            }
+        });
+        (Machine::at(&format!("http://{addr}")), seen)
+    }
+
     fn at_split_gate() -> App {
         let task = task_json(
             "aaaaaaaa7777",
@@ -14084,6 +14138,66 @@ mod stale_approval_tests {
         press(&mut app, KeyCode::Char('A'));
         press(&mut app, KeyCode::Char('y'));
         assert_eq!(posts(&seen), vec!["/repos/base/approve".to_string()]);
+    }
+
+    const DOCKERFILE_KEY: &str =
+        "dockerfile=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn floor_with_a_pending_dockerfile(changed: bool) -> App {
+        let (machine, _) = recording_machine();
+        let mut app = App::new(machine);
+        app.floor = Some(FloorState::default());
+        let floor = app.floor.as_mut().unwrap();
+        floor.health = serde_json::from_str(&format!(
+            r#"[{{"repo":"/r/fresh","image":{{"inUse":"m","base":null,"builtAt":null,"lastFailure":null,"pendingBase":null,
+                 "pendingDockerfile":{{"path":".devcontainer/Dockerfile","key":"{DOCKERFILE_KEY}","changed":{changed}}}}},
+                 "graph":{{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}}}]"#
+        ))
+        .unwrap();
+        press(&mut app, KeyCode::Tab);
+        app
+    }
+
+    #[test]
+    fn floor_capital_a_shows_the_dockerfile_its_short_sha_and_the_open_network_before_it_approves_its_key()
+     {
+        let mut app = floor_with_a_pending_dockerfile(false);
+        let (machine, seen) = super::confirm_tests::body_recording_machine();
+        app.machine = machine;
+        press(&mut app, KeyCode::Char('A'));
+        assert!(seen.lock().unwrap().is_empty(), "asking sends nothing");
+        let screen = render(&mut app, 120, 40);
+        assert!(
+            screen.contains("/r/fresh")
+                && screen.contains("Dockerfile .devcontainer/Dockerfile sha256:0123456789ab")
+                && !screen.contains("0123456789abc")
+                && screen.contains("builds with network access"),
+            "{screen}"
+        );
+        press(&mut app, KeyCode::Char('n'));
+        assert!(seen.lock().unwrap().is_empty());
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('y'));
+        let sent = seen.lock().unwrap().clone();
+        assert_eq!(
+            sent,
+            vec![(
+                "/repos/base/approve".to_string(),
+                serde_json::json!({"repo": "/r/fresh", "base": DOCKERFILE_KEY})
+            )]
+        );
+    }
+
+    #[test]
+    fn floor_capital_a_on_a_pending_base_still_shows_the_image_and_not_a_network_warning() {
+        let mut app = floor_with_a_pending_base();
+        press(&mut app, KeyCode::Char('A'));
+        let screen = render(&mut app, 120, 40);
+        assert!(
+            screen.contains("image python:3.13-slim")
+                && !screen.contains("builds with network access"),
+            "{screen}"
+        );
     }
 
     fn economy_at_a_proposal() -> (App, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
