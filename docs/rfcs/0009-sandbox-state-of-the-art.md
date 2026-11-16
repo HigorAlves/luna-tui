@@ -1,9 +1,9 @@
 # RFC 0009 — Sandbox state of the art: the gaps against the Claude Code, Agent SDK and eve guidance
 
 - **Author:** Higor Alves
-- **Status:** Draft (2026-11-16)
+- **Status:** Accepted, built (2026-11-16)
 - **Created:** 2026-11-16
-- **Discussion:** the stacked PR on `feat/sandbox-hardening`
+- **Discussion:** [PR #228](https://github.com/higoralves/luna-tui/pull/228)
 - **Related:** [RFC 0002](./0002-native-agent-runtimes.md) (runtimes), [RFC 0007](./0007-token-economy.md) (house style)
 
 ## Summary: the review
@@ -115,3 +115,60 @@ Conditions:
 Enabling the layer means shipping a seccomp profile that opens the user-namespace, mount and `pivot_root` calls. These are the entry points of many past kernel CVEs. That trades away the container's hardening for a layer that guards only the Bash tool, while the whole stage already runs in the container. The Claude Code docs call the layer optional when an outer container isolates.
 
 Revisit only with gVisor, or after an explicit decision to accept a custom profile, tested on native Linux.
+
+## What was built
+
+PR #228 builds every slice but S7, which the spike turned down. Below is each slice as it stands, and where it differs from the plan.
+
+### S1 to S3: containers, secrets and the SDK's env scrub
+
+- **S1.** Every container drops all capabilities and uses a private IPC namespace. Stage, check, app and install containers also get `no-new-privileges`, a read-only root and a pids limit. A service keeps five capabilities, because official database images start as root. Before the first container starts, the machine reads `docker info`. A daemon with no seccomp filter, or with `unconfined`, ends the card as `env_broken` (step `seccomp`). A seccomp profile path that is missing or not JSON is refused too.
+- **S2.** No secret is an argument or a `-e` of any container, so `docker inspect` shows none. The machine writes each secret as a file. The folder is 0755 and its files are 0644. It sits inside a parent that is 0700 and owned by the machine's user. The container's user reads the files under `--cap-drop ALL` whatever its uid. `luna-env` in the runner image exports each file as a variable and then runs the command. It fails closed. A folder or file that it cannot read refuses the start, and so does a file whose name is not a variable name. It never prints a value. The machine and `luna-env` both refuse a secret named like a variable that changes loading or traffic.
+- **S3.** The Claude runtime sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. The findings are above.
+
+### S5: the Claude credential behind a relay
+
+- The egress proxy serves a relay on port 3129 of the card network. The real credential is a 0444 file in a 0700 folder, mounted into the proxy alone. The stage holds a placeholder of the same kind and `ANTHROPIC_BASE_URL`. The relay address is in `NO_PROXY`.
+- The final allow-list is `POST /v1/messages` and `POST /v1/messages/count_tokens`, with any query string. The relay refuses any other method or path with 403. It refuses any path with a `%` in it.
+- `--relay-deny-local <cidr>` is the subnet of the `hardness-egress` bridge. The relay refuses a request whose local address is inside it, so the proxy's other address is no way in.
+- The placeholder and the kind are in `meta.json`, a second 0444 file. They are never on the proxy's command line, where `/proc/<pid>/cmdline` would show them.
+- The proxy reads the token file once at start-up. A missing or empty file, or a newline in the token, stops it with exit 1 and a line that names the problem. A read that fails later answers 502, with the reason `credential`.
+- The relay passes status, headers and body through unchanged, so a 429 or a 401 reaches the usage-limit fallback. `MACHINE_ENGINE_RELAY=off` restores the old behaviour.
+
+### S4 and S6: the spikes
+
+The two spikes are above. S4 gave a go with conditions. S6 gave a no-go, so S7 is not built. `bash_sandbox` in the machine policy is accepted and does nothing. The machine warns at start, and `GET /health` lists it under `notInForce`.
+
+### S8 and S9: the machine policy and the bounds on a repo
+
+- The owner writes `sandbox.yaml` (see [configuration.md](../configuration.md)). A repo's `luna.yaml` can ask for less than the policy allows and never more.
+- The policy covers cpu and memory, the process limit (`limits.max_pids`), the seccomp profile, the runtime per trust, the cache split, the image sources (`images.repo_base`, `images.devcontainer`), the egress hosts a repo may add, and the proof of a `luna.yaml`.
+- It covers every container the machine starts: stage, check, install, app and service containers, on-demand pack runs, evals, the graph build and the video tools. A service is capped at the cpu and memory of the container it runs beside.
+- A host that a repo chose passes `egress.deny`, `repo_hosts` and `max_repo_hosts`. What the policy drops is in `bounds` on the repo's row in `GET /repos`.
+
+### S10: trust
+
+- A card is untrusted when its source is a GitHub issue or PR from an author outside `OWNER`, `MEMBER` and `COLLABORATOR`. Intake and the PR inbox record GitHub's `author_association` as `authorAssociation` on the card's source. A GitHub card with no association on record counts as untrusted. A card the ticket machine makes from a GitHub ticket records no association at this commit. So it counts as untrusted, even for the owner's own issue. A Jira card is trusted.
+- An untrusted card gets its own cache volume and the runtime that `runtime.untrusted` names, such as gVisor `runsc`. The egress proxy always stays on `runc`.
+
+### S11, S11b and S12: the image
+
+- **S11.** The machine reads `.devcontainer/devcontainer.json`. Its `image` becomes the base, after the same approval and probe as `sandbox.image.base`. Its `containerEnv` reaches the repo's own commands, never an agent stage.
+- **S11b.** A devcontainer `build.dockerfile` builds only after a person approves its exact content. The key is `dockerfile=sha256:<hex>`, over the Dockerfile's bytes, the sorted build args and the context path. The build runs on the default network, with open egress and no secret, because BuildKit refuses the per-run network. **The limit:** the approval covers the Dockerfile only. The other files in the build context are not covered, and a `COPY` can read them.
+- **S12.** The probe checks each tool in the repo's `toolchains` against the image. A mismatch is a note, never a refusal.
+
+### S13: the network of each pack
+
+Every agent pack declares its network in `contracts/src/packs.ts`: `engine`, `github` or `full`. Most packs reach only their engine. The writable build, verify, e2e, recording and setup stages are `full`.
+
+### Review rounds
+
+The review rounds found 24 issues, and the PR fixes all of them. A later gap round fixed what remained: the relay's start-up token check, the recovery of council containers and orphan proxies after a restart, the sweep of run secrets inside `recover()`, the `bash_sandbox` flag, and unit tests that no longer reach the real docker daemon.
+
+## Still open
+
+- Codex, OpenAI and Jev are not relayed. Their stages still hold the engine's credential.
+- Condition 2, the real relay smoke, has not run. Run it before you rely on the relay. See [verify-the-engine-relay.md](../runbooks/verify-the-engine-relay.md).
+- The eval scorecards for the eve 1.0.0 and SDK 0.3.325 bumps are still to run. The bumps shipped in this PR against "a bump goes alone", by the maintainer's choice.
+- Cards from the ticket machine record no `authorAssociation`. A GitHub one always runs untrusted until the card's source carries it.
+- gVisor is untested on a host with `runsc`. See [turn-on-gvisor.md](../runbooks/turn-on-gvisor.md).
