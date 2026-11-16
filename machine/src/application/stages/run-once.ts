@@ -27,7 +27,7 @@ export interface OneRun {
   /** Extra container env: the run's trace context (RunSpan.childEnv()). */
   extraEnv?: Record<string, string>;
   /** Which list the run gets: the pack list (default, no repository) or the list a real run of an agent pack gets (an eval measures what runs). */
-  egressKind?: "pack" | "agent";
+  egressKind?: "pack" | "github" | "agent";
   /** How long to wait for a login another run holds (the Codex one is one run at a time); absent, the run's own time limit. */
   credentialWaitMs?: number;
   signal?: AbortSignal;

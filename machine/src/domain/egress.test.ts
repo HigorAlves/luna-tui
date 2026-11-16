@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { PACKS } from "@hardness/contracts";
 import { ENGINE_HOSTS, GITHUB_HOSTS, type EgressInputs, egressFor } from "./egress.ts";
 
 const base: EgressInputs = { allow: [], registries: "always", registryHosts: ["registry.npmjs.org"] };
@@ -82,5 +83,46 @@ describe("egressFor", () => {
           expect(allow).not.toContain("gateway.example.com:443");
           expect(allow).not.toContain("staging.example.com:443");
         }
+  });
+});
+
+describe("egressFor by a pack's network", () => {
+  const withAll: EgressInputs = { ...base, allow: ["repo.example.com"], owners: ["claude", "codex"], targets: ["staging.example.com:443"], machineEntries: ["host.docker.internal:4318"] };
+
+  it("gives `pack` (engine) the engine hosts only, with no GitHub, repo host, registry or target", () => {
+    expect(egressFor("pack", withAll).allow).toEqual(["api.anthropic.com:443", "api.openai.com:443", "auth.openai.com:443", "chatgpt.com:443"]);
+  });
+
+  it("gives `github` the engine hosts and GitHub's, and nothing a repository adds", () => {
+    const { allow } = egressFor("github", withAll);
+    expect(allow).toEqual([...new Set([...GITHUB_HOSTS.map((h) => `${h}:443`), "api.anthropic.com:443", "chatgpt.com:443", "auth.openai.com:443", "api.openai.com:443"])].sort());
+    expect(allow).not.toContain("registry.npmjs.org:443");
+    expect(allow).not.toContain("repo.example.com:443");
+    expect(allow).not.toContain("staging.example.com:443");
+  });
+
+  it("gives `agent` (full) the engine hosts, GitHub, the repo's hosts, registries and targets", () => {
+    const { allow } = egressFor("agent", withAll);
+    for (const host of ["api.anthropic.com:443", "github.com:443", "repo.example.com:443", "registry.npmjs.org:443", "staging.example.com:443"]) expect(allow).toContain(host);
+  });
+
+  it("takes a relayed Claude's host off the github list too, and keeps GitHub", () => {
+    const { allow } = egressFor("github", { ...withAll, relayed: ["claude"] });
+    expect(allow).not.toContain("api.anthropic.com:443");
+    expect(allow).toContain("github.com:443");
+    expect(allow).toContain("chatgpt.com:443");
+  });
+
+  it("gives a real pack of each network the list its network says", () => {
+    const listOf = (id: "chat_triage" | "triage" | "e2e" | "implementing") => {
+      const network = PACKS[id].network;
+      return egressFor(network === "engine" ? "pack" : network === "github" ? "github" : "agent", { ...base, owners: ["claude"], targets: ["staging.example.com:443"] }).allow;
+    };
+    expect(listOf("chat_triage")).toEqual(["api.anthropic.com:443"]);
+    expect(listOf("triage")).toContain("github.com:443");
+    expect(listOf("triage")).not.toContain("registry.npmjs.org:443");
+    expect(listOf("triage")).not.toContain("staging.example.com:443");
+    expect(listOf("e2e")).toContain("staging.example.com:443");
+    expect(listOf("implementing")).toContain("registry.npmjs.org:443");
   });
 });
